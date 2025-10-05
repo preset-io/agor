@@ -19,12 +19,17 @@ This directory contains modular knowledge files that document Agor's concepts, a
 ### Explorations (Work in Progress)
 Experimental ideas and designs not yet crystallized into concepts. These represent active thinking and may graduate to `concepts/` when ready:
 
+**Architecture & Infrastructure:**
 - **[architecture-api.md](explorations/architecture-api.md)** - **[DECISION]** FeathersJS + Drizzle full-stack architecture
 - **[state-management.md](explorations/state-management.md)** - Persistence layer (Drizzle ORM + LibSQL/PostgreSQL)
 - **[state-broadcasting.md](explorations/state-broadcasting.md)** - Real-time sync & multi-client (FeathersJS WebSocket)
-- **[agent-interface.md](explorations/agent-interface.md)** - Agent abstraction layer (Claude Code, Codex, Gemini, etc.)
 - **[cli.md](explorations/cli.md)** - CLI design (oclif, entity commands, stateful context)
 - **[git-worktree.md](explorations/git-worktree.md)** - Git worktree management strategy
+
+**Agent Integration:**
+- **[agent-interface.md](explorations/agent-interface.md)** - Agent abstraction layer (Claude Code, Codex, Gemini, etc.)
+- **[native-cli-feature-gaps.md](explorations/native-cli-feature-gaps.md)** - Native CLI features vs SDK limitations analysis
+- **[subtask-orchestration.md](explorations/subtask-orchestration.md)** - Getting agents to spawn Agor-tracked subtasks
 
 **Lifecycle:** `explorations/` → `concepts/` when design is validated and ready to be official
 

@@ -1,9 +1,17 @@
 # Agent Interface Architecture (Exploration)
 
-Related: [[state-management]], [[models]], [[core]]
+Related: [[state-management]], [[models]], [[core]], [[native-cli-feature-gaps]]
 
 **Status:** Exploration (not yet crystallized)
 **Date:** January 2025
+
+---
+
+## Executive Summary
+
+This document defines the abstraction layer for integrating multiple agent SDKs (Claude Code, Cursor, Codex, Gemini).
+
+**Key concern:** Some powerful native CLI features (autocomplete, slash commands, file watching) may not be available through SDKs. See [[native-cli-feature-gaps]] for detailed analysis of what we might lose vs gain.
 
 ---
 
