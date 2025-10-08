@@ -1,4 +1,4 @@
-import { MenuOutlined, SettingOutlined } from '@ant-design/icons';
+import { GithubOutlined, MenuOutlined, SettingOutlined } from '@ant-design/icons';
 import { Button, Layout, Space, Typography } from 'antd';
 
 const { Header } = Layout;
@@ -68,6 +68,15 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       </Space>
 
       <Space>
+        <Button
+          type="text"
+          icon={<GithubOutlined />}
+          href="https://github.com/maxtheman/agor"
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ color: '#fff' }}
+          title="View on GitHub"
+        />
         <Button
           type="text"
           icon={<MenuOutlined />}
