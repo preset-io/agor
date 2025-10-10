@@ -141,7 +141,10 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({ message }) => {
                 {isUser ? (
                   textBeforeTools.filter(t => t.trim()).join('\n\n')
                 ) : (
-                  <MarkdownRenderer content={textBeforeTools.filter(t => t.trim()).join('\n\n')} />
+                  <MarkdownRenderer
+                    content={textBeforeTools.filter(t => t.trim()).join('\n\n')}
+                    inline
+                  />
                 )}
               </div>
             }
@@ -175,7 +178,10 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({ message }) => {
             }
             content={
               <div style={{ wordWrap: 'break-word' }}>
-                <MarkdownRenderer content={textAfterTools.filter(t => t.trim()).join('\n\n')} />
+                <MarkdownRenderer
+                  content={textAfterTools.filter(t => t.trim()).join('\n\n')}
+                  inline
+                />
               </div>
             }
             variant="outlined"

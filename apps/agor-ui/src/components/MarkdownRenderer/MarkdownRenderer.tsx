@@ -17,13 +17,19 @@ interface MarkdownRendererProps {
    * Markdown content to render
    */
   content: string;
+  /**
+   * If true, renders inline (without <p> wrapper)
+   */
+  inline?: boolean;
 }
 
-export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content }) => {
+export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, inline = false }) => {
+  const html = inline ? md.renderInline(content) : md.render(content);
+
   return (
     <Typography>
       {/* biome-ignore lint/security/noDangerouslySetInnerHtml: markdown content is from trusted source (Agent SDK) */}
-      <div dangerouslySetInnerHTML={{ __html: md.render(content) }} />
+      <div dangerouslySetInnerHTML={{ __html: html }} />
     </Typography>
   );
 };

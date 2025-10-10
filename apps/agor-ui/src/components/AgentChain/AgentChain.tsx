@@ -251,7 +251,7 @@ export const AgentChain: React.FC<AgentChainProps> = ({ messages }) => {
                 color: token.colorTextSecondary,
               }}
             >
-              <MarkdownRenderer content={thoughtContent} />
+              <MarkdownRenderer content={thoughtContent} inline />
             </div>
           ),
         }),
