@@ -54,6 +54,7 @@ function AppContent() {
     repos,
     users,
     mcpServers,
+    sessionMcpServerIds,
     loading,
     error: dataError,
   } = useAgorData(connected ? client : null);
@@ -494,6 +495,40 @@ function AppContent() {
     }
   };
 
+  // Handle update session-MCP server relationships
+  const handleUpdateSessionMcpServers = async (sessionId: string, mcpServerIds: string[]) => {
+    if (!client) return;
+
+    try {
+      // Get current session-MCP relationships for this session
+      const currentIds = sessionMcpServerIds[sessionId] || [];
+
+      // Find servers to add (in new list but not in current)
+      const toAdd = mcpServerIds.filter(id => !currentIds.includes(id));
+
+      // Find servers to remove (in current list but not in new)
+      const toRemove = currentIds.filter(id => !mcpServerIds.includes(id));
+
+      // Add new relationships
+      for (const serverId of toAdd) {
+        await client.service(`sessions/${sessionId}/mcp-servers`).create({
+          mcpServerId: serverId,
+        });
+      }
+
+      // Remove old relationships
+      for (const serverId of toRemove) {
+        await client.service(`sessions/${sessionId}/mcp-servers`).remove(serverId);
+      }
+
+      message.success('MCP servers updated successfully!');
+    } catch (error) {
+      message.error(
+        `Failed to update MCP servers: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  };
+
   // Generate repo reference options for dropdowns
   const allOptions = getRepoReferenceOptions(repos);
   const worktreeOptions = allOptions.filter(opt => opt.type === 'managed-worktree');
@@ -511,6 +546,7 @@ function AppContent() {
       repos={repos}
       users={users}
       mcpServers={mcpServers}
+      sessionMcpServerIds={sessionMcpServerIds}
       worktreeOptions={worktreeOptions}
       repoOptions={repoOptions}
       initialBoardId={boards[0]?.board_id}
@@ -533,6 +569,7 @@ function AppContent() {
       onCreateMCPServer={handleCreateMCPServer}
       onUpdateMCPServer={handleUpdateMCPServer}
       onDeleteMCPServer={handleDeleteMCPServer}
+      onUpdateSessionMcpServers={handleUpdateSessionMcpServers}
       onLogout={logout}
     />
   );

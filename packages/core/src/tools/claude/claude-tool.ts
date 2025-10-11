@@ -12,6 +12,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { generateId } from '../../db/ids';
 import type { MessagesRepository } from '../../db/repositories/messages';
+import type { SessionMCPServerRepository } from '../../db/repositories/session-mcp-servers';
 import type { SessionRepository } from '../../db/repositories/sessions';
 import type { Message, MessageID, SessionID, TaskID, ToolUse } from '../../types';
 import type { ImportOptions, ITool, SessionData, ToolCapabilities } from '../base';
@@ -37,10 +38,16 @@ export class ClaudeTool implements ITool {
     private messagesRepo?: MessagesRepository,
     private sessionsRepo?: SessionRepository,
     private apiKey?: string,
-    private messagesService?: MessagesService
+    private messagesService?: MessagesService,
+    private sessionMCPRepo?: SessionMCPServerRepository
   ) {
     if (messagesRepo && sessionsRepo) {
-      this.promptService = new ClaudePromptService(messagesRepo, sessionsRepo, apiKey);
+      this.promptService = new ClaudePromptService(
+        messagesRepo,
+        sessionsRepo,
+        apiKey,
+        sessionMCPRepo
+      );
     }
   }
 

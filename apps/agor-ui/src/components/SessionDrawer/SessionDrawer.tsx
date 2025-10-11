@@ -1,12 +1,13 @@
 import type { AgorClient } from '@agor/core/api';
-import type { User } from '@agor/core/types';
+import type { MCPServer, User } from '@agor/core/types';
 import {
+  ApiOutlined,
   BranchesOutlined,
-  CodeOutlined,
   DownOutlined,
   ForkOutlined,
   GithubOutlined,
   SendOutlined,
+  SettingOutlined,
 } from '@ant-design/icons';
 import {
   Badge,
@@ -49,11 +50,14 @@ interface SessionDrawerProps {
   session: Session | null;
   users?: User[];
   currentUserId?: string;
+  mcpServers?: MCPServer[];
+  sessionMcpServerIds?: string[];
   open: boolean;
   onClose: () => void;
   onSendPrompt?: (prompt: string) => void;
   onFork?: (prompt: string) => void;
   onSubtask?: (prompt: string) => void;
+  onOpenSettings?: (sessionId: string) => void;
 }
 
 const SessionDrawer = ({
@@ -61,11 +65,14 @@ const SessionDrawer = ({
   session,
   users = [],
   currentUserId,
+  mcpServers = [],
+  sessionMcpServerIds = [],
   open,
   onClose,
   onSendPrompt,
   onFork,
   onSubtask,
+  onOpenSettings,
 }: SessionDrawerProps) => {
   const { token } = theme.useToken();
   const [inputValue, setInputValue] = React.useState('');
@@ -159,6 +166,17 @@ const SessionDrawer = ({
           </div>
         </Space>
       }
+      extra={
+        onOpenSettings && (
+          <Tooltip title="Session Settings">
+            <Button
+              type="text"
+              icon={<SettingOutlined />}
+              onClick={() => onOpenSettings(session.session_id)}
+            />
+          </Tooltip>
+        )
+      }
       placement="right"
       width={720}
       open={open}
@@ -171,8 +189,8 @@ const SessionDrawer = ({
     >
       {/* Genealogy Tags */}
       {(isForked || isSpawned) && (
-        <div style={{ marginBottom: token.sizeUnit * 6 }}>
-          <Space size={8}>
+        <div style={{ marginBottom: token.sizeUnit }}>
+          <Space size={4} wrap>
             {isForked && session.genealogy.forked_from_session_id && (
               <ForkPill
                 fromSessionId={session.genealogy.forked_from_session_id}
@@ -190,8 +208,8 @@ const SessionDrawer = ({
       )}
 
       {/* Git & Repo Info */}
-      <div style={{ marginBottom: token.sizeUnit * 6 }}>
-        <Space size={8} wrap>
+      <div style={{ marginBottom: token.sizeUnit }}>
+        <Space size={4} wrap>
           {session.repo?.repo_slug ? (
             <RepoPill repoName={session.repo.repo_slug} worktreeName={session.repo.worktree_name} />
           ) : session.repo?.cwd ? (
@@ -205,9 +223,9 @@ const SessionDrawer = ({
 
       {/* Concepts */}
       {session.concepts.length > 0 && (
-        <div style={{ marginBottom: token.sizeUnit * 6 }}>
+        <div style={{ marginBottom: token.sizeUnit }}>
           <Title level={5}>Loaded Concepts</Title>
-          <Space size={8} wrap>
+          <Space size={4} wrap>
             {session.concepts.map(concept => (
               <ConceptPill key={concept} name={concept} />
             ))}
@@ -215,7 +233,23 @@ const SessionDrawer = ({
         </div>
       )}
 
-      <Divider />
+      {/* MCP Servers */}
+      {sessionMcpServerIds.length > 0 && (
+        <div style={{ marginBottom: token.sizeUnit }}>
+          <Space size={4} wrap>
+            {sessionMcpServerIds
+              .map(serverId => mcpServers.find(s => s.mcp_server_id === serverId))
+              .filter(Boolean)
+              .map(server => (
+                <Tag key={server!.mcp_server_id} color="purple" icon={<ApiOutlined />}>
+                  {server!.display_name || server!.name}
+                </Tag>
+              ))}
+          </Space>
+        </div>
+      )}
+
+      <Divider style={{ margin: `${token.sizeUnit * 2}px 0` }} />
 
       {/* Task-Centric Conversation View */}
       <div

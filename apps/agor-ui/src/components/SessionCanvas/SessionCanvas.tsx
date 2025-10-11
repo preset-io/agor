@@ -1,5 +1,5 @@
 import type { AgorClient } from '@agor/core/api';
-import type { User } from '@agor/core/types';
+import type { MCPServer, User } from '@agor/core/types';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   Background,
@@ -24,10 +24,14 @@ interface SessionCanvasProps {
   tasks: Record<string, Task[]>;
   users: User[];
   currentUserId?: string;
+  mcpServers?: MCPServer[];
+  sessionMcpServerIds?: Record<string, string[]>; // Map sessionId -> mcpServerIds[]
   onSessionClick?: (sessionId: string) => void;
   onTaskClick?: (taskId: string) => void;
   onSessionUpdate?: (sessionId: string, updates: Partial<Session>) => void;
   onSessionDelete?: (sessionId: string) => void;
+  onUpdateSessionMcpServers?: (sessionId: string, mcpServerIds: string[]) => void;
+  onOpenSettings?: (sessionId: string) => void;
 }
 
 interface SessionNodeData {
@@ -35,10 +39,13 @@ interface SessionNodeData {
   tasks: Task[];
   users: User[];
   currentUserId?: string;
+  mcpServers: MCPServer[];
+  sessionMcpServerIds: string[];
   onTaskClick?: (taskId: string) => void;
   onSessionClick?: () => void;
   onUpdate?: (sessionId: string, updates: Partial<Session>) => void;
   onDelete?: (sessionId: string) => void;
+  onUpdateSessionMcpServers?: (sessionId: string, mcpServerIds: string[]) => void;
   compact?: boolean;
 }
 
@@ -51,10 +58,13 @@ const SessionNode = ({ data }: { data: SessionNodeData }) => {
         tasks={data.tasks}
         users={data.users}
         currentUserId={data.currentUserId}
+        mcpServers={data.mcpServers}
+        sessionMcpServerIds={data.sessionMcpServerIds}
         onTaskClick={data.onTaskClick}
         onSessionClick={data.onSessionClick}
         onUpdate={data.onUpdate}
         onDelete={data.onDelete}
+        onUpdateSessionMcpServers={data.onUpdateSessionMcpServers}
         compact={data.compact}
       />
     </div>
@@ -73,10 +83,14 @@ const SessionCanvas = ({
   tasks,
   users,
   currentUserId,
+  mcpServers = [],
+  sessionMcpServerIds = {},
   onSessionClick,
   onTaskClick,
   onSessionUpdate,
   onSessionDelete,
+  onUpdateSessionMcpServers,
+  onOpenSettings,
 }: SessionCanvasProps) => {
   // Debounce timer ref for position updates
   const layoutUpdateTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -137,10 +151,13 @@ const SessionCanvas = ({
           tasks: tasks[session.session_id] || [],
           users,
           currentUserId,
+          mcpServers,
+          sessionMcpServerIds: sessionMcpServerIds[session.session_id] || [],
           onTaskClick,
           onSessionClick: () => onSessionClick?.(session.session_id),
           onUpdate: onSessionUpdate,
           onDelete: onSessionDelete,
+          onUpdateSessionMcpServers,
           compact: false,
         },
       };
@@ -151,10 +168,13 @@ const SessionCanvas = ({
     tasks,
     users,
     currentUserId,
+    mcpServers,
+    sessionMcpServerIds,
     onSessionClick,
     onTaskClick,
     onSessionUpdate,
     onSessionDelete,
+    onUpdateSessionMcpServers,
   ]);
 
   // Convert session relationships to React Flow edges

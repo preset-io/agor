@@ -65,6 +65,10 @@ export default class McpAdd extends Command {
       description: 'Enable server immediately',
       default: true,
     }),
+    env: Flags.string({
+      char: 'e',
+      description: 'Environment variables (key=value pairs, comma-separated)',
+    }),
   };
 
   async run(): Promise<void> {
@@ -118,6 +122,21 @@ export default class McpAdd extends Command {
       if (flags.args) data.args = flags.args.split(',').map(arg => arg.trim());
       if (flags.url) data.url = flags.url;
 
+      // Add environment variables
+      if (flags.env) {
+        const envPairs = flags.env.split(',').map(pair => pair.trim());
+        const envObject: Record<string, string> = {};
+        for (const pair of envPairs) {
+          const [key, value] = pair.split('=');
+          if (key && value) {
+            envObject[key.trim()] = value.trim();
+          }
+        }
+        if (Object.keys(envObject).length > 0) {
+          data.env = envObject;
+        }
+      }
+
       // Add scope-specific IDs
       if (flags['session-id']) data.session_id = flags['session-id'];
       if (flags['repo-id']) data.repo_id = flags['repo-id'];
@@ -147,6 +166,10 @@ export default class McpAdd extends Command {
       }
       if (server.url) {
         this.log(`  ${chalk.cyan('URL')}: ${server.url}`);
+      }
+      if (server.env) {
+        const envKeys = Object.keys(server.env);
+        this.log(`  ${chalk.cyan('Environment')}: ${envKeys.join(', ')}`);
       }
 
       this.log('');

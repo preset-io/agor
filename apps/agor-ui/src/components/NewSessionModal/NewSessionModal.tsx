@@ -3,6 +3,7 @@ import { Collapse, Form, Input, Modal, Radio, Select, Space, Typography } from '
 import { useState } from 'react';
 import type { Agent } from '../../types';
 import { AgentSelectionCard } from '../AgentSelectionCard';
+import { MCPServerSelect } from '../MCPServerSelect';
 
 const { TextArea } = Input;
 const { Text } = Typography;
@@ -252,20 +253,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
           label="MCP Servers (optional)"
           help="Select MCP servers to make available in this session"
         >
-          <Select
-            mode="multiple"
-            placeholder="Select MCP servers..."
-            allowClear
-            showSearch
-            optionFilterProp="label"
-            options={mcpServers
-              .filter(server => server.enabled)
-              .map(server => ({
-                label: server.display_name || server.name,
-                value: server.mcp_server_id,
-                disabled: !server.enabled,
-              }))}
-          />
+          <MCPServerSelect mcpServers={mcpServers} />
         </Form.Item>
       </Form>
     </Modal>

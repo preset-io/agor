@@ -8,8 +8,9 @@
 import { execSync } from 'node:child_process';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { MessagesRepository } from '../../db/repositories/messages';
+import type { SessionMCPServerRepository } from '../../db/repositories/session-mcp-servers';
 import type { SessionRepository } from '../../db/repositories/sessions';
-import type { Message, SessionID } from '../../types';
+import type { MCPServersConfig, Message, SessionID } from '../../types';
 
 /**
  * Get path to Claude Code executable
@@ -68,7 +69,8 @@ export class ClaudePromptService {
   constructor(
     private messagesRepo: MessagesRepository,
     private sessionsRepo: SessionRepository,
-    private apiKey?: string
+    private apiKey?: string,
+    private sessionMCPRepo?: SessionMCPServerRepository
   ) {
     // No client initialization needed - Agent SDK is stateless
   }
@@ -106,6 +108,60 @@ export class ClaudePromptService {
     // Add optional resume if session exists
     if (resume && session.agent_session_id) {
       options.resume = session.agent_session_id;
+    }
+
+    // Fetch and configure MCP servers for this session
+    if (this.sessionMCPRepo) {
+      try {
+        const mcpServers = await this.sessionMCPRepo.listServers(sessionId, true); // enabledOnly
+        if (mcpServers.length > 0) {
+          console.log(
+            `🔌 Found ${mcpServers.length} enabled MCP server(s) for session ${sessionId}`
+          );
+
+          // Convert to SDK format
+          const mcpConfig: MCPServersConfig = {};
+          const allowedTools: string[] = [];
+
+          for (const server of mcpServers) {
+            console.log(`   - ${server.name} (${server.transport})`);
+
+            // Build server config
+            const serverConfig: {
+              transport?: 'stdio' | 'http' | 'sse';
+              command?: string;
+              args?: string[];
+              url?: string;
+              env?: Record<string, string>;
+            } = {
+              transport: server.transport,
+            };
+
+            if (server.command) serverConfig.command = server.command;
+            if (server.args) serverConfig.args = server.args;
+            if (server.url) serverConfig.url = server.url;
+            if (server.env) serverConfig.env = server.env;
+
+            mcpConfig[server.name] = serverConfig;
+
+            // Add tools to allowlist
+            if (server.tools) {
+              for (const tool of server.tools) {
+                allowedTools.push(tool.name);
+              }
+            }
+          }
+
+          options.mcpServers = mcpConfig;
+          if (allowedTools.length > 0) {
+            options.allowedTools = allowedTools;
+            console.log(`   🔧 Allowing ${allowedTools.length} MCP tools`);
+          }
+        }
+      } catch (error) {
+        console.warn('⚠️  Failed to fetch MCP servers for session:', error);
+        // Continue without MCP servers - non-fatal error
+      }
     }
 
     const result = query({

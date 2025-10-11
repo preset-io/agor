@@ -1,4 +1,4 @@
-import type { User } from '@agor/core/types';
+import type { MCPServer, User } from '@agor/core/types';
 import {
   BranchesOutlined,
   CloseOutlined,
@@ -26,6 +26,7 @@ import {
 } from 'antd';
 import React from 'react';
 import type { Session, Task } from '../../types';
+import { MCPServerSelect } from '../MCPServerSelect';
 import { CreatedByTag } from '../metadata';
 import TaskListItem from '../TaskListItem';
 import { ToolIcon } from '../ToolIcon';
@@ -39,10 +40,13 @@ interface SessionCardProps {
   tasks: Task[];
   users: User[];
   currentUserId?: string;
+  mcpServers?: MCPServer[];
+  sessionMcpServerIds?: string[];
   onTaskClick?: (taskId: string) => void;
   onSessionClick?: () => void;
   onDelete?: (sessionId: string) => void;
   onUpdate?: (sessionId: string, updates: Partial<Session>) => void;
+  onUpdateSessionMcpServers?: (sessionId: string, mcpServerIds: string[]) => void;
   defaultExpanded?: boolean;
 }
 
@@ -51,15 +55,28 @@ const SessionCard = ({
   tasks,
   users,
   currentUserId,
+  mcpServers = [],
+  sessionMcpServerIds = [],
   onTaskClick,
   onSessionClick,
   onDelete,
   onUpdate,
+  onUpdateSessionMcpServers,
   defaultExpanded = true,
 }: SessionCardProps) => {
   const [settingsOpen, setSettingsOpen] = React.useState(false);
   const [form] = Form.useForm();
   const { modal } = App.useApp();
+
+  // Reset form values when modal opens or props change
+  React.useEffect(() => {
+    if (settingsOpen) {
+      form.setFieldsValue({
+        title: session.description || '',
+        mcpServerIds: sessionMcpServerIds,
+      });
+    }
+  }, [settingsOpen, session.description, sessionMcpServerIds, form]);
 
   const handleDelete = () => {
     modal.confirm({
@@ -76,7 +93,16 @@ const SessionCard = ({
 
   const handleSettingsSave = () => {
     form.validateFields().then(values => {
-      onUpdate?.(session.session_id, { description: values.title });
+      // Update session title/description
+      if (values.title !== session.description) {
+        onUpdate?.(session.session_id, { description: values.title });
+      }
+
+      // Update MCP server attachments
+      if (onUpdateSessionMcpServers) {
+        onUpdateSessionMcpServers(session.session_id, values.mcpServerIds || []);
+      }
+
       setSettingsOpen(false);
     });
   };
@@ -335,14 +361,26 @@ const SessionCard = ({
         onOk={handleSettingsSave}
         onCancel={() => setSettingsOpen(false)}
         okText="Save"
+        width={600}
       >
-        <Form form={form} layout="vertical" initialValues={{ title: session.description || '' }}>
+        <Form
+          form={form}
+          layout="vertical"
+          initialValues={{
+            title: session.description || '',
+            mcpServerIds: sessionMcpServerIds,
+          }}
+        >
           <Form.Item
             label="Title"
             name="title"
             rules={[{ required: false, message: 'Please enter a session title' }]}
           >
             <Input placeholder="Enter session title" />
+          </Form.Item>
+
+          <Form.Item name="mcpServerIds" label="MCP Servers">
+            <MCPServerSelect mcpServers={mcpServers} placeholder="No MCP servers attached" />
           </Form.Item>
         </Form>
       </Modal>

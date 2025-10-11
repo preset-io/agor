@@ -7,7 +7,13 @@
 
 import 'dotenv/config';
 import { loadConfig } from '@agor/core/config';
-import { createDatabase, MessagesRepository, SessionRepository } from '@agor/core/db';
+import {
+  createDatabase,
+  MessagesRepository,
+  SessionMCPServerRepository,
+  SessionRepository,
+  sessionMcpServers,
+} from '@agor/core/db';
 import { ClaudeTool } from '@agor/core/tools';
 import type { SessionID } from '@agor/core/types';
 import { AuthenticationService, JWTStrategy } from '@feathersjs/authentication';
@@ -107,6 +113,23 @@ async function main() {
   app.use('/boards', createBoardsService(db));
   app.use('/repos', createReposService(db));
   app.use('/mcp-servers', createMCPServersService(db));
+
+  // Register session-mcp-servers as a top-level service for WebSocket events
+  // This is needed for real-time updates when MCP servers are added/removed from sessions
+  const sessionMCPServersService = createSessionMCPServersService(db);
+  app.use('/session-mcp-servers', {
+    async find() {
+      // Return all session-MCP relationships
+      // This allows the UI to fetch all relationships in one call
+      const rows = await db.select().from(sessionMcpServers).all();
+      return rows.map(row => ({
+        session_id: row.session_id,
+        mcp_server_id: row.mcp_server_id,
+        enabled: Boolean(row.enabled),
+        added_at: new Date(row.added_at),
+      }));
+    },
+  });
 
   // Register users service (for authentication)
   const usersService = createUsersService(db);
@@ -246,11 +269,18 @@ async function main() {
   // Initialize repositories for ClaudeTool
   const messagesRepo = new MessagesRepository(db);
   const sessionsRepo = new SessionRepository(db);
+  const sessionMCPRepo = new SessionMCPServerRepository(db);
 
   // Initialize ClaudeTool with repositories, API key, AND app-level messagesService
   // CRITICAL: Must use app.service('messages') to ensure WebSocket events are emitted
   // Using the raw service instance bypasses Feathers event publishing
-  const claudeTool = new ClaudeTool(messagesRepo, sessionsRepo, apiKey, app.service('messages'));
+  const claudeTool = new ClaudeTool(
+    messagesRepo,
+    sessionsRepo,
+    apiKey,
+    app.service('messages'),
+    sessionMCPRepo
+  );
 
   // Configure custom route for bulk message creation
   app.use('/messages/bulk', {
@@ -455,7 +485,7 @@ async function main() {
   });
 
   // Configure custom routes for session-MCP relationships
-  const sessionMCPServersService = createSessionMCPServersService(db);
+  // (sessionMCPServersService already created above for top-level service)
 
   // GET /sessions/:id/mcp-servers - List MCP servers for a session
   app.use('/sessions/:id/mcp-servers', {
@@ -475,11 +505,23 @@ async function main() {
       const id = params.route?.id;
       if (!id) throw new Error('Session ID required');
       if (!data.mcpServerId) throw new Error('MCP Server ID required');
-      return sessionMCPServersService.addServer(
+
+      await sessionMCPServersService.addServer(
         id as import('@agor/core/types').SessionID,
         data.mcpServerId as import('@agor/core/types').MCPServerID,
         params
       );
+
+      // Emit created event for WebSocket subscribers
+      const relationship = {
+        session_id: id,
+        mcp_server_id: data.mcpServerId,
+        enabled: true,
+        added_at: new Date(),
+      };
+      app.service('session-mcp-servers').emit('created', relationship);
+
+      return relationship;
     },
     // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
   } as any);
@@ -491,11 +533,21 @@ async function main() {
       const mcpId = params.route?.mcpId;
       if (!id) throw new Error('Session ID required');
       if (!mcpId) throw new Error('MCP Server ID required');
-      return sessionMCPServersService.removeServer(
+
+      await sessionMCPServersService.removeServer(
         id as import('@agor/core/types').SessionID,
         mcpId as import('@agor/core/types').MCPServerID,
         params
       );
+
+      // Emit removed event for WebSocket subscribers
+      const relationship = {
+        session_id: id,
+        mcp_server_id: mcpId,
+      };
+      app.service('session-mcp-servers').emit('removed', relationship);
+
+      return relationship;
     },
     // PATCH /sessions/:id/mcp-servers/:mcpId - Toggle MCP server enabled state
     async patch(

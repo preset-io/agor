@@ -6,7 +6,7 @@ This file provides guidance to Claude Code when working with the Agor codebase.
 
 **Agor** is an agent orchestration platform for AI-assisted development. It provides a unified interface to coordinate multiple AI coding agents (Claude Code, Cursor, Codex, Gemini), visualize session trees, and capture knowledge automatically.
 
-**Current Status:** Backend implementation with FeathersJS daemon, CLI, and database layer
+**Current Status:** Phase 2 Complete - Multi-user foundation with authentication, real-time sync, and MCP server support
 
 **Key Insight:** Context engineering is about managing sessions, tasks, and concepts as first-class composable primitives stored in a session tree.
 
@@ -201,7 +201,9 @@ See `context/concepts/architecture.md` for full schema.
 - `tasks` - Task records linked to sessions
 - `messages` - Conversation messages (indexed by session_id, task_id, index)
 - `repos` - Git repositories registered with Agor
-- `boards` - Session organization boards
+- `boards` - Session organization boards with position layout
+- `users` - User accounts with authentication
+- `mcp_servers` - MCP server configurations
 
 **Hybrid Storage Strategy:**
 
@@ -219,7 +221,10 @@ Located in `apps/agor-daemon/src/services/`:
 - `/tasks` - CRUD + complete/fail custom methods
 - `/messages` - CRUD + `/messages/bulk` for batch inserts
 - `/repos` - CRUD + `/repos/clone` and worktree management
-- `/boards` - CRUD + session association
+- `/boards` - CRUD + session association + position layout
+- `/users` - User authentication and management
+- `/mcp-servers` - MCP server configuration and capabilities
+- `/authentication` - JWT-based auth with local/anonymous strategies
 
 **Custom Routes:**
 
@@ -252,6 +257,22 @@ See `apps/agor-cli/src/commands/` for implementations.
 
 - `repo list` - List registered repositories
 - `repo add <url>` - Clone and register git repository
+
+**User Commands:**
+
+- `user list` - List all users
+- `user create` - Create new user account
+
+**Board Commands:**
+
+- `board list` - List all boards
+- `board add-session` - Add session to board
+
+**Config Commands:**
+
+- `config` - Show all configuration
+- `config get <key>` - Get specific config value
+- `config set <key> <value>` - Set config value
 
 **Important CLI Patterns:**
 
@@ -398,30 +419,28 @@ pnpm agor repo list
 
 ## Implementation Status
 
-**Completed:**
+**✅ Phase 2 Complete (Multi-User Foundation):**
 
-- ✅ Database schema with all tables (sessions, tasks, messages, repos, boards)
-- ✅ FeathersJS daemon with REST + WebSocket APIs
-- ✅ Repository layer with Drizzle ORM
-- ✅ CLI with session/repo commands
-- ✅ Claude Code session loading with message import
-- ✅ Task extraction from user messages (Messages → Tasks architecture)
-- ✅ Bulk insert endpoints (/messages/bulk, /tasks/bulk)
-- ✅ Git repository and worktree management
-- ✅ UUIDv7 IDs with short ID display
-- ✅ Socket cleanup and error handling
+- Database schema with all tables (sessions, tasks, messages, repos, boards, users, mcp_servers)
+- FeathersJS daemon with REST + WebSocket broadcasting
+- User authentication (email/password + JWT) with anonymous mode
+- Real-time position sync for multi-user boards
+- MCP server configuration and database schema
+- Claude Agent SDK integration with CLAUDE.md auto-loading
+- React Flow canvas with drag-and-drop sessions
+- User management UI with emoji avatars
+- SessionDrawer with conversation view and task preview
+- CLI with full CRUD operations (sessions, repos, boards, users, config)
+- Git operations via simple-git (clone, worktree management)
+- UUIDv7 IDs with short ID display
 
-**In Progress:**
+**🔄 Phase 3 Next Steps:**
 
-- 🔄 Full UI integration with backend APIs (messages API complete)
-- 🔄 Report generation from tasks
-- 🔄 Real-time task state updates
-
-**Future:**
-
-- 📋 Agent interface abstraction layer
-- 📋 Real-time collaboration features
-- 📋 Cloud sync with Turso
+- MCP server UI integration (settings modal, session enablement)
+- Hook MCP servers to Claude Agent SDK
+- Social collaboration features (facepile, cursor swarm, presence indicators)
+- Session forking UI and genealogy visualization
+- Concept management and report generation
 
 See `PROJECT.md` for detailed roadmap.
 

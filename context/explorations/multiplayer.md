@@ -1,72 +1,38 @@
-# Multiplayer Collaboration for Agor
+# Multiplayer Collaboration (Future Features)
 
-## Vision
+**Status:** Exploration / Planning
+**Related:** [../concepts/auth.md](../concepts/auth.md), [social-features.md](social-features.md)
 
-Multiple developers collaborating on the same board, prompting agents in parallel, seeing real-time cursor movements and session updates—like Miro/Figma but for AI-assisted development.
+**Note:** Basic multi-user collaboration is already working! See [../concepts/auth.md](../concepts/auth.md) for implemented features (user auth, real-time position sync, etc.).
 
-## Core Requirements
+This document explores **future** multiplayer features not yet implemented.
 
-### 1. User Identity & Authentication
+---
 
-**Minimal MVP:**
+## What's Already Working ✅
 
-- Username/display name (no passwords initially)
-- Persistent user ID (UUIDv7)
-- Color assignment for cursor/avatar
-- Optional: OAuth (GitHub, Google) for real identity
+See [../concepts/auth.md](../concepts/auth.md#real-time-collaboration-features) for details:
 
-**Data Model:**
+- User authentication (email/password + JWT)
+- Multi-user boards with real-time position sync
+- User profiles with emoji avatars
+- WebSocket broadcasting for all CRUD operations
+- User attribution (created_by tracking)
 
-```typescript
-User {
-  user_id: UUID
-  username: string
-  display_name: string
-  avatar_url?: string
-  color: string  // Hex color for cursor/presence
-  created_at: string
-}
-```
+---
 
-**Auth Flow:**
+## Future Features (Phase 3+)
 
-- Local-first: Store user in `~/.agor/user.json`
-- Cloud: JWT tokens from auth service
-- Websocket connection includes user_id in handshake
+### Presence & Awareness (Phase 3a)
 
-### 2. Presence & Awareness
+See [social-features.md](social-features.md) for detailed design:
 
-**Real-time State Sync:**
+- Facepile (who's active on board)
+- Cursor swarm (real-time cursor positions)
+- Presence indicators (who's viewing what)
+- Typing indicators (who's prompting)
 
-- Active users on board (who's online)
-- Cursor positions on canvas
-- Currently viewed session (which drawer is open)
-- Active typing indicators (who's prompting which session)
-
-**Presence Model:**
-
-```typescript
-Presence {
-  user_id: UUID
-  board_id: UUID
-  cursor_position?: { x: number, y: number }
-  viewing_session_id?: SessionID
-  active_prompt?: {
-    session_id: SessionID
-    typing: boolean
-  }
-  last_seen: string
-}
-```
-
-**WebSocket Events:**
-
-- `presence:join` - User enters board
-- `presence:leave` - User exits board
-- `presence:update` - Cursor move, session change
-- `presence:typing` - Typing indicator start/stop
-
-### 3. Collaborative Session Access
+### Collaborative Session Access (Phase 3b)
 
 **Permissions Model:**
 
@@ -78,35 +44,11 @@ Presence {
 **Conflict Resolution:**
 
 - Optimistic UI updates (local changes apply immediately)
-- Last-write-wins for simple fields
+- Last-write-wins for simple fields (currently used)
 - Operational Transformation (OT) for concurrent edits (future)
 - Session lock prevents multiple agents running simultaneously
 
-### 4. Real-time Data Sync
-
-**Current State (V1 - Local):**
-
-- Single client, single daemon
-- WebSocket for message streaming only
-
-**Multiplayer Requirements (V2):**
-
-- Broadcast all CRUD operations to connected clients
-- Session create/update/delete → all clients receive event
-- Task updates → live status sync
-- Message creation → live conversation updates
-- Board changes → canvas re-renders for all users
-
-**Event Broadcasting:**
-
-```typescript
-// Server broadcasts to all clients on same board
-socket.broadcast.to(`board:${boardId}`).emit('session:created', session);
-socket.broadcast.to(`board:${boardId}`).emit('session:updated', updates);
-socket.broadcast.to(`board:${boardId}`).emit('message:created', message);
-```
-
-### 5. Cursor & Interaction Tracking
+### Advanced Cursor Features (Phase 3b)
 
 **Visual Indicators:**
 
@@ -122,237 +64,60 @@ socket.broadcast.to(`board:${boardId}`).emit('message:created', message);
 - Hide cursor after 5s of inactivity
 - Different cursor styles (pointer, grab, text)
 
-### 6. Canvas State Sync
+### Viewport Sync (Phase 3c)
 
 **Board Layout Sync:**
 
-- Session card positions (x, y coordinates)
-- Zoom level and pan position (optional: sync viewport)
-- Session arrangement updates broadcast to all
-
-**React Flow Integration:**
-
-- Shared node positions via WebSocket
-- Conflict resolution: Last drag wins
-- Lock sessions during drag to prevent conflicts
+- Zoom level and pan position sync (optional: sync viewport)
+- "Follow user" mode to match their viewport
 - Auto-layout button to organize for everyone
 
-## Implementation Phases
-
-### Phase 1: Infrastructure (Cloud Migration)
-
-**Prerequisites:**
-
-1. **Database Migration**
-   - LibSQL (local) → PostgreSQL (cloud)
-   - Prisma or Drizzle with cloud adapter
-   - Connection pooling for concurrent clients
-
-2. **Authentication Service**
-   - Simple user registration (username/password)
-   - JWT token generation/validation
-   - Session management (refresh tokens)
-
-3. **WebSocket Room Management**
-   - Socket.io rooms per board (`board:${boardId}`)
-   - User presence tracking in Redis
-   - Heartbeat for online/offline detection
-
-### Phase 2: Presence System
+### Activity Feed (Phase 3d)
 
 **Features:**
 
-1. **User List Sidebar**
-   - Show all active users on board
-   - Avatar + username + online status
-   - Click to jump to their viewport (optional)
+- "User created Session X"
+- "User forked Session Y"
+- "User completed Task Z"
+- Timeline view of all board activity
+- Filter by user, action type, date range
 
-2. **Cursor Rendering**
-   - SVG cursor overlays on canvas
-   - Smooth interpolation between positions
-   - Username label with user color
-
-3. **Typing Indicators**
-   - "User is prompting Session X..." in prompt input
-   - Animated dots for typing state
-
-### Phase 3: Real-time Collaboration
+### Comments & Annotations (Phase 3e)
 
 **Features:**
 
-1. **Live Session Updates**
-   - All CRUD ops broadcast via WebSocket
-   - Optimistic updates with server reconciliation
-   - Conflict indicators if divergence detected
+- Comment threads on sessions
+- @ mentions for notifications
+- Resolve/unresolve threads
+- Attach comments to specific tasks/messages
 
-2. **Concurrent Prompting**
-   - Multiple users can prompt different sessions
-   - Session locking (optional toggle)
-   - Queue prompts if session locked
+---
 
-3. **Shared Canvas State**
-   - Session positions sync across clients
-   - Pan/zoom sync (optional, can be per-user)
-   - Auto-layout applies to all users
+## Team Workflows (Future)
 
-### Phase 4: Advanced Collaboration
-
-**Features:**
-
-1. **Permissions & Roles**
-   - Board owner, editor, viewer roles
-   - Invite links with permissions
-   - Session-level permissions (lock to owner)
-
-2. **Activity Feed**
-   - "User created Session X"
-   - "User forked Session Y"
-   - "User completed Task Z"
-
-3. **Comments & Annotations**
-   - Comment threads on sessions
-   - @ mentions for notifications
-   - Resolve/unresolve threads
-
-## Technical Architecture
-
-### Backend Changes
-
-**Current (V1):**
-
-```
-User → Daemon (FeathersJS) → SQLite
-        ↓
-    WebSocket (message streaming)
-```
-
-**Multiplayer (V2):**
-
-```
-Users → Cloud API (FeathersJS + Auth) → PostgreSQL
-         ↓
-    Socket.io Rooms (per board)
-         ↓
-    Redis (presence, sessions)
-```
-
-**Key Components:**
-
-- **Auth Middleware**: Verify JWT on WebSocket handshake
-- **Room Manager**: Join/leave board rooms automatically
-- **Presence Service**: Track user state, emit updates
-- **Broadcast Hooks**: Feathers hooks to emit events after CRUD ops
-
-### Frontend Changes
-
-**New Hooks:**
-
-```typescript
-// Track online users
-usePresence(boardId: string): User[]
-
-// Track user cursors
-useCursors(boardId: string): Map<UserID, CursorPosition>
-
-// Broadcast local cursor
-useCursorBroadcast(boardId: string)
-
-// Show who's typing
-useTypingIndicators(sessionId: SessionID): User[]
-```
-
-**New Components:**
-
-- `<PresenceSidebar>` - Online users list
-- `<CursorOverlay>` - Render remote cursors
-- `<TypingIndicator>` - "User is typing..."
-- `<ActivityFeed>` - Recent actions log
-
-## Data Migration Path
-
-### Local → Cloud Transition
-
-**Option 1: Dual Mode**
-
-- V1 continues with local SQLite
-- V2 adds cloud option (user chooses)
-- Import/export to migrate data
-
-**Option 2: Cloud-First**
-
-- V2 removes local mode entirely
-- Provide migration tool: `agor migrate --to-cloud`
-- One-time sync of local data to cloud
-
-**Recommended:** Option 1 (dual mode)
-
-- Allows dogfooding both modes
-- Gradual migration for users
-- Local mode for privacy-sensitive work
-
-## Security Considerations
-
-### Access Control
-
-- Board visibility: Private (invite-only) vs Public
-- Rate limiting on prompts (prevent abuse)
-- Session isolation (can't access sessions outside your boards)
-- API key management (who pays for Claude API?)
-
-### Data Privacy
-
-- End-to-end encryption for messages (optional)
-- Per-board encryption keys (team controls access)
-- Audit logs for compliance (who accessed what)
-
-## Performance Considerations
-
-### Scalability
-
-- WebSocket connections: Use Socket.io with Redis adapter
-- Database queries: Optimize with indexes, connection pooling
-- Cursor broadcasts: Throttle to 20 updates/sec per user
-- Presence updates: Batch and debounce
-
-### Bandwidth Optimization
-
-- Compress WebSocket messages (JSON + gzip)
-- Send deltas instead of full objects
-- Cursor position: Send only when changed >5px
-- Message streaming: Progressive rendering, not full reload
-
-## User Experience Goals
-
-### "It Just Works" Collaboration
-
-✅ **No friction** - Join board via link, start collaborating
-✅ **Instant feedback** - See changes in <100ms
-✅ **Clear awareness** - Always know who's doing what
-✅ **No conflicts** - System prevents/resolves automatically
-✅ **Feels live** - Like Figma/Miro, but for agent orchestration
-
-### Team Workflows
-
-**Example 1: Pair Programming**
+**Pair Programming:**
 
 - Both users on same board
 - User A prompts Session 1 (backend work)
 - User B prompts Session 2 (frontend work)
 - Both see each other's progress in real-time
+- Cursor shows where teammate is working
 
-**Example 2: Code Review**
+**Code Review:**
 
 - Reviewer joins board via link
 - Sees session tree, clicks through tasks
 - Leaves comments on specific sessions
 - Author gets notified, addresses feedback
 
-**Example 3: Onboarding**
+**Onboarding:**
 
 - New team member joins board
 - Browses historical sessions to understand decisions
 - Sees what senior dev is working on (live cursor)
 - Learns patterns by observing
+
+---
 
 ## Open Questions
 
@@ -361,38 +126,17 @@ useTypingIndicators(sessionId: SessionID): User[]
 3. **Version Control**: Should boards/sessions be git-like (branches, merges)? Or simpler?
 4. **Agent Quotas**: Limit concurrent agents per team to prevent runaway costs?
 5. **Session Replay**: Record all actions for playback (like session replay tools)?
+6. **Cloud vs Local**: Keep dual mode or force cloud for multiplayer?
+
+---
 
 ## Next Steps
 
-### V1 → V2 Transition Checklist
+See [social-features.md](social-features.md) for detailed implementation plan of Phase 3a features (facepile, cursor swarm, presence).
 
-**Prerequisites:**
+See [multiplayer-auth.md](multiplayer-auth.md) for enterprise features (OAuth, organizations, RBAC).
 
-- [ ] Migrate LibSQL → PostgreSQL (cloud DB)
-- [ ] Add user authentication (JWT-based)
-- [ ] Deploy daemon to cloud (Heroku, Railway, Render)
-- [ ] Set up Socket.io with Redis adapter
-
-**Phase 1 (Presence):**
-
-- [ ] User registration/login flow
-- [ ] Presence tracking (online/offline)
-- [ ] Cursor position sync
-- [ ] User list sidebar
-
-**Phase 2 (Collaboration):**
-
-- [ ] Broadcast all CRUD events
-- [ ] Optimistic UI updates
-- [ ] Live session status sync
-- [ ] Typing indicators
-
-**Phase 3 (Polish):**
-
-- [ ] Board permissions & invites
-- [ ] Activity feed
-- [ ] Comments on sessions
-- [ ] Performance optimization
+---
 
 ## References
 
@@ -400,9 +144,3 @@ useTypingIndicators(sessionId: SessionID): User[]
 - **Presence Examples**: [Liveblocks](https://liveblocks.io/), [PartyKit](https://partykit.io/)
 - **Cursor Sync**: [Perfect Cursors](https://github.com/steveruizok/perfect-cursors)
 - **WebSocket Scaling**: [Socket.io with Redis](https://socket.io/docs/v4/redis-adapter/)
-
----
-
-**Status:** Exploration
-**Target:** V2 (Q4 2025)
-**Dependencies:** Cloud infrastructure, user auth, database migration

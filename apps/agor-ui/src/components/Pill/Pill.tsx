@@ -11,10 +11,8 @@ import {
   MessageOutlined,
   ToolOutlined,
 } from '@ant-design/icons';
-import { Button, message, Tag, type TagProps, Typography } from 'antd';
+import { message, Tag, type TagProps, theme } from 'antd';
 import type React from 'react';
-
-const { Text } = Typography;
 
 /**
  * Standardized color palette for pills/badges
@@ -82,6 +80,7 @@ export const GitShaPill: React.FC<GitShaPillProps> = ({
   size,
   style,
 }) => {
+  const { token } = theme.useToken();
   const cleanSha = sha.replace('-dirty', '');
   const displaySha = cleanSha.substring(0, 7);
 
@@ -91,9 +90,7 @@ export const GitShaPill: React.FC<GitShaPillProps> = ({
       color={isDirty && showDirtyIndicator ? PILL_COLORS.warning : PILL_COLORS.git}
       style={style}
     >
-      <Text code style={{ fontSize: 'inherit' }}>
-        {displaySha}
-      </Text>
+      <span style={{ fontFamily: token.fontFamilyCode }}>{displaySha}</span>
       {isDirty && showDirtyIndicator && ' (dirty)'}
     </Tag>
   );
@@ -110,6 +107,7 @@ export const SessionIdPill: React.FC<SessionIdPillProps> = ({
   size = 'small',
   style,
 }) => {
+  const { token } = theme.useToken();
   const shortId = sessionId.substring(0, 8);
 
   const handleCopy = () => {
@@ -125,18 +123,14 @@ export const SessionIdPill: React.FC<SessionIdPillProps> = ({
         style={{ cursor: 'pointer', ...style }}
         onClick={handleCopy}
       >
-        <Text code style={{ fontSize: 'inherit' }}>
-          {shortId}
-        </Text>
+        <span style={{ fontFamily: token.fontFamilyCode }}>{shortId}</span>
       </Tag>
     );
   }
 
   return (
     <Tag icon={<CodeOutlined />} color={PILL_COLORS.session} style={style}>
-      <Text code style={{ fontSize: 'inherit' }}>
-        {shortId}
-      </Text>
+      <span style={{ fontFamily: token.fontFamilyCode }}>{shortId}</span>
     </Tag>
   );
 };
@@ -226,24 +220,30 @@ interface BranchPillProps extends BasePillProps {
   branch: string;
 }
 
-export const BranchPill: React.FC<BranchPillProps> = ({ branch, size, style }) => (
-  <Tag icon={<BranchesOutlined />} color={PILL_COLORS.git} style={style}>
-    <Text code style={{ fontSize: 'inherit' }}>
-      {branch}
-    </Text>
-  </Tag>
-);
+export const BranchPill: React.FC<BranchPillProps> = ({ branch, size, style }) => {
+  const { token } = theme.useToken();
+
+  return (
+    <Tag icon={<BranchesOutlined />} color={PILL_COLORS.git} style={style}>
+      <span style={{ fontFamily: token.fontFamilyCode }}>{branch}</span>
+    </Tag>
+  );
+};
 
 interface RepoPillProps extends BasePillProps {
   repoName: string;
   worktreeName?: string;
 }
 
-export const RepoPill: React.FC<RepoPillProps> = ({ repoName, worktreeName, size, style }) => (
-  <Tag icon={<GithubOutlined />} color={PILL_COLORS.git} style={style}>
-    <Text code style={{ fontSize: 'inherit' }}>
-      {repoName}
-      {worktreeName && `:${worktreeName}`}
-    </Text>
-  </Tag>
-);
+export const RepoPill: React.FC<RepoPillProps> = ({ repoName, worktreeName, size, style }) => {
+  const { token } = theme.useToken();
+
+  return (
+    <Tag icon={<GithubOutlined />} color={PILL_COLORS.git} style={style}>
+      <span style={{ fontFamily: token.fontFamilyCode }}>
+        {repoName}
+        {worktreeName && `:${worktreeName}`}
+      </span>
+    </Tag>
+  );
+};

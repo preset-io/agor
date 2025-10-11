@@ -1,11 +1,31 @@
 # Cloud Multiplayer Authentication (Phase 3)
 
-**Status:** Future Work / Planning
+**Status:** Partially Implemented / Future Planning
 **Related:** [../concepts/auth.md](../concepts/auth.md), [../concepts/architecture.md](../concepts/architecture.md)
 
-**Note:** Basic authentication is implemented. See [context/concepts/auth.md](../concepts/auth.md) for current implementation (Phase 2 - Optional Local Auth).
+## Implementation Status
 
-This document explores Phase 3: Cloud deployment with OAuth, organizations, and role-based permissions.
+**✅ Phase 2 Complete (Multi-User Foundation):**
+
+- User accounts with email/password authentication
+- JWT token management with persistent secrets
+- Real-time WebSocket sync for board positions
+- User attribution (created_by tracking)
+- User profiles with emoji avatars
+- Multi-user board collaboration
+
+**📋 Phase 3 Remaining (Enterprise Features):**
+
+- OAuth providers (GitHub, Google, OIDC/SAML)
+- Organizations/teams (multi-tenancy)
+- Role-based permissions (CASL integration)
+- Cloud deployment (PostgreSQL migration)
+- Session sharing (board-level permissions)
+- API tokens (CI/CD automation)
+
+See [../concepts/auth.md](../concepts/auth.md) for current implementation details.
+
+This document explores Phase 3 features still to be implemented.
 
 ---
 

@@ -7,7 +7,7 @@
 
 **Pronunciation:** "AY-gore"
 
-**Status:** Backend + CLI Complete | UI Integration In Progress
+**Status:** Phase 2 Complete - Multi-User Foundation
 **Project:** Open Source (Apache 2.0)
 **Organization:** Tembo
 **Date:** January 2025
@@ -144,21 +144,39 @@ Your Project:
 
 ## Current Status
 
-**✅ Completed:**
+**✅ Phase 2 Complete - Multi-User Foundation:**
 
-- Backend daemon (FeathersJS + Drizzle + LibSQL)
-- CLI tool (session management, repo/worktree operations)
+**Backend:**
+
+- FeathersJS daemon with REST + WebSocket broadcasting
+- User authentication (email/password + JWT) with anonymous mode
+- Real-time position sync for multi-user boards
+- MCP server configuration database
+- Claude Agent SDK integration (CLAUDE.md auto-loading)
+- Git operations via simple-git (clone, worktree management)
+
+**Frontend:**
+
+- React Flow canvas with drag-and-drop sessions
+- Real-time WebSocket sync across clients
+- User management UI with emoji avatars
+- SessionDrawer with conversation view
+- Board organization with persistent layout
+- Ant Design component system with token-based styling
+
+**CLI:**
+
+- Full CRUD operations (sessions, repos, boards, users)
+- Configuration management (get/set)
 - Claude Code session import with task extraction
-- UI prototype (React + Ant Design + Storybook)
-- Data architecture (Messages → Tasks event sourcing)
-- UI components (SessionCard, SessionDrawer, ConversationView)
-- Messages API with real-time WebSocket subscriptions
+- User authentication setup (`agor init`)
 
-**🚧 In Progress:**
+**🔄 Phase 3 Next Steps:**
 
-- Full UI ↔ Backend integration (session CRUD, task management)
-- Agent integration framework
-- Real-time task state updates
+- MCP server UI integration
+- Social collaboration features (facepile, cursors, presence)
+- Session forking UI and genealogy visualization
+- Concept management and report generation
 
 **See [PROJECT.md](PROJECT.md) for detailed roadmap.**
 
@@ -181,41 +199,54 @@ pnpm install
 
 ### Development Setup
 
-**Run 3 terminals for full-stack development:**
+**Simplified 2-process workflow:**
 
 ```bash
-# Terminal 1: Build @agor/core in watch mode
-cd packages/core
-pnpm dev
-
-# Terminal 2: Run backend daemon (auto-restarts on core changes)
+# Terminal 1: Run daemon (watches & rebuilds core, then restarts daemon on changes)
 cd apps/agor-daemon
 pnpm dev  # Starts on http://localhost:3030
 
-# Terminal 3: Run UI dev server
+# Terminal 2: Run UI dev server
 cd apps/agor-ui
 pnpm dev  # Starts on http://localhost:5173
 ```
 
-**Why 3 terminals?** The `@agor/core` package exports built files from `dist/`. Running `pnpm dev` in `packages/core` watches source files and rebuilds automatically, triggering daemon restarts.
+The daemon's `pnpm dev` uses `concurrently` to run:
+
+1. Core package watcher (`tsup --watch`) - rebuilds when core source changes
+2. Daemon watcher (`tsx watch`) - restarts when daemon source OR core dist changes
+
+This gives you a true 2-process workflow where editing core files automatically rebuilds and restarts the daemon!
 
 ### Use the CLI
 
 ```bash
-# Initialize Agor database
+# Initialize Agor (database + optional auth setup)
 pnpm agor init
 
+# User management
+pnpm agor user create
+pnpm agor user list
+
 # Import a Claude Code session
-pnpm agor session load-claude <session-id>
+pnpm agor session load-claude <session-id> --board <board-name>
 
-# List all sessions
+# Session management
 pnpm agor session list
+pnpm agor session show <id>
 
-# Clone a repository
+# Board organization
+pnpm agor board list
+pnpm agor board add-session <board-id> <session-id>
+
+# Repository operations
 pnpm agor repo add https://github.com/user/repo
-
-# Create a worktree for isolated work
 pnpm agor repo worktree add <repo-slug> <worktree-name>
+
+# Configuration
+pnpm agor config
+pnpm agor config get <key>
+pnpm agor config set <key> <value>
 ```
 
 ### Browse UI Components
@@ -252,40 +283,46 @@ Agor's knowledge is organized into modular concept files:
 
 ## Product Roadmap
 
-### V1: Local Desktop App (Target: Q2 2025)
+### V1: Local Orchestrator (Current - Q2 2025)
 
-**Goal:** Full-featured local agent orchestrator with GUI + CLI
+**Status:** Core features complete, polish phase
 
-**Core Capabilities:**
+**Complete:**
 
-- Multi-agent session management (Claude Code, Cursor, Codex, Gemini)
-- Visual session tree canvas with fork/spawn genealogy
-- Git worktree integration for isolated parallel sessions
-- Concept library for modular context composition
-- Automatic report generation from completed tasks
-- Local-only (no cloud, SQLite-based)
+- ✅ Multi-user authentication and real-time sync
+- ✅ Visual session canvas with drag-and-drop
+- ✅ Git worktree integration
+- ✅ Claude Agent SDK with CLAUDE.md loading
+- ✅ CLI + GUI + WebSocket architecture
+- ✅ MCP server configuration database
 
-**Deliverables:**
+**In Progress:**
 
-- Desktop app (Electron or Tauri)
-- Standalone CLI binary (`agor`)
-- Documentation + tutorials
+- 🔄 MCP server UI integration and Agent SDK hookup
+- 🔄 Social collaboration features (facepile, cursors, presence)
+- 🔄 Session fork/spawn genealogy
+
+**Remaining:**
+
+- Desktop packaging (Electron/Tauri)
+- Concept library
+- Report generation
+- Multi-agent adapters (Cursor, Codex)
 
 ---
 
-### V2: Agor Cloud (Target: Q4 2025)
+### V2: Cloud Collaboration (Q3-Q4 2025)
 
-**Goal:** Real-time collaborative agent orchestration
+**Goal:** Enterprise-ready collaborative platform
 
-**New Capabilities:**
+**Key Features:**
 
-- Cloud-hosted sessions (migrate LibSQL → PostgreSQL)
-- Real-time multiplayer (multiple devs, same session tree)
-- Shared concept libraries (team knowledge bases)
-- Pattern recommendations (learn from successful session workflows)
-- Session replay/export for knowledge sharing
-
-**Tagline:** _Real-time strategy multiplayer for AI development_
+- PostgreSQL migration for cloud hosting
+- OAuth providers (GitHub, Google, OIDC/SAML)
+- Organizations and team workspaces
+- Role-based access control (CASL)
+- Board-level permissions and sharing
+- API tokens for CI/CD automation
 
 ---
 

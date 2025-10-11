@@ -1,166 +1,180 @@
-# Agor Project
+## Implementation Status
 
-> **Next-gen agent orchestration platform** - Manage unlimited AI coding agents in hyper-context-aware session trees.
+### ✅ Phase 2 Complete (Multi-User Foundation)
 
-**See [context/](context/) for complete architecture, data models, and design documentation.**
+**Backend:**
 
----
+- FeathersJS daemon with REST + WebSocket (:3030)
+- User authentication (email/password + JWT)
+- Real-time position sync for multi-user boards
+- Sessions, Tasks, Messages, Repos, Boards, Users, MCP Servers
+- Claude Agent SDK integration (CLAUDE.md auto-loading)
+- Git operations via simple-git (clone, worktree management)
 
-## What Is Agor?
+**Frontend:**
 
-**Agor is an agent orchestrator** - the platform layer that sits above all agentic coding tools (Claude Code, Cursor, Codex, Gemini), providing unified session management, visual session trees, and automatic knowledge capture.
+- React Flow canvas with drag-and-drop sessions
+- Real-time WebSocket sync across clients
+- User management UI with emoji avatars
+- SessionDrawer with conversation view
+- Board organization and session cards
+- Ant Design component system with token-based styling
 
-**Core Insight:** Context engineering isn't about prompt templates—it's about managing sessions, tasks, and concepts as first-class composable primitives stored in a session tree.
+**CLI:**
 
-**See:** [context/concepts/core.md](context/concepts/core.md) for vision and primitives.
-
----
-
-## Current Implementation Status
-
-### ✅ What's Built
-
-**Backend & Data** - Fully operational FeathersJS daemon with real-time capabilities
-
-- FeathersJS REST + WebSocket daemon (:3030)
-- Drizzle ORM + LibSQL database
-- Sessions, Tasks, Messages, Repos, Boards services
-- UUIDv7 IDs with short ID resolution
-- Git operations: clone, worktree management
-- Claude Agent SDK integration with live execution
-- Progressive WebSocket message streaming
-
-**UI & Frontend** - Complete React component library with live data
-
-- SessionCanvas with React Flow tree visualization
-- SessionCard with drag handles and task preview
-- SessionDrawer with task-centric ConversationView
-- Real-time message streaming and task updates
-- Board organization and session management
-- Complete Ant Design component system
-
-**CLI Tools** - Operational session and repo management
-
-- `agor init` - Database initialization
+- `agor init` - Setup auth and database
 - `agor session list/load-claude` - Session management
-- `agor repo add/list/worktree` - Repository and worktree operations
+- `agor repo add/list/worktree` - Git repository operations
 - `agor board list/add-session` - Board organization
-- `agor config` - Configuration management
+- `agor config get/set` - Configuration management
+- `agor user list/create` - User management
 
-**Architecture Documentation** - Complete concept documentation in `context/concepts/`
+**Documentation:** Complete architecture in `context/concepts/` (core, models, architecture, auth, design, websockets)
 
-- Core primitives and data models
-- WebSocket architecture and real-time patterns
-- Conversation UI patterns
-- Agent integration strategy
-- Frontend guidelines and token-based styling
-
-**See:** [CLAUDE.md](CLAUDE.md) for complete implementation details and development guide.
+**See:** [CLAUDE.md](CLAUDE.md) for development guide and [context/concepts/auth.md](context/concepts/auth.md) for collaboration features.
 
 ---
 
-## Active TODO List
+## Next Up
 
-### High Priority
+### Phase 3a: MCP Server Integration (3-5 days)
 
-- [ ] **Session forking** - Fork sessions at decision points
-  - Wire fork button in UI to daemon API
-  - Create new session with genealogy relationship
-  - Display genealogy tree on canvas (React Flow edges)
-  - Add fork metadata (decision point, timestamp)
+See [context/explorations/mcp-integration.md](context/explorations/mcp-integration.md) for detailed design.
 
-- [ ] **Save session positions on board** - Persist canvas layout
-  - Store x/y coordinates in database
-  - Update on drag end
-  - Restore positions on board load
+**Goal:** Wire up MCP servers to Claude Agent SDK for enhanced tool capabilities.
 
-- [ ] **Session state transitions** - Idle → Running → Completed lifecycle
-  - Implement state machine in daemon
-  - UI indicators for each state
-  - Auto-transition based on activity
+- [ ] **MCP server configuration UI** - Manage MCP servers (2 days)
+  - Display available MCP servers in settings modal
+  - Enable/disable servers per session
+  - Show discovered tools, resources, prompts
+  - Test connection and capability discovery
 
-### Medium Priority
+- [ ] **Hook up to Agent SDK** - Pass MCP servers to Claude (1-2 days)
+  - Pass `mcpServers` config to Claude Agent SDK
+  - Filter by session-level enablement
+  - Handle MCP server lifecycle (start/stop)
+  - Show MCP tool usage in conversation view
 
-- [ ] **Genealogy tree visualization** - Show session relationships
-  - React Flow edges between parent/child sessions
-  - Distinguish fork (dashed) vs spawn (solid) relationships
-  - Interactive tree exploration
+- [ ] **Polish & debugging** - Error handling and UX (1 day)
+  - Display MCP connection errors
+  - Show which tools came from which server
+  - Add MCP server status indicators
 
-- [ ] **Token usage tracking** - Track costs from Agent SDK
-  - Capture token metadata from Claude responses
-  - Display in UI (session card, conversation view)
-  - Aggregate costs across sessions
+### Phase 3b: Social Collaboration (1-2 weeks)
 
-- [ ] **CLI session commands**
-  - `agor session show <id>` - Detailed session view with genealogy
-  - `agor session create` - Interactive session wizard
-  - `agor session fork/spawn` - Create child sessions
+See [context/explorations/social-features.md](context/explorations/social-features.md) for detailed implementation plan.
 
-### Future Features
+**Goal:** Add presence indicators so teammates can see what each other is doing in real-time.
 
-- [ ] **Concept management** - Modular context composition
-  - Define, attach, and detach concepts from sessions
-  - Concept library UI
-  - Auto-suggest relevant concepts
+- [ ] **Facepile** - Show active users on board (1-2 days)
+  - PresenceManager service in daemon
+  - `board:join` / `board:leave` WebSocket events
+  - `usePresence()` hook in UI
+  - Ant Design `Avatar.Group` component in canvas header
 
-- [ ] **Report generation** - Auto-generate summaries from completed tasks
+- [ ] **Cursor swarm** - Real-time cursor positions (2-3 days)
+  - `cursor:move` / `cursor:update` events (throttled to 50ms)
+  - `useCursorBroadcast()` and `useRemoteCursors()` hooks
+  - CursorOverlay component with smooth interpolation
+  - Use React Flow project() for coordinate mapping
+
+- [ ] **Presence indicators** - Who's viewing which sessions (1 day)
+  - `viewing:session` events
+  - Mini avatar badges on session cards
+  - Tooltip showing viewer names
+
+- [ ] **Typing indicators** - Who's prompting (1 day)
+  - `typing:start` / `typing:stop` events
+  - "User is typing..." below prompt input
+
+### Phase 3c: Session Orchestration (2-3 weeks)
+
+**Goal:** Complete the core fork/spawn workflow for parallel session management.
+
+- [ ] **Session forking UI** - Fork sessions at decision points
+  - Wire fork button to `/sessions/:id/fork` API
+  - Display fork genealogy on canvas (React Flow edges)
+  - Show fork point in conversation view
+
+- [ ] **Genealogy visualization** - Show session relationships
+  - React Flow edges between parent/child/forked sessions
+  - Different edge styles (solid spawn, dashed fork)
+  - Click edge to see fork/spawn context
+
+- [ ] **Session state machine** - Idle → Running → Completed
+  - Auto-transition on prompt execution
+  - Visual state indicators (spinner, checkmark, error)
+  - Status filtering on board
+
+### Phase 3d: Polish & UX (1-2 weeks)
+
+- [ ] **Token tracking** - Show costs from Claude API
+  - Capture from Agent SDK responses
+  - Display in session cards and conversation view
+  - Aggregate board-level costs
+
+- [ ] **Concept management** - Modular context files
+  - CRUD operations for concepts
+  - Attach/detach concepts from sessions
+  - Auto-suggest based on session description
+
+- [ ] **Report generation** - Auto-summarize completed tasks
   - LLM-powered task summaries
-  - Session-level reports
-  - Export capabilities
+  - Export session reports
+  - Share reports with team
 
-- [ ] **Optional tool execution** - Enable Claude tools with UX design
-  - Tool allowlist configuration
-  - Permission/approval flow
-  - Tool execution feedback in UI
+### Future (Phase 4+)
 
-- [ ] **Desktop packaging** - Electron/Tauri wrapper
-  - Bundled daemon (auto-start)
-  - System tray integration
-  - Native file system access
+See [context/explorations/](context/explorations/) for detailed designs:
 
-- [ ] **Multi-agent abstraction** - Support for Cursor, Codex, Gemini
-  - Agent adapter interface
-  - Agent-specific message formats
-  - Unified conversation view
+- **OAuth & organizations** ([multiplayer-auth.md](context/explorations/multiplayer-auth.md)) - GitHub/Google login, team workspaces, RBAC
+- **Desktop app** - Electron/Tauri packaging with bundled daemon
+- **Multi-agent support** ([agent-interface.md](context/concepts/agent-integration.md)) - Cursor, Codex, Gemini
+- **Cloud deployment** - PostgreSQL migration, Turso/Supabase
 
 ---
 
 ## Roadmap
 
-### V1: Local Desktop App (Target: Q2 2025)
+### V1: Local Orchestrator (Current - Q2 2025)
 
-**Goal:** Full-featured local agent orchestrator with GUI + CLI
+**Status:** Core features complete, polish phase
 
-**Core Capabilities:**
+**Complete:**
 
-- Multi-agent session management (Claude Code, Cursor, Codex, Gemini)
-- Visual session tree canvas with fork/spawn genealogy
-- Git worktree integration for isolated parallel sessions
-- Concept library for modular context composition
-- Automatic report generation from completed tasks
-- Local-only (no cloud, SQLite-based)
+- ✅ Multi-user authentication and real-time sync
+- ✅ Visual session canvas with drag-and-drop
+- ✅ Git worktree integration
+- ✅ Claude Agent SDK with CLAUDE.md loading
+- ✅ CLI + GUI + WebSocket architecture
 
-**Deliverables:**
+**In Progress:**
 
-- Desktop app (Electron or Tauri)
-- Standalone CLI binary (`agor`)
-- Documentation + tutorials
+- 🔄 Social collaboration features (facepile, cursors, presence)
+- 🔄 Session fork/spawn genealogy
+- 🔄 State machine and lifecycle management
 
-### V2: Agor Cloud (Target: Q4 2025)
+**Remaining:**
 
-**Goal:** Real-time collaborative agent orchestration
+- Desktop packaging (Electron/Tauri)
+- Concept library
+- Report generation
+- Multi-agent adapters (Cursor, Codex)
 
-**New Capabilities:**
+### V2: Cloud Collaboration (Q3-Q4 2025)
 
-- Cloud-hosted sessions (migrate LibSQL → PostgreSQL)
-- Real-time multiplayer (multiple devs, same session tree)
-- Shared concept libraries (team knowledge bases)
-- Pattern recommendations (learn from successful session workflows)
-- Session replay/export for knowledge sharing
+**Goal:** Enterprise-ready collaborative platform
 
-**Tagline:** _Real-time strategy multiplayer for AI development_
+**Key Features:**
 
-**See:** [README.md](README.md) for full product vision.
+- PostgreSQL migration for cloud hosting
+- OAuth providers (GitHub, Google, OIDC/SAML)
+- Organizations and team workspaces
+- Role-based access control (CASL)
+- Board-level permissions and sharing
+- API tokens for CI/CD automation
+
+**See:** [context/explorations/multiplayer-auth.md](context/explorations/multiplayer-auth.md) for detailed design.
 
 ---
 

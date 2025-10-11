@@ -1,13 +1,22 @@
 # Authentication & Authorization
 
-**Status:** Implemented (Phase 2 - Optional Local Auth)
+**Status:** Implemented (Phase 2 - Multi-User Auth + Real-time Sync)
 **Related:** [architecture.md](architecture.md), [models.md](models.md)
 
 ## Overview
 
-Agor uses **anonymous-first authentication** - zero config required for local development, with optional authentication when needed for shared environments.
+Agor uses **anonymous-first authentication** with full multi-user support - zero config required for local development, with optional authentication for shared environments.
 
 **Philosophy:** Local-first with progressive enhancement.
+
+**Current Capabilities:**
+
+- ✅ User accounts with email/password authentication
+- ✅ JWT tokens with automatic secret generation
+- ✅ Real-time WebSocket sync for session positions
+- ✅ Multi-user board collaboration
+- ✅ User attribution (created_by tracking)
+- ✅ User profiles with emoji avatars
 
 ---
 
@@ -329,9 +338,79 @@ chmod 700 ~/.agor/
 
 ---
 
-## Future Work
+## Real-Time Collaboration Features
 
-See [context/explorations/multiplayer-auth.md](../explorations/multiplayer-auth.md) for planned Phase 3 features:
+### Session Position Sync (Implemented)
+
+**Status:** ✅ Complete
+
+Multiple users can collaborate on the same board with real-time position synchronization:
+
+```typescript
+// Board layout tracks session positions
+board.layout = {
+  [sessionId]: { x: number, y: number },
+};
+```
+
+**Features:**
+
+- Drag-and-drop session cards sync across all clients
+- Debounced updates (500ms) reduce API calls during drag
+- Last-write-wins conflict resolution
+- Position persistence across page refreshes
+- Smart cache invalidation prevents echo issues
+
+**Implementation:** packages/core/src/types/board.ts:32-37, apps/agor-ui/src/components/SessionCanvas/SessionCanvas.tsx
+
+### User Attribution (Implemented)
+
+**Status:** ✅ Complete
+
+All entities track who created them via `created_by` field:
+
+```typescript
+{
+  created_by: string; // user_id or 'anonymous'
+}
+```
+
+**Applied to:** Sessions, tasks, boards
+
+**Hooks:** Automatic injection via FeathersJS before:create hooks (apps/agor-daemon/src/index.ts:116-201)
+
+### User Profiles (Implemented)
+
+**Status:** ✅ Complete
+
+Users have customizable profiles:
+
+```typescript
+{
+  user_id: string;
+  email: string;
+  name?: string;
+  emoji?: string; // User avatar (e.g., '👤', '🦄')
+  role: 'owner' | 'admin' | 'member' | 'viewer';
+  avatar?: string; // URL to profile image
+  preferences?: Record<string, unknown>;
+}
+```
+
+**UI:** Settings modal with user management table
+
+## Future Work (Phase 3)
+
+See [context/explorations/multiplayer-auth.md](../explorations/multiplayer-auth.md) and [context/explorations/social-features.md](../explorations/social-features.md) for planned features:
+
+**Phase 3a - Social Features (Next):**
+
+- **Cursor swarm** - Real-time cursor positions on canvas
+- **Facepile** - Show who's active on board
+- **Presence indicators** - Who's viewing/editing which session
+- **Typing indicators** - Show when users are prompting
+
+**Phase 3b - Enterprise Features (Later):**
 
 - **OAuth providers** (GitHub, Google, generic OIDC)
 - **Organizations/teams** (multi-tenancy)

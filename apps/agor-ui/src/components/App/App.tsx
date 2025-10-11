@@ -1,5 +1,5 @@
 import type { AgorClient } from '@agor/core/api';
-import type { CreateUserInput, Repo, UpdateUserInput, User } from '@agor/core/types';
+import type { CreateUserInput, MCPServer, Repo, UpdateUserInput, User } from '@agor/core/types';
 import { Layout } from 'antd';
 import { useState } from 'react';
 import type { Agent, Board, Session, Task } from '../../types';
@@ -26,6 +26,8 @@ export interface AppProps {
   boards: Board[];
   repos: Repo[];
   users: User[]; // All users for multiplayer metadata
+  mcpServers: MCPServer[];
+  sessionMcpServerIds: Record<string, string[]>; // Map: sessionId -> mcpServerIds[]
   worktreeOptions: RepoReferenceOption[];
   repoOptions: RepoReferenceOption[];
   initialBoardId?: string;
@@ -48,6 +50,10 @@ export interface AppProps {
   onCreateUser?: (data: CreateUserInput) => void;
   onUpdateUser?: (userId: string, updates: UpdateUserInput) => void;
   onDeleteUser?: (userId: string) => void;
+  onCreateMCPServer?: (data: Partial<MCPServer>) => void;
+  onUpdateMCPServer?: (mcpServerId: string, updates: Partial<MCPServer>) => void;
+  onDeleteMCPServer?: (mcpServerId: string) => void;
+  onUpdateSessionMcpServers?: (sessionId: string, mcpServerIds: string[]) => void;
   onLogout?: () => void;
 }
 
@@ -60,6 +66,8 @@ export const App: React.FC<AppProps> = ({
   boards,
   repos,
   users,
+  mcpServers,
+  sessionMcpServerIds,
   worktreeOptions,
   repoOptions,
   initialBoardId,
@@ -79,6 +87,10 @@ export const App: React.FC<AppProps> = ({
   onCreateUser,
   onUpdateUser,
   onDeleteUser,
+  onCreateMCPServer,
+  onUpdateMCPServer,
+  onDeleteMCPServer,
+  onUpdateSessionMcpServers,
   onLogout,
 }) => {
   const [modalOpen, setModalOpen] = useState(false);
@@ -147,9 +159,16 @@ export const App: React.FC<AppProps> = ({
           tasks={tasks}
           users={users}
           currentUserId={user?.user_id}
+          mcpServers={mcpServers}
+          sessionMcpServerIds={sessionMcpServerIds}
           onSessionClick={handleSessionClick}
           onSessionUpdate={onUpdateSession}
           onSessionDelete={onDeleteSession}
+          onUpdateSessionMcpServers={onUpdateSessionMcpServers}
+          onOpenSettings={sessionId => {
+            console.log('Open settings for session:', sessionId);
+            // TODO: Programmatically open SessionCard modal
+          }}
         />
         <NewSessionButton onClick={() => setModalOpen(true)} />
       </Content>
@@ -160,17 +179,24 @@ export const App: React.FC<AppProps> = ({
         availableAgents={availableAgents}
         worktreeOptions={worktreeOptions}
         repoOptions={repoOptions}
+        mcpServers={mcpServers}
       />
       <SessionDrawer
         client={client}
         session={selectedSession}
         users={users}
         currentUserId={user?.user_id}
+        mcpServers={mcpServers}
+        sessionMcpServerIds={selectedSessionId ? sessionMcpServerIds[selectedSessionId] || [] : []}
         open={!!selectedSessionId}
         onClose={() => setSelectedSessionId(null)}
         onSendPrompt={handleSendPrompt}
         onFork={handleFork}
         onSubtask={handleSubtask}
+        onOpenSettings={sessionId => {
+          console.log('Open settings for session from drawer:', sessionId);
+          // TODO: Programmatically trigger SessionCard modal
+        }}
       />
       <SessionListDrawer
         open={listDrawerOpen}
@@ -187,6 +213,7 @@ export const App: React.FC<AppProps> = ({
         boards={boards}
         repos={repos}
         users={users}
+        mcpServers={mcpServers}
         onCreateBoard={onCreateBoard}
         onUpdateBoard={onUpdateBoard}
         onDeleteBoard={onDeleteBoard}
@@ -197,6 +224,9 @@ export const App: React.FC<AppProps> = ({
         onCreateUser={onCreateUser}
         onUpdateUser={onUpdateUser}
         onDeleteUser={onDeleteUser}
+        onCreateMCPServer={onCreateMCPServer}
+        onUpdateMCPServer={onUpdateMCPServer}
+        onDeleteMCPServer={onDeleteMCPServer}
       />
     </Layout>
   );
