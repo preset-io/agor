@@ -2,7 +2,7 @@
 
 # Agor: Agent Orchestrator
 
-> **Agor — Next-gen agent orchestration**
+> **Next-gen coding agent orchestration**
 > Manage unlimited agents in hyper-context-aware session trees
 
 **Pronunciation:** "AY-gore"
@@ -187,6 +187,10 @@ Your Project:
 ### Prerequisites
 
 - Node.js 18+ and pnpm
+- **Claude Code 2.0+** - Ensure you have the latest version:
+  ```bash
+  pnpm install -g @anthropic-ai/claude-code@latest
+  ```
 - Git repository (optional, for worktree features)
 
 ### Installation
