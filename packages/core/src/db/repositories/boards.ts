@@ -205,6 +205,8 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
       await this.db
         .update(boards)
         .set({
+          name: insert.name,
+          slug: insert.slug,
           updated_at: new Date(),
           data: insert.data,
         })
