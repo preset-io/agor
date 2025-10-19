@@ -1,10 +1,14 @@
 // Schema and types
 
-// bcryptjs re-export (for password hashing in daemon)
-export { compare, hash } from 'bcryptjs';
 // Drizzle ORM re-exports (so daemon doesn't import drizzle-orm directly)
 // Commonly used operators and utilities
 export { and, desc, eq, inArray, like, or, sql } from 'drizzle-orm';
+
+// bcryptjs re-export (for password hashing in daemon)
+// bcryptjs is a CommonJS module, so we import the default and re-export specific functions
+import bcryptjs from 'bcryptjs';
+export const compare = bcryptjs.compare;
+export const hash = bcryptjs.hash;
 
 // ID utilities (re-exported from lib for convenience)
 export { formatShortId, generateId, IdResolutionError, resolveShortId } from '../lib/ids';
