@@ -8,7 +8,7 @@ import { LockOutlined, MailOutlined } from '@ant-design/icons';
 import { Alert, Button, Card, Form, Input, Space, Typography } from 'antd';
 import { useState } from 'react';
 
-const { Title, Text, Link } = Typography;
+const { Title, Text } = Typography;
 
 interface LoginPageProps {
   onLogin: (email: string, password: string) => Promise<boolean>;

@@ -8,7 +8,7 @@ import type {
   User,
 } from '@agor/core/types';
 import { Layout } from 'antd';
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { usePresence } from '../../hooks/usePresence';
 import type { Agent, Board, Session, Task } from '../../types';
 import { AppHeader } from '../AppHeader';
@@ -44,11 +44,7 @@ export interface AppProps {
   onCreateSession?: (config: NewSessionConfig, boardId: string) => void;
   onForkSession?: (sessionId: string, prompt: string) => void;
   onSpawnSession?: (sessionId: string, prompt: string) => void;
-  onSendPrompt?: (
-    sessionId: string,
-    prompt: string,
-    permissionMode?: PermissionMode
-  ) => void;
+  onSendPrompt?: (sessionId: string, prompt: string, permissionMode?: PermissionMode) => void;
   onUpdateSession?: (sessionId: string, updates: Partial<Session>) => void;
   onDeleteSession?: (sessionId: string) => void;
   onCreateBoard?: (board: Partial<Board>) => void;
@@ -124,10 +120,7 @@ export const App: React.FC<AppProps> = ({
     setSelectedSessionId(sessionId);
   };
 
-  const handleSendPrompt = async (
-    prompt: string,
-    permissionMode?: PermissionMode
-  ) => {
+  const handleSendPrompt = async (prompt: string, permissionMode?: PermissionMode) => {
     if (selectedSessionId) {
       const session = sessions.find(s => s.session_id === selectedSessionId);
       const agentName = session?.agentic_tool || 'agentic_tool';

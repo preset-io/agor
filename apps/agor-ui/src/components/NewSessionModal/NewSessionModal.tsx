@@ -1,5 +1,4 @@
-import type { AgentName as CoreAgentName, MCPServer, PermissionMode } from '@agor/core/types';
-import { getDefaultPermissionMode } from '@agor/core/types';
+import type { MCPServer, PermissionMode } from '@agor/core/types';
 import { DownOutlined } from '@ant-design/icons';
 import { Checkbox, Collapse, Form, Input, Modal, Radio, Select, Space, Typography } from 'antd';
 import { useEffect, useState } from 'react';

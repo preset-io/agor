@@ -45,8 +45,6 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
         return 'Codex Model';
       case 'gemini':
         return 'Gemini Model';
-      case 'claude-code':
-      case 'cursor':
       default:
         return 'Claude Model';
     }

@@ -20,7 +20,7 @@ import {
 } from '@agor/core/db';
 import { type PermissionDecision, PermissionService } from '@agor/core/permissions';
 import { ClaudeTool, CodexTool, GeminiTool } from '@agor/core/tools';
-import type { SessionID, User } from '@agor/core/types';
+import type { SessionID, TaskStatus, User } from '@agor/core/types';
 import type { PermissionMode } from '@anthropic-ai/claude-agent-sdk';
 import { AuthenticationService, JWTStrategy } from '@feathersjs/authentication';
 import { LocalStrategy } from '@feathersjs/authentication-local';
@@ -422,7 +422,7 @@ async function main() {
 
     console.log('🔑 Generated and saved persistent JWT secret to config');
   } else {
-    console.log('🔑 Loaded existing JWT secret from config:', jwtSecret.substring(0, 16) + '...');
+    console.log('🔑 Loaded existing JWT secret from config:', `${jwtSecret.substring(0, 16)}...`);
   }
 
   // Configure authentication options BEFORE creating service
@@ -897,12 +897,9 @@ async function main() {
 
       // Get session to find which tool to use
       const session = await sessionsService.get(id, params);
-      console.log(`   Session agent: ${session.agentic_tool}`);
-      console.log(`   Session status: ${session.status}`);
 
       // Check if session is actually running
       if (session.status !== 'running') {
-        console.log(`   ⚠️  Session not running, cannot stop`);
         return {
           success: false,
           reason: `Session is not running (status: ${session.status})`,
@@ -924,28 +921,21 @@ async function main() {
         ? runningTasks
         : runningTasks.data || [];
 
-      console.log(`   📋 Found ${runningTasksArray.length} running task(s)`);
-
       // PHASE 1: Immediately update status to 'stopping' (UI feedback before SDK call)
       if (runningTasksArray.length > 0) {
         const latestTask = runningTasksArray[runningTasksArray.length - 1];
-        console.log(`   🔄 Updating task ${latestTask.task_id.substring(0, 8)} to stopping...`);
 
         try {
-          const updatedTask = await Promise.race([
+          await Promise.race([
             tasksService.patch(latestTask.task_id, {
-              // biome-ignore lint/suspicious/noExplicitAny: Task status type being extended with new stopping/stopped values
-              status: 'stopping' as any,
+              status: 'stopping' satisfies TaskStatus as TaskStatus,
             }),
             new Promise((_, reject) =>
               setTimeout(() => reject(new Error('Task patch timeout')), 5000)
             ),
           ]);
-          // biome-ignore lint/suspicious/noExplicitAny: Task type from service doesn't include new status values yet
-          console.log(`   ✅ Task patched, new status: ${(updatedTask as any).status}`);
-          console.log(`   📡 WebSocket 'patched' event should have been emitted`);
         } catch (error) {
-          console.error(`   ❌ Failed to patch task:`, error);
+          console.error(`Failed to update task to stopping:`, error);
           // Continue anyway, we'll still try to stop the SDK
         }
       }
@@ -957,31 +947,23 @@ async function main() {
         reason?: string;
       };
 
-      console.log(`   🔀 Routing to tool: ${session.agentic_tool || 'claude-code (default)'}`);
-      console.log(`   🔍 claudeTool.stopTask exists: ${typeof claudeTool.stopTask}`);
-
       if (session.agentic_tool === 'codex') {
-        console.log(`   ➡️  Calling codexTool.stopTask(${id})`);
         result = (await codexTool.stopTask?.(id)) || {
           success: false,
           reason: 'stopTask not implemented',
         };
       } else if (session.agentic_tool === 'gemini') {
-        console.log(`   ➡️  Calling geminiTool.stopTask(${id})`);
         result = (await geminiTool.stopTask?.(id)) || {
           success: false,
           reason: 'stopTask not implemented',
         };
       } else {
         // Claude Code (default)
-        console.log(`   ➡️  Calling claudeTool.stopTask(${id})`);
         result = (await claudeTool.stopTask?.(id)) || {
           success: false,
           reason: 'stopTask not implemented',
         };
       }
-
-      console.log(`   📊 Stop result:`, result);
 
       // PHASE 3: Update final status based on stop result
       if (result.success) {
@@ -1000,7 +982,7 @@ async function main() {
               end_timestamp: new Date().toISOString(),
             },
           });
-          console.log(`   ✅ Marked task ${latestTask.task_id} as stopped`);
+          console.log(`✅ Task ${latestTask.task_id.substring(0, 8)} stopped`);
         }
       } else {
         // Stop failed, revert to running
@@ -1009,7 +991,6 @@ async function main() {
           await tasksService.patch(latestTask.task_id, {
             status: 'running', // Revert to running
           });
-          console.log(`   ❌ Stop failed, reverted task ${latestTask.task_id} to running`);
         }
       }
 
@@ -1024,8 +1005,6 @@ async function main() {
       if (!id) throw new Error('Session ID required');
       if (!data.requestId) throw new Error('requestId required');
       if (typeof data.allow !== 'boolean') throw new Error('allow field required');
-
-      console.log(`📨 Received permission decision:`, JSON.stringify(data, null, 2));
 
       // Resolve the pending permission request
       permissionService.resolvePermission(data);

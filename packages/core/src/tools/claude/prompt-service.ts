@@ -111,19 +111,8 @@ export class ClaudePromptService {
       toolUseID: string | undefined,
       options: { signal: AbortSignal }
     ): Promise<HookJSONOutput> => {
-      console.log('');
-      console.log('═══════════════════════════════════════════════════════════');
-      console.log('🔥🔥🔥 PreToolUse HOOK FIRED! 🔥🔥🔥');
-      console.log(`   Tool Name: ${input.tool_name}`);
-      console.log(`   Task ID: ${taskId}`);
-      console.log(`   Tool Use ID: ${toolUseID}`);
-      console.log(`   Tool Input: ${JSON.stringify(input.tool_input, null, 2)}`);
-      console.log('═══════════════════════════════════════════════════════════');
-      console.log('');
-
       // If no permission service or tasks service, allow by default
       if (!this.permissionService || !this.tasksService) {
-        console.log(`⚠️  No permission service or tasks service, allowing by default`);
         return {};
       }
 
@@ -131,13 +120,8 @@ export class ClaudePromptService {
         // Check session-specific permission overrides first
         // IMPORTANT: Always fetch fresh session data to catch recently saved permissions
         const session = await this.sessionsRepo.findById(sessionId);
-        console.log(`🔍 Checking permissions for ${input.tool_name}...`);
-        console.log(
-          `   Session allowedTools: ${JSON.stringify(session?.permission_config?.allowedTools || [])}`
-        );
 
         if (session?.permission_config?.allowedTools?.includes(input.tool_name)) {
-          console.log(`🛡️  Permission: ${input.tool_name} auto-allowed by session config`);
           return {
             hookSpecificOutput: {
               hookEventName: 'PreToolUse',
@@ -146,38 +130,24 @@ export class ClaudePromptService {
             },
           };
         }
-        console.log(`   → Not in allowlist, asking user...`);
 
         // Generate request ID
         const requestId = generateId();
         const timestamp = new Date().toISOString();
 
         // Update task status to 'awaiting_permission' via FeathersJS service (emits WebSocket)
-        console.log(`📝 Updating task ${taskId} to awaiting_permission status...`);
-        try {
-          await this.tasksService.patch(taskId, {
-            status: 'awaiting_permission',
-            permission_request: {
-              request_id: requestId,
-              tool_name: input.tool_name,
-              tool_input: input.tool_input as Record<string, unknown>,
-              tool_use_id: toolUseID,
-              requested_at: timestamp,
-            },
-          });
-          console.log(`✅ Task updated successfully via FeathersJS (WebSocket event emitted)`);
-        } catch (error) {
-          console.error(`❌ FAILED to update task:`, error);
-          throw error; // Re-throw to see if hook catches it
-        }
-
-        console.log(`🛡️  Task ${taskId} now awaiting permission for ${input.tool_name}`);
+        await this.tasksService.patch(taskId, {
+          status: 'awaiting_permission',
+          permission_request: {
+            request_id: requestId,
+            tool_name: input.tool_name,
+            tool_input: input.tool_input as Record<string, unknown>,
+            tool_use_id: toolUseID,
+            requested_at: timestamp,
+          },
+        });
 
         // Emit WebSocket event for UI (broadcasts to ALL viewers)
-        console.log(`📡 Emitting WebSocket permission request event...`);
-        console.log(`   Session ID: ${sessionId}`);
-        console.log(`   Request ID: ${requestId}`);
-        console.log(`   Tool: ${input.tool_name}`);
         this.permissionService.emitRequest(sessionId, {
           requestId,
           taskId,
@@ -186,26 +156,13 @@ export class ClaudePromptService {
           toolUseID,
           timestamp,
         });
-        console.log(`✅ WebSocket event emitted`);
 
         // Wait for UI decision (Promise pauses SDK execution)
-        console.log(`⏳ Waiting for user decision via UI...`);
-        console.log(`   Using AbortSignal: ${options.signal ? 'present' : 'missing'}`);
         const decision = await this.permissionService.waitForDecision(
           requestId,
           taskId,
           options.signal
         );
-        console.log('');
-        console.log('═══════════════════════════════════════════════════════════');
-        console.log('📨 DECISION RECEIVED FROM UI:');
-        console.log(`   decision.allow: ${decision.allow}`);
-        console.log(`   decision.remember: ${decision.remember}`);
-        console.log(`   decision.scope: ${decision.scope}`);
-        console.log(`   decision.reason: ${decision.reason}`);
-        console.log(`   decision.decidedBy: ${decision.decidedBy}`);
-        console.log('═══════════════════════════════════════════════════════════');
-        console.log('');
 
         // Update task with approval info and resume status via FeathersJS service
         // IMPORTANT: Must send full permission_request object, not dot notation
@@ -220,19 +177,11 @@ export class ClaudePromptService {
           },
         });
 
-        console.log(
-          `🛡️  Task ${taskId} ${decision.allow ? 'approved' : 'denied'} by user ${decision.decidedBy}`
-        );
-
         // Persist decision if user clicked "Remember"
-        console.log(
-          `💾 Checking if should persist: remember=${decision.remember}, scope=${decision.scope}`
-        );
         if (decision.remember) {
           // RE-FETCH session to get latest data (avoid stale closure)
           const freshSession = await this.sessionsRepo.findById(sessionId);
           if (!freshSession) {
-            console.error(`❌ Session ${sessionId} not found, cannot persist permission`);
             return {
               hookSpecificOutput: {
                 hookEventName: 'PreToolUse',
@@ -245,7 +194,6 @@ export class ClaudePromptService {
           if (decision.scope === 'session') {
             // Update session-level permissions via FeathersJS service (broadcasts WebSocket events)
             const currentAllowed = freshSession.permission_config?.allowedTools || [];
-            console.log(`   Current allowed tools: ${JSON.stringify(currentAllowed)}`);
 
             // IMPORTANT: Use FeathersJS service (if available) for WebSocket broadcasting
             // Fall back to repository if service not available (e.g., in tests)
@@ -257,27 +205,15 @@ export class ClaudePromptService {
             };
 
             if (this.sessionsService) {
-              console.log(`   📡 Updating via FeathersJS service (will broadcast to WebSocket)`);
               await this.sessionsService.patch(sessionId, updateData);
             } else {
-              console.log(
-                `   ⚠️  No SessionsService available, updating via repository (no WebSocket broadcast)`
-              );
               await this.sessionsRepo.update(sessionId, updateData);
             }
-            console.log(`🛡️  ✅ Saved ${input.tool_name} to session ${sessionId} permissions`);
-
-            // Verify it was saved
-            const verifySession = await this.sessionsRepo.findById(sessionId);
-            console.log(
-              `   Verification - allowedTools: ${JSON.stringify(verifySession?.permission_config?.allowedTools || [])}`
-            );
           } else if (decision.scope === 'project') {
             // Update project-level permissions in .claude/settings.json
             await this.updateProjectSettings(freshSession.repo.cwd, {
               allowTools: [input.tool_name],
             });
-            console.log(`🛡️  Saved ${input.tool_name} to project permissions`);
           }
         }
 
@@ -290,7 +226,7 @@ export class ClaudePromptService {
         };
       } catch (error) {
         // On any error in the permission flow, mark task as failed
-        console.error('❌ PreToolUse hook error:', error);
+        console.error('PreToolUse hook error:', error);
 
         try {
           await this.tasksService.patch(taskId, {
@@ -300,9 +236,8 @@ export class ClaudePromptService {
               timestamp: new Date().toISOString(),
             },
           });
-          console.log(`❌ Task ${taskId} marked as failed due to hook error`);
         } catch (updateError) {
-          console.error(`❌ Failed to update task status to failed:`, updateError);
+          console.error('Failed to update task status:', updateError);
         }
 
         // Return deny to SDK so tool doesn't execute
@@ -393,22 +328,16 @@ export class ClaudePromptService {
     const modelConfig = session.model_config;
     const model = modelConfig?.model || DEFAULT_CLAUDE_MODEL;
 
-    console.log(`🤖 Model selection:`);
-    console.log(`   Mode: ${modelConfig?.mode || 'default (no config)'}`);
-    console.log(`   Model: ${model}`);
-
     // Validate CWD exists
     const cwd = session.repo?.cwd || process.cwd();
     if (!session.repo?.cwd) {
-      console.warn(`⚠️  Session ${sessionId} has no repo.cwd, using process.cwd(): ${cwd}`);
+      console.warn(`Session ${sessionId} has no repo.cwd, using process.cwd(): ${cwd}`);
     }
-    console.log(`📂 Working directory: ${cwd}`);
 
     this.logPromptStart(sessionId, prompt, cwd, resume ? session.sdk_session_id : undefined);
 
-    // Get Claude Code path and log it
+    // Get Claude Code path
     const claudeCodePath = getClaudeCodePath();
-    console.log(`🔧 Claude CLI path: ${claudeCodePath}`);
 
     const options: Record<string, unknown> = {
       cwd,
@@ -424,33 +353,23 @@ export class ClaudePromptService {
       debug: true,
     };
 
-    console.log(`📋 SDK options (before query call):`, JSON.stringify(options, null, 2));
-
     // Add permissionMode if provided
     // For Claude Code sessions, the UI should pass Claude SDK permission modes directly:
     // 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan'
     // No mapping needed - UI is responsible for showing correct options per agent type
     if (permissionMode) {
       options.permissionMode = permissionMode;
-      console.log(`🛡️  Setting permissionMode: ${permissionMode}`);
     }
 
     // Add session-level allowed tools from our database
     const sessionAllowedTools = session.permission_config?.allowedTools || [];
     if (sessionAllowedTools.length > 0) {
       options.allowedTools = sessionAllowedTools;
-      console.log(`🛡️  Passing allowedTools to SDK: ${JSON.stringify(sessionAllowedTools)}`);
-      console.log(`   These tools will be auto-allowed without firing the hook`);
-    } else {
-      console.log(
-        `🛡️  No allowedTools configured for this session - all tools will require permission`
-      );
     }
 
     // Add PreToolUse hook if permission service is available and taskId provided
     // This enables Agor's custom permission UI (WebSocket-based) instead of CLI prompts
     if (this.permissionService && taskId) {
-      console.log(`🛡️  Registering PreToolUse hook for task ${taskId}`);
       options.hooks = {
         PreToolUse: [
           {
@@ -458,10 +377,6 @@ export class ClaudePromptService {
           },
         ],
       };
-    } else {
-      console.log(
-        `⚠️  PreToolUse hook NOT registered - permissionService: ${!!this.permissionService}, taskId: ${taskId}`
-      );
     }
 
     // Add optional apiKey if provided
@@ -472,11 +387,6 @@ export class ClaudePromptService {
     // Add optional resume if session exists
     if (resume && session.sdk_session_id) {
       options.resume = session.sdk_session_id;
-      console.log(`📚 Resuming Agent SDK session: ${session.sdk_session_id}`);
-    } else {
-      console.log(
-        `⚠️  NOT resuming - resume: ${resume}, sdk_session_id: ${session.sdk_session_id}`
-      );
     }
 
     // Fetch and configure MCP servers for this session (hierarchical scoping)
@@ -621,14 +531,8 @@ export class ClaudePromptService {
       options: options as any,
     });
 
-    console.log('✅ query() call returned, got async generator');
-
     // Store query object for potential interruption (Claude SDK has native interrupt() method)
     this.activeQueries.set(sessionId, result);
-    console.log(
-      `   📌 Stored query for session ${sessionId}, has interrupt: ${typeof result.interrupt === 'function'}`
-    );
-    console.log(`   📌 Total active queries: ${this.activeQueries.size}`);
 
     return { query: result, resolvedModel: model };
   }
@@ -643,13 +547,10 @@ export class ClaudePromptService {
     cwd: string,
     agentSessionId?: string
   ) {
-    console.log(`🤖 Prompting Claude for session ${sessionId}...`);
-    console.log(`   CWD: ${cwd}`);
-    console.log(`   Prompt: ${prompt.substring(0, 100)}${prompt.length > 100 ? '...' : ''}`);
+    console.log(`🤖 Prompting Claude for session ${sessionId.substring(0, 8)}...`);
     if (agentSessionId) {
-      console.log(`   📚 Resuming Agent SDK session: ${agentSessionId}`);
+      console.log(`   Resuming session: ${agentSessionId}`);
     }
-    console.log('📤 Calling Agent SDK query()...');
   }
 
   /**
@@ -666,10 +567,6 @@ export class ClaudePromptService {
     name?: string;
     input?: Record<string, unknown>;
   }> {
-    console.log(
-      `   [Message ${messageNum}] Content type: ${Array.isArray(content) ? 'array' : typeof content}`
-    );
-
     const contentBlocks: Array<{
       type: string;
       text?: string;
@@ -680,19 +577,9 @@ export class ClaudePromptService {
 
     if (typeof content === 'string') {
       contentBlocks.push({ type: 'text', text: content });
-      console.log(`   [Message ${messageNum}] Added text block: ${content.length} chars`);
     } else if (Array.isArray(content)) {
       for (const block of content) {
         contentBlocks.push(block);
-        if (block.type === 'text') {
-          console.log(
-            `   [Message ${messageNum}] Added text block: ${block.text?.length || 0} chars`
-          );
-        } else if (block.type === 'tool_use') {
-          console.log(`   [Message ${messageNum}] Added tool_use: ${block.name}`);
-        } else {
-          console.log(`   [Message ${messageNum}] Added block type: ${block.type}`);
-        }
       }
     }
 
@@ -763,7 +650,6 @@ export class ClaudePromptService {
     );
 
     // Collect and yield assistant messages progressively
-    console.log('📥 Receiving messages from Agent SDK...');
     let messageCount = 0;
     let capturedAgentSessionId: string | undefined;
 
@@ -772,20 +658,16 @@ export class ClaudePromptService {
 
       // Check if stop was requested (for immediate loop breaking)
       if (this.stopRequested.get(sessionId)) {
-        console.log(`🛑 Stop requested for session ${sessionId}, breaking event loop`);
+        console.log(
+          `🛑 Stop requested for session ${sessionId.substring(0, 8)}, breaking event loop`
+        );
         this.stopRequested.delete(sessionId);
         break;
-      }
-
-      // Only log non-stream events to reduce verbosity
-      if (msg.type !== 'stream_event') {
-        console.log(`   [Message ${messageCount}] type: ${msg.type}`);
       }
 
       // Capture SDK session_id from first message that has it
       if (!capturedAgentSessionId && 'session_id' in msg && msg.session_id) {
         capturedAgentSessionId = msg.session_id;
-        console.log(`   🔑 Captured Agent SDK session_id: ${capturedAgentSessionId}`);
       }
 
       // Handle partial streaming events (token-level streaming)
@@ -796,7 +678,6 @@ export class ClaudePromptService {
         // Extract text from content_block_delta events
         if (event?.type === 'content_block_delta' && event?.delta?.type === 'text_delta') {
           const textChunk = event.delta.text;
-          // Removed verbose token stream logging
 
           // Yield partial chunk immediately (enables real-time streaming)
           yield {
@@ -812,8 +693,6 @@ export class ClaudePromptService {
         const contentBlocks = this.processContentBlocks(msg.message?.content, messageCount);
         const toolUses = this.extractToolUses(contentBlocks);
 
-        console.log(`   [Message ${messageCount}] Yielding complete assistant message`);
-
         // Yield complete message for database storage
         yield {
           type: 'complete',
@@ -822,17 +701,8 @@ export class ClaudePromptService {
           agentSessionId: capturedAgentSessionId,
           resolvedModel,
         };
-      } else if (msg.type === 'result') {
-        console.log(`   [Message ${messageCount}] Final result received`);
-      } else {
-        console.log(
-          `   [Message ${messageCount}] Unknown type:`,
-          JSON.stringify(msg, null, 2).substring(0, 500)
-        );
       }
     }
-
-    console.log(`✅ Response complete: ${messageCount} total messages`);
 
     // Clean up query reference
     this.activeQueries.delete(sessionId);
@@ -855,7 +725,6 @@ export class ClaudePromptService {
 
     // Collect response messages from async generator
     // IMPORTANT: Keep assistant messages SEPARATE (don't merge into one)
-    console.log('📥 Receiving messages from Agent SDK...');
     const assistantMessages: Array<{
       content: Array<{
         type: string;
@@ -870,10 +739,6 @@ export class ClaudePromptService {
 
     for await (const msg of result) {
       messageCount++;
-      // Only log non-stream events to reduce verbosity
-      if (msg.type !== 'stream_event') {
-        console.log(`   [Message ${messageCount}] type: ${msg.type}`);
-      }
 
       if (msg.type === 'assistant') {
         const contentBlocks = this.processContentBlocks(msg.message?.content, messageCount);
@@ -884,23 +749,8 @@ export class ClaudePromptService {
           content: contentBlocks,
           toolUses: toolUses.length > 0 ? toolUses : undefined,
         });
-
-        console.log(
-          `   [Message ${messageCount}] Stored as assistant message #${assistantMessages.length}`
-        );
-      } else if (msg.type === 'result') {
-        console.log(`   [Message ${messageCount}] Final result received`);
-      } else {
-        console.log(
-          `   [Message ${messageCount}] Unknown type:`,
-          JSON.stringify(msg, null, 2).substring(0, 500)
-        );
       }
     }
-
-    console.log(
-      `✅ Response complete: ${assistantMessages.length} assistant messages, ${messageCount} total messages`
-    );
 
     // Clean up query reference
     this.activeQueries.delete(sessionId);
@@ -923,18 +773,11 @@ export class ClaudePromptService {
    * @returns Success status
    */
   async stopTask(sessionId: SessionID): Promise<{ success: boolean; reason?: string }> {
-    console.log(`🛑 stopTask called for session ${sessionId}`);
-    console.log(`   Active queries count: ${this.activeQueries.size}`);
-    console.log(`   Active query keys:`, Array.from(this.activeQueries.keys()));
+    console.log(`🛑 Stopping task for session ${sessionId.substring(0, 8)}`);
 
     const queryObj = this.activeQueries.get(sessionId);
-    console.log(`   Query object found: ${!!queryObj}`);
-    console.log(
-      `   Query has interrupt method: ${queryObj && typeof queryObj.interrupt === 'function'}`
-    );
 
     if (!queryObj) {
-      console.log(`   ❌ No active query found for session ${sessionId}`);
       return {
         success: false,
         reason: 'No active task found for this session',
@@ -942,22 +785,20 @@ export class ClaudePromptService {
     }
 
     try {
-      console.log(`   Setting stop flag for immediate loop break...`);
       // Set stop flag first for immediate loop breaking
       this.stopRequested.set(sessionId, true);
 
-      console.log(`   Calling interrupt()...`);
       // Call native interrupt() method on Query object
       // This is exactly what the Escape key uses in Claude Code CLI
       await queryObj.interrupt();
-      console.log(`🛑 Interrupted Claude execution for session ${sessionId}`);
 
       // Clean up query reference
       this.activeQueries.delete(sessionId);
 
+      console.log(`✅ Stopped Claude execution for session ${sessionId.substring(0, 8)}`);
       return { success: true };
     } catch (error) {
-      console.error(`❌ Failed to interrupt Claude execution:`, error);
+      console.error('Failed to interrupt Claude execution:', error);
       // Clean up stop flag on error
       this.stopRequested.delete(sessionId);
       return {
