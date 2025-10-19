@@ -21,6 +21,7 @@ import type { SessionMCPServerRepository } from '../../db/repositories/session-m
 import type { SessionRepository } from '../../db/repositories/sessions';
 import type { PermissionService } from '../../permissions/permission-service';
 import type { MCPServersConfig, SessionID, TaskID } from '../../types';
+import { TaskStatus } from '../../types';
 import type { SessionsService, TasksService } from './claude-tool';
 import { DEFAULT_CLAUDE_MODEL } from './models';
 
@@ -137,7 +138,7 @@ export class ClaudePromptService {
 
         // Update task status to 'awaiting_permission' via FeathersJS service (emits WebSocket)
         await this.tasksService.patch(taskId, {
-          status: 'awaiting_permission',
+          status: TaskStatus.AWAITING_PERMISSION,
           permission_request: {
             request_id: requestId,
             tool_name: input.tool_name,
@@ -169,7 +170,7 @@ export class ClaudePromptService {
         // Dot notation works in DB but doesn't broadcast properly via WebSocket
         const currentTask = await this.tasksService.get(taskId);
         await this.tasksService.patch(taskId, {
-          status: decision.allow ? 'running' : 'failed',
+          status: decision.allow ? TaskStatus.RUNNING : TaskStatus.FAILED,
           permission_request: {
             ...currentTask.permission_request,
             approved_by: decision.decidedBy,
@@ -230,7 +231,7 @@ export class ClaudePromptService {
 
         try {
           await this.tasksService.patch(taskId, {
-            status: 'failed',
+            status: TaskStatus.FAILED,
             report: {
               error: error instanceof Error ? error.message : String(error),
               timestamp: new Date().toISOString(),

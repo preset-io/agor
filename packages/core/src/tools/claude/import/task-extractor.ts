@@ -6,13 +6,14 @@
 
 import { generateId } from '../../../db/ids';
 import type { Message, SessionID, Task, UUID } from '../../../types';
+import { TaskStatus } from '../../../types';
 
 export interface ExtractedTask {
   task_id: string;
   session_id: SessionID;
   full_prompt: string;
   description: string;
-  status: 'completed';
+  status: typeof TaskStatus.COMPLETED;
   message_range: {
     start_index: number;
     end_index: number;
@@ -93,7 +94,7 @@ export function extractTasksFromMessages(
       session_id: sessionId,
       full_prompt: fullPrompt,
       description,
-      status: 'completed' as const, // Imported sessions are historical
+      status: TaskStatus.COMPLETED, // Imported sessions are historical
       message_range: {
         start_index: startIndex,
         end_index: endIndex,

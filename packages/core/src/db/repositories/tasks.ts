@@ -5,6 +5,7 @@
  */
 
 import type { Task, UUID } from '@agor/core/types';
+import { TaskStatus } from '@agor/core/types';
 import { eq, like, sql } from 'drizzle-orm';
 import type { Database } from '../client';
 import { formatShortId, generateId } from '../ids';
@@ -53,7 +54,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       session_id: task.session_id,
       created_at: new Date(now), // Always use server timestamp, ignore client-provided value
       completed_at: task.completed_at ? new Date(task.completed_at) : undefined,
-      status: task.status ?? 'created',
+      status: task.status ?? TaskStatus.CREATED,
       created_by: task.created_by ?? 'anonymous',
       data: {
         description: task.description ?? '',

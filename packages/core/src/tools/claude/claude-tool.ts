@@ -18,6 +18,7 @@ import type { SessionMCPServerRepository } from '../../db/repositories/session-m
 import type { SessionRepository } from '../../db/repositories/sessions';
 import type { PermissionService } from '../../permissions/permission-service';
 import type { Message, MessageID, SessionID, TaskID } from '../../types';
+import { TaskStatus } from '../../types';
 import type { ImportOptions, ITool, SessionData, ToolCapabilities } from '../base';
 import { loadClaudeSession } from './import/load-session';
 import { transcriptsToMessages } from './import/message-converter';
@@ -117,7 +118,7 @@ export class ClaudeTool implements ITool {
     const metadata = {
       sessionId: session.sessionId,
       toolType: this.toolType,
-      status: 'completed' as const, // Historical sessions are always completed
+      status: TaskStatus.COMPLETED, // Historical sessions are always completed
       createdAt: new Date(session.messages[0]?.timestamp || Date.now()),
       lastUpdatedAt: new Date(
         session.messages[session.messages.length - 1]?.timestamp || Date.now()

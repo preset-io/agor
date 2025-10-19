@@ -20,7 +20,8 @@ import {
 } from '@agor/core/db';
 import { type PermissionDecision, PermissionService } from '@agor/core/permissions';
 import { ClaudeTool, CodexTool, GeminiTool } from '@agor/core/tools';
-import type { SessionID, TaskStatus, User } from '@agor/core/types';
+import type { SessionID, User } from '@agor/core/types';
+import { TaskStatus } from '@agor/core/types';
 import type { PermissionMode } from '@anthropic-ai/claude-agent-sdk';
 import { AuthenticationService, JWTStrategy } from '@feathersjs/authentication';
 import { LocalStrategy } from '@feathersjs/authentication-local';
@@ -667,7 +668,7 @@ async function main() {
       const task = await tasksService.create(
         {
           session_id: id,
-          status: 'running', // Start as running, will be updated to completed
+          status: TaskStatus.RUNNING, // Start as running, will be updated to completed
           description: data.prompt.substring(0, 120),
           full_prompt: data.prompt,
           message_range: {
@@ -687,7 +688,7 @@ async function main() {
       // Update session with new task immediately and set status to running
       await sessionsService.patch(id, {
         tasks: [...session.tasks, task.task_id],
-        status: 'running',
+        status: TaskStatus.RUNNING,
       });
 
       // Create streaming callbacks for real-time UI updates
@@ -801,10 +802,10 @@ async function main() {
               // (e.g., 'failed' from denied permission, 'awaiting_permission' still pending, 'stopping'/'stopped' from user cancel)
               const currentTask = await tasksService.get(task.task_id);
               if (
-                currentTask.status === 'failed' ||
-                currentTask.status === 'awaiting_permission' ||
-                currentTask.status === 'stopping' ||
-                currentTask.status === 'stopped'
+                currentTask.status === TaskStatus.FAILED ||
+                currentTask.status === TaskStatus.AWAITING_PERMISSION ||
+                currentTask.status === TaskStatus.STOPPING ||
+                currentTask.status === TaskStatus.STOPPED
               ) {
                 console.log(
                   `⚠️  Task ${task.task_id} already in terminal state: ${currentTask.status} - not marking as completed`
@@ -822,7 +823,7 @@ async function main() {
               } else {
                 // Safe to mark as completed
                 await tasksService.patch(task.task_id, {
-                  status: 'completed',
+                  status: TaskStatus.COMPLETED,
                   message_range: {
                     start_index: messageStartIndex,
                     end_index: messageStartIndex + totalMessages - 1,
@@ -846,7 +847,7 @@ async function main() {
               console.error(`❌ Error completing task ${task.task_id}:`, error);
               // Mark task as failed
               await tasksService.patch(task.task_id, {
-                status: 'failed',
+                status: TaskStatus.FAILED,
               });
             }
           })
@@ -881,7 +882,7 @@ async function main() {
       return {
         success: true,
         taskId: task.task_id,
-        status: 'running',
+        status: TaskStatus.RUNNING,
         streaming: useStreaming, // Inform client whether streaming is enabled
       };
     },
@@ -899,7 +900,7 @@ async function main() {
       const session = await sessionsService.get(id, params);
 
       // Check if session is actually running
-      if (session.status !== 'running') {
+      if (session.status !== TaskStatus.RUNNING) {
         return {
           success: false,
           reason: `Session is not running (status: ${session.status})`,
@@ -911,7 +912,7 @@ async function main() {
       const runningTasks = await tasksService.find({
         query: {
           session_id: id,
-          status: { $in: ['running', 'awaiting_permission'] },
+          status: { $in: [TaskStatus.RUNNING, TaskStatus.AWAITING_PERMISSION] },
           $limit: 10,
         },
       });
@@ -928,7 +929,7 @@ async function main() {
         try {
           await Promise.race([
             tasksService.patch(latestTask.task_id, {
-              status: 'stopping' satisfies TaskStatus as TaskStatus,
+              status: TaskStatus.STOPPING,
             }),
             new Promise((_, reject) =>
               setTimeout(() => reject(new Error('Task patch timeout')), 5000)
@@ -976,7 +977,7 @@ async function main() {
         if (runningTasksArray.length > 0) {
           const latestTask = runningTasksArray[runningTasksArray.length - 1];
           await tasksService.patch(latestTask.task_id, {
-            status: 'stopped',
+            status: TaskStatus.STOPPED,
             message_range: {
               ...latestTask.message_range,
               end_timestamp: new Date().toISOString(),
@@ -989,7 +990,7 @@ async function main() {
         if (runningTasksArray.length > 0) {
           const latestTask = runningTasksArray[runningTasksArray.length - 1];
           await tasksService.patch(latestTask.task_id, {
-            status: 'running', // Revert to running
+            status: TaskStatus.RUNNING, // Revert to running
           });
         }
       }
