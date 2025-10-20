@@ -25,6 +25,8 @@ import SessionDrawer from '../SessionDrawer';
 import { SessionListDrawer } from '../SessionListDrawer';
 import { SessionSettingsModal } from '../SessionSettingsModal';
 import { SettingsModal } from '../SettingsModal';
+import { TerminalModal } from '../TerminalModal';
+import { WorktreeModal } from '../WorktreeModal';
 
 const { Content } = Layout;
 
@@ -53,6 +55,7 @@ export interface AppProps {
   onUpdateBoard?: (boardId: string, updates: Partial<Board>) => void;
   onDeleteBoard?: (boardId: string) => void;
   onCreateRepo?: (data: { url: string; slug: string }) => void;
+  onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
   onDeleteRepo?: (repoId: string) => void;
   onDeleteWorktree?: (worktreeId: string) => void;
   onUpdateWorktree?: (worktreeId: string, updates: Partial<Worktree>) => void;
@@ -95,6 +98,7 @@ export const App: React.FC<AppProps> = ({
   onUpdateBoard,
   onDeleteBoard,
   onCreateRepo,
+  onUpdateRepo,
   onDeleteRepo,
   onDeleteWorktree,
   onUpdateWorktree,
@@ -112,7 +116,9 @@ export const App: React.FC<AppProps> = ({
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [listDrawerOpen, setListDrawerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [terminalOpen, setTerminalOpen] = useState(false);
   const [sessionSettingsId, setSessionSettingsId] = useState<string | null>(null);
+  const [worktreeModalWorktreeId, setWorktreeModalWorktreeId] = useState<string | null>(null);
   const [currentBoardId, setCurrentBoardId] = useState(initialBoardId || boards[0]?.board_id || '');
 
   const handleCreateSession = (config: NewSessionConfig) => {
@@ -202,6 +208,17 @@ export const App: React.FC<AppProps> = ({
   const _selectedSessionTasks = selectedSessionId ? tasks[selectedSessionId] || [] : [];
   const currentBoard = boards.find(b => b.board_id === currentBoardId);
 
+  // Find worktree and repo for WorktreeModal
+  const selectedWorktree = worktreeModalWorktreeId
+    ? worktrees.find(w => w.worktree_id === worktreeModalWorktreeId)
+    : null;
+  const selectedWorktreeRepo = selectedWorktree
+    ? repos.find(r => r.repo_id === selectedWorktree.repo_id)
+    : null;
+  const worktreeSessions = selectedWorktree
+    ? sessions.filter(s => s.worktree_id === selectedWorktree.worktree_id)
+    : [];
+
   // Filter sessions by current board
   const boardSessions = sessions.filter(session =>
     currentBoard?.sessions.includes(session.session_id)
@@ -235,6 +252,7 @@ export const App: React.FC<AppProps> = ({
         currentUserId={user?.user_id}
         onMenuClick={() => setListDrawerOpen(true)}
         onSettingsClick={() => setSettingsOpen(true)}
+        onTerminalClick={() => setTerminalOpen(true)}
         onLogout={onLogout}
         currentBoardName={currentBoard?.name}
         currentBoardIcon={currentBoard?.icon}
@@ -273,6 +291,8 @@ export const App: React.FC<AppProps> = ({
         session={selectedSession}
         users={users}
         currentUserId={user?.user_id}
+        repos={repos}
+        worktrees={worktrees}
         mcpServers={mcpServers}
         sessionMcpServerIds={selectedSessionId ? sessionMcpServerIds[selectedSessionId] || [] : []}
         open={!!selectedSessionId}
@@ -283,6 +303,9 @@ export const App: React.FC<AppProps> = ({
         onPermissionDecision={handlePermissionDecision}
         onOpenSettings={sessionId => {
           setSessionSettingsId(sessionId);
+        }}
+        onOpenWorktree={worktreeId => {
+          setWorktreeModalWorktreeId(worktreeId);
         }}
         onUpdateSession={onUpdateSession}
       />
@@ -309,6 +332,7 @@ export const App: React.FC<AppProps> = ({
         onUpdateBoard={onUpdateBoard}
         onDeleteBoard={onDeleteBoard}
         onCreateRepo={onCreateRepo}
+        onUpdateRepo={onUpdateRepo}
         onDeleteRepo={onDeleteRepo}
         onDeleteWorktree={onDeleteWorktree}
         onUpdateWorktree={onUpdateWorktree}
@@ -334,6 +358,22 @@ export const App: React.FC<AppProps> = ({
           onUpdateModelConfig={handleUpdateModelConfig}
         />
       )}
+      <WorktreeModal
+        open={!!worktreeModalWorktreeId}
+        onClose={() => setWorktreeModalWorktreeId(null)}
+        worktree={selectedWorktree}
+        repo={selectedWorktreeRepo}
+        sessions={worktreeSessions}
+        client={client}
+        onUpdateWorktree={onUpdateWorktree}
+        onUpdateRepo={onUpdateRepo}
+        onDelete={onDeleteWorktree}
+        onOpenSettings={() => {
+          setWorktreeModalWorktreeId(null);
+          setSettingsOpen(true);
+        }}
+      />
+      <TerminalModal open={terminalOpen} onClose={() => setTerminalOpen(false)} client={client} />
     </Layout>
   );
 };

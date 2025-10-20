@@ -73,6 +73,7 @@ import { createReposService } from './services/repos';
 import { createSessionMCPServersService } from './services/session-mcp-servers';
 import { createSessionsService } from './services/sessions';
 import { createTasksService } from './services/tasks';
+import { TerminalsService } from './services/terminals';
 import { createUsersService } from './services/users';
 import { createWorktreesService } from './services/worktrees';
 import { AnonymousStrategy } from './strategies/anonymous';
@@ -280,14 +281,17 @@ async function main() {
 
   app.use('/mcp-servers', createMCPServersService(db));
 
-  // Register context service (read-only filesystem browser)
-  // Scans context/ folder for all .md files
-  // Currently: <project-root>/context/
-  // Future: May move to ~/.agor/context/
-  const __filename = fileURLToPath(import.meta.url);
-  const __dirname = dirname(__filename);
-  const contextPath = resolve(__dirname, '../../..', 'context');
-  app.use('/context', createContextService(contextPath));
+  // Register context service (read-only filesystem browser for worktree context/ files)
+  // Scans context/ directory in worktree for all .md files recursively
+  // Requires worktree_id query parameter
+  const worktreeRepository = new WorktreeRepository(db);
+  app.use('/context', createContextService(worktreeRepository));
+
+  // Register terminals service for PTY management
+  const terminalsService = new TerminalsService(app);
+  app.use('/terminals', terminalsService, {
+    events: ['data', 'exit'], // Custom events for terminal I/O
+  });
 
   // Register session-mcp-servers as a top-level service for WebSocket events
   // This is needed for real-time updates when MCP servers are added/removed from sessions
@@ -1316,6 +1320,10 @@ async function main() {
     console.log(`\n⏳ Received ${signal}, shutting down gracefully...`);
 
     try {
+      // Clean up terminal sessions
+      console.log('🖥️  Cleaning up terminal sessions...');
+      terminalsService.cleanup();
+
       // Close Socket.io connections (this also closes the HTTP server)
       if (socketServer) {
         console.log('🔌 Closing Socket.io and HTTP server...');

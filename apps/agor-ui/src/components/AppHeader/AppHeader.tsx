@@ -1,5 +1,6 @@
 import type { ActiveUser, User } from '@agor/core/types';
 import {
+  CodeOutlined,
   GithubOutlined,
   LogoutOutlined,
   MenuOutlined,
@@ -19,6 +20,7 @@ export interface AppHeaderProps {
   currentUserId?: string;
   onMenuClick?: () => void;
   onSettingsClick?: () => void;
+  onTerminalClick?: () => void;
   onLogout?: () => void;
   currentBoardName?: string;
   currentBoardIcon?: string;
@@ -30,6 +32,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   currentUserId,
   onMenuClick,
   onSettingsClick,
+  onTerminalClick,
   onLogout,
   currentBoardName,
   currentBoardIcon,
@@ -137,6 +140,13 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           icon={<MenuOutlined />}
           onClick={onMenuClick}
           style={{ color: '#fff' }}
+        />
+        <Button
+          type="text"
+          icon={<CodeOutlined />}
+          onClick={onTerminalClick}
+          style={{ color: '#fff' }}
+          title="Open Terminal"
         />
         <Button
           type="text"
