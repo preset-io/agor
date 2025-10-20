@@ -15,7 +15,6 @@ import { Modal, Tabs } from 'antd';
 import { useState } from 'react';
 import { WorktreeModal } from '../WorktreeModal';
 import { BoardsTable } from './BoardsTable';
-import { ContextTable } from './ContextTable';
 import { MCPServersTable } from './MCPServersTable';
 import { ReposTable } from './ReposTable';
 import { UsersTable } from './UsersTable';
@@ -24,7 +23,7 @@ import { WorktreesTable } from './WorktreesTable';
 export interface SettingsModalProps {
   open: boolean;
   onClose: () => void;
-  client: Application | null;
+  client: Application | null; // Still needed for WorktreeModal
   boards: Board[];
   repos: Repo[];
   worktrees: Worktree[];
@@ -152,11 +151,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 onDelete={onDeleteMCPServer}
               />
             ),
-          },
-          {
-            key: 'context',
-            label: 'Context',
-            children: <ContextTable client={client} />,
           },
           {
             key: 'users',
