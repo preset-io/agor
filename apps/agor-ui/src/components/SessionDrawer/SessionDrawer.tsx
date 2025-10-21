@@ -382,7 +382,6 @@ const SessionDrawer = ({
             onChange={e => setInputValue(e.target.value)}
             placeholder="Send a prompt, fork, or create a subtask..."
             autoSize={{ minRows: 1, maxRows: 10 }}
-            disabled={isRunning}
             onPressEnter={e => {
               if (e.shiftKey) {
                 return;
