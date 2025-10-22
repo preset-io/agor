@@ -219,7 +219,7 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
       activeUsers,
       remoteCursors,
     };
-  }, [presenceMap, cursorMap]);
+  }, [presenceMap, cursorMap, users]);
 
   return {
     activeUsers,
