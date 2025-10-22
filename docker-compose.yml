@@ -6,17 +6,18 @@ services:
     # No container_name - allows multiple instances via docker compose -p flag
     ports:
       # Expose daemon port (so browser can connect) - configurable via DAEMON_PORT
-      - '${DAEMON_PORT:-3030}:3030'
+      - '${DAEMON_PORT:-3030}:${DAEMON_PORT:-3030}'
       # Expose UI port (configurable via UI_PORT env var)
-      - '${UI_PORT:-5173}:5173'
+      - '${UI_PORT:-5173}:${UI_PORT:-5173}'
     environment:
-      # Daemon configuration (internal only, not exposed to host)
+      # Daemon configuration
       - NODE_ENV=development
+      - DAEMON_PORT=${DAEMON_PORT:-3030}
 
       # UI configuration
-      - VITE_PORT=${UI_PORT:-5173}
+      - UI_PORT=${UI_PORT:-5173}
       # UI connects to daemon via localhost (inside container)
-      - VITE_DAEMON_URL=http://localhost:3030
+      - VITE_DAEMON_PORT=${DAEMON_PORT:-3030}
 
       # Pass through API keys from host (if set)
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
