@@ -30,6 +30,7 @@ import {
   Input,
   message,
   Space,
+  Spin,
   Tag,
   Typography,
   theme,
@@ -76,6 +77,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   const [isStarting, setIsStarting] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
   const [isRestarting, setIsRestarting] = useState(false);
+  const [isCheckingHealth, setIsCheckingHealth] = useState(false);
   const [lastHealthCheck, setLastHealthCheck] = useState(
     worktree.environment_instance?.last_health_check
   );
@@ -84,16 +86,30 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   // Sync state when worktree prop changes
   useEffect(() => {
     setEnvStatus(worktree.environment_instance?.status || 'stopped');
-    setLastHealthCheck(worktree.environment_instance?.last_health_check);
+    const newHealthCheck = worktree.environment_instance?.last_health_check;
+
+    // If health check timestamp changed, show checking state briefly
+    if (newHealthCheck?.timestamp !== lastHealthCheck?.timestamp) {
+      setIsCheckingHealth(true);
+      setTimeout(() => setIsCheckingHealth(false), 500);
+    }
+
+    setLastHealthCheck(newHealthCheck);
     setProcessInfo(worktree.environment_instance?.process);
-  }, [worktree]);
+  }, [worktree, lastHealthCheck?.timestamp]);
 
   // WebSocket listener for real-time environment updates
   useEffect(() => {
     if (!client) return;
 
     const handleWorktreeUpdate = (updatedWorktree: Worktree) => {
+      console.log(
+        '🔄 WebSocket worktree update:',
+        updatedWorktree.worktree_id.substring(0, 8),
+        updatedWorktree.environment_instance
+      );
       if (updatedWorktree.worktree_id === worktree.worktree_id) {
+        console.log('✅ Updating UI state for worktree:', worktree.name);
         setEnvStatus(updatedWorktree.environment_instance?.status || 'stopped');
         setLastHealthCheck(updatedWorktree.environment_instance?.last_health_check);
         setProcessInfo(updatedWorktree.environment_instance?.process);
@@ -102,7 +118,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
 
     client.service('worktrees').on('patched', handleWorktreeUpdate);
     return () => client.service('worktrees').off('patched', handleWorktreeUpdate);
-  }, [client, worktree.worktree_id]);
+  }, [client, worktree.worktree_id, worktree.name]);
 
   // Environment control handlers
   const handleStart = async () => {
@@ -738,7 +754,8 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                       }}
                     >
                       <Space size="small">
-                        {getHealthBadge()}
+                        {isCheckingHealth && <Spin size="small" />}
+                        {!isCheckingHealth && getHealthBadge()}
                         <Text style={{ fontSize: 11 }}>
                           Health: <Text strong>{lastHealthCheck.status}</Text>
                         </Text>
