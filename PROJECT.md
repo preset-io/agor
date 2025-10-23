@@ -67,12 +67,14 @@ See [context/explorations/](context/explorations/) for detailed designs:
 
 **Distribution:**
 
-- [ ] **Doc website** - Nextra-based documentation site (see [docs-website.md](context/explorations/docs-website.md))
-  - User guides (getting started, features, workflows)
-  - Auto-generated REST API docs (OpenAPI)
-  - CLI reference (oclif self-documenting)
-  - Architecture docs (adapted from concepts/)
-  - Deploy to docs.agor.dev (Vercel)
+- [x] **Doc website** - Nextra-based documentation site at `apps/agor-docs` (see [docs-website.md](context/explorations/docs-website.md))
+  - [x] User guides (getting started, Docker, development)
+  - [x] Manual REST API docs (manual approach due to MDX constraints)
+  - [x] CLI reference (auto-generated from oclif commands)
+  - [ ] Architecture docs (adapted from concepts/)
+  - [ ] Deploy to docs.agor.dev (Vercel)
+  - **Running:** `pnpm docs:dev` → http://localhost:3001
+  - **Note:** Manual REST API docs preferred over auto-generation (TypeDoc/widdershins) due to Nextra MDX parsing issues
 
 # Nice to Have
 
