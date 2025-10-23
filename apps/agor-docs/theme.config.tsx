@@ -63,7 +63,7 @@ const config: DocsThemeConfig = {
   },
 
   editLink: {
-    component: 'Edit this page on GitHub →',
+    component: () => <>Edit this page on GitHub →</>,
   },
 
   feedback: {
