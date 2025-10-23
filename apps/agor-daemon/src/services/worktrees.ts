@@ -425,7 +425,8 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       templateContext
     );
 
-    console.log(`🏥 Health check for worktree ${worktree.name}: ${healthUrl}`);
+    // Track previous health status to detect changes
+    const previousHealthStatus = worktree.environment_instance?.last_health_check?.status;
 
     try {
       // Perform HTTP health check with timeout
@@ -440,10 +441,14 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       clearTimeout(timeout);
 
       const isHealthy = response.ok;
+      const newHealthStatus = isHealthy ? 'healthy' : 'unhealthy';
 
-      console.log(
-        `🏥 Health check response for ${worktree.name}: HTTP ${response.status} ${response.statusText} (${isHealthy ? 'healthy' : 'unhealthy'})`
-      );
+      // Only log if health status changed
+      if (previousHealthStatus !== newHealthStatus) {
+        console.log(
+          `🏥 Health status changed for ${worktree.name}: ${previousHealthStatus || 'unknown'} → ${newHealthStatus} (HTTP ${response.status})`
+        );
+      }
 
       // If health check succeeds and we're in 'starting' state, transition to 'running'
       const shouldTransitionToRunning = isHealthy && currentStatus === 'starting';
@@ -460,7 +465,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
           status: shouldTransitionToRunning ? 'running' : currentStatus,
           last_health_check: {
             timestamp: new Date().toISOString(),
-            status: isHealthy ? 'healthy' : 'unhealthy',
+            status: newHealthStatus,
             message: isHealthy
               ? `HTTP ${response.status}`
               : `HTTP ${response.status} ${response.statusText}`,
@@ -477,7 +482,14 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
             : error.message
           : 'Unknown error';
 
-      console.log(`🏥 Health check failed for ${worktree.name}: ${message}`);
+      const newHealthStatus = 'unhealthy';
+
+      // Only log if health status changed or if this is an error
+      if (previousHealthStatus !== newHealthStatus) {
+        console.log(
+          `🏥 Health status changed for ${worktree.name}: ${previousHealthStatus || 'unknown'} → ${newHealthStatus} (${message})`
+        );
+      }
 
       return await this.updateEnvironment(
         id,

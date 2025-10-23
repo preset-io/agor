@@ -59,8 +59,6 @@ export class HealthMonitor {
 
     const status = worktree.environment_instance?.status;
 
-    console.log(`🏥 Worktree update received: ${worktree.name} - status: ${status}`);
-
     if (status === 'running' || status === 'starting') {
       // Start monitoring if not already monitored
       // Monitor both 'running' and 'starting' - health checks will transition 'starting' → 'running'
@@ -130,15 +128,10 @@ export class HealthMonitor {
         return;
       }
 
-      console.log(`🏥 Running health check for worktree: ${worktree.name}`);
-
       // Perform health check via the service method
       // This will update environment_instance and broadcast via WebSocket
-      const result = await worktreesService.checkHealth(worktreeId);
-
-      console.log(
-        `🏥 Health check result for ${worktree.name}: ${result.environment_instance?.last_health_check?.status} - ${result.environment_instance?.last_health_check?.message}`
-      );
+      // Logging is handled in checkHealth() method - only logs on state changes
+      await worktreesService.checkHealth(worktreeId);
     } catch (error) {
       console.error(
         `❌ Health check failed for worktree ${worktreeId.substring(0, 8)}:`,
