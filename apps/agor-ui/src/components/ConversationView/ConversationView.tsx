@@ -73,6 +73,13 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
 
+  // Check if user is scrolled near the bottom (within 100px)
+  const isNearBottom = useCallback(() => {
+    if (!containerRef.current) return true;
+    const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
+    return scrollHeight - scrollTop - clientHeight < 100;
+  }, []);
+
   // Scroll to bottom function (wrapped in useCallback to avoid re-renders)
   const scrollToBottom = useCallback(() => {
     if (containerRef.current) {
@@ -122,10 +129,12 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
     }));
   }, [tasks, allMessages]);
 
-  // Auto-scroll to bottom when new messages arrive (including streaming)
+  // Auto-scroll to bottom when new messages arrive (only if user is already at bottom)
   // biome-ignore lint/correctness/useExhaustiveDependencies: We want to scroll on messages/streaming change
   useEffect(() => {
-    scrollToBottom();
+    if (isNearBottom()) {
+      scrollToBottom();
+    }
   }, [allMessages, tasks]);
 
   if (error) {

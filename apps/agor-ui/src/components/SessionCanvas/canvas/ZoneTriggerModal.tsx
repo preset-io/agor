@@ -200,10 +200,20 @@ export const ZoneTriggerModal = ({
       });
     } else {
       // Reuse existing session
+      const formValues = form.getFieldsValue();
       await onExecute({
         sessionId: selectedSessionId,
         action: selectedAction,
         renderedTemplate,
+        // Include agent config for fork/spawn actions
+        ...(selectedAction === 'fork' || selectedAction === 'spawn'
+          ? {
+              agent: selectedAgent,
+              modelConfig: formValues.modelConfig,
+              permissionMode: formValues.permissionMode,
+              mcpServerIds: formValues.mcpServerIds,
+            }
+          : {}),
       });
     }
   };
@@ -292,7 +302,7 @@ export const ZoneTriggerModal = ({
 
         {/* Session & Action Selection (only for reuse mode) */}
         {mode === 'reuse_existing' && (
-          <>
+          <Form form={form} layout="vertical">
             <div>
               <Typography.Text strong style={{ display: 'block', marginBottom: 8 }}>
                 Select Session
@@ -306,7 +316,8 @@ export const ZoneTriggerModal = ({
                   value: session.session_id,
                   label: (
                     <span>
-                      {session.description || session.session_id.substring(0, 8)} ({session.status})
+                      {session.title || session.description || session.session_id.substring(0, 8)} (
+                      {session.status})
                     </span>
                   ),
                 }))}
@@ -329,7 +340,54 @@ export const ZoneTriggerModal = ({
                 </Space>
               </Radio.Group>
             </div>
-          </>
+
+            {/* Agent selection for fork/spawn */}
+            {(selectedAction === 'fork' || selectedAction === 'spawn') && (
+              <>
+                <div style={{ marginTop: 16 }}>
+                  <Typography.Text strong style={{ display: 'block', marginBottom: 8 }}>
+                    Select Agent
+                  </Typography.Text>
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(2, 1fr)',
+                      gap: 8,
+                      marginTop: 8,
+                    }}
+                  >
+                    {availableAgents.map(agent => (
+                      <AgentSelectionCard
+                        key={agent.id}
+                        agent={agent}
+                        selected={selectedAgent === agent.id}
+                        onClick={() => setSelectedAgent(agent.id)}
+                      />
+                    ))}
+                  </div>
+                </div>
+
+                <Collapse
+                  ghost
+                  expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
+                  items={[
+                    {
+                      key: 'agentic-tool-config',
+                      label: <Typography.Text strong>Agentic Tool Configuration</Typography.Text>,
+                      children: (
+                        <AgenticToolConfigForm
+                          agenticTool={(selectedAgent as AgenticToolName) || 'claude-code'}
+                          mcpServers={mcpServers}
+                          showHelpText={true}
+                        />
+                      ),
+                    },
+                  ]}
+                  style={{ marginTop: 16 }}
+                />
+              </>
+            )}
+          </Form>
         )}
 
         {/* Template Preview */}

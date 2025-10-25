@@ -24,11 +24,48 @@ docker compose up
 
 ---
 
-## Screenshot
+## Screenshots
 
 ![Agor Board View](apps/agor-docs/public/screenshots/board.png)
 
 _Multiplayer spatial canvas with zones, real-time cursors, and session organization_
+
+<div align="center">
+<table>
+<tr>
+<td width="50%">
+
+![Conversation View](apps/agor-docs/public/screenshots/conversation_full_page.png)
+
+<p align="center"><em>Task-centric conversation UI</em></p>
+
+</td>
+<td width="50%">
+
+![Settings Modal](apps/agor-docs/public/screenshots/settings_modal.png)
+
+<p align="center"><em>MCP server and worktree management</em></p>
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+![Create Session Modal](apps/agor-docs/public/screenshots/create_session_modal.png)
+
+<p align="center"><em>Session creation with agent selection</em></p>
+
+</td>
+<td width="50%">
+
+![Zone Trigger Modal](apps/agor-docs/public/screenshots/zone_trigger_modal.png)
+
+<p align="center"><em>Zone trigger configuration</em></p>
+
+</td>
+</tr>
+</table>
+</div>
 
 ---
 
