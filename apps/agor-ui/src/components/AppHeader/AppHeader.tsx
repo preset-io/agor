@@ -20,9 +20,9 @@ export interface AppHeaderProps {
   activeUsers?: ActiveUser[];
   currentUserId?: string;
   onMenuClick?: () => void;
+  onCommentsClick?: () => void;
   onSettingsClick?: () => void;
   onTerminalClick?: () => void;
-  onCommentsClick?: () => void;
   onLogout?: () => void;
   currentBoardName?: string;
   currentBoardIcon?: string;
@@ -34,9 +34,9 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   activeUsers = [],
   currentUserId,
   onMenuClick,
+  onCommentsClick,
   onSettingsClick,
   onTerminalClick,
-  onCommentsClick,
   onLogout,
   currentBoardName,
   currentBoardIcon,
@@ -140,13 +140,13 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           style={{ color: '#fff' }}
           title="View on GitHub"
         />
-        <Badge count={unreadCommentsCount} dot>
+        <Badge count={unreadCommentsCount} offset={[-2, 2]}>
           <Button
             type="text"
             icon={<CommentOutlined />}
             onClick={onCommentsClick}
             style={{ color: '#fff' }}
-            title="Comments"
+            title="Toggle comments panel"
           />
         </Badge>
         <Button

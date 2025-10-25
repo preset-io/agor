@@ -1,12 +1,31 @@
 import type { BoardID, CommentID, MessageID, SessionID, TaskID, UserID, WorktreeID } from './id';
 
 /**
+ * Individual reaction on a comment
+ * Stored as JSON array: [{ user_id: "abc", emoji: "👍" }, ...]
+ */
+export interface CommentReaction {
+  user_id: string;
+  emoji: string;
+}
+
+/**
+ * Reactions grouped by emoji for display
+ * Example: { "👍": ["alice", "bob"], "🎉": ["charlie"] }
+ */
+export type ReactionSummary = Record<string, string[]>;
+
+/**
  * Board Comment - Human-to-human conversations and collaboration
  *
  * Flexible attachment strategy supporting:
  * - Board-level: General conversations (no attachments)
  * - Object-level: Attached to sessions, tasks, messages, or worktrees
  * - Spatial: Positioned on canvas (absolute or relative to objects)
+ *
+ * Threading model: Figma-style 2-layer (thread roots + replies)
+ * - Thread roots: parent_comment_id IS NULL, can be resolved, must have attachments
+ * - Replies: parent_comment_id IS NOT NULL, cannot be resolved, inherit parent context
  *
  * @see context/explorations/user-comments-and-conversation.md
  */
@@ -56,6 +75,13 @@ export interface BoardComment {
   edited: boolean;
 
   // ============================================================================
+  // Reactions (Phase 2)
+  // ============================================================================
+
+  /** Emoji reactions (for both thread roots and replies) */
+  reactions: CommentReaction[];
+
+  // ============================================================================
   // Spatial Positioning (Phase 3)
   // ============================================================================
 
@@ -90,35 +116,40 @@ export interface BoardComment {
  * Comment attachment type determination
  *
  * Hierarchy (most specific → least specific):
- * 1. message - Attached to specific message
- * 2. task - Attached to task
- * 3. session-spatial - Spatial pin on session
- * 4. session - Attached to session
- * 5. worktree - Attached to worktree
- * 6. board-spatial - Spatial pin on board
- * 7. board - General board conversation
+ * 1. MESSAGE - Attached to specific message
+ * 2. TASK - Attached to task
+ * 3. SESSION_SPATIAL - Spatial pin on session
+ * 4. SESSION - Attached to session
+ * 5. WORKTREE - Attached to worktree
+ * 6. BOARD_SPATIAL - Spatial pin on board
+ * 7. BOARD - General board conversation
  */
+export const CommentAttachmentType = {
+  MESSAGE: 'message',
+  TASK: 'task',
+  SESSION_SPATIAL: 'session-spatial',
+  SESSION: 'session',
+  WORKTREE: 'worktree',
+  BOARD_SPATIAL: 'board-spatial',
+  BOARD: 'board',
+} as const;
+
 export type CommentAttachmentType =
-  | 'message'
-  | 'task'
-  | 'session-spatial'
-  | 'session'
-  | 'worktree'
-  | 'board-spatial'
-  | 'board';
+  (typeof CommentAttachmentType)[keyof typeof CommentAttachmentType];
 
 /**
  * Helper function to determine comment attachment type
  */
 export function getCommentAttachmentType(comment: BoardComment): CommentAttachmentType {
   // Most specific → least specific
-  if (comment.message_id) return 'message';
-  if (comment.task_id) return 'task';
-  if (comment.session_id && comment.position?.relative) return 'session-spatial';
-  if (comment.session_id) return 'session';
-  if (comment.worktree_id) return 'worktree';
-  if (comment.position?.absolute) return 'board-spatial';
-  return 'board'; // Default: board-level conversation
+  if (comment.message_id) return CommentAttachmentType.MESSAGE;
+  if (comment.task_id) return CommentAttachmentType.TASK;
+  if (comment.session_id && comment.position?.relative)
+    return CommentAttachmentType.SESSION_SPATIAL;
+  if (comment.session_id) return CommentAttachmentType.SESSION;
+  if (comment.worktree_id) return CommentAttachmentType.WORKTREE;
+  if (comment.position?.absolute) return CommentAttachmentType.BOARD_SPATIAL;
+  return CommentAttachmentType.BOARD; // Default: board-level conversation
 }
 
 /**
@@ -137,3 +168,45 @@ export type BoardCommentCreate = Omit<
 export type BoardCommentPatch = Partial<Pick<BoardComment, 'content' | 'resolved'>> & {
   edited?: boolean; // Auto-set to true when content is updated
 };
+
+// ============================================================================
+// Helper Functions (Phase 2: Threading + Reactions)
+// ============================================================================
+
+/**
+ * Check if comment is a thread root (top-level comment)
+ */
+export function isThreadRoot(comment: BoardComment): boolean {
+  return !comment.parent_comment_id;
+}
+
+/**
+ * Check if comment is a reply (nested comment)
+ */
+export function isReply(comment: BoardComment): boolean {
+  return !!comment.parent_comment_id;
+}
+
+/**
+ * Check if comment can be resolved
+ * Only thread roots can be resolved, replies cannot
+ */
+export function isResolvable(comment: BoardComment): boolean {
+  return isThreadRoot(comment);
+}
+
+/**
+ * Group reactions by emoji for display
+ * Input: [{ user_id: "alice", emoji: "👍" }, { user_id: "bob", emoji: "👍" }, { user_id: "charlie", emoji: "🎉" }]
+ * Output: { "👍": ["alice", "bob"], "🎉": ["charlie"] }
+ */
+export function groupReactions(reactions: CommentReaction[]): ReactionSummary {
+  const grouped: Record<string, string[]> = {};
+  for (const { emoji, user_id } of reactions) {
+    if (!grouped[emoji]) {
+      grouped[emoji] = [];
+    }
+    grouped[emoji].push(user_id);
+  }
+  return grouped;
+}

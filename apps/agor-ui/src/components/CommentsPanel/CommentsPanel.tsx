@@ -1,36 +1,32 @@
 import type { AgorClient } from '@agor/core/api';
 import type { BoardComment, CommentReaction, ReactionSummary, User } from '@agor/core/types';
 import { groupReactions, isThreadRoot } from '@agor/core/types';
-import { CommentOutlined, SmileOutlined } from '@ant-design/icons';
-import { Sender } from '@ant-design/x';
 import {
-  Avatar,
-  Badge,
-  Button,
-  Drawer,
-  List,
-  Popover,
-  Space,
-  Spin,
-  Tag,
-  Typography,
-  theme,
-} from 'antd';
+  CheckOutlined,
+  CommentOutlined,
+  DeleteOutlined,
+  LeftOutlined,
+  RightOutlined,
+  SmileOutlined,
+  UndoOutlined,
+} from '@ant-design/icons';
+import { Sender } from '@ant-design/x';
+import { Avatar, Badge, Button, List, Popover, Space, Spin, Tag, Typography, theme } from 'antd';
 import EmojiPicker, { Theme } from 'emoji-picker-react';
 import type React from 'react';
-import { useCallback, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 
-export interface CommentsDrawerProps {
+export interface CommentsPanelProps {
   client: AgorClient | null;
   boardId: string;
   comments: BoardComment[];
   users: User[];
   currentUserId: string;
   loading?: boolean;
-  open: boolean;
-  onClose: () => void;
+  collapsed?: boolean;
+  onToggleCollapse?: () => void;
   onSendComment: (content: string) => void;
   onReplyComment?: (parentId: string, content: string) => void;
   onResolveComment?: (commentId: string) => void;
@@ -41,20 +37,21 @@ export interface CommentsDrawerProps {
 type FilterMode = 'all' | 'open' | 'mentions';
 
 /**
- * Reaction bar component - displays and manages emoji reactions
+ * Reaction display component - shows existing reactions as pills
  */
-const ReactionBar: React.FC<{
+const ReactionDisplay: React.FC<{
   reactions: CommentReaction[];
   currentUserId: string;
   onToggle: (emoji: string) => void;
 }> = ({ reactions, currentUserId, onToggle }) => {
-  const { token } = theme.useToken();
-  const [pickerOpen, setPickerOpen] = useState(false);
-
   const grouped: ReactionSummary = groupReactions(reactions);
 
+  if (Object.keys(grouped).length === 0) {
+    return null;
+  }
+
   return (
-    <Space size="small" style={{ marginTop: 8 }}>
+    <>
       {Object.entries(grouped).map(([emoji, userIds]) => {
         const hasReacted = userIds.includes(currentUserId);
         return (
@@ -74,34 +71,45 @@ const ReactionBar: React.FC<{
           </Button>
         );
       })}
-      <Popover
-        content={
-          <EmojiPicker
-            onEmojiClick={emojiData => {
-              onToggle(emojiData.emoji);
-              setPickerOpen(false);
-            }}
-            theme={Theme.DARK}
-            width={350}
-            height={400}
-          />
-        }
-        trigger="click"
-        open={pickerOpen}
-        onOpenChange={setPickerOpen}
-        placement="topLeft"
-      >
-        <Button
-          size="small"
-          icon={<SmileOutlined />}
-          style={{
-            borderRadius: 12,
-            height: 24,
-            padding: '0 8px',
+    </>
+  );
+};
+
+/**
+ * Emoji picker button component
+ */
+const EmojiPickerButton: React.FC<{
+  onToggle: (emoji: string) => void;
+}> = ({ onToggle }) => {
+  const { token } = theme.useToken();
+  const [pickerOpen, setPickerOpen] = useState(false);
+
+  return (
+    <Popover
+      content={
+        <EmojiPicker
+          onEmojiClick={emojiData => {
+            onToggle(emojiData.emoji);
+            setPickerOpen(false);
           }}
+          theme={Theme.DARK}
+          width={350}
+          height={400}
         />
-      </Popover>
-    </Space>
+      }
+      trigger="click"
+      open={pickerOpen}
+      onOpenChange={setPickerOpen}
+      placement="topLeft"
+    >
+      <Button
+        type="text"
+        size="small"
+        icon={<SmileOutlined />}
+        title="Add reaction"
+        style={{ color: token.colorTextSecondary }}
+      />
+    </Popover>
   );
 };
 
@@ -129,6 +137,7 @@ const CommentThread: React.FC<{
 }) => {
   const { token } = theme.useToken();
   const [showReplyInput, setShowReplyInput] = useState(false);
+  const [isHovered, setIsHovered] = useState(false);
   const user = users.find(u => u.user_id === comment.created_by);
   const isCurrentUser = comment.created_by === currentUserId;
 
@@ -139,7 +148,11 @@ const CommentThread: React.FC<{
         padding: '16px 0',
       }}
     >
-      <div style={{ width: '100%' }}>
+      <div
+        style={{ width: '100%', position: 'relative' }}
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
+      >
         {/* Thread Root */}
         <List.Item.Meta
           avatar={
@@ -170,33 +183,82 @@ const CommentThread: React.FC<{
           }
         />
 
-        {/* Reactions */}
-        {onToggleReaction && (
-          <ReactionBar
-            reactions={comment.reactions || []}
-            currentUserId={currentUserId}
-            onToggle={emoji => onToggleReaction(comment.comment_id, emoji)}
-          />
+        {/* Reactions Row (always visible if reactions exist) */}
+        {onToggleReaction && (comment.reactions || []).length > 0 && (
+          <div style={{ marginTop: 8 }}>
+            <Space size="small">
+              <ReactionDisplay
+                reactions={comment.reactions || []}
+                currentUserId={currentUserId}
+                onToggle={emoji => onToggleReaction(comment.comment_id, emoji)}
+              />
+            </Space>
+          </div>
         )}
 
-        {/* Actions */}
-        <Space size="small" style={{ marginTop: 8 }}>
-          {onReply && (
-            <Button type="link" size="small" onClick={() => setShowReplyInput(!showReplyInput)}>
-              Reply
-            </Button>
-          )}
-          {onResolve && (
-            <Button type="link" size="small" onClick={() => onResolve(comment.comment_id)}>
-              {comment.resolved ? 'Reopen' : 'Resolve'}
-            </Button>
-          )}
-          {onDelete && isCurrentUser && (
-            <Button type="link" size="small" danger onClick={() => onDelete(comment.comment_id)}>
-              Delete
-            </Button>
-          )}
-        </Space>
+        {/* Action buttons overlay (visible on hover) */}
+        {isHovered && (
+          <div
+            style={{
+              position: 'absolute',
+              top: 8,
+              right: 0,
+              backgroundColor: token.colorBgContainer,
+              borderRadius: 4,
+              padding: '4px',
+              boxShadow: '0 2px 8px rgba(0, 0, 0, 0.15)',
+            }}
+          >
+            <Space size="small">
+              {onToggleReaction && (
+                <EmojiPickerButton
+                  onToggle={emoji => onToggleReaction(comment.comment_id, emoji)}
+                />
+              )}
+              {onReply && (
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<CommentOutlined />}
+                  onClick={() => setShowReplyInput(!showReplyInput)}
+                  title="Reply"
+                  style={{ color: token.colorTextSecondary }}
+                />
+              )}
+              {onResolve && !comment.resolved && (
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<CheckOutlined />}
+                  onClick={() => onResolve(comment.comment_id)}
+                  title="Resolve"
+                  style={{ color: token.colorTextSecondary }}
+                />
+              )}
+              {onResolve && comment.resolved && (
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<UndoOutlined />}
+                  onClick={() => onResolve(comment.comment_id)}
+                  title="Reopen"
+                  style={{ color: token.colorTextSecondary }}
+                />
+              )}
+              {onDelete && isCurrentUser && (
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<DeleteOutlined />}
+                  onClick={() => onDelete(comment.comment_id)}
+                  title="Delete"
+                  danger
+                  style={{ color: token.colorTextSecondary }}
+                />
+              )}
+            </Space>
+          </div>
+        )}
 
         {/* Nested Replies (1 level deep) */}
         {replies.length > 0 && (
@@ -213,6 +275,7 @@ const CommentThread: React.FC<{
               renderItem={reply => {
                 const replyUser = users.find(u => u.user_id === reply.created_by);
                 const isReplyCurrentUser = reply.created_by === currentUserId;
+                const [replyHovered, setReplyHovered] = useState(false);
                 return (
                   <List.Item
                     style={{
@@ -220,7 +283,11 @@ const CommentThread: React.FC<{
                       padding: '8px 0',
                     }}
                   >
-                    <div style={{ width: '100%' }}>
+                    <div
+                      style={{ width: '100%', position: 'relative' }}
+                      onMouseEnter={() => setReplyHovered(true)}
+                      onMouseLeave={() => setReplyHovered(false)}
+                    >
                       <List.Item.Meta
                         avatar={
                           <Avatar size="small" style={{ backgroundColor: token.colorPrimary }}>
@@ -243,23 +310,52 @@ const CommentThread: React.FC<{
                           </div>
                         }
                       />
-                      {onToggleReaction && (
-                        <ReactionBar
-                          reactions={reply.reactions || []}
-                          currentUserId={currentUserId}
-                          onToggle={emoji => onToggleReaction(reply.comment_id, emoji)}
-                        />
+
+                      {/* Reactions Row (always visible if reactions exist) */}
+                      {onToggleReaction && (reply.reactions || []).length > 0 && (
+                        <div style={{ marginTop: 4 }}>
+                          <Space size="small">
+                            <ReactionDisplay
+                              reactions={reply.reactions || []}
+                              currentUserId={currentUserId}
+                              onToggle={emoji => onToggleReaction(reply.comment_id, emoji)}
+                            />
+                          </Space>
+                        </div>
                       )}
-                      {onDelete && isReplyCurrentUser && (
-                        <Button
-                          type="link"
-                          size="small"
-                          danger
-                          onClick={() => onDelete(reply.comment_id)}
-                          style={{ marginTop: 4, padding: 0 }}
+
+                      {/* Action buttons overlay (visible on hover) */}
+                      {replyHovered && (
+                        <div
+                          style={{
+                            position: 'absolute',
+                            top: 8,
+                            right: 0,
+                            backgroundColor: token.colorBgContainer,
+                            borderRadius: 4,
+                            padding: '4px',
+                            boxShadow: '0 2px 8px rgba(0, 0, 0, 0.15)',
+                          }}
                         >
-                          Delete
-                        </Button>
+                          <Space size="small">
+                            {onToggleReaction && (
+                              <EmojiPickerButton
+                                onToggle={emoji => onToggleReaction(reply.comment_id, emoji)}
+                              />
+                            )}
+                            {onDelete && isReplyCurrentUser && (
+                              <Button
+                                type="text"
+                                size="small"
+                                icon={<DeleteOutlined />}
+                                onClick={() => onDelete(reply.comment_id)}
+                                title="Delete"
+                                danger
+                                style={{ color: token.colorTextSecondary }}
+                              />
+                            )}
+                          </Space>
+                        </div>
                       )}
                     </div>
                   </List.Item>
@@ -290,16 +386,16 @@ const CommentThread: React.FC<{
 };
 
 /**
- * Main CommentsDrawer component with threading and reactions
+ * Main CommentsPanel component - permanent left sidebar with threading and reactions
  */
-export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
+export const CommentsPanel: React.FC<CommentsPanelProps> = ({
   boardId,
   comments,
   users,
   currentUserId,
   loading = false,
-  open,
-  onClose,
+  collapsed = false,
+  onToggleCollapse,
   onSendComment,
   onReplyComment,
   onResolveComment,
@@ -339,28 +435,45 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
       .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
   }, [threadRoots, filter, currentUserId]);
 
+  // When collapsed, don't render anything
+  if (collapsed) {
+    return null;
+  }
+
+  // Expanded state - full panel
   return (
-    <Drawer
-      title={
-        <Space>
-          <CommentOutlined />
-          <span>Comments</span>
-          <Badge count={filteredThreads.length} showZero={false} />
-        </Space>
-      }
-      placement="left"
-      width={500}
-      open={open}
-      onClose={onClose}
-      styles={{
-        body: {
-          padding: 0,
-          display: 'flex',
-          flexDirection: 'column',
-          height: '100%',
-        },
+    <div
+      style={{
+        width: 400,
+        height: '100%',
+        backgroundColor: token.colorBgContainer,
+        borderRight: `1px solid ${token.colorBorder}`,
+        display: 'flex',
+        flexDirection: 'column',
       }}
     >
+      {/* Header */}
+      <div
+        style={{
+          padding: 16,
+          borderBottom: `1px solid ${token.colorBorder}`,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+        }}
+      >
+        <Space>
+          <CommentOutlined />
+          <Text strong>Comments</Text>
+          <Badge count={filteredThreads.length} showZero={false} />
+        </Space>
+        {onToggleCollapse && (
+          <Button type="text" size="small" onClick={onToggleCollapse}>
+            Close
+          </Button>
+        )}
+      </div>
+
       {/* Filter Tabs */}
       <div
         style={{
@@ -448,12 +561,15 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
       >
         <Sender
           placeholder="Add a comment..."
-          onSubmit={content => onSendComment(content)}
+          onSubmit={content => {
+            onSendComment(content);
+            return true; // Return true to clear the input
+          }}
           style={{
             backgroundColor: token.colorBgContainer,
           }}
         />
       </div>
-    </Drawer>
+    </div>
   );
 };

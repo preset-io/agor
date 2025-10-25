@@ -399,6 +399,7 @@ async function createInitialSchema(db: Database): Promise<void> {
         parent_comment_id TEXT,
         resolved INTEGER NOT NULL DEFAULT 0,
         edited INTEGER NOT NULL DEFAULT 0,
+        reactions TEXT NOT NULL DEFAULT '[]',
         data TEXT NOT NULL,
         FOREIGN KEY (board_id) REFERENCES boards(board_id) ON DELETE CASCADE,
         FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE SET NULL,
@@ -536,6 +537,7 @@ export async function initializeDatabase(db: Database): Promise<void> {
             parent_comment_id TEXT,
             resolved INTEGER NOT NULL DEFAULT 0,
             edited INTEGER NOT NULL DEFAULT 0,
+            reactions TEXT NOT NULL DEFAULT '[]',
             data TEXT NOT NULL,
             FOREIGN KEY (board_id) REFERENCES boards(board_id) ON DELETE CASCADE,
             FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE SET NULL,
@@ -559,6 +561,24 @@ export async function initializeDatabase(db: Database): Promise<void> {
         await db.run(sql`CREATE INDEX board_comments_resolved_idx ON board_comments(resolved)`);
 
         console.log('  ✅ board_comments table added');
+      } else {
+        // Table exists - check for reactions column (Phase 2: Threading + reactions)
+        try {
+          const tableInfo = await db.run(sql`PRAGMA table_info(board_comments)`);
+          const hasReactionsColumn = tableInfo.rows.some(
+            (row: { name: string }) => row.name === 'reactions'
+          );
+
+          if (!hasReactionsColumn) {
+            console.log('  Adding reactions column to board_comments...');
+            await db.run(sql`
+              ALTER TABLE board_comments ADD COLUMN reactions TEXT NOT NULL DEFAULT '[]'
+            `);
+            console.log('  ✅ reactions column added');
+          }
+        } catch (error) {
+          console.error('  ⚠️ Failed to add reactions column:', error);
+        }
       }
 
       // Future migrations: Add more table checks here

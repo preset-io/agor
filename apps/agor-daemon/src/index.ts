@@ -1250,6 +1250,48 @@ async function main() {
     },
   });
 
+  // Configure custom methods for board-comments service (Phase 2: Threading + Reactions)
+  const boardCommentsService = app.service('board-comments') as unknown as {
+    toggleReaction: (
+      id: string,
+      data: { user_id: string; emoji: string },
+      params?: unknown
+    ) => Promise<import('@agor/core/types').BoardComment>;
+    createReply: (
+      parentId: string,
+      data: Partial<import('@agor/core/types').BoardComment>,
+      params?: unknown
+    ) => Promise<import('@agor/core/types').BoardComment>;
+  };
+
+  // POST /board-comments/:id/toggle-reaction - Toggle emoji reaction on comment
+  app.use('/board-comments/:id/toggle-reaction', {
+    async create(data: { user_id: string; emoji: string }, params: RouteParams) {
+      const id = params.route?.id;
+      if (!id) throw new Error('Comment ID required');
+      if (!data.user_id) throw new Error('user_id required');
+      if (!data.emoji) throw new Error('emoji required');
+      const updated = await boardCommentsService.toggleReaction(id, data, params);
+      // Manually emit patched event for real-time updates
+      app.service('board-comments').emit('patched', updated);
+      return updated;
+    },
+  });
+
+  // POST /board-comments/:id/reply - Create a reply to a comment thread
+  app.use('/board-comments/:id/reply', {
+    async create(data: Partial<import('@agor/core/types').BoardComment>, params: RouteParams) {
+      const id = params.route?.id;
+      if (!id) throw new Error('Comment ID required');
+      if (!data.content) throw new Error('content required');
+      if (!data.created_by) throw new Error('created_by required');
+      const reply = await boardCommentsService.createReply(id, data, params);
+      // Manually emit created event for real-time updates
+      app.service('board-comments').emit('created', reply);
+      return reply;
+    },
+  });
+
   // Configure custom methods for worktrees service (environment management)
   const worktreesService = app.service(
     'worktrees'

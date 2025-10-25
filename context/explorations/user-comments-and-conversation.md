@@ -1,6 +1,6 @@
 # User Comments and Conversation
 
-**Status:** Exploration / Design Proposal
+**Status:** ✅ Phase 2 Complete (Threading + Reactions)
 **Related:** [multiplayer.md](../concepts/multiplayer.md), [websockets.md](../concepts/websockets.md), [auth.md](../concepts/auth.md)
 
 ---
@@ -30,6 +30,423 @@ Each has significant UX and technical tradeoffs (explored below).
 2. **Non-invasive** - Toggle on/off, doesn't interfere with AI workflows
 3. **Multiplayer-first** - Real-time updates via existing WebSocket infrastructure
 4. **Anonymous-compatible** - Works in both authenticated and anonymous modes
+
+---
+
+## Use Case Examples: What Will People Actually Say?
+
+Before designing the technical implementation, let's imagine concrete scenarios of how teams might use comments in Agor:
+
+### Project Milestone Discussions (Worktree/Project-Level)
+
+```
+👤 Alice: "I think we're done with the auth system! All sessions completed successfully."
+👤 Bob: "Agreed, but we should document the OAuth flow before marking this complete."
+👤 Charlie: "I can write up the docs tomorrow. Consider it done!"
+```
+
+**Characteristics:**
+
+- High-level, strategic discussions
+- About completion/progress of work streams
+- Not attached to specific sessions
+- Resolution: ✅ Makes sense ("milestone reached" → resolved)
+
+### Session Analysis & Debugging (Object-Level)
+
+```
+👤 Alice: "@bob Look at session #a3f4c2 - the agent went completely off-track here. Why did it choose Redux instead of Zustand?"
+👤 Bob: "Oh I see it. The context file had outdated info about our state management preferences."
+👤 Alice: "Fixed the context in #e7b9d4. Let's re-run this session with correct context."
+```
+
+**Characteristics:**
+
+- Specific to a session/task
+- Diagnostic, investigative
+- References concrete work
+- Resolution: ❓ Maybe ("issue identified" → resolved, but conversation might continue)
+
+### Workflow Coordination (Spatial/Organizational)
+
+```
+👤 Charlie: "Let's organize all the database migration sessions in the top-left zone."
+👤 Alice: "Good idea. I'll move the Prisma sessions there too."
+👤 Bob: "Can we color-code them? Red for failed, green for completed?"
+```
+
+**Characteristics:**
+
+- About canvas organization
+- Spatial references ("top-left", "this area")
+- Workflow/process discussion
+- Resolution: ❌ Doesn't really apply (ongoing organizational choices)
+
+### Code Review & Quality Feedback (Message-Level)
+
+```
+👤 Bob: [on specific assistant message] "This implementation won't scale - it's O(n²). Agent should have used a hash map."
+👤 Alice: "Agreed. Should we fork this session and retry with better context?"
+👤 Charlie: "Or we could spawn a refactoring session from this point."
+```
+
+**Characteristics:**
+
+- Granular, technical
+- Attached to specific messages/code
+- Actionable critique
+- Resolution: ✅ Makes sense ("issue fixed" → resolved)
+
+### General Questions & Discussions (Board-Level)
+
+```
+👤 Alice: "Should we use JWT or sessions for auth? I've seen agents go both ways."
+👤 Bob: "JWT is better for our API architecture, see session #c3a7f2 for the decision."
+👤 Charlie: "Agreed on JWT. Let's document this as a project standard."
+```
+
+**Characteristics:**
+
+- Not tied to specific work
+- Decision-making, strategy
+- May reference sessions but not attached
+- Resolution: ✅ Makes sense ("decision made" → resolved)
+
+### Confusion & Help Requests
+
+```
+👤 Bob: "Why do we have 5 sessions doing authentication? Is this intentional or did something go wrong?"
+👤 Alice: "Oh those are experiments! I was testing different approaches. The one in zone 2 is the winner."
+👤 Bob: "Got it, thanks! Should we archive the failed experiments?"
+```
+
+**Characteristics:**
+
+- Clarification-seeking
+- May reveal workflow issues
+- Human learning/context sharing
+- Resolution: ✅ Definitely ("question answered" → resolved)
+
+### Key Insight: Multiple Conversation Modes
+
+From these examples, we see **three distinct conversation modes:**
+
+1. **Strategic/Milestone** - "Are we done with auth?" (worktree/project scope)
+2. **Tactical/Review** - "This session went wrong" (object scope)
+3. **Operational/Organization** - "Let's group these sessions" (spatial/workflow scope)
+
+**Question:** Do these all live in the same comment system, or should they be separated?
+
+---
+
+## Conversation Scoping: Where Should Comments Live?
+
+### The Scoping Hierarchy
+
+Agor has multiple organizational layers. Each suggests different conversation scopes:
+
+```
+Repository (Git Repo)
+└── Worktree (Project/Feature Branch)
+    ├── Board A (Organizational View)
+    │   ├── Session 1
+    │   ├── Session 2
+    │   └── Zone (Spatial Grouping)
+    └── Board B (Different View of Same Work)
+        ├── Session 1 (same session, different board!)
+        └── Session 3
+```
+
+### Scope Option 1: Board-Scoped (Current Implementation)
+
+**What we have now:** Comments attached to boards.
+
+**Works well for:**
+
+- ✅ Workflow coordination ("organize sessions in this zone")
+- ✅ Board-specific discussions ("this board is getting messy")
+- ✅ Organizational questions ("which session should we focus on?")
+
+**Doesn't work for:**
+
+- ❌ Project milestones ("auth system complete") - What if same worktree has multiple boards?
+- ❌ Session discussions ("this session failed") - Session might appear on multiple boards
+- ❌ Worktree-wide decisions ("we're using JWT") - Discussion happens in board context, not project context
+
+**Key limitation:** A session can be on multiple boards. If you comment on a session in Board A, should that comment appear in Board B?
+
+### Scope Option 2: Worktree-Scoped
+
+**Alternative:** Comments attached to worktrees (projects).
+
+**Works well for:**
+
+- ✅ Project milestone discussions ("auth system complete")
+- ✅ Technical decisions ("we chose JWT over sessions")
+- ✅ Documentation ("here's how our workflow works")
+- ✅ Cross-board discussions (sessions on any board visible)
+
+**Doesn't work for:**
+
+- ❌ Board-specific organization ("clean up this board")
+- ❌ Spatial coordination (worktrees don't have canvas coordinates)
+- ❌ Multiple projects (would need worktree selector in UI)
+
+**Interesting trade-off:** Worktrees = projects, Boards = views. Conversations about _work_ (worktree-scoped) vs conversations about _organization_ (board-scoped) are different!
+
+### Scope Option 3: Dual-Scoped (Worktree + Board)
+
+**Hybrid approach:** Support both worktree-scoped AND board-scoped conversations.
+
+**Schema change:**
+
+```typescript
+export const boardComments = sqliteTable('board_comments', {
+  // ... existing fields
+
+  // EITHER board_id OR worktree_id (at least one required)
+  board_id: text('board_id', { length: 36 }).references(() => boards.board_id),
+  worktree_id: text('worktree_id', { length: 36 }).references(() => worktrees.worktree_id),
+});
+```
+
+**UI:**
+
+```
+┌─ Comments Drawer ─────────────┐
+│  Scope: [Project] [This Board] │  ← Scope selector
+│                                │
+│  📁 Project: Auth System       │
+│    💬 "JWT decision made!"     │
+│    💬 "Milestone: auth done"   │
+│                                │
+│  📋 Board: Sprint 3            │
+│    💬 "Organize these sessions"│
+│    💬 "Zone 2 needs cleanup"   │
+└───────────────────────────────┘
+```
+
+**Pros:**
+
+- ✅ Separates project discussions from board organization
+- ✅ Project conversations persist across board reorganizations
+- ✅ Clear mental model (project talk vs board talk)
+
+**Cons:**
+
+- ❌ More complex UX (two comment types)
+- ❌ Users might not know which to use
+- ❌ Schema change needed (worktree_id)
+
+### Scope Option 4: Object-First (Session > Board)
+
+**Alternative:** Primary scope is the object (session/task/message), board is secondary.
+
+**Philosophy:** Comments are about _work artifacts_ (sessions, tasks), not organizational containers (boards).
+
+**Schema stays same** but UI changes:
+
+- "Comment on this session" is primary action
+- Comments appear wherever that session appears
+- Board-level comments are rare, for org/workflow only
+
+**Example:** Session #a3f4c2 appears on "Sprint 3" and "Auth Work" boards. Comments on that session show on both boards.
+
+**Pros:**
+
+- ✅ Comments follow the work
+- ✅ Natural for code review ("comment on this code")
+- ✅ Sessions are the main work unit
+
+**Cons:**
+
+- ❌ Still doesn't solve project-wide discussions
+- ❌ "General" comments still need a home
+
+### Recommendation: Start with Board-Scoped, Add Worktree Later
+
+**Phase 1 (shipped):** Board-scoped comments only
+
+**Phase 2 (future):** Add worktree-scoped conversations when teams request it
+
+**Reasoning:**
+
+1. Most early usage will be organizational ("arrange these sessions")
+2. Can learn from real usage patterns
+3. Adding worktree scope is backward-compatible (just add `worktree_id` column)
+4. Over-designing scope too early = complexity without validation
+
+**Key question to validate with users:** _"Do you want to talk about the PROJECT (worktree) or the BOARD (view)?"_
+
+---
+
+## Comment Resolution: When Does It Make Sense?
+
+We added a `resolved` boolean to comments, Figma-style. But does this make sense in Agor's context?
+
+### Resolution in Figma
+
+**Figma use cases:**
+
+- "Move this button 2px left" → Designer moves it → ✅ Resolved
+- "Change this to blue" → Changed → ✅ Resolved
+- "Is this the right spacing?" → "Yes" → ✅ Resolved
+
+**Characteristics:**
+
+- Clear action items
+- Visual, concrete changes
+- Objective completion criteria
+- Comments are about _what to change_
+
+### Resolution in GitHub PRs
+
+**GitHub use cases:**
+
+- "This won't handle null" → Code fixed → ✅ Resolved
+- "Add error handling" → Added → ✅ Resolved
+- "Why this approach?" → Explained → ✅ Resolved (question answered)
+
+**Characteristics:**
+
+- Code review feedback
+- Technical discussions
+- Resolution = "issue addressed" or "question answered"
+- Comments are about _code quality_
+
+### Resolution in Agor: What Changes?
+
+**The challenge:** In Agor, _what changes_ when you resolve a comment?
+
+**Scenario 1: Actionable feedback**
+
+```
+💬 "Session #a3f4c2 used wrong approach, needs retry"
+→ User forks session, fixes approach
+→ ✅ Resolves comment
+```
+
+**Resolution means:** Issue addressed, action taken ✅ Makes sense
+
+**Scenario 2: Strategic decision**
+
+```
+💬 "Should we use JWT or sessions for auth?"
+💬 "Let's use JWT, see session #x for rationale"
+→ Decision made
+→ ✅ Resolves comment
+```
+
+**Resolution means:** Decision made, discussion closed ✅ Makes sense
+
+**Scenario 3: Diagnostic discussion**
+
+```
+💬 "@alice Why did the agent choose Redux here?"
+💬 "Oh, the context file was outdated"
+→ Understanding reached
+→ ✅ Resolves comment
+```
+
+**Resolution means:** Question answered ✅ Makes sense
+
+**Scenario 4: Organizational coordination**
+
+```
+💬 "Let's group all database sessions in zone 2"
+💬 "Good idea, I'll move them"
+→ Sessions moved
+→ ??? Resolved?
+```
+
+**Resolution means:** ??? Coordination complete? Unclear if meaningful.
+
+**Scenario 5: Milestone celebration**
+
+```
+💬 "Auth system is complete! 🎉"
+→ ??? Should this be resolved? It's not a question or action item.
+→ Resolving feels like "dismissing" the celebration
+```
+
+**Resolution means:** ??? Not really applicable.
+
+### When Resolution Works
+
+Resolution makes sense when a comment is:
+
+1. **A question** - "Why did X happen?" → answered → resolved
+2. **An action item** - "Fix this session" → fixed → resolved
+3. **A decision** - "Should we use X?" → decided → resolved
+4. **A problem report** - "This failed" → addressed → resolved
+
+### When Resolution Doesn't Work
+
+Resolution is awkward when a comment is:
+
+1. **Informational** - "FYI, I'm working on auth" → no action needed
+2. **Celebratory** - "Great work!" → nothing to resolve
+3. **Strategic** - "Our architecture is X" → statement, not question
+4. **Ongoing coordination** - "Keep sessions organized" → continuous, not one-time
+
+### Alternative: Comment Types
+
+Instead of binary resolved/unresolved, what if comments had **types**?
+
+```typescript
+type CommentType =
+  | 'question' // Needs answer
+  | 'action-item' // Needs doing
+  | 'decision' // Needs deciding
+  | 'note' // FYI only
+  | 'discussion'; // Open-ended
+
+// Only question/action-item/decision can be "resolved"
+```
+
+**UI:**
+
+```
+💬 [Question] @alice Why did agent choose Redux?
+   ✅ Resolve
+
+💬 [Note] I'm working on auth system
+   (no resolve button - it's just informational)
+
+💬 [Action] Session #abc needs retry with correct context
+   ✅ Resolve
+```
+
+**Pros:**
+
+- ✅ Clearer semantics (not everything needs resolution)
+- ✅ Filterable ("show only questions", "show open action items")
+- ✅ Better for async work (know what needs response)
+
+**Cons:**
+
+- ❌ More complex UX (choose type when commenting)
+- ❌ People might not understand types
+- ❌ Over-engineering?
+
+### Recommendation: Keep Resolution, Add Context
+
+**Keep the current `resolved` boolean** but clarify its meaning:
+
+**In UI:**
+
+- Button text: "Mark as done" (not "Resolve")
+- Tooltip: "Mark this comment as addressed/answered/complete"
+- Only show for your own comments + mentions
+
+**In filters:**
+
+- "Open" instead of "Unresolved" (feels more action-oriented)
+- "Done" instead of "Resolved" (clearer for non-code scenarios)
+
+**Future enhancement:** Add comment types if usage patterns show clear categorization needs.
+
+**Key insight:** Resolution in Agor means "this conversation reached conclusion" (question answered, decision made, action taken, issue addressed). It's valid for many comment types, but not all.
 
 ---
 
@@ -232,49 +649,68 @@ Alice (10m ago):
 
 ---
 
-## Recommendation: Flexible Schema + Incremental Implementation
+## Final Design: Figma-Style Threaded Comments with Reactions
 
-### The Best of All Worlds
+After exploring multiple approaches and use cases, here's what we're building:
 
-Instead of choosing one approach, we design a **flexible schema that supports all attachment types**, but implement incrementally:
+### Core Design Decisions
 
-**Phase 1:** Board-level conversations only (simple, fast to ship)
-**Phase 2:** Session/message attachments (object-level context)
-**Phase 3:** Spatial positioning (visual annotations)
+1. **Threading Model: Figma-Style (2-Layer Only)**
+   - Every comment is a potential thread
+   - Thread root = `parent_comment_id IS NULL`
+   - Replies = `parent_comment_id IS NOT NULL`
+   - No recursive nesting (replies cannot have replies)
 
-This gives us:
+2. **Reactions: JSON Blob (Table Stakes)**
+   - Stored as JSON array on each comment/reply: `[{ user_id, emoji }, ...]`
+   - Both thread roots AND replies can have reactions
+   - Display grouped by emoji: `{ "👍": ["alice", "bob"], "🎉": ["charlie"] }`
 
-- ✅ Future-proof data model (no migrations later)
-- ✅ Simple MVP (board conversations)
-- ✅ Clear upgrade path (add features incrementally)
-- ✅ User choice (pick attachment type per comment)
+3. **Resolution: Thread Roots Only**
+   - Only top-level comments (thread roots) can be resolved
+   - Replies don't have resolution state
+   - Resolved threads can still receive new replies
+
+4. **Attachments: Thread Roots Only**
+   - Thread roots MUST have attachment (board_id, session_id, task_id, or position)
+   - Replies inherit context from parent
+   - Replies don't store attachment fields
+
+5. **UI: List-Based Threads (Not Chat)**
+   - Switch from `Bubble.List` (chat) to `List` (structured threads)
+   - All comments left-aligned (not chat-style left/right)
+   - Nested replies indented under parent
+   - Reactions displayed inline with existing `emoji-picker-react`
 
 ### Why This Works
 
-1. **Schema flexibility** - Optional foreign keys support multiple attachment types
-2. **UI simplicity** - Start with single drawer, add spatial rendering later
-3. **No technical debt** - Data model supports all future features
-4. **Incremental value** - Ship board conversations now, enhance later
+- ✅ **Simple mental model** - Every comment is a thread, replies nest under it
+- ✅ **Proven pattern** - Figma/GitHub/Linear all use this
+- ✅ **Future-proof** - Schema supports all attachment types (board, session, spatial)
+- ✅ **Real-time friendly** - WebSocket broadcasts work naturally
+- ✅ **Bounded complexity** - 2 layers prevent infinite nesting chaos
 
 ### Figma vs Agor Context
 
-| Aspect   | Figma                       | Agor                            |
-| -------- | --------------------------- | ------------------------------- |
-| Content  | Static designs              | Movable session cards           |
-| Feedback | Visual ("move this")        | Abstract ("why this approach?") |
-| Anchors  | UI elements (buttons, text) | Sessions (already have IDs)     |
-| Layout   | Fixed layout per frame      | Free-form board arrangement     |
-| Use Case | Design critique             | Code review, planning           |
+| Aspect    | Figma                       | Agor                            |
+| --------- | --------------------------- | ------------------------------- |
+| Content   | Static designs              | Movable session cards           |
+| Feedback  | Visual ("move this")        | Abstract ("why this approach?") |
+| Anchors   | UI elements (buttons, text) | Sessions (already have IDs)     |
+| Layout    | Fixed layout per frame      | Free-form board arrangement     |
+| Use Case  | Design critique             | Code review, planning           |
+| Threading | 2-layer (comment + replies) | **2-layer (same!)** ✅          |
+| Reactions | ✅ Emoji reactions          | **✅ Emoji reactions** ✅       |
 
-**Key insight:** Agor needs flexibility for both abstract discussions (board-level) AND visual annotations (spatial). Our schema supports both
+**Key insight:** Agor conversations blend Figma's spatial annotations with GitHub's code review threads. We support both abstract discussions (board-level) AND object-specific feedback (session/task/message-level)
 
 ---
 
-## Data Model: Flexible Schema
+## Data Model: Single Table with Threading and Reactions
 
-### New Table: `board_comments`
+### Table: `board_comments`
 
-**Design Philosophy:** Support ALL attachment types in schema, implement incrementally in UI.
+**Design Philosophy:** Single table handles both thread roots and replies using `parent_comment_id`. Reactions stored as JSON blob for simplicity.
 
 ```typescript
 // Location: packages/core/src/db/schema.ts
@@ -286,19 +722,24 @@ export const boardComments = sqliteTable(
     created_at: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
     updated_at: integer('updated_at', { mode: 'timestamp_ms' }),
 
-    // Scoping & authorship
-    board_id: text('board_id', { length: 36 })
-      .notNull()
-      .references(() => boards.board_id, { onDelete: 'cascade' }),
+    // Threading (Figma-style: 2 layers only)
+    // NULL = thread root (top-level comment)
+    // NOT NULL = reply (child comment)
+    parent_comment_id: text('parent_comment_id', { length: 36 }).references(
+      () => boardComments.comment_id,
+      { onDelete: 'cascade' }
+    ),
+
+    // Authorship
     created_by: text('created_by', { length: 36 })
       .notNull()
       .references(() => users.user_id, { onDelete: 'cascade' }),
 
-    // FLEXIBLE ATTACHMENTS (all optional except board_id)
-    // Phase 1: Only board_id used (board-level conversations)
-    // Phase 2: session_id, task_id, message_id for object attachments
-    // Phase 3: position for spatial annotations
-
+    // ATTACHMENTS (only for thread roots, NULL for replies)
+    // At least ONE required for thread roots, ALL should be NULL for replies
+    board_id: text('board_id', { length: 36 }).references(() => boards.board_id, {
+      onDelete: 'cascade',
+    }),
     session_id: text('session_id', { length: 36 }).references(() => sessions.session_id, {
       onDelete: 'set null',
     }),
@@ -308,10 +749,9 @@ export const boardComments = sqliteTable(
     message_id: text('message_id', { length: 36 }).references(() => messages.message_id, {
       onDelete: 'set null',
     }),
-
-    // Content
-    content: text('content').notNull(), // Markdown-supported text
-    content_preview: text('content_preview').notNull(), // First 200 chars
+    worktree_id: text('worktree_id', { length: 36 }).references(() => worktrees.worktree_id, {
+      onDelete: 'set null',
+    }),
 
     // SPATIAL POSITIONING (Phase 3)
     // Stored as JSON to support both absolute and relative positioning
@@ -327,14 +767,19 @@ export const boardComments = sqliteTable(
       };
     }>(),
 
-    // Thread support (optional for V1)
-    parent_comment_id: text('parent_comment_id', { length: 36 }).references(
-      () => boardComments.comment_id,
-      { onDelete: 'cascade' }
-    ), // NULL = top-level comment
+    // Content
+    content: text('content').notNull(), // Markdown-supported text
+    content_preview: text('content_preview').notNull(), // First 200 chars
+
+    // Reactions (for BOTH thread roots and replies)
+    // Stored as JSON array: [{ user_id: "abc", emoji: "👍" }, ...]
+    // Display grouped by emoji: { "👍": ["alice", "bob"], "🎉": ["charlie"] }
+    reactions: text('reactions', { mode: 'json' })
+      .$type<Array<{ user_id: string; emoji: string }>>()
+      .default(sql`'[]'`),
 
     // Metadata
-    resolved: integer('resolved', { mode: 'boolean' }).notNull().default(false),
+    resolved: integer('resolved', { mode: 'boolean' }).notNull().default(false), // Only meaningful for thread roots
     edited: integer('edited', { mode: 'boolean' }).notNull().default(false),
     mentions: text('mentions', { mode: 'json' }).$type<string[]>(), // Array of user IDs
   },
@@ -343,12 +788,37 @@ export const boardComments = sqliteTable(
     sessionIdx: index('board_comments_session_idx').on(table.session_id),
     taskIdx: index('board_comments_task_idx').on(table.task_id),
     messageIdx: index('board_comments_message_idx').on(table.message_id),
+    worktreeIdx: index('board_comments_worktree_idx').on(table.worktree_id),
     createdByIdx: index('board_comments_created_by_idx').on(table.created_by),
-    parentIdx: index('board_comments_parent_idx').on(table.parent_comment_id),
+    parentIdx: index('board_comments_parent_idx').on(table.parent_comment_id), // Critical for fetching replies
     createdIdx: index('board_comments_created_idx').on(table.created_at),
   })
 );
 ```
+
+### Business Rules
+
+**Thread Roots (parent_comment_id IS NULL):**
+
+1. MUST have at least one attachment:
+   - `board_id` (general board discussion)
+   - `session_id` (session-specific feedback)
+   - `task_id` (task-specific feedback)
+   - `message_id` (message-specific code review)
+   - `worktree_id` (project-level milestone)
+   - `position` (spatial annotation on canvas)
+
+2. CAN be resolved (`resolved = true/false`)
+3. CAN have replies (children with `parent_comment_id = this.comment_id`)
+4. CAN have reactions
+
+**Replies (parent_comment_id IS NOT NULL):**
+
+1. MUST have `parent_comment_id` linking to thread root
+2. SHOULD NOT have attachment fields (inherited from parent)
+3. CANNOT be resolved (field ignored)
+4. CANNOT have replies (2-layer limit)
+5. CAN have reactions
 
 ### Attachment Type Logic
 
@@ -356,51 +826,118 @@ export const boardComments = sqliteTable(
 
 ```typescript
 function getCommentAttachmentType(comment: BoardComment) {
-  // Most specific → least specific
+  // Replies inherit context from parent
+  if (comment.parent_comment_id) {
+    return 'reply'; // Context comes from parent thread
+  }
+
+  // Thread roots (most specific → least specific)
   if (comment.message_id) return 'message';
   if (comment.task_id) return 'task';
   if (comment.session_id && comment.position?.relative) return 'session-spatial';
   if (comment.session_id) return 'session';
+  if (comment.worktree_id) return 'worktree';
   if (comment.position?.absolute) return 'board-spatial';
-  return 'board'; // Default: board-level conversation
+  if (comment.board_id) return 'board';
+
+  throw new Error('Thread root must have at least one attachment');
 }
 ```
 
-**Attachment hierarchy:**
+**Attachment hierarchy (thread roots only):**
 
 1. **Message-level** - Most specific (e.g., "This line of code is wrong")
 2. **Task-level** - Specific to a task (e.g., "This approach won't scale")
 3. **Session-spatial** - Visual pin on session (e.g., "Check this session's output")
 4. **Session-level** - Attached to session (e.g., "Great work on this!")
-5. **Board-spatial** - Visual pin on empty space (e.g., "Add session here")
-6. **Board-level** - General conversation (e.g., "Should we use JWT?")
+5. **Worktree-level** - Project milestones (e.g., "Auth system complete!")
+6. **Board-spatial** - Visual pin on empty space (e.g., "Add session here")
+7. **Board-level** - General conversation (e.g., "Should we use JWT?")
 
-### TypeScript Type
+### TypeScript Types
 
 ```typescript
 // Location: packages/core/src/types/board-comment.ts
-import type { BoardID, CommentID, SessionID, TaskID, UserID } from './id';
+import type { BoardID, CommentID, SessionID, TaskID, MessageID, WorktreeID, UserID } from './id';
 
+// Individual reaction
+export interface CommentReaction {
+  user_id: string;
+  emoji: string;
+}
+
+// Reactions grouped by emoji for display
+export type ReactionSummary = {
+  [emoji: string]: string[]; // { "👍": ["alice", "bob"], "🎉": ["charlie"] }
+};
+
+// Position for spatial comments (Phase 3)
+export interface CommentPosition {
+  absolute?: { x: number; y: number }; // Absolute board coordinates
+  relative?: {
+    // Relative to session (follows when moved)
+    session_id: string;
+    offset_x: number;
+    offset_y: number;
+  };
+}
+
+// Main comment type
 export interface BoardComment {
   comment_id: CommentID;
-  board_id: BoardID;
-  created_by: UserID;
-  session_id?: SessionID; // Optional context link
-  task_id?: TaskID; // Optional context link
-  parent_comment_id?: CommentID; // For threaded replies
+  parent_comment_id?: CommentID; // NULL = thread root, NOT NULL = reply
+
+  // Attachments (only for thread roots)
+  board_id?: BoardID;
+  session_id?: SessionID;
+  task_id?: TaskID;
+  message_id?: MessageID;
+  worktree_id?: WorktreeID;
+  position?: CommentPosition;
 
   content: string; // Markdown text
   content_preview: string; // First 200 chars for list views
 
-  resolved: boolean; // Can mark as resolved (like GitHub PR comments)
-  edited: boolean; // Indicates if edited after creation
-  mentions: UserID[]; // @mentioned users
+  reactions: CommentReaction[]; // Raw storage format
+  resolved: boolean; // Only meaningful for thread roots
+  edited: boolean;
+  mentions?: UserID[];
 
+  created_by: UserID;
   created_at: Date;
   updated_at?: Date;
 }
 
-export type BoardCommentCreate = Omit<BoardComment, 'comment_id' | 'created_at' | 'updated_at'>;
+export type BoardCommentCreate = Omit<
+  BoardComment,
+  'comment_id' | 'created_at' | 'updated_at' | 'reactions' | 'resolved' | 'edited'
+> & {
+  reactions?: CommentReaction[];
+  resolved?: boolean;
+  edited?: boolean;
+};
+
+// Helper functions
+export function isThreadRoot(comment: BoardComment): boolean {
+  return !comment.parent_comment_id;
+}
+
+export function isReply(comment: BoardComment): boolean {
+  return !!comment.parent_comment_id;
+}
+
+export function isResolvable(comment: BoardComment): boolean {
+  return isThreadRoot(comment);
+}
+
+export function groupReactions(reactions: CommentReaction[]): ReactionSummary {
+  const grouped: Record<string, string[]> = {};
+  for (const { emoji, user_id } of reactions) {
+    if (!grouped[emoji]) grouped[emoji] = [];
+    grouped[emoji].push(user_id);
+  }
+  return grouped;
+}
 ```
 
 ### Why Board-Scoped?
@@ -498,125 +1035,127 @@ app.service('board-comments').publish('created', comment => {
 
 ## UI/UX Design
 
-### x.ant.design Components
+### Component Strategy
 
-Perfect match! Use **Ant Design X** (v1.0) atomic components:
+**Phase 1 (shipped):** Used `Bubble.List` from Ant Design X for chat-style UI
+**Phase 2 (now):** Switching to **Ant Design `List`** for threaded comment structure
 
-1. **`<Conversations>`** - Main conversation list container
-2. **`<Bubble>`** - Individual comment bubbles (user avatar, timestamp, content)
-3. **`<Sender>`** - Input box with @ mention support
-4. **`<Attachment>`** - Future: Attach images/files to comments
+**Why the switch:**
 
-**Installation:**
+- ❌ `Bubble.List` is designed for AI chat (left/right message flow)
+- ✅ `List` supports structured threads with nesting
+- ✅ More like Figma/GitHub comments (all left-aligned, hierarchical)
+- ✅ Better for 2-layer threading model
+
+**Component breakdown:**
+
+1. **`List`** (Ant Design) - Main container for thread roots
+2. **`List.Item`** (Ant Design) - Individual thread root + nested replies
+3. **`Sender`** (Ant Design X) - Input box (keep for @ mention support)
+4. **`EmojiPicker`** (emoji-picker-react) - Already in use! Reaction picker
+
+**Installation (already complete):**
 
 ```bash
-cd apps/agor-ui
-pnpm add @ant-design/x
+# Already installed:
+# - antd (for List, Avatar, Space, etc.)
+# - @ant-design/x (for Sender)
+# - emoji-picker-react (for reactions)
 ```
 
-**Usage Example:**
-
-```tsx
-import { Conversations, Bubble, Sender } from '@ant-design/x';
-
-<Conversations
-  items={comments.map(c => ({
-    key: c.comment_id,
-    avatar: getUserEmoji(c.created_by),
-    name: getUserName(c.created_by),
-    message: c.content,
-    timestamp: new Date(c.created_at),
-  }))}
-/>
-<Sender
-  placeholder="Add a comment... Use @ to mention teammates"
-  onSend={handleSend}
-/>
-```
-
-### Left Drawer Component
+### CommentsDrawer Component (Phase 2: List-Based Threads)
 
 **Location:** `apps/agor-ui/src/components/CommentsDrawer/CommentsDrawer.tsx`
 
 ```tsx
-import { Drawer, Space, Button, Badge } from 'antd';
-import { CommentOutlined, CloseOutlined } from '@ant-design/icons';
-import { Conversations, Bubble, Sender } from '@ant-design/x';
-import type { BoardComment, User } from '@agor/core/types';
+import { Drawer, List, Avatar, Space, Button, Badge, Popover, Tag } from 'antd';
+import { CommentOutlined, SmileOutlined } from '@ant-design/icons';
+import { Sender } from '@ant-design/x';
+import EmojiPicker, { Theme } from 'emoji-picker-react';
+import type { BoardComment, User, ReactionSummary } from '@agor/core/types';
+import { groupReactions, isThreadRoot } from '@agor/core/types';
 
 interface CommentsDrawerProps {
   open: boolean;
   onClose: () => void;
   boardId: string;
-  comments: BoardComment[];
+  comments: BoardComment[]; // Includes both thread roots and replies
   users: User[];
   currentUserId: string;
-  onSendComment: (content: string, sessionId?: string, taskId?: string) => void;
+  onSendComment: (content: string) => void;
+  onReplyComment: (parentId: string, content: string) => void;
   onResolveComment: (commentId: string) => void;
+  onToggleReaction: (commentId: string, emoji: string) => void;
 }
 
 export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
   open,
   onClose,
-  boardId,
   comments,
   users,
   currentUserId,
   onSendComment,
+  onReplyComment,
   onResolveComment,
+  onToggleReaction,
 }) => {
   const [filter, setFilter] = React.useState<'all' | 'unresolved' | 'mentions'>('all');
 
-  const filteredComments = React.useMemo(() => {
-    switch (filter) {
-      case 'unresolved':
-        return comments.filter(c => !c.resolved);
-      case 'mentions':
-        return comments.filter(c => c.mentions?.includes(currentUserId));
-      default:
-        return comments;
-    }
-  }, [comments, filter, currentUserId]);
+  // Separate thread roots from replies
+  const threadRoots = comments.filter(c => isThreadRoot(c));
+  const allReplies = comments.filter(c => !isThreadRoot(c));
+
+  // Group replies by parent
+  const repliesByParent = allReplies.reduce(
+    (acc, reply) => {
+      if (reply.parent_comment_id) {
+        if (!acc[reply.parent_comment_id]) acc[reply.parent_comment_id] = [];
+        acc[reply.parent_comment_id].push(reply);
+      }
+      return acc;
+    },
+    {} as Record<string, BoardComment[]>
+  );
+
+  // Apply filters to thread roots only
+  const filteredThreads = threadRoots.filter(thread => {
+    if (filter === 'unresolved' && thread.resolved) return false;
+    if (filter === 'mentions' && !thread.mentions?.includes(currentUserId)) return false;
+    return true;
+  });
 
   return (
     <Drawer
       title={
         <Space>
           <CommentOutlined />
-          Board Comments
-          <Badge count={filteredComments.length} showZero={false} />
+          <span>Comments</span>
+          <Badge count={filteredThreads.length} showZero={false} />
         </Space>
       }
-      placement="left" // LEFT drawer (vs SessionDrawer on right)
-      width={400}
+      placement="left"
+      width={500}
       open={open}
       onClose={onClose}
-      styles={{
-        body: {
-          padding: 0,
-          display: 'flex',
-          flexDirection: 'column',
-        },
-      }}
     >
       {/* Filter Tabs */}
-      <Space style={{ padding: 16, borderBottom: '1px solid #303030' }}>
+      <Space style={{ padding: 16, borderBottom: '1px solid var(--colorBorder)' }}>
         <Button
-          type={filter === 'all' ? 'primary' : 'text'}
+          type={filter === 'all' ? 'primary' : 'default'}
           size="small"
           onClick={() => setFilter('all')}
         >
           All
         </Button>
         <Button
-          type={filter === 'unresolved' ? 'primary' : 'text'}
+          type={filter === 'unresolved' ? 'primary' : 'default'}
           size="small"
           onClick={() => setFilter('unresolved')}
         >
-          Unresolved
+          Open
         </Button>
         <Button
-          type={filter === 'mentions' ? 'primary' : 'text'}
+          type={filter === 'mentions' ? 'primary' : 'default'}
           size="small"
           onClick={() => setFilter('mentions')}
         >
@@ -624,37 +1163,174 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
         </Button>
       </Space>
 
-      {/* Conversation List */}
-      <div style={{ flex: 1, overflow: 'auto', padding: 16 }}>
-        <Conversations
-          items={filteredComments.map(comment => {
-            const user = users.find(u => u.user_id === comment.created_by);
-            return {
-              key: comment.comment_id,
-              avatar: user?.emoji || '👤',
-              name: user?.name || 'Anonymous',
-              message: comment.content,
-              timestamp: new Date(comment.created_at),
-              actions: [
-                comment.created_by === currentUserId && (
-                  <Button size="small" onClick={() => onResolveComment(comment.comment_id)}>
-                    {comment.resolved ? 'Unresolve' : 'Resolve'}
-                  </Button>
-                ),
-              ],
-            };
-          })}
-        />
-      </div>
+      {/* Thread List */}
+      <List
+        dataSource={filteredThreads}
+        renderItem={thread => (
+          <CommentThread
+            comment={thread}
+            replies={repliesByParent[thread.comment_id] || []}
+            users={users}
+            currentUserId={currentUserId}
+            onReply={onReplyComment}
+            onResolve={onResolveComment}
+            onToggleReaction={onToggleReaction}
+          />
+        )}
+      />
 
-      {/* Input Box */}
-      <div style={{ padding: 16, borderTop: '1px solid #303030' }}>
-        <Sender
-          placeholder="Add a comment... Use @ to mention teammates"
-          onSend={content => onSendComment(content)}
-        />
+      {/* Input Box for new top-level comment */}
+      <div style={{ padding: 16, borderTop: '1px solid var(--colorBorder)' }}>
+        <Sender placeholder="Add a comment..." onSubmit={onSendComment} />
       </div>
     </Drawer>
+  );
+};
+
+// Individual thread component (root + replies)
+const CommentThread: React.FC<{
+  comment: BoardComment;
+  replies: BoardComment[];
+  users: User[];
+  currentUserId: string;
+  onReply: (parentId: string, content: string) => void;
+  onResolve: (commentId: string) => void;
+  onToggleReaction: (commentId: string, emoji: string) => void;
+}> = ({ comment, replies, users, currentUserId, onReply, onResolve, onToggleReaction }) => {
+  const [showReplyInput, setShowReplyInput] = React.useState(false);
+  const user = users.find(u => u.user_id === comment.created_by);
+
+  return (
+    <List.Item>
+      <div style={{ width: '100%' }}>
+        {/* Thread Root */}
+        <List.Item.Meta
+          avatar={<Avatar>{user?.emoji || '👤'}</Avatar>}
+          title={
+            <Space>
+              <span>{user?.name || 'Anonymous'}</span>
+              <span style={{ color: 'gray', fontSize: 12 }}>
+                {new Date(comment.created_at).toLocaleTimeString()}
+              </span>
+              {comment.resolved && <Tag color="success">Resolved</Tag>}
+            </Space>
+          }
+          description={comment.content}
+        />
+
+        {/* Reactions */}
+        <ReactionBar
+          reactions={groupReactions(comment.reactions)}
+          currentUserId={currentUserId}
+          onToggle={emoji => onToggleReaction(comment.comment_id, emoji)}
+        />
+
+        {/* Actions */}
+        <Space style={{ marginTop: 8 }}>
+          <Button type="link" size="small" onClick={() => setShowReplyInput(!showReplyInput)}>
+            Reply
+          </Button>
+          <Button type="link" size="small" onClick={() => onResolve(comment.comment_id)}>
+            {comment.resolved ? 'Reopen' : 'Resolve'}
+          </Button>
+        </Space>
+
+        {/* Nested Replies (1 level deep) */}
+        {replies.length > 0 && (
+          <div
+            style={{
+              marginLeft: 48,
+              marginTop: 12,
+              borderLeft: '2px solid var(--colorBorder)',
+              paddingLeft: 12,
+            }}
+          >
+            <List
+              dataSource={replies}
+              renderItem={reply => {
+                const replyUser = users.find(u => u.user_id === reply.created_by);
+                return (
+                  <List.Item style={{ borderBottom: 'none', padding: '8px 0' }}>
+                    <List.Item.Meta
+                      avatar={<Avatar size="small">{replyUser?.emoji || '👤'}</Avatar>}
+                      title={
+                        <Space>
+                          <span style={{ fontSize: 14 }}>{replyUser?.name || 'Anonymous'}</span>
+                          <span style={{ color: 'gray', fontSize: 11 }}>
+                            {new Date(reply.created_at).toLocaleTimeString()}
+                          </span>
+                        </Space>
+                      }
+                      description={reply.content}
+                    />
+                    <ReactionBar
+                      reactions={groupReactions(reply.reactions)}
+                      currentUserId={currentUserId}
+                      onToggle={emoji => onToggleReaction(reply.comment_id, emoji)}
+                    />
+                  </List.Item>
+                );
+              }}
+            />
+          </div>
+        )}
+
+        {/* Reply Input */}
+        {showReplyInput && (
+          <div style={{ marginLeft: 48, marginTop: 8 }}>
+            <Sender
+              placeholder="Reply..."
+              onSubmit={content => {
+                onReply(comment.comment_id, content);
+                setShowReplyInput(false);
+              }}
+            />
+          </div>
+        )}
+      </div>
+    </List.Item>
+  );
+};
+
+// Reaction bar component
+const ReactionBar: React.FC<{
+  reactions: ReactionSummary;
+  currentUserId: string;
+  onToggle: (emoji: string) => void;
+}> = ({ reactions, currentUserId, onToggle }) => {
+  const [pickerOpen, setPickerOpen] = React.useState(false);
+
+  return (
+    <Space size="small" style={{ marginTop: 8 }}>
+      {Object.entries(reactions).map(([emoji, userIds]) => (
+        <Button
+          key={emoji}
+          size="small"
+          type={userIds.includes(currentUserId) ? 'primary' : 'default'}
+          onClick={() => onToggle(emoji)}
+        >
+          {emoji} {userIds.length}
+        </Button>
+      ))}
+      <Popover
+        content={
+          <EmojiPicker
+            onEmojiClick={emojiData => {
+              onToggle(emojiData.emoji);
+              setPickerOpen(false);
+            }}
+            theme={Theme.DARK}
+            width={350}
+            height={400}
+          />
+        }
+        trigger="click"
+        open={pickerOpen}
+        onOpenChange={setPickerOpen}
+      >
+        <Button size="small" icon={<SmileOutlined />} />
+      </Popover>
+    </Space>
   );
 };
 ```
@@ -1031,18 +1707,78 @@ const conversationComments = comments.filter(c => !c.position);
 4. **Branded UUID types:** Need explicit casts when converting DB rows:
    - `row.user_id as UUID` not just `row.user_id`
 
-### Phase 2: Object Attachments
+### Phase 2: Threaded Comments with Reactions ✅ COMPLETE
 
-- [ ] Link comments to sessions/tasks/messages
+**Goal:** Upgrade from flat chat-style comments to Figma-style threaded discussions with emoji reactions.
+
+**Schema updates:**
+
+- [x] Add `reactions` field to `board_comments` table (JSON blob)
+- [x] Migration script for existing databases (auto-detects and adds column)
+
+**Backend (Repository & Service):**
+
+- [x] Add `toggleReaction(commentId, userId, emoji)` method
+- [x] Add `createReply(parentId, content, createdBy)` method with 2-layer validation
+- [x] Updated comments fetched as flat list, organized in UI
+- [x] Validation: enforces no replies to replies (2-layer limit)
+- [x] Custom routes with manual WebSocket broadcasting for reactions and replies
+
+**Types & Helpers:**
+
+- [x] Add `CommentReaction`, `ReactionSummary` types
+- [x] Add `groupReactions()` helper function
+- [x] Add `isThreadRoot()`, `isReply()`, `isResolvable()` helpers
+
+**UI Components:**
+
+- [x] Created new `CommentsPanel` component (permanent left sidebar)
+- [x] Built `CommentThread` component (root + nested replies, 1 level deep)
+- [x] Built `ReactionDisplay` and `EmojiPickerButton` components
+- [x] Added hover-based action overlay (saves vertical space)
+- [x] Reactions persist in separate row when present
+- [x] Add "Reply" action to thread roots only
+- [x] Update "Resolve/Reopen" logic (conditional rendering based on state)
+- [x] Changed filter "Unresolved" → "Open"
+- [x] Added navbar toggle button with unread count badge
+
+**Real-time updates:**
+
+- [x] Reply creation broadcasts correctly via manual emit
+- [x] Reaction toggle updates all clients
+- [x] Threads update incrementally
+
+**UX Improvements:**
+
+- [x] All action buttons use subtle icons with consistent styling
+- [x] Hover overlay shows actions (Reply, Resolve, Delete, Add Reaction)
+- [x] Auto-clears input after sending comment
+- [x] Collapsed state completely hides panel
+- [x] Board-scoped filtering (comments tied to current board)
+
+**Next steps (Phase 3):**
+
+- [ ] Link comments to sessions/tasks/messages (object attachments)
+- [ ] Parse `#session-id` references in content
+- [ ] Click reference → highlight/open session
+- [ ] Badge on session cards showing comment count
+- [ ] "Comment on this session" button in SessionDrawer
+
+**Effort:** ~2 days
+
+### Phase 3: Object Attachments & Context Linking
+
+- [ ] Link comments to sessions/tasks/messages (object attachments)
 - [ ] Parse `#session-id` references in content
 - [ ] Click reference → highlight/open session
 - [ ] Filter drawer by attachment type
 - [ ] Badge on session cards showing comment count
 - [ ] "Comment on this session" button in SessionDrawer
+- [ ] Comment context menu on messages/tasks
 
-**Effort:** ~1 day
+**Effort:** ~2 days
 
-### Phase 3: Spatial Annotations
+### Phase 4: Spatial Annotations (Canvas Pins)
 
 - [ ] "Add comment" canvas mode (Figma-style)
 - [ ] Render comment pins as React Flow nodes
@@ -1050,28 +1786,31 @@ const conversationComments = comments.filter(c => !c.position);
 - [ ] Relative positioning (session-attached comments)
 - [ ] Click pin → open thread in drawer/popover
 - [ ] Drag to reposition (optional)
+- [ ] Filter: show/hide spatial comments
 
-**Effort:** ~1-2 days
+**Effort:** ~2-3 days
 
-### Phase 4: Mentions & Notifications
+### Phase 5: Mentions & Notifications
 
-- [ ] @ mention autocomplete
+- [ ] @ mention autocomplete in Sender component
 - [ ] Extract mentions from content
-- [ ] Store in `mentions` field
-- [ ] "Mentions" filter in drawer
+- [ ] Store in `mentions` field (already in schema)
+- [ ] "Mentions" filter working properly
 - [ ] Optional: Email/toast notifications
+- [ ] Badge on header for unread mentions
 
 **Effort:** ~1 day
 
-### Phase 5: Advanced UX
+### Phase 6: Advanced UX
 
-- [ ] Threaded replies (parent_comment_id)
-- [ ] Resolve/unresolve comments
 - [ ] Edit comments (markdown preview)
-- [ ] Attachments (images, files)
-- [ ] Reactions (👍, 🎉, etc.)
+- [ ] Delete comments with confirmation
+- [ ] Attachments (images, files) - Ant Design X `<Attachment>`
+- [ ] Mark comments as "outdated" (like GitHub)
+- [ ] Keyboard shortcuts (Cmd+/ to toggle drawer)
+- [ ] Link to comment (shareable URLs)
 
-**Effort:** ~1-2 days
+**Effort:** ~2 days
 
 ---
 
@@ -1205,22 +1944,16 @@ SELECT * FROM board_comments WHERE board_id = ? AND session_id = ? ORDER BY crea
 - **WebSocket sync:** Existing infrastructure broadcasts comment CRUD events
 - **Anonymous-compatible:** Works in local dev with `created_by: 'anonymous'`
 
-### Next Steps
+### Implementation Roadmap
 
-**✅ DONE:** Phase 1 (board conversations) - Shipped January 2025
-**Next:** Add object attachments (Phase 2) - ~1 day
+**✅ Phase 1 DONE** (January 2025): Board conversations with Bubble.List (chat-style)
+**🚧 Phase 2 IN PROGRESS** (~2 days): Threaded comments + reactions
+**📋 Phase 3 PLANNED** (~2 days): Object attachments (session/task/message)
+**📋 Phase 4 PLANNED** (~2-3 days): Spatial annotations (canvas pins)
+**📋 Phase 5 PLANNED** (~1 day): Mentions & notifications
+**📋 Phase 6 PLANNED** (~2 days): Advanced UX (edit, attachments, keyboard shortcuts)
 
-- Link comments to sessions/tasks/messages/worktrees
-- Parse `#session-id` references in content
-- Click reference → highlight/open session
-- Badge on session cards showing comment count
-- "Comment on this session" button in SessionDrawer
-  **Future:** Spatial annotations when user demand is clear (Phase 3) - ~1-2 days
-- Canvas comment mode (Figma-style)
-- Render comment pins as React Flow nodes
-- Absolute + relative positioning
-
-This design future-proofs Agor for Figma-style spatial annotations while shipping immediate value with board-level conversations.
+This design future-proofs Agor for Figma-style spatial annotations while delivering immediate value with threaded conversations.
 
 ---
 
@@ -1261,3 +1994,105 @@ First database migration successfully implemented! Pattern for future migrations
 - ✅ Delete works correctly
 - ✅ Filters work (All/Unresolved/Mentions)
 - ✅ Badge count updates in real-time
+
+---
+
+## Final Design Summary (Updated February 2025)
+
+After exploration and discussion, here are the **definitive design decisions** for Agor comments:
+
+### 1. Threading Model: Figma-Style (2-Layer)
+
+- **Every comment is a thread**: Thread root (`parent_comment_id IS NULL`) can have replies
+- **Replies are flat**: Replies (`parent_comment_id IS NOT NULL`) cannot have sub-replies
+- **Maximum depth: 2 layers** (root + replies, no recursion)
+
+### 2. Data Storage: Single Table
+
+- **One table** (`board_comments`) handles both thread roots and replies
+- **`parent_comment_id`** distinguishes: `NULL` = root, `NOT NULL` = reply
+- **Reactions as JSON blob**: `[{ user_id, emoji }, ...]` stored on each comment/reply
+- **No separate reactions table**: Simpler queries, better real-time performance
+
+### 3. Resolution & Attachments
+
+- **Thread roots only**: Can be resolved, must have ≥1 attachment (board/session/task/message/worktree/position)
+- **Replies**: Cannot be resolved, don't store attachments (inherited from parent)
+- **Resolution semantics**: "This conversation reached conclusion" (question answered, decision made, action taken)
+
+### 4. UI: List-Based Threads (Not Chat)
+
+- **From:** `Bubble.List` (Ant Design X) - chat-style left/right bubbles
+- **To:** `List` (Ant Design) - structured threads, all left-aligned
+- **Inspiration:** Figma + GitHub comments (threaded discussions, not chat)
+
+### 5. Reactions: Table Stakes
+
+- **Storage**: JSON array `[{ user_id, emoji }, ...]` on each row
+- **Display**: Grouped by emoji `{ "👍": ["alice", "bob"] }`
+- **Picker**: `emoji-picker-react` (already in use)
+- **Both roots and replies** can have reactions
+
+### 6. Real-Time Updates
+
+- **Existing FeathersJS WebSocket** broadcasts all CRUD events
+- **Reply creation**: Broadcast `board-comments created` with `parent_comment_id`
+- **Reaction toggle**: Patch comment with updated `reactions` array
+- **No special handling needed**: Current infrastructure works perfectly
+
+### 7. Fetching Strategy
+
+- **Two queries**:
+  1. Fetch all thread roots (`parent_comment_id IS NULL`)
+  2. Fetch all replies (`parent_comment_id IS NOT NULL`)
+- **Group in memory**: `repliesByParent[parent_id] = [reply1, reply2]`
+- **Why not JOIN**: Simpler, more flexible, N is small (one board's comments)
+
+### 8. Scoping Strategy
+
+- **Phase 1 & 2**: Board-scoped only (`board_id`)
+- **Phase 3**: Add object attachments (`session_id`, `task_id`, `message_id`)
+- **Future**: Consider worktree-scoped conversations for project milestones
+- **Key insight**: Boards = organizational views, Worktrees = projects (different scopes!)
+
+### 9. Component Architecture
+
+```
+CommentsDrawer (Drawer)
+├─ Filter buttons (All / Open / Mentions)
+├─ List (thread roots)
+│  └─ CommentThread (each root)
+│     ├─ List.Item.Meta (avatar, name, timestamp, content)
+│     ├─ ReactionBar (emoji buttons + picker)
+│     ├─ Actions (Reply, Resolve)
+│     ├─ Nested replies (List)
+│     │  └─ List.Item (each reply)
+│     │     ├─ Meta (smaller avatar, name, content)
+│     │     └─ ReactionBar
+│     └─ Reply input (Sender, shown on demand)
+└─ New comment input (Sender)
+```
+
+### 10. Implementation Order
+
+1. ✅ **Phase 1** - Board conversations (chat-style, shipped)
+2. 🚧 **Phase 2** - Threading + reactions (List-based, in progress)
+3. 📋 **Phase 3** - Object attachments (session/task/message comments)
+4. 📋 **Phase 4** - Spatial annotations (canvas pins)
+5. 📋 **Phase 5** - Mentions & notifications
+6. 📋 **Phase 6** - Advanced UX (edit, attachments, shortcuts)
+
+### Key Technical Decisions
+
+| Aspect                | Decision                      | Rationale                                  |
+| --------------------- | ----------------------------- | ------------------------------------------ |
+| **Threading depth**   | 2 layers max                  | Prevents complexity, matches Figma/GitHub  |
+| **Reactions storage** | JSON blob in same row         | Simpler than separate table, bounded data  |
+| **Emoji picker**      | emoji-picker-react            | Already installed, works with Popover      |
+| **UI framework**      | Ant Design `List`             | Better for threads than Bubble.List (chat) |
+| **Fetching**          | Two queries + in-memory group | Simple, flexible, performant for scale     |
+| **Real-time**         | Existing FeathersJS           | No changes needed, broadcasts work OOB     |
+| **Resolution**        | Thread roots only             | Replies are conversational, not actionable |
+| **Attachments**       | Thread roots only             | Replies inherit parent context             |
+
+**Next Step:** Implement Phase 2 (threading + reactions) as documented in the checklist above.

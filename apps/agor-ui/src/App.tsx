@@ -715,6 +715,36 @@ function AppContent() {
     }
   };
 
+  const handleReplyComment = async (parentId: string, content: string) => {
+    if (!client) return;
+    try {
+      // Use the custom route for creating replies
+      await client.service(`board-comments/${parentId}/reply`).create({
+        content,
+        created_by: user?.user_id || 'anonymous',
+      });
+    } catch (error) {
+      message.error(
+        `Failed to send reply: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  };
+
+  const handleToggleReaction = async (commentId: string, emoji: string) => {
+    if (!client) return;
+    try {
+      // Use the custom route for toggling reactions
+      await client.service(`board-comments/${commentId}/toggle-reaction`).create({
+        user_id: user?.user_id || 'anonymous',
+        emoji,
+      });
+    } catch (error) {
+      message.error(
+        `Failed to toggle reaction: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  };
+
   // Generate repo reference options for dropdowns
   const allOptions = getRepoReferenceOptions(repos, worktrees);
   const worktreeOptions = allOptions.filter(opt => opt.type === 'managed-worktree');
@@ -765,7 +795,9 @@ function AppContent() {
         onDeleteMCPServer={handleDeleteMCPServer}
         onUpdateSessionMcpServers={handleUpdateSessionMcpServers}
         onSendComment={handleSendComment}
+        onReplyComment={handleReplyComment}
         onResolveComment={handleResolveComment}
+        onToggleReaction={handleToggleReaction}
         onDeleteComment={handleDeleteComment}
         onLogout={logout}
       />

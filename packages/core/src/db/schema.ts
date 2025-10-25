@@ -600,6 +600,14 @@ export const boardComments = sqliteTable(
     resolved: integer('resolved', { mode: 'boolean' }).notNull().default(false),
     edited: integer('edited', { mode: 'boolean' }).notNull().default(false),
 
+    // Reactions (for BOTH thread roots and replies)
+    // Stored as JSON array: [{ user_id: "abc", emoji: "👍" }, ...]
+    // Display grouped by emoji: { "👍": ["alice", "bob"], "🎉": ["charlie"] }
+    reactions: text('reactions', { mode: 'json' })
+      .$type<Array<{ user_id: string; emoji: string }>>()
+      .notNull()
+      .default('[]'),
+
     // JSON blob for advanced features
     data: text('data', { mode: 'json' })
       .$type<{

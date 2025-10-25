@@ -31,7 +31,7 @@ interface AgenticToolOption {
   description?: string;
 }
 
-import { CommentsDrawer } from '../CommentsDrawer';
+import { CommentsPanel } from '../CommentsPanel';
 import { NewSessionButton } from '../NewSessionButton';
 import { type NewSessionConfig, NewSessionModal } from '../NewSessionModal';
 import { type NewWorktreeConfig, NewWorktreeModal } from '../NewWorktreeModal';
@@ -96,7 +96,9 @@ export interface AppProps {
   onDeleteMCPServer?: (mcpServerId: string) => void;
   onUpdateSessionMcpServers?: (sessionId: string, mcpServerIds: string[]) => void;
   onSendComment?: (boardId: string, content: string) => void;
+  onReplyComment?: (parentId: string, content: string) => void;
   onResolveComment?: (commentId: string) => void;
+  onToggleReaction?: (commentId: string, emoji: string) => void;
   onDeleteComment?: (commentId: string) => void;
   onLogout?: () => void;
 }
@@ -141,7 +143,9 @@ export const App: React.FC<AppProps> = ({
   onDeleteMCPServer,
   onUpdateSessionMcpServers,
   onSendComment,
+  onReplyComment,
   onResolveComment,
+  onToggleReaction,
   onDeleteComment,
   onLogout,
 }) => {
@@ -149,7 +153,7 @@ export const App: React.FC<AppProps> = ({
   const [newWorktreeModalOpen, setNewWorktreeModalOpen] = useState(false);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [listDrawerOpen, setListDrawerOpen] = useState(false);
-  const [commentsDrawerOpen, setCommentsDrawerOpen] = useState(false);
+  const [commentsPanelCollapsed, setCommentsPanelCollapsed] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [terminalCommands, setTerminalCommands] = useState<string[]>([]);
@@ -354,9 +358,9 @@ export const App: React.FC<AppProps> = ({
         activeUsers={allActiveUsers}
         currentUserId={user?.user_id}
         onMenuClick={() => setListDrawerOpen(true)}
+        onCommentsClick={() => setCommentsPanelCollapsed(!commentsPanelCollapsed)}
         onSettingsClick={() => setSettingsOpen(true)}
         onTerminalClick={() => handleOpenTerminal()}
-        onCommentsClick={() => setCommentsDrawerOpen(true)}
         onLogout={onLogout}
         currentBoardName={currentBoard?.name}
         currentBoardIcon={currentBoard?.icon}
@@ -364,38 +368,54 @@ export const App: React.FC<AppProps> = ({
           comments.filter(c => c.board_id === currentBoardId && !c.resolved).length
         }
       />
-      <Content style={{ position: 'relative', overflow: 'hidden' }}>
-        <SessionCanvas
-          board={currentBoard || null}
+      <Content style={{ position: 'relative', overflow: 'hidden', display: 'flex' }}>
+        <CommentsPanel
           client={client}
-          sessions={boardSessions}
-          tasks={tasks}
+          boardId={currentBoardId || ''}
+          comments={comments.filter(c => c.board_id === currentBoardId)}
           users={users}
-          worktrees={boardWorktrees}
-          boardObjects={boardObjects}
-          currentUserId={user?.user_id}
-          availableAgents={availableAgents}
-          mcpServers={mcpServers}
-          sessionMcpServerIds={sessionMcpServerIds}
-          onSessionClick={handleSessionClick}
-          onSessionUpdate={onUpdateSession}
-          onSessionDelete={onDeleteSession}
-          onForkSession={onForkSession}
-          onSpawnSession={onSpawnSession}
-          onUpdateSessionMcpServers={onUpdateSessionMcpServers}
-          onOpenSettings={sessionId => {
-            setSessionSettingsId(sessionId);
-          }}
-          onCreateSessionForWorktree={worktreeId => {
-            setNewSessionWorktreeId(worktreeId);
-          }}
-          onOpenWorktree={worktreeId => {
-            setWorktreeModalWorktreeId(worktreeId);
-          }}
-          onDeleteWorktree={onDeleteWorktree}
-          onOpenTerminal={handleOpenTerminal}
+          currentUserId={user?.user_id || 'anonymous'}
+          collapsed={commentsPanelCollapsed}
+          onToggleCollapse={() => setCommentsPanelCollapsed(!commentsPanelCollapsed)}
+          onSendComment={content => onSendComment?.(currentBoardId || '', content)}
+          onReplyComment={onReplyComment}
+          onResolveComment={onResolveComment}
+          onToggleReaction={onToggleReaction}
+          onDeleteComment={onDeleteComment}
         />
-        <NewSessionButton onClick={() => setNewWorktreeModalOpen(true)} />
+        <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+          <SessionCanvas
+            board={currentBoard || null}
+            client={client}
+            sessions={boardSessions}
+            tasks={tasks}
+            users={users}
+            worktrees={boardWorktrees}
+            boardObjects={boardObjects}
+            currentUserId={user?.user_id}
+            availableAgents={availableAgents}
+            mcpServers={mcpServers}
+            sessionMcpServerIds={sessionMcpServerIds}
+            onSessionClick={handleSessionClick}
+            onSessionUpdate={onUpdateSession}
+            onSessionDelete={onDeleteSession}
+            onForkSession={onForkSession}
+            onSpawnSession={onSpawnSession}
+            onUpdateSessionMcpServers={onUpdateSessionMcpServers}
+            onOpenSettings={sessionId => {
+              setSessionSettingsId(sessionId);
+            }}
+            onCreateSessionForWorktree={worktreeId => {
+              setNewSessionWorktreeId(worktreeId);
+            }}
+            onOpenWorktree={worktreeId => {
+              setWorktreeModalWorktreeId(worktreeId);
+            }}
+            onDeleteWorktree={onDeleteWorktree}
+            onOpenTerminal={handleOpenTerminal}
+          />
+          <NewSessionButton onClick={() => setNewWorktreeModalOpen(true)} />
+        </div>
       </Content>
       {newSessionWorktreeId && (
         <NewSessionModal
@@ -408,18 +428,6 @@ export const App: React.FC<AppProps> = ({
           mcpServers={mcpServers}
         />
       )}
-      <CommentsDrawer
-        client={client}
-        boardId={currentBoardId || ''}
-        comments={comments.filter(c => c.board_id === currentBoardId)}
-        users={users}
-        currentUserId={user?.user_id || 'anonymous'}
-        open={commentsDrawerOpen}
-        onClose={() => setCommentsDrawerOpen(false)}
-        onSendComment={content => onSendComment?.(currentBoardId || '', content)}
-        onResolveComment={onResolveComment}
-        onDeleteComment={onDeleteComment}
-      />
       <SessionDrawer
         client={client}
         session={selectedSession}

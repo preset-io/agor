@@ -146,6 +146,34 @@ export class BoardCommentsService extends DrizzleService<
   ): Promise<BoardComment[]> {
     return this.commentsRepo.bulkCreate(comments);
   }
+
+  // ============================================================================
+  // Phase 2: Threading + Reactions
+  // ============================================================================
+
+  /**
+   * Custom method: Toggle reaction on a comment
+   * If user has already reacted with this emoji, remove it. Otherwise, add it.
+   */
+  async toggleReaction(
+    commentId: string,
+    data: { user_id: string; emoji: string },
+    _params?: BoardCommentsParams
+  ): Promise<BoardComment> {
+    return this.commentsRepo.toggleReaction(commentId, data.user_id, data.emoji);
+  }
+
+  /**
+   * Custom method: Create a reply to a comment (thread root)
+   * Validates that parent exists and is a thread root
+   */
+  async createReply(
+    parentId: string,
+    data: Partial<BoardComment>,
+    _params?: BoardCommentsParams
+  ): Promise<BoardComment> {
+    return this.commentsRepo.createReply(parentId, data);
+  }
 }
 
 /**

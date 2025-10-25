@@ -41,6 +41,13 @@ export class BoardCommentsRepository
       mentions?: string[];
     };
 
+    // Parse reactions (stored as JSON string)
+    const reactions = row.reactions
+      ? typeof row.reactions === 'string'
+        ? JSON.parse(row.reactions)
+        : row.reactions
+      : [];
+
     return {
       comment_id: row.comment_id as CommentID,
       board_id: row.board_id as UUID,
@@ -54,6 +61,7 @@ export class BoardCommentsRepository
       parent_comment_id: row.parent_comment_id ? (row.parent_comment_id as CommentID) : undefined,
       resolved: Boolean(row.resolved),
       edited: Boolean(row.edited),
+      reactions,
       position: data.position,
       mentions: data.mentions ? (data.mentions as UUID[]) : undefined,
       created_at: new Date(row.created_at),
@@ -85,6 +93,7 @@ export class BoardCommentsRepository
       parent_comment_id: comment.parent_comment_id ?? null,
       resolved: comment.resolved ?? false,
       edited: comment.edited ?? false,
+      reactions: JSON.stringify(comment.reactions ?? []),
       created_at: new Date(comment.created_at ?? now),
       updated_at: comment.updated_at ? new Date(comment.updated_at) : null,
       data: {
@@ -287,6 +296,7 @@ export class BoardCommentsRepository
           parent_comment_id: insert.parent_comment_id,
           resolved: insert.resolved,
           edited: insert.edited,
+          reactions: insert.reactions,
           updated_at: new Date(),
           data: insert.data,
         })
@@ -409,6 +419,86 @@ export class BoardCommentsRepository
     } catch (error) {
       throw new RepositoryError(
         `Failed to bulk create comments: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  // ============================================================================
+  // Phase 2: Threading + Reactions
+  // ============================================================================
+
+  /**
+   * Toggle a reaction on a comment
+   * If user has already reacted with this emoji, remove it. Otherwise, add it.
+   */
+  async toggleReaction(commentId: string, userId: string, emoji: string): Promise<BoardComment> {
+    try {
+      const comment = await this.findById(commentId);
+      if (!comment) {
+        throw new EntityNotFoundError('BoardComment', commentId);
+      }
+
+      const reactions = comment.reactions || [];
+      const existingIndex = reactions.findIndex(r => r.user_id === userId && r.emoji === emoji);
+
+      let updatedReactions: typeof reactions;
+      if (existingIndex >= 0) {
+        // Remove reaction
+        updatedReactions = reactions.filter((_, i) => i !== existingIndex);
+      } else {
+        // Add reaction
+        updatedReactions = [...reactions, { user_id: userId, emoji }];
+      }
+
+      return this.update(commentId, { reactions: updatedReactions });
+    } catch (error) {
+      if (error instanceof EntityNotFoundError) throw error;
+      throw new RepositoryError(
+        `Failed to toggle reaction: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Create a reply to a comment (thread root)
+   * Validates that parent exists and is a thread root
+   */
+  async createReply(parentId: string, data: Partial<BoardComment>): Promise<BoardComment> {
+    try {
+      // Validate parent exists
+      const parent = await this.findById(parentId);
+      if (!parent) {
+        throw new EntityNotFoundError('BoardComment', parentId);
+      }
+
+      // Validate parent is a thread root (not a reply to a reply)
+      if (parent.parent_comment_id) {
+        throw new RepositoryError(
+          'Cannot reply to a reply. Replies can only be added to thread roots (2-layer limit).'
+        );
+      }
+
+      // Create reply with parent_comment_id
+      const reply: Partial<BoardComment> = {
+        ...data,
+        parent_comment_id: parent.comment_id,
+        board_id: parent.board_id, // Inherit board_id from parent
+        // Replies don't have attachments - they inherit context from parent
+        session_id: undefined,
+        task_id: undefined,
+        message_id: undefined,
+        worktree_id: undefined,
+        position: undefined,
+      };
+
+      return this.create(reply);
+    } catch (error) {
+      if (error instanceof EntityNotFoundError) throw error;
+      if (error instanceof RepositoryError) throw error;
+      throw new RepositoryError(
+        `Failed to create reply: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }
