@@ -1059,14 +1059,27 @@ const SessionCanvas = ({
   const handlePaneClick = useCallback(
     (event: React.MouseEvent) => {
       if (activeTool === 'comment' && reactFlowInstanceRef.current) {
-        // Use project instead of screenToFlowPosition for more accurate coordinates
+        // Get the ReactFlow wrapper element bounds to calculate container-relative coordinates
+        const reactFlowBounds = (event.currentTarget as HTMLElement)
+          .closest('.react-flow')
+          ?.getBoundingClientRect();
+
+        if (!reactFlowBounds) return;
+
+        // Calculate position relative to ReactFlow container (accounting for CommentsPanel offset)
+        const containerX = event.clientX - reactFlowBounds.left;
+        const containerY = event.clientY - reactFlowBounds.top;
+
+        // Project from container-relative screen coords to flow coords
         const position = reactFlowInstanceRef.current.project({
-          x: event.clientX,
-          y: event.clientY,
+          x: containerX,
+          y: containerY,
         });
 
         console.log('📍 Comment click:', {
           client: { x: event.clientX, y: event.clientY },
+          bounds: { left: reactFlowBounds.left, top: reactFlowBounds.top },
+          container: { x: containerX, y: containerY },
           flowPosition: position,
         });
 
