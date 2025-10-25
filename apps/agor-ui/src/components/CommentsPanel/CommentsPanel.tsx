@@ -264,7 +264,7 @@ const CommentThread: React.FC<{
         {replies.length > 0 && (
           <div
             style={{
-              marginLeft: 48,
+              marginLeft: 24,
               marginTop: 12,
               borderLeft: `2px solid ${token.colorBorder}`,
               paddingLeft: 12,
