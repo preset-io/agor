@@ -483,8 +483,10 @@ const SessionCanvas = ({
   const commentNodes: Node[] = useMemo(() => {
     const nodes: Node[] = [];
 
-    // Filter to only spatial comments (with position.absolute)
-    const spatialComments = comments.filter(c => c.position?.absolute);
+    // Filter to only spatial comments on this board (with position.absolute)
+    const spatialComments = comments.filter(
+      c => c.position?.absolute && c.board_id === board?.board_id
+    );
 
     // Count replies for each thread root
     const replyCount = new Map<string, number>();
@@ -530,7 +532,7 @@ const SessionCanvas = ({
     }
 
     return nodes;
-  }, [comments, users, onOpenCommentsPanel, onCommentHover, onCommentSelect]);
+  }, [comments, users, board?.board_id, onOpenCommentsPanel, onCommentHover, onCommentSelect]);
 
   // Sync SESSION nodes only (don't trigger on zone changes)
   useEffect(() => {
