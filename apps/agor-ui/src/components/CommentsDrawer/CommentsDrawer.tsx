@@ -1,5 +1,5 @@
 import type { AgorClient } from '@agor/core/api';
-import type { BoardComment, CommentReaction, ReactionSummary, User } from '@agor/core/types';
+import type { BoardComment, CommentReaction, ReactionSummary, User, UUID } from '@agor/core/types';
 import { groupReactions, isThreadRoot } from '@agor/core/types';
 import { CommentOutlined, SmileOutlined } from '@ant-design/icons';
 import { Sender } from '@ant-design/x';
@@ -333,7 +333,8 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
     return threadRoots
       .filter(thread => {
         if (filter === 'open' && thread.resolved) return false;
-        if (filter === 'mentions' && !thread.mentions?.includes(currentUserId)) return false;
+        if (filter === 'mentions' && !thread.mentions?.includes(currentUserId as UUID))
+          return false;
         return true;
       })
       .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());

@@ -46,7 +46,12 @@ export interface SessionsServiceImpl extends Service<Session, Partial<Session>, 
   ): Promise<Session>;
   spawn(
     id: string,
-    data: { prompt: string; agent?: string; task_id?: string },
+    data: {
+      prompt: string;
+      title?: string;
+      agentic_tool?: Session['agentic_tool'];
+      task_id?: string;
+    },
     params?: FeathersParams
   ): Promise<Session>;
   getGenealogy(id: string, params?: FeathersParams): Promise<unknown>; // GenealogyTree type would go here

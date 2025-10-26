@@ -1285,7 +1285,6 @@ const SessionCanvas = ({
         elementsSelectable={true}
         elevateNodesOnSelect={false}
         panOnDrag={activeTool === 'select'}
-        colorMode="dark"
         className={`tool-mode-${activeTool}`}
       >
         <Background />
@@ -1377,7 +1376,6 @@ const SessionCanvas = ({
           maskColor={`${token.colorBgMask}40`}
           maskStrokeColor={token.colorPrimary}
           maskStrokeWidth={2}
-          bgColor={token.colorBgContainer}
         />
       </ReactFlow>
 

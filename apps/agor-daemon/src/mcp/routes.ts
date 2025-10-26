@@ -6,7 +6,9 @@
  */
 
 import type { Application } from '@agor/core/feathers';
+import type { AgenticToolName } from '@agor/core/types';
 import type { Request, Response } from 'express';
+import type { SessionsServiceImpl } from '../declarations.js';
 import { validateSessionToken } from './tokens.js';
 
 /**
@@ -78,7 +80,9 @@ export function setupMCPRoutes(app: Application): void {
             version: '0.1.0',
           },
         };
-        console.log(`✅ MCP initialized successfully (protocol: ${mcpResponse.protocolVersion})`);
+        console.log(
+          `✅ MCP initialized successfully (protocol: ${(mcpResponse as { protocolVersion: string }).protocolVersion})`
+        );
       } else if (mcpRequest.method === 'tools/list') {
         // Return list of available tools
         console.log(`🔧 MCP tools/list request from session ${context.sessionId.substring(0, 8)}`);
@@ -405,7 +409,7 @@ export function setupMCPRoutes(app: Application): void {
           const spawnData: {
             prompt: string;
             title?: string;
-            agentic_tool?: string;
+            agentic_tool?: AgenticToolName;
             task_id?: string;
           } = {
             prompt: args.prompt,
@@ -416,7 +420,7 @@ export function setupMCPRoutes(app: Application): void {
           }
 
           if (args.agenticTool) {
-            spawnData.agentic_tool = args.agenticTool;
+            spawnData.agentic_tool = args.agenticTool as AgenticToolName;
           }
 
           if (args.taskId) {
@@ -431,9 +435,9 @@ export function setupMCPRoutes(app: Application): void {
 
           // Call spawn method on sessions service
           console.log(`🌱 MCP spawning subsession from ${context.sessionId.substring(0, 8)}`);
-          const childSession = await app
-            .service('sessions')
-            .spawn(context.sessionId, spawnData, serviceParams);
+          const childSession = await (
+            app.service('sessions') as unknown as SessionsServiceImpl
+          ).spawn(context.sessionId, spawnData, serviceParams);
           console.log(`✅ Subsession created: ${childSession.session_id.substring(0, 8)}`);
 
           // Trigger prompt execution by directly calling the prompt service endpoint

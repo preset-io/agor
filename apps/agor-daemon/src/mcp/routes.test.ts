@@ -37,13 +37,16 @@ async function callMCPTool(name: string, args: any = {}) {
     }),
   });
 
-  const data = await resp.json();
+  const data = (await resp.json()) as {
+    error?: { message: string };
+    result?: { content: Array<{ text: string }> };
+  };
 
   if (data.error) {
     throw new Error(`MCP tool ${name} failed: ${data.error.message}`);
   }
 
-  return JSON.parse(data.result.content[0].text);
+  return JSON.parse(data.result!.content[0].text);
 }
 
 describe('MCP Tools - Session Tools', () => {
@@ -58,7 +61,7 @@ describe('MCP Tools - Session Tools', () => {
       }),
     });
 
-    const data = await resp.json();
+    const data = (await resp.json()) as { result: { tools: Array<{ name: string }> } };
     expect(data.result.tools).toHaveLength(14);
 
     // biome-ignore lint/suspicious/noExplicitAny: JSON response type from MCP server

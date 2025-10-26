@@ -60,6 +60,7 @@ import type { Socket } from 'socket.io';
 import type {
   BoardsServiceImpl,
   CreateHookContext,
+  HookContext,
   MessagesServiceImpl,
   ReposServiceImpl,
   SessionsServiceImpl,
@@ -400,7 +401,7 @@ async function main() {
     },
     after: {
       create: [
-        async (context: HookContext<Session> & { result: Session }) => {
+        (async (context: HookContext<Session> & { result: Session }) => {
           // Generate MCP session token for this session
           const { generateSessionToken } = await import('./mcp/tokens.js');
           const session = context.result;
@@ -426,7 +427,8 @@ async function main() {
           context.result = { ...session, mcp_token: mcpToken };
 
           return context;
-        },
+          // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type mismatch requires assertion
+        }) as any,
       ],
     },
   });
@@ -1021,14 +1023,6 @@ async function main() {
                     start_timestamp: startTimestamp,
                     end_timestamp: endTimestamp,
                   },
-                  duration_ms: result.durationMs,
-                  agent_session_id: result.agentSessionId,
-                  context_window: result.contextWindow,
-                  context_window_limit: result.contextWindowLimit,
-                  tool_use_count: result.assistantMessageIds.reduce((count, _id, _index) => {
-                    // First assistant message likely has tools
-                    return count; // TODO: Count actual tools from messages
-                  }, 0),
                   usage,
                 });
 

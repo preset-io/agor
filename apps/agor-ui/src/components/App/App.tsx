@@ -61,8 +61,8 @@ export interface AppProps {
   sessionMcpServerIds: Record<string, string[]>; // Map: sessionId -> mcpServerIds[]
   initialBoardId?: string;
   onCreateSession?: (config: NewSessionConfig, boardId: string) => void;
-  onForkSession?: (sessionId: string, prompt: string) => void;
-  onSpawnSession?: (sessionId: string, prompt: string) => void;
+  onForkSession?: (sessionId: string, prompt: string) => Promise<void>;
+  onSpawnSession?: (sessionId: string, prompt: string) => Promise<void>;
   onSendPrompt?: (sessionId: string, prompt: string, permissionMode?: PermissionMode) => void;
   onUpdateSession?: (sessionId: string, updates: Partial<Session>) => void;
   onDeleteSession?: (sessionId: string) => void;

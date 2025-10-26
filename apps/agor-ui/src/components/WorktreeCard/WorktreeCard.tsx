@@ -449,9 +449,6 @@ const WorktreeCard = ({
             ]}
             ghost
             style={{ marginTop: 8 }}
-            styles={{
-              content: { padding: 0 },
-            }}
           />
         )}
       </div>
