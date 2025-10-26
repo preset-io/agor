@@ -59,8 +59,6 @@ import jwt from 'jsonwebtoken';
 import type { Socket } from 'socket.io';
 import type {
   BoardsServiceImpl,
-  CreateHookContext,
-  HookContext,
   MessagesServiceImpl,
   ReposServiceImpl,
   SessionsServiceImpl,
@@ -351,9 +349,9 @@ async function main() {
   app.service('sessions').hooks({
     before: {
       create: [
-        (async (context: CreateHookContext<Partial<Session>>) => {
+        async context => {
           // Inject user_id if authenticated, otherwise use 'anonymous'
-          const user = context.params.user;
+          const user = (context.params as { user?: { user_id: string; email: string } }).user;
           const userId = user?.user_id || 'anonymous';
 
           // DEBUG: Log authentication state
@@ -395,16 +393,15 @@ async function main() {
           }
 
           return context;
-          // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type mismatch requires assertion
-        }) as any,
+        },
       ],
     },
     after: {
       create: [
-        (async (context: HookContext<Session> & { result: Session }) => {
+        async context => {
           // Generate MCP session token for this session
           const { generateSessionToken } = await import('./mcp/tokens.js');
-          const session = context.result;
+          const session = context.result as Session;
           const userId = session.created_by || 'anonymous';
 
           const mcpToken = generateSessionToken(
@@ -427,8 +424,7 @@ async function main() {
           context.result = { ...session, mcp_token: mcpToken };
 
           return context;
-          // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type mismatch requires assertion
-        }) as any,
+        },
       ],
     },
   });
@@ -436,9 +432,9 @@ async function main() {
   app.service('tasks').hooks({
     before: {
       create: [
-        (async (context: CreateHookContext<Partial<Task>>) => {
+        async context => {
           // Inject user_id if authenticated, otherwise use 'anonymous'
-          const user = context.params.user;
+          const user = (context.params as { user?: { user_id: string; email: string } }).user;
           const userId = user?.user_id || 'anonymous';
 
           // DEBUG: Log authentication state
@@ -457,8 +453,7 @@ async function main() {
             (context.data as Record<string, unknown>).created_by = userId;
           }
           return context;
-          // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type mismatch requires assertion
-        }) as any,
+        },
       ],
     },
   });
@@ -466,9 +461,11 @@ async function main() {
   app.service('boards').hooks({
     before: {
       create: [
-        (async (context: CreateHookContext<Partial<Board>>) => {
+        async context => {
           // Inject user_id if authenticated, otherwise use 'anonymous'
-          const userId = context.params.user?.user_id || 'anonymous';
+          const userId =
+            (context.params as { user?: { user_id: string; email: string } }).user?.user_id ||
+            'anonymous';
 
           if (Array.isArray(context.data)) {
             context.data.forEach(item => {
@@ -478,8 +475,7 @@ async function main() {
             (context.data as Record<string, unknown>).created_by = userId;
           }
           return context;
-          // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type mismatch requires assertion
-        }) as any,
+        },
       ],
       patch: [
         async context => {
