@@ -8,8 +8,8 @@ build.sh
 *.md
 !README.md
 
-# Node modules (will be installed by npm)
-node_modules/
+# Node modules: NOT ignored here because package.json "files" field
+# explicitly includes "node_modules/@agor" for bundled @agor/core
 
 # macOS
 .DS_Store

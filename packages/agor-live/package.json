@@ -1,6 +1,6 @@
 {
   "name": "agor-live",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "description": "Multiplayer canvas for orchestrating AI coding sessions",
   "type": "module",
   "bin": {
@@ -10,10 +10,13 @@
   "files": [
     "bin/",
     "dist/",
-    "node_modules/@agor",
+    "scripts/",
     "LICENSE",
     "README.md"
   ],
+  "scripts": {
+    "postinstall": "node scripts/postinstall.js"
+  },
   "imports": {
     "@agor/core": "./dist/core/index.js",
     "@agor/core/*": "./dist/core/*"
