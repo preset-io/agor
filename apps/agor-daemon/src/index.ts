@@ -7,6 +7,17 @@
 
 import 'dotenv/config';
 import { loadConfig, type UnknownJson } from '@agor/core/config';
+
+// Read package version once at startup (not on every /health request)
+let DAEMON_VERSION = '0.1.0';
+try {
+  const pkgPath = new URL('../package.json', import.meta.url);
+  const pkg = await import(pkgPath.href, { assert: { type: 'json' } });
+  DAEMON_VERSION = pkg.default?.version || DAEMON_VERSION;
+} catch {
+  // Fallback if package.json can't be read
+}
+
 import {
   createDatabase,
   MCPServerRepository,
@@ -1584,21 +1595,10 @@ async function main() {
   // NOTE: Keep this lightweight - it's called frequently by monitoring systems
   app.use('/health', {
     async find() {
-      // Try to read version from package.json (works in agor-live npm package)
-      let version = '0.1.0';
-      try {
-        // When running from agor-live, this will be the agor-live version
-        const pkgPath = new URL('../package.json', import.meta.url);
-        const pkg = await import(pkgPath.href, { assert: { type: 'json' } });
-        version = pkg.default?.version || version;
-      } catch {
-        // Fallback if package.json can't be read
-      }
-
       return {
         status: 'ok',
         timestamp: Date.now(),
-        version,
+        version: DAEMON_VERSION,
         database: DB_PATH,
         auth: {
           requireAuth: config.daemon?.requireAuth === true,
