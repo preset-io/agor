@@ -234,3 +234,11 @@ Highlights:
 - **Session Forking UI** — Visual genealogy showing how work branched, merged, and evolved
 - **Automated Reports** — AI-generated summaries after task completion capturing outcomes and decisions
 - **Context Management System** — Modular markdown-based context files that compose into session-specific knowledge
+
+---
+
+## About
+
+**Heavily prompted by [@mistercrunch](https://github.com/mistercrunch)** ([Preset](https://preset.io), [Apache Superset](https://github.com/apache/superset), [Apache Airflow](https://github.com/apache/airflow)), built by an army of Claudes.
+
+Read the story: [Making of Agor →](https://mistercrunch.github.io/agor/blog/making-of-agor)
