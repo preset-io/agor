@@ -20,7 +20,6 @@
       "visibility": "public"
     }
   },
-  "postCreateCommand": "npm install",
   "postStartCommand": "bash .devcontainer/playground/start-services.sh",
   "customizations": {
     "vscode": {
