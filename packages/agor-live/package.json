@@ -1,6 +1,6 @@
 {
   "name": "agor-live",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Multiplayer canvas for orchestrating AI coding sessions",
   "type": "module",
   "bin": {
@@ -68,6 +68,7 @@
     "dotenv": "^17.2.3",
     "drizzle-orm": "^0.44.6",
     "express": "^5.1.0",
+    "feathers-swagger": "^3.0.0",
     "handlebars": "^4.7.8",
     "inquirer": "^12.10.0",
     "js-yaml": "^4.1.0",
@@ -75,6 +76,7 @@
     "simple-git": "^3.28.0",
     "socket.io": "^4.7.2",
     "socket.io-client": "^4.8.1",
+    "swagger-ui-dist": "^5.30.0",
     "uuidv7": "^1.0.2"
   },
   "oclif": {
