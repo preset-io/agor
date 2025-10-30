@@ -66,7 +66,7 @@ export const AgenticToolsTab: React.FC<AgenticToolsTabProps> = ({ client }) => {
     const value = form.getFieldValue(field);
 
     try {
-      setSaving((prev) => ({ ...prev, [field]: true }));
+      setSaving(prev => ({ ...prev, [field]: true }));
       setError(null);
 
       // Update config via PATCH (allow empty string to clear the key)
@@ -77,20 +77,20 @@ export const AgenticToolsTab: React.FC<AgenticToolsTabProps> = ({ client }) => {
       });
 
       // Update original values to mark as saved
-      setOriginalValues((prev) => ({ ...prev, [field]: value }));
+      setOriginalValues(prev => ({ ...prev, [field]: value }));
 
       // Show success indicator
-      setSaved((prev) => ({ ...prev, [field]: true }));
+      setSaved(prev => ({ ...prev, [field]: true }));
 
       // Clear success indicator after 2 seconds
       setTimeout(() => {
-        setSaved((prev) => ({ ...prev, [field]: false }));
+        setSaved(prev => ({ ...prev, [field]: false }));
       }, 2000);
     } catch (err) {
       console.error(`Failed to save ${field}:`, err);
       setError(err instanceof Error ? err.message : `Failed to save ${field}`);
     } finally {
-      setSaving((prev) => ({ ...prev, [field]: false }));
+      setSaving(prev => ({ ...prev, [field]: false }));
     }
   };
 
@@ -186,16 +186,8 @@ export const AgenticToolsTab: React.FC<AgenticToolsTabProps> = ({ client }) => {
             </Text>
           </div>
 
-          {/* Google API Key */}
-          <Form.Item
-            label={
-              <Space>
-                <Text strong>Google API Key</Text>
-                <Text type="secondary">(Gemini)</Text>
-              </Space>
-            }
-            name="GEMINI_API_KEY"
-          >
+          {/* Gemini API Key */}
+          <Form.Item label={<Text strong>Gemini API Key</Text>} name="GEMINI_API_KEY">
             <Space.Compact style={{ width: '100%' }}>
               <Input.Password placeholder="AIza..." style={{ flex: 1 }} />
               <Button
