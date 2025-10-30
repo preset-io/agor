@@ -4,7 +4,7 @@
 
 Orchestrate Claude Code, Codex, and Gemini sessions on a multiplayer canvas. Manage git worktrees, track AI conversations, and visualize your team's agentic work in real-time.
 
-**[Docs](https://mistercrunch.github.io/agor/)** | **[Discussions](https://github.com/mistercrunch/agor/discussions)**
+**[Docs](https://agor.live/)** | **[Discussions](https://github.com/mistercrunch/agor/discussions)**
 
 ---
 
@@ -203,13 +203,13 @@ graph TB
     Services --> Config
 ```
 
-**[Full Architecture Guide →](https://mistercrunch.github.io/agor/guide/architecture)**
+**[Full Architecture Guide →](https://agor.live/guide/architecture)**
 
 ---
 
 ## Development
 
-**[Development Guide →](https://mistercrunch.github.io/agor/guide/development)**
+**[Development Guide →](https://agor.live/guide/development)**
 
 Quick start:
 
@@ -241,4 +241,4 @@ Highlights:
 
 **Heavily prompted by [@mistercrunch](https://github.com/mistercrunch)** ([Preset](https://preset.io), [Apache Superset](https://github.com/apache/superset), [Apache Airflow](https://github.com/apache/airflow)), built by an army of Claudes.
 
-Read the story: [Making of Agor →](https://mistercrunch.github.io/agor/blog/making-of-agor)
+Read the story: [Making of Agor →](https://agor.live/blog/making-of-agor)

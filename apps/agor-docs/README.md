@@ -88,6 +88,6 @@ Docs are automatically deployed to GitHub Pages on every push to `main` that cha
 gh workflow run deploy-docs.yml
 ```
 
-**Deployment URL:** https://mistercrunch.github.io/agor/
+**Deployment URL:** https://agor.live/
 
 Alternative options: Cloudflare Pages or Vercel (see [context/explorations/docs-website.md](../../context/explorations/docs-website.md))

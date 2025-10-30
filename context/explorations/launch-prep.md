@@ -88,7 +88,7 @@ agor open
 
 - [ ] README on GitHub: hero image loads, Mermaid renders
 - [ ] All links valid (no 404s)
-- [ ] Docs site (mistercrunch.github.io/agor) loads
+- [ ] Docs site (agor.live) loads
 - [ ] Swagger at localhost:3030/docs works
 - [ ] Codespaces quickstart link functional
 
@@ -133,7 +133,7 @@ agor init && agor daemon start && agor open
 ```
 
 GitHub: github.com/mistercrunch/agor
-Docs: mistercrunch.github.io/agor
+Docs: agor.live
 License: BSL 1.1 (free for non-commercial, converts to Apache 2.0 after 4 years)
 
 Built in public over the last few months. Feedback welcome — especially from teams already juggling multiple AI tools.

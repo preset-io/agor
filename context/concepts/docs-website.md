@@ -2,8 +2,8 @@
 
 **Status:** Live on GitHub Pages
 **Location:** `apps/agor-docs/`
-**Current URL:** https://mistercrunch.github.io/agor
-**Deployment:** GitHub Pages via GitHub Actions
+**Current URL:** https://agor.live
+**Deployment:** GitHub Pages via GitHub Actions (custom domain configured)
 
 ---
 
@@ -81,7 +81,7 @@ pnpm generate   # Regenerate CLI docs
 - Triggers on push to `main` (when `apps/agor-docs/**` or CLI commands change)
 - Builds with base path `/agor` (set via `NEXT_PUBLIC_BASE_PATH`)
 - Static export to `apps/agor-docs/out`
-- Auto-deploys to https://mistercrunch.github.io/agor
+- Auto-deploys to https://agor.live
 
 ## TODO: Migration to agor.live
 
