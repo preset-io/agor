@@ -8,8 +8,31 @@
 import type { Application } from '@agor/core/feathers';
 import type { AgenticToolName } from '@agor/core/types';
 import type { Request, Response } from 'express';
-import type { SessionsServiceImpl } from '../declarations.js';
+import type { ReposServiceImpl, SessionsServiceImpl } from '../declarations.js';
 import { validateSessionToken } from './tokens.js';
+
+const WORKTREE_NAME_PATTERN = /^[a-z0-9-]+$/;
+const GIT_SHA_PATTERN = /^[0-9a-f]{40}$/i;
+
+function coerceString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function normalizeOptionalUrl(value: unknown, fieldName: string): string | undefined {
+  const urlString = coerceString(value);
+  if (!urlString) return undefined;
+  try {
+    const parsed = new URL(urlString);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new Error();
+    }
+    return parsed.toString();
+  } catch {
+    throw new Error(`${fieldName} must be a valid http(s) URL`);
+  }
+}
 
 /**
  * Setup MCP routes on FeathersJS app
@@ -203,6 +226,59 @@ export function setupMCPRoutes(app: Application): void {
                 },
               },
             },
+            {
+              name: 'agor_worktrees_create',
+              description:
+                'Create a worktree (and optional branch) for a repository, with optional board/issue/PR links',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  repoId: {
+                    type: 'string',
+                    description: 'Repository ID where the worktree will be created',
+                  },
+                  worktreeName: {
+                    type: 'string',
+                    description:
+                      'Slug name for the worktree directory (lowercase letters, numbers, hyphens)',
+                  },
+                  ref: {
+                    type: 'string',
+                    description:
+                      'Git ref to checkout. Defaults to the worktree name when creating a new branch.',
+                  },
+                  createBranch: {
+                    type: 'boolean',
+                    description:
+                      'Whether to create a new branch. Defaults to true unless ref is a commit SHA.',
+                  },
+                  sourceBranch: {
+                    type: 'string',
+                    description:
+                      'Base branch when creating a new branch (defaults to the repo default branch).',
+                  },
+                  pullLatest: {
+                    type: 'boolean',
+                    description:
+                      'Pull latest from remote before creating the branch (defaults to true for new branches).',
+                  },
+                  boardId: {
+                    type: 'string',
+                    description:
+                      'Board ID to immediately place the worktree on (positions to default coordinates).',
+                  },
+                  issueUrl: {
+                    type: 'string',
+                    description: 'Issue URL to associate with the worktree.',
+                  },
+                  pullRequestUrl: {
+                    type: 'string',
+                    description: 'Pull request URL to associate with the worktree.',
+                  },
+                },
+                required: ['repoId', 'worktreeName'],
+              },
+            },
 
             // Board tools
             {
@@ -343,6 +419,10 @@ export function setupMCPRoutes(app: Application): void {
         const { name, arguments: args } = mcpRequest.params || {};
         console.log(`🔧 MCP tool call: ${name}`);
         console.log(`   Arguments:`, JSON.stringify(args || {}).substring(0, 200));
+        const baseServiceParams = {
+          user: context.userId ? { user_id: context.userId } : undefined,
+          authenticated: true,
+        };
 
         // Session tools
         if (name === 'agor_sessions_list') {
@@ -427,17 +507,11 @@ export function setupMCPRoutes(app: Application): void {
             spawnData.task_id = args.taskId;
           }
 
-          // Create authenticated params for service calls (enables WebSocket broadcasting)
-          const serviceParams = {
-            user: context.userId ? { user_id: context.userId } : undefined,
-            authenticated: true,
-          };
-
           // Call spawn method on sessions service
           console.log(`🌱 MCP spawning subsession from ${context.sessionId.substring(0, 8)}`);
           const childSession = await (
             app.service('sessions') as unknown as SessionsServiceImpl
-          ).spawn(context.sessionId, spawnData, serviceParams);
+          ).spawn(context.sessionId, spawnData, baseServiceParams);
           console.log(`✅ Subsession created: ${childSession.session_id.substring(0, 8)}`);
 
           // Trigger prompt execution by directly calling the prompt service endpoint
@@ -455,7 +529,7 @@ export function setupMCPRoutes(app: Application): void {
               stream: true,
             },
             {
-              ...serviceParams,
+              ...baseServiceParams,
               route: { id: childSession.session_id },
             }
           );
@@ -513,6 +587,144 @@ export function setupMCPRoutes(app: Application): void {
               {
                 type: 'text',
                 text: JSON.stringify(worktrees, null, 2),
+              },
+            ],
+          };
+        } else if (name === 'agor_worktrees_create') {
+          const repoId = coerceString(args?.repoId);
+          if (!repoId) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message: 'Invalid params: repoId is required',
+              },
+            });
+          }
+
+          const worktreeName = coerceString(args?.worktreeName);
+          if (!worktreeName) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message: 'Invalid params: worktreeName is required',
+              },
+            });
+          }
+
+          if (!WORKTREE_NAME_PATTERN.test(worktreeName)) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message:
+                  'Invalid params: worktreeName must use lowercase letters, numbers, or hyphens',
+              },
+            });
+          }
+
+          const reposService = app.service('repos') as unknown as ReposServiceImpl;
+          let repo: unknown;
+          try {
+            repo = await reposService.get(repoId);
+          } catch {
+            return res.status(404).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message: `Repository ${repoId} not found`,
+              },
+            });
+          }
+          const defaultBranch =
+            coerceString((repo as { default_branch?: unknown }).default_branch) ?? 'main';
+
+          let createBranch =
+            typeof args?.createBranch === 'boolean' ? args.createBranch : true;
+          let ref = coerceString(args?.ref);
+          let sourceBranch = coerceString(args?.sourceBranch);
+          let pullLatest =
+            typeof args?.pullLatest === 'boolean' ? args.pullLatest : undefined;
+
+          if (ref && GIT_SHA_PATTERN.test(ref)) {
+            createBranch = false;
+            pullLatest = false;
+            sourceBranch = undefined;
+          }
+
+          if (createBranch) {
+            if (!ref) {
+              ref = worktreeName;
+            }
+            if (!sourceBranch) {
+              sourceBranch = defaultBranch;
+            }
+            if (pullLatest === undefined) {
+              pullLatest = true;
+            }
+          } else {
+            if (!ref) {
+              return res.status(400).json({
+                jsonrpc: '2.0',
+                id: mcpRequest.id,
+                error: {
+                  code: -32602,
+                  message: 'Invalid params: ref is required when createBranch is false',
+                },
+              });
+            }
+            sourceBranch = undefined;
+            if (pullLatest === undefined) {
+              pullLatest = false;
+            }
+          }
+
+          const boardId = coerceString(args?.boardId);
+          let issueUrl: string | undefined;
+          let pullRequestUrl: string | undefined;
+
+          try {
+            issueUrl = normalizeOptionalUrl(args?.issueUrl, 'issueUrl');
+            pullRequestUrl = normalizeOptionalUrl(args?.pullRequestUrl, 'pullRequestUrl');
+          } catch (validationError) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message:
+                  validationError instanceof Error
+                    ? validationError.message
+                    : 'Invalid URL parameter',
+              },
+            });
+          }
+
+          const worktree = await reposService.createWorktree(
+            repoId,
+            {
+              name: worktreeName,
+              ref,
+              createBranch,
+              ...(pullLatest !== undefined ? { pullLatest } : {}),
+              ...(sourceBranch ? { sourceBranch } : {}),
+              ...(issueUrl ? { issue_url: issueUrl } : {}),
+              ...(pullRequestUrl ? { pull_request_url: pullRequestUrl } : {}),
+              ...(boardId ? { boardId } : {}),
+            },
+            baseServiceParams
+          );
+
+          mcpResponse = {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(worktree, null, 2),
               },
             ],
           };

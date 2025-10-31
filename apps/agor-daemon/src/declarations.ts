@@ -85,9 +85,18 @@ export interface ReposServiceImpl extends Service<Repo, Partial<Repo>, FeathersP
   ): Promise<Repo>;
   createWorktree(
     id: string,
-    data: { name: string; ref: string; createBranch?: boolean },
+    data: {
+      name: string;
+      ref: string;
+      createBranch?: boolean;
+      pullLatest?: boolean;
+      sourceBranch?: string;
+      issue_url?: string;
+      pull_request_url?: string;
+      boardId?: string;
+    },
     params?: FeathersParams
-  ): Promise<Repo>;
+  ): Promise<Worktree>;
   removeWorktree(id: string, name: string, params?: FeathersParams): Promise<Repo>;
 }
 
