@@ -1,0 +1,85 @@
+---
+title: Environment Configuration
+description: Configure reusable worktree environment templates in Agor with templated commands and collision-safe ports.
+---
+
+# Environment Configuration
+
+Agor lets you define start/stop/health/app commands at the **repository level**, so every worktree spawned from that repo inherits the exact same environment workflow. Configure it once, and teammates can launch or inspect the stack with a single click.
+
+> **Good to know:** Environment configuration is optional. Worktrees function without it, but setting it up unlocks one-click controls and makes it easier for collaborators (or agents) to share running stacks.
+
+## Why it Matters
+
+- **Consistent controls:** Start, stop, restart, and health checks all call your scripted commands underneath.
+- **Collision-free parallel work:** Template helpers (like `{{add ... worktree.unique_id}}`) guarantee that ports and Docker project names stay unique per worktree.
+- **Shared dev environments:** The long-term goal is a shared QA-style environment per worktree that anyone can join—PMs, QA, or another engineer.
+- **Agent-friendly:** Agents assume the commands return quickly and can be retriggered safely during automated workflows.
+
+## Requirements Checklist
+
+1. **Start command returns quickly.** Use detached/background modes (`docker compose up -d`, `systemctl start`, etc.) so Agor can transition the UI to “starting” without waiting for a long-running process.
+2. **Stop command fully tears down the stack.** Make sure it is idempotent (`docker compose down`, `systemctl stop`, etc.).
+3. **Optional health check URL.** Agor pings this endpoint to display the green “Running” badge and to catch regressions.
+4. **App URL.** Becomes a clickable link once the environment is healthy.
+5. **No port or namespace conflicts.** Use templated offsets or namespacing flags so multiple worktrees can run simultaneously.
+
+## Template Building Blocks
+
+Repository-level environment templates are rendered with the helpers defined in `packages/core/src/templates/handlebars-helpers.ts:220`. Common values:
+
+- `{{worktree.unique_id}}` – Auto-incrementing number (1, 2, 3, …); perfect for port math.
+- `{{worktree.name}}` – Slugified worktree name (e.g. `feat-search`), handy for Docker `-p` project names.
+- `{{worktree.path}}` – Absolute path to the worktree directory on disk.
+- `{{repo.slug}}` – Repository slug.
+- `{{custom.*}}` – Any custom context object you add later.
+- Arithmetic helpers like `{{add}}`, `{{sub}}`, `{{mul}}`, `{{div}}` for deterministic offsets.
+
+Because the template is stored **at the repo level**, updating it in the Environment tab instantly applies to every current and future worktree in the same repo.
+
+## Example: Agor with Docker Compose
+
+<img src="/screenshots/environment_set_up.png" alt="Agor Worktree Environment template with templated Docker commands" style={{ width: '100%', borderRadius: '8px' }} />
+
+```text title="Repository Environment Template"
+Up Command
+DAEMON_PORT={{add 3050 worktree.unique_id}} UI_PORT={{add 5050 worktree.unique_id}} docker compose -p {{worktree.name}} up -d
+
+Down Command
+docker compose -p {{worktree.name}} down
+
+Health Check URL
+http://localhost:{{add 3050 worktree.unique_id}}/health
+
+App URL
+http://localhost:{{add 5050 worktree.unique_id}}/
+```
+
+**How it works**
+
+- **Port arithmetic:** Offsets the daemon and UI ports by the worktree unique ID so each branch can run concurrently.
+- **Docker namespacing:** `-p {{worktree.name}}` isolates networks, volumes, and container names per worktree.
+- **Fast start:** `docker compose … up -d` returns immediately, satisfying the “fast command” requirement.
+- **Automatic linking:** Once the health check passes, Agor surfaces the App URL on the worktree card for everyone to click.
+
+## Operational Tips
+
+- Keep commands idempotent—running “Start” twice should not error out.
+- Surface meaningful errors (port already in use, missing `.env`, etc.) so teams can react quickly.
+- Document your chosen base ports and offsets inside the repo (README, compose labels, etc.).
+- If your template grows complex, consider storing shared snippets or scripts within the repo and call them from the template.
+
+## Typical Workflow
+
+1. Open any worktree → **Environment** tab.
+2. Edit the **Repository Environment Template** once; changes sync to all worktrees on that repo.
+3. Press **Start** to validate your commands and watch logs in real time.
+4. Check the health badge and App URL to confirm the environment is ready.
+5. Share the App link with QA, PMs, or collaborators for fast feedback.
+
+## Troubleshooting
+
+- **Port already in use:** Adjust the base port or free the conflicting service. The template math just provides deterministic offsets.
+- **Command never returns:** Switch to detached/background mode—Agor treats long-running foreground commands as timeouts.
+- **Health check fails:** Confirm the service listens on the templated port and ensure the endpoint returns a success status.
+- **Lingering containers:** Use the “Stop” button (which runs your templated down command) to enforce clean shutdowns.

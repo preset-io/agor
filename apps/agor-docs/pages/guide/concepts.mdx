@@ -210,10 +210,14 @@ Parent orchestrates, children execute focused subsessions with clean context.
 
 **Environments are runtime instances (dev servers, Docker containers, etc.) for your worktrees.**
 
+Configuring them is optional—worktrees run fine without it—but adding a template gives you shared start/stop controls, automatic health checks, and collision-free URLs.
+
 Each repo can have an **environment configuration template** that defines:
 - How to start/stop the environment (commands)
 - Health check configuration
 - App URL template
+
+Looking for step-by-step setup guidance? See the [Environment Configuration](./environment-configuration) guide.
 
 Each worktree gets its **own environment instance** with:
 - Unique ports (auto-assigned using worktree unique ID)
