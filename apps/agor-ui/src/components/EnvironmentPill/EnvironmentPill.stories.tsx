@@ -30,10 +30,13 @@ const baseRepo: Repo = {
 const repoWithConfig: Repo = {
   ...baseRepo,
   environment_config: {
-    start_command: 'docker compose up -d',
-    stop_command: 'docker compose down',
-    health_endpoint_template: 'http://localhost:{{add 9000 WORKTREE_UNIQUE_ID}}/health',
-    url_templates: ['http://localhost:{{add 9000 WORKTREE_UNIQUE_ID}}'],
+    up_command: 'docker compose up -d',
+    down_command: 'docker compose down',
+    health_check: {
+      type: 'http',
+      url_template: 'http://localhost:{{add 9000 worktree.unique_id}}/health',
+    },
+    app_url_template: 'http://localhost:{{add 9000 worktree.unique_id}}',
   },
 };
 
@@ -43,14 +46,17 @@ const baseWorktree: Worktree = {
   repo_id: baseRepo.repo_id,
   worktree_unique_id: 1,
   name: 'feature-auth',
-  branch: 'feature/auth',
+  ref: 'feature/auth',
   path: '/Users/user/.agor/worktrees/myapp/feature-auth',
   created_at: '2025-01-20T10:00:00Z',
   updated_at: '2025-01-20T10:00:00Z',
   created_by: '0193d1e2-3f4a-7b5c-a8f3-9d2e1c4b5a6f',
-  sessions: [],
+  new_branch: false,
   last_used: '2025-01-20T10:00:00Z',
 };
+
+const logStart = (worktreeId: string) => console.log('Start environment', worktreeId);
+const logStop = (worktreeId: string) => console.log('Stop environment', worktreeId);
 
 export const NotConfigured: Story = {
   args: {
@@ -70,6 +76,8 @@ export const ConfiguredButStopped: Story = {
       },
     },
     onEdit: () => alert('Opening environment settings...'),
+    onStartEnvironment: logStart,
+    onStopEnvironment: logStop,
   },
 };
 
@@ -80,7 +88,7 @@ export const Running: Story = {
       ...baseWorktree,
       environment_instance: {
         status: 'running',
-        access_urls: ['http://localhost:9001'],
+        access_urls: [{ name: 'UI', url: 'http://localhost:9001' }],
         process: {
           pid: 12345,
           started_at: '2025-01-20T10:00:00Z',
@@ -93,6 +101,8 @@ export const Running: Story = {
       },
     },
     onEdit: () => alert('Opening environment settings...'),
+    onStartEnvironment: logStart,
+    onStopEnvironment: logStop,
   },
 };
 
@@ -106,6 +116,8 @@ export const Starting: Story = {
       },
     },
     onEdit: () => alert('Opening environment settings...'),
+    onStartEnvironment: logStart,
+    onStopEnvironment: logStop,
   },
 };
 
@@ -116,10 +128,12 @@ export const Stopping: Story = {
       ...baseWorktree,
       environment_instance: {
         status: 'stopping',
-        access_urls: ['http://localhost:9001'],
+        access_urls: [{ name: 'UI', url: 'http://localhost:9001' }],
       },
     },
     onEdit: () => alert('Opening environment settings...'),
+    onStartEnvironment: logStart,
+    onStopEnvironment: logStop,
   },
 };
 
@@ -138,5 +152,7 @@ export const ErrorState: Story = {
       },
     },
     onEdit: () => alert('Opening environment settings...'),
+    onStartEnvironment: logStart,
+    onStopEnvironment: logStop,
   },
 };

@@ -91,6 +91,8 @@ interface SessionDrawerProps {
   onOpenTerminal?: (commands: string[]) => void;
   onUpdateSession?: (sessionId: string, updates: Partial<Session>) => void;
   onDelete?: (sessionId: string) => void;
+  onStartEnvironment?: (worktreeId: string) => void;
+  onStopEnvironment?: (worktreeId: string) => void;
 }
 
 const SessionDrawer = ({
@@ -114,6 +116,8 @@ const SessionDrawer = ({
   onOpenTerminal,
   onUpdateSession,
   onDelete,
+  onStartEnvironment,
+  onStopEnvironment,
 }: SessionDrawerProps) => {
   const { token } = theme.useToken();
   const { modal } = App.useApp();
@@ -423,9 +427,9 @@ const SessionDrawer = ({
                 onClick={onOpenWorktree ? () => onOpenWorktree(worktree.worktree_id) : undefined}
               />
             )}
-            {worktree && (
+            {worktree && repo && (
               <EnvironmentPill
-                repo={repo || ({} as Repo)}
+                repo={repo}
                 worktree={worktree}
                 onEdit={
                   onOpenWorktree
@@ -435,6 +439,8 @@ const SessionDrawer = ({
                       }
                     : undefined
                 }
+                onStartEnvironment={onStartEnvironment}
+                onStopEnvironment={onStopEnvironment}
               />
             )}
             {/* MCP Servers */}

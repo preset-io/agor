@@ -502,6 +502,8 @@ export const App: React.FC<AppProps> = ({
         onOpenTerminal={handleOpenTerminal}
         onUpdateSession={onUpdateSession}
         onDelete={onDeleteSession}
+        onStartEnvironment={onStartEnvironment}
+        onStopEnvironment={onStopEnvironment}
       />
       <SettingsModal
         open={effectiveSettingsOpen}

@@ -4,18 +4,27 @@ import {
   EditOutlined,
   GlobalOutlined,
   LoadingOutlined,
+  PlayCircleOutlined,
   StopOutlined,
   WarningOutlined,
 } from '@ant-design/icons';
-import { Space, Tag, Tooltip, theme } from 'antd';
+import { Button, Space, Tag, Tooltip, theme } from 'antd';
 
 interface EnvironmentPillProps {
   repo: Repo; // Need repo for environment_config
   worktree: Worktree; // Has environment_instance (runtime state)
   onEdit?: () => void; // Opens WorktreeModal → Environment tab
+  onStartEnvironment?: (worktreeId: string) => void;
+  onStopEnvironment?: (worktreeId: string) => void;
 }
 
-export function EnvironmentPill({ repo, worktree, onEdit }: EnvironmentPillProps) {
+export function EnvironmentPill({
+  repo,
+  worktree,
+  onEdit,
+  onStartEnvironment,
+  onStopEnvironment,
+}: EnvironmentPillProps) {
   const { token } = theme.useToken();
   const hasConfig = !!repo.environment_config;
   const env = worktree.environment_instance;
@@ -70,6 +79,11 @@ export function EnvironmentPill({ repo, worktree, onEdit }: EnvironmentPillProps
   };
 
   const status = env?.status || 'stopped';
+  const isProcessing = status === 'starting' || status === 'stopping';
+  const isRunning = status === 'running';
+  const canStop = status === 'running' || status === 'starting';
+  const startDisabled = !hasConfig || !onStartEnvironment || isProcessing || isRunning;
+  const stopDisabled = !hasConfig || !onStopEnvironment || isProcessing || !canStop;
 
   // Build helpful tooltip based on state
   const getTooltipText = () => {
@@ -111,9 +125,20 @@ export function EnvironmentPill({ repo, worktree, onEdit }: EnvironmentPillProps
     <Tooltip title={getTooltipText()}>
       <Tag
         color={getColor()}
-        style={{ userSelect: 'none', padding: 0, overflow: 'hidden', lineHeight: '20px' }}
+        style={{
+          userSelect: 'none',
+          padding: 0,
+          overflow: 'hidden',
+          lineHeight: '20px',
+          display: 'inline-flex',
+          alignItems: 'stretch',
+        }}
       >
-        <Space size={0} style={{ width: '100%' }}>
+        <Space
+          size={0}
+          style={{ width: '100%', display: 'inline-flex', alignItems: 'center' }}
+          direction="horizontal"
+        >
           {/* Left section - clickable to open URL (when running) */}
           {env?.status === 'running' && environmentUrl ? (
             <a
@@ -151,20 +176,89 @@ export function EnvironmentPill({ repo, worktree, onEdit }: EnvironmentPillProps
             </div>
           )}
 
+          {/* Environment controls */}
+          {(onStartEnvironment || onStopEnvironment) && hasConfig && (
+            <Space
+              size={2}
+              style={{
+                padding: '0 6px',
+                borderLeft: '1px solid rgba(255, 255, 255, 0.2)',
+                height: '22px',
+                display: 'inline-flex',
+                alignItems: 'center',
+              }}
+            >
+              {onStartEnvironment && (
+                <Tooltip title={status === 'running' ? 'Environment running' : 'Start environment'}>
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={isProcessing && status === 'starting' ? <LoadingOutlined /> : <PlayCircleOutlined />}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      if (!startDisabled) {
+                        onStartEnvironment(worktree.worktree_id);
+                      }
+                    }}
+                    disabled={startDisabled}
+                    style={{
+                      height: 22,
+                      width: 22,
+                      minWidth: 22,
+                      padding: 0,
+                    }}
+                  />
+                </Tooltip>
+              )}
+              {onStopEnvironment && (
+                <Tooltip
+                  title={
+                    status === 'running'
+                      ? 'Stop environment'
+                      : status === 'starting'
+                      ? 'Environment is starting'
+                      : 'Environment not running'
+                  }
+                >
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={isProcessing && status === 'stopping' ? <LoadingOutlined /> : <StopOutlined />}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      if (!stopDisabled) {
+                        onStopEnvironment(worktree.worktree_id);
+                      }
+                    }}
+                    disabled={stopDisabled}
+                    style={{
+                      height: 22,
+                      width: 22,
+                      minWidth: 22,
+                      padding: 0,
+                    }}
+                  />
+                </Tooltip>
+              )}
+            </Space>
+          )}
+
           {/* Edit button - always visible */}
-          <EditOutlined
-            onClick={handleEdit}
-            style={{
-              cursor: 'pointer',
-              opacity: 0.7,
-              padding: '0 7px',
-              borderLeft: '1px solid rgba(255, 255, 255, 0.2)',
-              fontSize: 12,
-              height: '22px',
-              display: 'inline-flex',
-              alignItems: 'center',
-            }}
-          />
+          <Tooltip title="Configure environment">
+            <Button
+              type="text"
+              size="small"
+              icon={<EditOutlined />}
+              onClick={handleEdit}
+              style={{
+                padding: 0,
+                height: 22,
+                width: 22,
+                minWidth: 22,
+                borderLeft: '1px solid rgba(255, 255, 255, 0.2)',
+              }}
+            />
+          </Tooltip>
         </Space>
       </Tag>
     </Tooltip>
