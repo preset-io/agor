@@ -15,8 +15,8 @@ import {
   PoweroffOutlined,
   WarningOutlined,
 } from '@ant-design/icons';
-import { Badge, Button, Empty, Form, Modal, Space, Table, Tooltip, Typography, theme } from 'antd';
-import { useCallback, useEffect, useState } from 'react';
+import { Badge, Button, Empty, Form, Input, Modal, Space, Table, Tooltip, Typography, theme } from 'antd';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { DeleteWorktreePopconfirm } from '../DeleteWorktreePopconfirm';
 import { WorktreeFormFields } from '../WorktreeFormFields';
 
@@ -59,6 +59,9 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
   const [useSameBranchName, setUseSameBranchName] = useState(true);
   const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null);
   const [isFormValid, setIsFormValid] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+
+  const reposById = useMemo(() => new Map(repos.map(repo => [repo.repo_id, repo])), [repos]);
 
   // Validate form fields to enable/disable Create button
   const validateForm = useCallback(() => {
@@ -102,7 +105,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
 
   // Helper to get repo name from repo_id
   const getRepoName = (repoId: string): string => {
-    const repo = repos.find(r => r.repo_id === repoId);
+    const repo = reposById.get(repoId as Repo['repo_id']);
     return repo?.name || 'Unknown Repo';
   };
 
@@ -381,28 +384,66 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
     },
   ];
 
+  const filteredWorktrees = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase();
+    const sorted = [...worktrees].sort((a, b) =>
+      new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    );
+
+    if (!term) {
+      return sorted;
+    }
+
+    return sorted.filter(worktree => {
+      const repo = reposById.get(worktree.repo_id);
+      const haystacks = [
+        worktree.name,
+        worktree.ref,
+        worktree.path,
+        String(worktree.worktree_unique_id),
+        repo?.name,
+        repo?.slug,
+      ];
+
+      return haystacks.some(value => {
+        if (value === undefined || value === null) {
+          return false;
+        }
+        return value.toString().toLowerCase().includes(term);
+      });
+    });
+  }, [reposById, searchTerm, worktrees]);
+
   return (
     <div>
-      <div
-        style={{
-          marginBottom: 16,
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-        }}
+      <Space
+        direction="vertical"
+        size={token.sizeUnit * 2}
+        style={{ marginBottom: token.sizeUnit * 2, width: '100%' }}
       >
         <Typography.Text type="secondary">
           Manage git worktrees for isolated development contexts across sessions.
         </Typography.Text>
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          onClick={() => setCreateModalOpen(true)}
-          disabled={repos.length === 0}
+        <Space
+          style={{ width: '100%', display: 'flex', justifyContent: 'space-between' }}
         >
-          Create Worktree
-        </Button>
-      </div>
+          <Input
+            allowClear
+            placeholder="Search by name, repo, slug, path, or ID"
+            value={searchTerm}
+            onChange={event => setSearchTerm(event.target.value)}
+            style={{ maxWidth: token.sizeUnit * 40 }}
+          />
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => setCreateModalOpen(true)}
+            disabled={repos.length === 0}
+          >
+            Create Worktree
+          </Button>
+        </Space>
+      </Space>
 
       {!worktrees && (
         <div
@@ -453,7 +494,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
 
       {worktrees.length > 0 && (
         <Table
-          dataSource={worktrees}
+          dataSource={filteredWorktrees}
           columns={columns}
           rowKey="worktree_id"
           pagination={{ pageSize: 10 }}
