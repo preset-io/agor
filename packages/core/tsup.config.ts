@@ -18,6 +18,7 @@ export default defineConfig({
     'templates/handlebars-helpers': 'src/templates/handlebars-helpers.ts', // Handlebars helpers
     'environment/variable-resolver': 'src/environment/variable-resolver.ts', // Environment variable resolution
     'utils/pricing': 'src/utils/pricing.ts', // Token pricing and cost calculation
+    'utils/url': 'src/utils/url.ts', // Shared URL validation helpers
   },
   format: ['cjs', 'esm'],
   dts: true,

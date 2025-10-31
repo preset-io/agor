@@ -7,6 +7,7 @@
 
 import type { Application } from '@agor/core/feathers';
 import type { AgenticToolName } from '@agor/core/types';
+import { normalizeOptionalHttpUrl } from '@agor/core/utils/url';
 import type { Request, Response } from 'express';
 import type { ReposServiceImpl, SessionsServiceImpl } from '../declarations.js';
 import { validateSessionToken } from './tokens.js';
@@ -20,19 +21,6 @@ function coerceString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function normalizeOptionalUrl(value: unknown, fieldName: string): string | undefined {
-  const urlString = coerceString(value);
-  if (!urlString) return undefined;
-  try {
-    const parsed = new URL(urlString);
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      throw new Error();
-    }
-    return parsed.toString();
-  } catch {
-    throw new Error(`${fieldName} must be a valid http(s) URL`);
-  }
-}
 
 /**
  * Setup MCP routes on FeathersJS app
@@ -689,8 +677,8 @@ export function setupMCPRoutes(app: Application): void {
           let pullRequestUrl: string | undefined;
 
           try {
-            issueUrl = normalizeOptionalUrl(args?.issueUrl, 'issueUrl');
-            pullRequestUrl = normalizeOptionalUrl(args?.pullRequestUrl, 'pullRequestUrl');
+            issueUrl = normalizeOptionalHttpUrl(args?.issueUrl, 'issueUrl');
+            pullRequestUrl = normalizeOptionalHttpUrl(args?.pullRequestUrl, 'pullRequestUrl');
           } catch (validationError) {
             return res.status(400).json({
               jsonrpc: '2.0',
