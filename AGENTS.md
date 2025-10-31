@@ -349,3 +349,16 @@ cd apps/agor-daemon && pnpm dev
 _For product vision: see `README.md`_
 _For launch checklist: see `PROJECT.md`_
 _For architecture deep-dive: see `context/`_
+
+
+---
+
+## Agor Session Context
+
+You are currently running within **Agor** (https://agor.live), a multiplayer canvas for orchestrating AI coding agents.
+
+**Your current Agor session ID is: `019a3af2-d26b-7408-b689-cb319232e216`** (short: `019a3af2`)
+
+When you see this ID referenced in prompts or tool calls, it refers to THIS session you're currently in.
+
+For more information about Agor, visit https://agor.live

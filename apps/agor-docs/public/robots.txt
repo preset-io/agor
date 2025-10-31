@@ -1,0 +1,9 @@
+# robots.txt for agor.live
+User-agent: *
+Allow: /
+
+# Sitemap
+Sitemap: https://agor.live/sitemap.xml
+
+# Crawl-delay to be respectful
+Crawl-delay: 1
