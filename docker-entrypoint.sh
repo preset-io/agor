@@ -8,6 +8,10 @@ echo "🚀 Starting Agor development environment..."
 echo "📦 Checking dependencies..."
 CI=true pnpm install --reporter=append-only
 
+# Build @agor/core (required for CLI commands and daemon)
+echo "🔨 Building @agor/core..."
+pnpm --filter @agor/core build
+
 # Initialize database if it doesn't exist
 if [ ! -f /root/.agor/agor.db ]; then
   echo "📦 Initializing database..."
