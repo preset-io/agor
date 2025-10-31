@@ -124,7 +124,7 @@ export default class Init extends Command {
       this.log('   - Stopped Codespaces retain data for 30 days');
       this.log('   - Rebuilt Codespaces lose all data\n');
       this.log(chalk.dim('For production use, install Agor locally:'));
-      this.log(chalk.dim('  https://github.com/mistercrunch/agor#installation\n'));
+      this.log(chalk.dim('  https://github.com/preset-io/agor#installation\n'));
     }
 
     try {

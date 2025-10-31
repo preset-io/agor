@@ -39,7 +39,7 @@ export function Hero({
               {ctaText}
             </Link>
             <Link
-              href="https://github.com/mistercrunch/agor"
+              href="https://github.com/preset-io/agor"
               target="_blank"
               rel="noopener noreferrer"
               className={styles.secondaryButton}

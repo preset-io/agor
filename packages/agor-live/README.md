@@ -34,7 +34,7 @@ agor ui open
 
 ## Documentation
 
-- **GitHub**: https://github.com/agorapp/agor
+- **GitHub**: https://github.com/preset-io/agor
 - **Docs**: https://agor.live
 
 ## License

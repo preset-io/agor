@@ -11,7 +11,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/mistercrunch/agor.git"
+    "url": "https://github.com/preset-io/agor.git"
   },
   "scripts": {
     "build": "turbo run build",

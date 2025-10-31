@@ -132,7 +132,7 @@ npm install -g agor-live
 agor init && agor daemon start && agor open
 ```
 
-GitHub: github.com/mistercrunch/agor
+GitHub: github.com/preset-io/agor
 Docs: agor.live
 License: BSL 1.1 (free for non-commercial, converts to Apache 2.0 after 4 years)
 

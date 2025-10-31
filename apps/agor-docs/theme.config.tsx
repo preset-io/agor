@@ -18,9 +18,9 @@ const config: DocsThemeConfig = {
     </span>
   ),
   project: {
-    link: 'https://github.com/mistercrunch/agor',
+    link: 'https://github.com/preset-io/agor',
   },
-  docsRepositoryBase: 'https://github.com/mistercrunch/agor/tree/main/apps/agor-docs',
+  docsRepositoryBase: 'https://github.com/preset-io/agor/tree/main/apps/agor-docs',
 
   navigation: {
     prev: true,

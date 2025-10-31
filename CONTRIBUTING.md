@@ -18,7 +18,7 @@ The documentation covers everything you need:
 ## Quick Start
 
 ```bash
-git clone https://github.com/mistercrunch/agor
+git clone https://github.com/preset-io/agor
 cd agor
 docker compose up
 # Visit http://localhost:5173 → Login: admin@agor.live / admin
@@ -222,8 +222,8 @@ Closes #123
 
 **Stuck? Confused? Need guidance?**
 
-- **[GitHub Discussions](https://github.com/mistercrunch/agor/discussions)** - Ask questions, share ideas, get help
-- **[GitHub Issues](https://github.com/mistercrunch/agor/issues)** - Report bugs, request features
+- **[GitHub Discussions](https://github.com/preset-io/agor/discussions)** - Ask questions, share ideas, get help
+- **[GitHub Issues](https://github.com/preset-io/agor/issues)** - Report bugs, request features
 - **Read the docs** - [CLAUDE.md](CLAUDE.md) and [context/](context/) have extensive documentation
 
 **Response time:**

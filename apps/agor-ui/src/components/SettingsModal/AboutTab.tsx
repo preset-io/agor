@@ -160,11 +160,7 @@ export const AboutTab: React.FC<AboutTabProps> = ({
             style={{ maxWidth: 800, margin: '0 auto', textAlign: 'center' }}
           >
             <Space size="large">
-              <a
-                href="https://github.com/mistercrunch/agor"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
+              <a href="https://github.com/preset-io/agor" target="_blank" rel="noopener noreferrer">
                 GitHub
               </a>
               <a href="https://agor.live" target="_blank" rel="noopener noreferrer">
