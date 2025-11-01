@@ -19,6 +19,7 @@ export default defineConfig({
     'environment/variable-resolver': 'src/environment/variable-resolver.ts', // Environment variable resolution
     'utils/pricing': 'src/utils/pricing.ts', // Token pricing and cost calculation
     'utils/url': 'src/utils/url.ts', // Shared URL validation helpers
+    'utils/permission-mode-mapper': 'src/utils/permission-mode-mapper.ts', // Permission mode mapping for cross-agent compatibility
   },
   format: ['cjs', 'esm'],
   dts: true,
