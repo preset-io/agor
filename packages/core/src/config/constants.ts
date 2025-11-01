@@ -36,6 +36,24 @@ export const ENVIRONMENT = {
    * Maximum consecutive health check failures before marking as 'error'
    */
   MAX_HEALTH_CHECK_FAILURES: 3,
+
+  /**
+   * Logs command timeout in milliseconds
+   * How long to wait for logs command to complete
+   */
+  LOGS_TIMEOUT_MS: 10_000, // 10 seconds
+
+  /**
+   * Maximum number of log lines to return from logs command
+   * Prevents daemon crashes from massive log outputs
+   */
+  LOGS_MAX_LINES: 100,
+
+  /**
+   * Maximum bytes to read from logs command output
+   * Prevents memory issues (100KB limit)
+   */
+  LOGS_MAX_BYTES: 100_000, // 100KB
 } as const;
 
 /**

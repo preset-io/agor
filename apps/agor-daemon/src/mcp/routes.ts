@@ -267,6 +267,82 @@ export function setupMCPRoutes(app: Application): void {
               },
             },
 
+            // Environment tools
+            {
+              name: 'agor_environment_start',
+              description:
+                'Start the environment for a worktree by running its configured start command',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  worktreeId: {
+                    type: 'string',
+                    description: 'Worktree ID (UUIDv7 or short ID)',
+                  },
+                },
+                required: ['worktreeId'],
+              },
+            },
+            {
+              name: 'agor_environment_stop',
+              description:
+                'Stop the environment for a worktree by running its configured stop command',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  worktreeId: {
+                    type: 'string',
+                    description: 'Worktree ID (UUIDv7 or short ID)',
+                  },
+                },
+                required: ['worktreeId'],
+              },
+            },
+            {
+              name: 'agor_environment_health',
+              description:
+                'Check the health status of a worktree environment by running its configured health command',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  worktreeId: {
+                    type: 'string',
+                    description: 'Worktree ID (UUIDv7 or short ID)',
+                  },
+                },
+                required: ['worktreeId'],
+              },
+            },
+            {
+              name: 'agor_environment_logs',
+              description:
+                'Fetch recent logs from a worktree environment (non-streaming, last ~100 lines)',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  worktreeId: {
+                    type: 'string',
+                    description: 'Worktree ID (UUIDv7 or short ID)',
+                  },
+                },
+                required: ['worktreeId'],
+              },
+            },
+            {
+              name: 'agor_environment_open_app',
+              description: 'Open the application URL for a worktree environment in the browser',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  worktreeId: {
+                    type: 'string',
+                    description: 'Worktree ID (UUIDv7 or short ID)',
+                  },
+                },
+                required: ['worktreeId'],
+              },
+            },
+
             // Board tools
             {
               name: 'agor_boards_get',
@@ -413,7 +489,8 @@ export function setupMCPRoutes(app: Application): void {
                   },
                   emoji: {
                     type: 'string',
-                    description: 'User emoji for visual identity (optional, single emoji character)',
+                    description:
+                      'User emoji for visual identity (optional, single emoji character)',
                   },
                   avatar: {
                     type: 'string',
@@ -756,6 +833,236 @@ export function setupMCPRoutes(app: Application): void {
               },
             ],
           };
+
+          // Environment tools
+        } else if (name === 'agor_environment_start') {
+          const worktreeId = coerceString(args?.worktreeId);
+          if (!worktreeId) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message: 'Invalid params: worktreeId is required',
+              },
+            });
+          }
+
+          const worktreesService = app.service(
+            'worktrees'
+          ) as unknown as import('../declarations').WorktreesServiceImpl;
+          try {
+            const worktree = await worktreesService.startEnvironment(
+              worktreeId as import('@agor/core/types').WorktreeID,
+              baseServiceParams
+            );
+            mcpResponse = {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify(
+                    {
+                      success: true,
+                      worktree,
+                    },
+                    null,
+                    2
+                  ),
+                },
+              ],
+            };
+          } catch (error) {
+            mcpResponse = {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify(
+                    {
+                      success: false,
+                      error: error instanceof Error ? error.message : 'Unknown error',
+                    },
+                    null,
+                    2
+                  ),
+                },
+              ],
+            };
+          }
+        } else if (name === 'agor_environment_stop') {
+          const worktreeId = coerceString(args?.worktreeId);
+          if (!worktreeId) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message: 'Invalid params: worktreeId is required',
+              },
+            });
+          }
+
+          const worktreesService = app.service(
+            'worktrees'
+          ) as unknown as import('../declarations').WorktreesServiceImpl;
+          try {
+            const worktree = await worktreesService.stopEnvironment(
+              worktreeId as import('@agor/core/types').WorktreeID,
+              baseServiceParams
+            );
+            mcpResponse = {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify(
+                    {
+                      success: true,
+                      worktree,
+                    },
+                    null,
+                    2
+                  ),
+                },
+              ],
+            };
+          } catch (error) {
+            mcpResponse = {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify(
+                    {
+                      success: false,
+                      error: error instanceof Error ? error.message : 'Unknown error',
+                    },
+                    null,
+                    2
+                  ),
+                },
+              ],
+            };
+          }
+        } else if (name === 'agor_environment_health') {
+          const worktreeId = coerceString(args?.worktreeId);
+          if (!worktreeId) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message: 'Invalid params: worktreeId is required',
+              },
+            });
+          }
+
+          const worktreesService = app.service(
+            'worktrees'
+          ) as unknown as import('../declarations').WorktreesServiceImpl;
+          const worktree = await worktreesService.checkHealth(
+            worktreeId as import('@agor/core/types').WorktreeID,
+            baseServiceParams
+          );
+          mcpResponse = {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(
+                  {
+                    status: worktree.environment_instance?.status || 'unknown',
+                    lastHealthCheck: worktree.environment_instance?.last_health_check,
+                    worktree,
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        } else if (name === 'agor_environment_logs') {
+          const worktreeId = coerceString(args?.worktreeId);
+          if (!worktreeId) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message: 'Invalid params: worktreeId is required',
+              },
+            });
+          }
+
+          const worktreesService = app.service(
+            'worktrees'
+          ) as unknown as import('../declarations').WorktreesServiceImpl;
+          const logsResult = await worktreesService.getLogs(
+            worktreeId as import('@agor/core/types').WorktreeID,
+            baseServiceParams
+          );
+          mcpResponse = {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(logsResult, null, 2),
+              },
+            ],
+          };
+        } else if (name === 'agor_environment_open_app') {
+          const worktreeId = coerceString(args?.worktreeId);
+          if (!worktreeId) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message: 'Invalid params: worktreeId is required',
+              },
+            });
+          }
+
+          const worktreesService = app.service(
+            'worktrees'
+          ) as unknown as import('../declarations').WorktreesServiceImpl;
+          const worktree = await worktreesService.get(
+            worktreeId as import('@agor/core/types').WorktreeID,
+            baseServiceParams
+          );
+
+          const appUrl = worktree.environment_instance?.access_urls?.[0]?.url;
+          if (!appUrl) {
+            mcpResponse = {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify(
+                    {
+                      success: false,
+                      error: 'No app URL configured for this worktree',
+                    },
+                    null,
+                    2
+                  ),
+                },
+              ],
+            };
+          } else {
+            // Note: We can't actually open the browser from server-side, but we can return the URL
+            // The agent can use this URL to inform the user or take other actions
+            mcpResponse = {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify(
+                    {
+                      success: true,
+                      url: appUrl,
+                      message: `App URL: ${appUrl}`,
+                    },
+                    null,
+                    2
+                  ),
+                },
+              ],
+            };
+          }
 
           // Board tools
         } else if (name === 'agor_boards_get') {
