@@ -90,6 +90,11 @@
       "types": "./dist/utils/url.d.ts",
       "import": "./dist/utils/url.js",
       "require": "./dist/utils/url.cjs"
+    },
+    "./utils/permission-mode-mapper": {
+      "types": "./dist/utils/permission-mode-mapper.d.ts",
+      "import": "./dist/utils/permission-mode-mapper.js",
+      "require": "./dist/utils/permission-mode-mapper.cjs"
     }
   },
   "scripts": {
