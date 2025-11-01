@@ -6,7 +6,15 @@
  */
 
 import { generateId } from '@agor/core';
-import { compare, type Database, eq, hash, users } from '@agor/core/db';
+import {
+  compare,
+  type Database,
+  decryptApiKey,
+  encryptApiKey,
+  eq,
+  hash,
+  users,
+} from '@agor/core/db';
 import type { Paginated, Params, User, UserID } from '@agor/core/types';
 
 /**
@@ -32,6 +40,11 @@ interface UpdateUserData {
   avatar?: string;
   preferences?: Record<string, unknown>;
   onboarding_completed?: boolean;
+  api_keys?: {
+    ANTHROPIC_API_KEY?: string | null;
+    OPENAI_API_KEY?: string | null;
+    GEMINI_API_KEY?: string | null;
+  };
 }
 
 /**
@@ -58,7 +71,7 @@ export class UsersService {
       rows = await this.db.select().from(users).all();
     }
 
-    const results = rows.map((row) => this.rowToUser(row, includePassword));
+    const results = rows.map(row => this.rowToUser(row, includePassword));
 
     return {
       total: results.length,
@@ -144,11 +157,39 @@ export class UsersService {
       updates.onboarding_completed = data.onboarding_completed;
 
     // Update data blob
-    if (data.avatar || data.preferences) {
+    if (data.avatar || data.preferences || data.api_keys) {
       const current = await this.get(id);
+      const currentRow = await this.db.select().from(users).where(eq(users.user_id, id)).get();
+      const currentData = currentRow?.data as {
+        avatar?: string;
+        preferences?: Record<string, unknown>;
+        api_keys?: Record<string, string>;
+      };
+
+      // Handle API keys (encrypt before storage)
+      const encryptedKeys = currentData?.api_keys || {};
+      if (data.api_keys) {
+        for (const [key, value] of Object.entries(data.api_keys)) {
+          if (value === null || value === undefined) {
+            // Clear key
+            delete encryptedKeys[key];
+          } else {
+            // Encrypt and store
+            try {
+              encryptedKeys[key] = encryptApiKey(value);
+              console.log(`🔐 Encrypted user API key: ${key}`);
+            } catch (err) {
+              console.error(`Failed to encrypt ${key}:`, err);
+              throw new Error(`Failed to encrypt ${key}`);
+            }
+          }
+        }
+      }
+
       updates.data = {
         avatar: data.avatar ?? current.avatar,
         preferences: data.preferences ?? current.preferences,
+        api_keys: Object.keys(encryptedKeys).length > 0 ? encryptedKeys : undefined,
       };
     }
 
@@ -199,6 +240,31 @@ export class UsersService {
   }
 
   /**
+   * Get decrypted API key for a user
+   * Used by key resolution service
+   */
+  async getApiKey(
+    userId: UserID,
+    keyName: 'ANTHROPIC_API_KEY' | 'OPENAI_API_KEY' | 'GEMINI_API_KEY'
+  ): Promise<string | undefined> {
+    const row = await this.db.select().from(users).where(eq(users.user_id, userId)).get();
+
+    if (!row) return undefined;
+
+    const data = row.data as { api_keys?: Record<string, string> };
+    const encryptedKey = data.api_keys?.[keyName];
+
+    if (!encryptedKey) return undefined;
+
+    try {
+      return decryptApiKey(encryptedKey);
+    } catch (err) {
+      console.error(`Failed to decrypt ${keyName} for user ${userId}:`, err);
+      return undefined;
+    }
+  }
+
+  /**
    * Convert database row to User type
    *
    * @param row - Database row
@@ -208,7 +274,11 @@ export class UsersService {
     row: typeof users.$inferSelect,
     includePassword = false
   ): User & { password?: string } {
-    const data = row.data as { avatar?: string; preferences?: Record<string, unknown> };
+    const data = row.data as {
+      avatar?: string;
+      preferences?: Record<string, unknown>;
+      api_keys?: Record<string, string>; // Encrypted keys
+    };
 
     const user: User & { password?: string } = {
       user_id: row.user_id as UserID,
@@ -221,6 +291,14 @@ export class UsersService {
       onboarding_completed: !!row.onboarding_completed,
       created_at: row.created_at,
       updated_at: row.updated_at ?? undefined,
+      // Return key status (boolean), NOT actual keys
+      api_keys: data.api_keys
+        ? {
+            ANTHROPIC_API_KEY: !!data.api_keys.ANTHROPIC_API_KEY,
+            OPENAI_API_KEY: !!data.api_keys.OPENAI_API_KEY,
+            GEMINI_API_KEY: !!data.api_keys.GEMINI_API_KEY,
+          }
+        : undefined,
     };
 
     // Include password for authentication (FeathersJS LocalStrategy needs this)
@@ -255,7 +333,11 @@ class UsersServiceWithAuth extends UsersService {
       throw new Error(`User not found: ${id}`);
     }
 
-    const data = row.data as { avatar?: string; preferences?: Record<string, unknown> };
+    const data = row.data as {
+      avatar?: string;
+      preferences?: Record<string, unknown>;
+      api_keys?: Record<string, string>;
+    };
 
     return {
       user_id: row.user_id as UserID,
@@ -269,6 +351,13 @@ class UsersServiceWithAuth extends UsersService {
       onboarding_completed: !!row.onboarding_completed,
       created_at: row.created_at,
       updated_at: row.updated_at ?? undefined,
+      api_keys: data.api_keys
+        ? {
+            ANTHROPIC_API_KEY: !!data.api_keys.ANTHROPIC_API_KEY,
+            OPENAI_API_KEY: !!data.api_keys.OPENAI_API_KEY,
+            GEMINI_API_KEY: !!data.api_keys.GEMINI_API_KEY,
+          }
+        : undefined,
     };
   }
 }

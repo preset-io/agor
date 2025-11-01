@@ -9,7 +9,8 @@ import { execSync } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { PermissionMode } from '@anthropic-ai/claude-agent-sdk/sdk';
-import { getCredential } from '../../config';
+import { resolveApiKey } from '../../config';
+import type { Database } from '../../db/client';
 import type { MCPServerRepository } from '../../db/repositories/mcp-servers';
 import type { MessagesRepository } from '../../db/repositories/messages';
 import type { SessionMCPServerRepository } from '../../db/repositories/session-mcp-servers';
@@ -82,6 +83,7 @@ export interface QuerySetupDeps {
   worktreesRepo?: WorktreeRepository;
   permissionLocks: Map<SessionID, Promise<void>>;
   mcpEnabled?: boolean;
+  db?: Database;
 }
 
 /**
@@ -263,8 +265,11 @@ export async function setupQuery(
 
   // Add optional apiKey if provided
   // NOTE: Don't require API key - user may have used `claude login` (OAuth)
-  // Precedence: config.yaml (UI) > process.env
-  const apiKey = getCredential('ANTHROPIC_API_KEY');
+  // Precedence: per-user key > config.yaml (UI) > process.env
+  const apiKey = await resolveApiKey('ANTHROPIC_API_KEY', {
+    userId: session.created_by as import('../../types').UserID | undefined,
+    db: deps.db,
+  });
   if (apiKey) {
     queryOptions.apiKey = apiKey;
   }

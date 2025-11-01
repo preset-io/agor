@@ -410,6 +410,12 @@ export const users = sqliteTable(
       .$type<{
         avatar?: string;
         preferences?: Record<string, unknown>;
+        // Encrypted API keys (stored as hex-encoded encrypted strings)
+        api_keys?: {
+          ANTHROPIC_API_KEY?: string; // Encrypted with AES-256-GCM
+          OPENAI_API_KEY?: string; // Encrypted with AES-256-GCM
+          GEMINI_API_KEY?: string; // Encrypted with AES-256-GCM
+        };
       }>()
       .notNull(),
   },
