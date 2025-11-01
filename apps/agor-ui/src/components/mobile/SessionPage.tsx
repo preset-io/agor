@@ -88,8 +88,7 @@ export const SessionPage: React.FC<SessionPageProps> = ({
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
       <MobileHeader
         title={worktree?.name || 'Session'}
-        showBack
-        showMenu={false}
+        showMenu
         user={currentUser}
         onMenuClick={onMenuClick}
       />

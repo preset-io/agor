@@ -1,13 +1,11 @@
 import type { User } from '@agor/core/types';
-import { ArrowLeftOutlined, MenuOutlined } from '@ant-design/icons';
+import { MenuOutlined } from '@ant-design/icons';
 import { Button, Layout, Space, Typography } from 'antd';
-import { useNavigate } from 'react-router-dom';
 
 const { Header } = Layout;
 const { Title } = Typography;
 
 interface MobileHeaderProps {
-  showBack?: boolean;
   showMenu?: boolean;
   showLogo?: boolean;
   title?: string;
@@ -17,7 +15,6 @@ interface MobileHeaderProps {
 }
 
 export const MobileHeader: React.FC<MobileHeaderProps> = ({
-  showBack = false,
   showMenu = true,
   showLogo = false,
   title,
@@ -25,8 +22,6 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
   onMenuClick,
   onLogout,
 }) => {
-  const navigate = useNavigate();
-
   return (
     <Header
       style={{
@@ -38,15 +33,6 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
       }}
     >
       <Space size={8} align="center" style={{ flex: 1 }}>
-        {showBack && (
-          <Button
-            type="text"
-            icon={<ArrowLeftOutlined />}
-            onClick={() => navigate(-1)}
-            style={{ padding: '4px 8px', color: '#fff' }}
-          />
-        )}
-
         {showLogo && (
           <img
             src={`${import.meta.env.BASE_URL}favicon.png`}
