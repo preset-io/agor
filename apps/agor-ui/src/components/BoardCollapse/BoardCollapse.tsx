@@ -29,6 +29,7 @@ export const BoardCollapse: React.FC<BoardCollapseProps> = ({ items, defaultActi
       style={{
         border: 'none',
         backgroundColor: 'transparent',
+        width: '100%',
       }}
       items={items.map(({ key, board, badge, children }) => ({
         key,
@@ -44,7 +45,7 @@ export const BoardCollapse: React.FC<BoardCollapseProps> = ({ items, defaultActi
         style: {
           marginBottom: 8,
           backgroundColor: token.colorBgContainer,
-          borderRadius: token.borderRadiusLG,
+          borderRadius: 0,
           border: `1px solid ${token.colorBorder}`,
         },
         children: (
@@ -53,8 +54,6 @@ export const BoardCollapse: React.FC<BoardCollapseProps> = ({ items, defaultActi
               backgroundColor: token.colorBgLayout,
               margin: -16,
               padding: 16,
-              borderBottomLeftRadius: token.borderRadiusLG,
-              borderBottomRightRadius: token.borderRadiusLG,
             }}
           >
             {children}

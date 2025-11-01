@@ -76,8 +76,6 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
   return (
     <div
       style={{
-        padding: '16px',
-        paddingBottom: '32px',
         overflowY: 'auto',
         height: 'calc(100vh - 64px)',
       }}
