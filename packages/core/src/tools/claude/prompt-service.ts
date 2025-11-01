@@ -177,6 +177,11 @@ export class ClaudePromptService {
       idleTimeoutMs: ClaudePromptService.IDLE_TIMEOUT_MS,
     });
 
+    // Store query reference for interruption via stopTask()
+    // This must happen BEFORE iteration starts so stopTask() can access it
+    this.activeQueries.set(sessionId, result);
+    console.log(`📌 Stored query reference for session ${sessionId.substring(0, 8)}`);
+
     try {
       for await (const msg of result) {
         // Check if stop was requested before processing message
@@ -232,9 +237,6 @@ export class ClaudePromptService {
         }
       }
     } catch (error) {
-      // Clean up query reference before re-throwing
-      this.activeQueries.delete(sessionId);
-
       const state = processor.getState();
 
       // Get actual error message from stderr if available
@@ -256,10 +258,11 @@ export class ClaudePromptService {
         stderr: stderrOutput || '(no stderr output)',
       });
       throw enhancedError;
+    } finally {
+      // Clean up query reference - always runs regardless of success/failure/stop
+      this.activeQueries.delete(sessionId);
+      console.log(`🧹 Cleaned up query reference for session ${sessionId.substring(0, 8)}`);
     }
-
-    // Clean up query reference
-    this.activeQueries.delete(sessionId);
   }
 
   /**
@@ -311,6 +314,10 @@ export class ClaudePromptService {
       idleTimeoutMs: ClaudePromptService.IDLE_TIMEOUT_MS,
     });
 
+    // Store query reference for interruption via stopTask()
+    this.activeQueries.set(sessionId, result);
+    console.log(`📌 Stored query reference for session ${sessionId.substring(0, 8)} (non-streaming)`);
+
     // Collect response messages from async generator
     // IMPORTANT: Keep assistant messages SEPARATE (don't merge into one)
     const assistantMessages: Array<{
@@ -334,37 +341,40 @@ export class ClaudePromptService {
         }
       | undefined;
 
-    for await (const msg of result) {
-      const events = await processor.process(msg);
+    try {
+      for await (const msg of result) {
+        const events = await processor.process(msg);
 
-      for (const event of events) {
-        // Only collect complete assistant messages
-        if (event.type === 'complete' && event.role === MessageRole.ASSISTANT) {
-          assistantMessages.push({
-            content: event.content,
-            toolUses: event.toolUses,
-          });
-        }
+        for (const event of events) {
+          // Only collect complete assistant messages
+          if (event.type === 'complete' && event.role === MessageRole.ASSISTANT) {
+            assistantMessages.push({
+              content: event.content,
+              toolUses: event.toolUses,
+            });
+          }
 
-        // Capture token usage from result events
-        if (event.type === 'result' && event.token_usage) {
-          tokenUsage = event.token_usage as {
-            input_tokens?: number;
-            output_tokens?: number;
-            cache_creation_tokens?: number;
-            cache_read_tokens?: number;
-          };
-        }
+          // Capture token usage from result events
+          if (event.type === 'result' && event.token_usage) {
+            tokenUsage = event.token_usage as {
+              input_tokens?: number;
+              output_tokens?: number;
+              cache_creation_tokens?: number;
+              cache_read_tokens?: number;
+            };
+          }
 
-        // Break on end event
-        if (event.type === 'end') {
-          break;
+          // Break on end event
+          if (event.type === 'end') {
+            break;
+          }
         }
       }
+    } finally {
+      // Clean up query reference - always runs regardless of success/failure/stop
+      this.activeQueries.delete(sessionId);
+      console.log(`🧹 Cleaned up query reference for session ${sessionId.substring(0, 8)} (non-streaming)`);
     }
-
-    // Clean up query reference
-    this.activeQueries.delete(sessionId);
 
     // Extract token counts from SDK result metadata
     return {
