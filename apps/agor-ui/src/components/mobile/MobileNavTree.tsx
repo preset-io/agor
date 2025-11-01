@@ -1,6 +1,7 @@
 import type { Board, Session, Task, Worktree } from '@agor/core/types';
-import { Collapse, List, Typography } from 'antd';
+import { Badge, Collapse, List, Typography, theme } from 'antd';
 import { useNavigate } from 'react-router-dom';
+import { BoardCollapse } from '../BoardCollapse';
 
 const { Panel } = Collapse;
 const { Text } = Typography;
@@ -21,6 +22,7 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
   onNavigate,
 }) => {
   const navigate = useNavigate();
+  const { token } = theme.useToken();
 
   const handleSessionClick = (sessionId: string) => {
     navigate(`/m/session/${sessionId}`);
@@ -80,27 +82,23 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
         height: 'calc(100vh - 64px)',
       }}
     >
-      <Collapse defaultActiveKey={[]} ghost>
-        {boards.map(board => {
+      <BoardCollapse
+        items={boards.map(board => {
           const boardWorktrees = worktreesByBoard[board.board_id] || [];
 
-          return (
-            <Panel
-              header={
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span>{board.icon || '📋'}</span>
-                  <Text strong>{board.name}</Text>
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    ({boardWorktrees.length} worktrees)
-                  </Text>
-                </div>
-              }
-              key={board.board_id}
-            >
-              {boardWorktrees.length === 0 ? (
-                <Text type="secondary" style={{ padding: '8px 0', display: 'block' }}>
-                  No worktrees on this board
-                </Text>
+          return {
+            key: board.board_id,
+            board,
+            badge: (
+              <Badge
+                count={boardWorktrees.length}
+                style={{ backgroundColor: token.colorPrimaryBg }}
+                showZero
+              />
+            ),
+            children:
+              boardWorktrees.length === 0 ? (
+                <Text type="secondary">No worktrees on this board</Text>
               ) : (
                 <Collapse defaultActiveKey={[]} ghost>
                   {boardWorktrees.map(worktree => {
@@ -178,11 +176,10 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
                     );
                   })}
                 </Collapse>
-              )}
-            </Panel>
-          );
+              ),
+          };
         })}
-      </Collapse>
+      />
     </div>
   );
 };
