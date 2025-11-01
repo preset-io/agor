@@ -84,6 +84,17 @@ export interface Repo {
    */
   environment_config?: RepoEnvironmentConfig;
 
+  /**
+   * Permission configuration for all sessions in this repo
+   *
+   * Applied to all sessions/worktrees in this repository.
+   * Session-level permissions take precedence over repo-level.
+   */
+  permission_config?: {
+    /** Tools allowed for all sessions in this repo */
+    allowedTools?: string[];
+  };
+
   /** Repository metadata */
   created_at: string;
   last_updated: string;

@@ -277,6 +277,9 @@ export const repos = sqliteTable(
             url_template?: string; // Handlebars template
           };
         };
+        permission_config?: {
+          allowedTools?: string[]; // Tools allowed for all sessions in this repo
+        };
       }>()
       .notNull(),
   },

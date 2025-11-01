@@ -47,6 +47,7 @@ import {
   createDatabase,
   MCPServerRepository,
   MessagesRepository,
+  RepoRepository,
   SessionMCPServerRepository,
   SessionRepository,
   sessionMcpServers,
@@ -1076,6 +1077,7 @@ async function main() {
   const sessionMCPRepo = new SessionMCPServerRepository(db);
   const mcpServerRepo = new MCPServerRepository(db);
   const worktreesRepo = new WorktreeRepository(db);
+  const reposRepo = new RepoRepository(db);
   const _tasksRepo = new TaskRepository(db);
 
   // Initialize PermissionService for UI-based permission prompts
@@ -1099,6 +1101,7 @@ async function main() {
     app.service('tasks'), // Use service instead of repo for WebSocket events
     app.service('sessions'), // Sessions service for permission persistence (WebSocket broadcast)
     worktreesRepo, // Worktrees repo for fetching worktree paths
+    reposRepo, // Repos repo for repo-level permissions
     config.daemon?.mcpEnabled !== false // Pass MCP enabled flag
   );
 

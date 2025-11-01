@@ -67,6 +67,7 @@ export class ClaudePromptService {
     private tasksService?: TasksService,
     private sessionsService?: SessionsService, // FeathersJS Sessions service for WebSocket broadcasting
     private worktreesRepo?: WorktreeRepository,
+    private reposRepo?: import('../../db/repositories/repos').RepoRepository,
     private messagesService?: import('./claude-tool').MessagesService, // FeathersJS Messages service for creating permission requests
     private mcpEnabled?: boolean
   ) {
@@ -146,6 +147,7 @@ export class ClaudePromptService {
       prompt,
       {
         sessionsRepo: this.sessionsRepo,
+        reposRepo: this.reposRepo,
         messagesRepo: this.messagesRepo,
         apiKey: this.apiKey,
         sessionMCPRepo: this.sessionMCPRepo,
@@ -280,6 +282,7 @@ export class ClaudePromptService {
       prompt,
       {
         sessionsRepo: this.sessionsRepo,
+        reposRepo: this.reposRepo,
         messagesRepo: this.messagesRepo,
         apiKey: this.apiKey,
         sessionMCPRepo: this.sessionMCPRepo,

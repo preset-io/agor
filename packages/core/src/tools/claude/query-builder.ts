@@ -13,6 +13,7 @@ import { resolveApiKey } from '../../config';
 import type { Database } from '../../db/client';
 import type { MCPServerRepository } from '../../db/repositories/mcp-servers';
 import type { MessagesRepository } from '../../db/repositories/messages';
+import type { RepoRepository } from '../../db/repositories/repos';
 import type { SessionMCPServerRepository } from '../../db/repositories/session-mcp-servers';
 import type { SessionRepository } from '../../db/repositories/sessions';
 import type { WorktreeRepository } from '../../db/repositories/worktrees';
@@ -72,6 +73,7 @@ function logPromptStart(
 
 export interface QuerySetupDeps {
   sessionsRepo: SessionRepository;
+  reposRepo?: RepoRepository;
   messagesRepo?: MessagesRepository;
   apiKey?: string;
   sessionMCPRepo?: SessionMCPServerRepository;
@@ -250,6 +252,7 @@ export async function setupQuery(
               permissionService: deps.permissionService,
               tasksService: deps.tasksService!,
               sessionsRepo: deps.sessionsRepo,
+              reposRepo: deps.reposRepo,
               messagesRepo: deps.messagesRepo!,
               messagesService: deps.messagesService,
               sessionsService: deps.sessionsService,

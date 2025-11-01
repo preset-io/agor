@@ -13,6 +13,7 @@ import * as path from 'node:path';
 import type { PermissionMode } from '@anthropic-ai/claude-agent-sdk';
 import type { MCPServerRepository } from '../../db/repositories/mcp-servers';
 import type { MessagesRepository } from '../../db/repositories/messages';
+import type { RepoRepository } from '../../db/repositories/repos';
 import type { SessionMCPServerRepository } from '../../db/repositories/session-mcp-servers';
 import type { SessionRepository } from '../../db/repositories/sessions';
 import type { WorktreeRepository } from '../../db/repositories/worktrees';
@@ -85,6 +86,7 @@ export class ClaudeTool implements ITool {
     private tasksService?: TasksService,
     sessionsService?: SessionsService,
     worktreesRepo?: WorktreeRepository,
+    reposRepo?: RepoRepository,
     mcpEnabled?: boolean
   ) {
     if (messagesRepo && sessionsRepo) {
@@ -98,6 +100,7 @@ export class ClaudeTool implements ITool {
         tasksService,
         sessionsService,
         worktreesRepo,
+        reposRepo,
         messagesService,
         mcpEnabled
       );

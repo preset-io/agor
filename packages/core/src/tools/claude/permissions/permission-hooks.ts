@@ -9,6 +9,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import type { HookJSONOutput, PreToolUseHookInput } from '@anthropic-ai/claude-agent-sdk/sdk';
 import type { MessagesRepository } from '../../../db/repositories/messages';
+import type { RepoRepository } from '../../../db/repositories/repos';
 import type { SessionRepository } from '../../../db/repositories/sessions';
 import type { WorktreeRepository } from '../../../db/repositories/worktrees';
 import { generateId } from '../../../lib/ids';
@@ -79,6 +80,7 @@ export function createPreToolUseHook(
     permissionService: PermissionService;
     tasksService: TasksService;
     sessionsRepo: SessionRepository;
+    reposRepo?: RepoRepository;
     messagesRepo: MessagesRepository;
     messagesService?: MessagesService;
     sessionsService?: SessionsService;
@@ -121,11 +123,30 @@ export function createPreToolUseHook(
         };
       }
 
+      // STEP 2.5: Check repo-level permission overrides
+      // Get the repo for this session via worktree
+      if (session?.worktree_id && deps.worktreesRepo && deps.reposRepo) {
+        const worktree = await deps.worktreesRepo.findById(session.worktree_id);
+        if (worktree?.repo_id) {
+          const repo = await deps.reposRepo.findById(worktree.repo_id);
+          if (repo?.permission_config?.allowedTools?.includes(input.tool_name)) {
+            console.log(`✅ Tool ${input.tool_name} allowed by repo config`);
+            return {
+              hookSpecificOutput: {
+                hookEventName: 'PreToolUse',
+                permissionDecision: 'allow',
+                permissionDecisionReason: 'Allowed by repository config',
+              },
+            };
+          }
+        }
+      }
+
       // STEP 3: No existing permission - create lock and show prompt
       console.log(
         `🔒 No permission found for ${input.tool_name}, creating lock and prompting user...`
       );
-      const newLock = new Promise<void>((resolve) => {
+      const newLock = new Promise<void>(resolve => {
         releaseLock = resolve;
       });
       deps.permissionLocks.set(sessionId, newLock);
@@ -260,11 +281,29 @@ export function createPreToolUseHook(
             await deps.sessionsRepo.update(sessionId, updateData);
           }
         } else if (decision.scope === 'project') {
-          // Update project-level permissions in .claude/settings.json
-          // Get worktree path to determine project directory
-          if (freshSession.worktree_id && deps.worktreesRepo) {
+          // Update repo-level permissions in database
+          // Get repo ID from worktree
+          if (freshSession.worktree_id && deps.worktreesRepo && deps.reposRepo) {
             const worktree = await deps.worktreesRepo.findById(freshSession.worktree_id);
-            if (worktree) {
+            if (worktree?.repo_id) {
+              const repo = await deps.reposRepo.findById(worktree.repo_id);
+              if (repo) {
+                const currentAllowed = repo.permission_config?.allowedTools || [];
+                const newAllowedTools = [...currentAllowed, input.tool_name];
+
+                // Update repo with new permission config
+                await deps.reposRepo.update(worktree.repo_id, {
+                  permission_config: {
+                    allowedTools: newAllowedTools,
+                  },
+                });
+
+                console.log(
+                  `✅ Tool ${input.tool_name} added to repo-level permissions (repo: ${worktree.repo_id.substring(0, 8)})`
+                );
+              }
+
+              // Also update .claude/settings.json for git-tracked permissions (optional)
               await updateProjectSettings(worktree.path, {
                 allowTools: [input.tool_name],
               });
