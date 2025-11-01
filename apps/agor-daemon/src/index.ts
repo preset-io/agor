@@ -384,146 +384,6 @@ async function main() {
     }
   });
 
-  app.service('messages').hooks({
-    before: {
-      all: [requireAuth],
-      create: [requireMinimumRole('member', 'create messages')],
-      patch: [requireMinimumRole('member', 'update messages')],
-      remove: [requireMinimumRole('member', 'delete messages')],
-    },
-  });
-
-  app.service('board-objects').hooks({
-    before: {
-      all: [requireAuth, requireMinimumRole('member', 'manage board objects')],
-    },
-  });
-
-  app.service('board-comments').hooks({
-    before: {
-      all: [requireAuth],
-      create: [requireMinimumRole('member', 'create board comments')],
-      patch: [requireMinimumRole('member', 'update board comments')],
-      remove: [requireMinimumRole('member', 'delete board comments')],
-    },
-  });
-
-  app.service('repos').hooks({
-    before: {
-      all: [requireAuth, requireMinimumRole('member', 'access repositories')],
-      create: [requireMinimumRole('member', 'create repositories')],
-      patch: [requireMinimumRole('member', 'update repositories')],
-      remove: [requireMinimumRole('member', 'delete repositories')],
-    },
-  });
-
-  app.service('worktrees').hooks({
-    before: {
-      all: [requireAuth, requireMinimumRole('member', 'access worktrees')],
-      create: [requireMinimumRole('member', 'create worktrees')],
-      patch: [requireMinimumRole('member', 'update worktrees')],
-      remove: [requireMinimumRole('member', 'delete worktrees')],
-    },
-  });
-
-  app.service('mcp-servers').hooks({
-    before: {
-      all: [requireAuth],
-      create: [requireMinimumRole('admin', 'create MCP servers')],
-      patch: [requireMinimumRole('admin', 'update MCP servers')],
-      remove: [requireMinimumRole('admin', 'delete MCP servers')],
-    },
-  });
-
-  app.service('session-mcp-servers').hooks({
-    before: {
-      all: [requireAuth],
-      find: [requireMinimumRole('member', 'list session MCP servers')],
-    },
-  });
-
-  app.service('config').hooks({
-    before: {
-      all: [requireAuth],
-      find: [requireMinimumRole('admin', 'view configuration')],
-      get: [requireMinimumRole('admin', 'view configuration')],
-      patch: [requireMinimumRole('admin', 'update configuration')],
-    },
-  });
-
-  app.service('context').hooks({
-    before: {
-      all: [requireAuth],
-    },
-  });
-
-  app.service('terminals').hooks({
-    before: {
-      all: [requireAuth, requireMinimumRole('admin', 'access terminals')],
-    },
-  });
-
-  app.service('users').hooks({
-    before: {
-      find: [
-        context => {
-          const params = context.params as AuthenticatedParams;
-
-          if (!params.provider) {
-            return context;
-          }
-
-          if (params.user) {
-            ensureMinimumRole(params, 'admin', 'list users');
-            return context;
-          }
-
-          const query = params.query || {};
-          if (query.email) {
-            // Allow local authentication lookup, ensure we only return minimal results
-            params.query = { ...query, $limit: 1 };
-            return context;
-          }
-
-          throw new NotAuthenticated('Authentication required');
-        },
-      ],
-      get: [
-        context => {
-          ensureMinimumRole(context.params as AuthenticatedParams, 'admin', 'view users');
-          return context;
-        },
-      ],
-      create: [
-        async context => {
-          const params = context.params as AuthenticatedParams;
-
-          if (!params.provider) {
-            return context;
-          }
-
-          const existing = (await usersService.find({ query: { $limit: 1 } })) as Paginated<User>;
-          if (existing.total > 0) {
-            ensureMinimumRole(params, 'admin', 'create users');
-          }
-
-          return context;
-        },
-      ],
-      patch: [requireMinimumRole('admin', 'update users')],
-      remove: [requireMinimumRole('admin', 'delete users')],
-    },
-  });
-
-  // Publish service events only to authenticated connections
-  app.publish((_data, context) => {
-    const params = context.params as AuthenticatedParams;
-    if (params.user) {
-      return app.channel('authenticated');
-    }
-    return undefined;
-  });
-
   // Configure Swagger for API documentation
   app.configure(
     swagger({
@@ -680,6 +540,147 @@ async function main() {
   // Register users service (for authentication)
   const usersService = createUsersService(db);
   app.use('/users', usersService);
+
+  // Configure service hooks for authentication and authorization
+  app.service('messages').hooks({
+    before: {
+      all: [requireAuth],
+      create: [requireMinimumRole('member', 'create messages')],
+      patch: [requireMinimumRole('member', 'update messages')],
+      remove: [requireMinimumRole('member', 'delete messages')],
+    },
+  });
+
+  app.service('board-objects').hooks({
+    before: {
+      all: [requireAuth, requireMinimumRole('member', 'manage board objects')],
+    },
+  });
+
+  app.service('board-comments').hooks({
+    before: {
+      all: [requireAuth],
+      create: [requireMinimumRole('member', 'create board comments')],
+      patch: [requireMinimumRole('member', 'update board comments')],
+      remove: [requireMinimumRole('member', 'delete board comments')],
+    },
+  });
+
+  app.service('repos').hooks({
+    before: {
+      all: [requireAuth, requireMinimumRole('member', 'access repositories')],
+      create: [requireMinimumRole('member', 'create repositories')],
+      patch: [requireMinimumRole('member', 'update repositories')],
+      remove: [requireMinimumRole('member', 'delete repositories')],
+    },
+  });
+
+  app.service('worktrees').hooks({
+    before: {
+      all: [requireAuth, requireMinimumRole('member', 'access worktrees')],
+      create: [requireMinimumRole('member', 'create worktrees')],
+      patch: [requireMinimumRole('member', 'update worktrees')],
+      remove: [requireMinimumRole('member', 'delete worktrees')],
+    },
+  });
+
+  app.service('mcp-servers').hooks({
+    before: {
+      all: [requireAuth],
+      create: [requireMinimumRole('admin', 'create MCP servers')],
+      patch: [requireMinimumRole('admin', 'update MCP servers')],
+      remove: [requireMinimumRole('admin', 'delete MCP servers')],
+    },
+  });
+
+  app.service('session-mcp-servers').hooks({
+    before: {
+      all: [requireAuth],
+      find: [requireMinimumRole('member', 'list session MCP servers')],
+    },
+  });
+
+  app.service('config').hooks({
+    before: {
+      all: [requireAuth],
+      find: [requireMinimumRole('admin', 'view configuration')],
+      get: [requireMinimumRole('admin', 'view configuration')],
+      patch: [requireMinimumRole('admin', 'update configuration')],
+    },
+  });
+
+  app.service('context').hooks({
+    before: {
+      all: [requireAuth],
+    },
+  });
+
+  app.service('terminals').hooks({
+    before: {
+      all: [requireAuth, requireMinimumRole('admin', 'access terminals')],
+    },
+  });
+
+  app.service('users').hooks({
+    before: {
+      find: [
+        context => {
+          const params = context.params as AuthenticatedParams;
+
+          if (!params.provider) {
+            return context;
+          }
+
+          if (params.user) {
+            ensureMinimumRole(params, 'admin', 'list users');
+            return context;
+          }
+
+          const query = params.query || {};
+          if (query.email) {
+            // Allow local authentication lookup, ensure we only return minimal results
+            params.query = { ...query, $limit: 1 };
+            return context;
+          }
+
+          throw new NotAuthenticated('Authentication required');
+        },
+      ],
+      get: [
+        context => {
+          ensureMinimumRole(context.params as AuthenticatedParams, 'admin', 'view users');
+          return context;
+        },
+      ],
+      create: [
+        async context => {
+          const params = context.params as AuthenticatedParams;
+
+          if (!params.provider) {
+            return context;
+          }
+
+          const existing = (await usersService.find({ query: { $limit: 1 } })) as Paginated<User>;
+          if (existing.total > 0) {
+            ensureMinimumRole(params, 'admin', 'create users');
+          }
+
+          return context;
+        },
+      ],
+      patch: [requireMinimumRole('admin', 'update users')],
+      remove: [requireMinimumRole('admin', 'delete users')],
+    },
+  });
+
+  // Publish service events only to authenticated connections
+  app.publish((_data, context) => {
+    const params = context.params as AuthenticatedParams;
+    if (params.user) {
+      return app.channel('authenticated');
+    }
+    return undefined;
+  });
 
   // Add hooks to inject created_by from authenticated user and populate repo from worktree
   app.service('sessions').hooks({
