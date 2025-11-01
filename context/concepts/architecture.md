@@ -685,7 +685,7 @@ const sdkOptions = {
 
 ### MCP Tools (Implemented)
 
-**10 tools** enable agents to understand and orchestrate their environment:
+Core MCP tools enable agents to understand and orchestrate their environment:
 
 | Tool                        | Description                          | Returns                 |
 | --------------------------- | ------------------------------------ | ----------------------- |
@@ -693,8 +693,12 @@ const sdkOptions = {
 | `agor_sessions_get`         | Get specific session                 | Full session object     |
 | `agor_sessions_get_current` | Get current session                  | Current session context |
 | `agor_sessions_spawn`       | **Spawn child session (subsession)** | New child session       |
+| `agor_sessions_create`      | Create a new session in a worktree   | Session + optional task |
+| `agor_sessions_update`      | Update session metadata              | Updated session         |
 | `agor_worktrees_get`        | Get worktree details                 | Path, branch, git state |
 | `agor_worktrees_list`       | List all worktrees                   | Paginated worktrees     |
+| `agor_worktrees_create`     | Create new worktree                  | Worktree + git context  |
+| `agor_worktrees_update`     | Update worktree metadata             | Worktree with updates   |
 | `agor_boards_get`           | Get board by ID                      | Board with zones        |
 | `agor_boards_list`          | List all boards                      | Paginated boards        |
 | `agor_tasks_list`           | List tasks in session                | Paginated tasks         |
@@ -859,13 +863,11 @@ describe('MCP Tools - Session Tools', () => {
 
 ### Future: Write Operations (Second Batch)
 
-Read-only tools are stable. Next batch will enable agents to modify their environment:
+Read-only tooling is stable. Remaining roadmap items focus on richer write capabilities:
 
-- `agor_sessions_create` - Create new session
-- `agor_sessions_spawn` - Spawn child session (subsession orchestration!)
 - `agor_sessions_fork` - Fork session at specific point
 - `agor_boards_create` - Create new board
-- `agor_worktrees_create` - Create new worktree
+- `agor_worktrees_clone` - Duplicate an existing worktree (branch + metadata)
 
 **This enables fully autonomous multi-agent workflows.**
 

@@ -420,6 +420,47 @@ export function setupMCPRoutes(app: Application): void {
                 required: ['repoId', 'worktreeName'],
               },
             },
+            {
+              name: 'agor_worktrees_update',
+              description:
+                'Update metadata for an existing worktree (issue/PR URLs, notes, board placement, custom context)',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  worktreeId: {
+                    type: 'string',
+                    description:
+                      'Worktree ID to update. Optional when calling from a session with a bound worktree.',
+                  },
+                  issueUrl: {
+                    type: ['string', 'null'],
+                    description:
+                      'Issue URL to associate. Pass null to clear. Must be http(s) when provided.',
+                  },
+                  pullRequestUrl: {
+                    type: ['string', 'null'],
+                    description:
+                      'Pull request URL to associate. Pass null to clear. Must be http(s) when provided.',
+                  },
+                  notes: {
+                    type: ['string', 'null'],
+                    description:
+                      'Freeform notes about the worktree. Pass null or empty string to clear.',
+                  },
+                  boardId: {
+                    type: ['string', 'null'],
+                    description:
+                      'Board ID to place this worktree on. Pass null to remove from any board.',
+                  },
+                  customContext: {
+                    type: ['object', 'null'],
+                    additionalProperties: true,
+                    description:
+                      'Custom context object for templates and automations. Pass null to clear existing context.',
+                  },
+                },
+              },
+            },
 
             // Board tools
             {
@@ -567,7 +608,8 @@ export function setupMCPRoutes(app: Application): void {
                   },
                   emoji: {
                     type: 'string',
-                    description: 'User emoji for visual identity (optional, single emoji character)',
+                    description:
+                      'User emoji for visual identity (optional, single emoji character)',
                   },
                   avatar: {
                     type: 'string',
@@ -803,20 +845,19 @@ export function setupMCPRoutes(app: Application): void {
 
             // Override agentic tool if specified
             if (args.agenticTool) {
-              await app.service('sessions').patch(
-                forkedSession.session_id,
-                { agentic_tool: args.agenticTool as AgenticToolName },
-                baseServiceParams
-              );
+              await app
+                .service('sessions')
+                .patch(
+                  forkedSession.session_id,
+                  { agentic_tool: args.agenticTool as AgenticToolName },
+                  baseServiceParams
+                );
             }
 
             // Override permission mode if specified
             if (args.permissionMode) {
               const { mapPermissionMode } = await import('@agor/core/utils/permission-mode-mapper');
-              const mappedMode = mapPermissionMode(
-                args.permissionMode,
-                forkedSession.agentic_tool
-              );
+              const mappedMode = mapPermissionMode(args.permissionMode, forkedSession.agentic_tool);
               await app.service('sessions').patch(
                 forkedSession.session_id,
                 {
@@ -831,18 +872,15 @@ export function setupMCPRoutes(app: Application): void {
 
             // Set custom title if provided
             if (args.title) {
-              await app.service('sessions').patch(
-                forkedSession.session_id,
-                { title: args.title },
-                baseServiceParams
-              );
+              await app
+                .service('sessions')
+                .patch(forkedSession.session_id, { title: args.title }, baseServiceParams);
             }
 
             // Get updated session
-            const updatedSession = await app.service('sessions').get(
-              forkedSession.session_id,
-              baseServiceParams
-            );
+            const updatedSession = await app
+              .service('sessions')
+              .get(forkedSession.session_id, baseServiceParams);
 
             // Trigger prompt execution
             console.log(`🚀 Triggering prompt execution for forked session`);
@@ -922,10 +960,9 @@ export function setupMCPRoutes(app: Application): void {
             }
 
             // Get updated session
-            const updatedSession = await app.service('sessions').get(
-              childSession.session_id,
-              baseServiceParams
-            );
+            const updatedSession = await app
+              .service('sessions')
+              .get(childSession.session_id, baseServiceParams);
 
             // Trigger prompt execution
             console.log(`🚀 Triggering prompt execution for subsession`);
@@ -1083,7 +1120,8 @@ export function setupMCPRoutes(app: Application): void {
               id: mcpRequest.id,
               error: {
                 code: -32602,
-                message: 'Invalid params: at least one field (title, description, status, permissionMode) must be provided',
+                message:
+                  'Invalid params: at least one field (title, description, status, permissionMode) must be provided',
               },
             });
           }
@@ -1098,7 +1136,9 @@ export function setupMCPRoutes(app: Application): void {
 
           // Handle permission mode update
           if (args.permissionMode !== undefined) {
-            const currentSession = await app.service('sessions').get(args.sessionId, baseServiceParams);
+            const currentSession = await app
+              .service('sessions')
+              .get(args.sessionId, baseServiceParams);
             const { mapPermissionMode } = await import('@agor/core/utils/permission-mode-mapper');
             const mappedMode = mapPermissionMode(args.permissionMode, currentSession.agentic_tool);
             updates.permission_config = {
@@ -1108,7 +1148,9 @@ export function setupMCPRoutes(app: Application): void {
           }
 
           // Update session
-          const session = await app.service('sessions').patch(args.sessionId, updates, baseServiceParams);
+          const session = await app
+            .service('sessions')
+            .patch(args.sessionId, updates, baseServiceParams);
           console.log(`✅ Session updated`);
 
           mcpResponse = {
@@ -1302,6 +1344,181 @@ export function setupMCPRoutes(app: Application): void {
               {
                 type: 'text',
                 text: JSON.stringify(worktree, null, 2),
+              },
+            ],
+          };
+        } else if (name === 'agor_worktrees_update') {
+          const requestedWorktreeId = coerceString(args?.worktreeId);
+          let resolvedWorktreeId = requestedWorktreeId;
+
+          if (!resolvedWorktreeId) {
+            const currentSession = await app.service('sessions').get(context.sessionId);
+            const sessionWorktreeId = currentSession.worktree_id;
+
+            if (!sessionWorktreeId) {
+              return res.status(400).json({
+                jsonrpc: '2.0',
+                id: mcpRequest.id,
+                error: {
+                  code: -32602,
+                  message:
+                    'Invalid params: worktreeId is required when current session is not bound to a worktree',
+                },
+              });
+            }
+
+            resolvedWorktreeId = sessionWorktreeId;
+          }
+
+          if (!resolvedWorktreeId) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message: 'Invalid params: worktreeId could not be resolved',
+              },
+            });
+          }
+
+          const worktreeId = resolvedWorktreeId;
+
+          let fieldsProvided = 0;
+          const updates: Record<string, unknown> = {};
+
+          try {
+            if (args && Object.hasOwn(args, 'issueUrl')) {
+              fieldsProvided++;
+              const rawIssueUrl = args.issueUrl;
+              if (rawIssueUrl === null) {
+                updates.issue_url = null;
+              } else {
+                const normalizedIssueUrl = normalizeOptionalHttpUrl(rawIssueUrl, 'issueUrl');
+                updates.issue_url = normalizedIssueUrl ?? null;
+              }
+            }
+
+            if (args && Object.hasOwn(args, 'pullRequestUrl')) {
+              fieldsProvided++;
+              const rawPullRequestUrl = args.pullRequestUrl;
+              if (rawPullRequestUrl === null) {
+                updates.pull_request_url = null;
+              } else {
+                const normalizedPullRequestUrl = normalizeOptionalHttpUrl(
+                  rawPullRequestUrl,
+                  'pullRequestUrl'
+                );
+                updates.pull_request_url = normalizedPullRequestUrl ?? null;
+              }
+            }
+          } catch (validationError) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message:
+                  validationError instanceof Error
+                    ? validationError.message
+                    : 'Invalid URL parameter',
+              },
+            });
+          }
+
+          if (args && Object.hasOwn(args, 'notes')) {
+            fieldsProvided++;
+            const rawNotes = args.notes;
+            if (rawNotes === null) {
+              updates.notes = null;
+            } else if (typeof rawNotes === 'string') {
+              const trimmedNotes = rawNotes.trim();
+              updates.notes = trimmedNotes.length > 0 ? trimmedNotes : null;
+            } else {
+              return res.status(400).json({
+                jsonrpc: '2.0',
+                id: mcpRequest.id,
+                error: {
+                  code: -32602,
+                  message: 'Invalid params: notes must be a string or null',
+                },
+              });
+            }
+          }
+
+          if (args && Object.hasOwn(args, 'boardId')) {
+            fieldsProvided++;
+            const rawBoardId = args.boardId;
+            if (rawBoardId === null) {
+              updates.board_id = null;
+            } else {
+              const boardId = coerceString(rawBoardId);
+              if (!boardId) {
+                return res.status(400).json({
+                  jsonrpc: '2.0',
+                  id: mcpRequest.id,
+                  error: {
+                    code: -32602,
+                    message: 'Invalid params: boardId must be a non-empty string or null',
+                  },
+                });
+              }
+              updates.board_id = boardId;
+            }
+          }
+
+          if (args && Object.hasOwn(args, 'customContext')) {
+            fieldsProvided++;
+            const rawCustomContext = args.customContext;
+            if (rawCustomContext === null) {
+              updates.custom_context = null;
+            } else if (
+              rawCustomContext &&
+              typeof rawCustomContext === 'object' &&
+              !Array.isArray(rawCustomContext)
+            ) {
+              updates.custom_context = rawCustomContext;
+            } else {
+              return res.status(400).json({
+                jsonrpc: '2.0',
+                id: mcpRequest.id,
+                error: {
+                  code: -32602,
+                  message: 'Invalid params: customContext must be an object or null',
+                },
+              });
+            }
+          }
+
+          if (fieldsProvided === 0) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message:
+                  'Invalid params: provide at least one field to update (issueUrl, pullRequestUrl, notes, boardId, customContext)',
+              },
+            });
+          }
+
+          console.log(`📝 MCP updating worktree ${worktreeId.substring(0, 8)}`);
+          const worktree = await app
+            .service('worktrees')
+            .patch(worktreeId, updates, baseServiceParams);
+          console.log(`✅ Worktree updated`);
+
+          mcpResponse = {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(
+                  {
+                    worktree,
+                    note: 'Worktree metadata updated successfully.',
+                  },
+                  null,
+                  2
+                ),
               },
             ],
           };
