@@ -251,6 +251,8 @@ $ agor session list | grep running | wc -l
 |------|-------------|---------|
 | `agor_worktrees_get` | Get worktree details | `{ worktreeId: '...' }` |
 | `agor_worktrees_list` | List all worktrees | `{ limit: 10 }` |
+| `agor_worktrees_create` | Create a worktree with optional issue/PR links | `{ repoId: '019a...', worktreeName: 'feat-x', issueUrl: 'https://...' }` |
+| `agor_worktrees_update` | Update worktree metadata (issue/PR URLs, notes) | `{ worktreeId: '019a...', pullRequestUrl: 'https://...', notes: 'Ready for review' }` |
 
 **Board Tools:**
 | Tool | Description | Example |
@@ -305,7 +307,7 @@ MCP tools route through **FeathersJS services** (not direct ORM) for:
 Planned tools for expanded orchestration capabilities:
 - `agor_sessions_fork` - Fork session at decision point (preserve history)
 - `agor_boards_create` - Create new board for organizing sessions
-- `agor_worktrees_create` - Create new worktree from repository
+- `agor_worktrees_clone` - Clone an existing worktree configuration (branch, metadata) for rapid duplication
 
 **Note:** `agor_sessions_spawn` is already live and enables autonomous multi-agent delegation!
 

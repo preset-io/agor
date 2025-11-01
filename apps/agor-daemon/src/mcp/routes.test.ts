@@ -1,7 +1,7 @@
 /**
  * MCP Tools Integration Tests
  *
- * These tests verify all 18 MCP tools work end-to-end.
+ * These tests verify all 19 MCP tools work end-to-end.
  * Requires daemon to be running on localhost:3030.
  *
  * Run with: INTEGRATION=true pnpm test
@@ -55,7 +55,7 @@ async function callMCPTool(name: string, args: Record<string, unknown> = {}) {
 }
 
 describeIntegration('MCP Tools - Session Tools', () => {
-  it('tools/list returns all 18 tools', async () => {
+  it('tools/list returns all 19 tools', async () => {
     const resp = await fetch(`${DAEMON_URL}/mcp?sessionToken=${sessionToken}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -67,7 +67,7 @@ describeIntegration('MCP Tools - Session Tools', () => {
     });
 
     const data = (await resp.json()) as { result: { tools: Array<{ name: string }> } };
-    expect(data.result.tools).toHaveLength(18);
+    expect(data.result.tools).toHaveLength(19);
 
     const toolNames = data.result.tools.map(t => t.name);
     expect(toolNames).toContain('agor_sessions_list');
@@ -79,6 +79,7 @@ describeIntegration('MCP Tools - Session Tools', () => {
     expect(toolNames).toContain('agor_sessions_update');
     expect(toolNames).toContain('agor_worktrees_get');
     expect(toolNames).toContain('agor_worktrees_list');
+    expect(toolNames).toContain('agor_worktrees_update');
     expect(toolNames).toContain('agor_boards_get');
     expect(toolNames).toContain('agor_boards_list');
     expect(toolNames).toContain('agor_tasks_list');
@@ -219,6 +220,38 @@ describeIntegration('MCP Tools - Worktree Tools', () => {
 
     expect(result.worktree_id).toBe(worktreeId);
     expect(result).toHaveProperty('path');
+  });
+
+  it('agor_worktrees_update updates worktree metadata', async () => {
+    const worktrees = await callMCPTool('agor_worktrees_list', { limit: 1 });
+
+    if (worktrees.data.length === 0) {
+      console.log('No worktrees found, skipping test');
+      return;
+    }
+
+    const worktree = worktrees.data[0];
+    const worktreeId = worktree.worktree_id;
+
+    const updated = await callMCPTool('agor_worktrees_update', {
+      worktreeId,
+      issueUrl: 'https://example.com/issues/123',
+      pullRequestUrl: null,
+      notes: 'Updated via MCP test',
+    });
+
+    expect(updated.worktree.worktree_id).toBe(worktreeId);
+    expect(updated.worktree.issue_url).toBe('https://example.com/issues/123');
+    expect(updated.worktree.pull_request_url).toBeNull();
+    expect(updated.worktree.notes).toBe('Updated via MCP test');
+
+    // Restore original state
+    await callMCPTool('agor_worktrees_update', {
+      worktreeId,
+      issueUrl: worktree.issue_url ?? null,
+      pullRequestUrl: worktree.pull_request_url ?? null,
+      notes: worktree.notes ?? null,
+    });
   });
 });
 
