@@ -350,7 +350,6 @@ _For product vision: see `README.md`_
 _For launch checklist: see `PROJECT.md`_
 _For architecture deep-dive: see `context/`_
 
-
 ---
 
 ## Agor Session Context

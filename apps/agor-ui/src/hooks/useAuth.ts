@@ -419,7 +419,9 @@ export function useAuth(): UseAuthReturn {
 
       return true;
     } catch (error) {
+      console.error('❌ Login failed:', error);
       const errorMessage = error instanceof Error ? error.message : 'Login failed';
+      console.error('❌ Error message:', errorMessage);
       setState(prev => ({
         ...prev,
         loading: false,

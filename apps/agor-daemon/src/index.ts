@@ -170,8 +170,9 @@ async function main() {
   const envPort = process.env.PORT ? Number.parseInt(process.env.PORT, 10) : undefined;
   const DAEMON_PORT = envPort || config.daemon?.port || 3030;
 
-  // Get UI port from config for CORS
-  const UI_PORT = config.ui?.port || 5173;
+  // Get UI port from config for CORS (with env var override)
+  const envUiPort = process.env.UI_PORT ? Number.parseInt(process.env.UI_PORT, 10) : undefined;
+  const UI_PORT = envUiPort || config.ui?.port || 5173;
 
   // Handle ANTHROPIC_API_KEY with priority: config.yaml > env var
   // Config service will update process.env when credentials change (hot-reload)
@@ -444,20 +445,15 @@ async function main() {
 
   const db = createDatabase({ url: DB_PATH });
 
-  // Run migrations (safe for existing databases - uses CREATE TABLE IF NOT EXISTS)
-  if (!dbExists) {
-    console.log('🔄 Initializing new database...');
-  } else {
-    console.log('🔄 Running database migrations...');
-  }
-  const { initializeDatabase, seedInitialData } = await import('@agor/core/db');
-  await initializeDatabase(db);
+  // Run migrations (auto-applies pending migrations from drizzle/ folder)
+  // Safe for both fresh and existing databases
+  console.log('🔄 Running database migrations...');
+  const { runMigrations, seedInitialData } = await import('@agor/core/db');
+  await runMigrations(db);
 
-  // Seed initial data if this is a fresh database
-  if (!dbExists) {
-    console.log('🌱 Seeding initial data...');
-    await seedInitialData(db);
-  }
+  // Seed initial data (idempotent - only creates if missing)
+  console.log('🌱 Seeding initial data...');
+  await seedInitialData(db);
 
   console.log('✅ Database ready');
 
@@ -984,6 +980,20 @@ async function main() {
 
   // Hook: Add refresh token to authentication response
   app.service('authentication').hooks({
+    before: {
+      create: [
+        async context => {
+          // Log authentication attempts for debugging
+          const data = Array.isArray(context.data) ? context.data[0] : context.data;
+          console.log('🔐 Authentication attempt:', {
+            strategy: data?.strategy,
+            email: data?.email,
+            hasPassword: !!data?.password,
+          });
+          return context;
+        },
+      ],
+    },
     after: {
       create: [
         async context => {
