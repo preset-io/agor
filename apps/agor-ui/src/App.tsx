@@ -911,10 +911,17 @@ function AppContent() {
               sessions={sessions}
               tasks={tasks}
               boards={boards}
+              boardObjects={boardObjects}
+              comments={comments}
               repos={repos}
               worktrees={worktrees}
               users={users}
               onSendPrompt={handleSendPrompt}
+              onSendComment={handleSendComment}
+              onReplyComment={handleReplyComment}
+              onResolveComment={handleResolveComment}
+              onToggleReaction={handleToggleReaction}
+              onDeleteComment={handleDeleteComment}
               onLogout={logout}
             />
           }

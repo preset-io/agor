@@ -57,6 +57,7 @@ export interface CommentsPanelProps {
   onDeleteComment?: (commentId: string) => void;
   hoveredCommentId?: string | null;
   selectedCommentId?: string | null;
+  width?: number | string; // Allow responsive width (default: 400)
 }
 
 type FilterMode = 'all' | 'active';
@@ -466,6 +467,7 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
   onDeleteComment,
   hoveredCommentId,
   selectedCommentId,
+  width = 400,
 }) => {
   const { token } = theme.useToken();
   const [filter, setFilter] = useState<FilterMode>('active');
@@ -599,7 +601,7 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
   return (
     <div
       style={{
-        width: 400,
+        width,
         height: '100%',
         backgroundColor: token.colorBgContainer,
         borderRight: `1px solid ${token.colorBorder}`,

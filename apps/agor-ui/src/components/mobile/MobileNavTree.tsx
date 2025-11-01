@@ -1,5 +1,6 @@
-import type { Board, Session, Task, Worktree } from '@agor/core/types';
-import { Badge, Collapse, List, Typography, theme } from 'antd';
+import type { Board, BoardComment, Session, Task, Worktree } from '@agor/core/types';
+import { CommentOutlined } from '@ant-design/icons';
+import { Badge, Button, Collapse, List, Space, Typography, theme } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { BoardCollapse } from '../BoardCollapse';
 
@@ -11,6 +12,7 @@ interface MobileNavTreeProps {
   worktrees: Worktree[];
   sessions: Session[];
   tasks: Record<string, Task[]>;
+  comments: BoardComment[];
   onNavigate?: () => void;
 }
 
@@ -19,6 +21,7 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
   worktrees,
   sessions,
   tasks,
+  comments,
   onNavigate,
 }) => {
   const navigate = useNavigate();
@@ -27,6 +30,18 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
   const handleSessionClick = (sessionId: string) => {
     navigate(`/m/session/${sessionId}`);
     onNavigate?.();
+  };
+
+  const handleCommentsClick = (boardId: string, e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent board collapse toggle
+    navigate(`/m/comments/${boardId}`);
+    onNavigate?.();
+  };
+
+  // Count active comments per board (unresolved)
+  const getActiveCommentCount = (boardId: string): number => {
+    return comments.filter(c => c.board_id === boardId && !c.resolved && !c.parent_comment_id)
+      .length;
   };
 
   // Group worktrees by board
@@ -83,16 +98,40 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
       <BoardCollapse
         items={boards.map(board => {
           const boardWorktrees = worktreesByBoard[board.board_id] || [];
+          const activeComments = getActiveCommentCount(board.board_id);
 
           return {
             key: board.board_id,
             board,
             badge: (
-              <Badge
-                count={boardWorktrees.length}
-                style={{ backgroundColor: token.colorPrimaryBg }}
-                showZero
-              />
+              <Space size={8}>
+                <Badge
+                  count={boardWorktrees.length}
+                  style={{ backgroundColor: token.colorPrimaryBg }}
+                  showZero
+                />
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<CommentOutlined />}
+                  onClick={e => handleCommentsClick(board.board_id, e)}
+                  style={{
+                    padding: '4px 8px',
+                    height: 'auto',
+                    color: activeComments > 0 ? token.colorPrimary : token.colorTextSecondary,
+                  }}
+                >
+                  {activeComments > 0 && (
+                    <Badge
+                      count={activeComments}
+                      style={{
+                        backgroundColor: token.colorPrimary,
+                        marginLeft: 4,
+                      }}
+                    />
+                  )}
+                </Button>
+              </Space>
             ),
             children:
               boardWorktrees.length === 0 ? (

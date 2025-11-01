@@ -1,8 +1,18 @@
 import type { AgorClient } from '@agor/core/api';
-import type { Board, Repo, Session, Task, User, Worktree } from '@agor/core/types';
+import type {
+  Board,
+  BoardComment,
+  BoardObject,
+  Repo,
+  Session,
+  Task,
+  User,
+  Worktree,
+} from '@agor/core/types';
 import { Drawer, Layout } from 'antd';
 import { useState } from 'react';
 import { Route, Routes } from 'react-router-dom';
+import { MobileCommentsPage } from './MobileCommentsPage';
 import { MobileHeader } from './MobileHeader';
 import { MobileNavTree } from './MobileNavTree';
 import { SessionPage } from './SessionPage';
@@ -15,10 +25,17 @@ interface MobileAppProps {
   sessions: Session[];
   tasks: Record<string, Task[]>;
   boards: Board[];
+  boardObjects: Record<string, BoardObject>;
+  comments: BoardComment[];
   repos: Repo[];
   worktrees: Worktree[];
   users: User[];
   onSendPrompt?: (sessionId: string, prompt: string) => void;
+  onSendComment: (boardId: string, content: string) => void;
+  onReplyComment?: (parentId: string, content: string) => void;
+  onResolveComment?: (commentId: string) => void;
+  onToggleReaction?: (commentId: string, emoji: string) => void;
+  onDeleteComment?: (commentId: string) => void;
   onLogout?: () => void;
 }
 
@@ -28,10 +45,17 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   sessions,
   tasks,
   boards,
+  boardObjects,
+  comments,
   repos,
   worktrees,
   users,
   onSendPrompt,
+  onSendComment,
+  onReplyComment,
+  onResolveComment,
+  onToggleReaction,
+  onDeleteComment,
   onLogout,
 }) => {
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -54,6 +78,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
           worktrees={worktrees}
           sessions={sessions}
           tasks={tasks}
+          comments={comments}
           onNavigate={() => setDrawerOpen(false)}
         />
       </Drawer>
@@ -99,6 +124,28 @@ export const MobileApp: React.FC<MobileAppProps> = ({
               currentUser={user}
               onSendPrompt={onSendPrompt}
               onMenuClick={() => setDrawerOpen(true)}
+            />
+          }
+        />
+
+        {/* Comments page */}
+        <Route
+          path="/comments/:boardId"
+          element={
+            <MobileCommentsPage
+              client={client}
+              boards={boards}
+              comments={comments}
+              boardObjects={boardObjects}
+              worktrees={worktrees}
+              users={users}
+              currentUser={user}
+              onMenuClick={() => setDrawerOpen(true)}
+              onSendComment={onSendComment}
+              onReplyComment={onReplyComment}
+              onResolveComment={onResolveComment}
+              onToggleReaction={onToggleReaction}
+              onDeleteComment={onDeleteComment}
             />
           }
         />
