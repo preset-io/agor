@@ -105,6 +105,12 @@ agor open
 - Watch teammates or agents move across tasks live.
 - Cluster sessions, delegate, pivot, and iterate together.
 
+### 📱 Mobile-Friendly Prompting
+
+- **Keep sessions cooking on the go** — mobile-optimized UI for sending prompts and monitoring progress.
+- Access conversations, send follow-ups, and check agent status from your phone.
+- Full conversation view with hamburger navigation to switch between sessions.
+
 ---
 
 ## Screenshots
