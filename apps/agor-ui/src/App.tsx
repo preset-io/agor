@@ -56,6 +56,7 @@ function DeviceRouter() {
 
 function AppContent() {
   const { message } = AntApp.useApp();
+  const { token } = theme.useToken();
 
   // Fetch daemon auth configuration
   const {
@@ -149,8 +150,10 @@ function AppContent() {
           style={{
             height: '100vh',
             display: 'flex',
+            flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'center',
+            backgroundColor: token.colorBgLayout,
           }}
         >
           <Spin size="large" />
@@ -211,8 +214,10 @@ function AppContent() {
           style={{
             height: '100vh',
             display: 'flex',
+            flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'center',
+            backgroundColor: token.colorBgLayout,
           }}
         >
           <Spin size="large" />
@@ -232,8 +237,10 @@ function AppContent() {
           style={{
             height: '100vh',
             display: 'flex',
+            flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'center',
+            backgroundColor: token.colorBgLayout,
           }}
         >
           <Spin size="large" />
@@ -290,8 +297,10 @@ function AppContent() {
           style={{
             height: '100vh',
             display: 'flex',
+            flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'center',
+            backgroundColor: token.colorBgLayout,
           }}
         >
           <Spin size="large" />
