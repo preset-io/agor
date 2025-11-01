@@ -393,7 +393,7 @@ export function setupMCPRoutes(app: Application): void {
               },
             },
             {
-              name: 'agor_users_create',
+              name: 'agor_user_create',
               description:
                 'Create a new user account. Requires email and password. Optionally set name, emoji, avatar, and role.',
               inputSchema: {
@@ -894,7 +894,7 @@ export function setupMCPRoutes(app: Application): void {
               },
             ],
           };
-        } else if (name === 'agor_users_create') {
+        } else if (name === 'agor_user_create') {
           // Create a new user
           if (!args?.email) {
             return res.status(400).json({
