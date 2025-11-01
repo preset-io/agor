@@ -10,5 +10,6 @@ export default {
   guide: 'Guide',
   'api-reference': 'API Reference',
   blog: 'Blog',
+  security: 'Security',
   faq: 'FAQ',
 };

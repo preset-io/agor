@@ -74,7 +74,7 @@ function AppContent() {
 
   // Session actions
   const { createSession, forkSession, spawnSession, updateSession, deleteSession } =
-    useSessionActions(client);
+    useSessionActions(client, authenticated ? accessToken : null);
 
   // Board actions
   const { createBoard, updateBoard, deleteBoard } = useBoardActions(client);
@@ -88,7 +88,7 @@ function AppContent() {
   // Get current user from users array (real-time updates via WebSocket)
   // This ensures we get the latest onboarding_completed status
   // Fall back to user from auth if users array hasn't loaded yet
-  const currentUser = user ? users.find(u => u.user_id === user.user_id) || user : null;
+  const currentUser = user ? users.find((u) => u.user_id === user.user_id) || user : null;
 
   // Memoize welcome modal stats to prevent unnecessary re-renders
   const welcomeStats = useMemo(
@@ -695,10 +695,10 @@ function AppContent() {
       const currentIds = sessionMcpServerIds[sessionId] || [];
 
       // Find servers to add (in new list but not in current)
-      const toAdd = mcpServerIds.filter(id => !currentIds.includes(id));
+      const toAdd = mcpServerIds.filter((id) => !currentIds.includes(id));
 
       // Find servers to remove (in current list but not in new)
-      const toRemove = currentIds.filter(id => !mcpServerIds.includes(id));
+      const toRemove = currentIds.filter((id) => !mcpServerIds.includes(id));
 
       // Add new relationships
       for (const serverId of toAdd) {
@@ -740,7 +740,7 @@ function AppContent() {
   const handleResolveComment = async (commentId: string) => {
     if (!client) return;
     try {
-      const comment = comments.find(c => c.comment_id === commentId);
+      const comment = comments.find((c) => c.comment_id === commentId);
       await client.service('board-comments').patch(commentId, {
         resolved: !comment?.resolved,
       });
@@ -795,8 +795,8 @@ function AppContent() {
 
   // Generate repo reference options for dropdowns
   const allOptions = getRepoReferenceOptions(repos, worktrees);
-  const _worktreeOptions = allOptions.filter(opt => opt.type === 'managed-worktree');
-  const _repoOptions = allOptions.filter(opt => opt.type === 'managed');
+  const _worktreeOptions = allOptions.filter((opt) => opt.type === 'managed-worktree');
+  const _repoOptions = allOptions.filter((opt) => opt.type === 'managed');
 
   // Handle onboarding dismissal
   const handleDismissOnboarding = async () => {

@@ -10,7 +10,7 @@
  */
 
 import { readdir, readFile, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import type { WorktreeRepository } from '@agor/core/db';
 import type {
   ContextFileDetail,
@@ -19,6 +19,7 @@ import type {
   QueryParams,
   ServiceMethods,
 } from '@agor/core/types';
+import { ensureMinimumRole } from '../utils/authorization';
 
 /**
  * Context service params (read-only, no create/update/delete)
@@ -48,6 +49,8 @@ export class ContextService
    * Returns lightweight list items without content
    */
   async find(params?: ContextParams): Promise<ContextFileListItem[]> {
+    ensureMinimumRole(params, 'member', 'list context files');
+
     const worktreeId = params?.query?.worktree_id;
 
     if (!worktreeId) {
@@ -83,6 +86,8 @@ export class ContextService
    * @param id - Relative path from worktree root (e.g., "context/concepts/core.md", "CLAUDE.md")
    */
   async get(id: Id, params?: ContextParams): Promise<ContextFileDetail> {
+    ensureMinimumRole(params, 'member', 'read context file');
+
     const worktreeId = params?.query?.worktree_id;
 
     if (!worktreeId) {
@@ -95,8 +100,22 @@ export class ContextService
       throw new Error(`Worktree not found: ${worktreeId}`);
     }
 
-    const relativePath = id.toString();
-    const fullPath = join(worktree.path, relativePath);
+    const relativePathInput = id.toString();
+    const normalizedRelativePath = this.normalizeRelativePath(relativePathInput);
+    const segments = normalizedRelativePath.split('/').filter(Boolean);
+
+    // Restrict access to context/ directory only
+    if (segments[0] !== 'context') {
+      throw new Error('Access restricted to context/ directory');
+    }
+
+    const worktreeRoot = resolve(worktree.path);
+    const fullPath = resolve(worktreeRoot, normalizedRelativePath);
+    const relativeToRoot = relative(worktreeRoot, fullPath);
+
+    if (!relativeToRoot || relativeToRoot.startsWith('..') || isAbsolute(relativeToRoot)) {
+      throw new Error('Invalid file path');
+    }
 
     try {
       // Read file content
@@ -106,10 +125,10 @@ export class ContextService
       const stats = await stat(fullPath);
 
       // Extract title from first H1 or filename
-      const title = this.extractTitle(content, relativePath);
+      const title = this.extractTitle(content, normalizedRelativePath);
 
       return {
-        path: relativePath,
+        path: normalizedRelativePath,
         title,
         size: stats.size,
         lastModified: stats.mtime.toISOString(),
@@ -157,6 +176,23 @@ export class ContextService
     } catch (_error) {
       // Directory doesn't exist, ignore
     }
+  }
+
+  /**
+   * Normalize relative path input, preventing traversal characters.
+   */
+  private normalizeRelativePath(pathFragment: string): string {
+    const normalized = pathFragment.replace(/\\/g, '/').replace(/^\/+/, '').trim();
+
+    if (!normalized) {
+      throw new Error('File path required');
+    }
+
+    if (normalized.includes('\0')) {
+      throw new Error('Invalid file path');
+    }
+
+    return normalized;
   }
 
   /**

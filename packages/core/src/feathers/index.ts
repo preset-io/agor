@@ -14,10 +14,13 @@
 export {
   AuthenticationBaseStrategy,
   AuthenticationService,
+  authenticate,
   JWTStrategy,
 } from '@feathersjs/authentication';
 export { default as authClient } from '@feathersjs/authentication-client';
 export { LocalStrategy } from '@feathersjs/authentication-local';
+// Errors
+export { Forbidden, NotAuthenticated } from '@feathersjs/errors';
 export type { Application as ExpressApplication } from '@feathersjs/express';
 // Express Integration
 export { default as feathersExpress, errorHandler, rest } from '@feathersjs/express';

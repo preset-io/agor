@@ -10,6 +10,7 @@ import { getDefaultPermissionMode, SessionStatus } from '@agor/core/types';
 import { useState } from 'react';
 import type { NewSessionConfig } from '../components/NewSessionModal';
 import { getDaemonUrl } from '../config/daemon';
+import { ACCESS_TOKEN_KEY } from './useAuth';
 
 interface UseSessionActionsResult {
   createSession: (config: NewSessionConfig) => Promise<Session | null>;
@@ -27,9 +28,28 @@ interface UseSessionActionsResult {
  * @param client - Agor client instance
  * @returns Session action functions and state
  */
-export function useSessionActions(client: AgorClient | null): UseSessionActionsResult {
+export function useSessionActions(
+  client: AgorClient | null,
+  accessToken?: string | null
+): UseSessionActionsResult {
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const resolveAccessToken = (): string | null => {
+    if (accessToken) {
+      return accessToken;
+    }
+
+    if (typeof window !== 'undefined') {
+      try {
+        return window.localStorage.getItem(ACCESS_TOKEN_KEY);
+      } catch (err) {
+        console.error('Failed to read access token from storage:', err);
+      }
+    }
+
+    return null;
+  };
 
   const createSession = async (config: NewSessionConfig): Promise<Session | null> => {
     if (!client) {
@@ -89,9 +109,15 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
       setError(null);
 
       // Call custom fork endpoint to create the forked session
+      const token = resolveAccessToken();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) {
+        headers.Authorization = `Bearer ${token}`;
+      }
+
       const response = await fetch(`${getDaemonUrl()}/sessions/${sessionId}/fork`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ prompt }),
       });
 
@@ -128,9 +154,15 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
       setError(null);
 
       // Call custom spawn endpoint to create the spawned session
+      const token = resolveAccessToken();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) {
+        headers.Authorization = `Bearer ${token}`;
+      }
+
       const response = await fetch(`${getDaemonUrl()}/sessions/${sessionId}/spawn`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ prompt }),
       });
 

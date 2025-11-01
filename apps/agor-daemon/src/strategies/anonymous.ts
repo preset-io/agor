@@ -34,14 +34,14 @@ export class AnonymousStrategy extends AuthenticationBaseStrategy {
       throw new NotAuthenticated('Anonymous access disabled');
     }
 
-    // Return anonymous user with admin privileges (local mode)
+    // Return anonymous user with viewer privileges (read-only local mode)
     return {
       accessToken: '',
       authentication: { strategy: 'anonymous' },
       user: {
         user_id: 'anonymous',
         email: 'anonymous@localhost',
-        role: 'admin',
+        role: 'viewer',
       },
     };
   }
