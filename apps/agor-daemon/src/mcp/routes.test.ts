@@ -55,7 +55,7 @@ async function callMCPTool(name: string, args: Record<string, unknown> = {}) {
 }
 
 describeIntegration('MCP Tools - Session Tools', () => {
-  it('tools/list returns all 14 tools', async () => {
+  it('tools/list returns all 15 tools', async () => {
     const resp = await fetch(`${DAEMON_URL}/mcp?sessionToken=${sessionToken}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -67,7 +67,7 @@ describeIntegration('MCP Tools - Session Tools', () => {
     });
 
     const data = (await resp.json()) as { result: { tools: Array<{ name: string }> } };
-    expect(data.result.tools).toHaveLength(14);
+    expect(data.result.tools).toHaveLength(15);
 
     const toolNames = data.result.tools.map(t => t.name);
     expect(toolNames).toContain('agor_sessions_list');
@@ -84,6 +84,7 @@ describeIntegration('MCP Tools - Session Tools', () => {
     expect(toolNames).toContain('agor_users_get');
     expect(toolNames).toContain('agor_users_get_current');
     expect(toolNames).toContain('agor_users_update_current');
+    expect(toolNames).toContain('agor_users_create');
   });
 
   it('agor_sessions_list returns sessions', async () => {
@@ -258,5 +259,44 @@ describeIntegration('MCP Tools - User Tools', () => {
       name: originalUser.name,
       emoji: originalUser.emoji,
     });
+  });
+
+  it('agor_users_create creates a new user', async () => {
+    // Generate unique email for test
+    const testEmail = `test-${Date.now()}@example.com`;
+
+    // Create user with all fields
+    const newUser = await callMCPTool('agor_users_create', {
+      email: testEmail,
+      password: 'test-password-123',
+      name: 'Test User',
+      emoji: '🧪',
+      role: 'admin',
+    });
+
+    expect(newUser).toHaveProperty('user_id');
+    expect(newUser.email).toBe(testEmail);
+    expect(newUser.name).toBe('Test User');
+    expect(newUser.emoji).toBe('🧪');
+    expect(newUser.role).toBe('admin');
+
+    // Verify password is NOT in response (it should be hashed internally)
+    expect(newUser).not.toHaveProperty('password');
+  });
+
+  it('agor_users_create validates required fields', async () => {
+    // Test missing email
+    await expect(async () => {
+      await callMCPTool('agor_users_create', {
+        password: 'test-password-123',
+      });
+    }).rejects.toThrow();
+
+    // Test missing password
+    await expect(async () => {
+      await callMCPTool('agor_users_create', {
+        email: 'test@example.com',
+      });
+    }).rejects.toThrow();
   });
 });

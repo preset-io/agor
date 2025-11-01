@@ -392,6 +392,43 @@ export function setupMCPRoutes(app: Application): void {
                 },
               },
             },
+            {
+              name: 'agor_users_create',
+              description:
+                'Create a new user account. Requires email and password. Optionally set name, emoji, avatar, and role.',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  email: {
+                    type: 'string',
+                    description: 'User email address (must be unique)',
+                  },
+                  password: {
+                    type: 'string',
+                    description: 'User password (will be hashed)',
+                  },
+                  name: {
+                    type: 'string',
+                    description: 'Display name (optional)',
+                  },
+                  emoji: {
+                    type: 'string',
+                    description: 'User emoji for visual identity (optional, single emoji character)',
+                  },
+                  avatar: {
+                    type: 'string',
+                    description: 'Avatar URL (optional)',
+                  },
+                  role: {
+                    type: 'string',
+                    enum: ['owner', 'admin', 'member', 'viewer'],
+                    description:
+                      'User role (optional, defaults to "member"). Roles: owner=full system access, admin=manage most resources, member=standard user, viewer=read-only',
+                  },
+                },
+                required: ['email', 'password'],
+              },
+            },
           ],
         };
       } else if (mcpRequest.method === 'notifications/initialized') {
@@ -854,6 +891,51 @@ export function setupMCPRoutes(app: Application): void {
               {
                 type: 'text',
                 text: JSON.stringify(updatedUser, null, 2),
+              },
+            ],
+          };
+        } else if (name === 'agor_users_create') {
+          // Create a new user
+          if (!args?.email) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message: 'Invalid params: email is required',
+              },
+            });
+          }
+
+          if (!args?.password) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message: 'Invalid params: password is required',
+              },
+            });
+          }
+
+          // Build user creation data
+          const createData: Record<string, unknown> = {
+            email: args.email,
+            password: args.password,
+          };
+
+          // Add optional fields
+          if (args?.name !== undefined) createData.name = args.name;
+          if (args?.emoji !== undefined) createData.emoji = args.emoji;
+          if (args?.avatar !== undefined) createData.avatar = args.avatar;
+          if (args?.role !== undefined) createData.role = args.role;
+
+          const newUser = await app.service('users').create(createData);
+          mcpResponse = {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(newUser, null, 2),
               },
             ],
           };
