@@ -65,7 +65,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
           element={
             <>
               <MobileHeader
-                title="Agor"
+                showLogo
                 user={user}
                 onMenuClick={() => setDrawerOpen(true)}
                 onLogout={onLogout}
