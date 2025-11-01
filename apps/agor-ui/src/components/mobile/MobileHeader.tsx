@@ -38,21 +38,14 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
       }}
     >
       <Space size={8} align="center" style={{ flex: 1 }}>
-        {showBack ? (
+        {showBack && (
           <Button
             type="text"
             icon={<ArrowLeftOutlined />}
             onClick={() => navigate(-1)}
             style={{ padding: '4px 8px', color: '#fff' }}
           />
-        ) : showMenu ? (
-          <Button
-            type="text"
-            icon={<MenuOutlined />}
-            onClick={onMenuClick}
-            style={{ padding: '4px 8px', color: '#fff' }}
-          />
-        ) : null}
+        )}
 
         {showLogo && (
           <img
@@ -80,16 +73,27 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
         </Title>
       </Space>
 
-      {user && (
-        <div
-          style={{
-            fontSize: 20,
-            lineHeight: 1,
-          }}
-        >
-          {user.emoji || '👤'}
-        </div>
-      )}
+      <Space size={12} align="center">
+        {user && (
+          <div
+            style={{
+              fontSize: 20,
+              lineHeight: 1,
+            }}
+          >
+            {user.emoji || '👤'}
+          </div>
+        )}
+
+        {showMenu && (
+          <Button
+            type="text"
+            icon={<MenuOutlined />}
+            onClick={onMenuClick}
+            style={{ padding: '4px 8px', color: '#fff' }}
+          />
+        )}
+      </Space>
     </Header>
   );
 };
