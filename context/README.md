@@ -53,6 +53,10 @@ Experimental ideas and designs not yet crystallized into concepts. These represe
 
 - **[init-experience.md](explorations/init-experience.md)** - Init flow, auth checking, API key management, tool availability UI patterns
 
+**Security & Multi-Tenancy:**
+
+- **[unix-user-integration.md](explorations/unix-user-integration.md)** - Deep exploration of OS-level Unix user integration: user management, process impersonation, credential storage, worktree ownership, security implications, and decision framework
+
 **Lifecycle:** `explorations/` → `concepts/` when design is validated and ready to be official
 
 ### Archives
