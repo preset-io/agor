@@ -1344,34 +1344,6 @@ const SessionCanvas = ({
     [activeTool, deleteObject]
   );
 
-  // Keyboard shortcuts
-  // biome-ignore lint/correctness/useExhaustiveDependencies: deleteObject is used inside handleKeyDown
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Ignore if typing in an input
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
-        return;
-      }
-
-      if (e.key === 'z') setActiveTool('zone');
-      if (e.key === 'c') setActiveTool('comment');
-      if (e.key === 'e') setActiveTool('eraser');
-      if (e.key === 'Escape') setActiveTool('select');
-      if (e.key === 'Delete' || e.key === 'Backspace') {
-        // Delete selected nodes
-        const selectedNodes = nodes.filter(n => n.selected);
-        selectedNodes.forEach(n => {
-          if (n.type === 'zone') {
-            deleteObject(n.id);
-          }
-        });
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [nodes, deleteObject]);
-
   // Clear comment placement state when switching away from comment tool
   useEffect(() => {
     if (activeTool !== 'comment' && commentPlacement) {
@@ -1451,7 +1423,7 @@ const SessionCanvas = ({
               e.stopPropagation();
               setActiveTool('select');
             }}
-            title="Select (Esc)"
+            title="Select"
             style={{
               borderLeft: activeTool === 'select' ? '3px solid #1677ff' : 'none',
             }}
@@ -1463,7 +1435,7 @@ const SessionCanvas = ({
               e.stopPropagation();
               setActiveTool('zone');
             }}
-            title="Add Zone (Z)"
+            title="Add Zone"
             style={{
               borderLeft: activeTool === 'zone' ? '3px solid #1677ff' : 'none',
             }}
@@ -1475,7 +1447,7 @@ const SessionCanvas = ({
               e.stopPropagation();
               setActiveTool('comment');
             }}
-            title="Add Comment (C)"
+            title="Add Comment"
             style={{
               borderLeft: activeTool === 'comment' ? '3px solid #1677ff' : 'none',
             }}
@@ -1487,7 +1459,7 @@ const SessionCanvas = ({
               e.stopPropagation();
               setActiveTool(activeTool === 'eraser' ? 'select' : 'eraser');
             }}
-            title="Eraser (E) - Click to toggle"
+            title="Eraser - Click to toggle"
             style={{
               borderLeft: activeTool === 'eraser' ? `3px solid ${token.colorError}` : 'none',
               color: activeTool === 'eraser' ? token.colorError : 'inherit',
