@@ -81,6 +81,7 @@ export interface QuerySetupDeps {
   messagesService?: MessagesService;
   worktreesRepo?: WorktreeRepository;
   permissionLocks: Map<SessionID, Promise<void>>;
+  mcpEnabled?: boolean;
 }
 
 /**
@@ -321,30 +322,34 @@ export async function setupQuery(
     // -> queryOptions.resume not set, SDK will start fresh and return new session ID
   }
 
-  // Configure Agor MCP server (self-access to daemon)
-  const mcpToken = session.mcp_token;
-  console.log(`🔍 [MCP DEBUG] Checking for MCP token in session ${sessionId.substring(0, 8)}`);
-  console.log(
-    `   session.mcp_token: ${mcpToken ? `${mcpToken.substring(0, 16)}...` : 'NOT FOUND'}`
-  );
+  // Configure Agor MCP server (self-access to daemon) - only if MCP is enabled
+  if (deps.mcpEnabled !== false) {
+    const mcpToken = session.mcp_token;
+    console.log(`🔍 [MCP DEBUG] Checking for MCP token in session ${sessionId.substring(0, 8)}`);
+    console.log(
+      `   session.mcp_token: ${mcpToken ? `${mcpToken.substring(0, 16)}...` : 'NOT FOUND'}`
+    );
 
-  if (mcpToken) {
-    // Get daemon URL from config (default: http://localhost:3030)
-    const daemonUrl = process.env.VITE_DAEMON_URL || 'http://localhost:3030';
+    if (mcpToken) {
+      // Get daemon URL from config (default: http://localhost:3030)
+      const daemonUrl = process.env.VITE_DAEMON_URL || 'http://localhost:3030';
 
-    console.log(`🔌 Configuring Agor MCP server (self-access to daemon)`);
-    const mcpConfig = {
-      agor: {
-        type: 'http' as const,
-        url: `${daemonUrl}/mcp?sessionToken=${mcpToken}`,
-      },
-    };
-    queryOptions.mcpServers = mcpConfig;
-    console.log(`   MCP server config:`, JSON.stringify(mcpConfig, null, 2));
-    console.log(`   Full URL: ${daemonUrl}/mcp?sessionToken=${mcpToken.substring(0, 16)}...`);
+      console.log(`🔌 Configuring Agor MCP server (self-access to daemon)`);
+      const mcpConfig = {
+        agor: {
+          type: 'http' as const,
+          url: `${daemonUrl}/mcp?sessionToken=${mcpToken}`,
+        },
+      };
+      queryOptions.mcpServers = mcpConfig;
+      console.log(`   MCP server config:`, JSON.stringify(mcpConfig, null, 2));
+      console.log(`   Full URL: ${daemonUrl}/mcp?sessionToken=${mcpToken.substring(0, 16)}...`);
+    } else {
+      console.warn(`⚠️  No MCP token found for session ${sessionId.substring(0, 8)}`);
+      console.warn(`   Session will not have access to Agor MCP tools`);
+    }
   } else {
-    console.warn(`⚠️  No MCP token found for session ${sessionId.substring(0, 8)}`);
-    console.warn(`   Session will not have access to Agor MCP tools`);
+    console.log(`🔒 Agor MCP server disabled - skipping MCP configuration`);
   }
 
   // Fetch and configure MCP servers for this session (hierarchical scoping)

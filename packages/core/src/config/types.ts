@@ -53,6 +53,9 @@ export interface AgorDaemonSettings {
 
   /** JWT secret (auto-generated if not provided) */
   jwtSecret?: string;
+
+  /** Enable built-in MCP server (default: true) */
+  mcpEnabled?: boolean;
 }
 
 /**

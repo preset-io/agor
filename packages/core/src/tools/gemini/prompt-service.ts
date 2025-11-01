@@ -85,7 +85,8 @@ export class GeminiPromptService {
     _apiKey?: string,
     private worktreesRepo?: WorktreeRepository,
     private mcpServerRepo?: MCPServerRepository,
-    private sessionMCPRepo?: SessionMCPServerRepository
+    private sessionMCPRepo?: SessionMCPServerRepository,
+    private mcpEnabled?: boolean
   ) {}
 
   /**
@@ -532,32 +533,38 @@ export class GeminiPromptService {
     // Fetch and configure MCP servers for this session (hierarchical scoping)
     const mcpServersConfig: Record<string, MCPServerConfig> = {};
 
-    // Configure Agor MCP server (self-access to daemon)
-    const mcpToken = session.mcp_token;
-    console.log(`🔍 [MCP DEBUG] Checking for MCP token in session ${sessionId.substring(0, 8)}`);
-    console.log(
-      `   session.mcp_token: ${mcpToken ? `${mcpToken.substring(0, 16)}...` : 'NOT FOUND'}`
-    );
-
-    if (mcpToken) {
-      // Get daemon URL from config (default: http://localhost:3030)
-      const daemonUrl = process.env.VITE_DAEMON_URL || 'http://localhost:3030';
-
-      console.log(`🔌 Configuring Agor MCP server (self-access to daemon)`);
-      // Use httpUrl parameter for HTTP transport
-      mcpServersConfig.agor = new MCPServerConfig(
-        undefined, // command
-        undefined, // args
-        {}, // env
-        undefined, // cwd
-        undefined, // url (websocket)
-        `${daemonUrl}/mcp?sessionToken=${mcpToken}`, // httpUrl
-        {} // headers
+    // Configure Agor MCP server (self-access to daemon) - only if MCP is enabled
+    if (this.mcpEnabled !== false) {
+      const mcpToken = session.mcp_token;
+      console.log(`🔍 [MCP DEBUG] Checking for MCP token in session ${sessionId.substring(0, 8)}`);
+      console.log(
+        `   session.mcp_token: ${mcpToken ? `${mcpToken.substring(0, 16)}...` : 'NOT FOUND'}`
       );
-      console.log(`   Agor MCP URL: ${daemonUrl}/mcp?sessionToken=${mcpToken.substring(0, 16)}...`);
+
+      if (mcpToken) {
+        // Get daemon URL from config (default: http://localhost:3030)
+        const daemonUrl = process.env.VITE_DAEMON_URL || 'http://localhost:3030';
+
+        console.log(`🔌 Configuring Agor MCP server (self-access to daemon)`);
+        // Use httpUrl parameter for HTTP transport
+        mcpServersConfig.agor = new MCPServerConfig(
+          undefined, // command
+          undefined, // args
+          {}, // env
+          undefined, // cwd
+          undefined, // url (websocket)
+          `${daemonUrl}/mcp?sessionToken=${mcpToken}`, // httpUrl
+          {} // headers
+        );
+        console.log(
+          `   Agor MCP URL: ${daemonUrl}/mcp?sessionToken=${mcpToken.substring(0, 16)}...`
+        );
+      } else {
+        console.warn(`⚠️  No MCP token found for session ${sessionId.substring(0, 8)}`);
+        console.warn(`   Session will not have access to Agor MCP tools`);
+      }
     } else {
-      console.warn(`⚠️  No MCP token found for session ${sessionId.substring(0, 8)}`);
-      console.warn(`   Session will not have access to Agor MCP tools`);
+      console.log(`🔒 Agor MCP server disabled - skipping MCP configuration`);
     }
 
     // Fetch user-configured MCP servers

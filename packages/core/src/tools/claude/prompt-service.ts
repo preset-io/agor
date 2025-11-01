@@ -67,7 +67,8 @@ export class ClaudePromptService {
     private tasksService?: TasksService,
     private sessionsService?: SessionsService, // FeathersJS Sessions service for WebSocket broadcasting
     private worktreesRepo?: WorktreeRepository,
-    private messagesService?: import('./claude-tool').MessagesService // FeathersJS Messages service for creating permission requests
+    private messagesService?: import('./claude-tool').MessagesService, // FeathersJS Messages service for creating permission requests
+    private mcpEnabled?: boolean
   ) {
     // No client initialization needed - Agent SDK is stateless
   }
@@ -151,6 +152,7 @@ export class ClaudePromptService {
         mcpServerRepo: this.mcpServerRepo,
         permissionService: this.permissionService,
         tasksService: this.tasksService,
+        mcpEnabled: this.mcpEnabled,
         sessionsService: this.sessionsService,
         messagesService: this.messagesService,
         worktreesRepo: this.worktreesRepo,
@@ -284,6 +286,7 @@ export class ClaudePromptService {
         mcpServerRepo: this.mcpServerRepo,
         permissionService: this.permissionService,
         tasksService: this.tasksService,
+        mcpEnabled: this.mcpEnabled,
         sessionsService: this.sessionsService,
         messagesService: this.messagesService,
         worktreesRepo: this.worktreesRepo,

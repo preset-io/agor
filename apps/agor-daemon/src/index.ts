@@ -739,6 +739,11 @@ async function main() {
     after: {
       create: [
         async context => {
+          // Skip MCP setup if MCP server is disabled
+          if (config.daemon?.mcpEnabled === false) {
+            return context;
+          }
+
           // Generate MCP session token for this session
           const { generateSessionToken } = await import('./mcp/tokens.js');
           const session = context.result as Session;
@@ -1079,7 +1084,8 @@ async function main() {
     permissionService,
     app.service('tasks'), // Use service instead of repo for WebSocket events
     app.service('sessions'), // Sessions service for permission persistence (WebSocket broadcast)
-    worktreesRepo // Worktrees repo for fetching worktree paths
+    worktreesRepo, // Worktrees repo for fetching worktree paths
+    config.daemon?.mcpEnabled !== false // Pass MCP enabled flag
   );
 
   // Handle OPENAI_API_KEY with priority: config.yaml > env var
@@ -1124,7 +1130,8 @@ async function main() {
     app.service('tasks'),
     worktreesRepo,
     mcpServerRepo,
-    sessionMCPRepo
+    sessionMCPRepo,
+    config.daemon?.mcpEnabled !== false // Pass MCP enabled flag
   );
 
   if (!geminiApiKey) {
@@ -1975,13 +1982,21 @@ async function main() {
           requireAuth: config.daemon?.requireAuth === true,
           allowAnonymous: config.daemon?.allowAnonymous !== false,
         },
+        mcp: {
+          enabled: config.daemon?.mcpEnabled !== false,
+        },
       };
     },
   });
 
-  // Setup MCP routes
-  const { setupMCPRoutes } = await import('./mcp/routes.js');
-  setupMCPRoutes(app);
+  // Setup MCP routes (if enabled)
+  if (config.daemon?.mcpEnabled !== false) {
+    const { setupMCPRoutes } = await import('./mcp/routes.js');
+    setupMCPRoutes(app);
+    console.log('✅ MCP server enabled at POST /mcp');
+  } else {
+    console.log('🔒 MCP server disabled via config (daemon.mcpEnabled=false)');
+  }
 
   // Error handling
   app.use(errorHandler());

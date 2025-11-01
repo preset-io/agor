@@ -44,7 +44,8 @@ export class GeminiTool implements ITool {
     private tasksService?: TasksService,
     worktreesRepo?: WorktreeRepository,
     mcpServerRepo?: MCPServerRepository,
-    sessionMCPRepo?: SessionMCPServerRepository
+    sessionMCPRepo?: SessionMCPServerRepository,
+    mcpEnabled?: boolean
   ) {
     if (messagesRepo && sessionsRepo) {
       this.promptService = new GeminiPromptService(
@@ -53,7 +54,8 @@ export class GeminiTool implements ITool {
         apiKey,
         worktreesRepo,
         mcpServerRepo,
-        sessionMCPRepo
+        sessionMCPRepo,
+        mcpEnabled
       );
     }
   }

@@ -95,6 +95,7 @@ export function getDefaultConfig(): AgorConfig {
       host: 'localhost',
       allowAnonymous: true, // Default: Allow anonymous access (local mode)
       requireAuth: false, // Default: Do not require authentication
+      mcpEnabled: true, // Default: Enable built-in MCP server
     },
     ui: {
       port: 5173,

@@ -144,6 +144,69 @@ All three use official SDKs for programmatic control, streaming, and session man
 - Codex: Shows 4 modes (Untrusted, On Request, On Failure, Never) - SDK-native terms
 - Gemini: Shows 3 modes (Ask, Auto, Allow All)
 
+**Runtime Permission Mode Mapping:**
+
+Different agents expose different permission mode values. Agor uses **Option A: Runtime Mapping** to provide a unified interface:
+
+```typescript
+// Unified PermissionMode enum (all possible values)
+type PermissionMode =
+  | 'default'
+  | 'acceptEdits'
+  | 'bypassPermissions'
+  | 'plan' // Claude/Gemini modes
+  | 'ask'
+  | 'auto'
+  | 'on-failure'
+  | 'allow-all'; // Codex modes
+
+// Mapping function
+function mapPermissionMode(mode: PermissionMode, agent: AgenticToolName): string {
+  // Claude Code / Gemini
+  if (agent === 'claude-code' || agent === 'gemini') {
+    switch (mode) {
+      case 'ask':
+        return 'default'; // Codex 'ask' → Claude 'default'
+      case 'auto':
+        return 'acceptEdits'; // Codex 'auto' → Claude 'acceptEdits'
+      case 'allow-all':
+        return 'bypassPermissions'; // Codex 'allow-all' → Claude 'bypass'
+      case 'on-failure':
+        return 'acceptEdits'; // Codex 'on-failure' → closest match
+      default:
+        return mode; // Native Claude/Gemini modes pass through
+    }
+  }
+
+  // Codex
+  if (agent === 'codex') {
+    switch (mode) {
+      case 'default':
+        return 'ask'; // Claude 'default' → Codex 'ask'
+      case 'acceptEdits':
+        return 'auto'; // Claude 'acceptEdits' → Codex 'auto'
+      case 'bypassPermissions':
+        return 'allow-all'; // Claude 'bypass' → Codex 'allow-all'
+      case 'plan':
+        return 'ask'; // Claude 'plan' → Codex 'ask' (read-only)
+      default:
+        return mode; // Native Codex modes pass through
+    }
+  }
+
+  return mode; // Fallback: pass through
+}
+```
+
+**Benefits:**
+
+- Agents don't need to memorize mode differences
+- MCP tools accept any `PermissionMode` value
+- Invalid modes gracefully map to closest equivalent
+- Better UX for multi-agent workflows
+
+**Location:** `packages/core/src/utils/permission-mode-mapper.ts` (to be implemented)
+
 ---
 
 #### 4. Mid-Session Permission Changes

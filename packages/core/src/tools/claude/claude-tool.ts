@@ -84,7 +84,8 @@ export class ClaudeTool implements ITool {
     permissionService?: PermissionService,
     private tasksService?: TasksService,
     sessionsService?: SessionsService,
-    worktreesRepo?: WorktreeRepository
+    worktreesRepo?: WorktreeRepository,
+    mcpEnabled?: boolean
   ) {
     if (messagesRepo && sessionsRepo) {
       this.promptService = new ClaudePromptService(
@@ -97,7 +98,8 @@ export class ClaudeTool implements ITool {
         tasksService,
         sessionsService,
         worktreesRepo,
-        messagesService
+        messagesService,
+        mcpEnabled
       );
     }
   }
