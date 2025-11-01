@@ -15,6 +15,7 @@ interface SessionPageProps {
   users: User[];
   currentUser?: User | null;
   onSendPrompt?: (sessionId: string, prompt: string, permissionMode?: PermissionMode) => void;
+  onMenuClick?: () => void;
 }
 
 export const SessionPage: React.FC<SessionPageProps> = ({
@@ -25,6 +26,7 @@ export const SessionPage: React.FC<SessionPageProps> = ({
   users,
   currentUser,
   onSendPrompt,
+  onMenuClick,
 }) => {
   const { sessionId } = useParams<{ sessionId: string }>();
 
@@ -84,7 +86,13 @@ export const SessionPage: React.FC<SessionPageProps> = ({
 
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
-      <MobileHeader title={worktree?.name || 'Session'} showBack user={currentUser} />
+      <MobileHeader
+        title={worktree?.name || 'Session'}
+        showBack
+        showMenu={false}
+        user={currentUser}
+        onMenuClick={onMenuClick}
+      />
       <div
         style={{
           flex: 1,
@@ -94,11 +102,13 @@ export const SessionPage: React.FC<SessionPageProps> = ({
       >
         <ConversationView
           client={client}
-          session={session}
-          worktree={worktree}
+          sessionId={session.session_id}
+          agentic_tool={session.agentic_tool}
+          sessionModel={session.model_config?.model}
+          users={users}
+          currentUserId={currentUser?.user_id}
           repos={repos}
           worktrees={worktrees}
-          users={users}
           onPermissionDecision={handlePermissionDecision}
           // Mobile-specific: don't show worktree/terminal links
           onOpenWorktree={undefined}

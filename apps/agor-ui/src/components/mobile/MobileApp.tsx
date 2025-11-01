@@ -1,6 +1,7 @@
 import type { AgorClient } from '@agor/core/api';
 import type { Board, Repo, Session, Task, User, Worktree } from '@agor/core/types';
-import { Layout } from 'antd';
+import { Drawer, Layout } from 'antd';
+import { useState } from 'react';
 import { Route, Routes } from 'react-router-dom';
 import { MobileHeader } from './MobileHeader';
 import { MobileNavTree } from './MobileNavTree';
@@ -33,22 +34,53 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   onSendPrompt,
   onLogout,
 }) => {
+  const [drawerOpen, setDrawerOpen] = useState(false);
+
   return (
     <Layout style={{ height: '100vh' }}>
+      {/* Navigation Drawer - shared across all routes */}
+      <Drawer
+        title="Navigation"
+        placement="left"
+        onClose={() => setDrawerOpen(false)}
+        open={drawerOpen}
+        width="85%"
+        styles={{
+          body: { padding: 0 },
+        }}
+      >
+        <MobileNavTree
+          boards={boards}
+          worktrees={worktrees}
+          sessions={sessions}
+          tasks={tasks}
+          onNavigate={() => setDrawerOpen(false)}
+        />
+      </Drawer>
+
       <Routes>
-        {/* Navigation tree page */}
+        {/* Home page - just shows header, drawer opened by hamburger */}
         <Route
           path="/"
           element={
             <>
-              <MobileHeader title="Agor" user={user} onLogout={onLogout} />
-              <Content style={{ overflowY: 'auto' }}>
-                <MobileNavTree
-                  boards={boards}
-                  worktrees={worktrees}
-                  sessions={sessions}
-                  tasks={tasks}
-                />
+              <MobileHeader
+                title="Agor"
+                user={user}
+                onMenuClick={() => setDrawerOpen(true)}
+                onLogout={onLogout}
+              />
+              <Content
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: 24,
+                }}
+              >
+                <div style={{ textAlign: 'center', color: 'rgba(255, 255, 255, 0.45)' }}>
+                  <p>Tap the menu icon to browse boards and sessions</p>
+                </div>
               </Content>
             </>
           }
@@ -66,6 +98,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
               users={users}
               currentUser={user}
               onSendPrompt={onSendPrompt}
+              onMenuClick={() => setDrawerOpen(true)}
             />
           }
         />

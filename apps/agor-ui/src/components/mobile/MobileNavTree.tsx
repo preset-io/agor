@@ -10,6 +10,7 @@ interface MobileNavTreeProps {
   worktrees: Worktree[];
   sessions: Session[];
   tasks: Record<string, Task[]>;
+  onNavigate?: () => void;
 }
 
 export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
@@ -17,8 +18,14 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
   worktrees,
   sessions,
   tasks,
+  onNavigate,
 }) => {
   const navigate = useNavigate();
+
+  const handleSessionClick = (sessionId: string) => {
+    navigate(`/m/session/${sessionId}`);
+    onNavigate?.();
+  };
 
   // Group worktrees by board
   const worktreesByBoard = worktrees.reduce(
@@ -133,7 +140,7 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
                             dataSource={worktreeSessions}
                             renderItem={session => (
                               <List.Item
-                                onClick={() => navigate(`/m/session/${session.session_id}`)}
+                                onClick={() => handleSessionClick(session.session_id)}
                                 style={{
                                   cursor: 'pointer',
                                   padding: '12px 8px 12px 28px',
