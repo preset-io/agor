@@ -15,6 +15,9 @@ export { formatShortId, generateId, IdResolutionError, resolveShortId } from '..
 // Client and database
 export * from './client';
 
+// Encryption utilities
+export * from './encryption';
+
 // Migrations
 export * from './migrate';
 // Repositories

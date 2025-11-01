@@ -23,6 +23,12 @@ export interface User {
   onboarding_completed: boolean;
   created_at: Date;
   updated_at?: Date;
+  // API key status (boolean only, never exposes actual keys)
+  api_keys?: {
+    ANTHROPIC_API_KEY?: boolean; // true = key is set, false/undefined = not set
+    OPENAI_API_KEY?: boolean;
+    GEMINI_API_KEY?: boolean;
+  };
 }
 
 /**
@@ -48,4 +54,10 @@ export interface UpdateUserInput {
   avatar?: string;
   preferences?: Record<string, unknown>;
   onboarding_completed?: boolean;
+  // API keys for update (accepts plaintext, encrypted before storage)
+  api_keys?: {
+    ANTHROPIC_API_KEY?: string | null; // string = set key, null = clear key
+    OPENAI_API_KEY?: string | null;
+    GEMINI_API_KEY?: string | null;
+  };
 }

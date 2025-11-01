@@ -2074,6 +2074,17 @@ async function main() {
   // Initialize Health Monitor for periodic environment health checks
   const healthMonitor = await createHealthMonitor(app);
 
+  // Validate master secret for API key encryption
+  if (!process.env.AGOR_MASTER_SECRET) {
+    console.warn('');
+    console.warn('⚠️  WARNING: AGOR_MASTER_SECRET not set');
+    console.warn('⚠️  API keys will be stored in plaintext (development mode)');
+    console.warn('⚠️  Set AGOR_MASTER_SECRET environment variable to enable encryption');
+    console.warn('');
+  } else {
+    console.log('🔐 API key encryption enabled (AGOR_MASTER_SECRET set)');
+  }
+
   // Start server and store reference for shutdown
   const server = await app.listen(DAEMON_PORT);
 

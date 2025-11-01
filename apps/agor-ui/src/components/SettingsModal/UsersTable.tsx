@@ -2,6 +2,7 @@ import type { CreateUserInput, UpdateUserInput, User } from '@agor/core/types';
 import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
 import {
   Button,
+  Collapse,
   Flex,
   Form,
   Input,
@@ -13,7 +14,8 @@ import {
   Tag,
   Typography,
 } from 'antd';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { ApiKeyFields, type ApiKeyStatus } from '../ApiKeyFields';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
 
 // Using Typography.Text directly to avoid DOM Text interface collision
@@ -30,6 +32,31 @@ export const UsersTable: React.FC<UsersTableProps> = ({ users, onCreate, onUpdat
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [form] = Form.useForm();
+
+  // API key management state for user edit
+  const [userApiKeyStatus, setUserApiKeyStatus] = useState<ApiKeyStatus>({
+    ANTHROPIC_API_KEY: false,
+    OPENAI_API_KEY: false,
+    GEMINI_API_KEY: false,
+  });
+  const [savingApiKeys, setSavingApiKeys] = useState<Record<string, boolean>>({});
+
+  // Load user's API key status when editing
+  useEffect(() => {
+    if (editingUser?.api_keys) {
+      setUserApiKeyStatus({
+        ANTHROPIC_API_KEY: !!editingUser.api_keys.ANTHROPIC_API_KEY,
+        OPENAI_API_KEY: !!editingUser.api_keys.OPENAI_API_KEY,
+        GEMINI_API_KEY: !!editingUser.api_keys.GEMINI_API_KEY,
+      });
+    } else {
+      setUserApiKeyStatus({
+        ANTHROPIC_API_KEY: false,
+        OPENAI_API_KEY: false,
+        GEMINI_API_KEY: false,
+      });
+    }
+  }, [editingUser]);
 
   const handleDelete = (userId: string) => {
     onDelete?.(userId);
@@ -86,6 +113,54 @@ export const UsersTable: React.FC<UsersTableProps> = ({ users, onCreate, onUpdat
       .catch(err => {
         console.error('Validation failed:', err);
       });
+  };
+
+  // Handle user API key save
+  const handleApiKeySave = async (field: keyof ApiKeyStatus, value: string) => {
+    if (!editingUser) return;
+
+    try {
+      setSavingApiKeys(prev => ({ ...prev, [field]: true }));
+
+      // Update user via onUpdate callback
+      await onUpdate?.(editingUser.user_id, {
+        api_keys: {
+          [field]: value,
+        },
+      });
+
+      // Update local state
+      setUserApiKeyStatus(prev => ({ ...prev, [field]: true }));
+    } catch (err) {
+      console.error(`Failed to save ${field}:`, err);
+      throw err;
+    } finally {
+      setSavingApiKeys(prev => ({ ...prev, [field]: false }));
+    }
+  };
+
+  // Handle user API key clear
+  const handleApiKeyClear = async (field: keyof ApiKeyStatus) => {
+    if (!editingUser) return;
+
+    try {
+      setSavingApiKeys(prev => ({ ...prev, [field]: true }));
+
+      // Update user via onUpdate callback
+      await onUpdate?.(editingUser.user_id, {
+        api_keys: {
+          [field]: null,
+        },
+      });
+
+      // Update local state
+      setUserApiKeyStatus(prev => ({ ...prev, [field]: false }));
+    } catch (err) {
+      console.error(`Failed to clear ${field}:`, err);
+      throw err;
+    } finally {
+      setSavingApiKeys(prev => ({ ...prev, [field]: false }));
+    }
   };
 
   const getRoleColor = (role: User['role']) => {
@@ -297,6 +372,33 @@ export const UsersTable: React.FC<UsersTableProps> = ({ users, onCreate, onUpdat
               <Select.Option value="member">Member</Select.Option>
               <Select.Option value="viewer">Viewer</Select.Option>
             </Select>
+          </Form.Item>
+
+          {/* API Keys Section */}
+          <Form.Item label="API Keys">
+            <Collapse
+              ghost
+              items={[
+                {
+                  key: 'api-keys',
+                  label: 'Configure Per-User API Keys',
+                  children: (
+                    <div style={{ paddingTop: 8 }}>
+                      <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
+                        Per-user API keys take precedence over global settings. These keys are
+                        encrypted at rest.
+                      </Typography.Paragraph>
+                      <ApiKeyFields
+                        keyStatus={userApiKeyStatus}
+                        onSave={handleApiKeySave}
+                        onClear={handleApiKeyClear}
+                        saving={savingApiKeys}
+                      />
+                    </div>
+                  ),
+                },
+              ]}
+            />
           </Form.Item>
         </Form>
       </Modal>
