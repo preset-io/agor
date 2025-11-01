@@ -911,7 +911,6 @@ function AppContent() {
               sessions={sessions}
               tasks={tasks}
               boards={boards}
-              boardObjects={boardObjects}
               comments={comments}
               repos={repos}
               worktrees={worktrees}

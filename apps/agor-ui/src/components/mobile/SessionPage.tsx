@@ -106,12 +106,7 @@ export const SessionPage: React.FC<SessionPageProps> = ({
           sessionModel={session.model_config?.model}
           users={users}
           currentUserId={currentUser?.user_id}
-          repos={repos}
-          worktrees={worktrees}
           onPermissionDecision={handlePermissionDecision}
-          // Mobile-specific: don't show worktree/terminal links
-          onOpenWorktree={undefined}
-          onOpenTerminal={undefined}
         />
       </div>
       <MobilePromptInput

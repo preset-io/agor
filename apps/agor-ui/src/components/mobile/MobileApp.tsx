@@ -1,14 +1,5 @@
 import type { AgorClient } from '@agor/core/api';
-import type {
-  Board,
-  BoardComment,
-  BoardObject,
-  Repo,
-  Session,
-  Task,
-  User,
-  Worktree,
-} from '@agor/core/types';
+import type { Board, BoardComment, Repo, Session, Task, User, Worktree } from '@agor/core/types';
 import { Drawer, Layout } from 'antd';
 import { useState } from 'react';
 import { Route, Routes } from 'react-router-dom';
@@ -25,7 +16,6 @@ interface MobileAppProps {
   sessions: Session[];
   tasks: Record<string, Task[]>;
   boards: Board[];
-  boardObjects: Record<string, BoardObject>;
   comments: BoardComment[];
   repos: Repo[];
   worktrees: Worktree[];
@@ -45,7 +35,6 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   sessions,
   tasks,
   boards,
-  boardObjects,
   comments,
   repos,
   worktrees,
@@ -136,7 +125,6 @@ export const MobileApp: React.FC<MobileAppProps> = ({
               client={client}
               boards={boards}
               comments={comments}
-              boardObjects={boardObjects}
               worktrees={worktrees}
               users={users}
               currentUser={user}

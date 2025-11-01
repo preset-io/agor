@@ -73,8 +73,8 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
   // Get the first task prompt for a session as its title
   const getSessionTitle = (sessionId: string): string => {
     const sessionTasks = tasks[sessionId] || [];
-    if (sessionTasks.length > 0 && sessionTasks[0]?.prompt) {
-      const firstPrompt = sessionTasks[0].prompt;
+    if (sessionTasks.length > 0 && sessionTasks[0]?.full_prompt) {
+      const firstPrompt = sessionTasks[0].full_prompt;
       return firstPrompt.length > 50 ? `${firstPrompt.slice(0, 50)}...` : firstPrompt;
     }
     return `Session ${sessionId.slice(0, 8)}`;
@@ -202,7 +202,9 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
                                     <Text>{getSessionTitle(session.session_id)}</Text>
                                   </div>
                                   <Text type="secondary" style={{ fontSize: 11, paddingLeft: 28 }}>
-                                    {session.agentic_tool} • {session.model}
+                                    {session.agentic_tool}
+                                    {session.model_config?.model &&
+                                      ` • ${session.model_config.model}`}
                                   </Text>
                                 </div>
                               </List.Item>
