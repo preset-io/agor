@@ -27,7 +27,7 @@ import {
   RobotOutlined,
 } from '@ant-design/icons';
 import { Bubble } from '@ant-design/x';
-import { Avatar, Collapse, Space, Tag, Typography, theme } from 'antd';
+import { Avatar, Collapse, Flex, Space, Tag, Typography, theme } from 'antd';
 import type React from 'react';
 import { useMemo } from 'react';
 import { useAgorClient } from '../../hooks/useAgorClient';
@@ -213,7 +213,7 @@ export const TaskBlock: React.FC<TaskBlockProps> = ({
           </div>
 
           {/* Task metadata */}
-          <Space size={token.sizeUnit * 1.5} style={{ marginTop: token.sizeUnit / 2 }}>
+          <Flex wrap gap={token.sizeUnit * 1.5} style={{ marginTop: token.sizeUnit / 2 }}>
             <TimerPill
               status={task.status}
               startedAt={task.message_range?.start_timestamp || task.created_at}
@@ -257,7 +257,7 @@ export const TaskBlock: React.FC<TaskBlockProps> = ({
                 Report
               </Tag>
             )}
-          </Space>
+          </Flex>
         </div>
       </Space>
     </div>
