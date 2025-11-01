@@ -1,7 +1,7 @@
 import { getRepoReferenceOptions } from '@agor/core/config/browser';
 import { Alert, App as AntApp, ConfigProvider, Spin, theme } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
-import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { BrowserRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { App as AgorApp } from './components/App';
 import { LoginPage } from './components/LoginPage';
 import { MobileApp } from './components/mobile/MobileApp';
@@ -989,8 +989,11 @@ function AppContent() {
 }
 
 function App() {
+  // Determine base path: '/ui' in production (served by daemon), '/' in dev mode
+  const basename = import.meta.env.BASE_URL === '/ui/' ? '/ui' : '';
+
   return (
-    <BrowserRouter basename="/ui">
+    <BrowserRouter basename={basename}>
       <ConfigProvider
         theme={{
           algorithm: theme.darkAlgorithm,
