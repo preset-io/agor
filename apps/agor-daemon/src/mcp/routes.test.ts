@@ -1,7 +1,7 @@
 /**
  * MCP Tools Integration Tests
  *
- * These tests verify all 9 MCP tools work end-to-end.
+ * These tests verify all 18 MCP tools work end-to-end.
  * Requires daemon to be running on localhost:3030.
  *
  * Run with: INTEGRATION=true pnpm test
@@ -55,7 +55,7 @@ async function callMCPTool(name: string, args: Record<string, unknown> = {}) {
 }
 
 describeIntegration('MCP Tools - Session Tools', () => {
-  it('tools/list returns all 15 tools', async () => {
+  it('tools/list returns all 18 tools', async () => {
     const resp = await fetch(`${DAEMON_URL}/mcp?sessionToken=${sessionToken}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -67,13 +67,16 @@ describeIntegration('MCP Tools - Session Tools', () => {
     });
 
     const data = (await resp.json()) as { result: { tools: Array<{ name: string }> } };
-    expect(data.result.tools).toHaveLength(15);
+    expect(data.result.tools).toHaveLength(18);
 
     const toolNames = data.result.tools.map(t => t.name);
     expect(toolNames).toContain('agor_sessions_list');
     expect(toolNames).toContain('agor_sessions_get');
     expect(toolNames).toContain('agor_sessions_get_current');
     expect(toolNames).toContain('agor_sessions_spawn');
+    expect(toolNames).toContain('agor_sessions_prompt');
+    expect(toolNames).toContain('agor_sessions_create');
+    expect(toolNames).toContain('agor_sessions_update');
     expect(toolNames).toContain('agor_worktrees_get');
     expect(toolNames).toContain('agor_worktrees_list');
     expect(toolNames).toContain('agor_boards_get');
@@ -122,10 +125,72 @@ describeIntegration('MCP Tools - Session Tools', () => {
       prompt: 'Test subsession task',
     });
 
-    expect(result).toHaveProperty('session_id');
-    expect(result).toHaveProperty('parent_session_id');
-    expect(result).toHaveProperty('status');
-    expect(result).toHaveProperty('worktree_id');
+    expect(result.session).toHaveProperty('session_id');
+    expect(result.session.genealogy).toHaveProperty('parent_session_id');
+    expect(result.session).toHaveProperty('status');
+    expect(result.session).toHaveProperty('worktree_id');
+    expect(result).toHaveProperty('taskId');
+  });
+
+  it('agor_sessions_update updates session metadata', async () => {
+    // Get current session
+    const currentSession = await callMCPTool('agor_sessions_get_current');
+
+    // Update title and status
+    const result = await callMCPTool('agor_sessions_update', {
+      sessionId: currentSession.session_id,
+      title: 'Updated Test Session',
+      status: 'idle',
+    });
+
+    expect(result.session.title).toBe('Updated Test Session');
+    expect(result.session.status).toBe('idle');
+    expect(result.note).toBe('Session updated successfully.');
+  });
+
+  it('agor_sessions_create creates new session with initialPrompt', async () => {
+    // Get a worktree to create session in
+    const worktrees = await callMCPTool('agor_worktrees_list', { limit: 1 });
+
+    if (worktrees.data.length === 0) {
+      console.log('No worktrees found, skipping test');
+      return;
+    }
+
+    const worktreeId = worktrees.data[0].worktree_id;
+
+    // Create session with initial prompt
+    const result = await callMCPTool('agor_sessions_create', {
+      worktreeId,
+      agenticTool: 'claude-code',
+      title: 'Test Created Session',
+      description: 'Session created via MCP tool',
+      initialPrompt: 'Say hello',
+    });
+
+    expect(result.session).toHaveProperty('session_id');
+    expect(result.session.worktree_id).toBe(worktreeId);
+    expect(result.session.agentic_tool).toBe('claude-code');
+    expect(result.session.title).toBe('Test Created Session');
+    expect(result.session.description).toBe('Session created via MCP tool');
+    expect(result).toHaveProperty('taskId'); // Should have task from initialPrompt
+    expect(result.note).toBe('Session created and initial prompt execution started.');
+  });
+
+  it('agor_sessions_prompt continues existing session', async () => {
+    // Get current session
+    const currentSession = await callMCPTool('agor_sessions_get_current');
+
+    // Continue with new prompt
+    const result = await callMCPTool('agor_sessions_prompt', {
+      sessionId: currentSession.session_id,
+      prompt: 'Additional work',
+      mode: 'continue',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result).toHaveProperty('taskId');
+    expect(result.note).toBe('Prompt added to existing session and execution started.');
   });
 });
 

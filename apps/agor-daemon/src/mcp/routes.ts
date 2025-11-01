@@ -179,6 +179,160 @@ export function setupMCPRoutes(app: Application): void {
                 required: ['prompt'],
               },
             },
+            {
+              name: 'agor_sessions_prompt',
+              description:
+                'Prompt an existing session to continue work. Supports three modes: continue (append to conversation), fork (branch at decision point), or subsession (delegate to child agent).',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  sessionId: {
+                    type: 'string',
+                    description: 'Session ID to prompt (UUIDv7 or short ID)',
+                  },
+                  prompt: {
+                    type: 'string',
+                    description: 'The prompt/task to execute',
+                  },
+                  mode: {
+                    type: 'string',
+                    enum: ['continue', 'fork', 'subsession'],
+                    description:
+                      'How to route the work: continue (add to existing session), fork (create sibling session), subsession (create child session)',
+                  },
+                  agenticTool: {
+                    type: 'string',
+                    enum: ['claude-code', 'cursor', 'codex', 'gemini'],
+                    description:
+                      'Override parent agent (for fork/subsession only, defaults to parent agent)',
+                  },
+                  permissionMode: {
+                    type: 'string',
+                    enum: [
+                      'default',
+                      'acceptEdits',
+                      'bypassPermissions',
+                      'plan',
+                      'ask',
+                      'auto',
+                      'on-failure',
+                      'allow-all',
+                    ],
+                    description:
+                      'Override permission mode (for fork/subsession only, defaults to parent mode)',
+                  },
+                  title: {
+                    type: 'string',
+                    description: 'Session title (for fork/subsession only)',
+                  },
+                  taskId: {
+                    type: 'string',
+                    description: 'Fork/spawn point task ID (optional)',
+                  },
+                },
+                required: ['sessionId', 'prompt', 'mode'],
+              },
+            },
+            {
+              name: 'agor_sessions_create',
+              description:
+                'Create a new session in an existing worktree. Useful for starting fresh work in the same codebase without forking or spawning.',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  worktreeId: {
+                    type: 'string',
+                    description: 'Worktree ID where the session will run (required)',
+                  },
+                  agenticTool: {
+                    type: 'string',
+                    enum: ['claude-code', 'cursor', 'codex', 'gemini'],
+                    description: 'Which agent to use for this session (required)',
+                  },
+                  title: {
+                    type: 'string',
+                    description: 'Session title (optional)',
+                  },
+                  description: {
+                    type: 'string',
+                    description: 'Session description (optional)',
+                  },
+                  permissionMode: {
+                    type: 'string',
+                    enum: [
+                      'default',
+                      'acceptEdits',
+                      'bypassPermissions',
+                      'plan',
+                      'ask',
+                      'auto',
+                      'on-failure',
+                      'allow-all',
+                    ],
+                    description:
+                      'Permission mode for tool approval (optional, defaults based on agenticTool)',
+                  },
+                  contextFiles: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: 'Context file paths to load (optional)',
+                  },
+                  mcpServerIds: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: 'MCP server IDs to attach (optional)',
+                  },
+                  initialPrompt: {
+                    type: 'string',
+                    description:
+                      'Initial prompt to execute immediately after creating the session (optional)',
+                  },
+                },
+                required: ['worktreeId', 'agenticTool'],
+              },
+            },
+            {
+              name: 'agor_sessions_update',
+              description:
+                'Update session metadata (title, description, status, permissions). Useful for agents to self-document their work or adjust permissions.',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  sessionId: {
+                    type: 'string',
+                    description: 'Session ID to update (UUIDv7 or short ID)',
+                  },
+                  title: {
+                    type: 'string',
+                    description: 'New session title (optional)',
+                  },
+                  description: {
+                    type: 'string',
+                    description: 'New session description (optional)',
+                  },
+                  status: {
+                    type: 'string',
+                    enum: ['idle', 'running', 'completed', 'failed'],
+                    description: 'New session status (optional)',
+                  },
+                  permissionMode: {
+                    type: 'string',
+                    enum: [
+                      'default',
+                      'acceptEdits',
+                      'bypassPermissions',
+                      'plan',
+                      'ask',
+                      'auto',
+                      'on-failure',
+                      'allow-all',
+                    ],
+                    description: 'New permission mode (optional)',
+                  },
+                },
+                required: ['sessionId'],
+              },
+            },
 
             // Worktree tools
             {
@@ -570,6 +724,401 @@ export function setupMCPRoutes(app: Application): void {
                     taskId: promptResponse.taskId,
                     status: promptResponse.status,
                     note: 'Subsession created and prompt execution started in background.',
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        } else if (name === 'agor_sessions_prompt') {
+          // Prompt an existing session with routing mode
+          if (!args?.sessionId || !args?.prompt || !args?.mode) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message: 'Invalid params: sessionId, prompt, and mode are required',
+              },
+            });
+          }
+
+          const mode = args.mode as 'continue' | 'fork' | 'subsession';
+
+          if (mode === 'continue') {
+            // Mode: continue - add to existing conversation
+            console.log(
+              `➡️  MCP continuing session ${args.sessionId.substring(0, 8)} with new prompt`
+            );
+
+            const promptResponse = await app.service('/sessions/:id/prompt').create(
+              {
+                prompt: args.prompt,
+                permissionMode: args.permissionMode,
+                stream: true,
+              },
+              {
+                ...baseServiceParams,
+                route: { id: args.sessionId },
+              }
+            );
+
+            mcpResponse = {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify(
+                    {
+                      success: true,
+                      taskId: promptResponse.taskId,
+                      status: promptResponse.status,
+                      note: 'Prompt added to existing session and execution started.',
+                    },
+                    null,
+                    2
+                  ),
+                },
+              ],
+            };
+          } else if (mode === 'fork') {
+            // Mode: fork - create sibling session
+            console.log(`🔀 MCP forking session ${args.sessionId.substring(0, 8)}`);
+
+            const forkData: {
+              prompt: string;
+              task_id?: string;
+            } = {
+              prompt: args.prompt,
+            };
+
+            if (args.taskId) {
+              forkData.task_id = args.taskId;
+            }
+
+            // Call fork method on sessions service
+            const forkedSession = await (
+              app.service('sessions') as unknown as SessionsServiceImpl
+            ).fork(args.sessionId, forkData, baseServiceParams);
+
+            // Override agentic tool if specified
+            if (args.agenticTool) {
+              await app.service('sessions').patch(
+                forkedSession.session_id,
+                { agentic_tool: args.agenticTool as AgenticToolName },
+                baseServiceParams
+              );
+            }
+
+            // Override permission mode if specified
+            if (args.permissionMode) {
+              const { mapPermissionMode } = await import('@agor/core/utils/permission-mode-mapper');
+              const mappedMode = mapPermissionMode(
+                args.permissionMode,
+                forkedSession.agentic_tool
+              );
+              await app.service('sessions').patch(
+                forkedSession.session_id,
+                {
+                  permission_config: {
+                    ...forkedSession.permission_config,
+                    mode: mappedMode,
+                  },
+                },
+                baseServiceParams
+              );
+            }
+
+            // Set custom title if provided
+            if (args.title) {
+              await app.service('sessions').patch(
+                forkedSession.session_id,
+                { title: args.title },
+                baseServiceParams
+              );
+            }
+
+            // Get updated session
+            const updatedSession = await app.service('sessions').get(
+              forkedSession.session_id,
+              baseServiceParams
+            );
+
+            // Trigger prompt execution
+            console.log(`🚀 Triggering prompt execution for forked session`);
+            const promptResponse = await app.service('/sessions/:id/prompt').create(
+              {
+                prompt: args.prompt,
+                permissionMode: updatedSession.permission_config?.mode,
+                stream: true,
+              },
+              {
+                ...baseServiceParams,
+                route: { id: forkedSession.session_id },
+              }
+            );
+
+            mcpResponse = {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify(
+                    {
+                      session: updatedSession,
+                      taskId: promptResponse.taskId,
+                      status: promptResponse.status,
+                      note: 'Forked session created and prompt execution started.',
+                    },
+                    null,
+                    2
+                  ),
+                },
+              ],
+            };
+          } else if (mode === 'subsession') {
+            // Mode: subsession - spawn child session (reuse existing spawn logic)
+            console.log(`🌱 MCP spawning subsession from ${args.sessionId.substring(0, 8)}`);
+
+            const spawnData: {
+              prompt: string;
+              title?: string;
+              agentic_tool?: AgenticToolName;
+              task_id?: string;
+            } = {
+              prompt: args.prompt,
+            };
+
+            if (args.title) {
+              spawnData.title = args.title;
+            }
+
+            if (args.agenticTool) {
+              spawnData.agentic_tool = args.agenticTool as AgenticToolName;
+            }
+
+            if (args.taskId) {
+              spawnData.task_id = args.taskId;
+            }
+
+            // Call spawn method on sessions service
+            const childSession = await (
+              app.service('sessions') as unknown as SessionsServiceImpl
+            ).spawn(args.sessionId, spawnData, baseServiceParams);
+
+            // Override permission mode if specified
+            if (args.permissionMode) {
+              const { mapPermissionMode } = await import('@agor/core/utils/permission-mode-mapper');
+              const mappedMode = mapPermissionMode(args.permissionMode, childSession.agentic_tool);
+              await app.service('sessions').patch(
+                childSession.session_id,
+                {
+                  permission_config: {
+                    ...childSession.permission_config,
+                    mode: mappedMode,
+                  },
+                },
+                baseServiceParams
+              );
+            }
+
+            // Get updated session
+            const updatedSession = await app.service('sessions').get(
+              childSession.session_id,
+              baseServiceParams
+            );
+
+            // Trigger prompt execution
+            console.log(`🚀 Triggering prompt execution for subsession`);
+            const promptResponse = await app.service('/sessions/:id/prompt').create(
+              {
+                prompt: args.prompt,
+                permissionMode: updatedSession.permission_config?.mode,
+                stream: true,
+              },
+              {
+                ...baseServiceParams,
+                route: { id: childSession.session_id },
+              }
+            );
+
+            mcpResponse = {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify(
+                    {
+                      session: updatedSession,
+                      taskId: promptResponse.taskId,
+                      status: promptResponse.status,
+                      note: 'Subsession created and prompt execution started.',
+                    },
+                    null,
+                    2
+                  ),
+                },
+              ],
+            };
+          }
+        } else if (name === 'agor_sessions_create') {
+          // Create a new session in an existing worktree
+          if (!args?.worktreeId || !args?.agenticTool) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message: 'Invalid params: worktreeId and agenticTool are required',
+              },
+            });
+          }
+
+          console.log(`✨ MCP creating new session in worktree ${args.worktreeId.substring(0, 8)}`);
+
+          // Get worktree to extract repo context
+          const worktree = await app.service('worktrees').get(args.worktreeId, baseServiceParams);
+
+          // Get current git state
+          const { getGitState, getCurrentBranch } = await import('@agor/core/git');
+          const currentSha = await getGitState(worktree.path);
+          const currentRef = await getCurrentBranch(worktree.path);
+
+          // Determine permission mode (default or user-specified)
+          const { getDefaultPermissionMode } = await import('@agor/core/types');
+          const { mapPermissionMode } = await import('@agor/core/utils/permission-mode-mapper');
+          const agenticTool = args.agenticTool as AgenticToolName;
+          const requestedMode = args.permissionMode || getDefaultPermissionMode(agenticTool);
+          const permissionMode = mapPermissionMode(requestedMode, agenticTool);
+
+          // Create session
+          const sessionData: Record<string, unknown> = {
+            worktree_id: args.worktreeId,
+            agentic_tool: agenticTool,
+            status: 'idle',
+            title: args.title,
+            description: args.description,
+            permission_config: {
+              mode: permissionMode,
+              allowedTools: [],
+            },
+            contextFiles: args.contextFiles || [],
+            git_state: {
+              ref: currentRef,
+              base_sha: currentSha,
+              current_sha: currentSha,
+            },
+            genealogy: { children: [] },
+            tasks: [],
+            message_count: 0,
+          };
+
+          const session = await app.service('sessions').create(sessionData, baseServiceParams);
+          console.log(`✅ Session created: ${session.session_id.substring(0, 8)}`);
+
+          // Attach MCP servers if specified
+          if (args.mcpServerIds && Array.isArray(args.mcpServerIds)) {
+            for (const mcpServerId of args.mcpServerIds) {
+              await app.service('session-mcp-servers').create(
+                {
+                  session_id: session.session_id,
+                  mcp_server_id: mcpServerId,
+                },
+                baseServiceParams
+              );
+            }
+            console.log(`✅ Attached ${args.mcpServerIds.length} MCP servers`);
+          }
+
+          // Execute initial prompt if provided
+          let promptResponse = null;
+          if (args.initialPrompt) {
+            console.log(`🚀 Executing initial prompt`);
+            promptResponse = await app.service('/sessions/:id/prompt').create(
+              {
+                prompt: args.initialPrompt,
+                permissionMode: permissionMode,
+                stream: true,
+              },
+              {
+                ...baseServiceParams,
+                route: { id: session.session_id },
+              }
+            );
+          }
+
+          mcpResponse = {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(
+                  {
+                    session,
+                    taskId: promptResponse?.taskId,
+                    note: args.initialPrompt
+                      ? 'Session created and initial prompt execution started.'
+                      : 'Session created successfully.',
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        } else if (name === 'agor_sessions_update') {
+          // Update session metadata
+          if (!args?.sessionId) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message: 'Invalid params: sessionId is required',
+              },
+            });
+          }
+
+          // Validate at least one field is provided
+          if (!args.title && !args.description && !args.status && !args.permissionMode) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message: 'Invalid params: at least one field (title, description, status, permissionMode) must be provided',
+              },
+            });
+          }
+
+          console.log(`📝 MCP updating session ${args.sessionId.substring(0, 8)}`);
+
+          // Build update object
+          const updates: Record<string, unknown> = {};
+          if (args.title !== undefined) updates.title = args.title;
+          if (args.description !== undefined) updates.description = args.description;
+          if (args.status !== undefined) updates.status = args.status;
+
+          // Handle permission mode update
+          if (args.permissionMode !== undefined) {
+            const currentSession = await app.service('sessions').get(args.sessionId, baseServiceParams);
+            const { mapPermissionMode } = await import('@agor/core/utils/permission-mode-mapper');
+            const mappedMode = mapPermissionMode(args.permissionMode, currentSession.agentic_tool);
+            updates.permission_config = {
+              ...currentSession.permission_config,
+              mode: mappedMode,
+            };
+          }
+
+          // Update session
+          const session = await app.service('sessions').patch(args.sessionId, updates, baseServiceParams);
+          console.log(`✅ Session updated`);
+
+          mcpResponse = {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(
+                  {
+                    session,
+                    note: 'Session updated successfully.',
                   },
                   null,
                   2
