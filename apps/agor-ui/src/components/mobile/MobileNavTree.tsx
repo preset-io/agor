@@ -49,7 +49,7 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
   // Get the first task prompt for a session as its title
   const getSessionTitle = (sessionId: string): string => {
     const sessionTasks = tasks[sessionId] || [];
-    if (sessionTasks.length > 0) {
+    if (sessionTasks.length > 0 && sessionTasks[0]?.prompt) {
       const firstPrompt = sessionTasks[0].prompt;
       return firstPrompt.length > 50 ? `${firstPrompt.slice(0, 50)}...` : firstPrompt;
     }
