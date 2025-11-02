@@ -48,6 +48,11 @@ function getGitBinary(): string | undefined {
 function createGit(baseDir?: string) {
   const gitBinary = getGitBinary();
 
+  // Set environment variables to disable interactive prompts
+  // This makes git fail immediately if credentials are needed
+  process.env.GIT_TERMINAL_PROMPT = '0';
+  process.env.GIT_ASKPASS = 'echo'; // Return empty string for any password prompt
+
   // Always disable strict host key checking for SSH operations
   // This prevents interactive prompts for unknown hosts in automated environments
   //
@@ -63,13 +68,6 @@ function createGit(baseDir?: string) {
     baseDir,
     binary: gitBinary,
     config,
-    // Disable terminal prompts by setting GIT_TERMINAL_PROMPT=0
-    // This makes git fail immediately if credentials are needed
-    env: {
-      ...process.env,
-      GIT_TERMINAL_PROMPT: '0',
-      GIT_ASKPASS: 'echo', // Fallback: return empty string for any password prompt
-    },
   });
 }
 
