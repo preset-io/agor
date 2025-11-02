@@ -244,7 +244,7 @@ export class SchedulerService {
     const renderedPrompt = this.renderPrompt(schedule.prompt_template, worktree);
 
     // 3. Get current run index (count of all scheduled sessions for this worktree)
-    const scheduledSessions = allSessions.filter(s => s.scheduled_from_worktree === true);
+    const scheduledSessions = worktreeSessions.filter(s => s.scheduled_from_worktree === true);
     const runIndex = scheduledSessions.length + 1;
 
     // 4. Create session with schedule metadata
