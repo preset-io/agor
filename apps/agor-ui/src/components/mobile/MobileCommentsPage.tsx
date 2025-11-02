@@ -1,5 +1,5 @@
 import type { AgorClient } from '@agor/core/api';
-import type { Board, BoardComment, Worktree } from '@agor/core/types';
+import type { Board, BoardComment, User, Worktree } from '@agor/core/types';
 import { Alert } from 'antd';
 import { useParams } from 'react-router-dom';
 import { CommentsPanel } from '../CommentsPanel';
