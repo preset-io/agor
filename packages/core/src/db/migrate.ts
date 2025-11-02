@@ -22,9 +22,10 @@
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import bcryptjs from 'bcryptjs';
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { migrate } from 'drizzle-orm/libsql/migrator';
 import type { Database } from './client';
+import { boards, users } from './schema';
 
 /**
  * Error thrown when migration fails
@@ -123,14 +124,6 @@ export async function runMigrations(db: Database): Promise<void> {
   try {
     console.log('Running database migrations...');
 
-    // Check if migrations table exists
-    const hasTable = await hasMigrationsTable(db);
-
-    if (!hasTable) {
-      // First time with new migration system - bootstrap it
-      await bootstrapMigrations(db);
-    }
-
     // Resolve migrations folder path relative to this file
     // In production: packages/core/dist/db/migrate.js -> packages/core/drizzle
     // In dev: packages/core/src/db/migrate.ts -> packages/core/drizzle
@@ -139,9 +132,10 @@ export async function runMigrations(db: Database): Promise<void> {
     const migrationsFolder = join(__dirname, '..', '..', 'drizzle');
 
     // Drizzle handles everything:
-    // 1. Checks which migrations are pending
-    // 2. Runs them in order within transaction
-    // 3. Updates tracking table
+    // 1. Creates __drizzle_migrations table if needed
+    // 2. Checks which migrations are pending
+    // 3. Runs them in order within transaction
+    // 4. Updates tracking table
     await migrate(db, { migrationsFolder });
 
     console.log('✅ Migrations complete');
@@ -173,11 +167,9 @@ export async function seedInitialData(db: Database): Promise<void> {
     const now = Date.now();
 
     // 1. Check if default board exists (by slug to avoid duplicates)
-    const boardResult = await db.run(sql`
-      SELECT board_id FROM boards WHERE slug = 'default'
-    `);
+    const existingBoard = await db.select().from(boards).where(eq(boards.slug, 'default')).get();
 
-    if (boardResult.rows.length === 0) {
+    if (!existingBoard) {
       // Create default board
       const boardId = generateId();
 
@@ -203,11 +195,8 @@ export async function seedInitialData(db: Database): Promise<void> {
     }
 
     // 2. Check if any users exist
-    const usersResult = await db.run(sql`
-      SELECT COUNT(*) as count FROM users
-    `);
-
-    const userCount = (usersResult.rows[0] as unknown as { count: number }).count;
+    const userCountResult = await db.select({ count: sql<number>`count(*)` }).from(users).get();
+    const userCount = userCountResult?.count || 0;
 
     if (userCount === 0) {
       // Create default admin user
