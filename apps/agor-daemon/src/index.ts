@@ -1128,7 +1128,7 @@ async function main() {
 
           // Only rate limit external requests (not internal service calls)
           if (context.params.provider) {
-            const identifier = data?.email || context.params.ip || 'unknown';
+            const identifier = data?.email || (context.params as any).ip || 'unknown';
 
             if (!checkAuthRateLimit(identifier)) {
               console.warn(`⚠️  Rate limit exceeded for authentication attempt: ${identifier}`);
@@ -1179,7 +1179,7 @@ async function main() {
     async create(data: { refreshToken: string }, params?: Params) {
       // SECURITY: Rate limit refresh token requests
       if (params?.provider) {
-        const identifier = params.ip || 'unknown';
+        const identifier = (params as any).ip || 'unknown';
         if (!checkAuthRateLimit(identifier)) {
           console.warn(`⚠️  Rate limit exceeded for token refresh: ${identifier}`);
           throw new Error('Too many token refresh attempts. Please try again in 15 minutes.');
@@ -2171,7 +2171,7 @@ async function main() {
 
       // If user is authenticated (via requireAuth hook check), provide detailed info
       // Check if this is an authenticated request
-      const isAuthenticated = params?.user !== undefined;
+      const isAuthenticated = (params as any)?.user !== undefined;
 
       if (isAuthenticated) {
         return {
@@ -2180,8 +2180,8 @@ async function main() {
           auth: {
             requireAuth: config.daemon?.requireAuth === true,
             allowAnonymous: allowAnonymous,
-            user: params?.user?.email,
-            role: params?.user?.role,
+            user: (params as any)?.user?.email,
+            role: (params as any)?.user?.role,
           },
           mcp: {
             enabled: config.daemon?.mcpEnabled !== false,
