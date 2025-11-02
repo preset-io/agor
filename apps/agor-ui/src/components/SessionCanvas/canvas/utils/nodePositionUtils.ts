@@ -38,7 +38,7 @@ export function getAbsoluteNodePosition(node: Node, allNodes: Node[]): { x: numb
 
   // Node has parent - calculate absolute from relative position
   if (node.parentId) {
-    const parentNode = allNodes.find(n => n.id === node.parentId);
+    const parentNode = allNodes.find((n) => n.id === node.parentId);
     if (parentNode) {
       // Recursive: parent might also need resolution
       const parentPos = getAbsoluteNodePosition(parentNode, allNodes);

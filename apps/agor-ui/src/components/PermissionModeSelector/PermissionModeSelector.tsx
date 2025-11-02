@@ -207,7 +207,7 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
         <Space size={8}>
           <Select
             value={codexSandboxMode}
-            onChange={val => onCodexChange?.(val, codexApprovalPolicy)}
+            onChange={(val) => onCodexChange?.(val, codexApprovalPolicy)}
             size={size}
             placeholder="Sandbox"
             options={CODEX_SANDBOX_MODES.map(({ value, label, description }) => ({
@@ -218,7 +218,7 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
           />
           <Select
             value={codexApprovalPolicy}
-            onChange={val => onCodexChange?.(codexSandboxMode, val)}
+            onChange={(val) => onCodexChange?.(codexSandboxMode, val)}
             size={size}
             placeholder="Approval"
             options={CODEX_APPROVAL_POLICIES.map(({ value, label, description }) => ({
@@ -250,7 +250,7 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
 
   // Full mode: render as Radio group with descriptions
   return (
-    <Radio.Group value={effectiveValue} onChange={e => onChange?.(e.target.value)}>
+    <Radio.Group value={effectiveValue} onChange={(e) => onChange?.(e.target.value)}>
       <Space direction="vertical" style={{ width: '100%' }}>
         {modes.map(({ mode, label, description, icon, color }) => (
           <Radio key={mode} value={mode}>

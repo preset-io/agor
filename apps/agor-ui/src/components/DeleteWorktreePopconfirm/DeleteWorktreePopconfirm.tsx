@@ -44,7 +44,7 @@ export const DeleteWorktreePopconfirm: React.FC<DeleteWorktreePopconfirmProps> =
           )}
           <Checkbox
             checked={deleteFromFilesystem}
-            onChange={e => setDeleteFromFilesystem(e.target.checked)}
+            onChange={(e) => setDeleteFromFilesystem(e.target.checked)}
             style={{ marginTop: 8 }}
           >
             Also delete worktree from filesystem

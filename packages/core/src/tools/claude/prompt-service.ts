@@ -234,7 +234,7 @@ export class ClaudePromptService {
         }
 
         // If we got an end event, break the outer loop
-        if (events.some(e => e.type === 'end')) {
+        if (events.some((e) => e.type === 'end')) {
           break;
         }
       }
@@ -319,7 +319,9 @@ export class ClaudePromptService {
 
     // Store query reference for interruption via stopTask()
     this.activeQueries.set(sessionId, result);
-    console.log(`📌 Stored query reference for session ${sessionId.substring(0, 8)} (non-streaming)`);
+    console.log(
+      `📌 Stored query reference for session ${sessionId.substring(0, 8)} (non-streaming)`
+    );
 
     // Collect response messages from async generator
     // IMPORTANT: Keep assistant messages SEPARATE (don't merge into one)
@@ -376,7 +378,9 @@ export class ClaudePromptService {
     } finally {
       // Clean up query reference - always runs regardless of success/failure/stop
       this.activeQueries.delete(sessionId);
-      console.log(`🧹 Cleaned up query reference for session ${sessionId.substring(0, 8)} (non-streaming)`);
+      console.log(
+        `🧹 Cleaned up query reference for session ${sessionId.substring(0, 8)} (non-streaming)`
+      );
     }
 
     // Extract token counts from SDK result metadata

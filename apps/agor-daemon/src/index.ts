@@ -350,7 +350,7 @@ async function main() {
         maxHttpBufferSize: 1e6, // 1MB max message size
         transports: ['websocket', 'polling'], // Prefer WebSocket
       },
-      io => {
+      (io) => {
         // Store Socket.io server instance for shutdown
         socketServer = io;
 
@@ -411,7 +411,7 @@ async function main() {
         });
 
         // Configure Socket.io for cursor presence events
-        io.on('connection', socket => {
+        io.on('connection', (socket) => {
           activeConnections++;
           const user = (socket as FeathersSocket).feathers?.user;
           console.log(
@@ -462,7 +462,7 @@ async function main() {
           });
 
           // Track disconnections
-          socket.on('disconnect', reason => {
+          socket.on('disconnect', (reason) => {
             activeConnections--;
             console.log(
               `🔌 Socket.io disconnected: ${socket.id} (reason: ${reason}, remaining: ${activeConnections})`
@@ -470,7 +470,7 @@ async function main() {
           });
 
           // Handle socket errors
-          socket.on('error', error => {
+          socket.on('error', (error) => {
             console.error(`❌ Socket.io error on ${socket.id}:`, error);
           });
         });
@@ -554,11 +554,9 @@ async function main() {
     await mkdir(dbDir, { recursive: true });
   }
 
-  // Check if database file exists
-  let dbExists = false;
+  // Check if database file exists (create message if needed)
   try {
     await access(dbFilePath, constants.F_OK);
-    dbExists = true;
   } catch {
     console.log('🆕 Database does not exist - will create on first connection');
   }
@@ -648,7 +646,7 @@ async function main() {
       // Return all session-MCP relationships
       // This allows the UI to fetch all relationships in one call
       const rows = await db.select().from(sessionMcpServers).all();
-      return rows.map(row => ({
+      return rows.map((row) => ({
         session_id: row.session_id,
         mcp_server_id: row.mcp_server_id,
         enabled: Boolean(row.enabled),
@@ -744,7 +742,7 @@ async function main() {
   app.service('users').hooks({
     before: {
       find: [
-        context => {
+        (context) => {
           const params = context.params as AuthenticatedParams;
 
           if (!params.provider) {
@@ -767,13 +765,13 @@ async function main() {
         },
       ],
       get: [
-        context => {
+        (context) => {
           ensureMinimumRole(context.params as AuthenticatedParams, 'admin', 'view users');
           return context;
         },
       ],
       create: [
-        async context => {
+        async (context) => {
           const params = context.params as AuthenticatedParams;
 
           if (!params.provider) {
@@ -807,7 +805,7 @@ async function main() {
       all: [requireAuth],
       create: [
         requireMinimumRole('member', 'create sessions'),
-        async context => {
+        async (context) => {
           // Inject user_id if authenticated, otherwise use 'anonymous'
           const user = (context.params as { user?: { user_id: string; email: string } }).user;
           const userId = user?.user_id || 'anonymous';
@@ -821,7 +819,7 @@ async function main() {
           );
 
           if (Array.isArray(context.data)) {
-            context.data.forEach(item => {
+            context.data.forEach((item) => {
               if (!item.created_by) (item as Record<string, unknown>).created_by = userId;
             });
           } else if (context.data && !context.data.created_by) {
@@ -858,7 +856,7 @@ async function main() {
     },
     after: {
       create: [
-        async context => {
+        async (context) => {
           // Skip MCP setup if MCP server is disabled
           if (config.daemon?.mcpEnabled === false) {
             return context;
@@ -925,7 +923,7 @@ async function main() {
       all: [requireAuth],
       create: [
         requireMinimumRole('member', 'create tasks'),
-        async context => {
+        async (context) => {
           // Inject user_id if authenticated, otherwise use 'anonymous'
           const user = (context.params as { user?: { user_id: string; email: string } }).user;
           const userId = user?.user_id || 'anonymous';
@@ -939,7 +937,7 @@ async function main() {
           );
 
           if (Array.isArray(context.data)) {
-            context.data.forEach(item => {
+            context.data.forEach((item) => {
               if (!item.created_by) (item as Record<string, unknown>).created_by = userId;
             });
           } else if (context.data && !context.data.created_by) {
@@ -958,14 +956,14 @@ async function main() {
       all: [requireAuth],
       create: [
         requireMinimumRole('member', 'create boards'),
-        async context => {
+        async (context) => {
           // Inject user_id if authenticated, otherwise use 'anonymous'
           const userId =
             (context.params as { user?: { user_id: string; email: string } }).user?.user_id ||
             'anonymous';
 
           if (Array.isArray(context.data)) {
-            context.data.forEach(item => {
+            context.data.forEach((item) => {
               if (!item.created_by) (item as Record<string, unknown>).created_by = userId;
             });
           } else if (context.data && !context.data.created_by) {
@@ -976,7 +974,7 @@ async function main() {
       ],
       patch: [
         requireMinimumRole('member', 'update boards'),
-        async context => {
+        async (context) => {
           // Handle atomic board object operations via _action parameter
           const contextData = context.data || {};
           const { _action, objectId, objectData, objects, deleteAssociatedSessions } =
@@ -1122,7 +1120,7 @@ async function main() {
   app.service('authentication').hooks({
     before: {
       create: [
-        async context => {
+        async (context) => {
           // SECURITY: Rate limit authentication attempts
           const data = Array.isArray(context.data) ? context.data[0] : context.data;
 
@@ -1148,7 +1146,7 @@ async function main() {
     },
     after: {
       create: [
-        async context => {
+        async (context) => {
           // Only add refresh token for non-anonymous authentication
           if (context.result?.user && context.result.user.user_id !== 'anonymous') {
             // Generate refresh token (30 days)
@@ -1498,7 +1496,7 @@ async function main() {
             chunk,
           });
         },
-        onStreamEnd: messageId => {
+        onStreamEnd: (messageId) => {
           console.debug(
             `📡 [${new Date().toISOString()}] Streaming end: ${messageId.substring(0, 8)}`
           );
@@ -1579,7 +1577,7 @@ async function main() {
         }
 
         executeMethod
-          .then(async result => {
+          .then(async (result) => {
             try {
               // PHASE 3: Mark task as completed and update message count
               // (Messages already created with task_id, no need to patch)
@@ -1678,7 +1676,7 @@ async function main() {
               await safePatch(tasksService, task.task_id, { status: TaskStatus.FAILED }, 'Task');
             }
           })
-          .catch(async error => {
+          .catch(async (error) => {
             console.error(`❌ Error executing prompt for task ${task.task_id}:`, error);
 
             // Check if error might be due to stale/invalid Agent SDK resume session
@@ -2252,7 +2250,7 @@ async function main() {
 
   // Also check for sessions that had orphaned tasks (even if session status wasn't RUNNING)
   // This handles cases where task was stuck but session status wasn't updated
-  const sessionIdsWithOrphanedTasks = new Set(orphanedTasks.map(t => t.session_id));
+  const sessionIdsWithOrphanedTasks = new Set(orphanedTasks.map((t) => t.session_id));
   if (sessionIdsWithOrphanedTasks.size > 0) {
     console.log(
       `   Checking ${sessionIdsWithOrphanedTasks.size} session(s) with orphaned tasks...`
@@ -2324,7 +2322,7 @@ async function main() {
       // Close Socket.io connections (this also closes the HTTP server)
       if (socketServer) {
         console.log('🔌 Closing Socket.io and HTTP server...');
-        await new Promise<void>(resolve => {
+        await new Promise<void>((resolve) => {
           socketServer?.close(() => {
             console.log('✅ Server closed');
             resolve();
@@ -2333,7 +2331,7 @@ async function main() {
       } else {
         // Fallback: close HTTP server directly if Socket.io wasn't initialized
         await new Promise<void>((resolve, reject) => {
-          server.close(err => {
+          server.close((err) => {
             if (err) {
               console.error('❌ Error closing server:', err);
               reject(err);
@@ -2357,7 +2355,7 @@ async function main() {
 }
 
 // Start the daemon
-main().catch(error => {
+main().catch((error) => {
   console.error('Failed to start daemon:', error);
   process.exit(1);
 });

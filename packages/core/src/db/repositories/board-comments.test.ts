@@ -488,7 +488,7 @@ describe('BoardCommentsRepository.update', () => {
     const data = createCommentData({ board_id: board.board_id });
     const created = await repo.create(data);
 
-    await new Promise(resolve => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, 10));
 
     const updated = await repo.update(data.comment_id!, { content: 'Updated' });
 

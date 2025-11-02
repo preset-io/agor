@@ -13,7 +13,7 @@ import type { MessagesRepository } from '../../db/repositories/messages';
 import type { SessionMCPServerRepository } from '../../db/repositories/session-mcp-servers';
 import type { SessionRepository } from '../../db/repositories/sessions';
 import type { WorktreeRepository } from '../../db/repositories/worktrees';
-import type { CodexPermissionMode, PermissionMode, SessionID, TaskID } from '../../types';
+import type { PermissionMode, SessionID, TaskID } from '../../types';
 import { DEFAULT_CODEX_MODEL } from './models';
 
 export interface CodexPromptResult {
@@ -90,7 +90,6 @@ export type CodexStreamEvent =
 
 export class CodexPromptService {
   private codex: Codex;
-  private lastApprovalPolicy: string | null = null;
   private lastMCPServersHash: string | null = null;
   private stopRequested = new Map<SessionID, boolean>();
   private apiKey: string | undefined;
@@ -158,12 +157,12 @@ export class CodexPromptService {
 
     console.log(`📊 [Codex MCP] Found ${mcpServers.length} MCP server(s) for session`);
     if (mcpServers.length > 0) {
-      console.log(`   Servers: ${mcpServers.map(s => `${s.name} (${s.transport})`).join(', ')}`);
+      console.log(`   Servers: ${mcpServers.map((s) => `${s.name} (${s.transport})`).join(', ')}`);
     }
 
     // Filter MCP servers: Codex ONLY supports stdio transport (not HTTP/SSE)
-    const stdioServers = mcpServers.filter(s => s.transport === 'stdio');
-    const unsupportedServers = mcpServers.filter(s => s.transport !== 'stdio');
+    const stdioServers = mcpServers.filter((s) => s.transport === 'stdio');
+    const unsupportedServers = mcpServers.filter((s) => s.transport !== 'stdio');
 
     if (unsupportedServers.length > 0) {
       console.warn(
@@ -213,7 +212,7 @@ approval_policy = "${approvalPolicy}"
 ${mcpServersToml}`;
 
     // Create hash to detect changes (only stdio servers count)
-    const configHash = `${approvalPolicy}:${JSON.stringify(stdioServers.map(s => s.mcp_server_id))}`;
+    const configHash = `${approvalPolicy}:${JSON.stringify(stdioServers.map((s) => s.mcp_server_id))}`;
 
     // Skip if config hasn't changed (avoid unnecessary file I/O)
     if (this.lastMCPServersHash === configHash) {
@@ -243,7 +242,7 @@ ${mcpServersToml}`;
     this.reinitializeCodex();
     if (stdioServers.length > 0) {
       console.log(
-        `✅ [Codex MCP] Configured ${stdioServers.length} STDIO MCP server(s): ${stdioServers.map(s => s.name).join(', ')}`
+        `✅ [Codex MCP] Configured ${stdioServers.length} STDIO MCP server(s): ${stdioServers.map((s) => s.name).join(', ')}`
       );
     }
 

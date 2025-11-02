@@ -730,7 +730,7 @@ describe('Error Handling', () => {
   it('should handle missing required session fields', async () => {
     const db = createTestDb();
     await initializeDatabase(db);
-    const { worktree } = await setupRepoAndWorktree(db);
+    await setupRepoAndWorktree(db);
 
     const repo = new SessionRepository(db);
 

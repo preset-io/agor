@@ -1,11 +1,9 @@
 import type { AgorClient } from '@agor/core/api';
 import type { AgorConfig } from '@agor/core/config';
 import { InfoCircleOutlined, WarningOutlined } from '@ant-design/icons';
-import { Alert, Spin, Typography, theme } from 'antd';
+import { Alert, Spin, theme } from 'antd';
 import { useEffect, useState } from 'react';
 import { ApiKeyFields, type ApiKeyStatus } from '../ApiKeyFields';
-
-const { Text } = Typography;
 
 export interface AgenticToolsTabProps {
   client: AgorClient | null;
@@ -58,7 +56,7 @@ export const AgenticToolsTab: React.FC<AgenticToolsTabProps> = ({ client }) => {
     if (!client) return;
 
     try {
-      setSaving(prev => ({ ...prev, [field]: true }));
+      setSaving((prev) => ({ ...prev, [field]: true }));
       setError(null);
 
       await client.service('config').patch(null, {
@@ -67,13 +65,13 @@ export const AgenticToolsTab: React.FC<AgenticToolsTabProps> = ({ client }) => {
         },
       });
 
-      setKeyStatus(prev => ({ ...prev, [field]: true }));
+      setKeyStatus((prev) => ({ ...prev, [field]: true }));
     } catch (err) {
       console.error(`Failed to save ${field}:`, err);
       setError(err instanceof Error ? err.message : `Failed to save ${field}`);
       throw err;
     } finally {
-      setSaving(prev => ({ ...prev, [field]: false }));
+      setSaving((prev) => ({ ...prev, [field]: false }));
     }
   };
 
@@ -82,7 +80,7 @@ export const AgenticToolsTab: React.FC<AgenticToolsTabProps> = ({ client }) => {
     if (!client) return;
 
     try {
-      setSaving(prev => ({ ...prev, [field]: true }));
+      setSaving((prev) => ({ ...prev, [field]: true }));
       setError(null);
 
       await client.service('config').patch(null, {
@@ -91,13 +89,13 @@ export const AgenticToolsTab: React.FC<AgenticToolsTabProps> = ({ client }) => {
         },
       });
 
-      setKeyStatus(prev => ({ ...prev, [field]: false }));
+      setKeyStatus((prev) => ({ ...prev, [field]: false }));
     } catch (err) {
       console.error(`Failed to clear ${field}:`, err);
       setError(err instanceof Error ? err.message : `Failed to clear ${field}`);
       throw err;
     } finally {
-      setSaving(prev => ({ ...prev, [field]: false }));
+      setSaving((prev) => ({ ...prev, [field]: false }));
     }
   };
 

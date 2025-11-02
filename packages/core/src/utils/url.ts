@@ -16,10 +16,7 @@
  * @param fieldName - Friendly field name for error messages
  * @throws Error if the URL is present but invalid or not http(s)
  */
-export function normalizeOptionalHttpUrl(
-  value: unknown,
-  fieldName = 'value'
-): string | undefined {
+export function normalizeOptionalHttpUrl(value: unknown, fieldName = 'value'): string | undefined {
   if (value === null || value === undefined) {
     return undefined;
   }

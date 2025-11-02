@@ -1,5 +1,4 @@
-import type { Session, Task, User } from '@agor/core/types';
-import { TaskStatus } from '@agor/core/types';
+import type { Session, Task } from '@agor/core/types';
 import {
   BranchesOutlined,
   CloseOutlined,
@@ -108,7 +107,7 @@ const SessionCard = ({
             type="text"
             icon={<PlusCircleOutlined />}
             size="small"
-            onClick={e => {
+            onClick={(e) => {
               e.stopPropagation();
               onSessionClick?.();
             }}
@@ -118,7 +117,7 @@ const SessionCard = ({
         </div>
       )}
 
-      {visibleTasks.map(task => (
+      {visibleTasks.map((task) => (
         <TaskListItem key={task.task_id} task={task} onClick={() => onTaskClick?.(task.task_id)} />
       ))}
     </div>
@@ -169,7 +168,7 @@ const SessionCard = ({
               <Tag
                 icon={<PushpinFilled />}
                 color="blue"
-                onClick={e => {
+                onClick={(e) => {
                   e.stopPropagation();
                   onUnpin?.(session.session_id);
                 }}
@@ -193,7 +192,7 @@ const SessionCard = ({
                 type="text"
                 size="small"
                 icon={<ExpandOutlined />}
-                onClick={e => {
+                onClick={(e) => {
                   e.stopPropagation();
                   onSessionClick();
                 }}
@@ -205,7 +204,7 @@ const SessionCard = ({
                 type="text"
                 size="small"
                 icon={<SettingOutlined />}
-                onClick={e => {
+                onClick={(e) => {
                   e.stopPropagation();
                   onOpenSettings(session.session_id);
                 }}
@@ -217,7 +216,7 @@ const SessionCard = ({
                 type="text"
                 size="small"
                 icon={<CloseOutlined />}
-                onClick={e => {
+                onClick={(e) => {
                   e.stopPropagation();
                   handleDelete();
                 }}
@@ -252,7 +251,7 @@ const SessionCard = ({
                 session.description &&
                 session.description.length > SESSION_TITLE_FALLBACK_CHARS
               ) {
-                return session.description.substring(0, SESSION_TITLE_FALLBACK_CHARS) + '...';
+                return `${session.description.substring(0, SESSION_TITLE_FALLBACK_CHARS)}...`;
               }
               return displayText;
             })()}

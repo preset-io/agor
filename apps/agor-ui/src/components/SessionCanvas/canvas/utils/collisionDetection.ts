@@ -39,7 +39,7 @@ export function findIntersectingObjects(
   allNodes: Node[]
 ): CollisionResult {
   // Find all zones/worktrees that contain the point
-  const intersectingNodes = allNodes.filter(node => {
+  const intersectingNodes = allNodes.filter((node) => {
     if (node.type !== 'zone' && node.type !== 'worktreeNode') return false;
 
     // Use measured dimensions (React Flow calculates from DOM)
@@ -62,7 +62,7 @@ export function findIntersectingObjects(
 
   // Priority: worktree > zone (worktrees are rendered on top)
   return {
-    worktreeNode: intersectingNodes.find(n => n.type === 'worktreeNode'),
-    zoneNode: intersectingNodes.find(n => n.type === 'zone'),
+    worktreeNode: intersectingNodes.find((n) => n.type === 'worktreeNode'),
+    zoneNode: intersectingNodes.find((n) => n.type === 'zone'),
   };
 }

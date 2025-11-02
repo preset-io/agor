@@ -366,7 +366,7 @@ describe('createPreToolUseHook', () => {
   it('should wait for existing permission lock before checking', async () => {
     const deps = createMockDeps();
     let lockResolved = false;
-    const existingLock = new Promise<void>(resolve => {
+    const existingLock = new Promise<void>((resolve) => {
       setTimeout(() => {
         lockResolved = true;
         resolve();

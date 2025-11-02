@@ -10,7 +10,7 @@ import {
   WarningOutlined,
 } from '@ant-design/icons';
 import { Button, Space, Tag, Tooltip, theme } from 'antd';
-import { type EnvironmentInferredState, getEnvironmentState } from '../../utils/environmentState';
+import { getEnvironmentState } from '../../utils/environmentState';
 
 interface EnvironmentPillProps {
   repo: Repo; // Need repo for environment_config
@@ -42,7 +42,7 @@ export function EnvironmentPill({
         <Tag
           color="default"
           style={{ cursor: 'pointer', userSelect: 'none', opacity: 0.6 }}
-          onClick={e => {
+          onClick={(e) => {
             e.stopPropagation();
             onEdit?.();
           }}
@@ -121,7 +121,6 @@ export function EnvironmentPill({
         return 'Stopping...';
       case 'error':
         return 'Failed to start - click to configure';
-      case 'stopped':
       default:
         return 'Stopped - click to configure';
     }
@@ -141,7 +140,6 @@ export function EnvironmentPill({
         return 'blue'; // Blue for transitioning
       case 'error':
         return 'red'; // Red for errors
-      case 'stopped':
       default:
         return 'default'; // Gray for stopped
     }
@@ -171,7 +169,7 @@ export function EnvironmentPill({
               href={environmentUrl}
               target="_blank"
               rel="noopener noreferrer"
-              onClick={e => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -229,7 +227,7 @@ export function EnvironmentPill({
                       <PlayCircleOutlined />
                     )
                   }
-                  onClick={event => {
+                  onClick={(event) => {
                     event.stopPropagation();
                     if (!startDisabled) {
                       onStartEnvironment(worktree.worktree_id);
@@ -261,7 +259,7 @@ export function EnvironmentPill({
                   icon={
                     isProcessing && status === 'stopping' ? <LoadingOutlined /> : <StopOutlined />
                   }
-                  onClick={event => {
+                  onClick={(event) => {
                     event.stopPropagation();
                     if (!stopDisabled) {
                       onStopEnvironment(worktree.worktree_id);

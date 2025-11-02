@@ -8,7 +8,7 @@ import { getDaemonUrl } from '../../config/daemon';
 
 // Lazy load particles
 const ParticleBackground = lazy(() =>
-  import('../LoginPage/ParticleBackground').then(module => ({
+  import('../LoginPage/ParticleBackground').then((module) => ({
     default: module.ParticleBackground,
   }))
 );
@@ -51,12 +51,12 @@ export const AboutTab: React.FC<AboutTabProps> = ({
 
     // Fetch health info
     fetch(`${daemonUrl}/health`)
-      .then(res => res.json())
-      .then(data => {
+      .then((res) => res.json())
+      .then((data) => {
         console.log('[AboutTab] Health info:', data);
         setHealthInfo(data);
       })
-      .catch(err => console.error('Failed to fetch health info:', err));
+      .catch((err) => console.error('Failed to fetch health info:', err));
   }, [daemonUrl, isAdmin]);
 
   return (

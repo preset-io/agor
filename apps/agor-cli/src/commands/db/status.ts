@@ -45,7 +45,7 @@ export default class DbStatus extends Command {
       }
 
       this.log(chalk.bold('\nApplied migrations:\n'));
-      result.rows.forEach(row => {
+      result.rows.forEach((row) => {
         const migration = row as unknown as { hash: string; created_at: number };
         const date = new Date(migration.created_at);
         const formattedDate = date.toLocaleString();

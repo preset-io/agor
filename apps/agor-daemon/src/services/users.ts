@@ -71,7 +71,7 @@ export class UsersService {
       rows = await this.db.select().from(users).all();
     }
 
-    const results = rows.map(row => this.rowToUser(row, includePassword));
+    const results = rows.map((row) => this.rowToUser(row, includePassword));
 
     return {
       total: results.length,
