@@ -50,14 +50,26 @@ function createGit(baseDir?: string) {
 
   // Always disable strict host key checking for SSH operations
   // This prevents interactive prompts for unknown hosts in automated environments
+  //
+  // Also disable credential prompts to fail fast if auth is required but not available
+  // This prevents git operations from hanging indefinitely waiting for user input
   const config = [
     'core.sshCommand=ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null',
+    'core.askpass=', // Disable askpass helper (prevents GUI password prompts)
+    'credential.helper=', // Disable credential helper (prevents interactive prompts)
   ];
 
   return simpleGit({
     baseDir,
     binary: gitBinary,
     config,
+    // Disable terminal prompts by setting GIT_TERMINAL_PROMPT=0
+    // This makes git fail immediately if credentials are needed
+    env: {
+      ...process.env,
+      GIT_TERMINAL_PROMPT: '0',
+      GIT_ASKPASS: 'echo', // Fallback: return empty string for any password prompt
+    },
   });
 }
 
