@@ -10,6 +10,7 @@
  */
 
 import {
+  type ContentBlock as CoreContentBlock,
   type Message,
   type PermissionRequestContent,
   PermissionScope,
@@ -36,7 +37,7 @@ interface ToolUseBlock {
 interface ToolResultBlock {
   type: 'tool_result';
   tool_use_id: string;
-  content: string | ContentBlock[];
+  content: string | CoreContentBlock[];
   is_error?: boolean;
 }
 

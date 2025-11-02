@@ -13,7 +13,7 @@
  * as green message bubbles, NOT in AgentChain.
  */
 
-import type { Message } from '@agor/core/types';
+import type { ContentBlock as CoreContentBlock, Message } from '@agor/core/types';
 import {
   BulbOutlined,
   CheckCircleOutlined,
@@ -41,7 +41,7 @@ interface ToolUseBlock {
 interface ToolResultBlock {
   type: 'tool_result';
   tool_use_id: string;
-  content: string | ContentBlock[];
+  content: string | CoreContentBlock[];
   is_error?: boolean;
 }
 
@@ -398,10 +398,10 @@ export const AgentChain: React.FC<AgentChainProps> = ({ messages }) => {
           cursor: 'pointer',
           transition: 'all 0.2s',
         }}
-        onMouseEnter={(e) => {
+        onMouseEnter={e => {
           e.currentTarget.style.borderColor = token.colorPrimaryBorder;
         }}
-        onMouseLeave={(e) => {
+        onMouseLeave={e => {
           e.currentTarget.style.borderColor = token.colorBorder;
         }}
       >

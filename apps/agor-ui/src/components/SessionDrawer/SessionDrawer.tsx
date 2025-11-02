@@ -352,12 +352,15 @@ const SessionDrawer = ({
 
     // Persist to database immediately (will broadcast via WebSocket)
     if (session && onUpdateSession) {
-      onUpdateSession(session.session_id, {
-        model_config: {
-          ...session.model_config,
-          thinkingMode: newMode,
-        },
-      });
+      // Only update if model_config exists (has required fields)
+      if (session.model_config) {
+        onUpdateSession(session.session_id, {
+          model_config: {
+            ...session.model_config,
+            thinkingMode: newMode,
+          },
+        });
+      }
     }
   };
 

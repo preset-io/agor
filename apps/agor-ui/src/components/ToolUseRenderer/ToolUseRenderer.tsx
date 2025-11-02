@@ -13,6 +13,7 @@
  * (like AgentChain) are responsible for wrapping this in ThoughtChain items.
  */
 
+import type { ContentBlock as CoreContentBlock } from '@agor/core/types';
 import { Typography, theme } from 'antd';
 import type React from 'react';
 import { getToolRenderer } from './renderers';
@@ -29,7 +30,7 @@ interface ToolUseBlock {
 interface ToolResultBlock {
   type: 'tool_result';
   tool_use_id: string;
-  content: string | ContentBlock[];
+  content: string | CoreContentBlock[];
   is_error?: boolean;
 }
 
@@ -85,7 +86,7 @@ export const ToolUseRenderer: React.FC<ToolUseRendererProps> = ({ toolUse, toolR
     if (Array.isArray(toolResult.content)) {
       return toolResult.content
         .filter((block): block is { type: 'text'; text: string } => block.type === 'text')
-        .map((block) => block.text)
+        .map(block => block.text)
         .join('\n\n');
     }
 

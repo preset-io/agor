@@ -11,7 +11,6 @@
 import { BulbOutlined, DownOutlined, RightOutlined } from '@ant-design/icons';
 import { Collapse, Typography, theme } from 'antd';
 import type React from 'react';
-import { MarkdownContent } from '../MarkdownContent';
 
 const { Text } = Typography;
 
@@ -85,12 +84,13 @@ export const ThinkingBlock: React.FC<ThinkingBlockProps> = ({
               style={{
                 fontSize: 13,
                 color: token.colorTextSecondary,
-                fontFamily: token.fontFamilyCode,
                 whiteSpace: 'pre-wrap',
               }}
             >
               {content ? (
-                <MarkdownContent content={content} style={{ fontSize: 13 }} />
+                <Typography.Paragraph type="secondary" style={{ fontSize: 13, marginBottom: 0 }}>
+                  {content}
+                </Typography.Paragraph>
               ) : (
                 <Text type="secondary" italic>
                   Thinking...
