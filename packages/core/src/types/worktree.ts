@@ -294,4 +294,18 @@ export interface RepoEnvironmentConfig {
    * Example: "http://localhost:{{add 5000 worktree.unique_id}}"
    */
   app_url_template?: string;
+
+  /**
+   * Optional logs command (Handlebars template)
+   * Command to fetch recent logs from the environment (non-streaming)
+   *
+   * Should return quickly with tail of recent logs.
+   * Output is limited to 100 lines / 100KB for safety.
+   *
+   * Examples:
+   * - "docker compose -p {{worktree.name}} logs --tail=100"
+   * - "tail -n 100 /var/log/app-{{worktree.unique_id}}.log"
+   * - "kubectl logs deployment/{{worktree.name}} --tail=100"
+   */
+  logs_command?: string;
 }

@@ -1881,6 +1881,17 @@ async function main() {
     // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
   } as any);
 
+  // GET /worktrees/:id/logs - Get environment logs
+  app.use('/worktrees/:id/logs', {
+    async find(_data: unknown, params: RouteParams) {
+      ensureMinimumRole(params, 'member', 'view worktree logs');
+      const id = params.route?.id;
+      if (!id) throw new Error('Worktree ID required');
+      return worktreesService.getLogs(id as import('@agor/core/types').WorktreeID, params);
+    },
+    // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
+  } as any);
+
   // Configure custom methods for boards service
   const boardsService = app.service('boards') as unknown as BoardsServiceImpl;
   app.use('/boards/:id/sessions', {

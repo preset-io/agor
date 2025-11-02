@@ -635,6 +635,127 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
   }
 
   /**
+   * Custom method: Get environment logs
+   */
+  async getLogs(
+    id: WorktreeID,
+    params?: WorktreeParams
+  ): Promise<{
+    logs: string;
+    timestamp: string;
+    error?: string;
+    truncated?: boolean;
+  }> {
+    const worktree = await this.get(id, params);
+    const repo = (await this.app.service('repos').get(worktree.repo_id)) as Repo;
+
+    // Check if logs command is configured
+    if (!repo.environment_config?.logs_command) {
+      return {
+        logs: '',
+        timestamp: new Date().toISOString(),
+        error: 'No logs command configured',
+      };
+    }
+
+    try {
+      // Build template context and render command
+      const templateContext = this.buildTemplateContext(worktree, repo);
+      const command = renderTemplate(repo.environment_config.logs_command, templateContext);
+
+      console.log(`📋 Fetching logs for worktree ${worktree.name}: ${command}`);
+
+      // Execute command with timeout and output limits
+      const result = await new Promise<{
+        stdout: string;
+        stderr: string;
+        truncated: boolean;
+      }>((resolve, reject) => {
+        const childProcess = spawn(command, {
+          cwd: worktree.path,
+          shell: true,
+        });
+
+        let stdout = '';
+        let stderr = '';
+        let truncated = false;
+
+        // Set timeout
+        const timeout = setTimeout(() => {
+          childProcess.kill('SIGTERM');
+          reject(new Error(`Logs command timed out after ${ENVIRONMENT.LOGS_TIMEOUT_MS / 1000}s`));
+        }, ENVIRONMENT.LOGS_TIMEOUT_MS);
+
+        // Capture stdout with size limit
+        childProcess.stdout?.on('data', (data: Buffer) => {
+          const chunk = data.toString();
+          if (stdout.length + chunk.length <= ENVIRONMENT.LOGS_MAX_BYTES) {
+            stdout += chunk;
+          } else {
+            // Truncate to max bytes
+            stdout += chunk.substring(0, ENVIRONMENT.LOGS_MAX_BYTES - stdout.length);
+            truncated = true;
+            childProcess.kill('SIGTERM');
+          }
+        });
+
+        // Capture stderr
+        childProcess.stderr?.on('data', (data: Buffer) => {
+          stderr += data.toString();
+        });
+
+        childProcess.on('exit', code => {
+          clearTimeout(timeout);
+          if (code === 0 || stdout.length > 0) {
+            resolve({ stdout, stderr, truncated });
+          } else {
+            reject(new Error(stderr || `Logs command exited with code ${code}`));
+          }
+        });
+
+        childProcess.on('error', error => {
+          clearTimeout(timeout);
+          reject(error);
+        });
+      });
+
+      // Process output: split into lines and keep last N lines
+      const allLines = result.stdout.split('\n');
+      let finalLines = allLines;
+      let wasTruncatedByLines = false;
+
+      if (allLines.length > ENVIRONMENT.LOGS_MAX_LINES) {
+        finalLines = allLines.slice(-ENVIRONMENT.LOGS_MAX_LINES);
+        wasTruncatedByLines = true;
+      }
+
+      const logs = finalLines.join('\n');
+      const truncated = result.truncated || wasTruncatedByLines;
+
+      console.log(
+        `✅ Fetched ${allLines.length} lines (${logs.length} bytes) for ${worktree.name}${truncated ? ' [truncated]' : ''}`
+      );
+
+      return {
+        logs,
+        timestamp: new Date().toISOString(),
+        truncated,
+      };
+    } catch (error) {
+      console.error(
+        `❌ Failed to fetch logs for ${worktree.name}:`,
+        error instanceof Error ? error.message : String(error)
+      );
+
+      return {
+        logs: '',
+        timestamp: new Date().toISOString(),
+        error: error instanceof Error ? error.message : 'Unknown error',
+      };
+    }
+  }
+
+  /**
    * Custom method: Recompute access URLs for a running environment
    *
    * Called when repo environment_config is updated to refresh URLs without restart
