@@ -1,4 +1,4 @@
-import type { Session, Task, User, Worktree } from '@agor/core/types';
+import type { Repo, Session, Task, User, Worktree } from '@agor/core/types';
 import {
   BranchesOutlined,
   CodeOutlined,
@@ -11,9 +11,10 @@ import {
   SubnodeOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import { Button, Card, Collapse, Space, Tag, Tree, Typography, theme } from 'antd';
+import { Badge, Button, Card, Collapse, Space, Tag, Tree, Typography, theme } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { DeleteWorktreePopconfirm } from '../DeleteWorktreePopconfirm';
+import { EnvironmentPill } from '../EnvironmentPill';
 import { type ForkSpawnAction, ForkSpawnModal } from '../ForkSpawnModal';
 import { CreatedByTag } from '../metadata';
 import { IssuePill, PullRequestPill } from '../Pill';
@@ -29,6 +30,7 @@ const SESSION_TITLE_FALLBACK_CHARS = 100; // Fallback truncation for unsupported
 
 interface WorktreeCardProps {
   worktree: Worktree;
+  repo: Repo;
   sessions: Session[];
   tasks: Record<string, Task[]>;
   users: User[];
@@ -41,6 +43,8 @@ interface WorktreeCardProps {
   onDelete?: (worktreeId: string, deleteFromFilesystem: boolean) => void;
   onOpenSettings?: (worktreeId: string) => void;
   onOpenTerminal?: (commands: string[]) => void;
+  onStartEnvironment?: (worktreeId: string) => void;
+  onStopEnvironment?: (worktreeId: string) => void;
   onUnpin?: (worktreeId: string) => void;
   isPinned?: boolean;
   zoneName?: string;
@@ -50,6 +54,7 @@ interface WorktreeCardProps {
 
 const WorktreeCard = ({
   worktree,
+  repo,
   sessions,
   tasks,
   users,
@@ -62,6 +67,8 @@ const WorktreeCard = ({
   onDelete,
   onOpenSettings,
   onOpenTerminal,
+  onStartEnvironment,
+  onStopEnvironment,
   onUnpin,
   isPinned = false,
   zoneName,
@@ -245,9 +252,7 @@ const WorktreeCard = ({
     >
       <Space size={4} align="center">
         <Typography.Text strong>Sessions</Typography.Text>
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          ({sessions.length})
-        </Typography.Text>
+        <Badge count={sessions.length} showZero color={token.colorPrimary} />
       </Space>
       {onCreateSession && (
         <div className="nodrag">
@@ -401,6 +406,17 @@ const WorktreeCard = ({
           </Typography.Text>
         </div>
       )}
+
+      {/* Environment Pill */}
+      <div className="nodrag" style={{ marginBottom: 8 }}>
+        <EnvironmentPill
+          repo={repo}
+          worktree={worktree}
+          onEdit={() => onOpenSettings?.(worktree.worktree_id)}
+          onStartEnvironment={onStartEnvironment}
+          onStopEnvironment={onStopEnvironment}
+        />
+      </div>
 
       {/* Sessions - collapsible (only show if sessions exist, otherwise show button directly) */}
       <div className="nodrag">
