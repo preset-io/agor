@@ -213,7 +213,33 @@ export class ClaudeTool implements ITool {
     const assistantMessageIds: MessageID[] = [];
     let capturedAgentSessionId: string | undefined;
     let resolvedModel: string | undefined;
-    let currentMessageId: MessageID | null = null;
+
+    /**
+     * Stream Separation Pattern (Option C)
+     *
+     * Each stream type (thinking, text, tool) gets its own independent message ID.
+     * This prevents state conflicts when multiple streams are active simultaneously.
+     *
+     * Lifecycle:
+     * 1. Thinking stream: thinking:start → thinking:chunk* → thinking:complete
+     * 2. Text stream: streaming:start → streaming:chunk* → streaming:end
+     * 3. Final message: Both streams merge into single DB message with same ID
+     *
+     * Example flow:
+     * - Claude thinks (thinking stream with ID abc123)
+     * - Claude responds (text stream with ID def456)
+     * - Complete message saved (uses def456, or abc123 if no text, or generates new)
+     *
+     * Benefits:
+     * - No ID collision between concurrent streams
+     * - Clear separation of concerns
+     * - Future-proof for tool streaming
+     * - Easy to refactor to unified pattern later
+     */
+    let currentTextMessageId: MessageID | null = null;
+    let currentThinkingMessageId: MessageID | null = null;
+    // Future: let currentToolMessageId: MessageID | null = null;
+
     let streamStartTime = Date.now();
     let firstTokenTime: number | null = null;
     let tokenUsage: TokenUsage | undefined;
@@ -263,12 +289,45 @@ export class ClaudeTool implements ITool {
 
       // Handle thinking partial (streaming)
       if (event.type === 'thinking_partial') {
+        // Emit to tasks service for task-level tracking
         if (this.tasksService && taskId) {
           this.tasksService.emit('thinking:chunk', {
             task_id: taskId,
             session_id: sessionId,
             chunk: event.thinkingChunk,
           });
+        }
+
+        // Emit to streaming callbacks for message-level UI updates
+        // Thinking blocks are part of assistant messages, but tracked separately
+        if (streamingCallbacks && streamingCallbacks.onThinkingChunk) {
+          // Start thinking stream if needed (separate from text stream)
+          if (!currentThinkingMessageId) {
+            currentThinkingMessageId = generateId() as MessageID;
+            const thinkingStartTime = Date.now();
+            const ttfb = thinkingStartTime - streamStartTime;
+            console.debug(`⏱️ [SDK] TTFB (thinking): ${ttfb}ms`);
+
+            if (streamingCallbacks.onThinkingStart) {
+              streamingCallbacks.onThinkingStart(currentThinkingMessageId, {
+                session_id: sessionId,
+                task_id: taskId,
+                timestamp: new Date().toISOString(),
+              });
+            }
+          }
+
+          // Stream thinking chunk with dedicated message ID
+          streamingCallbacks.onThinkingChunk(currentThinkingMessageId, event.thinkingChunk);
+        }
+      }
+
+      // Handle thinking complete
+      if (event.type === 'thinking_complete') {
+        if (streamingCallbacks && streamingCallbacks.onThinkingEnd && currentThinkingMessageId) {
+          streamingCallbacks.onThinkingEnd(currentThinkingMessageId);
+          // Keep ID around for potential merging with text message later
+          // Don't reset to null - we may need it for the complete message
         }
       }
 
@@ -316,15 +375,15 @@ export class ClaudeTool implements ITool {
 
       // Handle partial streaming events (token-level chunks)
       if (event.type === 'partial' && event.textChunk) {
-        // Start new message if needed
-        if (!currentMessageId) {
-          currentMessageId = generateId() as MessageID;
+        // Start new text stream if needed (separate from thinking stream)
+        if (!currentTextMessageId) {
+          currentTextMessageId = generateId() as MessageID;
           firstTokenTime = Date.now();
           const ttfb = firstTokenTime - streamStartTime;
-          console.debug(`⏱️ [SDK] TTFB: ${ttfb}ms`);
+          console.debug(`⏱️ [SDK] TTFB (text): ${ttfb}ms`);
 
           if (streamingCallbacks) {
-            streamingCallbacks.onStreamStart(currentMessageId, {
+            streamingCallbacks.onStreamStart(currentTextMessageId, {
               session_id: sessionId,
               task_id: taskId,
               role: MessageRole.ASSISTANT,
@@ -335,20 +394,20 @@ export class ClaudeTool implements ITool {
 
         // Emit chunk immediately (no artificial delays - true streaming!)
         if (streamingCallbacks) {
-          streamingCallbacks.onStreamChunk(currentMessageId, event.textChunk);
+          streamingCallbacks.onStreamChunk(currentTextMessageId, event.textChunk);
         }
       }
       // Handle complete message (save to database)
       else if (event.type === 'complete' && event.content) {
-        // End streaming if active (only for assistant messages)
+        // End text streaming if active (only for assistant messages)
         if (
-          currentMessageId &&
+          currentTextMessageId &&
           streamingCallbacks &&
           'role' in event &&
           event.role === MessageRole.ASSISTANT
         ) {
           const streamEndTime = Date.now();
-          streamingCallbacks.onStreamEnd(currentMessageId);
+          streamingCallbacks.onStreamEnd(currentTextMessageId);
           const totalTime = streamEndTime - streamStartTime;
           const streamingTime = firstTokenTime ? streamEndTime - firstTokenTime : 0;
           console.debug(
@@ -358,8 +417,19 @@ export class ClaudeTool implements ITool {
 
         // Handle based on role
         if ('role' in event && event.role === MessageRole.ASSISTANT) {
-          // Use existing message ID or generate new one
-          const assistantMessageId = currentMessageId || (generateId() as MessageID);
+          /**
+           * ID Selection Strategy:
+           * 1. Prefer text message ID (most common case - response with thinking)
+           * 2. Fallback to thinking ID (thinking-only message, rare)
+           * 3. Generate new ID (no streaming happened, very rare)
+           *
+           * This ensures:
+           * - UI sees consistent message ID from start to DB persistence
+           * - Thinking + text messages merge properly under one ID
+           * - Edge cases (no streaming) still work correctly
+           */
+          const assistantMessageId =
+            currentTextMessageId || currentThinkingMessageId || (generateId() as MessageID);
 
           // Create complete assistant message in DB
           await createAssistantMessage(
@@ -375,8 +445,10 @@ export class ClaudeTool implements ITool {
           );
           assistantMessageIds.push(assistantMessageId);
 
-          // Reset for next message
-          currentMessageId = null;
+          // Reset all stream IDs for next message
+          // Both thinking and text streams are complete at this point
+          currentTextMessageId = null;
+          currentThinkingMessageId = null;
           streamStartTime = Date.now();
           firstTokenTime = null;
         } else if ('role' in event && event.role === MessageRole.USER) {

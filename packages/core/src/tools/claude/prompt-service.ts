@@ -106,6 +106,10 @@ export class ClaudePromptService {
         agentSessionId?: string;
       }
     | {
+        type: 'thinking_complete';
+        agentSessionId?: string;
+      }
+    | {
         type: 'complete';
         role?: MessageRole.ASSISTANT | MessageRole.USER;
         content: Array<{
@@ -239,7 +243,7 @@ export class ClaudePromptService {
         }
 
         // If we got an end event, break the outer loop
-        if (events.some((e) => e.type === 'end')) {
+        if (events.some(e => e.type === 'end')) {
           break;
         }
       }

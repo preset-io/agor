@@ -16,8 +16,10 @@ export interface StreamingMessage {
   task_id?: string;
   role: 'assistant';
   content: string; // Accumulated chunks
+  thinkingContent?: string; // Accumulated thinking chunks (optional)
   timestamp: string;
   isStreaming: boolean;
+  isThinking?: boolean; // True if currently streaming thinking
 }
 
 interface StreamingStartEvent {
@@ -43,6 +45,24 @@ interface StreamingErrorEvent {
   message_id: MessageID;
   session_id: SessionID;
   error: string;
+}
+
+interface ThinkingStartEvent {
+  message_id: MessageID;
+  session_id: SessionID;
+  task_id?: string;
+  timestamp: string;
+}
+
+interface ThinkingChunkEvent {
+  message_id: MessageID;
+  session_id: SessionID;
+  chunk: string;
+}
+
+interface ThinkingEndEvent {
+  message_id: MessageID;
+  session_id: SessionID;
 }
 
 /**
@@ -76,7 +96,7 @@ export function useStreamingMessages(
 
       console.debug(`📡 Streaming start: ${data.message_id.substring(0, 8)}`);
 
-      setStreamingMessages((prev) => {
+      setStreamingMessages(prev => {
         const newMap = new Map(prev);
         newMap.set(data.message_id, {
           message_id: data.message_id,
@@ -98,7 +118,7 @@ export function useStreamingMessages(
         return;
       }
 
-      setStreamingMessages((prev) => {
+      setStreamingMessages(prev => {
         const message = prev.get(data.message_id);
         if (!message) {
           return prev;
@@ -124,7 +144,7 @@ export function useStreamingMessages(
 
       // Mark as ended but DON'T remove yet - wait for DB 'created' event
       // This prevents jitter where streaming message disappears before DB message appears
-      setStreamingMessages((prev) => {
+      setStreamingMessages(prev => {
         const message = prev.get(data.message_id);
         if (!message) return prev;
 
@@ -139,7 +159,7 @@ export function useStreamingMessages(
       // Safety: Remove after 1 second if DB event doesn't arrive
       // This handles edge cases where 'created' event might be missed
       setTimeout(() => {
-        setStreamingMessages((prev) => {
+        setStreamingMessages(prev => {
           const newMap = new Map(prev);
           newMap.delete(data.message_id);
           return newMap;
@@ -155,7 +175,7 @@ export function useStreamingMessages(
       }
 
       // Mark as error but keep content
-      setStreamingMessages((prev) => {
+      setStreamingMessages(prev => {
         const message = prev.get(data.message_id);
         if (!message) {
           return prev;
@@ -182,9 +202,80 @@ export function useStreamingMessages(
       );
 
       // Remove from streaming map now that it's in the DB
-      setStreamingMessages((prev) => {
+      setStreamingMessages(prev => {
         const newMap = new Map(prev);
         newMap.delete(message.message_id);
+        return newMap;
+      });
+    };
+
+    // Handler for thinking:start
+    const handleThinkingStart = (data: ThinkingStartEvent) => {
+      // Only track messages for this session (if sessionId provided)
+      if (sessionId && data.session_id !== sessionId) {
+        return;
+      }
+
+      console.debug(`🧠 Thinking start: ${data.message_id.substring(0, 8)}`);
+
+      setStreamingMessages(prev => {
+        const newMap = new Map(prev);
+        newMap.set(data.message_id, {
+          message_id: data.message_id,
+          session_id: data.session_id,
+          task_id: data.task_id,
+          role: 'assistant',
+          content: '', // No text content yet
+          thinkingContent: '', // Start with empty thinking
+          timestamp: data.timestamp,
+          isStreaming: true,
+          isThinking: true,
+        });
+        return newMap;
+      });
+    };
+
+    // Handler for thinking:chunk
+    const handleThinkingChunk = (data: ThinkingChunkEvent) => {
+      // Only track messages for this session (if sessionId provided)
+      if (sessionId && data.session_id !== sessionId) {
+        return;
+      }
+
+      setStreamingMessages(prev => {
+        const message = prev.get(data.message_id);
+        if (!message) {
+          return prev;
+        }
+
+        const newMap = new Map(prev);
+        newMap.set(data.message_id, {
+          ...message,
+          thinkingContent: (message.thinkingContent || '') + data.chunk,
+          isThinking: true,
+        });
+        return newMap;
+      });
+    };
+
+    // Handler for thinking:end
+    const handleThinkingEnd = (data: ThinkingEndEvent) => {
+      // Only track messages for this session (if sessionId provided)
+      if (sessionId && data.session_id !== sessionId) {
+        return;
+      }
+
+      console.debug(`🧠 Thinking end: ${data.message_id.substring(0, 8)}`);
+
+      setStreamingMessages(prev => {
+        const message = prev.get(data.message_id);
+        if (!message) return prev;
+
+        const newMap = new Map(prev);
+        newMap.set(data.message_id, {
+          ...message,
+          isThinking: false, // Stop thinking, may continue with text
+        });
         return newMap;
       });
     };
@@ -199,6 +290,12 @@ export function useStreamingMessages(
     // biome-ignore lint/suspicious/noExplicitAny: FeathersJS emit types are not strict
     messagesService.on('streaming:error', handleStreamingError as any);
     // biome-ignore lint/suspicious/noExplicitAny: FeathersJS emit types are not strict
+    messagesService.on('thinking:start', handleThinkingStart as any);
+    // biome-ignore lint/suspicious/noExplicitAny: FeathersJS emit types are not strict
+    messagesService.on('thinking:chunk', handleThinkingChunk as any);
+    // biome-ignore lint/suspicious/noExplicitAny: FeathersJS emit types are not strict
+    messagesService.on('thinking:end', handleThinkingEnd as any);
+    // biome-ignore lint/suspicious/noExplicitAny: FeathersJS emit types are not strict
     messagesService.on('created', handleMessageCreated as any);
 
     // Cleanup on unmount or client change
@@ -211,6 +308,12 @@ export function useStreamingMessages(
       messagesService.removeListener('streaming:end', handleStreamingEnd as any);
       // biome-ignore lint/suspicious/noExplicitAny: FeathersJS emit types are not strict
       messagesService.removeListener('streaming:error', handleStreamingError as any);
+      // biome-ignore lint/suspicious/noExplicitAny: FeathersJS emit types are not strict
+      messagesService.removeListener('thinking:start', handleThinkingStart as any);
+      // biome-ignore lint/suspicious/noExplicitAny: FeathersJS emit types are not strict
+      messagesService.removeListener('thinking:chunk', handleThinkingChunk as any);
+      // biome-ignore lint/suspicious/noExplicitAny: FeathersJS emit types are not strict
+      messagesService.removeListener('thinking:end', handleThinkingEnd as any);
       // biome-ignore lint/suspicious/noExplicitAny: FeathersJS emit types are not strict
       messagesService.removeListener('created', handleMessageCreated as any);
     };

@@ -72,6 +72,36 @@ export interface StreamingCallbacks {
    * @param error - Error that occurred
    */
   onStreamError(messageId: MessageID, error: Error): void;
+
+  /**
+   * Called when thinking block streaming starts (optional)
+   *
+   * @param messageId - Message ID for the thinking block
+   * @param metadata - Initial metadata (session_id, task_id, etc.)
+   */
+  onThinkingStart?(
+    messageId: MessageID,
+    metadata: {
+      session_id: SessionID;
+      task_id?: TaskID;
+      timestamp: string;
+    }
+  ): void;
+
+  /**
+   * Called for each chunk of thinking content (optional)
+   *
+   * @param messageId - Message ID for the thinking block
+   * @param chunk - Thinking text chunk
+   */
+  onThinkingChunk?(messageId: MessageID, chunk: string): void;
+
+  /**
+   * Called when thinking block completes (optional)
+   *
+   * @param messageId - Message ID for the thinking block
+   */
+  onThinkingEnd?(messageId: MessageID): void;
 }
 
 /**

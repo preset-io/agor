@@ -596,7 +596,15 @@ async function main() {
 
   // Register messages service with custom streaming events
   app.use('/messages', messagesService, {
-    events: ['streaming:start', 'streaming:chunk', 'streaming:end', 'streaming:error'],
+    events: [
+      'streaming:start',
+      'streaming:chunk',
+      'streaming:end',
+      'streaming:error',
+      'thinking:start',
+      'thinking:chunk',
+      'thinking:end',
+    ],
     docs: {
       description: 'Conversation messages within AI agent sessions',
       definitions: {
@@ -1532,6 +1540,31 @@ async function main() {
             message_id: messageId,
             session_id: id,
             error: error.message,
+          });
+        },
+        onThinkingStart: (messageId, metadata) => {
+          console.debug(
+            `📡 [${new Date().toISOString()}] Thinking start: ${messageId.substring(0, 8)}`
+          );
+          app.service('messages').emit('thinking:start', {
+            message_id: messageId,
+            ...metadata,
+          });
+        },
+        onThinkingChunk: (messageId, chunk) => {
+          app.service('messages').emit('thinking:chunk', {
+            message_id: messageId,
+            session_id: id,
+            chunk,
+          });
+        },
+        onThinkingEnd: messageId => {
+          console.debug(
+            `📡 [${new Date().toISOString()}] Thinking end: ${messageId.substring(0, 8)}`
+          );
+          app.service('messages').emit('thinking:end', {
+            message_id: messageId,
+            session_id: id,
           });
         },
       };

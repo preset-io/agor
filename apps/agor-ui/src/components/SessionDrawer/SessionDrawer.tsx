@@ -53,6 +53,7 @@ import {
   TimerPill,
   TokenCountPill,
 } from '../Pill';
+import { ThinkingModeSelector } from '../ThinkingModeSelector';
 import { ToolIcon } from '../ToolIcon';
 
 const { TextArea } = Input;
@@ -142,6 +143,9 @@ const SessionDrawer = ({
   const [codexApprovalPolicy, setCodexApprovalPolicy] = React.useState<CodexApprovalPolicy>(
     session?.permission_config?.codex?.approvalPolicy || 'on-request'
   );
+  const [thinkingMode, setThinkingMode] = React.useState<'auto' | 'manual' | 'off'>(
+    session?.model_config?.thinkingMode || 'off'
+  );
   const [scrollToBottom, setScrollToBottom] = React.useState<(() => void) | null>(null);
   const [isStopping, setIsStopping] = React.useState(false);
 
@@ -167,7 +171,7 @@ const SessionDrawer = ({
   const latestContextWindow = React.useMemo(() => {
     // Find most recent task with context window data
     const tasksWithContext = tasks
-      .filter((t) => t.context_window && t.context_window_limit)
+      .filter(t => t.context_window && t.context_window_limit)
       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
     if (tasksWithContext.length > 0) {
@@ -218,6 +222,13 @@ const SessionDrawer = ({
     session?.agentic_tool,
     getDefaultPermissionMode,
   ]);
+
+  // Update thinking mode when session changes
+  React.useEffect(() => {
+    if (session?.model_config?.thinkingMode) {
+      setThinkingMode(session.model_config.thinkingMode);
+    }
+  }, [session?.model_config?.thinkingMode]);
 
   // Scroll to bottom when drawer opens
   React.useEffect(() => {
@@ -336,6 +347,20 @@ const SessionDrawer = ({
     }
   };
 
+  const handleThinkingModeChange = (newMode: 'auto' | 'manual' | 'off') => {
+    setThinkingMode(newMode);
+
+    // Persist to database immediately (will broadcast via WebSocket)
+    if (session && onUpdateSession) {
+      onUpdateSession(session.session_id, {
+        model_config: {
+          ...session.model_config,
+          thinkingMode: newMode,
+        },
+      });
+    }
+  };
+
   const getStatusColor = () => {
     switch (session.status) {
       case 'running':
@@ -356,7 +381,7 @@ const SessionDrawer = ({
   const isRunning = session.status === SessionStatus.RUNNING;
 
   // Get repo from worktree (worktree is passed from parent)
-  const repo = worktree ? repos.find((r) => r.repo_id === worktree.repo_id) : null;
+  const repo = worktree ? repos.find(r => r.repo_id === worktree.repo_id) : null;
 
   return (
     <Drawer
@@ -490,9 +515,9 @@ const SessionDrawer = ({
             )}
             {/* MCP Servers */}
             {sessionMcpServerIds
-              .map((serverId) => mcpServers.find((s) => s.mcp_server_id === serverId))
+              .map(serverId => mcpServers.find(s => s.mcp_server_id === serverId))
               .filter(Boolean)
-              .map((server) => (
+              .map(server => (
                 <Tag key={server?.mcp_server_id} color="purple" icon={<ApiOutlined />}>
                   {server?.display_name || server?.name}
                 </Tag>
@@ -553,10 +578,10 @@ const SessionDrawer = ({
         <Space direction="vertical" style={{ width: '100%' }} size={8}>
           <TextArea
             value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
+            onChange={e => setInputValue(e.target.value)}
             placeholder="Send a prompt, fork, or create a subsession..."
             autoSize={{ minRows: 1, maxRows: 10 }}
-            onPressEnter={(e) => {
+            onPressEnter={e => {
               if (e.shiftKey) {
                 return;
               }
@@ -611,6 +636,15 @@ const SessionDrawer = ({
               )}
             </Space>
             <Space size={8}>
+              {/* Thinking Mode Selector - Claude only */}
+              {session.agentic_tool === 'claude-code' && (
+                <ThinkingModeSelector
+                  value={thinkingMode}
+                  onChange={handleThinkingModeChange}
+                  size="small"
+                  compact
+                />
+              )}
               {/* Permission Mode Selector - Agentic tool-specific options */}
               <PermissionModeSelector
                 value={permissionMode}

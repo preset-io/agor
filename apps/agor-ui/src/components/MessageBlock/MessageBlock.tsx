@@ -22,6 +22,7 @@ import { Avatar, theme } from 'antd';
 import type React from 'react';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { PermissionRequestBlock } from '../PermissionRequestBlock';
+import { ThinkingBlock } from '../ThinkingBlock';
 import { ToolIcon } from '../ToolIcon';
 import { ToolUseRenderer } from '../ToolUseRenderer';
 
@@ -44,10 +45,18 @@ interface TextBlock {
   text: string;
 }
 
-type ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock;
+interface ThinkingContentBlock {
+  type: 'thinking';
+  text: string;
+  signature?: string;
+}
+
+type ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock | ThinkingContentBlock;
 
 interface MessageBlockProps {
-  message: Message | (Message & { isStreaming?: boolean });
+  message:
+    | Message
+    | (Message & { isStreaming?: boolean; thinkingContent?: string; isThinking?: boolean });
   users?: User[];
   currentUserId?: string;
   isTaskRunning?: boolean; // Whether the task is running (for loading state)
@@ -100,7 +109,7 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
           }
           onDeny={
             canInteract && onPermissionDecision && sessionId && taskId
-              ? (messageId) => {
+              ? messageId => {
                   onPermissionDecision(
                     sessionId,
                     content.request_id,
@@ -132,7 +141,7 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
   const shouldUseTyping = isStreaming && hasContent;
 
   // Get current user's emoji
-  const currentUser = users.find((u) => u.user_id === currentUserId);
+  const currentUser = users.find(u => u.user_id === currentUserId);
   const userEmoji = currentUser?.emoji || '👤';
 
   // Skip rendering if message has no content
@@ -142,10 +151,12 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
 
   // Parse content blocks from message, preserving order
   const getContentBlocks = (): {
+    thinkingBlocks: string[];
     textBeforeTools: string[];
     toolBlocks: { toolUse: ToolUseBlock; toolResult?: ToolResultBlock }[];
     textAfterTools: string[];
   } => {
+    const thinkingBlocks: string[] = [];
     const textBeforeTools: string[] = [];
     const textAfterTools: string[] = [];
     const toolBlocks: { toolUse: ToolUseBlock; toolResult?: ToolResultBlock }[] = [];
@@ -153,6 +164,7 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
     // Handle string content
     if (typeof message.content === 'string') {
       return {
+        thinkingBlocks: [],
         textBeforeTools: [message.content],
         toolBlocks: [],
         textAfterTools: [],
@@ -167,7 +179,10 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
 
       // First pass: collect blocks and track order
       for (const block of message.content) {
-        if (block.type === 'text') {
+        if (block.type === 'thinking') {
+          const text = (block as unknown as ThinkingContentBlock).text;
+          thinkingBlocks.push(text);
+        } else if (block.type === 'text') {
           const text = (block as unknown as TextBlock).text;
           if (hasSeenTool) {
             textAfterTools.push(text);
@@ -193,28 +208,44 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
       }
     }
 
-    return { textBeforeTools, toolBlocks, textAfterTools };
+    return { thinkingBlocks, textBeforeTools, toolBlocks, textAfterTools };
   };
 
-  const { textBeforeTools, toolBlocks, textAfterTools } = getContentBlocks();
+  const { thinkingBlocks, textBeforeTools, toolBlocks, textAfterTools } = getContentBlocks();
+
+  // Also check for streaming thinking content
+  const streamingThinking = 'thinkingContent' in message ? message.thinkingContent : undefined;
+  const isThinking = 'isThinking' in message ? message.isThinking : false;
 
   // Skip rendering if message has no meaningful content
-  const hasTextBefore = textBeforeTools.some((text) => text.trim().length > 0);
-  const hasTextAfter = textAfterTools.some((text) => text.trim().length > 0);
+  const hasThinking =
+    thinkingBlocks.length > 0 || (streamingThinking && streamingThinking.length > 0);
+  const hasTextBefore = textBeforeTools.some(text => text.trim().length > 0);
+  const hasTextAfter = textAfterTools.some(text => text.trim().length > 0);
   const hasTools = toolBlocks.length > 0;
 
-  if (!hasTextBefore && !hasTextAfter && !hasTools) {
+  if (!hasThinking && !hasTextBefore && !hasTextAfter && !hasTools) {
     return null;
   }
 
   // IMPORTANT: For messages with tools AND text:
-  // 1. Show tools first (compact, no bubble)
-  // 2. Show text after as a response bubble
-  // This matches the expected UX: "Here's what I did" (tools) then "Here's the result" (response)
+  // 1. Show thinking first (if any)
+  // 2. Show tools next (compact, no bubble)
+  // 3. Show text after as a response bubble
+  // This matches the expected UX: thought process → actions → results
 
   return (
     <>
-      {/* Thinking/text before tools (if any) - rare but possible */}
+      {/* Thinking blocks (collapsed by default) */}
+      {hasThinking && (
+        <ThinkingBlock
+          content={streamingThinking || thinkingBlocks.join('\n\n')}
+          isStreaming={isThinking}
+          defaultExpanded={false}
+        />
+      )}
+
+      {/* Text before tools (if any) - rare but possible */}
       {hasTextBefore && (
         <div style={{ margin: `${token.sizeUnit}px 0` }}>
           <Bubble
