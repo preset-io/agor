@@ -24,6 +24,7 @@ import type {
   BoardComment,
   BoardCommentCreate,
   BoardObject,
+  Repo,
   Session,
   Task,
   Worktree,
@@ -60,6 +61,7 @@ interface SessionCanvasProps {
   sessions: Session[];
   tasks: Record<string, Task[]>;
   users: User[];
+  repos: Repo[];
   worktrees: import('@agor/core/types').Worktree[];
   boardObjects: import('@agor/core/types').BoardEntityObject[];
   comments: import('@agor/core/types').BoardComment[];
@@ -126,6 +128,7 @@ const SessionNode = ({ data }: { data: SessionNodeData }) => {
 
 interface WorktreeNodeData {
   worktree: Worktree;
+  repo: Repo;
   sessions: Session[];
   tasks: Record<string, Task[]>;
   users: User[];
@@ -138,6 +141,8 @@ interface WorktreeNodeData {
   onDelete?: (worktreeId: string) => void;
   onOpenSettings?: (worktreeId: string) => void;
   onOpenTerminal?: (commands: string[]) => void;
+  onStartEnvironment?: (worktreeId: string) => void;
+  onStopEnvironment?: (worktreeId: string) => void;
   onUnpin?: (worktreeId: string) => void;
   compact?: boolean;
   isPinned?: boolean;
@@ -152,6 +157,7 @@ const WorktreeNode = ({ data }: { data: WorktreeNodeData }) => {
     <div className="worktree-node">
       <WorktreeCard
         worktree={data.worktree}
+        repo={data.repo}
         sessions={data.sessions}
         tasks={data.tasks}
         users={data.users}
@@ -164,6 +170,8 @@ const WorktreeNode = ({ data }: { data: WorktreeNodeData }) => {
         onDelete={data.onDelete}
         onOpenSettings={data.onOpenSettings}
         onOpenTerminal={data.onOpenTerminal}
+        onStartEnvironment={data.onStartEnvironment}
+        onStopEnvironment={data.onStopEnvironment}
         onUnpin={data.onUnpin}
         isPinned={data.isPinned}
         zoneName={data.zoneName}
@@ -187,6 +195,7 @@ const SessionCanvas = ({
   board,
   client,
   sessions,
+  repos,
   worktrees,
   boardObjects,
   comments,
@@ -367,7 +376,8 @@ const SessionCanvas = ({
     const _HORIZONTAL_SPACING = 600;
 
     // Create nodes for worktrees on this board
-    return worktrees.map((worktree, index) => {
+    return worktrees
+      .map((worktree, index) => {
       // Find board object for this worktree (if positioned on this board)
       const boardObject = boardObjects.find(
         (bo) => bo.worktree_id === worktree.worktree_id && bo.board_id === board?.board_id
@@ -389,6 +399,13 @@ const SessionCanvas = ({
       // Get sessions for this worktree
       const worktreeSessions = sessions.filter((s) => s.worktree_id === worktree.worktree_id);
 
+      // Get repo for this worktree
+      const repo = repos.find((r) => r.repo_id === worktree.repo_id);
+      if (!repo) {
+        console.error(`Repo not found for worktree ${worktree.worktree_id}`);
+        return null;
+      }
+
       return {
         id: worktree.worktree_id,
         type: 'worktreeNode',
@@ -403,6 +420,7 @@ const SessionCanvas = ({
         extent: zoneId ? ('parent' as const) : undefined,
         data: {
           worktree,
+          repo,
           sessions: worktreeSessions,
           tasks,
           users,
@@ -422,10 +440,12 @@ const SessionCanvas = ({
           zoneColor,
         },
       };
-    });
+      })
+      .filter((node): node is Node => node !== null);
   }, [
     board,
     boardObjects,
+    repos,
     worktrees,
     sessions,
     tasks,

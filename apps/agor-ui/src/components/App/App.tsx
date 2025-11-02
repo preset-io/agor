@@ -435,6 +435,7 @@ export const App: React.FC<AppProps> = ({
             sessions={boardSessions}
             tasks={tasks}
             users={users}
+            repos={repos}
             worktrees={boardWorktrees}
             boardObjects={boardObjects}
             comments={comments}
