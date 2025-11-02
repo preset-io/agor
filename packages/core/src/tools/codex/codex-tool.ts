@@ -31,6 +31,10 @@ export class CodexTool implements ITool {
   readonly name = 'OpenAI Codex';
 
   private promptService?: CodexPromptService;
+  private messagesRepo?: MessagesRepository;
+  private sessionsRepo?: SessionRepository;
+  private messagesService?: MessagesService;
+  private tasksService?: TasksService;
 
   constructor(
     messagesRepo?: MessagesRepository,
@@ -41,6 +45,11 @@ export class CodexTool implements ITool {
     messagesService?: MessagesService,
     tasksService?: TasksService
   ) {
+    this.messagesRepo = messagesRepo;
+    this.sessionsRepo = sessionsRepo;
+    this.messagesService = messagesService;
+    this.tasksService = tasksService;
+
     if (messagesRepo && sessionsRepo) {
       this.promptService = new CodexPromptService(
         messagesRepo,
