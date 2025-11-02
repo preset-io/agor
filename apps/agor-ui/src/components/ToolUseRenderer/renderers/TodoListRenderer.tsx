@@ -8,8 +8,8 @@
  * - Compact inline display
  */
 
-import { CheckCircleFilled, ReloadOutlined } from '@ant-design/icons';
-import { theme } from 'antd';
+import { CheckCircleFilled } from '@ant-design/icons';
+import { Spin, theme } from 'antd';
 import type React from 'react';
 
 interface TodoItem {
@@ -71,7 +71,8 @@ const TodoItemRow: React.FC<{ todo: TodoItem; index: number }> = ({ todo, index 
         );
       case 'in_progress':
         return (
-          <ReloadOutlined
+          <Spin
+            size="small"
             style={{
               color: token.colorPrimary,
               fontSize: 14,
