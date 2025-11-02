@@ -48,10 +48,9 @@ function getGitBinary(): string | undefined {
 function createGit(baseDir?: string) {
   const gitBinary = getGitBinary();
 
-  // Set environment variables to disable interactive prompts
-  // This makes git fail immediately if credentials are needed
-  process.env.GIT_TERMINAL_PROMPT = '0';
-  process.env.GIT_ASKPASS = 'echo'; // Return empty string for any password prompt
+  // NOTE: Git environment variables (GIT_TERMINAL_PROMPT, GIT_ASKPASS) are set
+  // globally at daemon startup in apps/agor-daemon/src/index.ts
+  // This prevents interactive credential prompts and makes git fail fast
 
   // Always disable strict host key checking for SSH operations
   // This prevents interactive prompts for unknown hosts in automated environments

@@ -160,6 +160,11 @@ async function main() {
   registerHandlebarsHelpers();
   console.log('✅ Handlebars helpers registered');
 
+  // Configure Git to fail fast instead of prompting for credentials
+  // This prevents git operations from hanging indefinitely in automated environments
+  process.env.GIT_TERMINAL_PROMPT = '0'; // Disable terminal credential prompts
+  process.env.GIT_ASKPASS = 'echo'; // Return empty for any password prompt
+
   // Load config to get ports and API keys
   const config = await loadConfig();
 
