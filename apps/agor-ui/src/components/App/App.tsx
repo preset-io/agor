@@ -460,6 +460,8 @@ export const App: React.FC<AppProps> = ({
             }}
             onDeleteWorktree={onDeleteWorktree}
             onOpenTerminal={handleOpenTerminal}
+            onStartEnvironment={onStartEnvironment}
+            onStopEnvironment={onStopEnvironment}
             onOpenCommentsPanel={() => setCommentsPanelCollapsed(false)}
             onCommentHover={setHoveredCommentId}
             onCommentSelect={(commentId) => {

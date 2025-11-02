@@ -81,6 +81,8 @@ interface SessionCanvasProps {
   onOpenWorktree?: (worktreeId: string) => void;
   onDeleteWorktree?: (worktreeId: string, deleteFromFilesystem: boolean) => void;
   onOpenTerminal?: (commands: string[]) => void;
+  onStartEnvironment?: (worktreeId: string) => void;
+  onStopEnvironment?: (worktreeId: string) => void;
   onOpenCommentsPanel?: () => void;
   onCommentHover?: (commentId: string | null) => void;
   onCommentSelect?: (commentId: string | null) => void;
@@ -138,7 +140,7 @@ interface WorktreeNodeData {
   onCreateSession?: (worktreeId: string) => void;
   onForkSession?: (sessionId: string, prompt: string) => Promise<void>;
   onSpawnSession?: (sessionId: string, prompt: string) => Promise<void>;
-  onDelete?: (worktreeId: string) => void;
+  onDelete?: (worktreeId: string, deleteFromFilesystem: boolean) => void;
   onOpenSettings?: (worktreeId: string) => void;
   onOpenTerminal?: (commands: string[]) => void;
   onStartEnvironment?: (worktreeId: string) => void;
@@ -217,6 +219,8 @@ const SessionCanvas = ({
   onOpenWorktree,
   onDeleteWorktree,
   onOpenTerminal,
+  onStartEnvironment,
+  onStopEnvironment,
   onOpenCommentsPanel,
   onCommentHover,
   onCommentSelect,
@@ -436,6 +440,8 @@ const SessionCanvas = ({
           onDelete: onDeleteWorktree,
           onOpenSettings: onOpenWorktree,
           onOpenTerminal,
+          onStartEnvironment,
+          onStopEnvironment,
           onUnpin: handleUnpinWorktree,
           compact: false,
           isPinned: !!zoneId,
@@ -463,6 +469,8 @@ const SessionCanvas = ({
     onDeleteWorktree,
     onOpenWorktree,
     onOpenTerminal,
+    onStartEnvironment,
+    onStopEnvironment,
     handleUnpinWorktree,
     zoneLabels,
   ]);
