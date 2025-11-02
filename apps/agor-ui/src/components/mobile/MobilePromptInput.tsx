@@ -1,6 +1,5 @@
 import { SendOutlined } from '@ant-design/icons';
 import { Button, Input } from 'antd';
-import { useState } from 'react';
 
 const { TextArea } = Input;
 
@@ -8,19 +7,27 @@ interface MobilePromptInputProps {
   onSend: (prompt: string) => void;
   disabled?: boolean;
   placeholder?: string;
+  promptDraft?: string; // Draft prompt text for this session
+  onUpdateDraft?: (draft: string) => void; // Update draft callback
 }
 
 export const MobilePromptInput: React.FC<MobilePromptInputProps> = ({
   onSend,
   disabled = false,
   placeholder = 'Send a prompt...',
+  promptDraft = '',
+  onUpdateDraft,
 }) => {
-  const [prompt, setPrompt] = useState('');
+  // Use prop-driven draft state instead of local state
+  const prompt = promptDraft;
+  const setPrompt = (value: string) => {
+    onUpdateDraft?.(value);
+  };
 
   const handleSend = () => {
     if (prompt.trim() && !disabled) {
       onSend(prompt.trim());
-      setPrompt('');
+      // Draft clearing is now handled by parent (App.tsx)
     }
   };
 

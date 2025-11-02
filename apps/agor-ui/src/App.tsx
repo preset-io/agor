@@ -118,6 +118,9 @@ function AppContent() {
   const [openNewWorktree, setOpenNewWorktree] = useState(false);
   const [inOnboardingFlow, setInOnboardingFlow] = useState(false);
 
+  // Per-session prompt drafts (persists across session switches)
+  const [promptDrafts, setPromptDrafts] = useState<Map<string, string>>(new Map());
+
   // Get current user from users array (real-time updates via WebSocket)
   // This ensures we get the latest onboarding_completed status
   // Fall back to user from auth if users array hasn't loaded yet
@@ -404,11 +407,35 @@ function AppContent() {
     }
   };
 
+  // Update draft for a specific session
+  const handleUpdateDraft = (sessionId: string, draft: string) => {
+    setPromptDrafts(prev => {
+      const next = new Map(prev);
+      if (draft.trim()) {
+        next.set(sessionId, draft);
+      } else {
+        next.delete(sessionId); // Clean up empty drafts
+      }
+      return next;
+    });
+  };
+
+  // Clear draft for a specific session
+  const handleClearDraft = (sessionId: string) => {
+    setPromptDrafts(prev => {
+      const next = new Map(prev);
+      next.delete(sessionId);
+      return next;
+    });
+  };
+
   // Handle fork session
   const handleForkSession = async (sessionId: string, prompt: string) => {
     const session = await forkSession(sessionId as import('@agor/core/types').SessionID, prompt);
     if (session) {
       message.success('Session forked successfully!');
+      // Clear the draft after forking
+      handleClearDraft(sessionId);
     } else {
       message.error('Failed to fork session');
     }
@@ -419,6 +446,8 @@ function AppContent() {
     const session = await spawnSession(sessionId as import('@agor/core/types').SessionID, prompt);
     if (session) {
       message.success('Subsession session spawned successfully!');
+      // Clear the draft after spawning subsession
+      handleClearDraft(sessionId);
     } else {
       message.error('Failed to spawn session');
     }
@@ -441,6 +470,9 @@ function AppContent() {
       });
 
       message.success({ content: 'Response received!', key: 'prompt' });
+
+      // Clear the draft after sending
+      handleClearDraft(sessionId);
     } catch (error) {
       message.error({
         content: `Failed to send prompt: ${error instanceof Error ? error.message : String(error)}`,
@@ -925,6 +957,8 @@ function AppContent() {
               onToggleReaction={handleToggleReaction}
               onDeleteComment={handleDeleteComment}
               onLogout={logout}
+              promptDrafts={promptDrafts}
+              onUpdateDraft={handleUpdateDraft}
             />
           }
         />

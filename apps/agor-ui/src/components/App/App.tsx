@@ -165,6 +165,9 @@ export const App: React.FC<AppProps> = ({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsActiveTab, setSettingsActiveTab] = useState<string>('boards');
 
+  // Per-session prompt drafts (persists across session switches)
+  const [promptDrafts, setPromptDrafts] = useState<Map<string, string>>(new Map());
+
   // Handle external settings tab control (e.g., from welcome modal)
   const effectiveSettingsOpen = settingsOpen || !!openSettingsTab;
   const effectiveSettingsTab = openSettingsTab || settingsActiveTab;
@@ -263,6 +266,28 @@ export const App: React.FC<AppProps> = ({
     setSelectedSessionId(sessionId);
   };
 
+  // Update draft for a specific session
+  const handleUpdateDraft = (sessionId: string, draft: string) => {
+    setPromptDrafts(prev => {
+      const next = new Map(prev);
+      if (draft.trim()) {
+        next.set(sessionId, draft);
+      } else {
+        next.delete(sessionId); // Clean up empty drafts
+      }
+      return next;
+    });
+  };
+
+  // Clear draft for a specific session
+  const handleClearDraft = (sessionId: string) => {
+    setPromptDrafts(prev => {
+      const next = new Map(prev);
+      next.delete(sessionId);
+      return next;
+    });
+  };
+
   const handleSendPrompt = async (prompt: string, permissionMode?: PermissionMode) => {
     if (selectedSessionId) {
       const session = sessions.find(s => s.session_id === selectedSessionId);
@@ -278,18 +303,25 @@ export const App: React.FC<AppProps> = ({
       // Call the prompt endpoint
       // Note: onSendPrompt should be implemented in the parent to call the daemon
       onSendPrompt?.(selectedSessionId, prompt, permissionMode);
+
+      // Clear the draft after sending
+      handleClearDraft(selectedSessionId);
     }
   };
 
   const handleFork = (prompt: string) => {
     if (selectedSessionId) {
       onForkSession?.(selectedSessionId, prompt);
+      // Clear the draft after forking
+      handleClearDraft(selectedSessionId);
     }
   };
 
   const handleSubsession = (prompt: string) => {
     if (selectedSessionId) {
       onSpawnSession?.(selectedSessionId, prompt);
+      // Clear the draft after spawning subsession
+      handleClearDraft(selectedSessionId);
     }
   };
 
@@ -520,6 +552,8 @@ export const App: React.FC<AppProps> = ({
         onStartEnvironment={onStartEnvironment}
         onStopEnvironment={onStopEnvironment}
         onViewLogs={setLogsModalWorktreeId}
+        promptDraft={selectedSessionId ? promptDrafts.get(selectedSessionId) || '' : ''}
+        onUpdateDraft={(draft: string) => selectedSessionId && handleUpdateDraft(selectedSessionId, draft)}
       />
       <SettingsModal
         open={effectiveSettingsOpen}

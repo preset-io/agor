@@ -100,6 +100,8 @@ interface SessionDrawerProps {
   onStartEnvironment?: (worktreeId: string) => void;
   onStopEnvironment?: (worktreeId: string) => void;
   onViewLogs?: (worktreeId: string) => void;
+  promptDraft?: string; // Draft prompt text for this session
+  onUpdateDraft?: (draft: string) => void; // Update draft callback
 }
 
 const SessionDrawer = ({
@@ -126,10 +128,17 @@ const SessionDrawer = ({
   onStartEnvironment,
   onStopEnvironment,
   onViewLogs,
+  promptDraft = '',
+  onUpdateDraft,
 }: SessionDrawerProps) => {
   const { token } = theme.useToken();
   const { modal } = App.useApp();
-  const [inputValue, setInputValue] = React.useState('');
+
+  // Use prop-driven draft state instead of local state
+  const inputValue = promptDraft;
+  const setInputValue = (value: string) => {
+    onUpdateDraft?.(value);
+  };
 
   // Get agent-aware default permission mode (wrapped in useCallback for hook deps)
   const getDefaultPermissionMode = React.useCallback((agent?: string): PermissionMode => {
@@ -265,7 +274,7 @@ const SessionDrawer = ({
   const handleSendPrompt = () => {
     if (inputValue.trim()) {
       onSendPrompt?.(inputValue, permissionMode);
-      setInputValue('');
+      // Draft clearing is now handled by parent (App.tsx)
     }
   };
 
@@ -296,7 +305,7 @@ const SessionDrawer = ({
   const handleFork = () => {
     if (inputValue.trim()) {
       onFork?.(inputValue);
-      setInputValue('');
+      // Draft clearing is now handled by parent (App.tsx)
     }
   };
 
@@ -309,7 +318,7 @@ const SessionDrawer = ({
 
       // Send meta-prompt to the PARENT session (agent will use MCP tool)
       onSendPrompt?.(metaPrompt, permissionMode);
-      setInputValue('');
+      // Draft clearing is now handled by parent (App.tsx)
     }
   };
 
