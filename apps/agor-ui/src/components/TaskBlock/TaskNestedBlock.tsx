@@ -79,7 +79,7 @@ export const TaskNestedBlock: React.FC<TaskNestedBlockProps> = ({
       if (Array.isArray(msg.content)) {
         const textBlocks = msg.content.filter(b => b.type === 'text');
         if (textBlocks.length > 0) {
-          return textBlocks.map(b => (b as { text: string }).text).join('\n');
+          return textBlocks.map(b => (b as unknown as { text: string }).text).join('\n');
         }
       }
     }
@@ -145,7 +145,7 @@ export const TaskNestedBlock: React.FC<TaskNestedBlockProps> = ({
     <div
       style={{
         margin: `${token.marginSM}px 0`,
-        border: `1px solid ${token.colorPurple}`,
+        border: '1px solid rgba(114, 46, 209, 0.3)',
         borderRadius: token.borderRadiusLG,
         borderLeftWidth: 3,
         background: 'rgba(114, 46, 209, 0.02)',
