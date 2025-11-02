@@ -1,7 +1,7 @@
-import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
-import { withUserEnvironment } from './env-locking';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Database } from '../db/client';
 import type { UserID } from '../types';
+import { withUserEnvironment } from './env-locking';
 import * as resolverModule from './env-resolver';
 
 // Mock the resolver
@@ -22,7 +22,7 @@ describe('env-locking', () => {
   afterEach(() => {
     // Restore original environment
     Object.assign(process.env, originalEnv);
-    Object.keys(process.env).forEach(key => {
+    Object.keys(process.env).forEach((key) => {
       if (!(key in originalEnv)) {
         delete process.env[key];
       }
@@ -98,9 +98,9 @@ describe('env-locking', () => {
         throw error;
       };
 
-      await expect(
-        withUserEnvironment('user-1' as UserID, mockDb as Database, fn)
-      ).rejects.toThrow('Function failed');
+      await expect(withUserEnvironment('user-1' as UserID, mockDb as Database, fn)).rejects.toThrow(
+        'Function failed'
+      );
     });
 
     it('should restore env even when function throws', async () => {
@@ -113,7 +113,7 @@ describe('env-locking', () => {
 
       try {
         await withUserEnvironment('user-1' as UserID, mockDb as Database, fn);
-      } catch (e) {
+      } catch (_e) {
         // Expected
       }
 
@@ -131,14 +131,14 @@ describe('env-locking', () => {
       const fn1 = async () => {
         executionOrder.push('start-user1');
         // Simulate some async work
-        await new Promise(resolve => setTimeout(resolve, 10));
+        await new Promise((resolve) => setTimeout(resolve, 10));
         executionOrder.push('end-user1');
         expect(process.env.USER_ID).toBe('user-1-value');
       };
 
       const fn2 = async () => {
         executionOrder.push('start-user2');
-        await new Promise(resolve => setTimeout(resolve, 5));
+        await new Promise((resolve) => setTimeout(resolve, 5));
         executionOrder.push('end-user2');
         expect(process.env.USER_ID).toBe('user-2-value');
       };
@@ -339,15 +339,14 @@ describe('env-locking', () => {
     it('should serialize access for same user', async () => {
       const executionLog: string[] = [];
 
-      vi.mocked(resolverModule.resolveUserEnvironment)
-        .mockImplementation(async () => {
-          await new Promise(resolve => setTimeout(resolve, 5));
-          return {};
-        });
+      vi.mocked(resolverModule.resolveUserEnvironment).mockImplementation(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return {};
+      });
 
       const fn1 = async () => {
         executionLog.push('fn1-start');
-        await new Promise(resolve => setTimeout(resolve, 10));
+        await new Promise((resolve) => setTimeout(resolve, 10));
         executionLog.push('fn1-end');
       };
 
@@ -378,7 +377,7 @@ describe('env-locking', () => {
 
       const fn = async (userId: string) => {
         executionLog.push(`${userId}-start`);
-        await new Promise(resolve => setTimeout(resolve, 10));
+        await new Promise((resolve) => setTimeout(resolve, 10));
         executionLog.push(`${userId}-end`);
       };
 
@@ -394,7 +393,7 @@ describe('env-locking', () => {
       expect(executionLog).toContain('user-2-end');
 
       // Check that they overlap (interleaved execution)
-      const user1StartIdx = executionLog.indexOf('user-1-start');
+      const _user1StartIdx = executionLog.indexOf('user-1-start');
       const user2StartIdx = executionLog.indexOf('user-2-start');
       const user1EndIdx = executionLog.indexOf('user-1-end');
 

@@ -1,9 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  BLOCKED_ENV_VARS,
-  isEnvVarAllowed,
-  getEnvVarBlockReason,
-} from './env-blocklist';
+import { BLOCKED_ENV_VARS, getEnvVarBlockReason, isEnvVarAllowed } from './env-blocklist';
 
 describe('env-blocklist', () => {
   describe('BLOCKED_ENV_VARS set', () => {
@@ -252,17 +248,18 @@ describe('env-blocklist', () => {
         'DYLD_INSERT_LIBRARIES',
         'DYLD_LIBRARY_PATH',
       ];
-      injectionVectors.forEach(vec => {
+      injectionVectors.forEach((vec) => {
         expect(isEnvVarAllowed(vec)).toBe(false);
         const reason = getEnvVarBlockReason(vec);
-        const hasInjectionOrHijack = reason?.toLowerCase().includes('injection') || reason?.toLowerCase().includes('hijack');
+        const hasInjectionOrHijack =
+          reason?.toLowerCase().includes('injection') || reason?.toLowerCase().includes('hijack');
         expect(hasInjectionOrHijack).toBe(true);
       });
     });
 
     it('should block all system identity variables', () => {
       const systemVars = ['PATH', 'SHELL', 'HOME', 'USER', 'LOGNAME'];
-      systemVars.forEach(varName => {
+      systemVars.forEach((varName) => {
         expect(isEnvVarAllowed(varName)).toBe(false);
       });
     });

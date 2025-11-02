@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { validateEnvVar, isValid } from './env-validation';
-import { isEnvVarAllowed, getEnvVarBlockReason } from './env-blocklist';
+import { getEnvVarBlockReason, isEnvVarAllowed } from './env-blocklist';
+import { isValid, validateEnvVar } from './env-validation';
 
 describe('env-security', () => {
   describe('security: blocklist enforcement', () => {
@@ -8,25 +8,25 @@ describe('env-security', () => {
       it('should block LD_PRELOAD injection vector', () => {
         const errors = validateEnvVar('LD_PRELOAD', '/tmp/malicious.so');
         expect(!isValid(errors)).toBe(true);
-        expect(errors.some(e => e.code === 'blocked')).toBe(true);
+        expect(errors.some((e) => e.code === 'blocked')).toBe(true);
       });
 
       it('should block LD_LIBRARY_PATH hijacking', () => {
         const errors = validateEnvVar('LD_LIBRARY_PATH', '/tmp/evil:/usr/lib');
         expect(!isValid(errors)).toBe(true);
-        expect(errors.some(e => e.code === 'blocked')).toBe(true);
+        expect(errors.some((e) => e.code === 'blocked')).toBe(true);
       });
 
       it('should block DYLD_INSERT_LIBRARIES (macOS)', () => {
         const errors = validateEnvVar('DYLD_INSERT_LIBRARIES', '/tmp/evil.dylib');
         expect(!isValid(errors)).toBe(true);
-        expect(errors.some(e => e.code === 'blocked')).toBe(true);
+        expect(errors.some((e) => e.code === 'blocked')).toBe(true);
       });
 
       it('should block DYLD_LIBRARY_PATH (macOS)', () => {
         const errors = validateEnvVar('DYLD_LIBRARY_PATH', '/tmp/evil');
         expect(!isValid(errors)).toBe(true);
-        expect(errors.some(e => e.code === 'blocked')).toBe(true);
+        expect(errors.some((e) => e.code === 'blocked')).toBe(true);
       });
 
       it('should provide clear reason for library injection block', () => {
@@ -42,7 +42,7 @@ describe('env-security', () => {
       it('should block PATH manipulation', () => {
         const errors = validateEnvVar('PATH', '/attacker/bin:/usr/bin');
         expect(!isValid(errors)).toBe(true);
-        expect(errors.some(e => e.code === 'blocked')).toBe(true);
+        expect(errors.some((e) => e.code === 'blocked')).toBe(true);
       });
 
       it('should prevent command execution hijacking', () => {
@@ -105,7 +105,7 @@ describe('env-security', () => {
 
       it('should reject shell special characters in name', () => {
         const specialChars = ['&', '|', ';', '>', '<', '*', '?', '$', '`'];
-        specialChars.forEach(char => {
+        specialChars.forEach((char) => {
           const varName = `VAR${char}NAME`;
           const errors = validateEnvVar(varName);
           expect(!isValid(errors)).toBe(true);
@@ -120,11 +120,11 @@ describe('env-security', () => {
           'var.name', // dots
           'var name', // spaces
           'var@name', // special chars
-          '123var',   // starts with number
-          'varName',  // lowercase
+          '123var', // starts with number
+          'varName', // lowercase
         ];
 
-        invalidNames.forEach(name => {
+        invalidNames.forEach((name) => {
           const errors = validateEnvVar(name, 'value');
           expect(!isValid(errors)).toBe(true);
           expect(errors[0].code).toBe('invalid_format');
@@ -132,15 +132,9 @@ describe('env-security', () => {
       });
 
       it('should enforce naming convention strictly', () => {
-        const validNames = [
-          'VALID_NAME',
-          '_INTERNAL_VAR',
-          'NAME_WITH_123',
-          'A',
-          '_',
-        ];
+        const validNames = ['VALID_NAME', '_INTERNAL_VAR', 'NAME_WITH_123', 'A', '_'];
 
-        validNames.forEach(name => {
+        validNames.forEach((name) => {
           const errors = validateEnvVar(name, 'value');
           expect(isValid(errors)).toBe(true);
         });
@@ -154,7 +148,7 @@ describe('env-security', () => {
         const tooLarge = 'a'.repeat(10 * 1024 + 1);
         const errors = validateEnvVar('LARGE_VAR', tooLarge);
         expect(!isValid(errors)).toBe(true);
-        expect(errors.some(e => e.code === 'too_long')).toBe(true);
+        expect(errors.some((e) => e.code === 'too_long')).toBe(true);
       });
 
       it('should accept maximum allowed size', () => {
@@ -168,7 +162,7 @@ describe('env-security', () => {
         const tooLarge = '🔒'.repeat(3000);
         const errors = validateEnvVar('VAR', tooLarge);
         expect(!isValid(errors)).toBe(true);
-        expect(errors.some(e => e.code === 'too_long')).toBe(true);
+        expect(errors.some((e) => e.code === 'too_long')).toBe(true);
       });
 
       it('should allow max unicode-containing values', () => {
@@ -188,9 +182,9 @@ describe('env-security', () => {
 
       it('should reject whitespace-only values', () => {
         const whitespaceTests = [' ', '\t', '\n', '  \t  \n  '];
-        whitespaceTests.forEach(ws => {
+        whitespaceTests.forEach((ws) => {
           const errors = validateEnvVar('VAR', ws);
-          expect(errors.some(e => e.code === 'empty_value')).toBe(true);
+          expect(errors.some((e) => e.code === 'empty_value')).toBe(true);
         });
       });
     });
@@ -212,7 +206,7 @@ describe('env-security', () => {
           'AGOR_MASTER_SECRET',
         ];
 
-        criticalVars.forEach(varName => {
+        criticalVars.forEach((varName) => {
           expect(isEnvVarAllowed(varName)).toBe(false);
           expect(getEnvVarBlockReason(varName)).not.toBeNull();
         });
@@ -229,7 +223,7 @@ describe('env-security', () => {
           'SECRET_KEY',
         ];
 
-        legit.forEach(varName => {
+        legit.forEach((varName) => {
           expect(isEnvVarAllowed(varName)).toBe(true);
           expect(getEnvVarBlockReason(varName)).toBeNull();
         });
@@ -263,7 +257,7 @@ describe('env-security', () => {
 
       it('should prevent LD_PRELOAD with common paths', () => {
         const paths = ['/tmp/lib.so', '/var/tmp/evil.so', './lib.so'];
-        paths.forEach(path => {
+        paths.forEach((path) => {
           const errors = validateEnvVar('LD_PRELOAD', path);
           expect(!isValid(errors)).toBe(true);
         });
@@ -277,7 +271,9 @@ describe('env-security', () => {
       it('should prevent environment variable expansion tricks', () => {
         // These would be legitimate if they passed format check
         // But they should fail format validation
-        const errors = validateEnvVar('${EVIL}');
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: Testing that expansion syntax fails
+        const evil = '${EVIL}';
+        const errors = validateEnvVar(evil);
         expect(!isValid(errors)).toBe(true);
       });
     });
@@ -287,7 +283,7 @@ describe('env-security', () => {
         // Value can contain special chars, so this tests length limit
         const polyglot = 'a'.repeat(10 * 1024 + 1);
         const errors = validateEnvVar('CUSTOM_VAR', polyglot);
-        expect(errors.some(e => e.code === 'too_long')).toBe(true);
+        expect(errors.some((e) => e.code === 'too_long')).toBe(true);
       });
     });
 
@@ -316,11 +312,11 @@ describe('env-security', () => {
       it('should validate both name format and blocklist', () => {
         // Invalid format first
         const errors1 = validateEnvVar('invalid-name', 'value');
-        expect(errors1.some(e => e.code === 'invalid_format')).toBe(true);
+        expect(errors1.some((e) => e.code === 'invalid_format')).toBe(true);
 
         // Blocked name
         const errors2 = validateEnvVar('PATH', 'value');
-        expect(errors2.some(e => e.code === 'blocked')).toBe(true);
+        expect(errors2.some((e) => e.code === 'blocked')).toBe(true);
 
         // Invalid format + blocked
         const errors3 = validateEnvVar('path', 'value');
@@ -364,7 +360,7 @@ describe('env-security', () => {
     });
 
     it('should handle very long variable names', () => {
-      const longName = 'A_' + 'B'.repeat(10000);
+      const longName = `A_${'B'.repeat(10000)}`;
       const errors = validateEnvVar(longName, 'value');
       // Long name is valid format-wise
       expect(isValid(errors)).toBe(true);

@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { validateEnvVar, ENV_VAR_CONSTRAINTS, isValid, formatValidationError, formatValidationErrors } from './env-validation';
+import {
+  ENV_VAR_CONSTRAINTS,
+  formatValidationError,
+  formatValidationErrors,
+  isValid,
+  validateEnvVar,
+} from './env-validation';
 
 describe('env-validation', () => {
   describe('validateEnvVar - name validation', () => {
@@ -196,8 +202,8 @@ describe('env-validation', () => {
       const errors = validateEnvVar('invalid-name', '');
       // Should report both errors
       expect(errors.length).toBeGreaterThan(0);
-      expect(errors.some(e => e.field === 'name')).toBe(true);
-      expect(errors.some(e => e.field === 'value')).toBe(true);
+      expect(errors.some((e) => e.field === 'name')).toBe(true);
+      expect(errors.some((e) => e.field === 'value')).toBe(true);
     });
 
     it('should only validate value if name is valid and not blocked', () => {
@@ -208,7 +214,7 @@ describe('env-validation', () => {
 
     it('should reject name first before value', () => {
       const errors = validateEnvVar('invalid-name', 'valid-value');
-      expect(errors.some(e => e.field === 'name')).toBe(true);
+      expect(errors.some((e) => e.field === 'name')).toBe(true);
     });
   });
 
@@ -278,7 +284,7 @@ describe('env-validation', () => {
     });
 
     it('should handle very long valid names', () => {
-      const longName = 'A' + '_B'.repeat(50);
+      const longName = `A${'_B'.repeat(50)}`;
       const errors = validateEnvVar(longName);
       expect(errors).toHaveLength(0);
     });
@@ -288,12 +294,12 @@ describe('env-validation', () => {
       const errors1 = validateEnvVar('path'); // lowercase
       // lowercase fails format check (must be UPPERCASE) and also blocklist (case-insensitive)
       expect(errors1.length).toBeGreaterThan(0);
-      expect(errors1.some(e => e.code === 'invalid_format')).toBe(true);
+      expect(errors1.some((e) => e.code === 'invalid_format')).toBe(true);
 
       // Test mixed case - also fails format and blocklist
       const errors2 = validateEnvVar('Path'); // mixed case
       expect(errors2.length).toBeGreaterThan(0);
-      expect(errors2.some(e => e.code === 'invalid_format')).toBe(true);
+      expect(errors2.some((e) => e.code === 'invalid_format')).toBe(true);
     });
 
     it('should handle value that is just whitespace variations', () => {
