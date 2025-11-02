@@ -25,18 +25,29 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
   onDelete,
   onClose,
 }) => {
+  // Track if this is the initial mount to prevent overwriting user input
+  const [isInitialized, setIsInitialized] = useState(false);
   const [boardId, setBoardId] = useState(worktree.board_id || undefined);
   const [issueUrl, setIssueUrl] = useState(worktree.issue_url || '');
   const [prUrl, setPrUrl] = useState(worktree.pull_request_url || '');
   const [notes, setNotes] = useState(worktree.notes || '');
 
-  // Sync local state with prop changes (from WebSocket updates)
+  // Only sync local state on first mount, not on every prop change (to prevent overwriting user input)
   useEffect(() => {
-    setBoardId(worktree.board_id || undefined);
-    setIssueUrl(worktree.issue_url || '');
-    setPrUrl(worktree.pull_request_url || '');
-    setNotes(worktree.notes || '');
-  }, [worktree.board_id, worktree.issue_url, worktree.pull_request_url, worktree.notes]);
+    if (!isInitialized) {
+      setBoardId(worktree.board_id || undefined);
+      setIssueUrl(worktree.issue_url || '');
+      setPrUrl(worktree.pull_request_url || '');
+      setNotes(worktree.notes || '');
+      setIsInitialized(true);
+    }
+  }, [
+    isInitialized,
+    worktree.board_id,
+    worktree.issue_url,
+    worktree.pull_request_url,
+    worktree.notes,
+  ]);
 
   const hasChanges =
     boardId !== worktree.board_id ||
@@ -125,7 +136,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
                 onChange={setBoardId}
                 placeholder="Select board (optional)..."
                 allowClear
-                options={boards.map((board) => ({
+                options={boards.map(board => ({
                   value: board.board_id,
                   label: `${board.icon || '📋'} ${board.name}`,
                 }))}
@@ -135,7 +146,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
             <Form.Item label="Issue" labelCol={{ span: 6 }} wrapperCol={{ span: 18 }}>
               <Input
                 value={issueUrl}
-                onChange={(e) => setIssueUrl(e.target.value)}
+                onChange={e => setIssueUrl(e.target.value)}
                 placeholder="https://github.com/user/repo/issues/42"
                 prefix={<LinkOutlined />}
               />
@@ -144,7 +155,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
             <Form.Item label="Pull Request" labelCol={{ span: 6 }} wrapperCol={{ span: 18 }}>
               <Input
                 value={prUrl}
-                onChange={(e) => setPrUrl(e.target.value)}
+                onChange={e => setPrUrl(e.target.value)}
                 placeholder="https://github.com/user/repo/pull/43"
                 prefix={<LinkOutlined />}
               />
@@ -153,7 +164,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
             <Form.Item label="Notes" labelCol={{ span: 6 }} wrapperCol={{ span: 18 }}>
               <TextArea
                 value={notes}
-                onChange={(e) => setNotes(e.target.value)}
+                onChange={e => setNotes(e.target.value)}
                 placeholder="Freeform notes about this worktree..."
                 rows={4}
               />

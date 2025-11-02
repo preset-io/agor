@@ -2,6 +2,7 @@ import type { MCPServer, Session } from '@agor/core/types';
 import { DownOutlined } from '@ant-design/icons';
 import { Collapse, Form, Modal, Typography } from 'antd';
 import React from 'react';
+import { AdvancedSettingsForm } from '../AdvancedSettingsForm';
 import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
 import type { ModelConfig } from '../ModelSelector';
 import { SessionMetadataForm } from '../SessionMetadataForm';
@@ -38,13 +39,28 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
 }) => {
   const [form] = Form.useForm();
 
-  // Reset form values when modal opens or props change
+  // Store initial values when modal opens to prevent re-renders from overwriting user input
+  const [initialValues, setInitialValues] = React.useState<{
+    title: string;
+    mcpServerIds: string[];
+    modelConfig: ModelConfig | undefined;
+    permissionMode: string;
+    custom_context: string;
+  }>({
+    title: '',
+    mcpServerIds: [],
+    modelConfig: undefined,
+    permissionMode: 'acceptEdits',
+    custom_context: '',
+  });
+
+  // Reset form values only when modal opens (not on every prop change)
   React.useEffect(() => {
     if (open) {
       // Get default permission mode based on agentic tool type
       const defaultPermissionMode = session.agentic_tool === 'codex' ? 'auto' : 'acceptEdits';
 
-      form.setFieldsValue({
+      const values = {
         title: session.title || '',
         mcpServerIds: sessionMcpServerIds,
         modelConfig: session.model_config,
@@ -52,21 +68,24 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
         custom_context: session.custom_context
           ? JSON.stringify(session.custom_context, null, 2)
           : '',
-      });
+      };
+
+      setInitialValues(values);
+      form.setFieldsValue(values);
     }
   }, [
     open,
     session.title,
     session.agentic_tool,
-    sessionMcpServerIds,
     session.model_config,
     session.permission_config?.mode,
     session.custom_context,
+    sessionMcpServerIds,
     form,
   ]);
 
   const handleOk = () => {
-    form.validateFields().then((values) => {
+    form.validateFields().then(values => {
       // Collect all updates
       const updates: Partial<Session> = {};
 
@@ -139,21 +158,7 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
       cancelText="Cancel"
       width={600}
     >
-      <Form
-        form={form}
-        layout="vertical"
-        initialValues={{
-          title: session.title || '',
-          mcpServerIds: sessionMcpServerIds,
-          modelConfig: session.model_config,
-          permissionMode:
-            session.permission_config?.mode ||
-            (session.agentic_tool === 'codex' ? 'auto' : 'acceptEdits'),
-          custom_context: session.custom_context
-            ? JSON.stringify(session.custom_context, null, 2)
-            : '',
-        }}
-      >
+      <Form form={form} layout="vertical" initialValues={initialValues}>
         <Collapse
           ghost
           defaultActiveKey={['metadata', 'agentic-tool-config']}
@@ -176,6 +181,11 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
                   showHelpText={true}
                 />
               ),
+            },
+            {
+              key: 'advanced',
+              label: <Typography.Text strong>Advanced</Typography.Text>,
+              children: <AdvancedSettingsForm showHelpText={true} />,
             },
           ]}
         />

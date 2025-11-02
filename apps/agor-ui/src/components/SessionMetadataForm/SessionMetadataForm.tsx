@@ -3,16 +3,15 @@
  *
  * Reusable form section for session metadata fields:
  * - Title
- * - Custom Context (JSON)
  *
  * Used in both NewSessionModal and SessionSettingsModal
  *
- * Note: Issue URL and Pull Request URL have been moved to the Worktree entity.
+ * Note: Custom Context (JSON) has been moved to AdvancedSettingsForm.
+ * Issue URL and Pull Request URL have been moved to the Worktree entity.
  * These are now managed in the WorktreeModal instead.
  */
 
 import { Form, Input } from 'antd';
-import { JSONEditor, validateJSON } from '../JSONEditor';
 
 export interface SessionMetadataFormProps {
   /** Whether to show help text under each field */
@@ -28,7 +27,6 @@ export interface SessionMetadataFormProps {
  *
  * Expects to be used within a Form context with these field names:
  * - title
- * - custom_context
  */
 export const SessionMetadataForm: React.FC<SessionMetadataFormProps> = ({
   showHelpText = true,
@@ -46,19 +44,6 @@ export const SessionMetadataForm: React.FC<SessionMetadataFormProps> = ({
         }
       >
         <Input placeholder="e.g., Auth System Implementation" />
-      </Form.Item>
-
-      <Form.Item
-        name="custom_context"
-        label="Custom Context (JSON)"
-        help={
-          showHelpText
-            ? 'Add custom fields for use in zone trigger templates (e.g., {{ session.context.yourField }})'
-            : undefined
-        }
-        rules={[{ validator: validateJSON }]}
-      >
-        <JSONEditor placeholder='{"teamName": "Backend", "sprintNumber": 42}' rows={4} />
       </Form.Item>
     </>
   );
