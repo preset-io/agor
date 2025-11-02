@@ -641,21 +641,26 @@ const SessionCanvas = ({
       const updatedWorktrees = initialNodes.map(newNode => {
         const existingNode = currentNodes.find(n => n.id === newNode.id);
         const localPosition = localPositionsRef.current[newNode.id];
-        const incomingPosition = newNode.position;
-        const positionChanged =
-          localPosition &&
-          (Math.abs(localPosition.x - incomingPosition.x) > 1 ||
-            Math.abs(localPosition.y - incomingPosition.y) > 1);
 
-        if (positionChanged) {
-          delete localPositionsRef.current[newNode.id];
-          return { ...newNode, selected: existingNode?.selected };
-        }
-
+        // If we have a local position (user is dragging or just dragged), use it
         if (localPosition) {
+          const incomingPosition = newNode.position;
+          // Check if WebSocket confirmed our drag (positions are now close)
+          const positionConfirmed =
+            Math.abs(localPosition.x - incomingPosition.x) <= 1 &&
+            Math.abs(localPosition.y - incomingPosition.y) <= 1;
+
+          if (positionConfirmed) {
+            // WebSocket confirmed our position, clear the local override
+            delete localPositionsRef.current[newNode.id];
+            return { ...newNode, selected: existingNode?.selected };
+          }
+
+          // Still waiting for confirmation or another client moved it, keep local position
           return { ...newNode, position: localPosition, selected: existingNode?.selected };
         }
 
+        // No local override, use incoming position
         return { ...newNode, selected: existingNode?.selected };
       });
 
@@ -720,7 +725,32 @@ const SessionCanvas = ({
 
     setNodes(currentNodes => {
       const { zones, worktrees, cursors } = partitionNodesByType(currentNodes);
-      return applyZOrder(zones, worktrees, commentNodes, cursors);
+
+      // Apply local position overrides to comment nodes (to prevent flicker during drag)
+      const commentsWithLocalPositions = commentNodes.map(newNode => {
+        const localPosition = localPositionsRef.current[newNode.id];
+
+        if (localPosition) {
+          const incomingPosition = newNode.position;
+          // Check if WebSocket confirmed our drag (positions are now close)
+          const positionConfirmed =
+            Math.abs(localPosition.x - incomingPosition.x) <= 1 &&
+            Math.abs(localPosition.y - incomingPosition.y) <= 1;
+
+          if (positionConfirmed) {
+            // WebSocket confirmed our position, clear the local override
+            delete localPositionsRef.current[newNode.id];
+            return newNode;
+          }
+
+          // Still waiting for confirmation, keep local position
+          return { ...newNode, position: localPosition };
+        }
+
+        return newNode;
+      });
+
+      return applyZOrder(zones, worktrees, commentsWithLocalPositions, cursors);
     });
   }, [commentNodes, setNodes, applyZOrder, partitionNodesByType]);
 
@@ -878,20 +908,30 @@ const SessionCanvas = ({
               // Comment pin moved - extract comment_id from node id
               const commentId = nodeId.replace('comment-', '');
 
-              // IMPORTANT: If the node has a parentId, React Flow gives us RELATIVE position
-              // Convert to absolute position for intersection detection
-              let absolutePosition = { ...position };
+              // Calculate absolute position from the drag event
+              // React Flow gives us relative position if node has a parent, absolute if not
+              let absolutePosition: { x: number; y: number };
+
               if (draggedNode.parentId) {
+                // Node has a parent - position is relative, convert to absolute
                 const parentNode = currentNodes.find(n => n.id === draggedNode.parentId);
                 if (parentNode) {
+                  // Get the parent's absolute position (in case parent is also nested)
+                  const parentAbsPos = getAbsoluteNodePosition(parentNode, currentNodes);
                   absolutePosition = {
-                    x: parentNode.position.x + position.x,
-                    y: parentNode.position.y + position.y,
+                    x: parentAbsPos.x + position.x,
+                    y: parentAbsPos.y + position.y,
                   };
+                } else {
+                  // Fallback: parent not found, treat as absolute
+                  absolutePosition = { ...position };
                 }
+              } else {
+                // No parent - position is already absolute
+                absolutePosition = { ...position };
               }
 
-              // Find zones/worktrees that the comment intersects with
+              // Find zones/worktrees that the comment intersects with at this absolute position
               const { worktreeNode, zoneNode } = findIntersectingObjects(
                 absolutePosition,
                 currentNodes
@@ -910,7 +950,7 @@ const SessionCanvas = ({
 
               commentUpdates.push({
                 comment_id: commentId,
-                position: absolutePosition, // Use absolute position for calculation
+                position: absolutePosition, // Always use absolute position for DB storage calculation
                 parentId,
                 parentType,
               });
