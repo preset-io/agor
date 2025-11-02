@@ -1,4 +1,4 @@
-import { SessionStatus, TaskStatus } from '@agor/core/types';
+import { type SessionStatus, TaskStatus } from '@agor/core/types';
 import {
   CheckCircleOutlined,
   ClockCircleOutlined,
@@ -42,9 +42,6 @@ export const TaskStatusIcon: React.FC<TaskStatusIconProps> = ({ status, size = 1
       return <CloseCircleOutlined style={{ ...iconStyle, color: token.colorError }} />;
     case TaskStatus.STOPPED:
       return <MinusCircleOutlined style={{ ...iconStyle, color: token.colorWarning }} />;
-    case SessionStatus.IDLE:
-      return <ClockCircleOutlined style={{ ...iconStyle, color: token.colorTextDisabled }} />;
-    case TaskStatus.CREATED:
     default:
       return <ClockCircleOutlined style={{ ...iconStyle, color: token.colorTextDisabled }} />;
   }

@@ -86,7 +86,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({ repos, onCreate, onUpdat
   };
 
   const handleSaveRepo = () => {
-    repoForm.validateFields().then(values => {
+    repoForm.validateFields().then((values) => {
       if (isEditing && editingRepo) {
         // Update existing repo
         onUpdate?.(editingRepo.repo_id, {
@@ -150,7 +150,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({ repos, onCreate, onUpdat
 
       {repos.length > 0 && (
         <Space direction="vertical" size={16} style={{ width: '100%' }}>
-          {repos.map(repo => (
+          {repos.map((repo) => (
             <Card
               key={repo.repo_id}
               size="small"

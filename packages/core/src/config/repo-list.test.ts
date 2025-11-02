@@ -214,8 +214,8 @@ describe('getRepoReferenceOptions', () => {
     const result = getRepoReferenceOptions(repos, worktrees);
 
     expect(result).toHaveLength(2);
-    expect(result.some(opt => opt.worktree === 'orphan-branch')).toBe(false);
-    expect(result.some(opt => opt.worktree === 'main')).toBe(true);
+    expect(result.some((opt) => opt.worktree === 'orphan-branch')).toBe(false);
+    expect(result.some((opt) => opt.worktree === 'main')).toBe(true);
   });
 
   it('should handle repos without worktrees', () => {
@@ -245,7 +245,7 @@ describe('getRepoReferenceOptions', () => {
     expect(result).toHaveLength(2);
     expect(result[0].type).toBe('managed');
     expect(result[1].type).toBe('managed');
-    expect(result.every(opt => opt.type === 'managed')).toBe(true);
+    expect(result.every((opt) => opt.type === 'managed')).toBe(true);
   });
 
   it('should use correct ID values for repo and worktree options', () => {
@@ -547,7 +547,7 @@ describe('getGroupedRepoReferenceOptions', () => {
 
     expect(result['preset-io/agor']).toHaveLength(2);
     expect(Object.keys(result)).toHaveLength(1);
-    expect(result['preset-io/agor'].some(opt => opt.worktree === 'orphan')).toBe(false);
+    expect(result['preset-io/agor'].some((opt) => opt.worktree === 'orphan')).toBe(false);
   });
 
   it('should handle repos without worktrees', () => {

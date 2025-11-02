@@ -4,7 +4,6 @@ const ALGORITHM = 'aes-256-gcm';
 const KEY_LENGTH = 32;
 const IV_LENGTH = 16;
 const SALT_LENGTH = 16;
-const AUTH_TAG_LENGTH = 16;
 
 /**
  * Get master secret from environment
@@ -117,5 +116,5 @@ export function decryptApiKey(ciphertext: string, secret?: string): string {
  */
 export function isEncrypted(value: string): boolean {
   const parts = value.split(':');
-  return parts.length === 4 && parts.every(part => /^[0-9a-f]+$/i.test(part));
+  return parts.length === 4 && parts.every((part) => /^[0-9a-f]+$/i.test(part));
 }

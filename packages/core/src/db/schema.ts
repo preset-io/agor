@@ -98,7 +98,7 @@ export const sessions = sqliteTable(
       }>()
       .notNull(),
   },
-  table => ({
+  (table) => ({
     statusIdx: index('sessions_status_idx').on(table.status),
     agenticToolIdx: index('sessions_agentic_tool_idx').on(table.agentic_tool),
     boardIdx: index('sessions_board_idx').on(table.board_id),
@@ -158,7 +158,7 @@ export const tasks = sqliteTable(
       }>()
       .notNull(),
   },
-  table => ({
+  (table) => ({
     sessionIdx: index('tasks_session_idx').on(table.session_id),
     statusIdx: index('tasks_status_idx').on(table.status),
     createdIdx: index('tasks_created_idx').on(table.created_at),
@@ -206,7 +206,7 @@ export const messages = sqliteTable(
       }>()
       .notNull(),
   },
-  table => ({
+  (table) => ({
     // Indexes for efficient lookups
     sessionIdx: index('messages_session_id_idx').on(table.session_id),
     taskIdx: index('messages_task_id_idx').on(table.task_id),
@@ -242,7 +242,7 @@ export const boards = sqliteTable(
       }>()
       .notNull(),
   },
-  table => ({
+  (table) => ({
     nameIdx: index('boards_name_idx').on(table.name),
     slugIdx: index('boards_slug_idx').on(table.slug),
   })
@@ -283,7 +283,7 @@ export const repos = sqliteTable(
       }>()
       .notNull(),
   },
-  table => ({
+  (table) => ({
     slugIdx: index('repos_slug_idx').on(table.slug),
   })
 );
@@ -364,7 +364,7 @@ export const worktrees = sqliteTable(
       }>()
       .notNull(),
   },
-  table => ({
+  (table) => ({
     repoIdx: index('worktrees_repo_idx').on(table.repo_id),
     nameIdx: index('worktrees_name_idx').on(table.name),
     refIdx: index('worktrees_ref_idx').on(table.ref),
@@ -422,7 +422,7 @@ export const users = sqliteTable(
       }>()
       .notNull(),
   },
-  table => ({
+  (table) => ({
     emailIdx: index('users_email_idx').on(table.email),
   })
 );
@@ -502,7 +502,7 @@ export const mcpServers = sqliteTable(
       }>()
       .notNull(),
   },
-  table => ({
+  (table) => ({
     nameIdx: index('mcp_servers_name_idx').on(table.name),
     scopeIdx: index('mcp_servers_scope_idx').on(table.scope),
     ownerIdx: index('mcp_servers_owner_idx').on(table.owner_user_id),
@@ -544,7 +544,7 @@ export const boardObjects = sqliteTable(
       }>()
       .notNull(),
   },
-  table => ({
+  (table) => ({
     boardIdx: index('board_objects_board_idx').on(table.board_id),
     worktreeIdx: index('board_objects_worktree_idx').on(table.worktree_id),
   })
@@ -568,7 +568,7 @@ export const sessionMcpServers = sqliteTable(
     enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
     added_at: integer('added_at', { mode: 'timestamp_ms' }).notNull(),
   },
-  table => ({
+  (table) => ({
     // Composite primary key
     pk: index('session_mcp_servers_pk').on(table.session_id, table.mcp_server_id),
     // Indexes for queries
@@ -658,7 +658,7 @@ export const boardComments = sqliteTable(
       }>()
       .notNull(),
   },
-  table => ({
+  (table) => ({
     boardIdx: index('board_comments_board_idx').on(table.board_id),
     sessionIdx: index('board_comments_session_idx').on(table.session_id),
     taskIdx: index('board_comments_task_idx').on(table.task_id),

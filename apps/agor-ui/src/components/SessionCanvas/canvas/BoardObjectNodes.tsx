@@ -170,15 +170,15 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
         {/* Toolbar - ALWAYS rendered, visibility controlled by CSS only */}
         <div
           className="nodrag nopan"
-          onPointerDown={e => {
+          onPointerDown={(e) => {
             e.preventDefault();
             e.stopPropagation();
           }}
-          onPointerUp={e => {
+          onPointerUp={(e) => {
             e.preventDefault();
             e.stopPropagation();
           }}
-          onClick={e => {
+          onClick={(e) => {
             e.preventDefault();
             e.stopPropagation();
           }}
@@ -203,20 +203,20 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
             transition: 'opacity 0.15s ease',
           }}
         >
-          {colors.map(color => (
+          {colors.map((color) => (
             <button
               key={color}
               type="button"
-              onPointerDown={e => {
+              onPointerDown={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
               }}
-              onPointerUp={e => {
+              onPointerUp={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 handleColorChange(color);
               }}
-              onClick={e => {
+              onClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
               }}
@@ -246,16 +246,16 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
           />
           <button
             type="button"
-            onPointerDown={e => {
+            onPointerDown={(e) => {
               e.preventDefault();
               e.stopPropagation();
             }}
-            onPointerUp={e => {
+            onPointerUp={(e) => {
               e.preventDefault();
               e.stopPropagation();
               setConfigModalOpen(true);
             }}
-            onClick={e => {
+            onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
             }}
@@ -278,24 +278,24 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
           </button>
           <button
             type="button"
-            onPointerDown={e => {
+            onPointerDown={(e) => {
               e.preventDefault();
               e.stopPropagation();
             }}
-            onPointerUp={e => {
+            onPointerUp={(e) => {
               e.preventDefault();
               e.stopPropagation();
               setDeleteModalOpen(true);
             }}
-            onClick={e => {
+            onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
             }}
-            onMouseEnter={e => {
+            onMouseEnter={(e) => {
               e.currentTarget.style.color = token.colorError;
               e.currentTarget.style.borderColor = token.colorError;
             }}
-            onMouseLeave={e => {
+            onMouseLeave={(e) => {
               e.currentTarget.style.color = token.colorTextSecondary;
               e.currentTarget.style.borderColor = token.colorBorder;
             }}
@@ -329,7 +329,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
               ref={labelInputRef}
               type="text"
               value={label}
-              onChange={e => setLabel(e.target.value)}
+              onChange={(e) => setLabel(e.target.value)}
               onBlur={handleSaveLabel}
               onKeyDown={handleKeyDown}
               className="nodrag" // Prevent node drag when typing
@@ -384,7 +384,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
       <DeleteZoneModal
         open={deleteModalOpen}
         onCancel={() => setDeleteModalOpen(false)}
-        onConfirm={deleteAssociatedSessions => {
+        onConfirm={(deleteAssociatedSessions) => {
           setDeleteModalOpen(false);
           if (data.onDelete) {
             data.onDelete(data.objectId, deleteAssociatedSessions);

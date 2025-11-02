@@ -393,7 +393,6 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
             {stateText}
           </Typography.Text>
         );
-      case 'stopped':
       default:
         return <Typography.Text type="secondary">{stateText}</Typography.Text>;
     }
@@ -558,7 +557,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                   </Typography.Text>
                   <TextArea
                     value={upCommand}
-                    onChange={e => setUpCommand(e.target.value)}
+                    onChange={(e) => setUpCommand(e.target.value)}
                     placeholder="DAEMON_PORT={{add 3000 worktree.unique_id}} UI_PORT={{add 5000 worktree.unique_id}} docker compose -p {{worktree.name}} up -d"
                     rows={3}
                     style={{ fontFamily: 'monospace', fontSize: 11 }}
@@ -582,7 +581,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                   </Typography.Text>
                   <TextArea
                     value={downCommand}
-                    onChange={e => setDownCommand(e.target.value)}
+                    onChange={(e) => setDownCommand(e.target.value)}
                     placeholder="docker compose -p {{worktree.name}} down"
                     rows={2}
                     style={{ fontFamily: 'monospace', fontSize: 11 }}
@@ -606,7 +605,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                   </Typography.Text>
                   <Input
                     value={healthCheckUrl}
-                    onChange={e => setHealthCheckUrl(e.target.value)}
+                    onChange={(e) => setHealthCheckUrl(e.target.value)}
                     placeholder="http://localhost:{{add 9000 worktree.unique_id}}/health"
                     style={{ fontFamily: 'monospace', fontSize: 11 }}
                   />
@@ -622,7 +621,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                   </Typography.Text>
                   <Input
                     value={appUrl}
-                    onChange={e => setAppUrl(e.target.value)}
+                    onChange={(e) => setAppUrl(e.target.value)}
                     placeholder="http://localhost:{{add 5000 worktree.unique_id}}"
                     style={{ fontFamily: 'monospace', fontSize: 11 }}
                   />
@@ -771,7 +770,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                 <>
                   <TextArea
                     value={customContextJson}
-                    onChange={e => setCustomContextJson(e.target.value)}
+                    onChange={(e) => setCustomContextJson(e.target.value)}
                     placeholder='{\n  "feature_name": "authentication",\n  "extra_port": 3001\n}'
                     rows={6}
                     style={{ fontFamily: 'monospace', fontSize: 11 }}

@@ -193,7 +193,7 @@ export const PermissionRequestBlock: React.FC<PermissionRequestBlockProps> = ({
             {/* Radio group for scope selection */}
             <Radio.Group
               value={scope}
-              onChange={e => setScope(e.target.value)}
+              onChange={(e) => setScope(e.target.value)}
               style={{ width: '100%' }}
             >
               <Space direction="vertical" size={token.sizeUnit / 2}>

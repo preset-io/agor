@@ -15,7 +15,19 @@ import {
   PoweroffOutlined,
   WarningOutlined,
 } from '@ant-design/icons';
-import { Badge, Button, Empty, Form, Input, Modal, Space, Table, Tooltip, Typography, theme } from 'antd';
+import {
+  Badge,
+  Button,
+  Empty,
+  Form,
+  Input,
+  Modal,
+  Space,
+  Table,
+  Tooltip,
+  Typography,
+  theme,
+} from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { DeleteWorktreePopconfirm } from '../DeleteWorktreePopconfirm';
 import { WorktreeFormFields } from '../WorktreeFormFields';
@@ -61,7 +73,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
   const [isFormValid, setIsFormValid] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
 
-  const reposById = useMemo(() => new Map(repos.map(repo => [repo.repo_id, repo])), [repos]);
+  const reposById = useMemo(() => new Map(repos.map((repo) => [repo.repo_id, repo])), [repos]);
 
   // Validate form fields to enable/disable Create button
   const validateForm = useCallback(() => {
@@ -82,10 +94,10 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
       const lastBoardId = localStorage.getItem('agor:lastUsedBoardId');
 
       const defaultRepoId =
-        lastRepoId && repos.find(r => r.repo_id === lastRepoId) ? lastRepoId : repos[0].repo_id;
+        lastRepoId && repos.find((r) => r.repo_id === lastRepoId) ? lastRepoId : repos[0].repo_id;
 
       const defaultBoardId =
-        lastBoardId && boards.find(b => b.board_id === lastBoardId)
+        lastBoardId && boards.find((b) => b.board_id === lastBoardId)
           ? lastBoardId
           : boards.length > 0
             ? boards[0].board_id
@@ -95,7 +107,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
       form.setFieldsValue({
         repoId: defaultRepoId,
         boardId: defaultBoardId,
-        sourceBranch: repos.find(r => r.repo_id === defaultRepoId)?.default_branch || 'main',
+        sourceBranch: repos.find((r) => r.repo_id === defaultRepoId)?.default_branch || 'main',
       });
 
       setSelectedRepoId(defaultRepoId);
@@ -172,14 +184,14 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
   // Get selected repo's default branch
   const getDefaultBranch = (): string => {
     if (!selectedRepoId) return 'main';
-    const repo = repos.find(r => r.repo_id === selectedRepoId);
+    const repo = repos.find((r) => r.repo_id === selectedRepoId);
     return repo?.default_branch || 'main';
   };
 
   // Update source branch when repo changes
   const handleRepoChange = (repoId: string) => {
     setSelectedRepoId(repoId);
-    const repo = repos.find(r => r.repo_id === repoId);
+    const repo = repos.find((r) => r.repo_id === repoId);
     const defaultBranch = repo?.default_branch || 'main';
     form.setFieldValue('sourceBranch', defaultBranch);
   };
@@ -244,7 +256,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
       render: (_: unknown, record: Worktree) => {
         const status = record.environment_instance?.status;
         const healthStatus = record.environment_instance?.last_health_check?.status;
-        const repo = repos.find(r => r.repo_id === record.repo_id);
+        const repo = repos.find((r) => r.repo_id === record.repo_id);
         const hasEnvConfig = !!repo?.environment_config;
 
         const isRunningOrHealthy =
@@ -260,7 +272,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
                   size="small"
                   icon={<PlayCircleOutlined />}
                   disabled={isRunningOrHealthy}
-                  onClick={e => {
+                  onClick={(e) => {
                     e.stopPropagation();
                     onStartEnvironment?.(record.worktree_id);
                   }}
@@ -270,7 +282,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
                   type="text"
                   size="small"
                   icon={<PoweroffOutlined />}
-                  onClick={e => {
+                  onClick={(e) => {
                     e.stopPropagation();
                     onStopEnvironment?.(record.worktree_id);
                   }}
@@ -281,7 +293,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
                     type="text"
                     size="small"
                     icon={<GlobalOutlined />}
-                    onClick={e => {
+                    onClick={(e) => {
                       e.stopPropagation();
                       // Render the URL template with worktree context
                       const templateContext = {
@@ -359,15 +371,15 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
             type="text"
             size="small"
             icon={<EditOutlined />}
-            onClick={e => {
+            onClick={(e) => {
               e.stopPropagation();
               onRowClick?.(record);
             }}
           />
           <DeleteWorktreePopconfirm
             worktree={record}
-            sessionCount={sessions.filter(s => s.worktree_id === record.worktree_id).length}
-            onConfirm={deleteFromFilesystem =>
+            sessionCount={sessions.filter((s) => s.worktree_id === record.worktree_id).length}
+            onConfirm={(deleteFromFilesystem) =>
               handleDelete(record.worktree_id, deleteFromFilesystem)
             }
           >
@@ -376,7 +388,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
               size="small"
               icon={<DeleteOutlined />}
               danger
-              onClick={e => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
             />
           </DeleteWorktreePopconfirm>
         </Space>
@@ -386,15 +398,15 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
 
   const filteredWorktrees = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
-    const sorted = [...worktrees].sort((a, b) =>
-      new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    const sorted = [...worktrees].sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
     );
 
     if (!term) {
       return sorted;
     }
 
-    return sorted.filter(worktree => {
+    return sorted.filter((worktree) => {
       const repo = reposById.get(worktree.repo_id);
       const haystacks = [
         worktree.name,
@@ -405,7 +417,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
         repo?.slug,
       ];
 
-      return haystacks.some(value => {
+      return haystacks.some((value) => {
         if (value === undefined || value === null) {
           return false;
         }
@@ -424,14 +436,12 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
         <Typography.Text type="secondary">
           Manage git worktrees for isolated development contexts across sessions.
         </Typography.Text>
-        <Space
-          style={{ width: '100%', display: 'flex', justifyContent: 'space-between' }}
-        >
+        <Space style={{ width: '100%', display: 'flex', justifyContent: 'space-between' }}>
           <Input
             allowClear
             placeholder="Search by name, repo, slug, path, or ID"
             value={searchTerm}
-            onChange={event => setSearchTerm(event.target.value)}
+            onChange={(event) => setSearchTerm(event.target.value)}
             style={{ maxWidth: token.sizeUnit * 40 }}
           />
           <Button
@@ -499,7 +509,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
           rowKey="worktree_id"
           pagination={{ pageSize: 10 }}
           size="small"
-          onRow={record => ({
+          onRow={(record) => ({
             onClick: () => onRowClick?.(record),
             style: { cursor: onRowClick ? 'pointer' : 'default' },
           })}

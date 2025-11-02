@@ -1,5 +1,5 @@
 import type { AgorClient } from '@agor/core/api';
-import type { Board, BoardComment, BoardObject, User, Worktree } from '@agor/core/types';
+import type { Board, BoardComment, User, Worktree } from '@agor/core/types';
 import { Alert } from 'antd';
 import { useParams } from 'react-router-dom';
 import { CommentsPanel } from '../CommentsPanel';
@@ -36,8 +36,8 @@ export const MobileCommentsPage: React.FC<MobileCommentsPageProps> = ({
 }) => {
   const { boardId } = useParams<{ boardId: string }>();
 
-  const board = boards.find(b => b.board_id === boardId);
-  const boardComments = comments.filter(c => c.board_id === boardId);
+  const board = boards.find((b) => b.board_id === boardId);
+  const boardComments = comments.filter((c) => c.board_id === boardId);
 
   if (!boardId) {
     return (
@@ -72,7 +72,7 @@ export const MobileCommentsPage: React.FC<MobileCommentsPageProps> = ({
           currentUserId={currentUser?.user_id || 'anonymous'}
           boardObjects={board?.objects}
           worktrees={worktrees}
-          onSendComment={content => onSendComment(boardId, content)}
+          onSendComment={(content) => onSendComment(boardId, content)}
           onReplyComment={onReplyComment}
           onResolveComment={onResolveComment}
           onToggleReaction={onToggleReaction}

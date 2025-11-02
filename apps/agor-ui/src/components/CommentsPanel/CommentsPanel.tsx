@@ -114,7 +114,7 @@ const EmojiPickerButton: React.FC<{
     <Popover
       content={
         <EmojiPicker
-          onEmojiClick={emojiData => {
+          onEmojiClick={(emojiData) => {
             onToggle(emojiData.emoji);
             setPickerOpen(false);
           }}
@@ -151,7 +151,7 @@ const ReplyItem: React.FC<{
 }> = ({ reply, users, currentUserId, onToggleReaction, onDelete }) => {
   const { token } = theme.useToken();
   const [replyHovered, setReplyHovered] = useState(false);
-  const replyUser = users.find(u => u.user_id === reply.created_by);
+  const replyUser = users.find((u) => u.user_id === reply.created_by);
   const isReplyCurrentUser = reply.created_by === currentUserId;
 
   return (
@@ -196,7 +196,7 @@ const ReplyItem: React.FC<{
               <ReactionDisplay
                 reactions={reply.reactions || []}
                 currentUserId={currentUserId}
-                onToggle={emoji => onToggleReaction(reply.comment_id, emoji)}
+                onToggle={(emoji) => onToggleReaction(reply.comment_id, emoji)}
               />
             </Space>
           </div>
@@ -217,7 +217,9 @@ const ReplyItem: React.FC<{
           >
             <Space size="small">
               {onToggleReaction && (
-                <EmojiPickerButton onToggle={emoji => onToggleReaction(reply.comment_id, emoji)} />
+                <EmojiPickerButton
+                  onToggle={(emoji) => onToggleReaction(reply.comment_id, emoji)}
+                />
               )}
               {onDelete && isReplyCurrentUser && (
                 <Button
@@ -267,7 +269,7 @@ const CommentThread: React.FC<{
   const { token } = theme.useToken();
   const [showReplyInput, setShowReplyInput] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
-  const user = users.find(u => u.user_id === comment.created_by);
+  const user = users.find((u) => u.user_id === comment.created_by);
   const isCurrentUser = comment.created_by === currentUserId;
 
   return (
@@ -331,7 +333,7 @@ const CommentThread: React.FC<{
               <ReactionDisplay
                 reactions={comment.reactions || []}
                 currentUserId={currentUserId}
-                onToggle={emoji => onToggleReaction(comment.comment_id, emoji)}
+                onToggle={(emoji) => onToggleReaction(comment.comment_id, emoji)}
               />
             </Space>
           </div>
@@ -353,7 +355,7 @@ const CommentThread: React.FC<{
             <Space size="small">
               {onToggleReaction && (
                 <EmojiPickerButton
-                  onToggle={emoji => onToggleReaction(comment.comment_id, emoji)}
+                  onToggle={(emoji) => onToggleReaction(comment.comment_id, emoji)}
                 />
               )}
               {onReply && (
@@ -413,7 +415,7 @@ const CommentThread: React.FC<{
           >
             <List
               dataSource={replies}
-              renderItem={reply => (
+              renderItem={(reply) => (
                 <ReplyItem
                   reply={reply}
                   users={users}
@@ -432,7 +434,7 @@ const CommentThread: React.FC<{
             <Input.Search
               placeholder="Reply..."
               enterButton={<SendOutlined />}
-              onSearch={value => {
+              onSearch={(value) => {
                 if (value.trim()) {
                   onReply(comment.comment_id, value);
                   setShowReplyInput(false);
@@ -477,9 +479,9 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
   const commentRefs = React.useRef<Record<string, React.RefObject<HTMLDivElement>>>({});
 
   // Separate thread roots from replies
-  const threadRoots = useMemo(() => comments.filter(c => isThreadRoot(c)), [comments]);
+  const threadRoots = useMemo(() => comments.filter((c) => isThreadRoot(c)), [comments]);
 
-  const allReplies = useMemo(() => comments.filter(c => !isThreadRoot(c)), [comments]);
+  const allReplies = useMemo(() => comments.filter((c) => !isThreadRoot(c)), [comments]);
 
   // Group replies by parent
   const repliesByParent = useMemo(() => {
@@ -498,7 +500,7 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
   // Apply filters to thread roots only
   const filteredThreads = useMemo(() => {
     return threadRoots
-      .filter(thread => {
+      .filter((thread) => {
         if (filter === 'active' && thread.resolved) return false;
         return true;
       })
@@ -536,14 +538,14 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
           groupType = 'zone';
         } else if (parent_type === 'worktree') {
           groupKey = `worktree-${parent_id}`;
-          const worktree = worktrees.find(w => w.worktree_id === parent_id);
+          const worktree = worktrees.find((w) => w.worktree_id === parent_id);
           groupLabel = worktree ? worktree.name : `Worktree (${parent_id})`;
           groupType = 'worktree';
         }
       } else if (thread.worktree_id) {
         // Check for FK-based worktree attachment
         groupKey = `worktree-${thread.worktree_id}`;
-        const worktree = worktrees.find(w => w.worktree_id === thread.worktree_id);
+        const worktree = worktrees.find((w) => w.worktree_id === thread.worktree_id);
         groupLabel = worktree ? worktree.name : `Worktree (${thread.worktree_id})`;
         groupType = 'worktree';
       }
@@ -730,7 +732,7 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
               children: (
                 <List
                   dataSource={group.threads}
-                  renderItem={thread => {
+                  renderItem={(thread) => {
                     // Create or get ref for this thread
                     if (!commentRefs.current[thread.comment_id]) {
                       commentRefs.current[thread.comment_id] = React.createRef<HTMLDivElement>();
@@ -774,8 +776,8 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
           placeholder="Add a comment..."
           enterButton={<SendOutlined />}
           value={commentInputValue}
-          onChange={e => setCommentInputValue(e.target.value)}
-          onSearch={value => {
+          onChange={(e) => setCommentInputValue(e.target.value)}
+          onSearch={(value) => {
             if (value.trim()) {
               onSendComment(value);
               setCommentInputValue('');

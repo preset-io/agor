@@ -50,7 +50,7 @@ export const MobilePromptInput: React.FC<MobilePromptInputProps> = ({
     >
       <TextArea
         value={prompt}
-        onChange={e => setPrompt(e.target.value)}
+        onChange={(e) => setPrompt(e.target.value)}
         onKeyDown={handleKeyPress}
         placeholder={placeholder}
         disabled={disabled}

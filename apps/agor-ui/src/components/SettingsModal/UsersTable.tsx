@@ -63,7 +63,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({ users, onCreate, onUpdat
   };
 
   const handleCreate = () => {
-    form.validateFields().then(values => {
+    form.validateFields().then((values) => {
       onCreate?.({
         email: values.email,
         password: values.password,
@@ -110,7 +110,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({ users, onCreate, onUpdat
         setEditModalOpen(false);
         setEditingUser(null);
       })
-      .catch(err => {
+      .catch((err) => {
         console.error('Validation failed:', err);
       });
   };
@@ -120,7 +120,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({ users, onCreate, onUpdat
     if (!editingUser) return;
 
     try {
-      setSavingApiKeys(prev => ({ ...prev, [field]: true }));
+      setSavingApiKeys((prev) => ({ ...prev, [field]: true }));
 
       // Update user via onUpdate callback
       await onUpdate?.(editingUser.user_id, {
@@ -130,12 +130,12 @@ export const UsersTable: React.FC<UsersTableProps> = ({ users, onCreate, onUpdat
       });
 
       // Update local state
-      setUserApiKeyStatus(prev => ({ ...prev, [field]: true }));
+      setUserApiKeyStatus((prev) => ({ ...prev, [field]: true }));
     } catch (err) {
       console.error(`Failed to save ${field}:`, err);
       throw err;
     } finally {
-      setSavingApiKeys(prev => ({ ...prev, [field]: false }));
+      setSavingApiKeys((prev) => ({ ...prev, [field]: false }));
     }
   };
 
@@ -144,7 +144,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({ users, onCreate, onUpdat
     if (!editingUser) return;
 
     try {
-      setSavingApiKeys(prev => ({ ...prev, [field]: true }));
+      setSavingApiKeys((prev) => ({ ...prev, [field]: true }));
 
       // Update user via onUpdate callback
       await onUpdate?.(editingUser.user_id, {
@@ -154,12 +154,12 @@ export const UsersTable: React.FC<UsersTableProps> = ({ users, onCreate, onUpdat
       });
 
       // Update local state
-      setUserApiKeyStatus(prev => ({ ...prev, [field]: false }));
+      setUserApiKeyStatus((prev) => ({ ...prev, [field]: false }));
     } catch (err) {
       console.error(`Failed to clear ${field}:`, err);
       throw err;
     } finally {
-      setSavingApiKeys(prev => ({ ...prev, [field]: false }));
+      setSavingApiKeys((prev) => ({ ...prev, [field]: false }));
     }
   };
 

@@ -146,7 +146,7 @@ export function createPreToolUseHook(
       console.log(
         `🔒 No permission found for ${input.tool_name}, creating lock and prompting user...`
       );
-      const newLock = new Promise<void>(resolve => {
+      const newLock = new Promise<void>((resolve) => {
         releaseLock = resolve;
       });
       deps.permissionLocks.set(sessionId, newLock);

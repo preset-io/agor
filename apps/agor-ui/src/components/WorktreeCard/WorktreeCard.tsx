@@ -1,5 +1,4 @@
 import type { Session, Task, User, Worktree } from '@agor/core/types';
-import { TaskStatus } from '@agor/core/types';
 import {
   BranchesOutlined,
   CodeOutlined,
@@ -173,7 +172,7 @@ const WorktreeCard = ({
           marginBottom: 4,
         }}
         onClick={() => onSessionClick?.(session.session_id)}
-        onContextMenu={e => {
+        onContextMenu={(e) => {
           // Show fork/spawn menu on right-click if handlers exist
           if (onForkSession || onSpawnSession) {
             e.preventDefault();
@@ -203,7 +202,7 @@ const WorktreeCard = ({
                 session.description &&
                 session.description.length > SESSION_TITLE_FALLBACK_CHARS
               ) {
-                return session.description.substring(0, SESSION_TITLE_FALLBACK_CHARS) + '...';
+                return `${session.description.substring(0, SESSION_TITLE_FALLBACK_CHARS)}...`;
               }
               return displayText;
             })()}
@@ -223,7 +222,7 @@ const WorktreeCard = ({
     <Tree
       treeData={sessionTreeData}
       expandedKeys={expandedKeys}
-      onExpand={keys => setExpandedKeys(keys as React.Key[])}
+      onExpand={(keys) => setExpandedKeys(keys as React.Key[])}
       showLine
       showIcon={false}
       selectable={false}
@@ -256,7 +255,7 @@ const WorktreeCard = ({
             type="default"
             size="small"
             icon={<PlusOutlined />}
-            onClick={e => {
+            onClick={(e) => {
               e.stopPropagation();
               onCreateSession(worktree.worktree_id);
             }}
@@ -310,7 +309,7 @@ const WorktreeCard = ({
             {isPinned && zoneName && (
               <Tag
                 icon={<PushpinFilled style={{ color: zoneColor }} />}
-                onClick={e => {
+                onClick={(e) => {
                   e.stopPropagation();
                   onUnpin?.(worktree.worktree_id);
                 }}
@@ -337,7 +336,7 @@ const WorktreeCard = ({
                 type="text"
                 size="small"
                 icon={<CodeOutlined />}
-                onClick={e => {
+                onClick={(e) => {
                   e.stopPropagation();
                   onOpenTerminal([`cd ${worktree.path}`]);
                 }}
@@ -349,7 +348,7 @@ const WorktreeCard = ({
                 type="text"
                 size="small"
                 icon={<EditOutlined />}
-                onClick={e => {
+                onClick={(e) => {
                   e.stopPropagation();
                   onOpenSettings(worktree.worktree_id);
                 }}
@@ -360,7 +359,7 @@ const WorktreeCard = ({
               <DeleteWorktreePopconfirm
                 worktree={worktree}
                 sessionCount={sessions.length}
-                onConfirm={deleteFromFilesystem =>
+                onConfirm={(deleteFromFilesystem) =>
                   onDelete(worktree.worktree_id, deleteFromFilesystem)
                 }
               >
@@ -368,7 +367,7 @@ const WorktreeCard = ({
                   type="text"
                   size="small"
                   icon={<DeleteOutlined />}
-                  onClick={e => e.stopPropagation()}
+                  onClick={(e) => e.stopPropagation()}
                   title="Delete worktree"
                   danger
                 />
@@ -421,7 +420,7 @@ const WorktreeCard = ({
               <Button
                 type="primary"
                 icon={<PlusOutlined />}
-                onClick={e => {
+                onClick={(e) => {
                   e.stopPropagation();
                   onCreateSession(worktree.worktree_id);
                 }}

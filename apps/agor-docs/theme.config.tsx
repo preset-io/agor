@@ -101,6 +101,7 @@ const config: DocsThemeConfig = {
         {/* JSON-LD Structured Data */}
         <script
           type="application/ld+json"
+          // biome-ignore lint/security/noDangerouslySetInnerHtml: JSON-LD is static and controlled, not user-provided.
           dangerouslySetInnerHTML={{
             __html: JSON.stringify({
               '@context': 'https://schema.org',

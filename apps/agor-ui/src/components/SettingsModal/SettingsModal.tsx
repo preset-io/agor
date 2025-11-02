@@ -107,8 +107,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const handleWorktreeRowClick = (worktree: Worktree) => {
     // Snapshot the data when opening modal
     setSelectedWorktree(worktree);
-    setSelectedRepo(repos.find(r => r.repo_id === worktree.repo_id) || null);
-    setWorktreeSessions(sessions.filter(s => s.worktree_id === worktree.worktree_id));
+    setSelectedRepo(repos.find((r) => r.repo_id === worktree.repo_id) || null);
+    setWorktreeSessions(sessions.filter((s) => s.worktree_id === worktree.worktree_id));
     setWorktreeModalOpen(true);
   };
 

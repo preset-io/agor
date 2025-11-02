@@ -298,7 +298,7 @@ export function resolveShortId<T extends { id: UUID }>(prefix: IDPrefix, entitie
   const cleanPrefix = prefix.replace(/-/g, '').toLowerCase();
 
   // Find all entities whose IDs start with this prefix
-  const matches = entities.filter(e => {
+  const matches = entities.filter((e) => {
     const cleanId = e.id.replace(/-/g, '').toLowerCase();
     return cleanId.startsWith(cleanPrefix);
   });
@@ -318,7 +318,7 @@ export function resolveShortId<T extends { id: UUID }>(prefix: IDPrefix, entitie
   // Multiple matches - show suggestions with longer prefixes
   const suggestions = matches
     .slice(0, 10) // Limit to first 10 matches
-    .map(m => {
+    .map((m) => {
       const description = getEntityDescription(m);
       return `  - ${shortId(m.id, 12)}: ${description}`;
     })
@@ -330,7 +330,7 @@ export function resolveShortId<T extends { id: UUID }>(prefix: IDPrefix, entitie
     `Ambiguous ID prefix: ${prefix}\n\n${matches.length} matches found:\n${suggestions}${ellipsis}\n\nUse a longer prefix to disambiguate.`,
     'ambiguous',
     prefix,
-    matches.map(m => ({ id: m.id }))
+    matches.map((m) => ({ id: m.id }))
   );
 }
 
@@ -391,7 +391,7 @@ export function findMinimumPrefixLength(ids: UUID[]): number {
 
   // Start with 8 chars and increment until all IDs are unique
   for (let length = 8; length <= 32; length++) {
-    const prefixes = new Set(ids.map(id => shortId(id, length)));
+    const prefixes = new Set(ids.map((id) => shortId(id, length)));
     if (prefixes.size === ids.length) {
       return length;
     }

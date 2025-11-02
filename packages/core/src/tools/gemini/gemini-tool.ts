@@ -250,7 +250,7 @@ export class GeminiTool implements ITool {
     resolvedModel?: string
   ): Promise<Message> {
     // Extract text content for preview
-    const textBlocks = content.filter(b => b.type === 'text').map(b => b.text || '');
+    const textBlocks = content.filter((b) => b.type === 'text').map((b) => b.text || '');
     const fullTextContent = textBlocks.join('');
     const contentPreview = fullTextContent.substring(0, 200);
 
