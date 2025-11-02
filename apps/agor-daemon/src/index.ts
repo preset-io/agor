@@ -44,7 +44,7 @@ try {
 }
 
 import {
-  createDatabase,
+  createDatabaseAsync,
   MCPServerRepository,
   MessagesRepository,
   RepoRepository,
@@ -576,7 +576,8 @@ async function main() {
     console.log('🆕 Database does not exist - will create on first connection');
   }
 
-  const db = createDatabase({ url: DB_PATH });
+  // Create database with foreign keys enabled
+  const db = await createDatabaseAsync({ url: DB_PATH });
 
   // Run migrations (auto-applies pending migrations from drizzle/ folder)
   // Safe for both fresh and existing databases

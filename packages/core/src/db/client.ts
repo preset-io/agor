@@ -100,7 +100,10 @@ function createLibSQLClient(config: DbConfig): Client {
 }
 
 /**
- * Create Drizzle database instance
+ * Create Drizzle database instance (synchronous)
+ *
+ * NOTE: This function enables foreign key constraints asynchronously after returning.
+ * For guaranteed foreign key enforcement, use createDatabaseAsync() instead.
  *
  * @param config Database configuration
  * @returns Drizzle database instance with schema
@@ -115,19 +118,44 @@ function createLibSQLClient(config: DbConfig): Client {
  *   url: 'libsql://your-db.turso.io',
  *   authToken: process.env.TURSO_AUTH_TOKEN
  * });
- *
- * // Embedded replica (offline-first)
- * const db = createDatabase({
- *   url: 'file:~/.agor/agor.db',
- *   syncUrl: 'libsql://your-db.turso.io',
- *   authToken: process.env.TURSO_AUTH_TOKEN,
- *   syncInterval: 60
- * });
  * ```
  */
 export function createDatabase(config: DbConfig): LibSQLDatabase<typeof schema> {
   const client = createLibSQLClient(config);
-  return drizzle(client, { schema });
+  const db = drizzle(client, { schema });
+
+  // Enable foreign key constraints (required for CASCADE, SET NULL, etc.)
+  // SQLite has foreign keys disabled by default for backwards compatibility
+  // This runs async but doesn't block - foreign keys will be enabled shortly after
+  void client.execute('PRAGMA foreign_keys = ON').catch(error => {
+    console.warn('⚠️  Failed to enable foreign key constraints:', error);
+  });
+
+  return db;
+}
+
+/**
+ * Create Drizzle database instance with foreign keys enabled (async)
+ *
+ * Use this when you need guaranteed foreign key constraint enforcement immediately.
+ *
+ * @param config Database configuration
+ * @returns Promise resolving to Drizzle database instance with foreign keys enabled
+ */
+export async function createDatabaseAsync(
+  config: DbConfig
+): Promise<LibSQLDatabase<typeof schema>> {
+  const client = createLibSQLClient(config);
+  const db = drizzle(client, { schema });
+
+  // Enable foreign key constraints (required for CASCADE, SET NULL, etc.)
+  try {
+    await client.execute('PRAGMA foreign_keys = ON');
+  } catch (error) {
+    console.warn('⚠️  Failed to enable foreign key constraints:', error);
+  }
+
+  return db;
 }
 
 /**
