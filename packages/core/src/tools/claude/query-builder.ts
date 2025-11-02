@@ -24,6 +24,7 @@ import type { MessagesService, SessionsService, TasksService } from './claude-to
 import { DEFAULT_CLAUDE_MODEL } from './models';
 import { createPreToolUseHook } from './permissions/permission-hooks';
 import { appendSessionContextToCLAUDEmd } from './session-context';
+import { detectThinkingLevel, resolveThinkingBudget } from './thinking-detector';
 
 /**
  * Get path to Claude Code executable
@@ -236,6 +237,30 @@ export async function setupQuery(
   const sessionAllowedTools = session.permission_config?.allowedTools || [];
   if (sessionAllowedTools.length > 0) {
     queryOptions.allowedTools = sessionAllowedTools;
+  }
+
+  // Configure thinking budget based on mode and prompt keywords
+  // Matches Claude Code CLI behavior: auto-detect keywords or use manual setting
+  const thinkingBudget = resolveThinkingBudget(prompt, {
+    thinkingMode: session.model_config?.thinkingMode,
+    manualThinkingTokens: session.model_config?.manualThinkingTokens,
+  });
+
+  if (thinkingBudget !== null && thinkingBudget > 0) {
+    queryOptions.maxThinkingTokens = thinkingBudget;
+    console.log(`🧠 Thinking budget: ${thinkingBudget.toLocaleString()} tokens`);
+
+    // Log detected keywords in auto mode
+    if (session.model_config?.thinkingMode === 'auto' || !session.model_config?.thinkingMode) {
+      const detected = detectThinkingLevel(prompt);
+      if (detected.level !== 'none') {
+        console.log(
+          `   Auto-detected level: ${detected.level} (phrases: ${detected.detectedPhrases.join(', ')})`
+        );
+      }
+    }
+  } else {
+    console.log(`🧠 Thinking disabled (mode: ${session.model_config?.thinkingMode || 'auto'})`);
   }
 
   // Add PreToolUse hook if permission service is available and taskId provided

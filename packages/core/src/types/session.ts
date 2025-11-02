@@ -157,6 +157,15 @@ export interface Session {
     updated_at: string;
     /** Optional user notes about why this model was selected */
     notes?: string;
+    /**
+     * Thinking mode controls extended thinking token allocation
+     * - auto: Auto-detect keywords in prompts (matches Claude Code CLI behavior)
+     * - manual: Use explicit token budget set by user
+     * - off: Disable thinking (no token budget)
+     */
+    thinkingMode?: 'auto' | 'manual' | 'off';
+    /** Manual thinking token budget (used when thinkingMode='manual') */
+    manualThinkingTokens?: number;
   };
 
   // Custom context for Handlebars templates

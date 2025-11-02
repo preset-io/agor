@@ -50,6 +50,11 @@ export type ProcessedEvent =
       resolvedModel?: string;
     }
   | {
+      type: 'thinking_partial';
+      thinkingChunk: string;
+      agentSessionId?: string;
+    }
+  | {
       type: 'complete';
       role: MessageRole.ASSISTANT | MessageRole.USER;
       content: Array<{
@@ -61,6 +66,7 @@ export type ProcessedEvent =
         tool_use_id?: string;
         content?: unknown;
         is_error?: boolean;
+        signature?: string; // For thinking blocks
       }>;
       toolUses?: Array<{ id: string; name: string; input: Record<string, unknown> }>;
       agentSessionId?: string;
@@ -129,7 +135,7 @@ interface ProcessorState {
   // Track current content blocks for tool_complete events
   contentBlockStack: Array<{
     index: number;
-    type: 'text' | 'tool_use';
+    type: 'text' | 'tool_use' | 'thinking';
     toolUseId?: string;
     toolName?: string;
   }>;
@@ -363,7 +369,7 @@ export class SDKMessageProcessor {
       }
     }
 
-    // Content block start (text or tool use)
+    // Content block start (text, tool use, or thinking)
     if (event?.type === 'content_block_start') {
       const block = event.content_block as
         | { type?: string; name?: string; id?: string }
@@ -389,6 +395,13 @@ export class SDKMessageProcessor {
           toolUseId: toolId,
           agentSessionId: this.state.capturedAgentSessionId,
         });
+      } else if (block?.type === 'thinking') {
+        console.debug(`🧠 Thinking block start`);
+        // Track thinking blocks
+        this.state.contentBlockStack.push({
+          index: blockIndex,
+          type: 'thinking',
+        });
       } else if (block?.type === 'text') {
         // Track text blocks too
         this.state.contentBlockStack.push({
@@ -398,10 +411,10 @@ export class SDKMessageProcessor {
       }
     }
 
-    // Content block delta (streaming text or tool input)
+    // Content block delta (streaming text, tool input, or thinking)
     if (event?.type === 'content_block_delta') {
       const delta = event.delta as
-        | { type?: string; text?: string; partial_json?: string }
+        | { type?: string; text?: string; partial_json?: string; thinking?: string }
         | undefined;
       if (delta?.type === 'text_delta') {
         const textChunk = delta.text as string;
@@ -410,6 +423,14 @@ export class SDKMessageProcessor {
           textChunk,
           agentSessionId: this.state.capturedAgentSessionId,
           resolvedModel: this.state.resolvedModel,
+        });
+      } else if (delta?.type === 'thinking_delta') {
+        const thinkingChunk = delta.thinking as string;
+        console.debug(`🧠 Thinking chunk: ${thinkingChunk.substring(0, 50)}...`);
+        events.push({
+          type: 'thinking_partial',
+          thinkingChunk,
+          agentSessionId: this.state.capturedAgentSessionId,
         });
       } else if (delta?.type === 'input_json_delta') {
         // Tool input is being streamed - log for now
@@ -435,6 +456,8 @@ export class SDKMessageProcessor {
           toolUseId: completedBlock.toolUseId!,
           agentSessionId: this.state.capturedAgentSessionId,
         });
+      } else if (completedBlock?.type === 'thinking') {
+        console.debug(`🧠 Thinking block ${blockIndex} complete`);
       } else {
         console.debug(`🏁 Content block ${blockIndex} complete`);
       }
@@ -546,6 +569,7 @@ export class SDKMessageProcessor {
     id?: string;
     name?: string;
     input?: Record<string, unknown>;
+    signature?: string;
   }> {
     if (!Array.isArray(content)) {
       return [];
@@ -563,6 +587,12 @@ export class SDKMessageProcessor {
           id: block.id,
           name: block.name,
           input: block.input,
+        };
+      } else if (block.type === 'thinking') {
+        return {
+          type: 'thinking',
+          text: block.text,
+          signature: block.signature as string | undefined, // Cryptographic signature for verification
         };
       } else {
         // Return block as-is for other types (tool_result, etc.)

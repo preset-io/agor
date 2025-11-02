@@ -247,6 +247,44 @@ pnpm -w agor repo list
 
 ---
 
+## Extended Thinking Mode
+
+**New in January 2025**: Agor now supports Claude's extended thinking mode with automatic keyword detection!
+
+### What is Extended Thinking?
+
+Extended thinking allocates additional tokens for Claude to use an internal "scratchpad" to reason through problems before generating responses. Great for complex coding tasks, architecture decisions, and refactoring.
+
+### Usage
+
+**Auto Mode (Default)** - Automatically detects keywords in your prompts:
+
+- `think` → 4,000 tokens
+- `think hard`, `think deeply` → 10,000 tokens
+- `think harder`, `ultrathink` → 31,999 tokens
+
+```bash
+# Example prompts
+"please think about the best architecture for this feature"
+"think hard about potential edge cases"
+"ultrathink this critical migration strategy"
+```
+
+**Manual Mode** - Set explicit token budget in session settings (0-32k)
+
+**Off Mode** - Disable thinking to save costs
+
+### Implementation
+
+- **Keyword Detection**: `packages/core/src/tools/claude/thinking-detector.ts`
+- **SDK Integration**: `packages/core/src/tools/claude/query-builder.ts`
+- **Message Processing**: `packages/core/src/tools/claude/message-processor.ts`
+- **Design Doc**: `context/explorations/thinking-mode.md`
+
+Thinking blocks appear in messages as separate content blocks and stream in real-time via WebSocket (`thinking:chunk` events).
+
+---
+
 ## Tech Stack
 
 **Backend:**

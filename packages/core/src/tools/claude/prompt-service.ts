@@ -101,6 +101,11 @@ export class ClaudePromptService {
         resolvedModel?: string;
       }
     | {
+        type: 'thinking_partial';
+        thinkingChunk: string;
+        agentSessionId?: string;
+      }
+    | {
         type: 'complete';
         role?: MessageRole.ASSISTANT | MessageRole.USER;
         content: Array<{

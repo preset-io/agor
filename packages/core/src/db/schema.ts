@@ -86,12 +86,7 @@ export const sessions = sqliteTable(
         };
 
         // Model config (session-level model selection)
-        model_config?: {
-          mode: 'alias' | 'exact';
-          model: string;
-          updated_at: string;
-          notes?: string;
-        };
+        model_config?: Session['model_config'];
 
         // Custom context for Handlebars templates
         custom_context?: Record<string, unknown>;

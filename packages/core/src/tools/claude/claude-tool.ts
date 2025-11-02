@@ -261,6 +261,17 @@ export class ClaudeTool implements ITool {
         }
       }
 
+      // Handle thinking partial (streaming)
+      if (event.type === 'thinking_partial') {
+        if (this.tasksService && taskId) {
+          this.tasksService.emit('thinking:chunk', {
+            task_id: taskId,
+            session_id: sessionId,
+            chunk: event.thinkingChunk,
+          });
+        }
+      }
+
       // Capture metadata from result events (SDK may not type this properly)
       if ('token_usage' in event && event.token_usage) {
         tokenUsage = extractTokenUsage(event.token_usage);
