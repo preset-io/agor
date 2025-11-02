@@ -24,6 +24,8 @@ import {
   type ResumedSessionData,
 } from '@google/gemini-cli-core';
 import type { Content, Part } from '@google/genai';
+import { resolveUserEnvironment } from '../../config';
+import type { Database } from '../../db/client';
 import type { MCPServerRepository } from '../../db/repositories/mcp-servers';
 import type { MessagesRepository } from '../../db/repositories/messages';
 import type { SessionMCPServerRepository } from '../../db/repositories/session-mcp-servers';
@@ -78,6 +80,7 @@ export type GeminiStreamEvent =
 export class GeminiPromptService {
   private sessionClients = new Map<SessionID, GeminiClient>();
   private activeControllers = new Map<SessionID, AbortController>();
+  private db?: Database;
 
   constructor(
     _messagesRepo: MessagesRepository,
@@ -86,8 +89,11 @@ export class GeminiPromptService {
     private worktreesRepo?: WorktreeRepository,
     private mcpServerRepo?: MCPServerRepository,
     private sessionMCPRepo?: SessionMCPServerRepository,
-    private mcpEnabled?: boolean
-  ) {}
+    private mcpEnabled?: boolean,
+    db?: Database
+  ) {
+    this.db = db;
+  }
 
   /**
    * Execute prompt with streaming via @google/gemini-cli-core SDK
@@ -133,6 +139,35 @@ export class GeminiPromptService {
       while (loopCount < MAX_LOOPS) {
         loopCount++;
         console.debug(`[Gemini Loop ${loopCount}] Starting turn with ${parts.length} parts`);
+
+        // Resolve user environment variables and augment process.env
+        // This allows the Gemini subprocess to access per-user env vars
+        const userIdForEnv = session.created_by as import('../../types').UserID | undefined;
+        const originalProcessEnv = { ...process.env };
+        let userEnvCount = 0;
+
+        if (userIdForEnv && this.db) {
+          try {
+            const userEnv = await resolveUserEnvironment(userIdForEnv, this.db);
+            // Count how many user env vars we're adding (exclude system vars)
+            const systemVarCount = Object.keys(originalProcessEnv).length;
+            const totalVarCount = Object.keys(userEnv).length;
+            userEnvCount = totalVarCount - systemVarCount;
+
+            // Augment process.env with user variables (user takes precedence)
+            Object.assign(process.env, userEnv);
+
+            if (userEnvCount > 0 && loopCount === 1) {
+              // Only log on first iteration to avoid spam
+              console.log(
+                `🔐 [Gemini] Augmented process.env with ${userEnvCount} user env vars for ${userIdForEnv.substring(0, 8)}`
+              );
+            }
+          } catch (err) {
+            console.error(`⚠️  [Gemini] Failed to resolve user environment:`, err);
+            // Continue without user env vars - non-fatal error
+          }
+        }
 
         // Stream events from Gemini SDK
         const stream = client.sendMessageStream(parts, abortController.signal, promptId);

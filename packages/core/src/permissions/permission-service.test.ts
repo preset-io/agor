@@ -48,14 +48,14 @@ function createDecision(overrides?: Partial<PermissionDecision>): PermissionDeci
 describe('PermissionService.constructor', () => {
   it('should create instance with event emitter', () => {
     const emitEvent = vi.fn();
-    const service = new PermissionService(emitEvent);
+    const service = new PermissionService(emitEvent as any);
 
     expect(service).toBeInstanceOf(PermissionService);
   });
 
   it('should accept any event emitter function', () => {
     const customEmitter = vi.fn();
-    const service = new PermissionService(customEmitter);
+    const service = new PermissionService(customEmitter as any);
 
     expect(service).toBeInstanceOf(PermissionService);
   });
@@ -71,7 +71,7 @@ describe('PermissionService.emitRequest', () => {
 
   beforeEach(() => {
     emitEvent = vi.fn();
-    service = new PermissionService(emitEvent);
+    service = new PermissionService(emitEvent as any);
   });
 
   it('should emit permission:request event with full request data', () => {
@@ -102,13 +102,13 @@ describe('PermissionService.emitRequest', () => {
     const sessionId = 'session-789' as SessionID;
     const tools = ['Bash', 'Write', 'Edit', 'Read', 'Glob'];
 
-    tools.forEach((toolName) => {
+    tools.forEach(toolName => {
       const request = createRequest({ toolName });
       service.emitRequest(sessionId, request);
     });
 
     expect(emitEvent).toHaveBeenCalledTimes(tools.length);
-    expect(emitEvent.mock.calls.map((c) => (c[1] as PermissionRequest).toolName)).toEqual(tools);
+    expect(emitEvent.mock.calls.map(c => (c[1] as PermissionRequest).toolName)).toEqual(tools);
   });
 
   it('should preserve all request fields', () => {
@@ -174,7 +174,7 @@ describe('PermissionService.waitForDecision', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     emitEvent = vi.fn();
-    service = new PermissionService(emitEvent);
+    service = new PermissionService(emitEvent as any);
   });
 
   afterEach(() => {
@@ -378,7 +378,7 @@ describe('PermissionService.resolvePermission', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     emitEvent = vi.fn();
-    service = new PermissionService(emitEvent);
+    service = new PermissionService(emitEvent as any);
   });
 
   afterEach(() => {
@@ -480,7 +480,7 @@ describe('PermissionService multi-user scenarios', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     emitEvent = vi.fn();
-    service = new PermissionService(emitEvent);
+    service = new PermissionService(emitEvent as any);
   });
 
   afterEach(() => {
@@ -538,7 +538,7 @@ describe('PermissionService edge cases', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     emitEvent = vi.fn();
-    service = new PermissionService(emitEvent);
+    service = new PermissionService(emitEvent as any);
   });
 
   afterEach(() => {

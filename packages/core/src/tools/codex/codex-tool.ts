@@ -8,6 +8,7 @@
  */
 
 import { execSync } from 'node:child_process';
+import type { Database } from '../../db/client';
 import type { MessagesRepository } from '../../db/repositories/messages';
 import type { SessionMCPServerRepository } from '../../db/repositories/session-mcp-servers';
 import type { SessionRepository } from '../../db/repositories/sessions';
@@ -43,7 +44,8 @@ export class CodexTool implements ITool {
     worktreesRepo?: WorktreeRepository,
     apiKey?: string,
     messagesService?: MessagesService,
-    tasksService?: TasksService
+    tasksService?: TasksService,
+    private db?: Database
   ) {
     this.messagesRepo = messagesRepo;
     this.sessionsRepo = sessionsRepo;
@@ -56,7 +58,8 @@ export class CodexTool implements ITool {
         sessionsRepo,
         sessionMCPServerRepo,
         worktreesRepo,
-        apiKey
+        apiKey,
+        db
       );
     }
   }

@@ -17,6 +17,7 @@ import {
 import { useEffect, useState } from 'react';
 import { ApiKeyFields, type ApiKeyStatus } from '../ApiKeyFields';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
+import { EnvVarEditor } from '../EnvVarEditor';
 
 // Using Typography.Text directly to avoid DOM Text interface collision
 
@@ -41,7 +42,11 @@ export const UsersTable: React.FC<UsersTableProps> = ({ users, onCreate, onUpdat
   });
   const [savingApiKeys, setSavingApiKeys] = useState<Record<string, boolean>>({});
 
-  // Load user's API key status when editing
+  // Environment variable management state for user edit
+  const [userEnvVars, setUserEnvVars] = useState<Record<string, boolean>>({});
+  const [savingEnvVars, setSavingEnvVars] = useState<Record<string, boolean>>({});
+
+  // Load user's API key and env var status when editing
   useEffect(() => {
     if (editingUser?.api_keys) {
       setUserApiKeyStatus({
@@ -55,6 +60,12 @@ export const UsersTable: React.FC<UsersTableProps> = ({ users, onCreate, onUpdat
         OPENAI_API_KEY: false,
         GEMINI_API_KEY: false,
       });
+    }
+
+    if (editingUser?.env_vars) {
+      setUserEnvVars(editingUser.env_vars);
+    } else {
+      setUserEnvVars({});
     }
   }, [editingUser]);
 
@@ -160,6 +171,46 @@ export const UsersTable: React.FC<UsersTableProps> = ({ users, onCreate, onUpdat
       throw err;
     } finally {
       setSavingApiKeys((prev) => ({ ...prev, [field]: false }));
+    }
+  };
+
+  // Handle user env var save
+  const handleEnvVarSave = async (key: string, value: string) => {
+    if (!editingUser) return;
+
+    try {
+      setSavingEnvVars(prev => ({ ...prev, [key]: true }));
+      await onUpdate?.(editingUser.user_id, {
+        env_vars: { [key]: value },
+      });
+      setUserEnvVars(prev => ({ ...prev, [key]: true }));
+    } catch (err) {
+      console.error(`Failed to save ${key}:`, err);
+      throw err;
+    } finally {
+      setSavingEnvVars(prev => ({ ...prev, [key]: false }));
+    }
+  };
+
+  // Handle user env var delete
+  const handleEnvVarDelete = async (key: string) => {
+    if (!editingUser) return;
+
+    try {
+      setSavingEnvVars(prev => ({ ...prev, [key]: true }));
+      await onUpdate?.(editingUser.user_id, {
+        env_vars: { [key]: null },
+      });
+      setUserEnvVars(prev => {
+        const updated = { ...prev };
+        delete updated[key];
+        return updated;
+      });
+    } catch (err) {
+      console.error(`Failed to delete ${key}:`, err);
+      throw err;
+    } finally {
+      setSavingEnvVars(prev => ({ ...prev, [key]: false }));
     }
   };
 
@@ -393,6 +444,29 @@ export const UsersTable: React.FC<UsersTableProps> = ({ users, onCreate, onUpdat
                         onSave={handleApiKeySave}
                         onClear={handleApiKeyClear}
                         saving={savingApiKeys}
+                      />
+                    </div>
+                  ),
+                },
+              ]}
+            />
+          </Form.Item>
+
+          {/* Environment Variables Section */}
+          <Form.Item label="Environment Variables">
+            <Collapse
+              ghost
+              items={[
+                {
+                  key: 'env-vars',
+                  label: 'Configure Environment Variables',
+                  children: (
+                    <div style={{ paddingTop: 8 }}>
+                      <EnvVarEditor
+                        envVars={userEnvVars}
+                        onSave={handleEnvVarSave}
+                        onDelete={handleEnvVarDelete}
+                        loading={savingEnvVars}
                       />
                     </div>
                   ),

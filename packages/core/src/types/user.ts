@@ -29,6 +29,8 @@ export interface User {
     OPENAI_API_KEY?: boolean;
     GEMINI_API_KEY?: boolean;
   };
+  // Environment variable status (boolean only, never exposes actual values)
+  env_vars?: Record<string, boolean>; // { "GITHUB_TOKEN": true, "NPM_TOKEN": false }
 }
 
 /**
@@ -60,4 +62,6 @@ export interface UpdateUserInput {
     OPENAI_API_KEY?: string | null;
     GEMINI_API_KEY?: string | null;
   };
+  // Environment variables for update (accepts plaintext, encrypted before storage)
+  env_vars?: Record<string, string | null>; // { "GITHUB_TOKEN": "ghp_...", "NPM_TOKEN": null }
 }

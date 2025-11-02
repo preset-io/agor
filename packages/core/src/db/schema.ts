@@ -414,6 +414,8 @@ export const users = sqliteTable(
           OPENAI_API_KEY?: string; // Encrypted with AES-256-GCM
           GEMINI_API_KEY?: string; // Encrypted with AES-256-GCM
         };
+        // Encrypted environment variables (stored as hex-encoded encrypted strings)
+        env_vars?: Record<string, string>; // { "GITHUB_TOKEN": "enc:...", "NPM_TOKEN": "enc:..." }
       }>()
       .notNull(),
   },

@@ -127,6 +127,51 @@ ComponentName/
 - **Spawn edges**: Solid line with purple color, animated
 - **MiniMap**: Color-coded by session status
 
+### Settings Modal Patterns
+
+#### API Key Fields
+
+- **Individual field per key** - Anthropic, OpenAI, Gemini
+- **Status indicators** - "Set" (green check) or "Not Set" (gray X)
+- **Masked inputs** - Use `Input.Password` for security
+- **Save/Clear actions** - Separate buttons for each key
+- **Never expose values** - Only show boolean status once saved
+
+#### Environment Variables Editor (Accumulator Pattern)
+
+- **Table view** - Shows all configured env vars with status
+- **Key-value pairs** - Variable name (code font) + encrypted status
+- **Inline editing** - Click "Update" to modify existing value (password-masked)
+- **Add form at bottom** - Two-input compact group (name + value) with Add button
+- **Delete per variable** - Danger button with trash icon
+- **No text area** - Each variable is an independent row (better UX than `.env` file)
+- **Status visibility** - "Set (encrypted)" tag when variable has a value
+- **Validation feedback** - Show errors for invalid var names (e.g., blocklisted vars)
+
+**Rationale for Accumulator Pattern:**
+
+- ✅ Clear per-variable status (which vars are encrypted vs empty)
+- ✅ Granular operations (update one var without re-entering all)
+- ✅ Individual encryption (each var encrypted separately in database)
+- ✅ Security (only one value visible at time when editing)
+- ✅ Consistency with MCP Servers Table, Users Table patterns
+- ❌ Text area approach (`.env` file style) has poor UX: no validation, no status indicators, all values visible at once
+
+**UI Layout:**
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ Variable Name      │ Value               │ Actions          │
+├────────────────────┼─────────────────────┼──────────────────┤
+│ GITHUB_TOKEN       │ ● Set (encrypted)   │ [Update][Delete] │
+│ NPM_TOKEN          │ ● Set (encrypted)   │ [Update][Delete] │
+│ AWS_ACCESS_KEY_ID  │ ● Set (encrypted)   │ [Update][Delete] │
+└────────────────────┴─────────────────────┴──────────────────┘
+
+Add New Variable:
+[Name______________] [●●●●●●●●●●] [+ Add]
+```
+
 ## Visual Design Patterns
 
 ### Status Indicators

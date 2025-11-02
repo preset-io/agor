@@ -23,16 +23,16 @@ export interface ClaudeModel {
  */
 export const AVAILABLE_CLAUDE_MODEL_ALIASES: ClaudeModel[] = [
   {
-    id: 'claude-opus-4-1',
-    displayName: 'Claude Opus 4.1',
-    family: 'claude-4',
-    description: 'Most capable model (latest)',
-  },
-  {
     id: 'claude-sonnet-4-5',
     displayName: 'Claude Sonnet 4.5',
     family: 'claude-4',
     description: 'Best for coding (latest)',
+  },
+  {
+    id: 'claude-opus-4-1',
+    displayName: 'Claude Opus 4.1',
+    family: 'claude-4',
+    description: 'Most capable model (latest)',
   },
   {
     id: 'claude-sonnet-4-0',

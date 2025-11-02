@@ -15,6 +15,7 @@ describe('env-locking', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockDb = {};
     // Save original environment
     originalEnv = { ...process.env };
   });
@@ -22,7 +23,7 @@ describe('env-locking', () => {
   afterEach(() => {
     // Restore original environment
     Object.assign(process.env, originalEnv);
-    Object.keys(process.env).forEach((key) => {
+    Object.keys(process.env).forEach(key => {
       if (!(key in originalEnv)) {
         delete process.env[key];
       }
@@ -34,7 +35,7 @@ describe('env-locking', () => {
       const userEnv = { GITHUB_TOKEN: 'token-123' };
       vi.mocked(resolverModule.resolveUserEnvironment).mockResolvedValue(userEnv);
 
-      let envDuringExecution = {};
+      let envDuringExecution: Record<string, string | undefined> = {};
       const fn = async () => {
         envDuringExecution = { ...process.env };
         return 'success';
@@ -131,14 +132,14 @@ describe('env-locking', () => {
       const fn1 = async () => {
         executionOrder.push('start-user1');
         // Simulate some async work
-        await new Promise((resolve) => setTimeout(resolve, 10));
+        await new Promise(resolve => setTimeout(resolve, 10));
         executionOrder.push('end-user1');
         expect(process.env.USER_ID).toBe('user-1-value');
       };
 
       const fn2 = async () => {
         executionOrder.push('start-user2');
-        await new Promise((resolve) => setTimeout(resolve, 5));
+        await new Promise(resolve => setTimeout(resolve, 5));
         executionOrder.push('end-user2');
         expect(process.env.USER_ID).toBe('user-2-value');
       };
@@ -340,13 +341,13 @@ describe('env-locking', () => {
       const executionLog: string[] = [];
 
       vi.mocked(resolverModule.resolveUserEnvironment).mockImplementation(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 5));
+        await new Promise(resolve => setTimeout(resolve, 5));
         return {};
       });
 
       const fn1 = async () => {
         executionLog.push('fn1-start');
-        await new Promise((resolve) => setTimeout(resolve, 10));
+        await new Promise(resolve => setTimeout(resolve, 10));
         executionLog.push('fn1-end');
       };
 
@@ -377,7 +378,7 @@ describe('env-locking', () => {
 
       const fn = async (userId: string) => {
         executionLog.push(`${userId}-start`);
-        await new Promise((resolve) => setTimeout(resolve, 10));
+        await new Promise(resolve => setTimeout(resolve, 10));
         executionLog.push(`${userId}-end`);
       };
 

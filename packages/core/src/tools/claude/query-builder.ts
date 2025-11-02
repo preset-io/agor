@@ -9,7 +9,7 @@ import { execSync } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { PermissionMode } from '@anthropic-ai/claude-agent-sdk/sdk';
-import { resolveApiKey } from '../../config';
+import { resolveApiKey, resolveUserEnvironment } from '../../config';
 import type { Database } from '../../db/client';
 import type { MCPServerRepository } from '../../db/repositories/mcp-servers';
 import type { MessagesRepository } from '../../db/repositories/messages';
@@ -300,6 +300,34 @@ export async function setupQuery(
   });
   if (apiKey) {
     queryOptions.apiKey = apiKey;
+  }
+
+  // Resolve user environment variables and augment process.env
+  // This allows the Claude Code subprocess to access per-user env vars
+  const userIdForEnv = session.created_by as import('../../types').UserID | undefined;
+  const originalProcessEnv = { ...process.env };
+  let userEnvCount = 0;
+
+  if (userIdForEnv && deps.db) {
+    try {
+      const userEnv = await resolveUserEnvironment(userIdForEnv, deps.db);
+      // Count how many user env vars we're adding (exclude system vars)
+      const systemVarCount = Object.keys(originalProcessEnv).length;
+      const totalVarCount = Object.keys(userEnv).length;
+      userEnvCount = totalVarCount - systemVarCount;
+
+      // Augment process.env with user variables (user takes precedence)
+      Object.assign(process.env, userEnv);
+
+      if (userEnvCount > 0) {
+        console.log(
+          `🔐 Augmented process.env with ${userEnvCount} user env vars for ${userIdForEnv.substring(0, 8)}`
+        );
+      }
+    } catch (err) {
+      console.error(`⚠️  Failed to resolve user environment:`, err);
+      // Continue without user env vars - non-fatal error
+    }
   }
 
   // Handle resume, fork, and spawn cases

@@ -6,6 +6,7 @@
  */
 
 import { generateId } from '@agor/core';
+import { getEnvVarBlockReason, isEnvVarAllowed, validateEnvVar } from '@agor/core/config';
 import {
   compare,
   type Database,
@@ -45,6 +46,8 @@ interface UpdateUserData {
     OPENAI_API_KEY?: string | null;
     GEMINI_API_KEY?: string | null;
   };
+  // Environment variables for update (accepts plaintext, encrypted before storage)
+  env_vars?: Record<string, string | null>; // { "GITHUB_TOKEN": "ghp_...", "NPM_TOKEN": null }
 }
 
 /**
@@ -157,13 +160,14 @@ export class UsersService {
       updates.onboarding_completed = data.onboarding_completed;
 
     // Update data blob
-    if (data.avatar || data.preferences || data.api_keys) {
+    if (data.avatar || data.preferences || data.api_keys || data.env_vars) {
       const current = await this.get(id);
       const currentRow = await this.db.select().from(users).where(eq(users.user_id, id)).get();
       const currentData = currentRow?.data as {
         avatar?: string;
         preferences?: Record<string, unknown>;
         api_keys?: Record<string, string>;
+        env_vars?: Record<string, string>;
       };
 
       // Handle API keys (encrypt before storage)
@@ -186,10 +190,44 @@ export class UsersService {
         }
       }
 
+      // Handle env vars (encrypt before storage)
+      const encryptedEnvVars = currentData?.env_vars || {};
+      if (data.env_vars) {
+        for (const [key, value] of Object.entries(data.env_vars)) {
+          // Validate variable name
+          if (!isEnvVarAllowed(key)) {
+            const reason = getEnvVarBlockReason(key);
+            throw new Error(`Cannot set environment variable "${key}": ${reason}`);
+          }
+
+          if (value === null || value === undefined) {
+            // Clear variable
+            delete encryptedEnvVars[key];
+            console.log(`🗑️  Cleared user env var: ${key}`);
+          } else {
+            // Validate and encrypt
+            const errors = validateEnvVar(key, value);
+            if (errors.length > 0) {
+              const message = errors.map(e => e.message).join('; ');
+              throw new Error(`Invalid environment variable: ${message}`);
+            }
+
+            try {
+              encryptedEnvVars[key] = encryptApiKey(value);
+              console.log(`🔐 Encrypted user env var: ${key}`);
+            } catch (err) {
+              console.error(`Failed to encrypt env var ${key}:`, err);
+              throw new Error(`Failed to encrypt environment variable: ${key}`);
+            }
+          }
+        }
+      }
+
       updates.data = {
         avatar: data.avatar ?? current.avatar,
         preferences: data.preferences ?? current.preferences,
         api_keys: Object.keys(encryptedKeys).length > 0 ? encryptedKeys : undefined,
+        env_vars: Object.keys(encryptedEnvVars).length > 0 ? encryptedEnvVars : undefined,
       };
     }
 
@@ -265,6 +303,34 @@ export class UsersService {
   }
 
   /**
+   * Get decrypted environment variables for a user
+   * Used by subprocess spawning, terminal sessions, etc.
+   */
+  async getEnvironmentVariables(userId: UserID): Promise<Record<string, string>> {
+    const row = await this.db.select().from(users).where(eq(users.user_id, userId)).get();
+
+    if (!row) return {};
+
+    const data = row.data as { env_vars?: Record<string, string> };
+    const encryptedVars = data.env_vars;
+
+    if (!encryptedVars) return {};
+
+    const decryptedVars: Record<string, string> = {};
+
+    for (const [key, encryptedValue] of Object.entries(encryptedVars)) {
+      try {
+        decryptedVars[key] = decryptApiKey(encryptedValue);
+      } catch (err) {
+        console.error(`Failed to decrypt env var ${key} for user ${userId}:`, err);
+        // Skip this variable (don't crash)
+      }
+    }
+
+    return decryptedVars;
+  }
+
+  /**
    * Convert database row to User type
    *
    * @param row - Database row
@@ -278,6 +344,7 @@ export class UsersService {
       avatar?: string;
       preferences?: Record<string, unknown>;
       api_keys?: Record<string, string>; // Encrypted keys
+      env_vars?: Record<string, string>; // Encrypted env vars
     };
 
     const user: User & { password?: string } = {
@@ -298,6 +365,10 @@ export class UsersService {
             OPENAI_API_KEY: !!data.api_keys.OPENAI_API_KEY,
             GEMINI_API_KEY: !!data.api_keys.GEMINI_API_KEY,
           }
+        : undefined,
+      // Return env var status (boolean), NOT actual values
+      env_vars: data.env_vars
+        ? Object.fromEntries(Object.keys(data.env_vars).map(key => [key, true]))
         : undefined,
     };
 
@@ -337,6 +408,7 @@ class UsersServiceWithAuth extends UsersService {
       avatar?: string;
       preferences?: Record<string, unknown>;
       api_keys?: Record<string, string>;
+      env_vars?: Record<string, string>;
     };
 
     return {
@@ -357,6 +429,9 @@ class UsersServiceWithAuth extends UsersService {
             OPENAI_API_KEY: !!data.api_keys.OPENAI_API_KEY,
             GEMINI_API_KEY: !!data.api_keys.GEMINI_API_KEY,
           }
+        : undefined,
+      env_vars: data.env_vars
+        ? Object.fromEntries(Object.keys(data.env_vars).map(key => [key, true]))
         : undefined,
     };
   }

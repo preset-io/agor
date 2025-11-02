@@ -642,7 +642,7 @@ async function main() {
   app.use('/context', createContextService(worktreeRepository));
 
   // Register terminals service for PTY management
-  const terminalsService = new TerminalsService(app);
+  const terminalsService = new TerminalsService(app, db);
   app.use('/terminals', terminalsService, {
     events: ['data', 'exit'], // Custom events for terminal I/O
   });
@@ -1293,7 +1293,8 @@ async function main() {
     worktreesRepo, // Worktrees repo for fetching worktree paths
     openaiApiKey,
     app.service('messages'),
-    app.service('tasks')
+    app.service('tasks'),
+    db // Database for env var resolution
   );
 
   if (!openaiApiKey) {
@@ -1320,7 +1321,8 @@ async function main() {
     worktreesRepo,
     mcpServerRepo,
     sessionMCPRepo,
-    config.daemon?.mcpEnabled !== false // Pass MCP enabled flag
+    config.daemon?.mcpEnabled !== false, // Pass MCP enabled flag
+    db // Database for env var resolution
   );
 
   if (!geminiApiKey) {

@@ -11,6 +11,7 @@
  */
 
 import { execSync } from 'node:child_process';
+import type { Database } from '../../db/client';
 import type { MCPServerRepository } from '../../db/repositories/mcp-servers';
 import type { MessagesRepository } from '../../db/repositories/messages';
 import type { SessionMCPServerRepository } from '../../db/repositories/session-mcp-servers';
@@ -45,7 +46,8 @@ export class GeminiTool implements ITool {
     worktreesRepo?: WorktreeRepository,
     mcpServerRepo?: MCPServerRepository,
     sessionMCPRepo?: SessionMCPServerRepository,
-    mcpEnabled?: boolean
+    mcpEnabled?: boolean,
+    private db?: Database
   ) {
     if (messagesRepo && sessionsRepo) {
       this.promptService = new GeminiPromptService(
@@ -55,7 +57,8 @@ export class GeminiTool implements ITool {
         worktreesRepo,
         mcpServerRepo,
         sessionMCPRepo,
-        mcpEnabled
+        mcpEnabled,
+        db
       );
     }
   }

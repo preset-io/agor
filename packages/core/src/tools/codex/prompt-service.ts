@@ -8,7 +8,8 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { Codex, type Thread, type ThreadItem } from '@openai/codex-sdk';
-import { getCredential } from '../../config';
+import { getCredential, resolveUserEnvironment } from '../../config';
+import type { Database } from '../../db/client';
 import type { MessagesRepository } from '../../db/repositories/messages';
 import type { SessionMCPServerRepository } from '../../db/repositories/session-mcp-servers';
 import type { SessionRepository } from '../../db/repositories/sessions';
@@ -93,16 +94,19 @@ export class CodexPromptService {
   private lastMCPServersHash: string | null = null;
   private stopRequested = new Map<SessionID, boolean>();
   private apiKey: string | undefined;
+  private db?: Database;
 
   constructor(
     _messagesRepo: MessagesRepository,
     private sessionsRepo: SessionRepository,
     private sessionMCPServerRepo?: SessionMCPServerRepository,
     private worktreesRepo?: WorktreeRepository,
-    apiKey?: string
+    apiKey?: string,
+    db?: Database
   ) {
     // Store API key for reinitializing SDK
     this.apiKey = apiKey;
+    this.db = db;
     // Initialize Codex SDK
     this.codex = new Codex({
       apiKey: apiKey || process.env.OPENAI_API_KEY,
@@ -451,6 +455,34 @@ ${mcpServersToml}`;
       console.log(
         `▶️  [Codex] Running prompt: "${prompt.substring(0, 50)}${prompt.length > 50 ? '...' : ''}"`
       );
+
+      // Resolve user environment variables and augment process.env
+      // This allows the Codex subprocess to access per-user env vars
+      const userIdForEnv = session.created_by as import('../../types').UserID | undefined;
+      const originalProcessEnv = { ...process.env };
+      let userEnvCount = 0;
+
+      if (userIdForEnv && this.db) {
+        try {
+          const userEnv = await resolveUserEnvironment(userIdForEnv, this.db);
+          // Count how many user env vars we're adding (exclude system vars)
+          const systemVarCount = Object.keys(originalProcessEnv).length;
+          const totalVarCount = Object.keys(userEnv).length;
+          userEnvCount = totalVarCount - systemVarCount;
+
+          // Augment process.env with user variables (user takes precedence)
+          Object.assign(process.env, userEnv);
+
+          if (userEnvCount > 0) {
+            console.log(
+              `🔐 [Codex] Augmented process.env with ${userEnvCount} user env vars for ${userIdForEnv.substring(0, 8)}`
+            );
+          }
+        } catch (err) {
+          console.error(`⚠️  [Codex] Failed to resolve user environment:`, err);
+          // Continue without user env vars - non-fatal error
+        }
+      }
 
       // Use streaming API
       const { events } = await thread.runStreamed(prompt);
