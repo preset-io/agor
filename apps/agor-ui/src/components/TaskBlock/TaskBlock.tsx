@@ -44,6 +44,7 @@ import {
   TokenCountPill,
   ToolCountPill,
 } from '../Pill';
+import { StickyTodoRenderer } from '../StickyTodoRenderer';
 import { TaskStatusIcon } from '../TaskStatusIcon';
 import ToolExecutingIndicator from '../ToolExecutingIndicator';
 import { ToolIcon } from '../ToolIcon';
@@ -338,6 +339,11 @@ export const TaskBlock: React.FC<TaskBlockProps> = ({
                 <div style={{ margin: `${token.sizeUnit * 1.5}px 0` }}>
                   <ToolExecutingIndicator toolsExecuting={toolsExecuting} />
                 </div>
+              )}
+
+              {/* Show sticky TODO (latest) above typing indicator when task is running */}
+              {task.status === TaskStatus.RUNNING && (
+                <StickyTodoRenderer messages={messages} />
               )}
 
               {/* Show typing indicator whenever task is actively running */}
