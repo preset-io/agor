@@ -168,3 +168,61 @@ export async function createAssistantMessage(
 
   return message;
 }
+
+/**
+ * Extract content preview from content blocks
+ */
+function extractContentPreview(
+  content: Array<{
+    type: string;
+    text?: string;
+    status?: string;
+  }>
+): string {
+  // For system_status blocks, return status-specific preview
+  const statusBlock = content.find(b => b.type === 'system_status');
+  if (statusBlock?.status === 'compacting') {
+    return 'Compacting conversation context...';
+  }
+
+  // For text blocks, return text preview
+  const textBlocks = content.filter(b => b.type === 'text').map(b => b.text || '');
+  const fullTextContent = textBlocks.join('');
+  return fullTextContent.substring(0, 200);
+}
+
+/**
+ * Create system message in database (for compaction, etc.)
+ */
+export async function createSystemMessage(
+  sessionId: SessionID,
+  messageId: MessageID,
+  content: Array<{
+    type: string;
+    text?: string;
+    status?: string;
+  }>,
+  taskId: TaskID | undefined,
+  nextIndex: number,
+  resolvedModel: string | undefined,
+  messagesService: MessagesService
+): Promise<Message> {
+  const message: Message = {
+    message_id: messageId,
+    session_id: sessionId,
+    type: 'system',
+    role: MessageRole.SYSTEM,
+    index: nextIndex,
+    timestamp: new Date().toISOString(),
+    content_preview: extractContentPreview(content),
+    content: content as Message['content'],
+    task_id: taskId,
+    metadata: {
+      model: resolvedModel || DEFAULT_CLAUDE_MODEL,
+      is_meta: true, // Mark as synthetic system message
+    },
+  };
+
+  await messagesService.create(message);
+  return message;
+}

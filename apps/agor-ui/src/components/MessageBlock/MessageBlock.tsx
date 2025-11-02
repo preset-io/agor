@@ -19,7 +19,9 @@ import {
 } from '@agor/core/types';
 import { RobotOutlined } from '@ant-design/icons';
 import { Bubble } from '@ant-design/x';
-import { Avatar, Spin, theme } from 'antd';
+import { Avatar, Space, Spin, theme, Typography } from 'antd';
+
+const { Text } = Typography;
 import type React from 'react';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { PermissionRequestBlock } from '../PermissionRequestBlock';
@@ -169,10 +171,11 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
   // Check if this is a Task tool prompt or result (agent-generated, but has user role)
   const isTaskPrompt = isTaskToolPrompt(message);
   const isTaskResult = isTaskToolResult(message);
+  const isSystem = message.role === 'system';
 
   // Determine if this should be displayed as user or agent message
   const isUser = message.role === 'user' && !isTaskPrompt && !isTaskResult;
-  const isAgent = message.role === 'assistant' || isTaskPrompt || isTaskResult;
+  const isAgent = message.role === 'assistant' || isTaskPrompt || isTaskResult || isSystem;
 
   // Check if message is currently streaming
   const isStreaming = 'isStreaming' in message && message.isStreaming === true;
@@ -194,6 +197,41 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
   // Skip rendering if message has no content
   if (!message.content || (typeof message.content === 'string' && message.content.trim() === '')) {
     return null;
+  }
+
+  // Special handling for system messages (compaction, etc.)
+  if (isSystem && Array.isArray(message.content)) {
+    const systemStatusBlock = message.content.find(b => b.type === 'system_status');
+    if (systemStatusBlock && 'status' in systemStatusBlock) {
+      const status = systemStatusBlock.status;
+
+      if (status === 'compacting') {
+        return (
+          <div style={{ margin: `${token.sizeUnit}px 0` }}>
+            <Bubble
+              placement="start"
+              avatar={
+                agentic_tool ? (
+                  <ToolIcon tool={agentic_tool} size={32} />
+                ) : (
+                  <Avatar
+                    icon={<RobotOutlined />}
+                    style={{ backgroundColor: token.colorBgContainer }}
+                  />
+                )
+              }
+              content={
+                <Space>
+                  <Spin size="small" />
+                  <Text type="secondary">Compacting conversation context...</Text>
+                </Space>
+              }
+              variant="outlined"
+            />
+          </div>
+        );
+      }
+    }
   }
 
   // Parse content blocks from message, preserving order

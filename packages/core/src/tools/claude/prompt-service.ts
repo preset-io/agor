@@ -15,7 +15,7 @@ import type { PermissionService } from '../../permissions/permission-service';
 import type { SessionID, TaskID } from '../../types';
 import { MessageRole } from '../../types';
 import type { SessionsService, TasksService } from './claude-tool';
-import { SDKMessageProcessor } from './message-processor';
+import { SDKMessageProcessor, type ProcessedEvent } from './message-processor';
 import { setupQuery } from './query-builder';
 
 export interface PromptResult {
@@ -93,64 +93,7 @@ export class ClaudePromptService {
     taskId?: TaskID,
     permissionMode?: PermissionMode,
     _chunkCallback?: (messageId: string, chunk: string) => void
-  ): AsyncGenerator<
-    | {
-        type: 'partial';
-        textChunk: string;
-        agentSessionId?: string;
-        resolvedModel?: string;
-      }
-    | {
-        type: 'thinking_partial';
-        thinkingChunk: string;
-        agentSessionId?: string;
-      }
-    | {
-        type: 'thinking_complete';
-        agentSessionId?: string;
-      }
-    | {
-        type: 'complete';
-        role?: MessageRole.ASSISTANT | MessageRole.USER;
-        content: Array<{
-          type: string;
-          text?: string;
-          id?: string;
-          name?: string;
-          input?: Record<string, unknown>;
-        }>;
-        toolUses?: Array<{ id: string; name: string; input: Record<string, unknown> }>;
-        agentSessionId?: string;
-        resolvedModel?: string;
-      }
-    | {
-        type: 'tool_start';
-        toolName: string;
-        toolUseId: string;
-        agentSessionId?: string;
-      }
-    | {
-        type: 'tool_complete';
-        toolUseId: string;
-        agentSessionId?: string;
-      }
-    | {
-        type: 'message_start';
-        agentSessionId?: string;
-      }
-    | {
-        type: 'message_complete';
-        agentSessionId?: string;
-      }
-    | {
-        type: 'result';
-        subtype: string;
-        duration_ms?: number;
-        cost?: number;
-        token_usage?: unknown;
-        agentSessionId?: string;
-      }
-  > {
+  ): AsyncGenerator<ProcessedEvent> {
     const { query: result, getStderr } = await setupQuery(
       sessionId,
       prompt,
