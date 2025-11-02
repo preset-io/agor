@@ -217,7 +217,15 @@ const WorktreeCard = ({
         </Space>
 
         {/* Status indicator - fixed width to prevent layout shift */}
-        <div style={{ width: 24, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+        <div
+          style={{
+            marginLeft: 8,
+            width: 24,
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+          }}
+        >
           <TaskStatusIcon status={session.status} size={16} />
         </div>
       </div>
