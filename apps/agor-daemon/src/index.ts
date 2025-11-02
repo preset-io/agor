@@ -224,7 +224,13 @@ async function main() {
   ];
 
   // SECURITY: Configure CORS based on deployment environment
-  let corsOrigin: boolean | string[] | ((origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => void);
+  let corsOrigin:
+    | boolean
+    | string[]
+    | ((
+        origin: string | undefined,
+        callback: (err: Error | null, allow?: boolean) => void
+      ) => void);
 
   if (process.env.CORS_ORIGIN === '*') {
     // Explicit wildcard - allow all origins (use with caution!)
@@ -247,7 +253,7 @@ async function main() {
         /^https?:\/\/localhost(:\d+)?$/,
       ];
 
-      const isAllowed = allowedPatterns.some(pattern => pattern.test(origin));
+      const isAllowed = allowedPatterns.some((pattern) => pattern.test(origin));
 
       if (isAllowed) {
         callback(null, true);
@@ -395,7 +401,9 @@ async function main() {
             }
 
             // Fetch user from database
-            const user = await app.service('users').get(decoded.sub as import('@agor/core/types').UUID);
+            const user = await app
+              .service('users')
+              .get(decoded.sub as import('@agor/core/types').UUID);
 
             // Attach user to socket (FeathersJS convention)
             (socket as FeathersSocket).feathers = { user };
@@ -1105,14 +1113,17 @@ async function main() {
   };
 
   // Cleanup old rate limit entries every hour
-  setInterval(() => {
-    const now = Date.now();
-    for (const [key, record] of authAttempts.entries()) {
-      if (now > record.resetAt) {
-        authAttempts.delete(key);
+  setInterval(
+    () => {
+      const now = Date.now();
+      for (const [key, record] of authAttempts.entries()) {
+        if (now > record.resetAt) {
+          authAttempts.delete(key);
+        }
       }
-    }
-  }, 60 * 60 * 1000);
+    },
+    60 * 60 * 1000
+  );
 
   app.use('/authentication', authentication);
 
@@ -1126,6 +1137,7 @@ async function main() {
 
           // Only rate limit external requests (not internal service calls)
           if (context.params.provider) {
+            // biome-ignore lint/suspicious/noExplicitAny: FeathersJS request params are untyped
             const identifier = data?.email || (context.params as any).ip || 'unknown';
 
             if (!checkAuthRateLimit(identifier)) {
@@ -1177,6 +1189,7 @@ async function main() {
     async create(data: { refreshToken: string }, params?: Params) {
       // SECURITY: Rate limit refresh token requests
       if (params?.provider) {
+        // biome-ignore lint/suspicious/noExplicitAny: FeathersJS request params are untyped
         const identifier = (params as any).ip || 'unknown';
         if (!checkAuthRateLimit(identifier)) {
           console.warn(`⚠️  Rate limit exceeded for token refresh: ${identifier}`);
@@ -2169,6 +2182,7 @@ async function main() {
 
       // If user is authenticated (via requireAuth hook check), provide detailed info
       // Check if this is an authenticated request
+      // biome-ignore lint/suspicious/noExplicitAny: FeathersJS request params are untyped
       const isAuthenticated = (params as any)?.user !== undefined;
 
       if (isAuthenticated) {
@@ -2178,7 +2192,9 @@ async function main() {
           auth: {
             requireAuth: config.daemon?.requireAuth === true,
             allowAnonymous: allowAnonymous,
+            // biome-ignore lint/suspicious/noExplicitAny: FeathersJS request params are untyped
             user: (params as any)?.user?.email,
+            // biome-ignore lint/suspicious/noExplicitAny: FeathersJS request params are untyped
             role: (params as any)?.user?.role,
           },
           mcp: {
