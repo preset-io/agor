@@ -163,9 +163,27 @@ async function main() {
   // Load config to get ports and API keys
   const config = await loadConfig();
 
-  const allowAnonymous = config.daemon?.allowAnonymous !== false;
+  // SECURITY: Disable anonymous authentication by default
+  // Must explicitly set daemon.allowAnonymous=true in config to enable
+  const allowAnonymous = config.daemon?.allowAnonymous === true;
   const authStrategies = allowAnonymous ? ['jwt', 'anonymous'] : ['jwt'];
   const requireAuth = authenticate({ strategies: authStrategies });
+
+  // SECURITY: Enforce authentication in public deployments
+  const isPublicDeployment =
+    process.env.CODESPACES === 'true' ||
+    process.env.NODE_ENV === 'production' ||
+    process.env.RAILWAY_ENVIRONMENT !== undefined ||
+    process.env.RENDER !== undefined;
+
+  if (isPublicDeployment && allowAnonymous) {
+    console.error('');
+    console.error('❌ SECURITY ERROR: Anonymous authentication is enabled in a public deployment');
+    console.error('   This would allow unauthorized access to your Agor instance.');
+    console.error('   Set daemon.allowAnonymous=false in config or unset it (defaults to false)');
+    console.error('');
+    process.exit(1);
+  }
 
   // Get daemon port from config (with env var override)
   const envPort = process.env.PORT ? Number.parseInt(process.env.PORT, 10) : undefined;
@@ -205,11 +223,43 @@ async function main() {
     `http://localhost:${UI_PORT + 3}`,
   ];
 
-  // In Codespaces or if CORS_ORIGIN=* is set, allow all origins
-  const corsOrigin =
-    process.env.CORS_ORIGIN === '*' || process.env.CODESPACES === 'true'
-      ? true // Allow all origins
-      : corsOrigins;
+  // SECURITY: Configure CORS based on deployment environment
+  let corsOrigin: boolean | string[] | ((origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => void);
+
+  if (process.env.CORS_ORIGIN === '*') {
+    // Explicit wildcard - allow all origins (use with caution!)
+    console.warn('⚠️  CORS set to allow ALL origins (CORS_ORIGIN=*)');
+    corsOrigin = true;
+  } else if (process.env.CODESPACES === 'true') {
+    // Codespaces: Only allow GitHub Codespaces domains and localhost
+    console.log('🔒 CORS configured for GitHub Codespaces (*.github.dev, *.githubpreview.dev)');
+    corsOrigin = (origin, callback) => {
+      // Allow requests with no origin (like mobile apps, curl, Postman)
+      if (!origin) {
+        return callback(null, true);
+      }
+
+      // Allow GitHub Codespaces domains
+      const allowedPatterns = [
+        /\.github\.dev$/,
+        /\.githubpreview\.dev$/,
+        /\.preview\.app\.github\.dev$/,
+        /^https?:\/\/localhost(:\d+)?$/,
+      ];
+
+      const isAllowed = allowedPatterns.some(pattern => pattern.test(origin));
+
+      if (isAllowed) {
+        callback(null, true);
+      } else {
+        console.warn(`⚠️  CORS rejected origin: ${origin}`);
+        callback(new Error('Not allowed by CORS'));
+      }
+    };
+  } else {
+    // Local development: Allow localhost ports only
+    corsOrigin = corsOrigins;
+  }
 
   app.use(
     cors({
@@ -267,6 +317,22 @@ async function main() {
   // Configure REST and Socket.io with CORS
   app.configure(rest());
 
+  // Generate or load JWT secret (needed for WebSocket authentication)
+  let jwtSecret = config.daemon?.jwtSecret;
+  if (!jwtSecret) {
+    // Generate a random secret and save it to config for persistence
+    const crypto = await import('node:crypto');
+    jwtSecret = crypto.randomBytes(32).toString('hex');
+
+    // Save to config so it persists across restarts
+    const { setConfigValue } = await import('@agor/core/config');
+    await setConfigValue('daemon.jwtSecret', jwtSecret);
+
+    console.log('🔑 Generated and saved persistent JWT secret to config');
+  } else {
+    console.log('🔑 Loaded existing JWT secret from config:', `${jwtSecret.substring(0, 16)}...`);
+  }
+
   // Store Socket.io instance for graceful shutdown
   let socketServer: import('socket.io').Server | null = null;
 
@@ -292,11 +358,64 @@ async function main() {
         let activeConnections = 0;
         let lastLoggedCount = 0;
 
+        // SECURITY: Add authentication middleware for WebSocket connections
+        io.use(async (socket, next) => {
+          try {
+            // Extract authentication token from handshake
+            // Clients can send token via:
+            // 1. socket.io auth object: io('url', { auth: { token: 'xxx' } })
+            // 2. Authorization header: io('url', { extraHeaders: { Authorization: 'Bearer xxx' } })
+            const token =
+              socket.handshake.auth?.token ||
+              socket.handshake.headers?.authorization?.replace('Bearer ', '');
+
+            if (!token) {
+              // SECURITY: If anonymous is allowed, permit connection but mark as unauthenticated
+              // Otherwise, reject the connection
+              if (allowAnonymous) {
+                console.log(
+                  `🔓 WebSocket connection without auth (anonymous allowed): ${socket.id}`
+                );
+                // Don't set socket.feathers.user - will be handled by FeathersJS auth
+                return next();
+              } else {
+                console.warn(`⚠️  WebSocket connection rejected (no auth token): ${socket.id}`);
+                return next(new Error('Authentication required'));
+              }
+            }
+
+            // Verify JWT token
+            const decoded = jwt.verify(token, jwtSecret, {
+              issuer: 'agor',
+              audience: 'https://agor.dev',
+            }) as { sub: string; type: string };
+
+            if (decoded.type !== 'access') {
+              return next(new Error('Invalid token type'));
+            }
+
+            // Fetch user from database
+            const user = await app.service('users').get(decoded.sub as import('@agor/core/types').UUID);
+
+            // Attach user to socket (FeathersJS convention)
+            (socket as FeathersSocket).feathers = { user };
+
+            console.log(
+              `🔐 WebSocket authenticated: ${socket.id} (user: ${user.user_id.substring(0, 8)})`
+            );
+            next();
+          } catch (error) {
+            console.error(`❌ WebSocket authentication failed for ${socket.id}:`, error);
+            next(new Error('Invalid or expired authentication token'));
+          }
+        });
+
         // Configure Socket.io for cursor presence events
         io.on('connection', socket => {
           activeConnections++;
+          const user = (socket as FeathersSocket).feathers?.user;
           console.log(
-            `🔌 Socket.io connection established: ${socket.id} (total: ${activeConnections})`
+            `🔌 Socket.io connection established: ${socket.id} (user: ${user ? user.user_id.substring(0, 8) : 'anonymous'}, total: ${activeConnections})`
           );
 
           // Log connection lifespan after 5 seconds to identify long-lived connections
@@ -934,23 +1053,8 @@ async function main() {
     },
   });
 
-  // Generate or load JWT secret
-  let jwtSecret = config.daemon?.jwtSecret;
-  if (!jwtSecret) {
-    // Generate a random secret and save it to config for persistence
-    const crypto = await import('node:crypto');
-    jwtSecret = crypto.randomBytes(32).toString('hex');
-
-    // Save to config so it persists across restarts
-    const { setConfigValue } = await import('@agor/core/config');
-    await setConfigValue('daemon.jwtSecret', jwtSecret);
-
-    console.log('🔑 Generated and saved persistent JWT secret to config');
-  } else {
-    console.log('🔑 Loaded existing JWT secret from config:', `${jwtSecret.substring(0, 16)}...`);
-  }
-
   // Configure authentication options BEFORE creating service
+  // Note: jwtSecret is initialized earlier (before Socket.io config)
   app.set('authentication', {
     secret: jwtSecret,
     entity: 'user',
@@ -977,15 +1081,62 @@ async function main() {
   authentication.register('local', new LocalStrategy());
   authentication.register('anonymous', new AnonymousStrategy());
 
+  // SECURITY: Simple in-memory rate limiter for authentication endpoints
+  const authAttempts = new Map<string, { count: number; resetAt: number }>();
+  const AUTH_RATE_LIMIT = 5; // Max attempts
+  const AUTH_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+
+  const checkAuthRateLimit = (identifier: string): boolean => {
+    const now = Date.now();
+    const record = authAttempts.get(identifier);
+
+    if (!record || now > record.resetAt) {
+      // First attempt or window expired
+      authAttempts.set(identifier, { count: 1, resetAt: now + AUTH_WINDOW_MS });
+      return true;
+    }
+
+    if (record.count >= AUTH_RATE_LIMIT) {
+      // Rate limit exceeded
+      return false;
+    }
+
+    // Increment count
+    record.count++;
+    return true;
+  };
+
+  // Cleanup old rate limit entries every hour
+  setInterval(() => {
+    const now = Date.now();
+    for (const [key, record] of authAttempts.entries()) {
+      if (now > record.resetAt) {
+        authAttempts.delete(key);
+      }
+    }
+  }, 60 * 60 * 1000);
+
   app.use('/authentication', authentication);
 
-  // Hook: Add refresh token to authentication response
+  // Hook: Add refresh token to authentication response + rate limiting
   app.service('authentication').hooks({
     before: {
       create: [
         async context => {
-          // Log authentication attempts for debugging
+          // SECURITY: Rate limit authentication attempts
           const data = Array.isArray(context.data) ? context.data[0] : context.data;
+
+          // Only rate limit external requests (not internal service calls)
+          if (context.params.provider) {
+            const identifier = data?.email || context.params.ip || 'unknown';
+
+            if (!checkAuthRateLimit(identifier)) {
+              console.warn(`⚠️  Rate limit exceeded for authentication attempt: ${identifier}`);
+              throw new Error('Too many authentication attempts. Please try again in 15 minutes.');
+            }
+          }
+
+          // Log authentication attempts for debugging
           console.log('🔐 Authentication attempt:', {
             strategy: data?.strategy,
             email: data?.email,
@@ -1025,7 +1176,16 @@ async function main() {
 
   // Refresh token endpoint
   app.use('/authentication/refresh', {
-    async create(data: { refreshToken: string }) {
+    async create(data: { refreshToken: string }, params?: Params) {
+      // SECURITY: Rate limit refresh token requests
+      if (params?.provider) {
+        const identifier = params.ip || 'unknown';
+        if (!checkAuthRateLimit(identifier)) {
+          console.warn(`⚠️  Rate limit exceeded for token refresh: ${identifier}`);
+          throw new Error('Too many token refresh attempts. Please try again in 15 minutes.');
+        }
+      }
+
       try {
         // Verify refresh token
         const decoded = jwt.verify(data.refreshToken, jwtSecret, {
@@ -1998,22 +2158,39 @@ async function main() {
   // Sessions are accessed through worktree cards. No cleanup needed on session deletion.
 
   // Health check endpoint
-  // NOTE: Keep this lightweight - it's called frequently by monitoring systems
+  // SECURITY: Minimal public endpoint for uptime monitoring
+  // Authenticated users can get detailed info, public users get basic status only
   app.use('/health', {
-    async find() {
-      return {
+    async find(params?: Params) {
+      // Basic status (always public for monitoring systems)
+      const publicResponse = {
         status: 'ok',
         timestamp: Date.now(),
         version: DAEMON_VERSION,
-        database: DB_PATH,
-        auth: {
-          requireAuth: config.daemon?.requireAuth === true,
-          allowAnonymous: config.daemon?.allowAnonymous !== false,
-        },
-        mcp: {
-          enabled: config.daemon?.mcpEnabled !== false,
-        },
       };
+
+      // If user is authenticated (via requireAuth hook check), provide detailed info
+      // Check if this is an authenticated request
+      const isAuthenticated = params?.user !== undefined;
+
+      if (isAuthenticated) {
+        return {
+          ...publicResponse,
+          database: DB_PATH,
+          auth: {
+            requireAuth: config.daemon?.requireAuth === true,
+            allowAnonymous: allowAnonymous,
+            user: params?.user?.email,
+            role: params?.user?.role,
+          },
+          mcp: {
+            enabled: config.daemon?.mcpEnabled !== false,
+          },
+        };
+      }
+
+      // Public response (no sensitive data)
+      return publicResponse;
     },
   });
 
