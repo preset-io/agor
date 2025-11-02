@@ -8,7 +8,7 @@
  * - Compact inline display
  */
 
-import { BorderOutlined, CheckCircleFilled } from '@ant-design/icons';
+import { CheckCircleFilled, ReloadOutlined } from '@ant-design/icons';
 import { theme } from 'antd';
 import type React from 'react';
 
@@ -71,7 +71,7 @@ const TodoItemRow: React.FC<{ todo: TodoItem; index: number }> = ({ todo, index 
         );
       case 'in_progress':
         return (
-          <BorderOutlined
+          <ReloadOutlined
             style={{
               color: token.colorPrimary,
               fontSize: 14,
@@ -151,8 +151,8 @@ export const TodoListRenderer: React.FC<TodoListRendererProps> = ({ toolUseId, i
   }
 
   // Count statuses for summary
-  const completedCount = todos.filter((t) => t.status === 'completed').length;
-  const inProgressCount = todos.filter((t) => t.status === 'in_progress').length;
+  const completedCount = todos.filter(t => t.status === 'completed').length;
+  const inProgressCount = todos.filter(t => t.status === 'in_progress').length;
   const totalCount = todos.length;
 
   return (
