@@ -33,6 +33,7 @@ import { loadClaudeSession } from './import/load-session';
 import { transcriptsToMessages } from './import/message-converter';
 import {
   createAssistantMessage,
+  createSystemMessage,
   createUserMessage,
   createUserMessageFromContent,
   extractTokenUsage,
@@ -260,7 +261,7 @@ export class ClaudeTool implements ITool {
       }
 
       // Capture Agent SDK session_id
-      if (!capturedAgentSessionId && event.agentSessionId) {
+      if (!capturedAgentSessionId && 'agentSessionId' in event && event.agentSessionId) {
         capturedAgentSessionId = event.agentSessionId;
         await this.captureAgentSessionId(sessionId, capturedAgentSessionId);
       }
@@ -583,7 +584,7 @@ export class ClaudeTool implements ITool {
       }
 
       // Capture Agent SDK session_id
-      if (!capturedAgentSessionId && event.agentSessionId) {
+      if (!capturedAgentSessionId && 'agentSessionId' in event && event.agentSessionId) {
         capturedAgentSessionId = event.agentSessionId;
         await this.captureAgentSessionId(sessionId, capturedAgentSessionId);
       }
@@ -636,23 +637,48 @@ export class ClaudeTool implements ITool {
       }
 
       // Handle complete messages only
-      if (event.type === 'complete' && event.content && event.role === MessageRole.ASSISTANT) {
+      if (event.type === 'complete' && event.content) {
         // Type assertion for complete event
         const completeEvent = event as Extract<ProcessedEvent, { type: 'complete' }>;
         const messageId = generateId() as MessageID;
-        await createAssistantMessage(
-          sessionId,
-          messageId,
-          completeEvent.content,
-          completeEvent.toolUses,
-          taskId,
-          nextIndex++,
-          resolvedModel,
-          this.messagesService!,
-          this.tasksService,
-          completeEvent.parent_tool_use_id ?? null
-        );
-        assistantMessageIds.push(messageId);
+
+        if (completeEvent.role === MessageRole.ASSISTANT) {
+          await createAssistantMessage(
+            sessionId,
+            messageId,
+            completeEvent.content,
+            completeEvent.toolUses,
+            taskId,
+            nextIndex++,
+            resolvedModel,
+            this.messagesService!,
+            this.tasksService,
+            completeEvent.parent_tool_use_id ?? null
+          );
+          assistantMessageIds.push(messageId);
+        } else if (completeEvent.role === MessageRole.SYSTEM) {
+          // Handle system messages (compaction, etc.)
+          await createSystemMessage(
+            sessionId,
+            messageId,
+            completeEvent.content,
+            taskId,
+            nextIndex++,
+            resolvedModel,
+            this.messagesService!
+          );
+          assistantMessageIds.push(messageId);
+        }
+      }
+
+      // Handle system_complete events (compaction finished)
+      if (event.type === 'system_complete') {
+        const systemCompleteEvent = event as Extract<ProcessedEvent, { type: 'system_complete' }>;
+        if (systemCompleteEvent.systemType === 'compaction') {
+          console.log(`✅ Compaction complete`);
+          // Could update last system message with completion status
+          // For now, just log
+        }
       }
     }
 

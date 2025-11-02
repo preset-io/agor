@@ -1,4 +1,3 @@
-ALTER TABLE `messages` ADD `parent_tool_use_id` text;--> statement-breakpoint
 ALTER TABLE `sessions` ADD `scheduled_run_at` integer;--> statement-breakpoint
 ALTER TABLE `sessions` ADD `scheduled_from_worktree` integer DEFAULT false NOT NULL;--> statement-breakpoint
 CREATE INDEX `sessions_scheduled_flag_idx` ON `sessions` (`scheduled_from_worktree`);--> statement-breakpoint

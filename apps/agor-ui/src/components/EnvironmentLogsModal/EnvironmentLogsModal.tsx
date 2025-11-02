@@ -41,7 +41,7 @@ export const EnvironmentLogsModal: React.FC<EnvironmentLogsModalProps> = ({
         query: {
           worktree_id: worktree.worktree_id,
         },
-      })) as LogsResponse;
+      })) as unknown as LogsResponse;
       setLogs(data);
     } catch (error: unknown) {
       setLogs({

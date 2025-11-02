@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "2fb604c1-8a03-46b9-886f-3005d19b15bf",
-  "prevId": "9c49a24f-5893-456e-b9a7-98314f7b4733",
+  "id": "73cb0009-0908-4f2a-a055-8ebcb745bbcb",
+  "prevId": "2fb604c1-8a03-46b9-886f-3005d19b15bf",
   "tables": {
     "board_comments": {
       "name": "board_comments",
@@ -861,6 +861,21 @@
           "notNull": true,
           "autoincrement": false
         },
+        "scheduled_run_at": {
+          "name": "scheduled_run_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "scheduled_from_worktree": {
+          "name": "scheduled_from_worktree",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
         "data": {
           "name": "data",
           "type": "text",
@@ -903,6 +918,11 @@
         "sessions_forked_idx": {
           "name": "sessions_forked_idx",
           "columns": ["forked_from_session_id"],
+          "isUnique": false
+        },
+        "sessions_scheduled_flag_idx": {
+          "name": "sessions_scheduled_flag_idx",
+          "columns": ["scheduled_from_worktree"],
           "isUnique": false
         }
       },
@@ -1167,6 +1187,35 @@
           "notNull": false,
           "autoincrement": false
         },
+        "schedule_enabled": {
+          "name": "schedule_enabled",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "schedule_cron": {
+          "name": "schedule_cron",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "schedule_last_triggered_at": {
+          "name": "schedule_last_triggered_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "schedule_next_run_at": {
+          "name": "schedule_next_run_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "data": {
           "name": "data",
           "type": "text",
@@ -1209,6 +1258,16 @@
         "worktrees_repo_name_unique": {
           "name": "worktrees_repo_name_unique",
           "columns": ["repo_id", "name"],
+          "isUnique": false
+        },
+        "worktrees_schedule_enabled_idx": {
+          "name": "worktrees_schedule_enabled_idx",
+          "columns": ["schedule_enabled"],
+          "isUnique": false
+        },
+        "worktrees_board_schedule_idx": {
+          "name": "worktrees_board_schedule_idx",
+          "columns": ["board_id", "schedule_enabled"],
           "isUnique": false
         }
       },

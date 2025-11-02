@@ -16,6 +16,8 @@ interface SessionPageProps {
   currentUser?: User | null;
   onSendPrompt?: (sessionId: string, prompt: string, permissionMode?: PermissionMode) => void;
   onMenuClick?: () => void;
+  promptDrafts: Map<string, string>;
+  onUpdateDraft: (sessionId: string, draft: string) => void;
 }
 
 export const SessionPage: React.FC<SessionPageProps> = ({
@@ -27,11 +29,13 @@ export const SessionPage: React.FC<SessionPageProps> = ({
   currentUser,
   onSendPrompt,
   onMenuClick,
+  promptDrafts,
+  onUpdateDraft,
 }) => {
   const { sessionId } = useParams<{ sessionId: string }>();
 
-  const session = sessions.find((s) => s.session_id === sessionId);
-  const worktree = session ? worktrees.find((w) => w.worktree_id === session.worktree_id) : null;
+  const session = sessions.find(s => s.session_id === sessionId);
+  const worktree = session ? worktrees.find(w => w.worktree_id === session.worktree_id) : null;
 
   if (!sessionId) {
     return (
@@ -113,6 +117,8 @@ export const SessionPage: React.FC<SessionPageProps> = ({
         onSend={handleSendPrompt}
         disabled={session.status === 'running'}
         placeholder={session.status === 'running' ? 'Agent is working...' : 'Send a prompt...'}
+        promptDraft={sessionId ? promptDrafts.get(sessionId) || '' : ''}
+        onUpdateDraft={(draft: string) => sessionId && onUpdateDraft(sessionId, draft)}
       />
     </div>
   );

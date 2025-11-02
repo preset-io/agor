@@ -60,7 +60,7 @@ export type ProcessedEvent =
     }
   | {
       type: 'complete';
-      role: MessageRole.ASSISTANT | MessageRole.USER;
+      role: MessageRole.ASSISTANT | MessageRole.USER | MessageRole.SYSTEM;
       content: Array<{
         type: string;
         text?: string;
@@ -71,6 +71,7 @@ export type ProcessedEvent =
         content?: unknown;
         is_error?: boolean;
         signature?: string; // For thinking blocks
+        status?: string; // For system_status blocks
       }>;
       toolUses?: Array<{ id: string; name: string; input: Record<string, unknown> }>;
       parent_tool_use_id?: string | null;
@@ -107,6 +108,11 @@ export type ProcessedEvent =
       cost?: number;
       token_usage?: unknown;
       model_usage?: unknown; // Per-model breakdown with context window info
+      agentSessionId?: string;
+    }
+  | {
+      type: 'system_complete';
+      systemType: string;
       agentSessionId?: string;
     }
   | {
@@ -539,8 +545,37 @@ export class SDKMessageProcessor {
    */
   private handleSystem(msg: SDKSystemMessage | SDKCompactBoundaryMessage): ProcessedEvent[] {
     if ('subtype' in msg && msg.subtype === 'compact_boundary') {
-      console.debug(`📦 SDK compact boundary (memory management)`);
-      return [];
+      console.log(`📦 SDK compact_boundary (compaction finished)`);
+      // Emit event to mark compaction as complete
+      return [
+        {
+          type: 'system_complete',
+          systemType: 'compaction',
+          agentSessionId: this.state.capturedAgentSessionId,
+        },
+      ];
+    }
+
+    // Handle status='compacting' - check before 'init' to avoid type narrowing issues
+    if ('status' in msg && msg.status === 'compacting') {
+      console.log(`🗜️  SDK compacting context...`);
+      return [
+        {
+          type: 'complete',
+          role: MessageRole.SYSTEM,
+          content: [
+            {
+              type: 'system_status',
+              status: 'compacting',
+              text: 'Compacting conversation context...',
+            },
+          ],
+          toolUses: undefined,
+          parent_tool_use_id: null,
+          agentSessionId: this.state.capturedAgentSessionId,
+          resolvedModel: this.state.resolvedModel,
+        },
+      ];
     }
 
     if ('subtype' in msg && msg.subtype === 'init') {
