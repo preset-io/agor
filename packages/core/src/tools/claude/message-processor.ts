@@ -556,25 +556,8 @@ export class SDKMessageProcessor {
       ];
     }
 
-    if ('subtype' in msg && msg.subtype === 'init') {
-      console.debug(`ℹ️  SDK system init:`, {
-        model: msg.model,
-        permissionMode: msg.permissionMode,
-        cwd: msg.cwd,
-        tools: msg.tools?.length,
-        mcp_servers: msg.mcp_servers?.length,
-      });
-
-      // Capture model from init message
-      if (msg.model) {
-        this.state.resolvedModel = msg.model;
-      }
-
-      return [];
-    }
-
-    // Handle status='compacting' - emit as system message
-    if ('subtype' in msg && msg.subtype === 'status' && 'status' in msg && msg.status === 'compacting') {
+    // Handle status='compacting' - check before 'init' to avoid type narrowing issues
+    if ('status' in msg && msg.status === 'compacting') {
       console.log(`🗜️  SDK compacting context...`);
       return [
         {
@@ -593,6 +576,23 @@ export class SDKMessageProcessor {
           resolvedModel: this.state.resolvedModel,
         },
       ];
+    }
+
+    if ('subtype' in msg && msg.subtype === 'init') {
+      console.debug(`ℹ️  SDK system init:`, {
+        model: msg.model,
+        permissionMode: msg.permissionMode,
+        cwd: msg.cwd,
+        tools: msg.tools?.length,
+        mcp_servers: msg.mcp_servers?.length,
+      });
+
+      // Capture model from init message
+      if (msg.model) {
+        this.state.resolvedModel = msg.model;
+      }
+
+      return [];
     }
 
     console.debug(`ℹ️  SDK system message:`, msg);
