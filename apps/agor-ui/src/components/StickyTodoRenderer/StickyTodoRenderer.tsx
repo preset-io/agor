@@ -49,7 +49,9 @@ export function StickyTodoRenderer({ messages }: StickyTodoRendererProps) {
         for (const block of message.content) {
           if (block.type === 'tool_use' && block.name === 'TodoWrite') {
             // Found the latest TodoWrite - return its todos and exit immediately
-            return (block.input?.todos as TodoItem[] | undefined) || null;
+            const input = block.input as Record<string, unknown> | undefined;
+            const todos = input?.todos as TodoItem[] | undefined;
+            return todos || null;
           }
         }
       }
