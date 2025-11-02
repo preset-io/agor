@@ -386,7 +386,7 @@ const WorktreeCard = ({
         </Space>
       </div>
 
-      {/* Worktree metadata - all pills on one row */}
+      {/* Worktree metadata - all pills on one row with wrapping */}
       <div className="nodrag" style={{ marginBottom: 8 }}>
         <Space size={4} wrap>
           {worktree.created_by && (
@@ -399,6 +399,13 @@ const WorktreeCard = ({
           )}
           {worktree.issue_url && <IssuePill issueUrl={worktree.issue_url} />}
           {worktree.pull_request_url && <PullRequestPill prUrl={worktree.pull_request_url} />}
+          <EnvironmentPill
+            repo={repo}
+            worktree={worktree}
+            onEdit={() => onOpenSettings?.(worktree.worktree_id)}
+            onStartEnvironment={onStartEnvironment}
+            onStopEnvironment={onStopEnvironment}
+          />
         </Space>
       </div>
 
@@ -410,17 +417,6 @@ const WorktreeCard = ({
           </Typography.Text>
         </div>
       )}
-
-      {/* Environment Pill */}
-      <div className="nodrag" style={{ marginBottom: 8 }}>
-        <EnvironmentPill
-          repo={repo}
-          worktree={worktree}
-          onEdit={() => onOpenSettings?.(worktree.worktree_id)}
-          onStartEnvironment={onStartEnvironment}
-          onStopEnvironment={onStopEnvironment}
-        />
-      </div>
 
       {/* Sessions - collapsible (only show if sessions exist, otherwise show button directly) */}
       <div className="nodrag">
