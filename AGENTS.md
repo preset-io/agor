@@ -192,6 +192,13 @@ Agor is built on 5 primitives:
 
 ### Important Rules
 
+**Git Commits:**
+
+- ❌ **NEVER use `git commit --no-verify`** without explicit user permission
+- Pre-commit hooks (typecheck, lint) exist for a reason
+- If hooks fail, fix the issues - don't bypass them
+- Only bypass hooks if user explicitly says "skip hooks" or "use --no-verify"
+
 **Git Library:**
 
 - ✅ Use `simple-git` for ALL git operations
@@ -399,3 +406,5 @@ You are currently running within **Agor** (https://agor.live), a multiplayer can
 When you see this ID referenced in prompts or tool calls, it refers to THIS session you're currently in.
 
 For more information about Agor, visit https://agor.live
+
+- don't ever use --no-verify without asking first and getting confirmation
