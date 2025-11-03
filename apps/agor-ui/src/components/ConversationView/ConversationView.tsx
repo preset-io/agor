@@ -93,6 +93,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
     scheduledRunAt,
   }) => {
     const containerRef = useRef<HTMLDivElement>(null);
+    const { token } = theme.useToken();
 
     // Check if user is scrolled near the bottom (within 100px)
     const isNearBottom = useCallback(() => {
@@ -182,7 +183,6 @@ export const ConversationView = React.memo<ConversationViewProps>(
     }
 
     if (tasks.length === 0) {
-      const { token } = theme.useToken();
       return (
         <div
           style={{

@@ -1,4 +1,5 @@
 import type { Board } from '@agor/core/types';
+import { DownOutlined } from '@ant-design/icons';
 import { Collapse, Typography, theme } from 'antd';
 import type { ReactNode } from 'react';
 
@@ -26,6 +27,7 @@ export const BoardCollapse: React.FC<BoardCollapseProps> = ({ items, defaultActi
   return (
     <Collapse
       defaultActiveKey={defaultActiveKey}
+      expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
       style={{
         border: 'none',
         backgroundColor: 'transparent',

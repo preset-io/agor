@@ -1,10 +1,9 @@
 import type { Board, BoardComment, Session, Task, Worktree } from '@agor/core/types';
-import { CommentOutlined } from '@ant-design/icons';
+import { CommentOutlined, DownOutlined } from '@ant-design/icons';
 import { Badge, Button, Collapse, List, Space, Typography, theme } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { BoardCollapse } from '../BoardCollapse';
 
-const { Panel } = Collapse;
 const { Text } = Typography;
 
 interface MobileNavTreeProps {
@@ -137,33 +136,35 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
               boardWorktrees.length === 0 ? (
                 <Text type="secondary">No worktrees on this board</Text>
               ) : (
-                <Collapse defaultActiveKey={[]} ghost>
-                  {boardWorktrees.map(worktree => {
+                <Collapse
+                  defaultActiveKey={[]}
+                  ghost
+                  expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
+                  items={boardWorktrees.map(worktree => {
                     const worktreeSessions = sessionsByWorktree[worktree.worktree_id] || [];
 
-                    return (
-                      <Panel
-                        header={
-                          <div
-                            style={{
-                              display: 'flex',
-                              flexDirection: 'column',
-                              gap: 2,
-                              padding: '2px 0',
-                            }}
-                          >
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                              <span>🌳</span>
-                              <Text strong>{worktree.name}</Text>
-                            </div>
-                            <Text type="secondary" style={{ fontSize: 12, paddingLeft: 28 }}>
-                              {worktreeSessions.length} sessions
-                            </Text>
+                    return {
+                      key: worktree.worktree_id,
+                      label: (
+                        <div
+                          style={{
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: 2,
+                            padding: '2px 0',
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span>🌳</span>
+                            <Text strong>{worktree.name}</Text>
                           </div>
-                        }
-                        key={worktree.worktree_id}
-                      >
-                        {worktreeSessions.length === 0 ? (
+                          <Text type="secondary" style={{ fontSize: 12, paddingLeft: 28 }}>
+                            {worktreeSessions.length} sessions
+                          </Text>
+                        </div>
+                      ),
+                      children:
+                        worktreeSessions.length === 0 ? (
                           <Text
                             type="secondary"
                             style={{ padding: '8px 0 8px 28px', display: 'block' }}
@@ -210,11 +211,10 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
                               </List.Item>
                             )}
                           />
-                        )}
-                      </Panel>
-                    );
+                        ),
+                    };
                   })}
-                </Collapse>
+                />
               ),
           };
         })}
