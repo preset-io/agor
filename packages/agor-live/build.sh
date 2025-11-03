@@ -144,6 +144,21 @@ cat > "$SCRIPT_DIR/dist/core/package.json" << 'PKGJSON'
       "types": "./utils/pricing.d.ts",
       "import": "./utils/pricing.js",
       "require": "./utils/pricing.cjs"
+    },
+    "./utils/url": {
+      "types": "./utils/url.d.ts",
+      "import": "./utils/url.js",
+      "require": "./utils/url.cjs"
+    },
+    "./utils/permission-mode-mapper": {
+      "types": "./utils/permission-mode-mapper.d.ts",
+      "import": "./utils/permission-mode-mapper.js",
+      "require": "./utils/permission-mode-mapper.cjs"
+    },
+    "./utils/cron": {
+      "types": "./utils/cron.d.ts",
+      "import": "./utils/cron.js",
+      "require": "./utils/cron.cjs"
     }
   }
 }
