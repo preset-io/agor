@@ -3,6 +3,38 @@
 **Status:** Implemented (Phase 2 - Multi-User Auth + Real-time Sync)
 **Related:** [architecture.md](architecture.md), [models.md](models.md)
 
+---
+
+## ⚠️ SECURITY NOTE: Pre-1.0 Multi-User Limitations
+
+**Given the early stage of the project, we recommend you keep Agor within trusted networks and provide access only to users you'd be confident giving the daemon's direct user access to the machine.**
+
+**Current multi-user security limitations (as of v0.x):**
+
+1. **No resource isolation** - Any authenticated user can access, modify, or delete any other user's sessions, tasks, worktrees, and boards. User attribution is tracked but not enforced.
+
+2. **Shared API keys** - API keys configured at the daemon level are visible to all authenticated users. MCP tokens are stored unencrypted in the database.
+
+3. **No rate limiting or quotas** - Users can spawn unlimited sessions, make unlimited API calls, and potentially exhaust API credits or system resources.
+
+4. **Admin capabilities** - Users with admin role can execute arbitrary code via terminal access and environment controls under the daemon's system user account.
+
+**Treat every invited user as having:**
+- Full read/write access to all Agor data
+- Access to all configured API keys
+- Ability to execute code as the daemon's Unix user (if admin)
+
+**Deployment recommendations:**
+- Keep daemon behind firewall, VPN, or private network
+- Only invite trusted team members
+- Rotate API credentials frequently
+- Use scoped/temporary credentials where possible
+- Run daemon as a dedicated, scoped Unix user
+
+**Roadmap:** True multi-tenancy with resource isolation, secure token management, rate limiting, and granular permissions are planned for v1.0.
+
+---
+
 ## Overview
 
 Agor uses **anonymous-first authentication** with full multi-user support - zero config required for local development, with optional authentication for shared environments.
