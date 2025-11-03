@@ -11,8 +11,6 @@ description: Practical guidance for operating Agor safely while the product is s
 
 ## Current Security Limitations (Pre-1.0)
 
-> 💡 **Meta note:** This security audit was conducted using Agor itself—spawning parallel security audit sessions across Claude, Codex, and Gemini. We practice what we preach about multi-agent orchestration, even for finding our own bugs.
-
 **⚠️ Critical limitations to understand before inviting users:**
 
 1. **No resource isolation** - Any authenticated user can access, modify, or delete any other user's sessions, tasks, worktrees, and boards. User attribution is tracked but not enforced at the API level.
