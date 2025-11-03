@@ -148,8 +148,8 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
                             style={{
                               display: 'flex',
                               flexDirection: 'column',
-                              gap: 4,
-                              padding: '4px 0',
+                              gap: 2,
+                              padding: '2px 0',
                             }}
                           >
                             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -178,7 +178,7 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
                                 onClick={() => handleSessionClick(session.session_id)}
                                 style={{
                                   cursor: 'pointer',
-                                  padding: '12px 8px 12px 28px',
+                                  padding: '6px 8px 6px 28px',
                                   borderRadius: 4,
                                 }}
                                 onMouseEnter={e => {
@@ -193,7 +193,7 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
                                   style={{
                                     display: 'flex',
                                     flexDirection: 'column',
-                                    gap: 4,
+                                    gap: 2,
                                     width: '100%',
                                   }}
                                 >

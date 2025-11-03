@@ -398,8 +398,9 @@ const SessionCanvas = ({
         : { x: 100, y: 100 + index * VERTICAL_SPACING };
 
       // Check if worktree is pinned to a zone (via board_object.zone_id)
-      const dbZoneId = boardObject?.zone_id; // Database zone ID (no prefix)
-      const reactFlowZoneId = dbZoneId ? `zone-${dbZoneId}` : undefined; // React Flow node ID
+      // Note: zone_id in database already has 'zone-' prefix (e.g., 'zone-1234')
+      const zoneId = boardObject?.zone_id; // Zone ID with 'zone-' prefix
+      const dbZoneId = zoneId?.replace('zone-', ''); // Strip prefix for board.objects lookup
       const zoneName = dbZoneId ? zoneLabels[dbZoneId] || 'Unknown Zone' : undefined;
       const zoneColor =
         dbZoneId && board?.objects?.[dbZoneId]
@@ -425,9 +426,9 @@ const SessionCanvas = ({
         // Set dimensions for collision detection (matches WorktreeCard size)
         width: 500,
         height: 200, // Approximate height, will be measured by React Flow
-        // Constrain to parent zone if pinned (React Flow needs 'zone-{id}' format)
-        parentId: reactFlowZoneId,
-        extent: reactFlowZoneId ? ('parent' as const) : undefined,
+        // Constrain to parent zone if pinned (zone_id already has 'zone-' prefix)
+        parentId: zoneId,
+        extent: zoneId ? ('parent' as const) : undefined,
         data: {
           worktree,
           repo,
