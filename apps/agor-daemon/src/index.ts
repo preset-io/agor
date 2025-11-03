@@ -284,9 +284,9 @@ async function main() {
     })
   );
 
-  // Parse JSON
-  app.use(express.json());
-  app.use(express.urlencoded({ extended: true }));
+  // Parse JSON with size limits (security: prevent DoS via large payloads)
+  app.use(express.json({ limit: '10mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
   // Serve static UI files in production (when installed as npm package)
   // In development, UI runs on separate Vite dev server
@@ -930,7 +930,6 @@ async function main() {
           console.log(
             `🎫 MCP token for session ${session.session_id.substring(0, 8)}: ${mcpToken.substring(0, 16)}...`
           );
-          console.log(`   Full token (for testing): ${mcpToken}`);
 
           // Store token in session record
           await app.service('sessions').patch(session.session_id, {
@@ -2417,11 +2416,25 @@ async function main() {
 
   // Validate master secret for API key encryption
   if (!process.env.AGOR_MASTER_SECRET) {
-    console.warn('');
-    console.warn('⚠️  WARNING: AGOR_MASTER_SECRET not set');
-    console.warn('⚠️  API keys will be stored in plaintext (development mode)');
-    console.warn('⚠️  Set AGOR_MASTER_SECRET environment variable to enable encryption');
-    console.warn('');
+    // Check if we have a saved secret in config
+    const savedSecret = config.daemon?.masterSecret;
+
+    if (savedSecret) {
+      // Use saved secret from config
+      process.env.AGOR_MASTER_SECRET = savedSecret;
+      console.log('🔐 Using saved AGOR_MASTER_SECRET from config');
+    } else {
+      // Auto-generate a random master secret and persist it in config
+      const { randomBytes } = await import('node:crypto');
+      const { setConfigValue } = await import('@agor/core/config');
+
+      const generatedSecret = randomBytes(32).toString('hex');
+      await setConfigValue('daemon.masterSecret', generatedSecret);
+      process.env.AGOR_MASTER_SECRET = generatedSecret;
+
+      console.log('🔐 Generated and saved AGOR_MASTER_SECRET for API key encryption');
+      console.log('   Secret stored in ~/.agor/config.yaml');
+    }
   } else {
     console.log('🔐 API key encryption enabled (AGOR_MASTER_SECRET set)');
   }

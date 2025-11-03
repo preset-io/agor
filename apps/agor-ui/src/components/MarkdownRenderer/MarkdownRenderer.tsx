@@ -11,7 +11,8 @@ import markdownit from 'markdown-it';
 import type React from 'react';
 
 // Initialize markdown-it instance (cached)
-const md = markdownit({ html: true, breaks: true });
+// Security: html disabled to prevent XSS from AI-generated content
+const md = markdownit({ html: false, breaks: true });
 
 interface MarkdownRendererProps {
   /**

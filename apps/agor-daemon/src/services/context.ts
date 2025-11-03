@@ -102,19 +102,18 @@ export class ContextService
 
     const relativePathInput = id.toString();
     const normalizedRelativePath = this.normalizeRelativePath(relativePathInput);
-    const segments = normalizedRelativePath.split('/').filter(Boolean);
-
-    // Restrict access to context/ directory only
-    if (segments[0] !== 'context') {
-      throw new Error('Access restricted to context/ directory');
-    }
 
     const worktreeRoot = resolve(worktree.path);
     const fullPath = resolve(worktreeRoot, normalizedRelativePath);
     const relativeToRoot = relative(worktreeRoot, fullPath);
 
+    // Validate path is within worktree and starts with context/
     if (!relativeToRoot || relativeToRoot.startsWith('..') || isAbsolute(relativeToRoot)) {
       throw new Error('Invalid file path');
+    }
+
+    if (!relativeToRoot.startsWith('context/')) {
+      throw new Error('Access restricted to context/ directory');
     }
 
     try {
