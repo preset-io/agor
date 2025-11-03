@@ -1,5 +1,6 @@
 import type { AgorClient } from '@agor/core/api';
-import { App, Modal } from 'antd';
+import type { User } from '@agor/core/types';
+import { Alert, App, Modal } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import { Terminal } from 'xterm';
 import 'xterm/css/xterm.css';
@@ -8,6 +9,7 @@ export interface TerminalModalProps {
   open: boolean;
   onClose: () => void;
   client: AgorClient | null;
+  user?: User | null;
   initialCommands?: string[]; // Commands to execute after connection
 }
 
@@ -15,6 +17,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
   open,
   onClose,
   client,
+  user,
   initialCommands = [],
 }) => {
   const { modal } = App.useApp();
@@ -23,8 +26,14 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
   const [_terminalId, setTerminalId] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
 
+  // Check if user has admin role
+  const isAdmin = user?.role === 'admin' || user?.role === 'owner';
+
   useEffect(() => {
     if (!open || !terminalDivRef.current || !client) return;
+
+    // Skip terminal setup for non-admin users
+    if (!isAdmin) return;
 
     let mounted = true;
     let currentTerminalId: string | null = null;
@@ -127,7 +136,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
       setTerminalId(null);
       setIsConnected(false);
     };
-  }, [open, client, initialCommands]);
+  }, [open, client, initialCommands, isAdmin]);
 
   const handleClose = () => {
     if (isConnected) {
@@ -168,9 +177,30 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
         },
       }}
     >
-      <div style={{ height: '100%', width: '100%', padding: '16px' }}>
-        <div ref={terminalDivRef} style={{ height: '100%', width: '100%' }} />
-      </div>
+      {!isAdmin ? (
+        <div style={{ padding: '24px' }}>
+          <Alert
+            message="Admin Access Required"
+            description={
+              <div>
+                <p>
+                  Terminal access requires <strong>admin</strong> or <strong>owner</strong> role.
+                </p>
+                <p style={{ marginBottom: 0 }}>
+                  Terminal sessions run as the daemon's system user and can execute arbitrary code.
+                  Contact your Agor administrator to request elevated permissions.
+                </p>
+              </div>
+            }
+            type="warning"
+            showIcon
+          />
+        </div>
+      ) : (
+        <div style={{ height: '100%', width: '100%', padding: '16px' }}>
+          <div ref={terminalDivRef} style={{ height: '100%', width: '100%' }} />
+        </div>
+      )}
     </Modal>
   );
 };

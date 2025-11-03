@@ -598,6 +598,7 @@ export const App: React.FC<AppProps> = ({
         open={terminalOpen}
         onClose={handleCloseTerminal}
         client={client}
+        user={user}
         initialCommands={terminalCommands}
       />
       <NewWorktreeModal
