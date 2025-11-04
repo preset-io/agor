@@ -9,8 +9,6 @@ import type { AgenticToolName, Session, SessionID } from '@agor/core/types';
 import { getDefaultPermissionMode, SessionStatus } from '@agor/core/types';
 import { useState } from 'react';
 import type { NewSessionConfig } from '../components/NewSessionModal';
-import { getDaemonUrl } from '../config/daemon';
-import { ACCESS_TOKEN_KEY } from './useAuth';
 
 interface UseSessionActionsResult {
   createSession: (config: NewSessionConfig) => Promise<Session | null>;
@@ -29,27 +27,10 @@ interface UseSessionActionsResult {
  * @returns Session action functions and state
  */
 export function useSessionActions(
-  client: AgorClient | null,
-  accessToken?: string | null
+  client: AgorClient | null
 ): UseSessionActionsResult {
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const resolveAccessToken = (): string | null => {
-    if (accessToken) {
-      return accessToken;
-    }
-
-    if (typeof window !== 'undefined') {
-      try {
-        return window.localStorage.getItem(ACCESS_TOKEN_KEY);
-      } catch (err) {
-        console.error('Failed to read access token from storage:', err);
-      }
-    }
-
-    return null;
-  };
 
   const createSession = async (config: NewSessionConfig): Promise<Session | null> => {
     if (!client) {
@@ -108,24 +89,10 @@ export function useSessionActions(
       setCreating(true);
       setError(null);
 
-      // Call custom fork endpoint to create the forked session
-      const token = resolveAccessToken();
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (token) {
-        headers.Authorization = `Bearer ${token}`;
-      }
-
-      const response = await fetch(`${getDaemonUrl()}/sessions/${sessionId}/fork`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ prompt }),
+      // Call custom fork endpoint via FeathersJS client
+      const forkedSession = await client.service(`sessions/${sessionId}/fork`).create({
+        prompt,
       });
-
-      if (!response.ok) {
-        throw new Error(`Fork failed: ${response.statusText}`);
-      }
-
-      const forkedSession = await response.json();
 
       // Send the prompt to the forked session to actually execute it
       await client.service(`sessions/${forkedSession.session_id}/prompt`).create({
@@ -153,24 +120,10 @@ export function useSessionActions(
       setCreating(true);
       setError(null);
 
-      // Call custom spawn endpoint to create the spawned session
-      const token = resolveAccessToken();
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (token) {
-        headers.Authorization = `Bearer ${token}`;
-      }
-
-      const response = await fetch(`${getDaemonUrl()}/sessions/${sessionId}/spawn`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ prompt }),
+      // Call custom spawn endpoint via FeathersJS client
+      const spawnedSession = await client.service(`sessions/${sessionId}/spawn`).create({
+        prompt,
       });
-
-      if (!response.ok) {
-        throw new Error(`Spawn failed: ${response.statusText}`);
-      }
-
-      const spawnedSession = await response.json();
 
       // Send the prompt to the spawned session to actually execute it
       await client.service(`sessions/${spawnedSession.session_id}/prompt`).create({

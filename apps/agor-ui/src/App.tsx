@@ -100,7 +100,7 @@ function AppContent() {
 
   // Session actions
   const { createSession, forkSession, spawnSession, updateSession, deleteSession } =
-    useSessionActions(client, authenticated ? accessToken : null);
+    useSessionActions(client);
 
   // Board actions
   const { createBoard, updateBoard, deleteBoard } = useBoardActions(client);

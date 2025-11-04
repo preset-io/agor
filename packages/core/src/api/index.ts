@@ -22,6 +22,12 @@ import type { Application, Paginated, Params } from '@feathersjs/feathers';
 import { feathers } from '@feathersjs/feathers';
 import socketio from '@feathersjs/socketio-client';
 import io, { type Socket } from 'socket.io-client';
+import { DAEMON } from '../config/constants';
+
+/**
+ * Default daemon URL for client connections
+ */
+const DEFAULT_DAEMON_URL = `http://${DAEMON.DEFAULT_HOST}:${DAEMON.DEFAULT_PORT}`;
 
 /**
  * Service interfaces for type safety
@@ -248,7 +254,7 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
 /**
  * Create Feathers client connected to agor-daemon
  *
- * @param url - Daemon URL (default: http://localhost:3030)
+ * @param url - Daemon URL
  * @param autoConnect - Auto-connect socket (default: true for CLI, false for React)
  * @param options - Additional options
  * @returns Feathers client instance with socket exposed
@@ -259,7 +265,7 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
  * Uses REST transport instead of WebSocket to avoid keeping Node.js processes alive.
  * Only use this in CLI commands - UI should use createClient() with WebSocket.
  */
-export async function createRestClient(url: string = 'http://localhost:3030'): Promise<AgorClient> {
+export async function createRestClient(url: string = DEFAULT_DAEMON_URL): Promise<AgorClient> {
   const client = feathers<ServiceTypes>() as AgorClient;
 
   // Lazy-load REST client (only imported when needed, not in browser bundles)
@@ -283,7 +289,7 @@ export async function createRestClient(url: string = 'http://localhost:3030'): P
 }
 
 export function createClient(
-  url: string = 'http://localhost:3030',
+  url: string = DEFAULT_DAEMON_URL,
   autoConnect: boolean = true,
   options?: {
     /** Show connection status logs (useful for CLI) */
@@ -350,7 +356,7 @@ export function createClient(
  * @param url - Daemon URL
  * @returns true if daemon is reachable
  */
-export async function isDaemonRunning(url: string = 'http://localhost:3030'): Promise<boolean> {
+export async function isDaemonRunning(url: string = DEFAULT_DAEMON_URL): Promise<boolean> {
   try {
     const response = await fetch(`${url}/health`, { signal: AbortSignal.timeout(1000) });
     return response.ok;

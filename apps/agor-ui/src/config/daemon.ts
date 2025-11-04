@@ -4,6 +4,8 @@
  * Reads daemon URL from environment variables or uses defaults
  */
 
+import { DAEMON } from '@agor/core/config/constants';
+
 /**
  * Get daemon URL for UI connections
  *
@@ -26,16 +28,17 @@ export function getDaemonUrl(): string {
   if (envUrl) return envUrl;
 
   // 2. Same-host assumption: daemon runs on same host as UI
-  // Replaces 5173 (UI port) with 3030 (daemon port)
+  // Use VITE_DAEMON_PORT if available, otherwise use default from constants
+  const daemonPort = import.meta.env.VITE_DAEMON_PORT || String(DAEMON.DEFAULT_PORT);
+
   if (typeof window !== 'undefined') {
     const origin = window.location.origin;
-    if (!origin.includes('localhost') && !origin.includes('127.0.0.1')) {
-      return origin.replace(':5173', ':3030');
-    }
+    const url = new URL(origin);
+    return `${url.protocol}//${url.hostname}:${daemonPort}`;
   }
 
-  // 3. Local dev fallback: localhost:3030
-  return 'http://localhost:3030';
+  // 3. Server-side fallback
+  return `http://${DAEMON.DEFAULT_HOST}:${daemonPort}`;
 }
 
 /**

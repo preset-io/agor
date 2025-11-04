@@ -9,6 +9,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import yaml from 'js-yaml';
+import { DAEMON } from './constants';
 import type { AgorConfig, UnknownJson } from './types';
 
 /**
@@ -91,8 +92,8 @@ export function getDefaultConfig(): AgorConfig {
       shortIdLength: 8,
     },
     daemon: {
-      port: 3030,
-      host: 'localhost',
+      port: DAEMON.DEFAULT_PORT,
+      host: DAEMON.DEFAULT_HOST,
       allowAnonymous: true, // Default: Allow anonymous access (local mode)
       requireAuth: false, // Default: Do not require authentication
       mcpEnabled: true, // Default: Enable built-in MCP server
@@ -238,8 +239,8 @@ export async function getDaemonUrl(): Promise<string> {
 
   // 2. Build URL from config (with env var overrides for port)
   const envPort = process.env.PORT ? Number.parseInt(process.env.PORT, 10) : undefined;
-  const port = envPort || config.daemon?.port || defaults.daemon?.port || 3030;
-  const host = config.daemon?.host || defaults.daemon?.host || 'localhost';
+  const port = envPort || config.daemon?.port || defaults.daemon?.port || DAEMON.DEFAULT_PORT;
+  const host = config.daemon?.host || defaults.daemon?.host || DAEMON.DEFAULT_HOST;
 
   // 3. Construct from host:port (always localhost for internal communication)
   return `http://${host}:${port}`;

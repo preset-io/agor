@@ -5,6 +5,21 @@
  */
 
 /**
+ * Daemon Constants
+ */
+export const DAEMON = {
+  /**
+   * Default daemon port
+   */
+  DEFAULT_PORT: 3030,
+
+  /**
+   * Default daemon host
+   */
+  DEFAULT_HOST: 'localhost',
+} as const;
+
+/**
  * Environment Management Constants
  */
 export const ENVIRONMENT = {
