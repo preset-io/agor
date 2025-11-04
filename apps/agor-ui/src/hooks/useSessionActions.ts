@@ -90,9 +90,9 @@ export function useSessionActions(
       setError(null);
 
       // Call custom fork endpoint via FeathersJS client
-      const forkedSession = await client.service(`sessions/${sessionId}/fork`).create({
+      const forkedSession = (await client.service(`sessions/${sessionId}/fork`).create({
         prompt,
-      });
+      })) as Session;
 
       // Send the prompt to the forked session to actually execute it
       await client.service(`sessions/${forkedSession.session_id}/prompt`).create({
@@ -121,9 +121,9 @@ export function useSessionActions(
       setError(null);
 
       // Call custom spawn endpoint via FeathersJS client
-      const spawnedSession = await client.service(`sessions/${sessionId}/spawn`).create({
+      const spawnedSession = (await client.service(`sessions/${sessionId}/spawn`).create({
         prompt,
-      });
+      })) as Session;
 
       // Send the prompt to the spawned session to actually execute it
       await client.service(`sessions/${spawnedSession.session_id}/prompt`).create({
