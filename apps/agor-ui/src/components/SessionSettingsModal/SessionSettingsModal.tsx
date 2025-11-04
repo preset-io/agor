@@ -114,9 +114,10 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
       // Update Codex network access (only for Codex sessions)
       if (session.agentic_tool === 'codex' && values.codexNetworkAccess !== undefined) {
         updates.permission_config = {
-          ...updates.permission_config,
           ...session.permission_config,
+          ...updates.permission_config,
           codex: {
+            ...session.permission_config?.codex,
             sandboxMode:
               session.permission_config?.codex?.sandboxMode || 'workspace-write',
             approvalPolicy: session.permission_config?.codex?.approvalPolicy || 'on-request',
