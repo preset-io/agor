@@ -12,7 +12,7 @@ import {
   SubnodeOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import { Badge, Button, Card, Collapse, Space, Tag, Tree, Typography, theme } from 'antd';
+import { Badge, Button, Card, Collapse, Space, Spin, Tag, Tree, Typography, theme } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { DeleteWorktreePopconfirm } from '../DeleteWorktreePopconfirm';
 import { EnvironmentPill } from '../EnvironmentPill';
@@ -120,6 +120,9 @@ const WorktreeCard = ({
 
   // Build genealogy tree structure (only for manual sessions)
   const sessionTreeData = useMemo(() => buildSessionTree(manualSessions), [manualSessions]);
+
+  // Check if any session is running
+  const hasRunningSession = useMemo(() => sessions.some(s => s.status === 'running'), [sessions]);
 
   // Auto-expand all nodes on mount and when new nodes with children are added
   useEffect(() => {
@@ -397,16 +400,27 @@ const WorktreeCard = ({
         <Space size={8} align="center">
           <div
             className="drag-handle"
-            style={{ display: 'flex', alignItems: 'center', cursor: 'grab' }}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              cursor: 'grab',
+              width: 32,
+              height: 32,
+              justifyContent: 'center',
+            }}
           >
-            <BranchesOutlined style={{ fontSize: 32, color: token.colorPrimary }} />
+            {hasRunningSession ? (
+              <Spin size="large" />
+            ) : (
+              <BranchesOutlined style={{ fontSize: 32, color: token.colorPrimary }} />
+            )}
           </div>
           <div style={{ display: 'flex', flexDirection: 'column' }}>
             <Typography.Text strong className="nodrag">
-              {repo.slug}
+              {worktree.name}
             </Typography.Text>
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {worktree.name}
+              {repo.slug}
             </Typography.Text>
           </div>
         </Space>
