@@ -19,6 +19,7 @@ export default defineConfig({
     'feathers/index': 'src/feathers/index.ts', // FeathersJS runtime re-exports
     'templates/handlebars-helpers': 'src/templates/handlebars-helpers.ts', // Handlebars helpers
     'environment/variable-resolver': 'src/environment/variable-resolver.ts', // Environment variable resolution
+    'utils/errors': 'src/utils/errors.ts', // Error handling and formatting utilities
     'utils/pricing': 'src/utils/pricing.ts', // Token pricing and cost calculation
     'utils/url': 'src/utils/url.ts', // Shared URL validation helpers
     'utils/permission-mode-mapper': 'src/utils/permission-mode-mapper.ts', // Permission mode mapping for cross-agent compatibility

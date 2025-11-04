@@ -53,6 +53,12 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
   private worktreeRepo: WorktreeRepository;
   private app: Application;
   private processes = new Map<WorktreeID, ManagedProcess>();
+  // Cache board-objects service reference (lazy-loaded to avoid circular deps)
+  private boardObjectsService?: {
+    findByWorktreeId: (worktreeId: WorktreeID) => Promise<unknown>;
+    create: (data: unknown) => Promise<unknown>;
+    remove: (id: string) => Promise<unknown>;
+  };
 
   constructor(db: Database, app: Application) {
     const worktreeRepo = new WorktreeRepository(db);
@@ -66,6 +72,21 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
 
     this.worktreeRepo = worktreeRepo;
     this.app = app;
+  }
+
+  /**
+   * Get board-objects service (lazy-loaded to prevent circular dependencies)
+   * FIX: Cache service reference instead of calling this.app.service() repeatedly
+   */
+  private getBoardObjectsService() {
+    if (!this.boardObjectsService) {
+      this.boardObjectsService = this.app.service('board-objects') as unknown as {
+        findByWorktreeId: (worktreeId: WorktreeID) => Promise<unknown>;
+        create: (data: unknown) => Promise<unknown>;
+        remove: (id: string) => Promise<unknown>;
+      };
+    }
+    return this.boardObjectsService;
   }
 
   /**
@@ -122,15 +143,13 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     }
 
     if (oldBoardId !== newBoardId) {
-      const boardObjectsService = this.app.service('board-objects') as unknown as {
-        findByWorktreeId: (worktreeId: WorktreeID) => Promise<BoardEntityObject | null>;
-        create: (data: Partial<BoardEntityObject>) => Promise<BoardEntityObject>;
-        remove: (id: string) => Promise<BoardEntityObject>;
-      };
+      const boardObjectsService = this.getBoardObjectsService();
 
       try {
         // First, check if a board_object already exists
-        const existingObject = await boardObjectsService.findByWorktreeId(id);
+        const existingObject = (await boardObjectsService.findByWorktreeId(id)) as
+          | { object_id: string }
+          | null;
 
         if (existingObject) {
           // Board object exists - delete it first

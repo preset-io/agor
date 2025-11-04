@@ -8,6 +8,10 @@ echo "🚀 Starting Agor development environment..."
 echo "📦 Installing dependencies..."
 yes | pnpm install --reporter=default
 
+# Initialize husky git hooks (required in Docker since --prefer-frozen-lockfile skips post-install hooks)
+echo "🎣 Initializing git hooks..."
+pnpm husky install
+
 # Build @agor/core (required for CLI commands and daemon)
 echo "🔨 Building @agor/core..."
 pnpm --filter @agor/core build

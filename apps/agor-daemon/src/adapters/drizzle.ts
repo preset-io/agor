@@ -261,7 +261,6 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
     }
 
     const result = await this.repository.create(data as Partial<T>);
-    console.log('🔔 [DrizzleService] Emitting created event, emit function exists:', !!this.emit);
     this.emit?.('created', result, params);
     return result;
   }
