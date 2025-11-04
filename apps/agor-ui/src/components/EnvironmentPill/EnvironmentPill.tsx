@@ -223,13 +223,7 @@ export function EnvironmentPill({
                 <Button
                   type="text"
                   size="small"
-                  icon={
-                    isProcessing && status === 'starting' ? (
-                      <LoadingOutlined />
-                    ) : (
-                      <PlayCircleOutlined />
-                    )
-                  }
+                  icon={<PlayCircleOutlined />}
                   onClick={event => {
                     event.stopPropagation();
                     if (!startDisabled) {
@@ -259,9 +253,7 @@ export function EnvironmentPill({
                 <Button
                   type="text"
                   size="small"
-                  icon={
-                    isProcessing && status === 'stopping' ? <LoadingOutlined /> : <StopOutlined />
-                  }
+                  icon={<StopOutlined />}
                   onClick={event => {
                     event.stopPropagation();
                     if (!stopDisabled) {

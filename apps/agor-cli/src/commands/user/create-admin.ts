@@ -9,6 +9,7 @@ import {
   createDefaultAdminUser,
   DEFAULT_ADMIN_USER,
   getUserByEmail,
+  runMigrations,
 } from '@agor/core/db';
 import { Command } from '@oclif/core';
 import chalk from 'chalk';
@@ -27,6 +28,11 @@ export default class UserCreateAdmin extends Command {
 
       // Connect to database
       const db = createDatabase({ url: `file:${dbPath}` });
+
+      // Ensure migrations are run (idempotent, safe to run multiple times)
+      // This is critical for Docker environments where init --skip-if-exists
+      // might skip migrations if the directory already exists
+      await runMigrations(db);
 
       // Check if admin user already exists
       const existingAdmin = await getUserByEmail(db, DEFAULT_ADMIN_USER.email);
