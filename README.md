@@ -2,7 +2,9 @@
 
 # Agor
 
-Orchestrate Claude Code, Codex, and Gemini sessions on a multiplayer canvas. Manage git worktrees, track AI conversations, and visualize your team's agentic work in real-time.
+**Think Figma, but for AI coding assistants.** Orchestrate Claude Code, Codex, and Gemini sessions on a multiplayer canvas. Manage git worktrees, track AI conversations, and visualize your team's agentic work in real-time.
+
+> **TL;DR:** Agor is a multiplayer spatial canvas where you coordinate multiple AI coding assistants on parallel tasks, with GitHub-linked worktrees, automated workflow zones, and isolated test environments—all running simultaneously.
 
 **📖 [Read the full documentation at agor.live →](https://agor.live/)**
 
@@ -93,16 +95,25 @@ agor open
 
 ### ⚙️ Zone Triggers — Workflows Made Spatial
 
-- Define **zones** on your board that trigger templated prompts when sessions are dropped.
+- Define **zones** on your board that trigger templated prompts when worktrees are dropped.
 - Build **kanban-style flows** or custom pipelines: analyze → develop → review → deploy.
-- Templated prompts -> "deeply analyze this github issue: {{ worktree.issue_url }}"
+- **GitHub-native workflow**: Link worktrees to issues/PRs, auto-inject context into prompts
+  - Template syntax: `"deeply analyze this github issue: {{ worktree.issue_url }}"`
+  - Each worktree = isolated branch for a specific issue/PR
+  - AI agents automatically read the linked issue/PR context
 
-### 🌳 Shared, Persisted Dev Environments
+### 🌳 Isolated Test Environments
 
-- **No more local environment juggling** — managed **git worktrees** with shared, persistent dev environments.
-- Sessions map to worktrees with running apps, auto-managed ports, and health monitoring.
-- **One-click control** — configure start/stop commands once, everyone on the team can use it.
-- Powered by templated commands such as `PORT={{ add 9000 worktree.unique_id  }} docker compose -p {{ worktree.name}} up -d` to avoid conflicts while parallelizing things
+**The Problem:** Working on 3 PRs simultaneously? Each needs different ports, dependencies, database states.
+
+**Agor's Solution:**
+- Each worktree gets its own **isolated environment** with auto-managed unique ports
+- Configure start/stop commands once with templates: `PORT={{ add 9000 worktree.unique_id }} docker compose up -d`
+- Everyone on your team can **one-click start/stop** any worktree's environment
+- Multiple AI agents work in parallel without stepping on each other
+- Health monitoring tracks if services are running properly
+
+**No more:** "Kill your local server, I need to test my branch"
 
 ### 🕹️ Real-Time Strategy for AI Teams
 
@@ -115,6 +126,21 @@ agor open
 - **Keep sessions cooking on the go** — mobile-optimized UI for sending prompts and monitoring progress.
 - Access conversations, send follow-ups, and check agent status from your phone.
 - Full conversation view with hamburger navigation to switch between sessions.
+
+---
+
+## Use Case: Parallel PR Workflow
+
+Your team has 3 bug fixes and 2 features in flight. With Agor:
+
+1. **Create 5 worktrees**, each linked to its GitHub issue/PR
+2. **Spawn AI sessions** for each worktree (Claude, Codex, Gemini)
+3. **Drop into zones** → "Analyze" zone triggers: `"Review this issue: {{ worktree.issue_url }}"`
+4. **Watch in real-time** as all 5 agents work simultaneously on the spatial canvas
+5. **Isolated environments** with unique ports prevent conflicts
+6. **Push directly** from worktrees to GitHub when ready
+
+**No context switching. No port collisions. No waiting.**
 
 ---
 
