@@ -102,7 +102,7 @@ agor open
   - Each worktree = isolated branch for a specific issue/PR
   - AI agents automatically read the linked issue/PR context
 
-### 🌳 Isolated Test Environments
+### 🌳 Isolated Development Environments
 
 **The Problem:** Working on 3 PRs simultaneously? Each needs different ports, dependencies, database states.
 
