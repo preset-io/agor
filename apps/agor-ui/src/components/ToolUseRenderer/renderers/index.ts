@@ -12,6 +12,17 @@
  * Example:
  *   import { MyToolRenderer } from './MyToolRenderer';
  *   TOOL_RENDERERS.set('MyTool', MyToolRenderer);
+ *
+ * For long text output, use the CollapsibleText component:
+ *   import { CollapsibleText } from '../../CollapsibleText';
+ *
+ *   // In your renderer:
+ *   <CollapsibleText maxLines={10} code preserveWhitespace>
+ *     {longOutputText}
+ *   </CollapsibleText>
+ *
+ * This ensures consistent "show more/less" behavior across all tools.
+ * See TEXT_TRUNCATION constants in src/constants/ui.ts for default limits.
  */
 
 import type React from 'react';

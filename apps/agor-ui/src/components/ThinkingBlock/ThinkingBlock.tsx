@@ -11,6 +11,8 @@
 import { BulbOutlined, DownOutlined, RightOutlined } from '@ant-design/icons';
 import { Collapse, Typography, theme } from 'antd';
 import type React from 'react';
+import { CollapsibleText } from '../CollapsibleText';
+import { TEXT_TRUNCATION } from '../../constants/ui';
 
 const { Text } = Typography;
 
@@ -88,9 +90,13 @@ export const ThinkingBlock: React.FC<ThinkingBlockProps> = ({
             >
               <div style={{ color: token.colorTextTertiary }}>
                 {content ? (
-                  <Typography.Paragraph style={{ fontSize: 13, marginBottom: 0 }}>
+                  <CollapsibleText
+                    maxLines={TEXT_TRUNCATION.DEFAULT_LINES}
+                    preserveWhitespace
+                    style={{ fontSize: 13, marginBottom: 0 }}
+                  >
                     {content}
-                  </Typography.Paragraph>
+                  </CollapsibleText>
                 ) : (
                   <Text>Thinking...</Text>
                 )}

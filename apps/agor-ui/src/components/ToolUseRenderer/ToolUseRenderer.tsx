@@ -14,11 +14,10 @@
  */
 
 import type { ContentBlock as CoreContentBlock } from '@agor/core/types';
-import { Typography, theme } from 'antd';
+import { theme } from 'antd';
 import type React from 'react';
+import { CollapsibleText } from '../CollapsibleText';
 import { getToolRenderer } from './renderers';
-
-const { Paragraph } = Typography;
 
 interface ToolUseBlock {
   type: 'tool_use';
@@ -108,12 +107,11 @@ export const ToolUseRenderer: React.FC<ToolUseRendererProps> = ({ toolUse, toolR
           border: `1px solid ${isError ? token.colorErrorBorder : token.colorSuccessBorder}`,
         }}
       >
-        <Paragraph
-          ellipsis={{ rows: 10, expandable: true, symbol: 'show more' }}
+        <CollapsibleText
+          code
+          preserveWhitespace
           style={{
-            fontFamily: 'monospace',
             fontSize: 11,
-            whiteSpace: 'pre-wrap',
             margin: 0,
             ...((!hasContent && {
               fontStyle: 'italic',
@@ -122,7 +120,7 @@ export const ToolUseRenderer: React.FC<ToolUseRendererProps> = ({ toolUse, toolR
           }}
         >
           {hasContent ? resultText : '(no output)'}
-        </Paragraph>
+        </CollapsibleText>
       </div>
 
       {/* Tool input parameters (collapsible below result) */}
