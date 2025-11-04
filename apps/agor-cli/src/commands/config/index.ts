@@ -97,7 +97,6 @@ export default class ConfigIndex extends Command {
       this.log(chalk.cyan('  Credentials:'));
       this.log('    credentials.ANTHROPIC_API_KEY');
       this.log('    credentials.OPENAI_API_KEY');
-      this.log('    credentials.CURSOR_API_KEY');
       this.log('    credentials.GEMINI_API_KEY');
       this.log('');
       this.log(chalk.cyan('  Daemon:'));

@@ -1055,9 +1055,6 @@ describe('SessionRepository edge cases', () => {
     const claude = await repo.create(
       createSessionData({ worktree_id: worktree.worktree_id, agentic_tool: 'claude-code' })
     );
-    const cursor = await repo.create(
-      createSessionData({ worktree_id: worktree.worktree_id, agentic_tool: 'cursor' })
-    );
     const codex = await repo.create(
       createSessionData({ worktree_id: worktree.worktree_id, agentic_tool: 'codex' })
     );
@@ -1066,7 +1063,6 @@ describe('SessionRepository edge cases', () => {
     );
 
     expect(claude.agentic_tool).toBe('claude-code');
-    expect(cursor.agentic_tool).toBe('cursor');
     expect(codex.agentic_tool).toBe('codex');
     expect(gemini.agentic_tool).toBe('gemini');
   });

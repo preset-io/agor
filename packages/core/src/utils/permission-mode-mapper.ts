@@ -28,7 +28,6 @@ export function mapPermissionMode(
 ): PermissionMode {
   switch (agenticTool) {
     case 'claude-code':
-    case 'cursor':
     case 'gemini':
       // Claude/Gemini support: default, acceptEdits, bypassPermissions, plan
       // Map Codex-specific modes to closest equivalents

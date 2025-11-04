@@ -14,7 +14,7 @@ The universal container for all agent interactions.
 Session {
   // Identity
   session_id: string
-  agent: 'claude-code' | 'cursor' | 'codex' | 'gemini'
+  agent: 'claude-code' | 'codex' | 'gemini'
   agent_version?: string
   status: 'idle' | 'running' | 'completed' | 'failed'
 
@@ -183,7 +183,7 @@ Coding agent metadata.
 ```typescript
 Agent {
   id: string
-  name: 'claude-code' | 'cursor' | 'codex' | 'gemini'
+  name: 'claude-code' | 'codex' | 'gemini'
   icon: string
   installed: boolean
   version?: string

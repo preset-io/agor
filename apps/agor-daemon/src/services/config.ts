@@ -29,7 +29,6 @@ function maskCredentials(config: AgorConfig): AgorConfig {
       ANTHROPIC_API_KEY: maskApiKey(config.credentials.ANTHROPIC_API_KEY),
       OPENAI_API_KEY: maskApiKey(config.credentials.OPENAI_API_KEY),
       GEMINI_API_KEY: maskApiKey(config.credentials.GEMINI_API_KEY),
-      CURSOR_API_KEY: maskApiKey(config.credentials.CURSOR_API_KEY),
     },
   };
 }

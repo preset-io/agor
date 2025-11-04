@@ -15,12 +15,24 @@
 
 import type { ContentBlock as CoreContentBlock, Message } from '@agor/core/types';
 import {
+  BranchesOutlined,
   BulbOutlined,
   CheckCircleOutlined,
+  CheckSquareOutlined,
   CloseCircleOutlined,
+  CodeOutlined,
   DownOutlined,
+  EditOutlined,
+  FileAddOutlined,
+  FileOutlined,
+  FileSearchOutlined,
   FileTextOutlined,
+  FolderOpenOutlined,
+  GlobalOutlined,
   RightOutlined,
+  SearchOutlined,
+  ThunderboltOutlined,
+  ToolOutlined,
 } from '@ant-design/icons';
 import type { ThoughtChainProps } from '@ant-design/x';
 import { ThoughtChain } from '@ant-design/x';
@@ -28,7 +40,6 @@ import { Space, Spin, Tag, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { useMemo, useState } from 'react';
 import { MarkdownRenderer } from '../MarkdownRenderer';
-import { ToolIcon } from '../ToolIcon';
 import { ToolUseRenderer } from '../ToolUseRenderer';
 
 interface ToolUseBlock {
@@ -63,6 +74,48 @@ interface ChainItem {
   type: 'thought' | 'tool';
   content: string | { toolUse: ToolUseBlock; toolResult?: ToolResultBlock };
   message: Message;
+}
+
+/**
+ * Get the appropriate Ant Design icon for a tool name
+ */
+function getToolIcon(toolName: string): React.ReactElement {
+  const iconProps = { style: { fontSize: 12 } };
+
+  switch (toolName) {
+    case 'Read':
+      return <FileOutlined {...iconProps} />;
+    case 'Write':
+      return <FileAddOutlined {...iconProps} />;
+    case 'Edit':
+      return <EditOutlined {...iconProps} />;
+    case 'Bash':
+      return <CodeOutlined {...iconProps} />;
+    case 'Grep':
+      return <SearchOutlined {...iconProps} />;
+    case 'Glob':
+      return <FolderOpenOutlined {...iconProps} />;
+    case 'Task':
+      return <BranchesOutlined {...iconProps} />;
+    case 'TodoWrite':
+      return <CheckSquareOutlined {...iconProps} />;
+    case 'WebFetch':
+      return <GlobalOutlined {...iconProps} />;
+    case 'WebSearch':
+      return <SearchOutlined {...iconProps} />;
+    case 'NotebookEdit':
+      return <FileTextOutlined {...iconProps} />;
+    case 'Skill':
+    case 'SlashCommand':
+      return <ThunderboltOutlined {...iconProps} />;
+    // MCP tools
+    case 'ListMcpResourcesTool':
+    case 'ReadMcpResourceTool':
+      return <FileSearchOutlined {...iconProps} />;
+    // Fallback for unknown tools
+    default:
+      return <ToolOutlined {...iconProps} />;
+  }
 }
 
 export const AgentChain: React.FC<AgentChainProps> = ({ messages }) => {
@@ -377,46 +430,33 @@ export const AgentChain: React.FC<AgentChainProps> = ({ messages }) => {
 
   // Summary section
   const summaryDescription = (
-    <Space direction="vertical" size={token.sizeUnit / 2} style={{ marginTop: token.sizeUnit / 2 }}>
+    <Space size={token.sizeUnit} wrap style={{ marginTop: token.sizeUnit / 2 }}>
       {/* Tool name tags */}
-      {stats.toolNames.size > 0 && (
-        <Space size={token.sizeUnit} wrap>
-          {Array.from(stats.toolNames.entries()).map(([name, count]) => (
-            <Tag
-              key={name}
-              icon={<ToolIcon tool={name} size={12} />}
-              style={{ fontSize: 11, margin: 0 }}
-            >
-              {name} × {count}
-            </Tag>
-          ))}
-        </Space>
-      )}
+      {stats.toolNames.size > 0 &&
+        Array.from(stats.toolNames.entries()).map(([name, count]) => (
+          <Tag key={name} icon={getToolIcon(name)} style={{ fontSize: 11, margin: 0 }}>
+            {name} × {count}
+          </Tag>
+        ))}
 
       {/* Result stats */}
-      {(stats.successCount > 0 || stats.errorCount > 0) && (
-        <Space size={token.sizeUnit}>
-          {stats.successCount > 0 && (
-            <Tag icon={<CheckCircleOutlined />} color="success" style={{ fontSize: 11, margin: 0 }}>
-              {stats.successCount} success
-            </Tag>
-          )}
-          {stats.errorCount > 0 && (
-            <Tag icon={<CloseCircleOutlined />} color="error" style={{ fontSize: 11, margin: 0 }}>
-              {stats.errorCount} error
-            </Tag>
-          )}
-        </Space>
+      {stats.successCount > 0 && (
+        <Tag icon={<CheckCircleOutlined />} color="success" style={{ fontSize: 11, margin: 0 }}>
+          {stats.successCount} success
+        </Tag>
+      )}
+      {stats.errorCount > 0 && (
+        <Tag icon={<CloseCircleOutlined />} color="error" style={{ fontSize: 11, margin: 0 }}>
+          {stats.errorCount} error
+        </Tag>
       )}
 
       {/* Files affected */}
       {stats.filesAffected.length > 0 && (
-        <div>
-          <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-            <FileTextOutlined /> {stats.filesAffected.length}{' '}
-            {stats.filesAffected.length === 1 ? 'file' : 'files'} affected
-          </Typography.Text>
-        </div>
+        <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+          <FileTextOutlined /> {stats.filesAffected.length}{' '}
+          {stats.filesAffected.length === 1 ? 'file' : 'files'} affected
+        </Typography.Text>
       )}
     </Space>
   );

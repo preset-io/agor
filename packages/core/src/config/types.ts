@@ -79,7 +79,6 @@ export enum CredentialKey {
   ANTHROPIC_API_KEY = 'ANTHROPIC_API_KEY',
   OPENAI_API_KEY = 'OPENAI_API_KEY',
   GEMINI_API_KEY = 'GEMINI_API_KEY',
-  CURSOR_API_KEY = 'CURSOR_API_KEY',
 }
 
 /**
@@ -88,9 +87,6 @@ export enum CredentialKey {
 export interface AgorCredentials {
   /** Anthropic API key for Claude Code */
   ANTHROPIC_API_KEY?: string;
-
-  /** Cursor API key (if needed) */
-  CURSOR_API_KEY?: string;
 
   /** OpenAI API key for Codex */
   OPENAI_API_KEY?: string;

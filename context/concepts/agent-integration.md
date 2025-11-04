@@ -9,7 +9,7 @@ Related: [[core]], [[models]], [[architecture]]
 
 ## Executive Summary
 
-This document defines Agor's strategy for integrating AI coding agents (Claude Code, Cursor, Codex, Gemini). We use the **Claude Agent SDK** as our reference implementation and define an abstraction layer for other agents.
+This document defines Agor's strategy for integrating AI coding agents (Claude Code, Codex, Gemini). We use the **Claude Agent SDK** as our reference implementation and define an abstraction layer for other agents.
 
 **Key Discovery:** The `@anthropic-ai/claude-agent-sdk` provides production-ready capabilities including:
 
@@ -38,7 +38,6 @@ This document defines Agor's strategy for integrating AI coding agents (Claude C
 ┌────────────────┴────────────────────────┐
 │     Agent SDK/API Layer                 │
 │  - @anthropic-ai/claude-agent-sdk       │
-│  - cursor SDK (if available)            │
 │  - openai SDK (for Codex)               │
 │  - google-generativeai (for Gemini)     │
 └─────────────────────────────────────────┘
@@ -346,11 +345,11 @@ async executePrompt(sessionId: SessionID, prompt: string) {
 
 ## Future: Multi-Agent Abstraction
 
-**When we add a second agent** (Cursor, Codex, Gemini), extract common interface:
+**When we add a second agent** (Codex, Gemini), extract common interface:
 
 ```typescript
 interface IAgentClient {
-  readonly agentType: 'claude-code' | 'cursor' | 'codex' | 'gemini';
+  readonly agentType: 'claude-code' | 'codex' | 'gemini';
 
   executePrompt(
     sessionId: SessionID,
@@ -374,18 +373,6 @@ class ClaudeAgentClient implements IAgentClient {
     return null; // No-op, SDK does this
   }
 }
-
-class CursorAgentClient implements IAgentClient {
-  agentType = 'cursor' as const;
-
-  async executePrompt(sessionId, prompt, options) {
-    // Use Cursor SDK/API
-  }
-
-  async loadProjectInstructions(cwd) {
-    // Manually load CURSOR.md or equivalent
-  }
-}
 ```
 
 **But not yet!** YAGNI - build this when we actually add agent #2.
@@ -394,15 +381,15 @@ class CursorAgentClient implements IAgentClient {
 
 ## Capabilities Matrix
 
-| Feature               | Claude (Agent SDK)  | Cursor | Codex                   | Gemini                  |
-| --------------------- | ------------------- | ------ | ----------------------- | ----------------------- |
-| Session management    | ✅ Built-in         | ❓ TBD | 🟡 Emulated             | 🟡 Emulated             |
-| Project instructions  | ✅ CLAUDE.md        | ❓ TBD | ❌ Manual               | ❌ Manual               |
-| Preset system prompts | ✅ Yes              | ❌ No  | ❌ No                   | ❌ No                   |
-| Tool execution        | ✅ Built-in         | ❓ TBD | 🟡 Via function calling | 🟡 Via function calling |
-| Streaming             | ✅ Async generators | ❓ TBD | ✅ SSE                  | ✅ SSE                  |
-| Git awareness         | ✅ Built-in         | ❓ TBD | ❌ No                   | ❌ No                   |
-| Working directory     | ✅ cwd option       | ❓ TBD | ❌ No                   | ❌ No                   |
+| Feature               | Claude (Agent SDK)  | Codex                   | Gemini                  |
+| --------------------- | ------------------- | ----------------------- | ----------------------- |
+| Session management    | ✅ Built-in         | 🟡 Emulated             | 🟡 Emulated             |
+| Project instructions  | ✅ CLAUDE.md        | ❌ Manual               | ❌ Manual               |
+| Preset system prompts | ✅ Yes              | ❌ No                   | ❌ No                   |
+| Tool execution        | ✅ Built-in         | 🟡 Via function calling | 🟡 Via function calling |
+| Streaming             | ✅ Async generators | ✅ SSE                  | ✅ SSE                  |
+| Git awareness         | ✅ Built-in         | ❌ No                   | ❌ No                   |
+| Working directory     | ✅ cwd option       | ❌ No                   | ❌ No                   |
 
 Legend:
 
@@ -523,7 +510,7 @@ Long agent responses (30s-60s) appear suddenly after generation completes. Users
 
 Optional streaming via callback interface:
 
-1. **Streaming is OPTIONAL** - Not all agents support it (e.g., Cursor may lack streaming API)
+1. **Streaming is OPTIONAL** - Not all agents support it
 2. **Final message is MANDATORY** - All agents MUST call `messagesService.create()` with complete message
 3. **Streaming via callbacks** - Agents that support streaming use `StreamingCallbacks` interface
 
@@ -571,15 +558,15 @@ interface ITool {
 
 ### Updated Capabilities Matrix
 
-| Feature               | Claude (Agent SDK)      | Cursor | Codex                   | Gemini                  |
-| --------------------- | ----------------------- | ------ | ----------------------- | ----------------------- |
-| Session management    | ✅ Built-in             | ❓ TBD | 🟡 Emulated             | 🟡 Emulated             |
-| Project instructions  | ✅ CLAUDE.md            | ❓ TBD | ❌ Manual               | ❌ Manual               |
-| Preset system prompts | ✅ Yes                  | ❌ No  | ❌ No                   | ❌ No                   |
-| Tool execution        | ✅ Built-in             | ❓ TBD | 🟡 Via function calling | 🟡 Via function calling |
-| **Streaming**         | **✅ Async generators** | ❓ TBD | 🟡 SSE                  | 🟡 SSE                  |
-| Git awareness         | ✅ Built-in             | ❓ TBD | ❌ No                   | ❌ No                   |
-| Working directory     | ✅ cwd option           | ❓ TBD | ❌ No                   | ❌ No                   |
+| Feature               | Claude (Agent SDK)      | Codex                   | Gemini                  |
+| --------------------- | ----------------------- | ----------------------- | ----------------------- |
+| Session management    | ✅ Built-in             | 🟡 Emulated             | 🟡 Emulated             |
+| Project instructions  | ✅ CLAUDE.md            | ❌ Manual               | ❌ Manual               |
+| Preset system prompts | ✅ Yes                  | ❌ No                   | ❌ No                   |
+| Tool execution        | ✅ Built-in             | 🟡 Via function calling | 🟡 Via function calling |
+| **Streaming**         | **✅ Async generators** | 🟡 SSE                  | 🟡 SSE                  |
+| Git awareness         | ✅ Built-in             | ❌ No                   | ❌ No                   |
+| Working directory     | ✅ cwd option           | ❌ No                   | ❌ No                   |
 
 ### Example: Claude with Streaming
 
@@ -638,35 +625,6 @@ export class ClaudeTool implements ITool {
 }
 ```
 
-### Example: Cursor without Streaming
-
-```typescript
-export class CursorTool implements ITool {
-  getCapabilities(): ToolCapabilities {
-    return { /* ... */, supportsStreaming: false };
-  }
-
-  async executeTask(
-    sessionId: SessionID,
-    prompt: string,
-    taskId?: TaskID,
-    streamingCallbacks?: StreamingCallbacks // Ignored
-  ): Promise<TaskResult> {
-    // Execute via Cursor CLI (blocks until complete)
-    const result = await execCursorCLI(['run', prompt]);
-
-    // MANDATORY: Write complete message to DB
-    await this.messagesService.create({
-      message_id: uuidv7() as MessageID,
-      content: result.stdout,
-      // ...
-    });
-
-    return { /* ... */ };
-  }
-}
-```
-
 ### Daemon Integration
 
 The daemon creates `StreamingCallbacks` that emit FeathersJS events:
@@ -703,7 +661,6 @@ The UI is **agent-agnostic**:
 **User experience:**
 
 - **Claude Code:** Streams chunks → typewriter effect → DB message supersedes
-- **Cursor:** No streaming → loading spinner → DB message appears
 - **Codex/Gemini:** Depends on SDK capabilities
 
 ---

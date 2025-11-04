@@ -100,30 +100,6 @@ describe('calculateTokenCost', () => {
     });
   });
 
-  describe('cursor', () => {
-    const agent: AgenticToolName = 'cursor';
-
-    it('should calculate cost with same pricing as claude-code', () => {
-      const usage: TokenUsage = {
-        input_tokens: 1_000_000,
-        output_tokens: 1_000_000,
-      };
-      const cost = calculateTokenCost(usage, agent);
-      expect(cost).toBe(18.0); // $3 + $15 = $18
-    });
-
-    it('should support cache tokens like claude-code', () => {
-      const usage: TokenUsage = {
-        input_tokens: 1_000_000,
-        cache_read_tokens: 1_000_000,
-        cache_creation_tokens: 1_000_000,
-      };
-      const cost = calculateTokenCost(usage, agent);
-      // $3 + $0.30 + $3.75 = $7.05
-      expect(cost).toBe(7.05);
-    });
-  });
-
   describe('codex', () => {
     const agent: AgenticToolName = 'codex';
 

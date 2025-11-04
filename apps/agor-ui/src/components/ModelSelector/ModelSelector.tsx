@@ -17,8 +17,8 @@ export interface ModelConfig {
 export interface ModelSelectorProps {
   value?: ModelConfig;
   onChange?: (config: ModelConfig) => void;
-  agent?: 'claude-code' | 'cursor' | 'codex' | 'gemini'; // Kept as 'agent' for backwards compat in prop name
-  agentic_tool?: 'claude-code' | 'cursor' | 'codex' | 'gemini';
+  agent?: 'claude-code' | 'codex' | 'gemini'; // Kept as 'agent' for backwards compat in prop name
+  agentic_tool?: 'claude-code' | 'codex' | 'gemini';
 }
 
 // Codex model options

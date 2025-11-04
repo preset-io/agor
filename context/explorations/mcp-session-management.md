@@ -199,7 +199,7 @@ For full details on permission system architecture:
   mode: 'continue' | 'fork' | 'subsession';  // Required: how to route the work
 
   // Optional overrides
-  agenticTool?: 'claude-code' | 'cursor' | 'codex' | 'gemini';  // Override parent's agent
+  agenticTool?: 'claude-code' | 'codex' | 'gemini';  // Override parent's agent
   permissionMode?: PermissionMode;  // Override parent's permission mode (for fork/subsession)
   title?: string;                 // Session title (for fork/subsession only)
   taskId?: string;                // Fork/spawn point task ID
@@ -310,7 +310,7 @@ agor_sessions_prompt({
 ```typescript
 {
   worktreeId: string;             // Required: which worktree to work in
-  agenticTool: 'claude-code' | 'cursor' | 'codex' | 'gemini';  // Required: which agent
+  agenticTool: 'claude-code' | 'codex' | 'gemini';  // Required: which agent
 
   // Optional metadata
   title?: string;

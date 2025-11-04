@@ -21,8 +21,7 @@ describe('mapPermissionMode', () => {
       expect(mapPermissionMode('allow-all', 'claude-code')).toBe('bypassPermissions');
     });
 
-    it('works the same for Cursor and Gemini', () => {
-      expect(mapPermissionMode('ask', 'cursor')).toBe('default');
+    it('works the same for Gemini', () => {
       expect(mapPermissionMode('auto', 'gemini')).toBe('acceptEdits');
     });
   });

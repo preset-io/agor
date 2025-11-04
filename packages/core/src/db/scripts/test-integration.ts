@@ -291,7 +291,7 @@ async function testGenealogy(db: ReturnType<typeof createDatabase>) {
 
   // Create spawned child
   const spawn = await repo.create({
-    agentic_tool: 'cursor',
+    agentic_tool: 'codex',
     status: SessionStatus.IDLE,
     created_by: 'test-user' as UserID,
     worktree_id: 'test-worktree-id' as WorktreeID,

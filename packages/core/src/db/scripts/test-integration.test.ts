@@ -275,9 +275,8 @@ describe('Session Repository Integration', () => {
 
     const repo = new SessionRepository(db);
 
-    const tools: Array<'claude-code' | 'cursor' | 'codex' | 'gemini'> = [
+    const tools: Array<'claude-code' | 'codex' | 'gemini'> = [
       'claude-code',
-      'cursor',
       'codex',
       'gemini',
     ];
@@ -649,7 +648,7 @@ describe('Session Genealogy', () => {
     });
 
     const spawn = await repo.create({
-      agentic_tool: 'cursor',
+      agentic_tool: 'codex',
       status: SessionStatus.IDLE,
       created_by: 'test-user' as UserID,
       worktree_id: worktree.worktree_id,

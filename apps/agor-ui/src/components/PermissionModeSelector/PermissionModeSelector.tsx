@@ -11,7 +11,7 @@ import { Radio, Select, Space, Typography } from 'antd';
 export interface PermissionModeSelectorProps {
   value?: PermissionMode;
   onChange?: (value: PermissionMode) => void;
-  agentic_tool?: 'claude-code' | 'cursor' | 'codex' | 'gemini';
+  agentic_tool?: 'claude-code' | 'codex' | 'gemini';
   /** If true, renders as a compact Select dropdown instead of Radio buttons */
   compact?: boolean;
   /** Size for compact mode */

@@ -1,7 +1,7 @@
 /**
  * Tool Types - Base types for agentic coding tools
  *
- * Tools: External agentic coding products (Claude Code, Cursor, Codex, Gemini)
+ * Tools: External agentic coding products (Claude Code, Codex, Gemini)
  * Not to be confused with AI agents (internal personas)
  */
 
@@ -10,7 +10,7 @@ import type { Message, MessageID, MessageRole, SessionID, TaskID } from '../../t
 /**
  * Supported tool types
  */
-export type ToolType = 'claude-code' | 'cursor' | 'codex' | 'gemini';
+export type ToolType = 'claude-code' | 'codex' | 'gemini';
 
 /**
  * Streaming callback interface for agents that support real-time streaming

@@ -15,10 +15,6 @@ describe('getDefaultPermissionMode', () => {
     expect(getDefaultPermissionMode('claude-code')).toBe('acceptEdits');
   });
 
-  it('returns "acceptEdits" for cursor', () => {
-    expect(getDefaultPermissionMode('cursor')).toBe('acceptEdits');
-  });
-
   it('returns "acceptEdits" for gemini', () => {
     expect(getDefaultPermissionMode('gemini')).toBe('acceptEdits');
   });
@@ -36,9 +32,9 @@ describe('getDefaultPermissionMode', () => {
       expect(mode).toBe('auto');
     });
 
-    it('claude-code, cursor, and gemini use accept edits mode', () => {
+    it('claude-code and gemini use accept edits mode', () => {
       // Claude-based tools: auto-accept file edits, prompt for other tools
-      const tools: AgenticToolName[] = ['claude-code', 'cursor', 'gemini'];
+      const tools: AgenticToolName[] = ['claude-code', 'gemini'];
 
       for (const tool of tools) {
         expect(getDefaultPermissionMode(tool)).toBe('acceptEdits');
@@ -59,7 +55,7 @@ describe('getDefaultPermissionMode', () => {
 
   describe('all agentic tools coverage', () => {
     it('handles all valid AgenticToolName values', () => {
-      const allTools: AgenticToolName[] = ['claude-code', 'cursor', 'codex', 'gemini'];
+      const allTools: AgenticToolName[] = ['claude-code', 'codex', 'gemini'];
       const results: Record<string, string> = {};
 
       for (const tool of allTools) {
@@ -68,13 +64,12 @@ describe('getDefaultPermissionMode', () => {
 
       // Verify expected mappings
       expect(results['claude-code']).toBe('acceptEdits');
-      expect(results.cursor).toBe('acceptEdits');
       expect(results.codex).toBe('auto');
       expect(results.gemini).toBe('acceptEdits');
     });
 
     it('returns valid PermissionMode values', () => {
-      const allTools: AgenticToolName[] = ['claude-code', 'cursor', 'codex', 'gemini'];
+      const allTools: AgenticToolName[] = ['claude-code', 'codex', 'gemini'];
       const validModes = [
         'default',
         'acceptEdits',

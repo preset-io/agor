@@ -167,7 +167,7 @@ export function setupMCPRoutes(app: Application): void {
                   },
                   agenticTool: {
                     type: 'string',
-                    enum: ['claude-code', 'cursor', 'codex', 'gemini'],
+                    enum: ['claude-code', 'codex', 'gemini'],
                     description:
                       'Which agent to use for the subsession (defaults to same as parent)',
                   },
@@ -202,7 +202,7 @@ export function setupMCPRoutes(app: Application): void {
                   },
                   agenticTool: {
                     type: 'string',
-                    enum: ['claude-code', 'cursor', 'codex', 'gemini'],
+                    enum: ['claude-code', 'codex', 'gemini'],
                     description:
                       'Override parent agent (for fork/subsession only, defaults to parent agent)',
                   },
@@ -246,7 +246,7 @@ export function setupMCPRoutes(app: Application): void {
                   },
                   agenticTool: {
                     type: 'string',
-                    enum: ['claude-code', 'cursor', 'codex', 'gemini'],
+                    enum: ['claude-code', 'codex', 'gemini'],
                     description: 'Which agent to use for this session (required)',
                   },
                   title: {

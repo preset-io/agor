@@ -7,14 +7,13 @@ import type { AgenticToolID } from './id';
  *
  * These are the external agentic CLI/IDE tools that connect to Agor:
  * - claude-code: Anthropic's Claude Code CLI
- * - cursor: Cursor IDE
  * - codex: OpenAI's Codex CLI
  * - gemini: Google's Gemini Code Assist
  *
  * Not to be confused with "execution tools" (Bash, Write, Read, etc.)
  * which are the primitives that agentic tools use to perform work.
  */
-export type AgenticToolName = 'claude-code' | 'cursor' | 'codex' | 'gemini';
+export type AgenticToolName = 'claude-code' | 'codex' | 'gemini';
 
 /**
  * Agentic tool metadata for UI display

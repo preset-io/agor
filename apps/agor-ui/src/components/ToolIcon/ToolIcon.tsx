@@ -7,13 +7,12 @@
 import { theme } from 'antd';
 import ccLogo from '../../assets/tools/cc.png';
 import codexLogo from '../../assets/tools/codex.png';
-import cursorLogo from '../../assets/tools/cursor.png';
 import geminiLogo from '../../assets/tools/gemini.png';
 
 const { useToken } = theme;
 
 export interface ToolIconProps {
-  /** Tool/agent name (e.g., "claude-code", "codex", "cursor", "gemini") */
+  /** Tool/agent name (e.g., "claude-code", "codex", "gemini") */
   tool: string;
   /** Size in pixels (default: 32) */
   size?: number;
@@ -24,7 +23,6 @@ export interface ToolIconProps {
 const toolLogos: Record<string, string> = {
   'claude-code': ccLogo,
   codex: codexLogo,
-  cursor: cursorLogo,
   gemini: geminiLogo,
 };
 
@@ -35,7 +33,6 @@ export const ToolIcon: React.FC<ToolIconProps> = ({ tool, size = 32, className =
   // Fallback to emoji if no logo available
   const fallbackEmoji: Record<string, string> = {
     'claude-code': '🤖',
-    cursor: '✏️',
     codex: '💻',
     gemini: '💎',
   };

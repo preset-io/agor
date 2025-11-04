@@ -268,7 +268,7 @@ CREATE INDEX worktrees_board_schedule_idx ON worktrees(board_id, schedule_enable
   schedule?: {
     timezone: string;                    // IANA timezone (default: 'UTC')
     prompt_template: string;             // Handlebars template
-    agentic_tool: AgenticTool;           // 'claude-code' | 'cursor' | ...
+    agentic_tool: AgenticTool;           // 'claude-code' | 'codex' | 'gemini'
     retention: number;                   // How many sessions to keep
     permission_mode?: PermissionMode;    // 'auto' | 'ask' | 'default'
     model_config?: {
@@ -868,7 +868,7 @@ cronstrue.toString('0 */4 * * *'); // "Every 4 hours"
 │                                                             │
 │ ─── Agent Configuration ───                                │
 │                                                             │
-│ Agent: [claude-code ▼] [cursor] [codex] [gemini]          │
+│ Agent: [claude-code ▼] [codex] [gemini]                    │
 │                                                             │
 │ Permission Mode: [default ▼]                               │
 │ Model: [default ▼] (or custom: opus, sonnet, etc.)        │

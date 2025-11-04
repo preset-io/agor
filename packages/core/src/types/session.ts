@@ -76,7 +76,7 @@ export interface Session {
   /** Unique session identifier (UUIDv7) */
   session_id: SessionID;
 
-  /** Which agentic coding tool is running this session (Claude Code, Cursor, Codex, Gemini) */
+  /** Which agentic coding tool is running this session (Claude Code, Codex, Gemini) */
   agentic_tool: AgenticToolName;
   /** Agentic tool/CLI version */
   agentic_tool_version?: string;

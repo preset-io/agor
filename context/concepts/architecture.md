@@ -149,7 +149,7 @@ Store in `data` column:
 {
   session_id: text('session_id').primaryKey(),
   status: text('status', { enum: ['idle', 'running', 'completed', 'failed'] }),
-  agentic_tool: text('agentic_tool', { enum: ['claude-code', 'cursor', 'codex', 'gemini'] }),
+  agentic_tool: text('agentic_tool', { enum: ['claude-code', 'codex', 'gemini'] }),
   board_id: text('board_id'),
   parent_session_id: text('parent_session_id'),
   forked_from_session_id: text('forked_from_session_id'),
@@ -384,7 +384,7 @@ export function useSessions(boardId?: string) {
 
 ### Overview
 
-Agor executes prompts against AI agents (Claude Code, Cursor, etc.) through a unified execution layer. For Claude, we use the **Claude Agent SDK** which provides Claude Code's full capabilities including automatic CLAUDE.md loading, built-in tools, and proper system prompts.
+Agor executes prompts against AI agents (Claude Code, Codex, Gemini) through a unified execution layer. For Claude, we use the **Claude Agent SDK** which provides Claude Code's full capabilities including automatic CLAUDE.md loading, built-in tools, and proper system prompts.
 
 ### Architecture: ClaudePromptService
 
