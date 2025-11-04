@@ -138,12 +138,14 @@ export interface Session {
     allowedTools?: string[];
     /** Permission mode for agent tool execution (Claude/Gemini unified mode) */
     mode?: PermissionMode;
-    /** Codex-specific dual permission config (sandboxMode + approvalPolicy) */
+    /** Codex-specific dual permission config (sandboxMode + approvalPolicy + networkAccess) */
     codex?: {
       /** Sandbox mode controls WHERE Codex can write (filesystem boundaries) */
       sandboxMode: CodexSandboxMode;
       /** Approval policy controls WHETHER Codex asks before executing */
       approvalPolicy: CodexApprovalPolicy;
+      /** Network access controls whether outbound HTTP/HTTPS requests are allowed (workspace-write only) */
+      networkAccess?: boolean;
     };
   };
 

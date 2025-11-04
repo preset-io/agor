@@ -78,3 +78,22 @@ export type CodexSandboxMode = 'read-only' | 'workspace-write' | 'danger-full-ac
  * - never: Auto-approve everything
  */
 export type CodexApprovalPolicy = 'untrusted' | 'on-request' | 'on-failure' | 'never';
+
+/**
+ * Codex network access mode - controls network connectivity
+ *
+ * Network access is only available when sandboxMode = 'workspace-write'.
+ * Configured via [sandbox_workspace_write].network_access in config.toml.
+ *
+ * - disabled: No network access (default, most secure)
+ * - enabled: Full outbound HTTP/HTTPS access (security risk - prompt injection, data exfiltration)
+ *
+ * Note: The 'web_search' tool is separate and controlled by the --search CLI flag.
+ * This setting enables ALL network requests, not just web search.
+ *
+ * Security Warning: Enabling network access exposes your environment to:
+ * - Prompt injection attacks
+ * - Data exfiltration of code/secrets
+ * - Inclusion of malware or vulnerable dependencies
+ */
+export type CodexNetworkAccess = boolean;

@@ -42,12 +42,14 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
     mcpServerIds: string[];
     modelConfig: Session['model_config'];
     permissionMode: string;
+    codexNetworkAccess: boolean;
     custom_context: string;
   }>({
     title: '',
     mcpServerIds: [],
     modelConfig: undefined,
     permissionMode: 'acceptEdits',
+    codexNetworkAccess: false,
     custom_context: '',
   });
 
@@ -62,6 +64,7 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
         mcpServerIds: sessionMcpServerIds,
         modelConfig: session.model_config,
         permissionMode: session.permission_config?.mode || defaultPermissionMode,
+        codexNetworkAccess: session.permission_config?.codex?.networkAccess ?? false,
         custom_context: session.custom_context
           ? JSON.stringify(session.custom_context, null, 2)
           : '',
@@ -76,6 +79,7 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
     session.agentic_tool,
     session.model_config,
     session.permission_config?.mode,
+    session.permission_config?.codex?.networkAccess,
     session.custom_context,
     sessionMcpServerIds,
     form,
@@ -104,6 +108,20 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
         updates.permission_config = {
           ...session.permission_config,
           mode: values.permissionMode,
+        };
+      }
+
+      // Update Codex network access (only for Codex sessions)
+      if (session.agentic_tool === 'codex' && values.codexNetworkAccess !== undefined) {
+        updates.permission_config = {
+          ...updates.permission_config,
+          ...session.permission_config,
+          codex: {
+            sandboxMode:
+              session.permission_config?.codex?.sandboxMode || 'workspace-write',
+            approvalPolicy: session.permission_config?.codex?.approvalPolicy || 'on-request',
+            networkAccess: values.codexNetworkAccess,
+          },
         };
       }
 

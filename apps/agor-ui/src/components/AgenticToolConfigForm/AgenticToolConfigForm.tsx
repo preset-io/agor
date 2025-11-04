@@ -11,6 +11,7 @@
 
 import type { AgenticToolName, MCPServer } from '@agor/core/types';
 import { Form } from 'antd';
+import { CodexNetworkAccessToggle } from '../CodexNetworkAccessToggle';
 import { MCPServerSelect } from '../MCPServerSelect';
 import { ModelSelector } from '../ModelSelector';
 import { PermissionModeSelector } from '../PermissionModeSelector';
@@ -72,6 +73,21 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
       >
         <PermissionModeSelector agentic_tool={agenticTool} />
       </Form.Item>
+
+      {agenticTool === 'codex' && (
+        <Form.Item
+          name="codexNetworkAccess"
+          label="Network Access"
+          help={
+            showHelpText
+              ? 'Allow outbound HTTP/HTTPS requests (workspace-write sandbox only)'
+              : undefined
+          }
+          valuePropName="checked"
+        >
+          <CodexNetworkAccessToggle showWarning={showHelpText} />
+        </Form.Item>
+      )}
 
       <Form.Item
         name="mcpServerIds"
