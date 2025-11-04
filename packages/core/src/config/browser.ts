@@ -5,6 +5,7 @@
  * Use this module in browser environments instead of '@agor/core/config'.
  */
 
+export * from './constants';
 export * from './repo-list';
 export * from './repo-reference';
 export * from './types';

@@ -4,7 +4,7 @@
  * Reads daemon URL from environment variables or uses defaults
  */
 
-import { DAEMON } from '@agor/core/config';
+import { DAEMON } from '@agor/core/config/browser';
 
 /**
  * Get daemon URL for UI connections
