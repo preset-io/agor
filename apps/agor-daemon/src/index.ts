@@ -504,9 +504,7 @@ async function main() {
         }, 30000);
 
         // Ensure interval is cleared on shutdown
-        if (typeof process !== 'undefined' && process.on) {
-          process.once('beforeExit', () => clearInterval(metricsInterval));
-        }
+        process.once('beforeExit', () => clearInterval(metricsInterval));
       }
     )
   );
@@ -1181,9 +1179,7 @@ async function main() {
   );
 
   // Ensure cleanup interval is cleared on shutdown
-  if (typeof process !== 'undefined' && process.on) {
-    process.once('beforeExit', () => clearInterval(rateLimitCleanupInterval));
-  }
+  process.once('beforeExit', () => clearInterval(rateLimitCleanupInterval));
 
   app.use('/authentication', authentication);
 
