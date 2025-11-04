@@ -85,6 +85,11 @@
       "import": "./dist/environment/variable-resolver.js",
       "require": "./dist/environment/variable-resolver.cjs"
     },
+    "./utils/errors": {
+      "types": "./dist/utils/errors.d.ts",
+      "import": "./dist/utils/errors.js",
+      "require": "./dist/utils/errors.cjs"
+    },
     "./utils/pricing": {
       "types": "./dist/utils/pricing.d.ts",
       "import": "./dist/utils/pricing.js",
