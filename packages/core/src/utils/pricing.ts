@@ -41,13 +41,6 @@ const PRICING: Record<AgenticToolName, ModelPricing> = {
     cache_read: 0.3, // $0.30 per 1M cache read tokens
     cache_creation: 3.75, // $3.75 per 1M cache creation tokens
   },
-  cursor: {
-    // Cursor uses Claude Sonnet 4.5 (same pricing as claude-code)
-    input: 3.0, // $3 per 1M input tokens
-    output: 15.0, // $15 per 1M output tokens
-    cache_read: 0.3, // $0.30 per 1M cache read tokens
-    cache_creation: 3.75, // $3.75 per 1M cache creation tokens
-  },
   codex: {
     // OpenAI GPT-4 Turbo pricing (estimate for Codex)
     input: 10.0, // $10 per 1M input tokens
