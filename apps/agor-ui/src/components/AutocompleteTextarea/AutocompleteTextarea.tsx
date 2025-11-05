@@ -466,6 +466,7 @@ export const AutocompleteTextarea = React.forwardRef<
       >
         <TextArea
           ref={node => {
+            let textarea: HTMLTextAreaElement | null = null;
             if (
               node &&
               typeof node === 'object' &&
@@ -475,12 +476,18 @@ export const AutocompleteTextarea = React.forwardRef<
               'textArea' in node.resizableTextArea &&
               node.resizableTextArea.textArea instanceof HTMLTextAreaElement
             ) {
-              const textarea = node.resizableTextArea.textArea;
+              textarea = node.resizableTextArea.textArea;
+            }
+            if (textarea) {
               textareaRef.current = textarea;
               if (typeof ref === 'function') {
                 ref(textarea);
               } else if (ref) {
-                ref.current = textarea;
+                try {
+                  ref.current = textarea;
+                } catch {
+                  // Read-only ref, ignore
+                }
               }
             }
           }}
