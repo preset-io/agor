@@ -164,6 +164,7 @@ async function main() {
 
   // Configure Git to fail fast instead of prompting for credentials
   // This prevents git operations from hanging indefinitely in automated environments
+  // while still allowing credential helpers (gh auth, SSH keys, credential stores) to work
   process.env.GIT_TERMINAL_PROMPT = '0'; // Disable terminal credential prompts
   process.env.GIT_ASKPASS = 'echo'; // Return empty for any password prompt
 

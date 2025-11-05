@@ -39,6 +39,12 @@ function getGitBinary(): string | undefined {
  * Automatically detects git binary path for consistent behavior
  * across different environments (native, Docker, etc.)
  *
+ * **Non-Interactive Mode:**
+ * GIT_TERMINAL_PROMPT=0 and GIT_ASKPASS=echo are set globally at daemon startup
+ * to prevent interactive prompts while allowing credential helpers to work.
+ * This enables gh auth, SSH keys, and credential stores while still failing fast
+ * in automated environments.
+ *
  * **SSH Host Key Checking:**
  * Always disabled by default to prevent interactive prompts.
  * Agor is an automation tool and should not require user interaction for SSH operations.
@@ -50,17 +56,14 @@ function createGit(baseDir?: string) {
 
   // NOTE: Git environment variables (GIT_TERMINAL_PROMPT, GIT_ASKPASS) are set
   // globally at daemon startup in apps/agor-daemon/src/index.ts
-  // This prevents interactive credential prompts and makes git fail fast
+  // These environment variables prevent interactive credential prompts while still
+  // allowing credential helpers (gh auth, SSH keys, credential stores) to work.
+  // Git will fail fast if credentials are needed but not available.
 
   // Always disable strict host key checking for SSH operations
   // This prevents interactive prompts for unknown hosts in automated environments
-  //
-  // Also disable credential prompts to fail fast if auth is required but not available
-  // This prevents git operations from hanging indefinitely waiting for user input
   const config = [
     'core.sshCommand=ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null',
-    'core.askpass=', // Disable askpass helper (prevents GUI password prompts)
-    'credential.helper=', // Disable credential helper (prevents interactive prompts)
   ];
 
   return simpleGit({
