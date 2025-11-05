@@ -156,12 +156,12 @@ export const AutocompleteTextarea = React.forwardRef<
         const lowercaseQuery = searchQuery.toLowerCase();
         return users
           .filter(
-            (u) =>
+            u =>
               u.name.toLowerCase().includes(lowercaseQuery) ||
               u.email.toLowerCase().includes(lowercaseQuery)
           )
           .slice(0, MAX_USER_RESULTS)
-          .map((u) => ({
+          .map(u => ({
             name: u.name,
             email: u.email,
             type: 'user' as const,
@@ -279,14 +279,30 @@ export const AutocompleteTextarea = React.forwardRef<
         switch (e.key) {
           case 'ArrowDown':
             e.preventDefault();
-            setHighlightedIndex((prev) =>
-              prev < autocompleteOptions.length - 1 ? prev + 1 : prev
-            );
+            setHighlightedIndex(prev => (prev < autocompleteOptions.length - 1 ? prev + 1 : prev));
             break;
 
           case 'ArrowUp':
             e.preventDefault();
-            setHighlightedIndex((prev) => (prev > 0 ? prev - 1 : -1));
+            setHighlightedIndex(prev => (prev > 0 ? prev - 1 : -1));
+            break;
+
+          case 'Tab':
+            // Tab to select highlighted item (like Enter)
+            e.preventDefault();
+            if (highlightedIndex >= 0) {
+              const item = autocompleteOptions[highlightedIndex];
+              if (!('heading' in item)) {
+                handleSelect(item as FileResult | UserResult);
+              }
+            } else if (autocompleteOptions.length > 0) {
+              // If nothing highlighted, highlight first non-heading item
+              const firstItem = autocompleteOptions.find(item => !('heading' in item));
+              if (firstItem) {
+                const idx = autocompleteOptions.indexOf(firstItem);
+                setHighlightedIndex(idx);
+              }
+            }
             break;
 
           case 'Enter':
@@ -371,8 +387,7 @@ export const AutocompleteTextarea = React.forwardRef<
               );
             }
 
-            const label =
-              'path' in item ? item.path : `${item.name} (${item.email})`;
+            const label = 'path' in item ? item.path : `${item.name} (${item.email})`;
             const isHighlighted = highlightedIndex === idx;
 
             return (
@@ -385,16 +400,14 @@ export const AutocompleteTextarea = React.forwardRef<
                   transition: 'background-color 0.2s',
                   fontSize: token.fontSize,
                   lineHeight: 1.4,
-                  backgroundColor: isHighlighted
-                    ? token.colorPrimaryBg
-                    : 'transparent',
+                  backgroundColor: isHighlighted ? token.colorPrimaryBg : 'transparent',
                   color: isHighlighted ? token.colorPrimary : token.colorText,
                 }}
-                onMouseEnter={(e) => {
+                onMouseEnter={e => {
                   setHighlightedIndex(idx);
                   e.currentTarget.style.backgroundColor = token.colorBgTextHover;
                 }}
-                onMouseLeave={(e) => {
+                onMouseLeave={e => {
                   setHighlightedIndex(-1);
                   e.currentTarget.style.backgroundColor = 'transparent';
                 }}
@@ -415,7 +428,7 @@ export const AutocompleteTextarea = React.forwardRef<
         overlayStyle={{ paddingTop: 4 }}
       >
         <TextArea
-          ref={(node) => {
+          ref={node => {
             textareaRef.current = node;
             if (typeof ref === 'function') {
               ref(node);
