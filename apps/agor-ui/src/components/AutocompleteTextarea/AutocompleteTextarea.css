@@ -7,19 +7,19 @@
 
 /* Textarea container - inherit from Ant Design Input styles */
 .agor-textarea {
-  background-color: var(--ant-color-bg-container);
-  color: var(--ant-color-text);
-  border: 1px solid var(--ant-color-border);
-  border-radius: var(--ant-border-radius);
-  font-family: var(--ant-font-family);
-  font-size: var(--ant-font-size);
-  line-height: 1.5;
-  padding: 5px 11px;
-  width: 100%;
-  box-sizing: border-box;
-  resize: vertical;
+  background-color: var(--ant-color-bg-container) !important;
+  color: var(--ant-color-text) !important;
+  border: 1px solid var(--ant-color-border) !important;
+  border-radius: var(--ant-border-radius) !important;
+  font-family: var(--ant-font-family) !important;
+  font-size: var(--ant-font-size) !important;
+  line-height: 1.5 !important;
+  padding: 5px 11px !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+  resize: vertical !important;
   transition: border-color 0.3s cubic-bezier(0.645, 0.045, 0.355, 1),
-              box-shadow 0.3s cubic-bezier(0.645, 0.045, 0.355, 1);
+              box-shadow 0.3s cubic-bezier(0.645, 0.045, 0.355, 1) !important;
 }
 
 .agor-textarea:hover {
