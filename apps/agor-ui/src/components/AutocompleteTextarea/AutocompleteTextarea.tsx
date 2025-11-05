@@ -54,31 +54,39 @@ interface AutocompleteTextareaProps {
 
 /**
  * Custom render component for autocomplete items
+ * Library passes { entity, selected } props
  */
-const AutocompleteItem: React.FC<{ entity: AutocompleteEntity }> = ({ entity }) => {
+const AutocompleteItem: React.FC<{ entity: AutocompleteEntity; selected?: boolean }> = ({
+  entity,
+  selected,
+}) => {
   if (entity.heading) {
     return (
-      <Typography.Text
-        type="secondary"
+      <div
         style={{
           fontSize: '12px',
           fontWeight: 600,
-          display: 'block',
-          paddingLeft: '8px',
-          paddingTop: '4px',
-          paddingBottom: '4px',
+          padding: '4px 8px',
           textTransform: 'uppercase',
+          color: 'var(--ant-color-text-secondary)',
+          borderBottom: '1px solid var(--ant-color-border)',
         }}
       >
         {entity.heading}
-      </Typography.Text>
+      </div>
     );
   }
 
   return (
-    <Typography.Text ellipsis style={{ display: 'block', padding: '4px 8px' }}>
+    <div
+      style={{
+        padding: '4px 8px',
+        backgroundColor: selected ? 'var(--ant-color-primary-bg)' : 'transparent',
+        color: selected ? 'var(--ant-color-primary)' : 'var(--ant-color-text)',
+      }}
+    >
       {entity.label}
-    </Typography.Text>
+    </div>
   );
 };
 
@@ -288,6 +296,27 @@ export const AutocompleteTextarea = React.forwardRef<
         minRows={autoSize?.minRows || 2}
         maxRows={autoSize?.maxRows || 10}
         loadingComponent={LoadingComponent}
+        dropdownStyle={{
+          backgroundColor: 'var(--ant-color-bg-elevated)',
+          border: '1px solid var(--ant-color-border)',
+          borderRadius: 'var(--ant-border-radius)',
+          boxShadow: 'var(--ant-box-shadow-secondary)',
+          maxHeight: '300px',
+          zIndex: 1000,
+        }}
+        listStyle={{
+          margin: 0,
+          padding: 0,
+          listStyle: 'none',
+        }}
+        itemStyle={{
+          padding: '4px 8px',
+          cursor: 'pointer',
+        }}
+        loaderStyle={{
+          padding: '8px',
+          textAlign: 'center',
+        }}
         trigger={{
           '@': {
             dataProvider: (token) => {
