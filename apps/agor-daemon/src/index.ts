@@ -112,6 +112,7 @@ import { createBoardsService } from './services/boards';
 import { createConfigService } from './services/config';
 import { createContextService } from './services/context';
 import { createHealthMonitor } from './services/health-monitor';
+import { createFilesService } from './services/files';
 import { createMCPServersService } from './services/mcp-servers';
 import { createMessagesService } from './services/messages';
 import { createReposService } from './services/repos';
@@ -665,6 +666,9 @@ async function main() {
   // Requires worktree_id query parameter
   const worktreeRepository = new WorktreeRepository(db);
   app.use('/context', createContextService(worktreeRepository));
+
+  // Register files service for autocomplete search
+  app.use('/files', createFilesService(db));
 
   // Register terminals service for PTY management
   const terminalsService = new TerminalsService(app, db);

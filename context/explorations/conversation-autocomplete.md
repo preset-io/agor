@@ -280,80 +280,109 @@ Shows categorized results:
 
 ## React/Ant Design Libraries
 
-### Option 1: Ant Design AutoComplete (Recommended)
+### Selected: `@webscopeio/react-textarea-autocomplete` ✅
 
-**Why custom with AutoComplete:**
+**Library:** [`@webscopeio/react-textarea-autocomplete`](https://github.com/webscopeio/react-textarea-autocomplete)
 
-- Single `@` trigger is simple to detect manually
-- Full control over categorized display
-- Native Ant Design styling, perfect token integration
-- Lighter weight than react-mentions
-- Easy to customize rendering
+**Why this library:**
+
+- Purpose-built for inline character-triggered autocomplete (GitHub-style)
+- Handles all cursor positioning, text insertion, and keyboard navigation automatically
+- Supports multiple triggers (`@` for now, can add more later)
+- 2.3k stars, actively maintained
+- Mature library that handles edge cases we'd otherwise have to implement
+
+**Basic usage:**
 
 ```tsx
-import { AutoComplete, Input } from 'antd';
+import ReactTextareaAutocomplete from "@webscopeio/react-textarea-autocomplete";
+import "@webscopeio/react-textarea-autocomplete/style.css";
 
-// Detect @ trigger and show autocomplete
-const [showAutocomplete, setShowAutocomplete] = useState(false);
-const [autocompleteQuery, setAutocompleteQuery] = useState('');
+<ReactTextareaAutocomplete
+  trigger={{
+    "@": {
+      dataProvider: async (token) => {
+        // Combine files + users
+        const [files, users] = await Promise.all([
+          fetchFiles(sessionId, token),
+          filterUsers(token)
+        ]);
 
-const handleInputChange = e => {
-  const value = e.target.value;
-  const cursorPos = e.target.selectionStart;
-
-  // Find @ before cursor
-  const textBeforeCursor = value.substring(0, cursorPos);
-  const atIndex = textBeforeCursor.lastIndexOf('@');
-
-  if (atIndex !== -1) {
-    const query = textBeforeCursor.substring(atIndex + 1);
-    setAutocompleteQuery(query);
-    setShowAutocomplete(true);
-  } else {
-    setShowAutocomplete(false);
-  }
-};
+        return [
+          { heading: "FILES" },
+          ...files.map(f => ({ type: 'file', path: f.path, label: f.path })),
+          { heading: "USERS" },
+          ...users.map(u => ({ type: 'user', name: u.name, label: `${u.name} (${u.email})` }))
+        ];
+      },
+      component: ({ entity }) => (
+        <div>
+          {entity.heading && <strong>{entity.heading}</strong>}
+          {!entity.heading && entity.label}
+        </div>
+      ),
+      output: (item) => item.path || `@${item.name}`
+    }
+  }}
+/>
 ```
 
 **Pros:**
 
-- Complete control over UX
-- Native Ant Design integration
-- Lighter bundle size
-- Easy to add categories with `options` groups
+- Handles all the hard parts (cursor tracking, dropdown positioning, keyboard nav, text replacement)
+- Supports categorized/grouped results via special "heading" items
+- Well-tested with real-world usage
+- Saves 2-3 days of custom implementation work
 
 **Cons:**
 
-- More code to write (trigger detection, cursor position, insertion)
-- Need to handle edge cases manually
+- Adds a dependency (~40KB)
+- Styling requires custom CSS (not native Ant Design tokens, but we can override)
+- Less control over exact UX behavior (but good defaults)
 
-### Option 2: react-mentions (Fallback)
+**Styling approach:**
 
-**Library:** `react-mentions` (25K stars, mature)
+Use CSS variables to match Ant Design tokens:
 
-Could still work with single trigger by merging all data sources:
+```css
+.agor-textarea {
+  background: var(--ant-color-bg-container);
+  color: var(--ant-color-text);
+  border: 1px solid var(--ant-color-border);
+  border-radius: var(--ant-border-radius);
+  font-family: var(--ant-font-family);
+  font-size: var(--ant-font-size);
+  padding: var(--ant-padding-sm);
+}
 
-```tsx
-<MentionsInput value={value} onChange={handleChange}>
-  <Mention
-    trigger="@"
-    data={[...files, ...users, ...sessions]} // Combined
-    renderSuggestion={renderCategorizedSuggestion}
-  />
-</MentionsInput>
+.rta__autocomplete {
+  background: var(--ant-color-bg-elevated);
+  border: 1px solid var(--ant-color-border);
+  box-shadow: var(--ant-box-shadow-secondary);
+  border-radius: var(--ant-border-radius);
+}
+
+.rta__list {
+  max-height: 300px;
+}
+
+.rta__item {
+  padding: var(--ant-padding-sm);
+  color: var(--ant-color-text);
+}
+
+.rta__item--selected {
+  background: var(--ant-color-primary-bg);
+}
 ```
 
-**Pros:**
+### Alternatives Considered
 
-- Handles cursor/insertion complexity
-- Mature library
+**Ant Design AutoComplete** - Does NOT support inline character-triggered autocomplete (wraps entire input only)
 
-**Cons:**
+**react-mentions** - Heavier library, harder to style with Ant Design tokens, more complex for single-trigger use case
 
-- Not designed for categorized display
-- Would need custom grouping logic
-- Harder to style with Ant Design tokens
-- Overkill for single trigger
+**Custom implementation** - Significantly more work than initially estimated (2-3 days vs 3-4 hours)
 
 ## Frontend Implementation
 

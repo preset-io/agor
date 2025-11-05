@@ -23,6 +23,7 @@
     "@tsparticles/engine": "^3.9.1",
     "@tsparticles/react": "^3.0.0",
     "@tsparticles/slim": "^3.9.1",
+    "@webscopeio/react-textarea-autocomplete": "^4.9.2",
     "ansi-to-react": "^6.1.6",
     "antd": "^5.27.4",
     "cronstrue": "^3.9.0",

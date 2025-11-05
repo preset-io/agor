@@ -487,3 +487,9 @@ export async function getGitState(repoPath: string): Promise<string> {
     return 'unknown';
   }
 }
+
+/**
+ * Re-export simpleGit for use in services
+ * Allows other packages to use simple-git through @agor/core dependency
+ */
+export { simpleGit };

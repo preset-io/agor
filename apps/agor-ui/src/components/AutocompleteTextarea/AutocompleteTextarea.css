@@ -1,0 +1,99 @@
+/**
+ * AutocompleteTextarea Styling
+ *
+ * Matches Ant Design tokens using CSS variables.
+ * The library uses .rta__* classes for autocomplete dropdown styling.
+ */
+
+/* Textarea container */
+.agor-textarea {
+  background: var(--ant-color-bg-container, #fff);
+  color: var(--ant-color-text, #000);
+  border: 1px solid var(--ant-color-border, #d9d9d9);
+  border-radius: var(--ant-border-radius, 6px);
+  font-family: var(--ant-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+  font-size: var(--ant-font-size, 14px);
+  line-height: 1.5;
+  padding: var(--ant-padding-sm, 8px);
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  transition: border-color 0.3s, box-shadow 0.3s;
+}
+
+.agor-textarea:focus {
+  border-color: var(--ant-color-primary, #1890ff);
+  box-shadow: 0 0 0 2px var(--ant-color-primary-bg, rgba(24, 144, 255, 0.2));
+  outline: none;
+}
+
+.agor-textarea::placeholder {
+  color: var(--ant-color-text-quaternary, #bfbfbf);
+}
+
+/* Autocomplete dropdown container */
+.rta__autocomplete {
+  background: var(--ant-color-bg-elevated, #fafafa);
+  border: 1px solid var(--ant-color-border, #d9d9d9);
+  border-radius: var(--ant-border-radius, 6px);
+  box-shadow: var(--ant-box-shadow-secondary, 0 3px 6px -4px rgba(0, 0, 0, 0.12));
+  max-height: 300px;
+  overflow-y: auto;
+  z-index: 1000;
+  margin-top: 4px;
+}
+
+/* Autocomplete list */
+.rta__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Individual autocomplete item */
+.rta__item {
+  padding: var(--ant-padding-sm, 8px);
+  cursor: pointer;
+  color: var(--ant-color-text, #000);
+  font-size: var(--ant-font-size, 14px);
+  transition: background-color 0.2s;
+  border: none;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+}
+
+.rta__item:hover {
+  background-color: var(--ant-color-bg-container, #fff);
+}
+
+/* Selected/highlighted item */
+.rta__item--selected,
+.rta__item:active {
+  background-color: var(--ant-color-primary-bg, rgba(24, 144, 255, 0.15));
+}
+
+/* Loading spinner */
+.rta__item.loading {
+  padding: var(--ant-padding-md, 12px);
+  text-align: center;
+  color: var(--ant-color-text-secondary, #666);
+}
+
+/* Scrollbar styling for webkit browsers */
+.rta__autocomplete::-webkit-scrollbar {
+  width: 8px;
+}
+
+.rta__autocomplete::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.rta__autocomplete::-webkit-scrollbar-thumb {
+  background: var(--ant-color-border, #d9d9d9);
+  border-radius: 4px;
+}
+
+.rta__autocomplete::-webkit-scrollbar-thumb:hover {
+  background: var(--ant-color-border-secondary, #f0f0f0);
+}

@@ -39,6 +39,7 @@ import React from 'react';
 import { useTasks } from '../../hooks/useTasks';
 import spawnSubsessionTemplate from '../../templates/spawn_subsession.hbs?raw';
 import { compileTemplate } from '../../utils/templates';
+import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { ConversationView } from '../ConversationView';
 import { EnvironmentPill } from '../EnvironmentPill';
 import { CreatedByTag } from '../metadata';
@@ -55,8 +56,6 @@ import {
 } from '../Pill';
 import { ThinkingModeSelector } from '../ThinkingModeSelector';
 import { ToolIcon } from '../ToolIcon';
-
-const { TextArea } = Input;
 
 // Re-export PermissionMode from SDK for convenience
 export type { PermissionMode };
@@ -618,21 +617,23 @@ const SessionDrawer = ({
         }}
       >
         <Space direction="vertical" style={{ width: '100%' }} size={8}>
-          <TextArea
+          <AutocompleteTextarea
             value={inputValue}
-            onChange={e => setInputValue(e.target.value)}
-            placeholder="Send a prompt, fork, or create a subsession..."
+            onChange={setInputValue}
+            placeholder="Send a prompt, fork, or create a subsession... (type @ for autocomplete)"
             autoSize={{ minRows: 1, maxRows: 10 }}
-            onPressEnter={e => {
-              if (e.shiftKey) {
-                return;
-              }
-              e.preventDefault();
-              // Respect same disabled conditions as Send button (isRunning || !inputValue.trim())
-              if (!isRunning && inputValue.trim()) {
-                handleSendPrompt();
+            onKeyPress={e => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                // Respect same disabled conditions as Send button (isRunning || !inputValue.trim())
+                if (!isRunning && inputValue.trim()) {
+                  handleSendPrompt();
+                }
               }
             }}
+            client={client}
+            sessionId={session?.session_id || null}
+            users={users}
           />
           <Space style={{ width: '100%', justifyContent: 'space-between' }}>
             <Space size={8}>
