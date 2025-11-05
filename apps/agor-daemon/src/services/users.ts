@@ -48,6 +48,8 @@ interface UpdateUserData {
   };
   // Environment variables for update (accepts plaintext, encrypted before storage)
   env_vars?: Record<string, string | null>; // { "GITHUB_TOKEN": "ghp_...", "NPM_TOKEN": null }
+  // Default agentic tool configurations
+  default_agentic_config?: import('@agor/core/types').DefaultAgenticConfig;
 }
 
 /**
@@ -160,7 +162,7 @@ export class UsersService {
       updates.onboarding_completed = data.onboarding_completed;
 
     // Update data blob
-    if (data.avatar || data.preferences || data.api_keys || data.env_vars) {
+    if (data.avatar || data.preferences || data.api_keys || data.env_vars || data.default_agentic_config) {
       const current = await this.get(id);
       const currentRow = await this.db.select().from(users).where(eq(users.user_id, id)).get();
       const currentData = currentRow?.data as {
@@ -168,6 +170,7 @@ export class UsersService {
         preferences?: Record<string, unknown>;
         api_keys?: Record<string, string>;
         env_vars?: Record<string, string>;
+        default_agentic_config?: import('@agor/core/types').DefaultAgenticConfig;
       };
 
       // Handle API keys (encrypt before storage)
@@ -228,6 +231,7 @@ export class UsersService {
         preferences: data.preferences ?? current.preferences,
         api_keys: Object.keys(encryptedKeys).length > 0 ? encryptedKeys : undefined,
         env_vars: Object.keys(encryptedEnvVars).length > 0 ? encryptedEnvVars : undefined,
+        default_agentic_config: data.default_agentic_config ?? current.default_agentic_config,
       };
     }
 
