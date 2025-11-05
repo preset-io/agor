@@ -109,14 +109,33 @@ export const ZoneTriggerModal = ({
     )[0].session_id;
   }, [worktreeSessions]);
 
+  // Get the currently selected session (for pre-populating form on reuse)
+  const selectedSession = useMemo(() => {
+    return worktreeSessions.find(s => s.session_id === selectedSessionId);
+  }, [selectedSessionId, worktreeSessions]);
+
   // Reset to defaults when modal opens
   useEffect(() => {
     if (open) {
       setMode('create_new');
       setSelectedSessionId(smartDefaultSession);
       setSelectedAction('prompt');
+      form.resetFields();
     }
-  }, [open, smartDefaultSession]);
+  }, [open, smartDefaultSession, form]);
+
+  // Pre-populate form with selected session's config when reusing
+  useEffect(() => {
+    if (mode === 'reuse_existing' && selectedSession) {
+      // Pre-populate with session's current config
+      form.setFieldsValue({
+        agent: selectedSession.agentic_tool,
+        permissionMode: selectedSession.permission_config?.mode,
+        modelConfig: selectedSession.model_config,
+        // Note: mcpServerIds would need to be fetched separately if we want to show them
+      });
+    }
+  }, [mode, selectedSession, form]);
 
   // Render template preview
   const renderedTemplate = useMemo(() => {
@@ -199,20 +218,24 @@ export const ZoneTriggerModal = ({
     } else {
       // Reuse existing session
       const formValues = form.getFieldsValue();
-      await onExecute({
+
+      // For 'prompt' action on reuse: just send the prompt (form shows current config for reference)
+      // For 'fork'/'spawn': include agent config (will be used in future backend updates)
+      const params: Parameters<typeof onExecute>[0] = {
         sessionId: selectedSessionId,
         action: selectedAction,
-        renderedTemplate: editableTemplate, // Use edited template
-        // Include agent config for fork/spawn actions
-        ...(selectedAction === 'fork' || selectedAction === 'spawn'
-          ? {
-              agent: selectedAgent,
-              modelConfig: formValues.modelConfig,
-              permissionMode: formValues.permissionMode,
-              mcpServerIds: formValues.mcpServerIds,
-            }
-          : {}),
-      });
+        renderedTemplate: editableTemplate,
+      };
+
+      if (selectedAction === 'fork' || selectedAction === 'spawn') {
+        // Include config for fork/spawn (eventual support for changing config)
+        params.agent = formValues.agent || selectedSession?.agentic_tool;
+        params.modelConfig = formValues.modelConfig;
+        params.permissionMode = formValues.permissionMode;
+        params.mcpServerIds = formValues.mcpServerIds;
+      }
+
+      await onExecute(params);
     }
   };
 
@@ -250,53 +273,6 @@ export const ZoneTriggerModal = ({
             />
           )}
         </div>
-
-        {/* Agent Configuration (only for create_new mode) */}
-        {mode === 'create_new' && (
-          <Form form={form} layout="vertical">
-            <div>
-              <Typography.Text strong style={{ display: 'block', marginBottom: 8 }}>
-                Select Agent
-              </Typography.Text>
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(2, 1fr)',
-                  gap: 8,
-                  marginTop: 8,
-                }}
-              >
-                {availableAgents.map(agent => (
-                  <AgentSelectionCard
-                    key={agent.id}
-                    agent={agent}
-                    selected={selectedAgent === agent.id}
-                    onClick={() => setSelectedAgent(agent.id)}
-                  />
-                ))}
-              </div>
-            </div>
-
-            <Collapse
-              ghost
-              expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
-              items={[
-                {
-                  key: 'agentic-tool-config',
-                  label: <Typography.Text strong>Agentic Tool Configuration</Typography.Text>,
-                  children: (
-                    <AgenticToolConfigForm
-                      agenticTool={(selectedAgent as AgenticToolName) || 'claude-code'}
-                      mcpServers={mcpServers}
-                      showHelpText={true}
-                    />
-                  ),
-                },
-              ]}
-              style={{ marginTop: 16 }}
-            />
-          </Form>
-        )}
 
         {/* Session & Action Selection (only for reuse mode) */}
         {mode === 'reuse_existing' && (
@@ -338,55 +314,75 @@ export const ZoneTriggerModal = ({
                 </Space>
               </Radio.Group>
             </div>
-
-            {/* Agent selection for fork/spawn */}
-            {(selectedAction === 'fork' || selectedAction === 'spawn') && (
-              <>
-                <div style={{ marginTop: 16 }}>
-                  <Typography.Text strong style={{ display: 'block', marginBottom: 8 }}>
-                    Select Agent
-                  </Typography.Text>
-                  <div
-                    style={{
-                      display: 'grid',
-                      gridTemplateColumns: 'repeat(2, 1fr)',
-                      gap: 8,
-                      marginTop: 8,
-                    }}
-                  >
-                    {availableAgents.map(agent => (
-                      <AgentSelectionCard
-                        key={agent.id}
-                        agent={agent}
-                        selected={selectedAgent === agent.id}
-                        onClick={() => setSelectedAgent(agent.id)}
-                      />
-                    ))}
-                  </div>
-                </div>
-
-                <Collapse
-                  ghost
-                  expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
-                  items={[
-                    {
-                      key: 'agentic-tool-config',
-                      label: <Typography.Text strong>Agentic Tool Configuration</Typography.Text>,
-                      children: (
-                        <AgenticToolConfigForm
-                          agenticTool={(selectedAgent as AgenticToolName) || 'claude-code'}
-                          mcpServers={mcpServers}
-                          showHelpText={true}
-                        />
-                      ),
-                    },
-                  ]}
-                  style={{ marginTop: 16 }}
-                />
-              </>
-            )}
           </Form>
         )}
+
+        {/* Agent Configuration - Always shown (collapsed for reuse, expanded for create_new) */}
+        <Form form={form} layout="vertical">
+          {mode === 'create_new' && (
+            <div>
+              <Typography.Text strong style={{ display: 'block', marginBottom: 8 }}>
+                Select Agent
+              </Typography.Text>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(2, 1fr)',
+                  gap: 8,
+                  marginTop: 8,
+                }}
+              >
+                {availableAgents.map(agent => (
+                  <AgentSelectionCard
+                    key={agent.id}
+                    agent={agent}
+                    selected={selectedAgent === agent.id}
+                    onClick={() => setSelectedAgent(agent.id)}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          <Collapse
+            ghost
+            defaultActiveKey={mode === 'create_new' ? ['agentic-tool-config'] : []}
+            expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
+            items={[
+              {
+                key: 'agentic-tool-config',
+                label: (
+                  <Typography.Text strong>
+                    {mode === 'create_new'
+                      ? 'Agentic Tool Configuration'
+                      : `Session Configuration (${selectedSession?.agentic_tool || 'unknown'})`}
+                  </Typography.Text>
+                ),
+                children: (
+                  <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+                    {mode === 'reuse_existing' && (
+                      <Alert
+                        message="Showing current configuration. These settings are for reference."
+                        type="info"
+                        showIcon
+                      />
+                    )}
+                    <AgenticToolConfigForm
+                      agenticTool={
+                        (mode === 'create_new'
+                          ? (selectedAgent as AgenticToolName)
+                          : (selectedSession?.agentic_tool as AgenticToolName)) || 'claude-code'
+                      }
+                      mcpServers={mcpServers}
+                      showHelpText={true}
+                    />
+                  </Space>
+                ),
+              },
+            ]}
+            style={{ marginTop: 16 }}
+          />
+        </Form>
 
         {/* Editable Template */}
         <div>
