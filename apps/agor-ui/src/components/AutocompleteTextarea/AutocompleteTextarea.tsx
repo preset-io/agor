@@ -7,7 +7,7 @@
 
 import type { AgorClient } from '@agor/core/api';
 import type { SessionID, User } from '@agor/core/types';
-import { Spin, theme } from 'antd';
+import { Empty, List, Spin, Typography, theme } from 'antd';
 import React, { useCallback, useMemo } from 'react';
 import ReactTextareaAutocomplete from '@webscopeio/react-textarea-autocomplete';
 import '@webscopeio/react-textarea-autocomplete/style.css';
@@ -56,34 +56,29 @@ interface AutocompleteTextareaProps {
  * Custom render component for autocomplete items
  */
 const AutocompleteItem: React.FC<{ entity: AutocompleteEntity }> = ({ entity }) => {
-  const { token } = theme.useToken();
-
   if (entity.heading) {
     return (
-      <div
+      <Typography.Text
+        type="secondary"
         style={{
-          fontSize: token.fontSizeSM,
-          color: token.colorTextSecondary,
+          fontSize: '12px',
           fontWeight: 600,
-          padding: `${token.paddingXS}px ${token.paddingSM}px`,
-          borderBottom: `1px solid ${token.colorBorderSecondary}`,
+          display: 'block',
+          paddingLeft: '8px',
+          paddingTop: '4px',
+          paddingBottom: '4px',
+          textTransform: 'uppercase',
         }}
       >
         {entity.heading}
-      </div>
+      </Typography.Text>
     );
   }
 
   return (
-    <div
-      style={{
-        padding: `${token.paddingSM}px`,
-        fontSize: token.fontSize,
-        color: token.colorText,
-      }}
-    >
+    <Typography.Text ellipsis style={{ display: 'block', padding: '4px 8px' }}>
       {entity.label}
-    </div>
+    </Typography.Text>
   );
 };
 
@@ -91,17 +86,9 @@ const AutocompleteItem: React.FC<{ entity: AutocompleteEntity }> = ({ entity }) 
  * Loading component for autocomplete
  */
 const LoadingComponent: React.FC = () => {
-  const { token } = theme.useToken();
   return (
-    <div
-      style={{
-        padding: `${token.paddingSM}px`,
-        textAlign: 'center',
-        color: token.colorTextSecondary,
-        fontSize: token.fontSizeSM,
-      }}
-    >
-      Searching files...
+    <div style={{ padding: '8px', textAlign: 'center' }}>
+      <Spin size="small" />
     </div>
   );
 };
@@ -169,7 +156,10 @@ export const AutocompleteTextarea = React.forwardRef<
      */
     const searchFiles = useCallback(
       async (query: string) => {
+        console.log('[AutocompleteTextarea] searchFiles called:', { sessionId, query, hasClient: !!client });
+
         if (!client || !sessionId || !query.trim()) {
+          console.log('[AutocompleteTextarea] Early return:', { hasClient: !!client, sessionId, query });
           setFileResults([]);
           return;
         }
@@ -182,10 +172,12 @@ export const AutocompleteTextarea = React.forwardRef<
         abortControllerRef.current = new AbortController();
 
         try {
+          console.log('[AutocompleteTextarea] Calling files service:', { sessionId, search: query });
           const result = await client.service('files').find({
             query: { sessionId, search: query },
           });
 
+          console.log('[AutocompleteTextarea] Got result:', result);
           setFileResults(
             Array.isArray(result) ? result : result.data || []
           );
