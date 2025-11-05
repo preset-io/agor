@@ -117,14 +117,15 @@ export const AutocompleteTextarea = React.forwardRef<
      */
     React.useEffect(() => {
       if (highlightedIndex >= 0 && popoverContentRef.current) {
-        const items = popoverContentRef.current.querySelectorAll('[data-autocomplete-item]');
-        const highlightedItem = items[highlightedIndex];
-
-        if (highlightedItem) {
-          highlightedItem.scrollIntoView({
-            behavior: 'smooth',
-            block: 'nearest',
-          });
+        const children = popoverContentRef.current.children;
+        if (highlightedIndex < children.length) {
+          const highlightedElement = children[highlightedIndex];
+          if (highlightedElement) {
+            highlightedElement.scrollIntoView({
+              behavior: 'smooth',
+              block: 'nearest',
+            });
+          }
         }
       }
     }, [highlightedIndex]);
@@ -254,7 +255,7 @@ export const AutocompleteTextarea = React.forwardRef<
 
         let insertText = '';
         if ('path' in item) {
-          insertText = quoteIfNeeded(item.path);
+          insertText = `@${quoteIfNeeded(item.path)}`;
         } else {
           insertText = `@${item.name}`;
         }
@@ -403,13 +404,17 @@ export const AutocompleteTextarea = React.forwardRef<
                 <div
                   key={`heading-${item.heading}`}
                   style={{
+                    position: 'sticky',
+                    top: 0,
                     padding: `${token.paddingXS}px ${token.paddingSM}px`,
                     fontSize: token.fontSizeSM,
                     fontWeight: 600,
                     color: token.colorTextSecondary,
+                    backgroundColor: token.colorBgContainer,
                     textTransform: 'uppercase',
                     borderBottom: `1px solid ${token.colorBorder}`,
                     marginTop: idx > 0 ? token.paddingXS : 0,
+                    zIndex: 10,
                   }}
                 >
                   {item.heading}
@@ -423,7 +428,6 @@ export const AutocompleteTextarea = React.forwardRef<
             return (
               <div
                 key={label}
-                data-autocomplete-item
                 onClick={() => handleSelect(item)}
                 style={{
                   padding: `${token.paddingXS}px ${token.paddingSM}px`,
