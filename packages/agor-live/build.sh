@@ -159,6 +159,11 @@ cat > "$SCRIPT_DIR/dist/core/package.json" << 'PKGJSON'
       "types": "./utils/cron.d.ts",
       "import": "./utils/cron.js",
       "require": "./utils/cron.cjs"
+    },
+    "./utils/errors": {
+      "types": "./utils/errors.d.ts",
+      "import": "./utils/errors.js",
+      "require": "./utils/errors.cjs"
     }
   }
 }
