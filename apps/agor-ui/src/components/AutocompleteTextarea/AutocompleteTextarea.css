@@ -1,112 +1,11 @@
 /**
  * AutocompleteTextarea Styling
  *
- * Uses Ant Design CSS variables for consistent dark/light mode support.
- * The library uses .rta__* classes for autocomplete dropdown styling.
+ * Uses Ant Design Input.TextArea which handles styling via tokens.
+ * Popover is styled through Ant Design theme automatically.
  */
 
-/* Textarea container - inherit from Ant Design Input styles */
 .agor-textarea {
-  background-color: var(--ant-color-bg-container) !important;
-  color: var(--ant-color-text) !important;
-  border: 1px solid var(--ant-color-border) !important;
-  border-radius: var(--ant-border-radius) !important;
-  font-family: var(--ant-font-family) !important;
-  font-size: var(--ant-font-size) !important;
-  line-height: 1.5 !important;
-  padding: 5px 11px !important;
-  width: 100% !important;
-  box-sizing: border-box !important;
-  resize: vertical !important;
-  transition: border-color 0.3s cubic-bezier(0.645, 0.045, 0.355, 1),
-              box-shadow 0.3s cubic-bezier(0.645, 0.045, 0.355, 1) !important;
-}
-
-.agor-textarea:hover {
-  border-color: var(--ant-color-primary);
-}
-
-.agor-textarea:focus {
-  border-color: var(--ant-color-primary);
-  box-shadow: 0 0 0 2px var(--ant-color-primary-bg);
-  outline: none;
-}
-
-.agor-textarea::placeholder {
-  color: var(--ant-color-text-tertiary);
-}
-
-/* Autocomplete dropdown container */
-.rta__autocomplete {
-  background-color: var(--ant-color-bg-elevated);
-  border: 1px solid var(--ant-color-border);
-  border-radius: var(--ant-border-radius);
-  box-shadow: var(--ant-box-shadow-secondary);
-  max-height: 300px;
-  overflow-y: auto;
-  z-index: 1000;
-  margin-top: 4px;
-}
-
-/* Autocomplete list */
-.rta__list {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-/* Individual autocomplete item */
-.rta__item {
-  padding: 5px 12px;
-  cursor: pointer;
-  color: var(--ant-color-text);
-  font-size: var(--ant-font-size);
-  transition: background-color 0.2s;
-  border: none;
-  width: 100%;
-  text-align: left;
-  background: transparent;
-  min-height: 32px;
-  display: flex;
-  align-items: center;
-}
-
-.rta__item:hover {
-  background-color: var(--ant-color-fill-secondary);
-}
-
-/* Selected/highlighted item */
-.rta__item--selected {
-  background-color: var(--ant-color-primary-bg);
-  color: var(--ant-color-primary);
-}
-
-.rta__item--selected:hover {
-  background-color: var(--ant-color-primary-bg-hover, var(--ant-color-primary-bg));
-}
-
-/* Loading spinner */
-.rta__item.loading {
-  padding: 12px;
-  text-align: center;
-  color: var(--ant-color-text-secondary);
-  justify-content: center;
-}
-
-/* Scrollbar styling for webkit browsers */
-.rta__autocomplete::-webkit-scrollbar {
-  width: 8px;
-}
-
-.rta__autocomplete::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.rta__autocomplete::-webkit-scrollbar-thumb {
-  background: var(--ant-color-border);
-  border-radius: 4px;
-}
-
-.rta__autocomplete::-webkit-scrollbar-thumb:hover {
-  background: var(--ant-color-border-secondary);
+  /* Ant Design TextArea handles all styling through tokens */
+  /* No custom styles needed - inherits theme automatically */
 }

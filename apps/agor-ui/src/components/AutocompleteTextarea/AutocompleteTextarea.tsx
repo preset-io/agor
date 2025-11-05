@@ -2,16 +2,17 @@
  * AutocompleteTextarea
  *
  * Textarea with @ mentions autocomplete for files and users.
- * Uses @webscopeio/react-textarea-autocomplete for inline autocomplete.
+ * Uses Ant Design Popover for dropdown and native textarea for input.
  */
 
 import type { AgorClient } from '@agor/core/api';
 import type { SessionID, User } from '@agor/core/types';
-import { Empty, List, Spin, Typography, theme } from 'antd';
-import React, { useCallback, useMemo } from 'react';
-import ReactTextareaAutocomplete from '@webscopeio/react-textarea-autocomplete';
-import '@webscopeio/react-textarea-autocomplete/style.css';
+import { Input, Popover, Spin, Typography, theme } from 'antd';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import './AutocompleteTextarea.css';
+
+const { TextArea } = Input;
+const { Text } = Typography;
 
 // Constants
 const MAX_FILE_RESULTS = 10;
@@ -29,14 +30,7 @@ interface UserResult {
   type: 'user';
 }
 
-interface AutocompleteEntity {
-  heading?: string;
-  type?: 'file' | 'user';
-  label?: string;
-  path?: string;
-  name?: string;
-  email?: string;
-}
+type AutocompleteResult = FileResult | UserResult | { heading: string };
 
 interface AutocompleteTextareaProps {
   value: string;
@@ -51,55 +45,6 @@ interface AutocompleteTextareaProps {
     maxRows?: number;
   };
 }
-
-/**
- * Custom render component for autocomplete items
- * Library passes { entity, selected } props
- */
-const AutocompleteItem: React.FC<{ entity: AutocompleteEntity; selected?: boolean }> = ({
-  entity,
-  selected,
-}) => {
-  if (entity.heading) {
-    return (
-      <div
-        style={{
-          fontSize: '12px',
-          fontWeight: 600,
-          padding: '4px 8px',
-          textTransform: 'uppercase',
-          color: 'var(--ant-color-text-secondary)',
-          borderBottom: '1px solid var(--ant-color-border)',
-        }}
-      >
-        {entity.heading}
-      </div>
-    );
-  }
-
-  return (
-    <div
-      style={{
-        padding: '4px 8px',
-        backgroundColor: selected ? 'var(--ant-color-primary-bg)' : 'transparent',
-        color: selected ? 'var(--ant-color-primary)' : 'var(--ant-color-text)',
-      }}
-    >
-      {entity.label}
-    </div>
-  );
-};
-
-/**
- * Loading component for autocomplete
- */
-const LoadingComponent: React.FC = () => {
-  return (
-    <div style={{ padding: '8px', textAlign: 'center' }}>
-      <Spin size="small" />
-    </div>
-  );
-};
 
 /**
  * Extract text at cursor position before the @ trigger
@@ -122,7 +67,7 @@ const getAtTokenQuery = (text: string, position: number): string | null => {
 
   const query = textBeforeCursor.substring(lastAtIndex + 1);
 
-  // Don't trigger if query contains whitespace (@ is no longer active trigger)
+  // Don't trigger if query contains whitespace
   if (query.includes(' ') || query.includes('\n')) {
     return null;
   }
@@ -155,44 +100,41 @@ export const AutocompleteTextarea = React.forwardRef<
     ref
   ) => {
     const { token } = theme.useToken();
-    const [isLoading, setIsLoading] = React.useState(false);
-    const [fileResults, setFileResults] = React.useState<FileResult[]>([]);
-    const abortControllerRef = React.useRef<AbortController | null>(null);
+    const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+    // Autocomplete state
+    const [showPopover, setShowPopover] = useState(false);
+    const [atIndex, setAtIndex] = useState(-1);
+    const [query, setQuery] = useState('');
+    const [isLoading, setIsLoading] = useState(false);
+    const [fileResults, setFileResults] = useState<FileResult[]>([]);
 
     /**
      * Search files in session's worktree
      */
     const searchFiles = useCallback(
-      async (query: string) => {
-        console.log('[AutocompleteTextarea] searchFiles called:', { sessionId, query, hasClient: !!client });
-
-        if (!client || !sessionId || !query.trim()) {
-          console.log('[AutocompleteTextarea] Early return:', { hasClient: !!client, sessionId, query });
+      async (searchQuery: string) => {
+        if (!client || !sessionId || !searchQuery.trim()) {
           setFileResults([]);
           return;
         }
 
-        if (abortControllerRef.current) {
-          abortControllerRef.current.abort();
-        }
-
         setIsLoading(true);
-        abortControllerRef.current = new AbortController();
 
         try {
-          console.log('[AutocompleteTextarea] Calling files service:', { sessionId, search: query });
+          console.log('[AutocompleteTextarea] Calling files service:', {
+            sessionId,
+            search: searchQuery,
+          });
           const result = await client.service('files').find({
-            query: { sessionId, search: query },
+            query: { sessionId, search: searchQuery },
           });
 
           console.log('[AutocompleteTextarea] Got result:', result);
-          setFileResults(
-            Array.isArray(result) ? result : result.data || []
-          );
+          setFileResults(Array.isArray(result) ? result : result.data || []);
         } catch (error) {
-          if ((error as any)?.name !== 'AbortError') {
-            console.error('File search error:', error);
-          }
+          console.error('File search error:', error);
           setFileResults([]);
         } finally {
           setIsLoading(false);
@@ -201,28 +143,16 @@ export const AutocompleteTextarea = React.forwardRef<
       [client, sessionId]
     );
 
-    // Debounce file search
-    const debouncedSearchFiles = useMemo(() => {
-      let timeoutId: NodeJS.Timeout;
-
-      return (query: string) => {
-        clearTimeout(timeoutId);
-        timeoutId = setTimeout(() => {
-          searchFiles(query);
-        }, DEBOUNCE_MS);
-      };
-    }, [searchFiles]);
-
     /**
-     * Filter users by query (client-side)
+     * Filter users by query
      */
     const filterUsers = useCallback(
-      (query: string): UserResult[] => {
-        if (!query.trim()) {
+      (searchQuery: string): UserResult[] => {
+        if (!searchQuery.trim()) {
           return [];
         }
 
-        const lowercaseQuery = query.toLowerCase();
+        const lowercaseQuery = searchQuery.toLowerCase();
         return users
           .filter(
             (u) =>
@@ -240,103 +170,199 @@ export const AutocompleteTextarea = React.forwardRef<
     );
 
     /**
-     * Build autocomplete options for @ trigger
+     * Build autocomplete options with categories
      */
-    const buildAutocompleteOptions = useCallback(
-      (query: string): AutocompleteEntity[] => {
-        const userResults = filterUsers(query);
-        const options: AutocompleteEntity[] = [];
+    const autocompleteOptions = useMemo(() => {
+      const options: AutocompleteResult[] = [];
 
-        // Add FILES section if we have file results
-        if (fileResults.length > 0) {
-          options.push({ heading: 'FILES' });
-          options.push(
-            ...fileResults.map((f) => ({
-              type: 'file' as const,
-              path: f.path,
-              label: f.path,
-            }))
-          );
+      if (fileResults.length > 0) {
+        options.push({ heading: 'FILES' });
+        options.push(...fileResults);
+      }
+
+      const userResults = filterUsers(query);
+      if (userResults.length > 0) {
+        options.push({ heading: 'USERS' });
+        options.push(...userResults);
+      }
+
+      return options;
+    }, [fileResults, query, filterUsers]);
+
+    /**
+     * Handle textarea change
+     */
+    const handleChange = useCallback(
+      (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+        const newValue = e.target.value;
+        onChange(newValue);
+
+        const cursorPos = e.target.selectionStart || 0;
+        const atQuery = getAtTokenQuery(newValue, cursorPos);
+
+        if (atQuery !== null) {
+          setQuery(atQuery);
+          setAtIndex(newValue.lastIndexOf('@'));
+
+          // Debounced search
+          if (debounceTimerRef.current) {
+            clearTimeout(debounceTimerRef.current);
+          }
+          debounceTimerRef.current = setTimeout(() => {
+            searchFiles(atQuery);
+          }, DEBOUNCE_MS);
+
+          setShowPopover(true);
+        } else {
+          setShowPopover(false);
+          setFileResults([]);
         }
-
-        // Add USERS section if we have user results
-        if (userResults.length > 0) {
-          options.push({ heading: 'USERS' });
-          options.push(
-            ...userResults.map((u) => ({
-              type: 'user' as const,
-              name: u.name,
-              email: u.email,
-              label: `${u.name} (${u.email})`,
-            }))
-          );
-        }
-
-        // Show loading state if searching
-        if (isLoading && fileResults.length === 0 && userResults.length === 0) {
-          options.push({
-            heading: 'LOADING',
-            label: 'Searching files...',
-          });
-        }
-
-        return options;
       },
-      [fileResults, filterUsers, isLoading]
+      [onChange, searchFiles]
+    );
+
+    /**
+     * Handle item selection
+     */
+    const handleSelect = useCallback(
+      (item: FileResult | UserResult) => {
+        if (atIndex === -1) return;
+
+        const cursorPos = textareaRef.current?.selectionStart || 0;
+        const textBeforeCursor = value.substring(0, cursorPos);
+        const atQueryLength = textBeforeCursor.substring(atIndex + 1).length;
+
+        let insertText = '';
+        if ('path' in item) {
+          insertText = quoteIfNeeded(item.path);
+        } else {
+          insertText = `@${item.name}`;
+        }
+
+        const newValue =
+          value.substring(0, atIndex) +
+          insertText +
+          ' ' +
+          value.substring(atIndex + 1 + atQueryLength);
+
+        onChange(newValue);
+        setShowPopover(false);
+        setFileResults([]);
+
+        // Move cursor after inserted value
+        setTimeout(() => {
+          const newCursorPos = atIndex + insertText.length + 1;
+          textareaRef.current?.setSelectionRange(newCursorPos, newCursorPos);
+          textareaRef.current?.focus();
+        }, 0);
+      },
+      [atIndex, value, onChange]
+    );
+
+    /**
+     * Render popover content
+     */
+    const popoverContent = (
+      <div
+        style={{
+          maxHeight: '300px',
+          overflowY: 'auto',
+          minWidth: '250px',
+        }}
+      >
+        {isLoading && (
+          <div style={{ padding: token.paddingMD, textAlign: 'center' }}>
+            <Spin size="small" />
+          </div>
+        )}
+
+        {!isLoading && autocompleteOptions.length === 0 && (
+          <div
+            style={{
+              padding: token.paddingMD,
+              color: token.colorTextSecondary,
+              fontSize: token.fontSizeSM,
+            }}
+          >
+            No results
+          </div>
+        )}
+
+        {!isLoading &&
+          autocompleteOptions.map((item, idx) => {
+            if ('heading' in item) {
+              return (
+                <div
+                  key={`heading-${item.heading}`}
+                  style={{
+                    padding: `${token.paddingXS}px ${token.paddingSM}px`,
+                    fontSize: token.fontSizeSM,
+                    fontWeight: 600,
+                    color: token.colorTextSecondary,
+                    textTransform: 'uppercase',
+                    borderBottom: `1px solid ${token.colorBorder}`,
+                    marginTop: idx > 0 ? token.marginSM : 0,
+                  }}
+                >
+                  {item.heading}
+                </div>
+              );
+            }
+
+            const label =
+              'path' in item ? item.path : `${item.name} (${item.email})`;
+
+            return (
+              <div
+                key={label}
+                onClick={() => handleSelect(item)}
+                style={{
+                  padding: token.paddingSM,
+                  cursor: 'pointer',
+                  transition: 'background-color 0.2s',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = token.colorBgTextHover;
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = 'transparent';
+                }}
+              >
+                <Text ellipsis>{label}</Text>
+              </div>
+            );
+          })}
+      </div>
     );
 
     return (
-      <ReactTextareaAutocomplete<AutocompleteEntity>
-        ref={ref}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        onKeyPress={onKeyPress}
-        placeholder={placeholder}
-        className="agor-textarea"
-        minRows={autoSize?.minRows || 2}
-        maxRows={autoSize?.maxRows || 10}
-        loadingComponent={LoadingComponent}
-        dropdownStyle={{
-          backgroundColor: 'var(--ant-color-bg-elevated)',
-          border: '1px solid var(--ant-color-border)',
-          borderRadius: 'var(--ant-border-radius)',
-          boxShadow: 'var(--ant-box-shadow-secondary)',
-          maxHeight: '300px',
-          zIndex: 1000,
-        }}
-        listStyle={{
-          margin: 0,
-          padding: 0,
-          listStyle: 'none',
-        }}
-        itemStyle={{
-          padding: '4px 8px',
-          cursor: 'pointer',
-        }}
-        loaderStyle={{
-          padding: '8px',
-          textAlign: 'center',
-        }}
-        trigger={{
-          '@': {
-            dataProvider: (token) => {
-              debouncedSearchFiles(token);
-              return buildAutocompleteOptions(token);
-            },
-            component: AutocompleteItem,
-            output: (item) => {
-              // Convert entity to output string
-              if (item.path) {
-                return quoteIfNeeded(item.path);
-              }
-              if (item.name) {
-                return `@${item.name}`;
-              }
-              return '';
-            },
-          },
-        }}
-      />
+      <Popover
+        content={popoverContent}
+        open={showPopover && autocompleteOptions.length > 0}
+        trigger="manual"
+        placement="bottomLeft"
+        overlayStyle={{ paddingTop: 4 }}
+      >
+        <TextArea
+          ref={(node) => {
+            textareaRef.current = node;
+            if (typeof ref === 'function') {
+              ref(node);
+            } else if (ref) {
+              ref.current = node;
+            }
+          }}
+          value={value}
+          onChange={handleChange}
+          onKeyPress={onKeyPress}
+          placeholder={placeholder}
+          autoSize={autoSize || { minRows: 2, maxRows: 10 }}
+          className="agor-textarea"
+          style={{
+            borderColor: token.colorBorder,
+          }}
+        />
+      </Popover>
     );
   }
 );
