@@ -300,6 +300,10 @@ export const UsersTable: React.FC<UsersTableProps> = ({
       await onUpdate?.(editingUser.user_id, {
         default_agentic_config: newConfig,
       });
+
+      // Close modal after successful save
+      setEditModalOpen(false);
+      setEditingUser(null);
     } catch (err) {
       console.error(`Failed to save ${tool} config:`, err);
       throw err;
