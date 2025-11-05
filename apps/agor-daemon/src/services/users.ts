@@ -349,6 +349,7 @@ export class UsersService {
       preferences?: Record<string, unknown>;
       api_keys?: Record<string, string>; // Encrypted keys
       env_vars?: Record<string, string>; // Encrypted env vars
+      default_agentic_config?: import('@agor/core/types').DefaultAgenticConfig;
     };
 
     const user: User & { password?: string } = {
@@ -374,6 +375,8 @@ export class UsersService {
       env_vars: data.env_vars
         ? Object.fromEntries(Object.keys(data.env_vars).map(key => [key, true]))
         : undefined,
+      // Return default agentic config
+      default_agentic_config: data.default_agentic_config,
     };
 
     // Include password for authentication (FeathersJS LocalStrategy needs this)
