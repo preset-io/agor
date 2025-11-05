@@ -466,12 +466,21 @@ export const AutocompleteTextarea = React.forwardRef<
       >
         <TextArea
           ref={node => {
-            if (node) {
-              textareaRef.current = node.textarea;
+            if (
+              node &&
+              typeof node === 'object' &&
+              'resizableTextArea' in node &&
+              node.resizableTextArea &&
+              typeof node.resizableTextArea === 'object' &&
+              'textArea' in node.resizableTextArea &&
+              node.resizableTextArea.textArea instanceof HTMLTextAreaElement
+            ) {
+              const textarea = node.resizableTextArea.textArea;
+              textareaRef.current = textarea;
               if (typeof ref === 'function') {
-                ref(node.textarea);
+                ref(textarea);
               } else if (ref) {
-                ref.current = node.textarea;
+                ref.current = textarea;
               }
             }
           }}
