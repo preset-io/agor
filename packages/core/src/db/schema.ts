@@ -29,7 +29,7 @@ export const sessions = sqliteTable(
 
     // Materialized for filtering/joins (cross-DB compatible)
     status: text('status', {
-      enum: ['idle', 'running', 'completed', 'failed'],
+      enum: ['idle', 'running', 'awaiting_permission', 'completed', 'failed'],
     }).notNull(),
     agentic_tool: text('agentic_tool', {
       enum: ['claude-code', 'codex', 'gemini'],

@@ -82,6 +82,7 @@ export default class SessionList extends BaseCommand {
   private formatStatus(status: Session['status']): string {
     const icons = {
       running: chalk.blue('●'),
+      awaiting_permission: chalk.yellow('⏸'),
       completed: chalk.green('✓'),
       failed: chalk.red('✗'),
       idle: chalk.gray('○'),
@@ -89,6 +90,7 @@ export default class SessionList extends BaseCommand {
 
     const labels = {
       running: chalk.blue('Running'),
+      awaiting_permission: chalk.yellow('Awaiting Permission'),
       completed: chalk.green('Done'),
       failed: chalk.red('Failed'),
       idle: chalk.gray('Idle'),

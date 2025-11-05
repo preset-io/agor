@@ -3,8 +3,8 @@ import {
   CheckCircleOutlined,
   ClockCircleOutlined,
   CloseCircleOutlined,
-  LockOutlined,
   MinusCircleOutlined,
+  PauseCircleOutlined,
   StopOutlined,
 } from '@ant-design/icons';
 import { Spin, theme } from 'antd';
@@ -37,7 +37,7 @@ export const TaskStatusIcon: React.FC<TaskStatusIconProps> = ({ status, size = 1
     case TaskStatus.STOPPING:
       return <StopOutlined style={{ ...iconStyle, color: token.colorWarning }} />;
     case TaskStatus.AWAITING_PERMISSION:
-      return <LockOutlined style={{ ...iconStyle, color: token.colorWarning }} />;
+      return <PauseCircleOutlined style={{ ...iconStyle, color: token.colorWarning }} />;
     case TaskStatus.FAILED:
       return <CloseCircleOutlined style={{ ...iconStyle, color: token.colorError }} />;
     case TaskStatus.STOPPED:

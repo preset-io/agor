@@ -146,7 +146,7 @@ export function createPreToolUseHook(
       console.log(
         `🔒 No permission found for ${input.tool_name}, creating lock and prompting user...`
       );
-      const newLock = new Promise<void>((resolve) => {
+      const newLock = new Promise<void>(resolve => {
         releaseLock = resolve;
       });
       deps.permissionLocks.set(sessionId, newLock);
@@ -205,6 +205,19 @@ export function createPreToolUseHook(
         throw patchError;
       }
 
+      // Update session status to 'awaiting_permission'
+      try {
+        if (deps.sessionsService) {
+          await deps.sessionsService.patch(sessionId, {
+            status: 'awaiting_permission' as const,
+          });
+          console.log(`✅ Session ${sessionId} updated to awaiting_permission`);
+        }
+      } catch (patchError) {
+        console.error(`⚠️  Failed to patch session ${sessionId}:`, patchError);
+        // Don't throw - task status is more critical
+      }
+
       // Emit WebSocket event for UI (broadcasts to ALL viewers)
       deps.permissionService.emitRequest(sessionId, {
         requestId,
@@ -247,6 +260,14 @@ export function createPreToolUseHook(
       await deps.tasksService.patch(taskId, {
         status: decision.allow ? TaskStatus.RUNNING : TaskStatus.FAILED,
       });
+
+      // Restore session status to running (whether approved or denied, session continues)
+      if (deps.sessionsService) {
+        await deps.sessionsService.patch(sessionId, {
+          status: 'running' as const,
+        });
+        console.log(`✅ Session ${sessionId} restored to running after permission decision`);
+      }
 
       // Persist decision if user clicked "Remember"
       if (decision.remember) {
