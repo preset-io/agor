@@ -109,6 +109,7 @@ export const AutocompleteTextarea = React.forwardRef<
     const [query, setQuery] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [fileResults, setFileResults] = useState<FileResult[]>([]);
+    const [highlightedIndex, setHighlightedIndex] = useState(-1);
 
     /**
      * Search files in session's worktree
@@ -216,6 +217,7 @@ export const AutocompleteTextarea = React.forwardRef<
         } else {
           setShowPopover(false);
           setFileResults([]);
+          setHighlightedIndex(-1);
         }
       },
       [onChange, searchFiles]
@@ -248,6 +250,7 @@ export const AutocompleteTextarea = React.forwardRef<
         onChange(newValue);
         setShowPopover(false);
         setFileResults([]);
+        setHighlightedIndex(-1);
 
         // Move cursor after inserted value
         setTimeout(() => {
@@ -260,6 +263,58 @@ export const AutocompleteTextarea = React.forwardRef<
     );
 
     /**
+     * Handle keyboard navigation in popover
+     */
+    const handleKeyDown = useCallback(
+      (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+        // Only handle keyboard nav if popover is open
+        if (!showPopover || autocompleteOptions.length === 0) {
+          // Let the parent handle Enter to send prompt
+          if (onKeyPress) {
+            onKeyPress(e);
+          }
+          return;
+        }
+
+        switch (e.key) {
+          case 'ArrowDown':
+            e.preventDefault();
+            setHighlightedIndex((prev) =>
+              prev < autocompleteOptions.length - 1 ? prev + 1 : prev
+            );
+            break;
+
+          case 'ArrowUp':
+            e.preventDefault();
+            setHighlightedIndex((prev) => (prev > 0 ? prev - 1 : -1));
+            break;
+
+          case 'Enter':
+            e.preventDefault();
+            if (highlightedIndex >= 0) {
+              const item = autocompleteOptions[highlightedIndex];
+              if (!('heading' in item)) {
+                handleSelect(item as FileResult | UserResult);
+              }
+            }
+            break;
+
+          case 'Escape':
+            e.preventDefault();
+            setShowPopover(false);
+            break;
+
+          default:
+            // For other keys, call parent handler if provided
+            if (onKeyPress) {
+              onKeyPress(e);
+            }
+        }
+      },
+      [showPopover, autocompleteOptions, highlightedIndex, handleSelect, onKeyPress]
+    );
+
+    /**
      * Render popover content
      */
     const popoverContent = (
@@ -268,10 +323,17 @@ export const AutocompleteTextarea = React.forwardRef<
           maxHeight: '300px',
           overflowY: 'auto',
           minWidth: '250px',
+          border: `1px solid ${token.colorBorder}`,
+          borderRadius: token.borderRadius,
         }}
       >
         {isLoading && (
-          <div style={{ padding: token.paddingMD, textAlign: 'center' }}>
+          <div
+            style={{
+              padding: `${token.paddingXS}px ${token.paddingSM}px`,
+              textAlign: 'center',
+            }}
+          >
             <Spin size="small" />
           </div>
         )}
@@ -279,7 +341,7 @@ export const AutocompleteTextarea = React.forwardRef<
         {!isLoading && autocompleteOptions.length === 0 && (
           <div
             style={{
-              padding: token.paddingMD,
+              padding: `${token.paddingXS}px ${token.paddingSM}px`,
               color: token.colorTextSecondary,
               fontSize: token.fontSizeSM,
             }}
@@ -301,7 +363,7 @@ export const AutocompleteTextarea = React.forwardRef<
                     color: token.colorTextSecondary,
                     textTransform: 'uppercase',
                     borderBottom: `1px solid ${token.colorBorder}`,
-                    marginTop: idx > 0 ? token.marginSM : 0,
+                    marginTop: idx > 0 ? token.paddingXS : 0,
                   }}
                 >
                   {item.heading}
@@ -311,20 +373,29 @@ export const AutocompleteTextarea = React.forwardRef<
 
             const label =
               'path' in item ? item.path : `${item.name} (${item.email})`;
+            const isHighlighted = highlightedIndex === idx;
 
             return (
               <div
                 key={label}
                 onClick={() => handleSelect(item)}
                 style={{
-                  padding: token.paddingSM,
+                  padding: `${token.paddingXS}px ${token.paddingSM}px`,
                   cursor: 'pointer',
                   transition: 'background-color 0.2s',
+                  fontSize: token.fontSize,
+                  lineHeight: 1.4,
+                  backgroundColor: isHighlighted
+                    ? token.colorPrimaryBg
+                    : 'transparent',
+                  color: isHighlighted ? token.colorPrimary : token.colorText,
                 }}
                 onMouseEnter={(e) => {
+                  setHighlightedIndex(idx);
                   e.currentTarget.style.backgroundColor = token.colorBgTextHover;
                 }}
                 onMouseLeave={(e) => {
+                  setHighlightedIndex(-1);
                   e.currentTarget.style.backgroundColor = 'transparent';
                 }}
               >
@@ -354,7 +425,7 @@ export const AutocompleteTextarea = React.forwardRef<
           }}
           value={value}
           onChange={handleChange}
-          onKeyPress={onKeyPress}
+          onKeyDown={handleKeyDown}
           placeholder={placeholder}
           autoSize={autoSize || { minRows: 2, maxRows: 10 }}
           className="agor-textarea"
