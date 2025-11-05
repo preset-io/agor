@@ -88,6 +88,25 @@ const AutocompleteItem: React.FC<{ entity: AutocompleteEntity }> = ({ entity }) 
 };
 
 /**
+ * Loading component for autocomplete
+ */
+const LoadingComponent: React.FC = () => {
+  const { token } = theme.useToken();
+  return (
+    <div
+      style={{
+        padding: `${token.paddingSM}px`,
+        textAlign: 'center',
+        color: token.colorTextSecondary,
+        fontSize: token.fontSizeSM,
+      }}
+    >
+      Searching files...
+    </div>
+  );
+};
+
+/**
  * Extract text at cursor position before the @ trigger
  */
 const getAtTokenQuery = (text: string, position: number): string | null => {
@@ -276,6 +295,7 @@ export const AutocompleteTextarea = React.forwardRef<
         className="agor-textarea"
         minRows={autoSize?.minRows || 2}
         maxRows={autoSize?.maxRows || 10}
+        loadingComponent={LoadingComponent}
         trigger={{
           '@': {
             dataProvider: (token) => {
