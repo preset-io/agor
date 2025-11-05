@@ -173,7 +173,7 @@ const SessionDrawer = ({
     session?.permission_config?.codex?.approvalPolicy || 'on-request'
   );
   const [thinkingMode, setThinkingMode] = React.useState<'auto' | 'manual' | 'off'>(
-    session?.model_config?.thinkingMode || 'off'
+    session?.model_config?.thinkingMode || 'auto'
   );
   const [scrollToBottom, setScrollToBottom] = React.useState<(() => void) | null>(null);
   const [isStopping, setIsStopping] = React.useState(false);

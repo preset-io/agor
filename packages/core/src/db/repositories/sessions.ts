@@ -97,7 +97,12 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         tasks: session.tasks ?? [],
         message_count: session.message_count ?? 0,
         permission_config: session.permission_config,
-        model_config: session.model_config,
+        model_config: session.model_config
+          ? {
+              ...session.model_config,
+              thinkingMode: session.model_config.thinkingMode ?? 'auto',
+            }
+          : undefined,
         custom_context: session.custom_context,
       },
     };

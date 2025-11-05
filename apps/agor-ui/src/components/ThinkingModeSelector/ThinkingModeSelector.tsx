@@ -24,7 +24,7 @@ interface ThinkingModeSelectorProps {
  * ThinkingModeSelector - Dropdown for selecting thinking mode
  */
 export const ThinkingModeSelector: React.FC<ThinkingModeSelectorProps> = ({
-  value = 'off',
+  value = 'auto',
   onChange,
   size = 'middle',
   compact = false,
