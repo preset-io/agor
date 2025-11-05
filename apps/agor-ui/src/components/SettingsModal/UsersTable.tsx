@@ -503,6 +503,12 @@ export const UsersTable: React.FC<UsersTableProps> = ({
         }}
         okText="Save"
         width={900}
+        styles={{
+          body: {
+            height: '500px',
+            overflowY: 'auto',
+          },
+        }}
       >
         <Tabs
           activeKey={activeTab}
