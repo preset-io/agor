@@ -100,7 +100,7 @@ export const AutocompleteTextarea = React.forwardRef<
     ref
   ) => {
     const { token } = theme.useToken();
-    const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const textareaRef = useRef<{ current: HTMLTextAreaElement | null }>({ current: null });
     const popoverContentRef = useRef<HTMLDivElement>(null);
     const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -251,7 +251,7 @@ export const AutocompleteTextarea = React.forwardRef<
       (item: FileResult | UserResult) => {
         if (atIndex === -1) return;
 
-        const cursorPos = textareaRef.current?.selectionStart || 0;
+        const cursorPos = textareaRef.current.current?.selectionStart || 0;
         const textBeforeCursor = value.substring(0, cursorPos);
         const atQueryLength = textBeforeCursor.substring(atIndex + 1).length;
 
@@ -276,8 +276,8 @@ export const AutocompleteTextarea = React.forwardRef<
         // Move cursor after inserted value
         setTimeout(() => {
           const newCursorPos = atIndex + insertText.length + 1;
-          textareaRef.current?.setSelectionRange(newCursorPos, newCursorPos);
-          textareaRef.current?.focus();
+          textareaRef.current.current?.setSelectionRange(newCursorPos, newCursorPos);
+          textareaRef.current.current?.focus();
         }, 0);
       },
       [atIndex, value, onChange]
@@ -479,7 +479,7 @@ export const AutocompleteTextarea = React.forwardRef<
               textarea = node.resizableTextArea.textArea;
             }
             if (textarea) {
-              textareaRef.current = textarea;
+              textareaRef.current.current = textarea;
               if (typeof ref === 'function') {
                 ref(textarea);
               } else if (ref) {
