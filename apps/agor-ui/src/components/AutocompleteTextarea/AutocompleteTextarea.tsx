@@ -152,7 +152,9 @@ export const AutocompleteTextarea = React.forwardRef<
           });
 
           console.log('[AutocompleteTextarea] Got result:', result);
-          setFileResults(Array.isArray(result) ? result : result.data || []);
+          setFileResults(
+            Array.isArray(result) ? (result as FileResult[]) : (result?.data as FileResult[]) || []
+          );
         } catch (error) {
           console.error('File search error:', error);
           setFileResults([]);
@@ -176,12 +178,12 @@ export const AutocompleteTextarea = React.forwardRef<
         return users
           .filter(
             u =>
-              u.name.toLowerCase().includes(lowercaseQuery) ||
+              (u.name && u.name.toLowerCase().includes(lowercaseQuery)) ||
               u.email.toLowerCase().includes(lowercaseQuery)
           )
           .slice(0, MAX_USER_RESULTS)
           .map(u => ({
-            name: u.name,
+            name: u.name || u.email,
             email: u.email,
             type: 'user' as const,
           }));
@@ -458,17 +460,19 @@ export const AutocompleteTextarea = React.forwardRef<
       <Popover
         content={popoverContent}
         open={showPopover && autocompleteOptions.length > 0}
-        trigger="manual"
+        trigger={[]}
         placement="bottomLeft"
         overlayStyle={{ paddingTop: 4 }}
       >
         <TextArea
           ref={node => {
-            textareaRef.current = node;
-            if (typeof ref === 'function') {
-              ref(node);
-            } else if (ref) {
-              ref.current = node;
+            if (node) {
+              textareaRef.current = node.textarea;
+              if (typeof ref === 'function') {
+                ref(node.textarea);
+              } else if (ref) {
+                ref.current = node.textarea;
+              }
             }
           }}
           value={value}
