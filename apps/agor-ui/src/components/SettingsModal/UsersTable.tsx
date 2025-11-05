@@ -1,8 +1,8 @@
-import type { CreateUserInput, MCPServer, UpdateUserInput, User } from '@agor/core/types';
+import type { AgenticToolName, CreateUserInput, MCPServer, UpdateUserInput, User } from '@agor/core/types';
+import { getDefaultPermissionMode } from '@agor/core/types';
 import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
 import {
   Button,
-  Collapse,
   Flex,
   Form,
   Input,
@@ -11,14 +11,15 @@ import {
   Select,
   Space,
   Table,
+  Tabs,
   Tag,
   Typography,
 } from 'antd';
 import { useEffect, useState } from 'react';
+import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
 import { ApiKeyFields, type ApiKeyStatus } from '../ApiKeyFields';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { EnvVarEditor } from '../EnvVarEditor';
-import { DefaultAgenticSettings } from './DefaultAgenticSettings';
 
 // Using Typography.Text directly to avoid DOM Text interface collision
 
@@ -42,6 +43,14 @@ export const UsersTable: React.FC<UsersTableProps> = ({
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [form] = Form.useForm();
 
+  // Active tab in edit modal
+  const [activeTab, setActiveTab] = useState<string>('general');
+
+  // Separate forms for each agentic tool tab
+  const [claudeForm] = Form.useForm();
+  const [codexForm] = Form.useForm();
+  const [geminiForm] = Form.useForm();
+
   // API key management state for user edit
   const [userApiKeyStatus, setUserApiKeyStatus] = useState<ApiKeyStatus>({
     ANTHROPIC_API_KEY: false,
@@ -53,6 +62,13 @@ export const UsersTable: React.FC<UsersTableProps> = ({
   // Environment variable management state for user edit
   const [userEnvVars, setUserEnvVars] = useState<Record<string, boolean>>({});
   const [savingEnvVars, setSavingEnvVars] = useState<Record<string, boolean>>({});
+
+  // Saving state for agentic tool tabs
+  const [savingAgenticConfig, setSavingAgenticConfig] = useState<Record<AgenticToolName, boolean>>({
+    'claude-code': false,
+    codex: false,
+    gemini: false,
+  });
 
   // Load user's API key and env var status when editing
   useEffect(() => {
@@ -97,12 +113,39 @@ export const UsersTable: React.FC<UsersTableProps> = ({
 
   const handleEdit = (user: User) => {
     setEditingUser(user);
+    setActiveTab('general'); // Reset to general tab
+
     form.setFieldsValue({
       email: user.email,
       name: user.name,
       emoji: user.emoji,
       role: user.role,
     });
+
+    // Initialize agentic tool forms with user's defaults
+    const defaults = user.default_agentic_config;
+
+    claudeForm.setFieldsValue({
+      permissionMode: defaults?.['claude-code']?.permissionMode || getDefaultPermissionMode('claude-code'),
+      modelConfig: defaults?.['claude-code']?.modelConfig,
+      mcpServerIds: defaults?.['claude-code']?.mcpServerIds || [],
+    });
+
+    codexForm.setFieldsValue({
+      permissionMode: defaults?.codex?.permissionMode || getDefaultPermissionMode('codex'),
+      modelConfig: defaults?.codex?.modelConfig,
+      mcpServerIds: defaults?.codex?.mcpServerIds || [],
+      codexSandboxMode: defaults?.codex?.codexSandboxMode,
+      codexApprovalPolicy: defaults?.codex?.codexApprovalPolicy,
+      codexNetworkAccess: defaults?.codex?.codexNetworkAccess,
+    });
+
+    geminiForm.setFieldsValue({
+      permissionMode: defaults?.gemini?.permissionMode || getDefaultPermissionMode('gemini'),
+      modelConfig: defaults?.gemini?.modelConfig,
+      mcpServerIds: defaults?.gemini?.mcpServerIds || [],
+    });
+
     setEditModalOpen(true);
   };
 
@@ -220,6 +263,71 @@ export const UsersTable: React.FC<UsersTableProps> = ({
     } finally {
       setSavingEnvVars(prev => ({ ...prev, [key]: false }));
     }
+  };
+
+  // Handle agentic tool config save
+  const handleAgenticConfigSave = async (tool: AgenticToolName) => {
+    if (!editingUser) return;
+
+    const formMap = {
+      'claude-code': claudeForm,
+      codex: codexForm,
+      gemini: geminiForm,
+    };
+
+    const currentForm = formMap[tool];
+
+    try {
+      setSavingAgenticConfig(prev => ({ ...prev, [tool]: true }));
+
+      const values = currentForm.getFieldsValue();
+
+      // Merge with existing config for other tools
+      const newConfig = {
+        ...editingUser.default_agentic_config,
+        [tool]: {
+          modelConfig: values.modelConfig,
+          permissionMode: values.permissionMode,
+          mcpServerIds: values.mcpServerIds,
+          ...(tool === 'codex' && {
+            codexSandboxMode: values.codexSandboxMode,
+            codexApprovalPolicy: values.codexApprovalPolicy,
+            codexNetworkAccess: values.codexNetworkAccess,
+          }),
+        },
+      };
+
+      await onUpdate?.(editingUser.user_id, {
+        default_agentic_config: newConfig,
+      });
+    } catch (err) {
+      console.error(`Failed to save ${tool} config:`, err);
+      throw err;
+    } finally {
+      setSavingAgenticConfig(prev => ({ ...prev, [tool]: false }));
+    }
+  };
+
+  // Handle agentic tool config clear
+  const handleAgenticConfigClear = (tool: AgenticToolName) => {
+    const formMap = {
+      'claude-code': claudeForm,
+      codex: codexForm,
+      gemini: geminiForm,
+    };
+
+    const currentForm = formMap[tool];
+
+    currentForm.setFieldsValue({
+      modelConfig: undefined,
+      permissionMode: getDefaultPermissionMode(tool),
+      mcpServerIds: [],
+      ...(tool === 'codex' && {
+        codexSandboxMode: undefined,
+        codexApprovalPolicy: undefined,
+        codexNetworkAccess: undefined,
+      }),
+    });
   };
 
   const getRoleColor = (role: User['role']) => {
@@ -391,124 +499,170 @@ export const UsersTable: React.FC<UsersTableProps> = ({
           form.resetFields();
           setEditModalOpen(false);
           setEditingUser(null);
+          setActiveTab('general');
         }}
         okText="Save"
-        width={800}
+        width={900}
       >
-        <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
-          <Form.Item label="Name" style={{ marginBottom: 24 }}>
-            <Flex gap={8}>
-              <Form.Item name="emoji" noStyle>
-                <FormEmojiPickerInput form={form} fieldName="emoji" defaultEmoji="👤" />
-              </Form.Item>
-              <Form.Item name="name" noStyle style={{ flex: 1 }}>
-                <Input placeholder="John Doe" style={{ flex: 1 }} />
-              </Form.Item>
-            </Flex>
-          </Form.Item>
+        <Tabs
+          activeKey={activeTab}
+          onChange={setActiveTab}
+          style={{ marginTop: 16 }}
+          items={[
+            {
+              key: 'general',
+              label: 'General',
+              children: (
+                <Form form={form} layout="vertical" style={{ paddingTop: 8 }}>
+                  <Form.Item label="Name" style={{ marginBottom: 24 }}>
+                    <Flex gap={8}>
+                      <Form.Item name="emoji" noStyle>
+                        <FormEmojiPickerInput form={form} fieldName="emoji" defaultEmoji="👤" />
+                      </Form.Item>
+                      <Form.Item name="name" noStyle style={{ flex: 1 }}>
+                        <Input placeholder="John Doe" style={{ flex: 1 }} />
+                      </Form.Item>
+                    </Flex>
+                  </Form.Item>
 
-          <Form.Item
-            label="Email"
-            name="email"
-            rules={[
-              { required: true, message: 'Please enter an email' },
-              { type: 'email', message: 'Please enter a valid email' },
-            ]}
-          >
-            <Input placeholder="user@example.com" />
-          </Form.Item>
+                  <Form.Item
+                    label="Email"
+                    name="email"
+                    rules={[
+                      { required: true, message: 'Please enter an email' },
+                      { type: 'email', message: 'Please enter a valid email' },
+                    ]}
+                  >
+                    <Input placeholder="user@example.com" />
+                  </Form.Item>
 
-          <Form.Item label="Password" name="password" help="Leave blank to keep current password">
-            <Input.Password placeholder="••••••••" />
-          </Form.Item>
+                  <Form.Item label="Password" name="password" help="Leave blank to keep current password">
+                    <Input.Password placeholder="••••••••" />
+                  </Form.Item>
 
-          <Form.Item
-            label="Role"
-            name="role"
-            rules={[{ required: true, message: 'Please select a role' }]}
-          >
-            <Select>
-              <Select.Option value="owner">Owner</Select.Option>
-              <Select.Option value="admin">Admin</Select.Option>
-              <Select.Option value="member">Member</Select.Option>
-              <Select.Option value="viewer">Viewer</Select.Option>
-            </Select>
-          </Form.Item>
-
-          {/* API Keys Section */}
-          <Form.Item label="API Keys">
-            <Collapse
-              ghost
-              items={[
-                {
-                  key: 'api-keys',
-                  label: 'Configure Per-User API Keys',
-                  children: (
-                    <div style={{ paddingTop: 8 }}>
-                      <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
-                        Per-user API keys take precedence over global settings. These keys are
-                        encrypted at rest.
-                      </Typography.Paragraph>
-                      <ApiKeyFields
-                        keyStatus={userApiKeyStatus}
-                        onSave={handleApiKeySave}
-                        onClear={handleApiKeyClear}
-                        saving={savingApiKeys}
-                      />
-                    </div>
-                  ),
-                },
-              ]}
-            />
-          </Form.Item>
-
-          {/* Environment Variables Section */}
-          <Form.Item label="Environment Variables">
-            <Collapse
-              ghost
-              items={[
-                {
-                  key: 'env-vars',
-                  label: 'Configure Environment Variables',
-                  children: (
-                    <div style={{ paddingTop: 8 }}>
-                      <EnvVarEditor
-                        envVars={userEnvVars}
-                        onSave={handleEnvVarSave}
-                        onDelete={handleEnvVarDelete}
-                        loading={savingEnvVars}
-                      />
-                    </div>
-                  ),
-                },
-              ]}
-            />
-          </Form.Item>
-
-          {/* Default Agentic Settings Section */}
-          <Form.Item label="Default Agentic Settings">
-            <Collapse
-              ghost
-              items={[
-                {
-                  key: 'agentic-settings',
-                  label: 'Configure Default Agentic Tool Settings',
-                  children: (
-                    <DefaultAgenticSettings
-                      defaultConfig={editingUser?.default_agentic_config}
-                      mcpServers={mcpServers}
-                      onSave={async config => {
-                        if (editingUser && onUpdate) {
-                          await onUpdate(editingUser.user_id, { default_agentic_config: config });
-                        }
-                      }}
-                    />
-                  ),
-                },
-              ]}
-            />
-          </Form.Item>
-        </Form>
+                  <Form.Item
+                    label="Role"
+                    name="role"
+                    rules={[{ required: true, message: 'Please select a role' }]}
+                  >
+                    <Select>
+                      <Select.Option value="owner">Owner</Select.Option>
+                      <Select.Option value="admin">Admin</Select.Option>
+                      <Select.Option value="member">Member</Select.Option>
+                      <Select.Option value="viewer">Viewer</Select.Option>
+                    </Select>
+                  </Form.Item>
+                </Form>
+              ),
+            },
+            {
+              key: 'api-keys',
+              label: 'API Keys',
+              children: (
+                <div style={{ paddingTop: 8 }}>
+                  <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
+                    Per-user API keys take precedence over global settings. These keys are encrypted at rest.
+                  </Typography.Paragraph>
+                  <ApiKeyFields
+                    keyStatus={userApiKeyStatus}
+                    onSave={handleApiKeySave}
+                    onClear={handleApiKeyClear}
+                    saving={savingApiKeys}
+                  />
+                </div>
+              ),
+            },
+            {
+              key: 'env-vars',
+              label: 'Env Vars',
+              children: (
+                <div style={{ paddingTop: 8 }}>
+                  <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
+                    Environment variables are encrypted at rest and available to all sessions for this user.
+                  </Typography.Paragraph>
+                  <EnvVarEditor
+                    envVars={userEnvVars}
+                    onSave={handleEnvVarSave}
+                    onDelete={handleEnvVarDelete}
+                    loading={savingEnvVars}
+                  />
+                </div>
+              ),
+            },
+            {
+              key: 'claude-code',
+              label: 'Claude Code',
+              children: (
+                <div style={{ paddingTop: 8 }}>
+                  <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
+                    Configure default settings for Claude Code. These will prepopulate session creation forms.
+                  </Typography.Paragraph>
+                  <Form form={claudeForm} layout="vertical">
+                    <AgenticToolConfigForm agenticTool="claude-code" mcpServers={mcpServers} showHelpText={false} />
+                    <Space style={{ marginTop: 16 }}>
+                      <Button onClick={() => handleAgenticConfigClear('claude-code')}>Clear Defaults</Button>
+                      <Button
+                        type="primary"
+                        onClick={() => handleAgenticConfigSave('claude-code')}
+                        loading={savingAgenticConfig['claude-code']}
+                      >
+                        Save Defaults
+                      </Button>
+                    </Space>
+                  </Form>
+                </div>
+              ),
+            },
+            {
+              key: 'codex',
+              label: 'Codex',
+              children: (
+                <div style={{ paddingTop: 8 }}>
+                  <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
+                    Configure default settings for Codex. These will prepopulate session creation forms.
+                  </Typography.Paragraph>
+                  <Form form={codexForm} layout="vertical">
+                    <AgenticToolConfigForm agenticTool="codex" mcpServers={mcpServers} showHelpText={false} />
+                    <Space style={{ marginTop: 16 }}>
+                      <Button onClick={() => handleAgenticConfigClear('codex')}>Clear Defaults</Button>
+                      <Button
+                        type="primary"
+                        onClick={() => handleAgenticConfigSave('codex')}
+                        loading={savingAgenticConfig.codex}
+                      >
+                        Save Defaults
+                      </Button>
+                    </Space>
+                  </Form>
+                </div>
+              ),
+            },
+            {
+              key: 'gemini',
+              label: 'Gemini',
+              children: (
+                <div style={{ paddingTop: 8 }}>
+                  <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
+                    Configure default settings for Gemini. These will prepopulate session creation forms.
+                  </Typography.Paragraph>
+                  <Form form={geminiForm} layout="vertical">
+                    <AgenticToolConfigForm agenticTool="gemini" mcpServers={mcpServers} showHelpText={false} />
+                    <Space style={{ marginTop: 16 }}>
+                      <Button onClick={() => handleAgenticConfigClear('gemini')}>Clear Defaults</Button>
+                      <Button
+                        type="primary"
+                        onClick={() => handleAgenticConfigSave('gemini')}
+                        loading={savingAgenticConfig.gemini}
+                      >
+                        Save Defaults
+                      </Button>
+                    </Space>
+                  </Form>
+                </div>
+              ),
+            },
+          ]}
+        />
       </Modal>
     </div>
   );
