@@ -101,6 +101,7 @@ export const AutocompleteTextarea = React.forwardRef<
   ) => {
     const { token } = theme.useToken();
     const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const popoverContentRef = useRef<HTMLDivElement>(null);
     const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
     // Autocomplete state
@@ -110,6 +111,23 @@ export const AutocompleteTextarea = React.forwardRef<
     const [isLoading, setIsLoading] = useState(false);
     const [fileResults, setFileResults] = useState<FileResult[]>([]);
     const [highlightedIndex, setHighlightedIndex] = useState(-1);
+
+    /**
+     * Scroll highlighted item into view
+     */
+    React.useEffect(() => {
+      if (highlightedIndex >= 0 && popoverContentRef.current) {
+        const items = popoverContentRef.current.querySelectorAll('[data-autocomplete-item]');
+        const highlightedItem = items[highlightedIndex];
+
+        if (highlightedItem) {
+          highlightedItem.scrollIntoView({
+            behavior: 'smooth',
+            block: 'nearest',
+          });
+        }
+      }
+    }, [highlightedIndex]);
 
     /**
      * Search files in session's worktree
@@ -267,62 +285,73 @@ export const AutocompleteTextarea = React.forwardRef<
      */
     const handleKeyDown = useCallback(
       (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-        // Only handle keyboard nav if popover is open
-        if (!showPopover || autocompleteOptions.length === 0) {
-          // Let the parent handle Enter to send prompt
-          if (onKeyPress) {
-            onKeyPress(e);
-          }
-          return;
-        }
+        const isPopoverOpen = showPopover && autocompleteOptions.length > 0;
 
         switch (e.key) {
           case 'ArrowDown':
-            e.preventDefault();
-            setHighlightedIndex(prev => (prev < autocompleteOptions.length - 1 ? prev + 1 : prev));
+            if (isPopoverOpen) {
+              e.preventDefault();
+              e.stopPropagation();
+              setHighlightedIndex(prev =>
+                prev < autocompleteOptions.length - 1 ? prev + 1 : prev
+              );
+            }
             break;
 
           case 'ArrowUp':
-            e.preventDefault();
-            setHighlightedIndex(prev => (prev > 0 ? prev - 1 : -1));
+            if (isPopoverOpen) {
+              e.preventDefault();
+              e.stopPropagation();
+              setHighlightedIndex(prev => (prev > 0 ? prev - 1 : -1));
+            }
             break;
 
           case 'Tab':
-            // Tab to select highlighted item (like Enter)
-            e.preventDefault();
-            if (highlightedIndex >= 0) {
-              const item = autocompleteOptions[highlightedIndex];
-              if (!('heading' in item)) {
-                handleSelect(item as FileResult | UserResult);
-              }
-            } else if (autocompleteOptions.length > 0) {
-              // If nothing highlighted, highlight first non-heading item
-              const firstItem = autocompleteOptions.find(item => !('heading' in item));
-              if (firstItem) {
-                const idx = autocompleteOptions.indexOf(firstItem);
-                setHighlightedIndex(idx);
+            if (isPopoverOpen) {
+              // Tab to select highlighted item (like Enter)
+              e.preventDefault();
+              e.stopPropagation();
+              if (highlightedIndex >= 0) {
+                const item = autocompleteOptions[highlightedIndex];
+                if (!('heading' in item)) {
+                  handleSelect(item as FileResult | UserResult);
+                }
+              } else if (autocompleteOptions.length > 0) {
+                // If nothing highlighted, highlight first non-heading item
+                const firstItem = autocompleteOptions.find(item => !('heading' in item));
+                if (firstItem) {
+                  const idx = autocompleteOptions.indexOf(firstItem);
+                  setHighlightedIndex(idx);
+                }
               }
             }
             break;
 
           case 'Enter':
-            e.preventDefault();
-            if (highlightedIndex >= 0) {
+            if (isPopoverOpen && highlightedIndex >= 0) {
+              e.preventDefault();
+              e.stopPropagation();
               const item = autocompleteOptions[highlightedIndex];
               if (!('heading' in item)) {
                 handleSelect(item as FileResult | UserResult);
               }
+            } else if (!isPopoverOpen && onKeyPress) {
+              // Popover closed, let parent handle Enter to send prompt
+              onKeyPress(e);
             }
             break;
 
           case 'Escape':
-            e.preventDefault();
-            setShowPopover(false);
+            if (isPopoverOpen) {
+              e.preventDefault();
+              e.stopPropagation();
+              setShowPopover(false);
+            }
             break;
 
           default:
             // For other keys, call parent handler if provided
-            if (onKeyPress) {
+            if (!isPopoverOpen && onKeyPress) {
               onKeyPress(e);
             }
         }
@@ -335,6 +364,7 @@ export const AutocompleteTextarea = React.forwardRef<
      */
     const popoverContent = (
       <div
+        ref={popoverContentRef}
         style={{
           maxHeight: '300px',
           overflowY: 'auto',
@@ -393,6 +423,7 @@ export const AutocompleteTextarea = React.forwardRef<
             return (
               <div
                 key={label}
+                data-autocomplete-item
                 onClick={() => handleSelect(item)}
                 style={{
                   padding: `${token.paddingXS}px ${token.paddingSM}px`,
