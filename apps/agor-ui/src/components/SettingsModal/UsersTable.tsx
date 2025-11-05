@@ -330,6 +330,32 @@ export const UsersTable: React.FC<UsersTableProps> = ({
     });
   };
 
+  // Unified save handler that routes based on active tab
+  const handleModalSave = async () => {
+    if (!editingUser) return;
+
+    switch (activeTab) {
+      case 'general':
+        handleUpdate();
+        break;
+      case 'api-keys':
+        // API Keys tab - nothing to save (keys save individually)
+        setEditModalOpen(false);
+        setEditingUser(null);
+        break;
+      case 'env-vars':
+        // Env Vars tab - nothing to save (vars save individually)
+        setEditModalOpen(false);
+        setEditingUser(null);
+        break;
+      case 'claude-code':
+      case 'codex':
+      case 'gemini':
+        await handleAgenticConfigSave(activeTab as AgenticToolName);
+        break;
+    }
+  };
+
   const getRoleColor = (role: User['role']) => {
     switch (role) {
       case 'owner':
@@ -494,7 +520,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
       <Modal
         title="Edit User"
         open={editModalOpen}
-        onOk={handleUpdate}
+        onOk={handleModalSave}
         onCancel={() => {
           form.resetFields();
           setEditModalOpen(false);
@@ -502,6 +528,16 @@ export const UsersTable: React.FC<UsersTableProps> = ({
           setActiveTab('general');
         }}
         okText="Save"
+        cancelText="Close"
+        confirmLoading={
+          activeTab === 'claude-code'
+            ? savingAgenticConfig['claude-code']
+            : activeTab === 'codex'
+              ? savingAgenticConfig.codex
+              : activeTab === 'gemini'
+                ? savingAgenticConfig.gemini
+                : false
+        }
         width={900}
         styles={{
           body: {
@@ -605,17 +641,10 @@ export const UsersTable: React.FC<UsersTableProps> = ({
                   </Typography.Paragraph>
                   <Form form={claudeForm} layout="vertical">
                     <AgenticToolConfigForm agenticTool="claude-code" mcpServers={mcpServers} showHelpText={false} />
-                    <Space style={{ marginTop: 16 }}>
-                      <Button onClick={() => handleAgenticConfigClear('claude-code')}>Clear Defaults</Button>
-                      <Button
-                        type="primary"
-                        onClick={() => handleAgenticConfigSave('claude-code')}
-                        loading={savingAgenticConfig['claude-code']}
-                      >
-                        Save Defaults
-                      </Button>
-                    </Space>
                   </Form>
+                  <div style={{ marginTop: 16 }}>
+                    <Button onClick={() => handleAgenticConfigClear('claude-code')}>Clear Defaults</Button>
+                  </div>
                 </div>
               ),
             },
@@ -629,17 +658,10 @@ export const UsersTable: React.FC<UsersTableProps> = ({
                   </Typography.Paragraph>
                   <Form form={codexForm} layout="vertical">
                     <AgenticToolConfigForm agenticTool="codex" mcpServers={mcpServers} showHelpText={false} />
-                    <Space style={{ marginTop: 16 }}>
-                      <Button onClick={() => handleAgenticConfigClear('codex')}>Clear Defaults</Button>
-                      <Button
-                        type="primary"
-                        onClick={() => handleAgenticConfigSave('codex')}
-                        loading={savingAgenticConfig.codex}
-                      >
-                        Save Defaults
-                      </Button>
-                    </Space>
                   </Form>
+                  <div style={{ marginTop: 16 }}>
+                    <Button onClick={() => handleAgenticConfigClear('codex')}>Clear Defaults</Button>
+                  </div>
                 </div>
               ),
             },
@@ -653,17 +675,10 @@ export const UsersTable: React.FC<UsersTableProps> = ({
                   </Typography.Paragraph>
                   <Form form={geminiForm} layout="vertical">
                     <AgenticToolConfigForm agenticTool="gemini" mcpServers={mcpServers} showHelpText={false} />
-                    <Space style={{ marginTop: 16 }}>
-                      <Button onClick={() => handleAgenticConfigClear('gemini')}>Clear Defaults</Button>
-                      <Button
-                        type="primary"
-                        onClick={() => handleAgenticConfigSave('gemini')}
-                        loading={savingAgenticConfig.gemini}
-                      >
-                        Save Defaults
-                      </Button>
-                    </Space>
                   </Form>
+                  <div style={{ marginTop: 16 }}>
+                    <Button onClick={() => handleAgenticConfigClear('gemini')}>Clear Defaults</Button>
+                  </div>
                 </div>
               ),
             },
