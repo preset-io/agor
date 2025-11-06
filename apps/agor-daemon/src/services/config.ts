@@ -70,7 +70,7 @@ export class ConfigService {
   /**
    * Update config values
    *
-   * SECURITY: Only allow updating credentials section from UI
+   * SECURITY: Only allow updating credentials and opencode sections from UI
    */
   async patch(_id: null, data: Partial<AgorConfig>, _params?: Params): Promise<AgorConfig> {
     const config = await loadConfig();
@@ -91,6 +91,22 @@ export class ConfigService {
           // Set the key
           (config.credentials as Record<string, string>)[key] = value;
         }
+      }
+    }
+
+    // Allow updating opencode configuration
+    if (data.opencode) {
+      // Initialize opencode if not present
+      if (!config.opencode) {
+        config.opencode = {};
+      }
+
+      // Update opencode settings
+      if (data.opencode.enabled !== undefined) {
+        config.opencode.enabled = data.opencode.enabled;
+      }
+      if (data.opencode.serverUrl !== undefined) {
+        config.opencode.serverUrl = data.opencode.serverUrl;
       }
     }
 

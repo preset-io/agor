@@ -12,7 +12,7 @@ import {
   InfoCircleOutlined,
   LoadingOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, Form, Input, Space, Spin, Switch, theme, Tooltip } from 'antd';
+import { Alert, Button, Form, Input, Space, Spin, Switch, message, theme, Tooltip } from 'antd';
 import { useEffect, useState } from 'react';
 
 export interface OpenCodeTabProps {
@@ -91,10 +91,10 @@ export const OpenCodeTab: React.FC<OpenCodeTabProps> = ({ client }) => {
         },
       });
 
-      // Show success message
-      // In real implementation, would use message/notification
-      console.log('OpenCode settings saved');
+      message.success('OpenCode settings saved successfully');
     } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Failed to save OpenCode settings';
+      message.error(errorMsg);
       console.error('Failed to save OpenCode settings:', err);
     }
   };
