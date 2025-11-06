@@ -1,5 +1,6 @@
-import React from 'react';
-import { Typography } from 'antd';
+import { Typography, theme } from 'antd';
+import type React from 'react';
+import { useState } from 'react';
 import { TEXT_TRUNCATION } from '../../constants/ui';
 
 const { Paragraph } = Typography;
@@ -66,6 +67,30 @@ export const CollapsibleText: React.FC<CollapsibleTextProps> = ({
   style,
   code = false,
 }) => {
+  const { token } = theme.useToken();
+  const [expanded, setExpanded] = useState(false);
+
+  const lines = children.split('\n');
+  const shouldTruncate = lines.length > maxLines + 5;
+
+  if (!shouldTruncate) {
+    const computedStyle: React.CSSProperties = {
+      ...style,
+      ...(preserveWhitespace && { whiteSpace: 'pre-wrap' }),
+      ...(code && { fontFamily: 'monospace' }),
+      wordWrap: 'break-word',
+    };
+
+    return (
+      <div className={className} style={computedStyle}>
+        {children}
+      </div>
+    );
+  }
+
+  const displayContent = expanded ? children : lines.slice(0, maxLines).join('\n');
+  const lineCount = lines.length;
+
   const computedStyle: React.CSSProperties = {
     ...style,
     ...(preserveWhitespace && { whiteSpace: 'pre-wrap' }),
@@ -73,16 +98,38 @@ export const CollapsibleText: React.FC<CollapsibleTextProps> = ({
   };
 
   return (
-    <Paragraph
-      className={className}
-      style={computedStyle}
-      ellipsis={{
-        rows: maxLines,
-        expandable: true,
-        symbol: 'show more',
-      }}
-    >
-      {children}
-    </Paragraph>
+    <div className={className} style={computedStyle}>
+      <div style={{ whiteSpace: 'pre-wrap', wordWrap: 'break-word' }}>{displayContent}</div>
+
+      <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {!expanded && (
+          <div
+            style={{
+              fontStyle: 'italic',
+              opacity: 0.6,
+              fontSize: token.fontSizeSM,
+              color: token.colorTextTertiary,
+            }}
+          >
+            ... ({lineCount - maxLines} more lines)
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={() => setExpanded(!expanded)}
+          style={{
+            fontSize: token.fontSizeSM,
+            cursor: 'pointer',
+            alignSelf: 'flex-start',
+            color: token.colorLink,
+            background: 'none',
+            border: 'none',
+            padding: 0,
+          }}
+        >
+          {expanded ? 'show less' : 'show more'}
+        </button>
+      </div>
+    </div>
   );
 };

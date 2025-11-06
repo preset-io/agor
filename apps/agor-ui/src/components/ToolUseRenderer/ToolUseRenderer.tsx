@@ -16,7 +16,9 @@
 import type { ContentBlock as CoreContentBlock } from '@agor/core/types';
 import { theme } from 'antd';
 import type React from 'react';
+import { shouldUseAnsiRendering } from '../../utils/ansi';
 import { CollapsibleText } from '../CollapsibleText';
+import { CollapsibleAnsiText } from '../CollapsibleText/CollapsibleAnsiText';
 import { getToolRenderer } from './renderers';
 
 interface ToolUseBlock {
@@ -95,6 +97,9 @@ export const ToolUseRenderer: React.FC<ToolUseRendererProps> = ({ toolUse, toolR
   const resultText = getResultText();
   const hasContent = resultText.trim().length > 0;
 
+  // Detect if we should use ANSI rendering for this tool output
+  const useAnsi = shouldUseAnsiRendering(name, resultText);
+
   // Default generic content renderer (no ThoughtChain wrapper - that's handled by parent)
   return toolResult ? (
     <div>
@@ -103,29 +108,48 @@ export const ToolUseRenderer: React.FC<ToolUseRendererProps> = ({ toolUse, toolR
         style={{
           padding: token.sizeUnit,
           borderRadius: token.borderRadius,
-          background: isError ? 'rgba(255, 77, 79, 0.05)' : 'rgba(82, 196, 26, 0.05)',
-          border: `1px solid ${isError ? token.colorErrorBorder : token.colorSuccessBorder}`,
+          ...(isError && {
+            background: 'rgba(255, 77, 79, 0.05)',
+            border: `1px solid ${token.colorErrorBorder}`,
+          }),
         }}
       >
-        <CollapsibleText
-          code
-          preserveWhitespace
-          style={{
-            fontSize: 11,
-            margin: 0,
-            ...((!hasContent && {
-              fontStyle: 'italic',
+        {useAnsi ? (
+          <CollapsibleAnsiText
+            style={{
+              fontSize: token.fontSizeSM,
+              margin: 0,
               color: token.colorTextSecondary,
-            }) as React.CSSProperties),
-          }}
-        >
-          {hasContent ? resultText : '(no output)'}
-        </CollapsibleText>
+              ...((!hasContent && {
+                fontStyle: 'italic',
+              }) as React.CSSProperties),
+            }}
+          >
+            {hasContent ? resultText : '(no output)'}
+          </CollapsibleAnsiText>
+        ) : (
+          <CollapsibleText
+            code
+            preserveWhitespace
+            style={{
+              fontSize: token.fontSizeSM,
+              margin: 0,
+              color: token.colorTextSecondary,
+              ...((!hasContent && {
+                fontStyle: 'italic',
+              }) as React.CSSProperties),
+            }}
+          >
+            {hasContent ? resultText : '(no output)'}
+          </CollapsibleText>
+        )}
       </div>
 
       {/* Tool input parameters (collapsible below result) */}
       <details style={{ marginTop: token.sizeUnit }}>
-        <summary style={{ cursor: 'pointer', fontSize: 11, color: token.colorTextSecondary }}>
+        <summary
+          style={{ cursor: 'pointer', fontSize: token.fontSizeSM, color: token.colorTextSecondary }}
+        >
           Show input parameters
         </summary>
         <pre
@@ -135,7 +159,7 @@ export const ToolUseRenderer: React.FC<ToolUseRendererProps> = ({ toolUse, toolR
             padding: token.sizeUnit,
             borderRadius: token.borderRadius,
             fontFamily: 'Monaco, Menlo, Ubuntu Mono, Consolas, source-code-pro, monospace',
-            fontSize: 10,
+            fontSize: token.fontSizeSM,
             overflowX: 'auto',
           }}
         >

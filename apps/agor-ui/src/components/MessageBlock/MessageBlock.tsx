@@ -25,6 +25,7 @@ const { Text } = Typography;
 
 import type React from 'react';
 import { AgorAvatar } from '../AgorAvatar';
+import { CollapsibleMarkdown } from '../CollapsibleText/CollapsibleMarkdown';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { PermissionRequestBlock } from '../PermissionRequestBlock';
 import { ThinkingBlock } from '../ThinkingBlock';
@@ -406,13 +407,20 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
                   gap: token.sizeUnit,
                 }}
               >
-                {textBeforeTools.map((text, idx) => (
-                  <MarkdownRenderer
-                    key={`text-${idx}-${text.substring(0, 20)}`}
-                    content={text}
-                    inline
-                  />
-                ))}
+                {textBeforeTools.map((text, idx) => {
+                  // Use CollapsibleMarkdown for long text blocks (15+ lines)
+                  const shouldTruncate = text.split('\n').length > 15;
+
+                  return (
+                    <div key={`text-${idx}-${text.substring(0, 20)}`}>
+                      {shouldTruncate ? (
+                        <CollapsibleMarkdown maxLines={10}>{text}</CollapsibleMarkdown>
+                      ) : (
+                        <MarkdownRenderer content={text} inline />
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             }
             variant={isUser ? 'filled' : 'outlined'}
@@ -454,7 +462,16 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
             typing={shouldUseTyping ? { step: 5, interval: 20 } : false}
             content={
               <div style={{ wordWrap: 'break-word' }}>
-                <MarkdownRenderer content={textAfterTools} inline />
+                {(() => {
+                  const combinedText = textAfterTools.join('\n\n');
+                  const shouldTruncate = combinedText.split('\n').length > 15;
+
+                  return shouldTruncate ? (
+                    <CollapsibleMarkdown maxLines={10}>{combinedText}</CollapsibleMarkdown>
+                  ) : (
+                    <MarkdownRenderer content={combinedText} inline />
+                  );
+                })()}
               </div>
             }
             variant="outlined"

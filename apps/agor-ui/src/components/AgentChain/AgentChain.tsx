@@ -21,6 +21,7 @@ import {
   CheckSquareOutlined,
   CloseCircleOutlined,
   CodeOutlined,
+  CopyOutlined,
   DownOutlined,
   EditOutlined,
   FileAddOutlined,
@@ -36,9 +37,10 @@ import {
 } from '@ant-design/icons';
 import type { ThoughtChainProps } from '@ant-design/x';
 import { ThoughtChain } from '@ant-design/x';
-import { Space, Spin, Tag, Tooltip, Typography, theme } from 'antd';
+import { Popover, Space, Spin, Tag, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { useMemo, useState } from 'react';
+import { CollapsibleText } from '../CollapsibleText';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { ToolUseRenderer } from '../ToolUseRenderer';
 
@@ -333,19 +335,17 @@ export const AgentChain: React.FC<AgentChainProps> = ({ messages }) => {
         // No status - thoughts are neutral, not success/error
         ...(thoughtContent.trim() && {
           content: (
-            <div
+            <CollapsibleText
+              maxLines={8}
+              preserveWhitespace
               style={{
-                padding: token.sizeUnit,
-                borderRadius: token.borderRadius,
-                background: token.colorBgElevated,
+                fontSize: token.fontSizeSM,
+                margin: 0,
+                color: token.colorTextTertiary,
               }}
             >
-              <MarkdownRenderer
-                content={thoughtContent}
-                inline
-                style={{ color: token.colorTextTertiary }}
-              />
-            </div>
+              {thoughtContent}
+            </CollapsibleText>
           ),
         }),
       };
@@ -453,10 +453,57 @@ export const AgentChain: React.FC<AgentChainProps> = ({ messages }) => {
 
       {/* Files affected */}
       {stats.filesAffected.length > 0 && (
-        <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-          <FileTextOutlined /> {stats.filesAffected.length}{' '}
-          {stats.filesAffected.length === 1 ? 'file' : 'files'} affected
-        </Typography.Text>
+        <Popover
+          content={
+            <div style={{ maxWidth: 450 }}>
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 4,
+                }}
+              >
+                {stats.filesAffected.map(file => (
+                  <div
+                    key={file}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 8,
+                      padding: '4px 0',
+                      fontSize: token.fontSizeSM,
+                      color: token.colorTextSecondary,
+                      fontFamily: 'monospace',
+                      wordBreak: 'break-all',
+                    }}
+                  >
+                    <span style={{ flex: 1 }}>{file}</span>
+                    <CopyOutlined
+                      style={{
+                        fontSize: 10,
+                        color: token.colorTextTertiary,
+                        cursor: 'pointer',
+                        opacity: 0.5,
+                        transition: 'opacity 0.2s',
+                        flexShrink: 0,
+                      }}
+                      onClick={() => navigator.clipboard.writeText(file)}
+                      title="Copy to clipboard"
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          }
+          title={`${stats.filesAffected.length} ${stats.filesAffected.length === 1 ? 'file' : 'files'} affected`}
+          trigger="hover"
+        >
+          <Typography.Text type="secondary" style={{ fontSize: 11, cursor: 'pointer' }}>
+            <FileTextOutlined /> {stats.filesAffected.length}{' '}
+            {stats.filesAffected.length === 1 ? 'file' : 'files'} affected
+          </Typography.Text>
+        </Popover>
       )}
     </Space>
   );

@@ -11,8 +11,8 @@
 import { BulbOutlined, DownOutlined, RightOutlined } from '@ant-design/icons';
 import { Collapse, Typography, theme } from 'antd';
 import type React from 'react';
-import { CollapsibleText } from '../CollapsibleText';
 import { TEXT_TRUNCATION } from '../../constants/ui';
+import { CollapsibleText } from '../CollapsibleText';
 
 const { Text } = Typography;
 
@@ -47,7 +47,7 @@ export const ThinkingBlock: React.FC<ThinkingBlockProps> = ({
   const thinkingHeader = (
     <div style={{ display: 'flex', alignItems: 'center', gap: token.sizeUnit }}>
       <BulbOutlined style={{ color: token.colorTextSecondary, fontSize: 14 }} />
-      <Text type="secondary" style={{ fontSize: 13 }}>
+      <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
         Extended Thinking
         {isStreaming && ' (streaming...)'}
       </Text>
@@ -76,32 +76,25 @@ export const ThinkingBlock: React.FC<ThinkingBlockProps> = ({
               border: 'none',
             },
             body: {
-              padding: `${token.sizeUnit}px ${token.sizeUnit * 1.5}px`,
-              paddingTop: 0,
+              padding: `${token.sizeUnit * 0.5}px ${token.sizeUnit * 1.5}px`,
               background: 'transparent',
+              fontSize: token.fontSizeSM,
             },
           },
-          children: (
-            <div
+          children: content ? (
+            <CollapsibleText
+              maxLines={TEXT_TRUNCATION.DEFAULT_LINES}
+              preserveWhitespace
               style={{
-                fontSize: 13,
-                whiteSpace: 'pre-wrap',
+                fontSize: token.fontSizeSM,
+                margin: 0,
+                color: token.colorTextSecondary,
               }}
             >
-              <div style={{ color: token.colorTextTertiary }}>
-                {content ? (
-                  <CollapsibleText
-                    maxLines={TEXT_TRUNCATION.DEFAULT_LINES}
-                    preserveWhitespace
-                    style={{ fontSize: 13, marginBottom: 0 }}
-                  >
-                    {content}
-                  </CollapsibleText>
-                ) : (
-                  <Text>Thinking...</Text>
-                )}
-              </div>
-            </div>
+              {content}
+            </CollapsibleText>
+          ) : (
+            <Text type="secondary">Thinking...</Text>
           ),
         },
       ]}
