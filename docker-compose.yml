@@ -28,9 +28,9 @@ services:
       # Mount entire repo for hot-reload (includes node_modules from host)
       - .:/app
       # Persist database/config (unique per project name)
-      - agor-data:/root/.agor
+      - agor-data:/home/agor/.agor
       # Mount SSH keys for git authentication (dev only)
-      - ~/.ssh:/root/.ssh:ro
+      - ~/.ssh:/home/agor/.ssh:ro
     stdin_open: true
     tty: true
 

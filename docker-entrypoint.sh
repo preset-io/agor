@@ -21,8 +21,8 @@ echo "📦 Initializing Agor environment..."
 pnpm agor init --skip-if-exists
 
 # Always ensure auth is enabled in docker (create/overwrite config for multiplayer mode)
-mkdir -p /root/.agor
-cat > /root/.agor/config.yaml <<EOF
+mkdir -p /home/agor/.agor
+cat > /home/agor/.agor/config.yaml <<EOF
 daemon:
   port: ${DAEMON_PORT:-3030}
   host: localhost

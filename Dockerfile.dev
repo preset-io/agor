@@ -25,11 +25,22 @@ WORKDIR /app
 COPY docker-entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
-# Create .agor directory for database and config
-RUN mkdir -p /root/.agor
+# Create non-root 'agor' user for development
+RUN useradd -m -s /bin/bash agor && \
+    # Grant sudoers access without password (needed for some development tasks)
+    mkdir -p /etc/sudoers.d && \
+    echo "agor ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/agor && \
+    chmod 0440 /etc/sudoers.d/agor && \
+    # Create .agor directory for database and config
+    mkdir -p /home/agor/.agor && \
+    # Ensure agor owns the workspace
+    chown -R agor:agor /app /home/agor/.agor
 
 # Expose UI port only (daemon is internal)
 EXPOSE ${VITE_PORT:-5173}
+
+# Switch to agor user
+USER agor
 
 # Use entrypoint script to start both processes
 ENTRYPOINT ["docker-entrypoint.sh"]
