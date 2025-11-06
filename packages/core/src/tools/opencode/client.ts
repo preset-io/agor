@@ -70,7 +70,7 @@ export class OpenCodeClient {
    */
   async createSession(params: { title: string; project: string }): Promise<OpenCodeSession> {
     try {
-      const response = await fetch(`${this.config.serverUrl}/api/session`, {
+      const response = await fetch(`${this.config.serverUrl}/session`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -103,11 +103,11 @@ export class OpenCodeClient {
    */
   async sendPrompt(sessionId: string, prompt: string): Promise<string> {
     try {
-      const response = await fetch(`${this.config.serverUrl}/api/session/${sessionId}`, {
+      const response = await fetch(`${this.config.serverUrl}/session/${sessionId}/message`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          message: prompt,
+          parts: [{ type: 'text', text: prompt }],
         }),
       });
 
@@ -149,7 +149,7 @@ export class OpenCodeClient {
    */
   async getMessages(sessionId: string): Promise<Record<string, unknown>[]> {
     try {
-      const response = await fetch(`${this.config.serverUrl}/api/session/${sessionId}/messages`, {
+      const response = await fetch(`${this.config.serverUrl}/session/${sessionId}/message`, {
         method: 'GET',
       });
 
@@ -174,7 +174,7 @@ export class OpenCodeClient {
    */
   async deleteSession(sessionId: string): Promise<void> {
     try {
-      const response = await fetch(`${this.config.serverUrl}/api/session/${sessionId}`, {
+      const response = await fetch(`${this.config.serverUrl}/session/${sessionId}`, {
         method: 'DELETE',
       });
 
@@ -195,7 +195,7 @@ export class OpenCodeClient {
     sessionId: string
   ): Promise<{ id: string; title: string; createdAt?: string }> {
     try {
-      const response = await fetch(`${this.config.serverUrl}/api/session/${sessionId}`, {
+      const response = await fetch(`${this.config.serverUrl}/session/${sessionId}`, {
         method: 'GET',
       });
 
@@ -222,7 +222,7 @@ export class OpenCodeClient {
    */
   async listSessions(): Promise<OpenCodeSession[]> {
     try {
-      const response = await fetch(`${this.config.serverUrl}/api/sessions`, {
+      const response = await fetch(`${this.config.serverUrl}/session`, {
         method: 'GET',
       });
 
