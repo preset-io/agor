@@ -12,6 +12,9 @@
  * - ⏳ Session import (future: when OpenCode provides export API)
  */
 
+import { generateId } from '../../lib/ids';
+import type { Message, SessionID, TaskID } from '../../types';
+import { MessageRole } from '../../types';
 import type {
   CreateSessionConfig,
   SessionHandle,
@@ -21,7 +24,6 @@ import type {
   ToolCapabilities,
 } from '../base';
 import type { ITool } from '../base/tool.interface';
-import type { Message } from '../../types';
 import { OpenCodeClient } from './client';
 
 export interface OpenCodeConfig {
@@ -33,14 +35,14 @@ export interface OpenCodeConfig {
  * Service interface for creating messages via FeathersJS
  */
 export interface MessagesService {
-  create(data: Partial<any>): Promise<any>;
+  create(data: Partial<Message>): Promise<Message>;
 }
 
 /**
  * Service interface for updating tasks via FeathersJS
  */
 export interface TasksService {
-  patch(id: string, data: Partial<any>): Promise<any>;
+  patch(id: string, data: Partial<{ status: string }>): Promise<unknown>;
 }
 
 export class OpenCodeTool implements ITool {
@@ -50,13 +52,28 @@ export class OpenCodeTool implements ITool {
   private client: OpenCodeClient | null = null;
   private config: OpenCodeConfig;
   private messagesService?: MessagesService;
+  private sessionMap: Map<string, string> = new Map(); // Agor session ID → OpenCode session ID
+  private sessionModels: Map<string, string | undefined> = new Map(); // Agor session ID → model
 
-  constructor(
-    config: OpenCodeConfig,
-    messagesService?: MessagesService
-  ) {
+  constructor(config: OpenCodeConfig, messagesService?: MessagesService) {
     this.config = config;
     this.messagesService = messagesService;
+  }
+
+  /**
+   * Map an Agor session ID to an OpenCode session ID
+   */
+  mapSession(agorSessionId: string, opencodeSessionId: string): void {
+    this.sessionMap.set(agorSessionId, opencodeSessionId);
+  }
+
+  /**
+   * Set session context (OpenCode session ID and model) for an Agor session
+   * Must be called before executeTask
+   */
+  setSessionContext(agorSessionId: string, opencodeSessionId: string, model?: string): void {
+    this.sessionMap.set(agorSessionId, opencodeSessionId);
+    this.sessionModels.set(agorSessionId, model);
   }
 
   /**
@@ -126,6 +143,13 @@ export class OpenCodeTool implements ITool {
    *
    * Sends prompt to OpenCode and streams response if callbacks provided.
    * CONTRACT: Must call messagesService.create() with complete message
+   *
+   * NOTE: Must call setSessionContext() before this method to set OpenCode session ID and model
+   *
+   * @param sessionId - Agor session ID (for message creation)
+   * @param prompt - User prompt
+   * @param taskId - Task ID
+   * @param streamingCallbacks - Optional streaming callbacks
    */
   async executeTask?(
     sessionId: string,
@@ -136,10 +160,31 @@ export class OpenCodeTool implements ITool {
     const client = this.getClient();
 
     try {
-      console.log('[OpenCodeTool] executeTask called:', { sessionId, taskId, promptLength: prompt.length });
+      // Get OpenCode session ID and model from stored context
+      const opencodeSessionId = this.sessionMap.get(sessionId);
+      const model = this.sessionModels.get(sessionId);
 
-      // Send prompt to OpenCode
-      const response = await client.sendPrompt(sessionId, prompt);
+      console.log('[OpenCodeTool] executeTask called:', {
+        sessionId,
+        opencodeSessionId,
+        taskId,
+        promptLength: prompt.length,
+        model,
+      });
+
+      if (!opencodeSessionId) {
+        throw new Error(
+          `OpenCode session ID not found for Agor session ${sessionId}. Call setSessionContext() first.`
+        );
+      }
+      console.log('[OpenCodeTool] Using OpenCode session:', opencodeSessionId);
+
+      if (model) {
+        console.log('[OpenCodeTool] Using model:', model);
+      }
+
+      // Send prompt to OpenCode with optional model
+      const response = await client.sendPrompt(opencodeSessionId, prompt, model);
       console.log('[OpenCodeTool] sendPrompt response received:', response.substring(0, 100));
 
       // Create message in Agor database
@@ -150,16 +195,20 @@ export class OpenCodeTool implements ITool {
       }
 
       const message = await this.messagesService.create({
-        session_id: sessionId,
-        task_id: taskId,
-        role: 'assistant',
+        message_id: generateId(),
+        session_id: sessionId as SessionID,
+        task_id: taskId as TaskID | undefined,
+        type: 'assistant' as const,
+        role: MessageRole.ASSISTANT,
+        index: 0, // Assistant's first response in this task
+        timestamp: new Date().toISOString(),
+        content_preview: response.substring(0, 200),
         content: [
           {
             type: 'text',
             text: response,
           },
         ],
-        created_at: new Date().toISOString(),
       });
 
       console.log('[OpenCodeTool] Message created:', message);
@@ -232,7 +281,7 @@ export class OpenCodeTool implements ITool {
     try {
       const sessions = await client.listSessions();
 
-      return sessions.map((session) => ({
+      return sessions.map(session => ({
         sessionId: session.id,
         toolType: 'opencode' as const,
         status: 'active' as const,

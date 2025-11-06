@@ -98,27 +98,106 @@ export class OpenCodeClient {
   }
 
   /**
+   * Map model name to OpenCode format (providerID + modelID)
+   * OpenCode expects: { providerID: "openai", modelID: "gpt-4-turbo" }
+   */
+  private mapModelToOpenCodeFormat(model: string): { providerID: string; modelID: string } | null {
+    // Simple heuristic-based mapping
+    if (model.startsWith('gpt-') || model.startsWith('o1-')) {
+      return { providerID: 'openai', modelID: model };
+    }
+    if (model.startsWith('claude-')) {
+      return { providerID: 'anthropic', modelID: model };
+    }
+    if (model.startsWith('gemini-')) {
+      return { providerID: 'google', modelID: model };
+    }
+    if (model.startsWith('llama-') || model.startsWith('mixtral-')) {
+      return { providerID: 'together', modelID: model };
+    }
+
+    // Default: try with the model name as-is, provider unknown
+    console.warn(`[OpenCode] Unknown model format: ${model}, using default provider`);
+    return { providerID: 'openai', modelID: model };
+  }
+
+  /**
    * Send a prompt to an existing OpenCode session
    * Returns the response as a string
    */
-  async sendPrompt(sessionId: string, prompt: string): Promise<string> {
+  async sendPrompt(sessionId: string, prompt: string, model?: string): Promise<string> {
     try {
+      const requestBody: {
+        parts: Array<{ type: string; text: string }>;
+        model?: { providerID: string; modelID: string };
+      } = {
+        parts: [{ type: 'text', text: prompt }],
+      };
+
+      // Model parameter - requires API keys configured via `opencode auth login`
+      if (model) {
+        console.log('[OpenCode] Using model:', model);
+        const modelConfig = this.mapModelToOpenCodeFormat(model);
+        if (modelConfig) {
+          console.log('[OpenCode] Mapped to OpenCode format:', JSON.stringify(modelConfig));
+          requestBody.model = modelConfig;
+        } else {
+          console.warn('[OpenCode] Could not map model to OpenCode format:', model);
+        }
+      }
+
       const response = await fetch(`${this.config.serverUrl}/session/${sessionId}/message`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          parts: [{ type: 'text', text: prompt }],
-        }),
+        body: JSON.stringify(requestBody),
       });
 
       if (!response.ok) {
         throw new Error(`Failed to send prompt: ${response.statusText}`);
       }
 
-      const data = await response.json();
+      console.log('[OpenCode] Response status:', response.status);
+      console.log('[OpenCode] Response content-length:', response.headers.get('content-length'));
 
-      // Extract text from response
+      // Handle empty response body (204 No Content or empty response)
+      const contentLength = response.headers.get('content-length');
+      if (contentLength === '0' || response.status === 204) {
+        // OpenCode accepted the message but returned empty body
+        console.error('[OpenCode] Empty response (204 or content-length=0)');
+        console.error('[OpenCode] This may indicate missing API keys for the requested model');
+        console.error('[OpenCode] Run `opencode auth login` to configure API credentials');
+        throw new Error(
+          'OpenCode returned empty response - check if API keys are configured for this model'
+        );
+      }
+
+      let data: unknown;
+      try {
+        data = await response.json();
+        console.log('[OpenCode] Response data:', JSON.stringify(data).substring(0, 200));
+      } catch (parseError) {
+        // If response body is empty or not JSON, return success message
+        const text = await response.text();
+        console.log('[OpenCode] Non-JSON response:', text.substring(0, 200));
+        if (!text || text.trim() === '') {
+          return 'Message sent to OpenCode successfully';
+        }
+        throw parseError;
+      }
+
+      // Extract text from OpenCode response
+      // OpenCode returns: { parts: [{ type: 'text', text: '...' }, ...] }
       if (data && typeof data === 'object') {
+        // Check for parts array (OpenCode's actual response format)
+        if ('parts' in data && Array.isArray(data.parts)) {
+          const textParts = (data.parts as Array<{ type?: string; text?: string }>)
+            .filter(part => part.type === 'text')
+            .map(part => part.text || '')
+            .join('\n');
+          if (textParts) return textParts;
+        }
+
+        // Fallback to other possible fields
         if ('output' in data) {
           return String(data.output);
         }
@@ -136,7 +215,8 @@ export class OpenCodeClient {
         }
       }
 
-      return String(data || '');
+      // Last resort: stringify the whole object
+      return JSON.stringify(data);
     } catch (error) {
       throw new Error(
         `Failed to send prompt to OpenCode: ${error instanceof Error ? error.message : String(error)}`

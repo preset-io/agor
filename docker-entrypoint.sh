@@ -28,6 +28,9 @@ daemon:
   host: localhost
   allowAnonymous: false
   requireAuth: true
+opencode:
+  enabled: true
+  serverUrl: http://host.docker.internal:4096
 EOF
 
 # Always create/update admin user (safe: only upserts)

@@ -111,8 +111,8 @@ import { createBoardObjectsService } from './services/board-objects';
 import { createBoardsService } from './services/boards';
 import { createConfigService } from './services/config';
 import { createContextService } from './services/context';
-import { createHealthMonitor } from './services/health-monitor';
 import { createFilesService } from './services/files';
+import { createHealthMonitor } from './services/health-monitor';
 import { createMCPServersService } from './services/mcp-servers';
 import { createMessagesService } from './services/messages';
 import { createReposService } from './services/repos';
@@ -979,6 +979,53 @@ async function main() {
 
           return context;
         },
+        // Create OpenCode session if agentic_tool is 'opencode'
+        async context => {
+          const session = context.result as Session;
+
+          if (session.agentic_tool === 'opencode') {
+            try {
+              console.log(
+                `🔧 [OpenCode] Creating OpenCode session for Agor session ${session.session_id.substring(0, 8)}...`
+              );
+
+              // Create OpenCode session via OpenCodeTool
+              const sessionWithRepo = session as Session & {
+                repo?: { repo_slug?: string; cwd?: string };
+              };
+              const ocSession = await opencodeTool.createSession?.({
+                title: session.title || 'Agor Session',
+                projectName: sessionWithRepo.repo?.repo_slug || 'default',
+                workingDirectory: sessionWithRepo.repo?.cwd,
+              });
+
+              if (ocSession?.sessionId) {
+                console.log(`✅ [OpenCode] Created OpenCode session: ${ocSession.sessionId}`);
+
+                // Map Agor session ID to OpenCode session ID
+                opencodeTool.mapSession(session.session_id, ocSession.sessionId);
+                console.log(
+                  `🗺️  [OpenCode] Mapped Agor session ${session.session_id.substring(0, 8)} → OpenCode session ${ocSession.sessionId}`
+                );
+
+                // Store OpenCode session ID in Agor session metadata
+                await app.service('sessions').patch(session.session_id, {
+                  sdk_session_id: ocSession.sessionId,
+                });
+
+                console.log(`💾 [OpenCode] Stored OpenCode session ID in Agor session metadata`);
+
+                // Update context.result to include the OpenCode session ID
+                context.result = { ...session, sdk_session_id: ocSession.sessionId };
+              }
+            } catch (error) {
+              console.error('⚠️  [OpenCode] Failed to create OpenCode session:', error);
+              // Don't fail Agor session creation if OpenCode session creation fails
+            }
+          }
+
+          return context;
+        },
       ],
     },
   });
@@ -1718,15 +1765,36 @@ async function main() {
           // Use OpenCodeTool for OpenCode sessions
           // OpenCode doesn't support executePromptWithStreaming, so always use executeTask
           console.log('[Daemon] Routing to OpenCodeTool.executeTask');
-          executeMethod = (opencodeTool.executeTask?.(
-            id as SessionID,
-            data.prompt,
-            task.task_id,
-            useStreaming ? streamingCallbacks : undefined
-          ) || Promise.reject(new Error('OpenCode executeTask not available'))).then(result => {
+
+          // Extract model and OpenCode session ID from session
+          const model = session.model_config?.model;
+          const opencodeSessionId = (session as { sdk_session_id?: string }).sdk_session_id;
+
+          console.log(
+            '[Daemon] Using Agor session ID:',
+            id,
+            'with model:',
+            model,
+            'OpenCode session:',
+            opencodeSessionId
+          );
+
+          // Store session context in OpenCodeTool before calling executeTask
+          if (opencodeSessionId) {
+            opencodeTool.setSessionContext(id as SessionID, opencodeSessionId, model);
+          }
+
+          executeMethod = (
+            opencodeTool.executeTask?.(
+              id as SessionID,
+              data.prompt,
+              task.task_id,
+              useStreaming ? streamingCallbacks : undefined
+            ) || Promise.reject(new Error('OpenCode executeTask not available'))
+          ).then(result => {
             console.log('[Daemon] OpenCodeTool.executeTask completed:', result);
             return {
-              userMessageId: `user-${task.task_id}` as any,
+              userMessageId: `user-${task.task_id}` as import('@agor/core/types').MessageID,
               assistantMessageIds: [],
             };
           });
