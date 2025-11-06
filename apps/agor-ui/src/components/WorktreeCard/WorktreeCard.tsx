@@ -10,10 +10,12 @@ import {
   PlusOutlined,
   PushpinFilled,
   SubnodeOutlined,
+  ToolOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { Badge, Button, Card, Collapse, Space, Tag, Tree, Typography, theme } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
+import { isMobileDevice, isOnMobileRoute } from '../../utils/deviceDetection';
 import { DeleteWorktreePopconfirm } from '../DeleteWorktreePopconfirm';
 import { EnvironmentPill } from '../EnvironmentPill';
 import { type ForkSpawnAction, ForkSpawnModal } from '../ForkSpawnModal';
@@ -79,6 +81,8 @@ const WorktreeCard = ({
   defaultExpanded = true,
 }: WorktreeCardProps) => {
   const { token } = theme.useToken();
+  const isDesktopUI = useMemo(() => !isMobileDevice() && !isOnMobileRoute(), []);
+  const canShowVSCodeButton = isDesktopUI && Boolean(worktree.path);
 
   // Fork/Spawn modal state
   const [forkSpawnModal, setForkSpawnModal] = useState<{
@@ -103,6 +107,20 @@ const WorktreeCard = ({
     } else {
       await onSpawnSession?.(forkSpawnModal.session.session_id, prompt);
     }
+  };
+
+  const handleOpenInVSCode = () => {
+    if (!worktree.path) {
+      return;
+    }
+
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const normalizedPath = worktree.path.replace(/\\/g, '/');
+    const vscodeUri = `vscode://file/${encodeURI(normalizedPath)}`;
+    window.location.href = vscodeUri;
   };
 
   // Separate manual sessions from scheduled runs
@@ -448,6 +466,18 @@ const WorktreeCard = ({
                   onOpenTerminal([`cd ${worktree.path}`]);
                 }}
                 title="Open terminal in worktree directory"
+              />
+            )}
+            {canShowVSCodeButton && (
+              <Button
+                type="text"
+                size="small"
+                icon={<ToolOutlined />}
+                onClick={e => {
+                  e.stopPropagation();
+                  handleOpenInVSCode();
+                }}
+                title="Open in VS Code"
               />
             )}
             {onOpenSettings && (
