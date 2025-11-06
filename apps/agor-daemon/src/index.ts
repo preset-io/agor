@@ -1717,15 +1717,19 @@ async function main() {
         } else if (session.agentic_tool === 'opencode') {
           // Use OpenCodeTool for OpenCode sessions
           // OpenCode doesn't support executePromptWithStreaming, so always use executeTask
+          console.log('[Daemon] Routing to OpenCodeTool.executeTask');
           executeMethod = (opencodeTool.executeTask?.(
             id as SessionID,
             data.prompt,
             task.task_id,
             useStreaming ? streamingCallbacks : undefined
-          ) || Promise.reject(new Error('OpenCode executeTask not available'))).then(result => ({
-            userMessageId: `user-${task.task_id}` as any,
-            assistantMessageIds: [],
-          }));
+          ) || Promise.reject(new Error('OpenCode executeTask not available'))).then(result => {
+            console.log('[Daemon] OpenCodeTool.executeTask completed:', result);
+            return {
+              userMessageId: `user-${task.task_id}` as any,
+              assistantMessageIds: [],
+            };
+          });
         } else {
           // Use ClaudeTool for Claude Code sessions (default)
           executeMethod = useStreaming

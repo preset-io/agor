@@ -1,11 +1,11 @@
 /**
  * OpenCode.ai Client Wrapper
  *
- * Provides a clean TypeScript interface to OpenCode's HTTP-based API.
+ * Direct HTTP client for OpenCode server API.
  * Uses ephemeral HTTP connections - connects when needed, disconnects after.
  * Sessions persist in OpenCode's SQLite database at ~/.opencode/
  *
- * Direct HTTP implementation (no SDK dependency) for simpler integration.
+ * OpenCode server exposes REST API at baseUrl/api/*
  */
 
 export interface OpenCodeConfig {
@@ -28,11 +28,11 @@ export interface OpenCodeMessageEvent {
 }
 
 /**
- * OpenCode client wrapper with ephemeral HTTP connections
+ * OpenCode client with direct HTTP calls
  *
  * Pattern:
  * 1. User runs `opencode serve --port 4096` in a separate terminal
- * 2. Agor connects via ephemeral HTTP requests (no persistent connection)
+ * 2. Agor connects via ephemeral HTTP requests
  * 3. Sessions persist in OpenCode's SQLite at ~/.opencode/
  * 4. Map Agor session IDs → OpenCode session IDs
  */
@@ -67,19 +67,14 @@ export class OpenCodeClient {
 
   /**
    * Create a new OpenCode session
-   * Returns the session ID for future reference
    */
-  async createSession(params: {
-    title: string;
-    project: string;
-  }): Promise<OpenCodeSession> {
+  async createSession(params: { title: string; project: string }): Promise<OpenCodeSession> {
     try {
-      const response = await fetch(`${this.config.serverUrl}/api/sessions`, {
+      const response = await fetch(`${this.config.serverUrl}/api/session`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           title: params.title,
-          project: params.project,
         }),
       });
 
@@ -108,14 +103,13 @@ export class OpenCodeClient {
    */
   async sendPrompt(sessionId: string, prompt: string): Promise<string> {
     try {
-      const response = await fetch(
-        `${this.config.serverUrl}/api/sessions/${sessionId}/messages`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prompt }),
-        }
-      );
+      const response = await fetch(`${this.config.serverUrl}/api/session/${sessionId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: prompt,
+        }),
+      });
 
       if (!response.ok) {
         throw new Error(`Failed to send prompt: ${response.statusText}`);
@@ -137,6 +131,9 @@ export class OpenCodeClient {
         if ('message' in data) {
           return String(data.message);
         }
+        if ('response' in data) {
+          return String(data.response);
+        }
       }
 
       return String(data || '');
@@ -148,39 +145,40 @@ export class OpenCodeClient {
   }
 
   /**
-   * Get message history from a session
+   * Get messages from a session
    */
-  async getMessages(sessionId: string): Promise<any[]> {
+  async getMessages(sessionId: string): Promise<Record<string, unknown>[]> {
     try {
-      const response = await fetch(
-        `${this.config.serverUrl}/api/sessions/${sessionId}/messages`
-      );
+      const response = await fetch(`${this.config.serverUrl}/api/session/${sessionId}/messages`, {
+        method: 'GET',
+      });
 
       if (!response.ok) {
-        throw new Error(`Failed to fetch messages: ${response.statusText}`);
+        return [];
       }
 
-      const data = (await response.json()) as any;
-      return Array.isArray(data) ? data : (data.messages || []);
+      const data = await response.json();
+      if (Array.isArray(data)) {
+        return data;
+      }
+
+      return [];
     } catch (error) {
-      throw new Error(
-        `Failed to fetch messages from OpenCode: ${error instanceof Error ? error.message : String(error)}`
-      );
+      console.error('Failed to get messages:', error);
+      return [];
     }
   }
 
   /**
    * Delete a session
-   * Called when Agor session is deleted to clean up OpenCode session
    */
   async deleteSession(sessionId: string): Promise<void> {
     try {
-      const response = await fetch(
-        `${this.config.serverUrl}/api/sessions/${sessionId}`,
-        { method: 'DELETE' }
-      );
+      const response = await fetch(`${this.config.serverUrl}/api/session/${sessionId}`, {
+        method: 'DELETE',
+      });
 
-      if (!response.ok && response.status !== 404) {
+      if (!response.ok) {
         throw new Error(`Failed to delete session: ${response.statusText}`);
       }
     } catch (error) {
@@ -193,40 +191,60 @@ export class OpenCodeClient {
   /**
    * Get session metadata
    */
-  async getSessionMetadata(sessionId: string) {
+  async getSessionMetadata(
+    sessionId: string
+  ): Promise<{ id: string; title: string; createdAt?: string }> {
     try {
-      const response = await fetch(
-        `${this.config.serverUrl}/api/sessions/${sessionId}`
-      );
+      const response = await fetch(`${this.config.serverUrl}/api/session/${sessionId}`, {
+        method: 'GET',
+      });
 
       if (!response.ok) {
-        throw new Error(`Failed to fetch session metadata: ${response.statusText}`);
+        throw new Error('Failed to get session');
       }
 
-      return await response.json();
+      const data = (await response.json()) as Record<string, unknown>;
+
+      return {
+        id: String(data.id || sessionId),
+        title: String(data.title || 'Untitled'),
+        createdAt: String(data.createdAt || new Date().toISOString()),
+      };
     } catch (error) {
       throw new Error(
-        `Failed to fetch session metadata: ${error instanceof Error ? error.message : String(error)}`
+        `Failed to get session metadata: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   }
 
   /**
-   * List all available sessions in OpenCode
+   * List all sessions
    */
-  async listSessions() {
+  async listSessions(): Promise<OpenCodeSession[]> {
     try {
-      const response = await fetch(`${this.config.serverUrl}/api/sessions`);
+      const response = await fetch(`${this.config.serverUrl}/api/sessions`, {
+        method: 'GET',
+      });
 
       if (!response.ok) {
-        throw new Error(`Failed to list sessions: ${response.statusText}`);
+        return [];
       }
 
-      const data = (await response.json()) as any;
-      return Array.isArray(data) ? data : (data.sessions || []);
+      const data = await response.json();
+
+      if (Array.isArray(data)) {
+        return data.map((s: Record<string, unknown>) => ({
+          id: String(s.id || ''),
+          title: String(s.title || 'Untitled'),
+          project: String(s.project || ''),
+          createdAt: String(s.createdAt || new Date().toISOString()),
+        }));
+      }
+
+      return [];
     } catch (error) {
       throw new Error(
-        `Failed to list OpenCode sessions: ${error instanceof Error ? error.message : String(error)}`
+        `Failed to list sessions: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   }

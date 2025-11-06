@@ -136,8 +136,11 @@ export class OpenCodeTool implements ITool {
     const client = this.getClient();
 
     try {
+      console.log('[OpenCodeTool] executeTask called:', { sessionId, taskId, promptLength: prompt.length });
+
       // Send prompt to OpenCode
       const response = await client.sendPrompt(sessionId, prompt);
+      console.log('[OpenCodeTool] sendPrompt response received:', response.substring(0, 100));
 
       // Create message in Agor database
       // Note: In real implementation, would parse OpenCode response properly
@@ -159,6 +162,8 @@ export class OpenCodeTool implements ITool {
         created_at: new Date().toISOString(),
       });
 
+      console.log('[OpenCodeTool] Message created:', message);
+
       return {
         taskId: taskId || '',
         status: 'completed',
@@ -166,6 +171,7 @@ export class OpenCodeTool implements ITool {
         completedAt: new Date(),
       };
     } catch (error) {
+      console.error('[OpenCodeTool] executeTask failed:', error);
       const errorObj = error instanceof Error ? error : new Error(String(error));
       return {
         taskId: taskId || '',
@@ -206,31 +212,14 @@ export class OpenCodeTool implements ITool {
     const client = this.getClient();
 
     try {
-      const messages = await client.getMessages(sessionId);
-
-      // Convert OpenCode messages to Agor Message format
-      return messages.map((msg: Record<string, unknown>, index: number) => {
-        const content = typeof msg.content === 'string' ? msg.content : typeof msg.text === 'string' ? msg.text : String(msg);
-        return {
-          message_id: `opencode-msg-${sessionId}-${index}`,
-          session_id: sessionId,
-          role: (typeof msg.role === 'string' ? msg.role : 'assistant') as 'user' | 'assistant',
-          type: 'text' as const,
-          index,
-          content: [
-            {
-              type: 'text' as const,
-              text: content,
-            },
-          ],
-          timestamp: new Date().toISOString(),
-          content_preview: content.substring(0, 200),
-        };
-      });
+      // TODO: Implement proper message fetching from OpenCode
+      // For now, return empty array since OpenCode messages are streamed directly
+      await client.getMessages(sessionId);
+      return [];
     } catch (error) {
-      throw new Error(
-        `Failed to get session messages: ${error instanceof Error ? error.message : String(error)}`
-      );
+      console.error('Failed to get session messages:', error);
+      // Don't throw - return empty array as fallback
+      return [];
     }
   }
 
@@ -243,12 +232,12 @@ export class OpenCodeTool implements ITool {
     try {
       const sessions = await client.listSessions();
 
-      return sessions.map((session: Record<string, unknown>) => ({
-        sessionId: typeof session.id === 'string' ? session.id : String(session.id),
+      return sessions.map((session) => ({
+        sessionId: session.id,
         toolType: 'opencode' as const,
         status: 'active' as const,
-        createdAt: new Date(typeof session.createdAt === 'string' ? session.createdAt : Date.now()),
-        lastUpdatedAt: new Date(typeof session.updatedAt === 'string' ? session.updatedAt : Date.now()),
+        createdAt: new Date(session.createdAt),
+        lastUpdatedAt: new Date(),
       }));
     } catch (error) {
       throw new Error(

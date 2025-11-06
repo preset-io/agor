@@ -73,6 +73,7 @@ export class ConfigService {
    * SECURITY: Only allow updating credentials and opencode sections from UI
    */
   async patch(_id: null, data: Partial<AgorConfig>, _params?: Params): Promise<AgorConfig> {
+    console.log('[Config Service] Patch received:', JSON.stringify(data, null, 2));
     const config = await loadConfig();
 
     // Only allow updating credentials section for security
@@ -111,6 +112,7 @@ export class ConfigService {
     }
 
     await saveConfig(config);
+    console.log('[Config Service] Config saved successfully');
 
     // Propagate credentials to process.env for hot-reload
     // Precedence rule: config.yaml (UI) > environment variables
