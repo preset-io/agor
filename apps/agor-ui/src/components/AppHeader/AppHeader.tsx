@@ -11,6 +11,7 @@ import {
 import type { MenuProps } from 'antd';
 import { Badge, Button, Dropdown, Layout, Space, Typography, theme } from 'antd';
 import { Facepile } from '../Facepile';
+import { ThemeSwitcher } from '../ThemeSwitcher';
 
 const { Header } = Layout;
 const { Title } = Typography;
@@ -23,6 +24,7 @@ export interface AppHeaderProps {
   onCommentsClick?: () => void;
   onSettingsClick?: () => void;
   onTerminalClick?: () => void;
+  onThemeEditorClick?: () => void;
   onLogout?: () => void;
   currentBoardName?: string;
   currentBoardIcon?: string;
@@ -37,6 +39,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onCommentsClick,
   onSettingsClick,
   onTerminalClick,
+  onThemeEditorClick,
   onLogout,
   currentBoardName,
   currentBoardIcon,
@@ -53,7 +56,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           <span style={{ fontSize: 20 }}>{userEmoji}</span>
           <div>
             <div style={{ fontWeight: 500 }}>{user?.name || 'User'}</div>
-            <div style={{ fontSize: 12, color: 'rgba(255, 255, 255, 0.45)' }}>{user?.email}</div>
+            <div style={{ fontSize: 12, color: token.colorTextDescription }}>{user?.email}</div>
           </div>
         </div>
       ),
@@ -77,7 +80,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
         alignItems: 'center',
         justifyContent: 'space-between',
         padding: '0 24px',
-        background: '#001529',
+        background: token.colorBgContainer,
+        borderBottom: `1px solid ${token.colorBorderSecondary}`,
       }}
     >
       <Space size={16} align="center">
@@ -91,7 +95,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             display: 'block',
           }}
         />
-        <Title level={3} style={{ margin: 0, color: '#fff' }}>
+        <Title level={3} style={{ margin: 0, color: token.colorText }}>
           agor
         </Title>
         {currentBoardName && (
@@ -101,11 +105,11 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             style={{
               cursor: 'pointer',
               padding: '4px 8px',
-              borderRadius: 4,
+              borderRadius: token.borderRadius,
               transition: 'background 0.2s',
             }}
             onMouseEnter={e => {
-              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)';
+              e.currentTarget.style.background = token.colorBgTextHover;
             }}
             onMouseLeave={e => {
               e.currentTarget.style.background = 'transparent';
@@ -113,7 +117,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             onClick={onMenuClick}
           >
             {currentBoardIcon && <span style={{ fontSize: 16 }}>{currentBoardIcon}</span>}
-            <Typography.Text style={{ color: 'rgba(255, 255, 255, 0.65)', fontSize: 14 }}>
+            <Typography.Text style={{ color: token.colorTextSecondary, fontSize: 14 }}>
               {currentBoardName}
             </Typography.Text>
           </Space>
@@ -137,7 +141,6 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           href="https://github.com/preset-io/agor"
           target="_blank"
           rel="noopener noreferrer"
-          style={{ color: '#fff' }}
           title="View on GitHub"
         />
         <Badge
@@ -149,7 +152,6 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             type="text"
             icon={<CommentOutlined style={{ fontSize: token.fontSizeLG }} />}
             onClick={onCommentsClick}
-            style={{ color: '#fff' }}
             title="Toggle comments panel"
           />
         </Badge>
@@ -157,26 +159,23 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           type="text"
           icon={<MenuOutlined style={{ fontSize: token.fontSizeLG }} />}
           onClick={onMenuClick}
-          style={{ color: '#fff' }}
         />
         <Button
           type="text"
           icon={<CodeOutlined style={{ fontSize: token.fontSizeLG }} />}
           onClick={onTerminalClick}
-          style={{ color: '#fff' }}
           title="Open Terminal"
         />
+        <ThemeSwitcher onOpenThemeEditor={onThemeEditorClick} />
         <Button
           type="text"
           icon={<SettingOutlined style={{ fontSize: token.fontSizeLG }} />}
           onClick={onSettingsClick}
-          style={{ color: '#fff' }}
         />
         <Dropdown menu={{ items: userMenuItems }} placement="bottomRight" trigger={['click']}>
           <Button
             type="text"
             icon={<UserOutlined style={{ fontSize: token.fontSizeLG }} />}
-            style={{ color: '#fff' }}
             title={user?.name || 'User menu'}
           />
         </Dropdown>

@@ -30,6 +30,7 @@ import SessionDrawer from '../SessionDrawer';
 import { SessionSettingsModal } from '../SessionSettingsModal';
 import { SettingsModal } from '../SettingsModal';
 import { TerminalModal } from '../TerminalModal';
+import { ThemeEditorModal } from '../ThemeEditorModal';
 import { WorktreeListDrawer } from '../WorktreeListDrawer';
 import { WorktreeModal } from '../WorktreeModal';
 
@@ -176,6 +177,7 @@ export const App: React.FC<AppProps> = ({
   const [sessionSettingsId, setSessionSettingsId] = useState<string | null>(null);
   const [worktreeModalWorktreeId, setWorktreeModalWorktreeId] = useState<string | null>(null);
   const [logsModalWorktreeId, setLogsModalWorktreeId] = useState<string | null>(null);
+  const [themeEditorOpen, setThemeEditorOpen] = useState(false);
 
   // Initialize current board from localStorage or fallback to first board or initialBoardId
   const [currentBoardId, setCurrentBoardId] = useState(() => {
@@ -383,6 +385,7 @@ export const App: React.FC<AppProps> = ({
         onCommentsClick={() => setCommentsPanelCollapsed(!commentsPanelCollapsed)}
         onSettingsClick={() => setSettingsOpen(true)}
         onTerminalClick={() => handleOpenTerminal()}
+        onThemeEditorClick={() => setThemeEditorOpen(true)}
         onLogout={onLogout}
         currentBoardName={currentBoard?.name}
         currentBoardIcon={currentBoard?.icon}
@@ -610,6 +613,7 @@ export const App: React.FC<AppProps> = ({
           client={client}
         />
       )}
+      <ThemeEditorModal open={themeEditorOpen} onClose={() => setThemeEditorOpen(false)} />
     </Layout>
   );
 };

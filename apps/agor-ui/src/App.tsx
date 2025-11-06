@@ -8,6 +8,7 @@ import { LoginPage } from './components/LoginPage';
 import { MobileApp } from './components/mobile/MobileApp';
 import { SandboxBanner } from './components/SandboxBanner';
 import { WelcomeModal } from './components/WelcomeModal';
+import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import {
   useAgorClient,
   useAgorData,
@@ -50,6 +51,7 @@ function DeviceRouter() {
 function AppContent() {
   const { message } = AntApp.useApp();
   const { token } = theme.useToken();
+  const { getCurrentThemeConfig } = useTheme();
 
   // Fetch daemon auth configuration
   const {
@@ -141,7 +143,7 @@ function AppContent() {
   // Show loading while fetching auth config
   if (authConfigLoading) {
     return (
-      <ConfigProvider theme={{ algorithm: theme.darkAlgorithm }}>
+      <ConfigProvider theme={getCurrentThemeConfig()}>
         <div
           style={{
             height: '100vh',
@@ -163,7 +165,7 @@ function AppContent() {
   // If we already have a config cached, continue with that even if there's an error
   if (authConfigError && !authConfig) {
     return (
-      <ConfigProvider theme={{ algorithm: theme.darkAlgorithm }}>
+      <ConfigProvider theme={getCurrentThemeConfig()}>
         <div
           style={{
             height: '100vh',
@@ -205,7 +207,7 @@ function AppContent() {
   // Show reconnecting state if we have tokens but lost connection
   if (authConfig?.requireAuth && hasTokens && (!connected || !authenticated)) {
     return (
-      <ConfigProvider theme={{ algorithm: theme.darkAlgorithm }}>
+      <ConfigProvider theme={getCurrentThemeConfig()}>
         <div
           style={{
             height: '100vh',
@@ -228,7 +230,7 @@ function AppContent() {
   // Show loading while checking authentication (only if auth is required)
   if (authConfig?.requireAuth && authLoading) {
     return (
-      <ConfigProvider theme={{ algorithm: theme.darkAlgorithm }}>
+      <ConfigProvider theme={getCurrentThemeConfig()}>
         <div
           style={{
             height: '100vh',
@@ -257,7 +259,7 @@ function AppContent() {
     }
 
     return (
-      <ConfigProvider theme={{ algorithm: theme.darkAlgorithm }}>
+      <ConfigProvider theme={getCurrentThemeConfig()}>
         <div
           style={{
             height: '100vh',
@@ -288,7 +290,7 @@ function AppContent() {
   // Show loading state
   if (connecting || loading) {
     return (
-      <ConfigProvider theme={{ algorithm: theme.darkAlgorithm }}>
+      <ConfigProvider theme={getCurrentThemeConfig()}>
         <div
           style={{
             height: '100vh',
@@ -311,7 +313,7 @@ function AppContent() {
   // Show data error
   if (dataError) {
     return (
-      <ConfigProvider theme={{ algorithm: theme.darkAlgorithm }}>
+      <ConfigProvider theme={getCurrentThemeConfig()}>
         <div
           style={{
             height: '100vh',
@@ -1035,30 +1037,27 @@ function AppContent() {
   );
 }
 
+function AppWrapper() {
+  const { getCurrentThemeConfig } = useTheme();
+
+  return (
+    <ConfigProvider theme={getCurrentThemeConfig()}>
+      <AntApp>
+        <AppContent />
+      </AntApp>
+    </ConfigProvider>
+  );
+}
+
 function App() {
   // Determine base path: '/ui' in production (served by daemon), '/' in dev mode
   const basename = import.meta.env.BASE_URL === '/ui/' ? '/ui' : '';
 
   return (
     <BrowserRouter basename={basename}>
-      <ConfigProvider
-        theme={{
-          algorithm: theme.darkAlgorithm,
-          token: {
-            colorPrimary: '#2e9a92', // Agor teal - primary brand color (darkened 20%)
-            colorSuccess: '#52c41a', // Keep Ant Design's vibrant green
-            colorWarning: '#faad14', // Keep Ant Design's amber
-            colorError: '#ff4d4f', // Keep Ant Design's red
-            colorInfo: '#2e9a92', // Match primary
-            colorLink: '#2e9a92', // Match primary for consistency
-            borderRadius: 8, // Slightly more rounded for modern feel
-          },
-        }}
-      >
-        <AntApp>
-          <AppContent />
-        </AntApp>
-      </ConfigProvider>
+      <ThemeProvider>
+        <AppWrapper />
+      </ThemeProvider>
     </BrowserRouter>
   );
 }
