@@ -152,7 +152,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
             agents={availableAgents}
             selectedAgentId={selectedAgent}
             onSelect={setSelectedAgent}
-            columns={3}
+            columns={2}
             showHelperText={true}
             showComparisonLink={true}
           />

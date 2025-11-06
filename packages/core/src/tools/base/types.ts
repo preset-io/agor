@@ -10,7 +10,7 @@ import type { Message, MessageID, MessageRole, SessionID, TaskID } from '../../t
 /**
  * Supported tool types
  */
-export type ToolType = 'claude-code' | 'codex' | 'gemini';
+export type ToolType = 'claude-code' | 'codex' | 'gemini' | 'opencode';
 
 /**
  * Streaming callback interface for agents that support real-time streaming

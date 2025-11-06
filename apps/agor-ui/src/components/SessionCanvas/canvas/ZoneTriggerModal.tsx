@@ -380,7 +380,7 @@ export const ZoneTriggerModal = ({
                 agents={availableAgents}
                 selectedAgentId={selectedAgent}
                 onSelect={setSelectedAgent}
-                columns={3}
+                columns={2}
                 showHelperText={false}
                 showComparisonLink={false}
               />

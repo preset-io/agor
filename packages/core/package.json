@@ -141,6 +141,7 @@
     "@google/genai": "^1.26.0",
     "@libsql/client": "^0.15.15",
     "@openai/codex-sdk": "^0.47.0",
+    "@opencode-ai/sdk": "^1.0.30",
     "bcryptjs": "^2.4.3",
     "cron-parser": "^5.4.0",
     "cronstrue": "^3.9.0",

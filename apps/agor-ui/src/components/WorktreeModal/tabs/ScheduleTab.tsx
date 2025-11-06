@@ -228,7 +228,7 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
               agents={AVAILABLE_AGENTS}
               selectedAgentId={agenticTool}
               onSelect={setAgenticTool}
-              columns={3}
+              columns={2}
               showComparisonLink={true}
             />
           </Space>

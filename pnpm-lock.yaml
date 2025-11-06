@@ -477,6 +477,9 @@ importers:
       '@openai/codex-sdk':
         specifier: ^0.47.0
         version: 0.47.0
+      '@opencode-ai/sdk':
+        specifier: ^1.0.30
+        version: 1.0.30
       bcryptjs:
         specifier: ^2.4.3
         version: 2.4.3
@@ -2068,6 +2071,9 @@ packages:
   '@openai/codex-sdk@0.47.0':
     resolution: {integrity: sha512-GFmF0C7wkmX10omICL/5Gm1w+BvZtc41Rwuv7/pVO47ZbSq+9bJqn0XUpwoyrYQavg+BsKSuJAo9CYCn9JhkZA==}
     engines: {node: '>=18'}
+
+  '@opencode-ai/sdk@1.0.30':
+    resolution: {integrity: sha512-OFbYJ2YbtKJnmbTUXtm4WQhAG+SKJrL32vEQdj9cr5FcWDFCY6EwQhrUwZXPllNE/Y/uM/5ZcQZAmFxZib6JsA==}
 
   '@opentelemetry/api-logs@0.203.0':
     resolution: {integrity: sha512-9B9RU0H7Ya1Dx/Rkyc4stuBZSGVQF27WigitInx2QQoj6KUpEFYPKoWjdFTunJYxmXmh17HeBvbMa1EhGyPmqQ==}
@@ -10133,6 +10139,8 @@ snapshots:
       - supports-color
 
   '@openai/codex-sdk@0.47.0': {}
+
+  '@opencode-ai/sdk@1.0.30': {}
 
   '@opentelemetry/api-logs@0.203.0':
     dependencies:

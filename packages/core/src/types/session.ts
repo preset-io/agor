@@ -7,6 +7,7 @@ import type {
   CodexPermissionMode,
   CodexSandboxMode,
   GeminiPermissionMode,
+  OpenCodePermissionMode,
 } from './agentic-tool';
 import type { ContextFilePath } from './context';
 import type { SessionID, TaskID, WorktreeID } from './id';
@@ -53,6 +54,7 @@ export type {
   CodexPermissionMode,
   CodexSandboxMode,
   GeminiPermissionMode,
+  OpenCodePermissionMode,
 };
 
 /**
@@ -63,6 +65,7 @@ export type {
  * - Cursor: 'acceptEdits' (same as Claude Code)
  * - Codex: 'auto' (auto-approve safe operations, ask for dangerous ones)
  * - Gemini: 'acceptEdits' (same as Claude Code)
+ * - OpenCode: 'acceptEdits' (auto-approve via server SDK settings)
  */
 export function getDefaultPermissionMode(agenticTool: AgenticToolName): PermissionMode {
   switch (agenticTool) {

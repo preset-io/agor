@@ -8,6 +8,7 @@ import { theme } from 'antd';
 import ccLogo from '../../assets/tools/cc.png';
 import codexLogo from '../../assets/tools/codex.png';
 import geminiLogo from '../../assets/tools/gemini.png';
+import opencodeLogo from '../../assets/tools/opencode.png';
 
 const { useToken } = theme;
 
@@ -24,6 +25,7 @@ const toolLogos: Record<string, string> = {
   'claude-code': ccLogo,
   codex: codexLogo,
   gemini: geminiLogo,
+  opencode: opencodeLogo,
 };
 
 export const ToolIcon: React.FC<ToolIconProps> = ({ tool, size = 32, className = '' }) => {
@@ -35,6 +37,7 @@ export const ToolIcon: React.FC<ToolIconProps> = ({ tool, size = 32, className =
     'claude-code': '🤖',
     codex: '💻',
     gemini: '💎',
+    opencode: '🌐',
   };
 
   if (!logoSrc) {

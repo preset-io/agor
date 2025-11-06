@@ -69,7 +69,7 @@ import {
 } from '@agor/core/feathers';
 import { type PermissionDecision, PermissionService } from '@agor/core/permissions';
 import { registerHandlebarsHelpers } from '@agor/core/templates/handlebars-helpers';
-import { ClaudeTool, CodexTool, GeminiTool } from '@agor/core/tools';
+import { ClaudeTool, CodexTool, GeminiTool, OpenCodeTool } from '@agor/core/tools';
 import type {
   AuthenticatedParams,
   Message,
@@ -1423,6 +1423,29 @@ async function main() {
     console.warn('   Or set GEMINI_API_KEY environment variable');
   }
 
+  // Initialize OpenCodeTool
+  // OpenCode server must be running separately: opencode serve --port 4096
+  const openCodeServerUrl = config.opencode?.serverUrl || 'http://localhost:4096';
+  const opencodeTool = new OpenCodeTool(
+    {
+      enabled: config.opencode?.enabled !== false,
+      serverUrl: openCodeServerUrl,
+    },
+    app.service('messages')
+  );
+
+  if (config.opencode?.enabled !== false) {
+    // Check OpenCode server availability on startup (non-blocking)
+    opencodeTool.checkInstalled().then(isAvailable => {
+      if (!isAvailable) {
+        console.warn('⚠️  OpenCode server not available at', openCodeServerUrl);
+        console.warn('   Start OpenCode with: opencode serve --port 4096');
+      } else {
+        console.log('✅ OpenCode server available at', openCodeServerUrl);
+      }
+    });
+  }
+
   // Configure custom route for bulk message creation
   app.use('/messages/bulk', {
     async create(data: unknown, params: RouteParams) {
@@ -1691,6 +1714,18 @@ async function main() {
                 task.task_id,
                 data.permissionMode
               );
+        } else if (session.agentic_tool === 'opencode') {
+          // Use OpenCodeTool for OpenCode sessions
+          // OpenCode doesn't support executePromptWithStreaming, so always use executeTask
+          executeMethod = (opencodeTool.executeTask?.(
+            id as SessionID,
+            data.prompt,
+            task.task_id,
+            useStreaming ? streamingCallbacks : undefined
+          ) || Promise.reject(new Error('OpenCode executeTask not available'))).then(result => ({
+            userMessageId: `user-${task.task_id}` as any,
+            assistantMessageIds: [],
+          }));
         } else {
           // Use ClaudeTool for Claude Code sessions (default)
           executeMethod = useStreaming
@@ -1982,6 +2017,12 @@ async function main() {
         result = (await geminiTool.stopTask?.(id)) || {
           success: false,
           reason: 'stopTask not implemented',
+        };
+      } else if (session.agentic_tool === 'opencode') {
+        // OpenCode doesn't support stopTask
+        result = {
+          success: false,
+          reason: 'stopTask not implemented for OpenCode',
         };
       } else {
         // Claude Code (default)

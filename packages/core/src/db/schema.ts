@@ -32,7 +32,7 @@ export const sessions = sqliteTable(
       enum: ['idle', 'running', 'awaiting_permission', 'completed', 'failed'],
     }).notNull(),
     agentic_tool: text('agentic_tool', {
-      enum: ['claude-code', 'codex', 'gemini'],
+      enum: ['claude-code', 'codex', 'gemini', 'opencode'],
     }).notNull(),
     board_id: text('board_id', { length: 36 }), // NULL = no board
 
@@ -391,7 +391,7 @@ export const worktrees = sqliteTable(
         schedule?: {
           timezone: string; // IANA timezone (default: 'UTC')
           prompt_template: string; // Handlebars template
-          agentic_tool: 'claude-code' | 'codex' | 'gemini';
+          agentic_tool: 'claude-code' | 'codex' | 'gemini' | 'opencode';
           retention: number; // How many sessions to keep (0 = keep forever)
           permission_mode?: string; // Permission mode for spawned sessions
           model_config?: {
@@ -503,6 +503,14 @@ export const users = sqliteTable(
             };
             permissionMode?: string;
             mcpServerIds?: string[];
+          };
+          opencode?: {
+            modelConfig?: {
+              mode?: 'alias' | 'exact';
+              model?: string;
+            };
+            permissionMode?: string;
+            serverUrl?: string;
           };
         };
       }>()

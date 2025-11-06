@@ -73,6 +73,17 @@ export interface AgorUISettings {
 }
 
 /**
+ * OpenCode.ai integration settings
+ */
+export interface AgorOpenCodeSettings {
+  /** Enable OpenCode integration (default: false) */
+  enabled?: boolean;
+
+  /** URL where OpenCode server is running (default: http://localhost:4096) */
+  serverUrl?: string;
+}
+
+/**
  * Supported credential keys (enum for type safety)
  */
 export enum CredentialKey {
@@ -111,6 +122,9 @@ export interface AgorConfig {
   /** UI settings */
   ui?: AgorUISettings;
 
+  /** OpenCode.ai integration settings */
+  opencode?: AgorOpenCodeSettings;
+
   /** Tool credentials (API keys, tokens) */
   credentials?: AgorCredentials;
 }
@@ -123,4 +137,5 @@ export type ConfigKey =
   | `display.${keyof AgorDisplaySettings}`
   | `daemon.${keyof AgorDaemonSettings}`
   | `ui.${keyof AgorUISettings}`
+  | `opencode.${keyof AgorOpenCodeSettings}`
   | `credentials.${keyof AgorCredentials}`;

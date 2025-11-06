@@ -51,6 +51,12 @@ const PRICING: Record<AgenticToolName, ModelPricing> = {
     input: 0.075, // $0.075 per 1M input tokens (much cheaper!)
     output: 0.3, // $0.30 per 1M output tokens
   },
+  opencode: {
+    // OpenCode uses configured LLM providers - pricing depends on provider
+    // Using average pricing across common providers (Claude, GPT-4, Gemini)
+    input: 4.4, // ~$4.40 per 1M input tokens (average)
+    output: 15.1, // ~$15.10 per 1M output tokens (average)
+  },
 };
 
 /**

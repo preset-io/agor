@@ -11,7 +11,7 @@ import { Radio, Select, Space, Typography } from 'antd';
 export interface PermissionModeSelectorProps {
   value?: PermissionMode;
   onChange?: (value: PermissionMode) => void;
-  agentic_tool?: 'claude-code' | 'codex' | 'gemini';
+  agentic_tool?: 'claude-code' | 'codex' | 'gemini' | 'opencode';
   /** If true, renders as a compact Select dropdown instead of Radio buttons */
   compact?: boolean;
   /** Size for compact mode */
@@ -133,6 +133,38 @@ const GEMINI_MODES: {
   },
 ];
 
+// OpenCode permission modes (OpenCode API)
+// OpenCode auto-approves by default; these modes control approval behavior
+const OPENCODE_MODES: {
+  mode: PermissionMode;
+  label: string;
+  description: string;
+  icon: React.ReactNode;
+  color: string;
+}[] = [
+  {
+    mode: 'default',
+    label: 'ask',
+    description: 'Prompt for approval before each operation',
+    icon: <LockOutlined />,
+    color: '#f5222d', // Red
+  },
+  {
+    mode: 'acceptEdits',
+    label: 'auto-approve',
+    description: 'Auto-approve all operations (recommended)',
+    icon: <EditOutlined />,
+    color: '#52c41a', // Green
+  },
+  {
+    mode: 'bypassPermissions',
+    label: 'bypass',
+    description: 'Fully bypass all permission checks',
+    icon: <UnlockOutlined />,
+    color: '#faad14', // Orange/yellow
+  },
+];
+
 // Codex sandbox mode options
 const CODEX_SANDBOX_MODES = [
   {
@@ -193,7 +225,9 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
       ? CODEX_MODES
       : agentic_tool === 'gemini'
         ? GEMINI_MODES
-        : CLAUDE_CODE_MODES;
+        : agentic_tool === 'opencode'
+          ? OPENCODE_MODES
+          : CLAUDE_CODE_MODES;
 
   // Get default value based on agentic tool type
   const defaultValue = agentic_tool === 'codex' ? 'auto' : 'acceptEdits';

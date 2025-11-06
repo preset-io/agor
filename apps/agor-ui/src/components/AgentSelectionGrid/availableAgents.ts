@@ -26,4 +26,10 @@ export const AVAILABLE_AGENTS: AgenticToolOption[] = [
     icon: '💎',
     description: 'Google Gemini coding agent',
   },
+  {
+    id: 'opencode',
+    name: 'OpenCode',
+    icon: '🌐',
+    description: 'Open-source terminal AI with 75+ LLM providers',
+  },
 ];

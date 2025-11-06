@@ -19,6 +19,7 @@ import { AboutTab } from './AboutTab';
 import { AgenticToolsTab } from './AgenticToolsTab';
 import { BoardsTable } from './BoardsTable';
 import { MCPServersTable } from './MCPServersTable';
+import { OpenCodeTab } from './OpenCodeTab';
 import { ReposTable } from './ReposTable';
 import { UsersTable } from './UsersTable';
 import { WorktreesTable } from './WorktreesTable';
@@ -201,6 +202,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             key: 'api-keys',
             label: 'API Keys',
             children: <AgenticToolsTab client={client} />,
+          },
+          {
+            key: 'opencode',
+            label: 'OpenCode',
+            children: <OpenCodeTab client={client} />,
           },
           {
             key: 'users',

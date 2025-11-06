@@ -17,8 +17,8 @@ export interface ModelConfig {
 export interface ModelSelectorProps {
   value?: ModelConfig;
   onChange?: (config: ModelConfig) => void;
-  agent?: 'claude-code' | 'codex' | 'gemini'; // Kept as 'agent' for backwards compat in prop name
-  agentic_tool?: 'claude-code' | 'codex' | 'gemini';
+  agent?: 'claude-code' | 'codex' | 'gemini' | 'opencode'; // Kept as 'agent' for backwards compat in prop name
+  agentic_tool?: 'claude-code' | 'codex' | 'gemini' | 'opencode';
 }
 
 // Codex model options
@@ -39,6 +39,16 @@ const GEMINI_MODEL_OPTIONS = Object.entries(GEMINI_MODELS).map(([modelId, meta])
   label: meta.name,
   description: meta.description,
 }));
+
+// OpenCode provider options (75+ providers via Models.dev)
+const OPENCODE_PROVIDER_OPTIONS = [
+  { id: 'claude-3-5-sonnet', label: 'Claude 3.5 Sonnet', description: 'Default Anthropic model' },
+  { id: 'gpt-4o', label: 'GPT-4o', description: 'OpenAI GPT-4o' },
+  { id: 'gpt-4-turbo', label: 'GPT-4 Turbo', description: 'OpenAI GPT-4 Turbo' },
+  { id: 'gemini-2-flash', label: 'Gemini 2 Flash', description: 'Google Gemini' },
+  { id: 'llama-70b', label: 'Llama 70B', description: 'Open-source via Together/Replicate' },
+  { id: 'mixtral-8x7b', label: 'Mixtral 8x7B', description: 'Mistral open model' },
+];
 
 /**
  * Model Selector Component
@@ -62,7 +72,9 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       ? CODEX_MODEL_OPTIONS
       : effectiveTool === 'gemini'
         ? GEMINI_MODEL_OPTIONS
-        : AVAILABLE_CLAUDE_MODEL_ALIASES;
+        : effectiveTool === 'opencode'
+          ? OPENCODE_PROVIDER_OPTIONS
+          : AVAILABLE_CLAUDE_MODEL_ALIASES;
 
   // Determine initial mode based on whether the value is in the aliases list
   // If no value provided, default to 'alias' mode (recommended)
@@ -82,7 +94,9 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
             ? 'gpt-5-codex'
             : effectiveTool === 'gemini'
               ? 'gemini-2.5-flash'
-              : 'claude-sonnet-4-5-20250929';
+              : effectiveTool === 'opencode'
+                ? 'claude-3-5-sonnet'
+                : 'claude-sonnet-4-5-20250929';
       onChange({
         mode: newMode,
         model: value?.model || defaultModel,
@@ -145,7 +159,9 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                     ? 'e.g., gpt-5-codex'
                     : effectiveTool === 'gemini'
                       ? 'e.g., gemini-2.5-pro'
-                      : 'e.g., claude-opus-4-20250514'
+                      : effectiveTool === 'opencode'
+                        ? 'e.g., claude-3-5-sonnet'
+                        : 'e.g., claude-opus-4-20250514'
                 }
                 style={{ width: '100%', minWidth: 400 }}
               />
@@ -157,7 +173,9 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                       ? 'https://platform.openai.com/docs/models'
                       : effectiveTool === 'gemini'
                         ? 'https://ai.google.dev/gemini-api/docs/models'
-                        : 'https://docs.anthropic.com/en/docs/about-claude/models'
+                        : effectiveTool === 'opencode'
+                          ? 'https://models.dev'
+                          : 'https://docs.anthropic.com/en/docs/about-claude/models'
                   }
                   target="_blank"
                   style={{ fontSize: 12 }}

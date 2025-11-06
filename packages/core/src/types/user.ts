@@ -55,6 +55,7 @@ export interface DefaultAgenticConfig {
   'claude-code'?: DefaultAgenticToolConfig;
   codex?: DefaultAgenticToolConfig;
   gemini?: DefaultAgenticToolConfig;
+  opencode?: DefaultAgenticToolConfig;
 }
 
 /**

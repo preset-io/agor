@@ -9,11 +9,12 @@ import type { AgenticToolID } from './id';
  * - claude-code: Anthropic's Claude Code CLI
  * - codex: OpenAI's Codex CLI
  * - gemini: Google's Gemini Code Assist
+ * - opencode: Open-source terminal-based AI assistant with 75+ LLM providers
  *
  * Not to be confused with "execution tools" (Bash, Write, Read, etc.)
  * which are the primitives that agentic tools use to perform work.
  */
-export type AgenticToolName = 'claude-code' | 'codex' | 'gemini';
+export type AgenticToolName = 'claude-code' | 'codex' | 'gemini' | 'opencode';
 
 /**
  * Agentic tool metadata for UI display
@@ -50,6 +51,15 @@ export type ClaudeCodePermissionMode = 'default' | 'acceptEdits' | 'bypassPermis
  * Unified permission model - single mode controls tool approval behavior.
  */
 export type GeminiPermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions';
+
+/**
+ * OpenCode permission modes (via OpenCode server SDK)
+ *
+ * Unified permission model - single mode controls tool approval behavior.
+ * OpenCode auto-approves permissions during automation, so modes primarily affect
+ * interactive prompting when user is present.
+ */
+export type OpenCodePermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions';
 
 /**
  * Codex permission modes (legacy - now split into sandboxMode + approvalPolicy)
