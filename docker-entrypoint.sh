@@ -35,7 +35,7 @@ echo "👤 Ensuring default admin user exists..."
 pnpm --filter @agor/cli exec tsx bin/dev.ts user create-admin --force
 
 # Start daemon in background (use DAEMON_PORT env var or default to 3030)
-echo "📡 Starting daemon on port ${DAEMON_PORT:-3030}..."
+echo "🚀 Starting daemon on port ${DAEMON_PORT:-3030}..."
 PORT="${DAEMON_PORT:-3030}" pnpm --filter @agor/daemon dev &
 DAEMON_PID=$!
 
