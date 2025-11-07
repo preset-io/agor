@@ -429,12 +429,13 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
         access_urls = [{ name: 'App', url }];
       }
 
-      // Update status to 'running' - now rely on health checks to monitor
+      // Keep status as 'starting' - let health checks transition to 'running'
+      // The first successful health check will transition from 'starting' → 'running'
+      // This prevents premature "healthy" status before app is truly ready
       return await this.updateEnvironment(
         id,
         {
-          status: 'running',
-          process: undefined, // No subprocess to track
+          // Don't change status - keep as 'starting' until first successful health check
           access_urls,
         },
         params
