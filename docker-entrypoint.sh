@@ -44,6 +44,12 @@ EOF
 echo "👤 Ensuring default admin user exists..."
 pnpm --filter @agor/cli exec tsx bin/dev.ts user create-admin --force
 
+# Run seed script if SEED=true (idempotent: only runs if no data exists)
+if [ "$SEED" = "true" ]; then
+  echo "🌱 Seeding development fixtures..."
+  pnpm tsx scripts/seed.ts --skip-if-exists
+fi
+
 # Start daemon in background (use DAEMON_PORT env var or default to 3030)
 echo "🚀 Starting daemon on port ${DAEMON_PORT:-3030}..."
 PORT="${DAEMON_PORT:-3030}" pnpm --filter @agor/daemon dev &

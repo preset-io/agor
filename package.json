@@ -30,7 +30,8 @@
     "prepare": "husky",
     "cli:link": "pnpm -C apps/agor-cli link --global",
     "cli:unlink": "pnpm -C apps/agor-cli unlink --global",
-    "agor": "NODE_NO_WARNINGS=1 pnpm --filter @agor/cli exec tsx bin/dev.ts"
+    "agor": "NODE_NO_WARNINGS=1 pnpm --filter @agor/cli exec tsx bin/dev.ts",
+    "seed": "tsx scripts/seed.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.2.6",
