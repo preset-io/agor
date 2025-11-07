@@ -140,12 +140,16 @@ export const ConversationView = React.memo<ConversationViewProps>(
         setExpandedTaskIds(prev => {
           // If no tasks expanded or last task changed, expand the last task
           if (prev.size === 0 || !prev.has(lastTaskId)) {
+            // Scroll to bottom after expansion is rendered
+            requestAnimationFrame(() => {
+              scrollToBottom();
+            });
             return new Set([lastTaskId]);
           }
           return prev;
         });
       }
-    }, [tasks]);
+    }, [tasks, scrollToBottom]);
 
     // Handle task expand/collapse
     const handleTaskExpandChange = useCallback((taskId: string, expanded: boolean) => {

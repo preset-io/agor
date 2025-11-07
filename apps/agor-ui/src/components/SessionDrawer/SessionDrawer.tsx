@@ -261,15 +261,16 @@ const SessionDrawer = ({
     }
   }, [session?.model_config?.thinkingMode]);
 
-  // Scroll to bottom when drawer opens
+  // Scroll to bottom when drawer opens or session changes
   React.useEffect(() => {
-    if (open && scrollToBottom) {
-      // Small delay to ensure content is rendered
-      setTimeout(() => {
+    if (open && scrollToBottom && session) {
+      // Longer delay to ensure tasks are loaded and content is rendered
+      const timeoutId = setTimeout(() => {
         scrollToBottom();
-      }, 100);
+      }, 300);
+      return () => clearTimeout(timeoutId);
     }
-  }, [open, scrollToBottom]);
+  }, [open, scrollToBottom, session?.session_id]);
 
   // Early return if no session (drawer should not be open without a session)
   // IMPORTANT: Must be after all hooks to satisfy Rules of Hooks
