@@ -980,7 +980,7 @@ function AppContent() {
               )}
               <AgorApp
                 client={client}
-                user={user}
+                user={currentUser}
                 sessions={sessions}
                 tasks={tasks}
                 availableAgents={AVAILABLE_AGENTS}
