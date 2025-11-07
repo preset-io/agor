@@ -150,6 +150,8 @@ interface ProcessorState {
     toolUseId?: string;
     toolName?: string;
   }>;
+  // Counter for throttling tool input chunk logging
+  toolInputChunkCount: number;
 }
 
 /**
@@ -172,6 +174,7 @@ export class SDKMessageProcessor {
       enableTokenStreaming: options.enableTokenStreaming ?? true,
       idleTimeoutMs: options.idleTimeoutMs ?? 30000, // 30s default
       contentBlockStack: [],
+      toolInputChunkCount: 0,
     };
   }
 
@@ -306,17 +309,11 @@ export class SDKMessageProcessor {
     if (hasToolResult) {
       // Tool result messages - save to database for conversation continuity
       const toolResults = content.filter((b: ContentBlock) => b.type === 'tool_result');
+      const errorCount = toolResults.filter((tr: ContentBlock) => tr.is_error).length;
+      const successCount = toolResults.length - errorCount;
       console.log(
-        `🔧 SDK user message with ${toolResults.length} tool result(s) (uuid: ${uuid?.substring(0, 8)})`
+        `🔧 SDK user message with ${toolResults.length} tool result(s) (✅ ${successCount}, ❌ ${errorCount})`
       );
-
-      toolResults.forEach((tr: ContentBlock, i: number) => {
-        const preview =
-          typeof tr.content === 'string'
-            ? tr.content.substring(0, 100)
-            : JSON.stringify(tr.content).substring(0, 100);
-        console.log(`   Result ${i + 1}: ${tr.is_error ? '❌ ERROR' : '✅'} ${preview}`);
-      });
 
       // Yield event to save tool results to database
       return [
@@ -447,11 +444,11 @@ export class SDKMessageProcessor {
           agentSessionId: this.state.capturedAgentSessionId,
         });
       } else if (delta?.type === 'input_json_delta') {
-        // Tool input is being streamed - log for now
+        // Tool input is being streamed - log every 10th chunk only (reduce verbosity)
         // Could emit tool_input_chunk event if we want to show tool args as they build
-        const partialJson = delta.partial_json;
-        if (partialJson) {
-          console.debug(`🔧 Tool input chunk: ${partialJson.substring(0, 50)}...`);
+        this.state.toolInputChunkCount++;
+        if (this.state.toolInputChunkCount % 10 === 0) {
+          console.debug(`🔧 Tool input chunk (${this.state.toolInputChunkCount})`);
         }
       }
     }
