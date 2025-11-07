@@ -27,8 +27,8 @@ services:
     volumes:
       # Mount entire repo for hot-reload (includes node_modules from host)
       - .:/app
-      # Persist database/config (unique per project name)
-      - agor-data:/home/agor/.agor
+      # Persist entire home directory (database, config, agent auth tokens, etc.)
+      - agor-home:/home/agor
       # Mount SSH keys for git authentication (dev only)
       - ~/.ssh:/home/agor/.ssh:ro
     stdin_open: true
@@ -37,4 +37,5 @@ services:
 volumes:
   # Named volume - unique per docker-compose project
   # Use -p flag to create separate volumes per worktree
-  agor-data:
+  # Persists: database, config, agent auth tokens, caches, etc.
+  agor-home:
