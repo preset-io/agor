@@ -488,7 +488,13 @@ export const AgentChain: React.FC<AgentChainProps> = ({ messages }) => {
                         transition: 'opacity 0.2s',
                         flexShrink: 0,
                       }}
-                      onClick={() => navigator.clipboard.writeText(file)}
+                      onClick={async () => {
+                        try {
+                          await navigator.clipboard.writeText(file);
+                        } catch (error) {
+                          console.error('Failed to copy to clipboard:', error);
+                        }
+                      }}
                       title="Copy to clipboard"
                     />
                   </div>

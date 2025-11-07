@@ -72,9 +72,13 @@ export function SandboxBanner() {
               </Typography.Text>
               <Button
                 size="small"
-                onClick={() => {
+                onClick={async () => {
                   // Copy command to clipboard
-                  navigator.clipboard.writeText('pnpm agor init');
+                  try {
+                    await navigator.clipboard.writeText('pnpm agor init');
+                  } catch (error) {
+                    console.error('Failed to copy to clipboard:', error);
+                  }
                 }}
               >
                 Copy Command

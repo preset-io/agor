@@ -64,9 +64,14 @@ const CommandPreview: React.FC<{
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
-    await navigator.clipboard.writeText(preview.result);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    try {
+      await navigator.clipboard.writeText(preview.result);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (error) {
+      console.error('Failed to copy to clipboard:', error);
+      message.error('Failed to copy to clipboard');
+    }
   };
 
   return (
@@ -108,9 +113,14 @@ const TemplateField: React.FC<{ label: string; value: string }> = ({ label, valu
 
   const handleCopy = async () => {
     if (!value) return;
-    await navigator.clipboard.writeText(value);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (error) {
+      console.error('Failed to copy to clipboard:', error);
+      message.error('Failed to copy to clipboard');
+    }
   };
 
   return (
