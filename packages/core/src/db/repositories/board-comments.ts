@@ -5,7 +5,7 @@
  * Supports flexible attachments (board, session, task, message, worktree, spatial).
  */
 
-import type { BoardComment, CommentID, UUID } from '@agor/core/types';
+import type { BoardComment, CommentID, CommentReaction, UUID } from '@agor/core/types';
 import { and, eq, isNull, like } from 'drizzle-orm';
 import { formatShortId, generateId } from '../../lib/ids';
 import type { Database } from '../client';
@@ -42,11 +42,33 @@ export class BoardCommentsRepository
     };
 
     // Parse reactions (stored as JSON string)
-    const reactions = row.reactions
+    let reactions = row.reactions
       ? typeof row.reactions === 'string'
         ? JSON.parse(row.reactions)
         : row.reactions
       : [];
+
+    // Migrate old reactions to new format with reaction_id
+    const migrateReactions = (reactionArray: any[]): CommentReaction[] => {
+      return reactionArray.map((r) => {
+        if (!r.reaction_id) {
+          // Old format - add reaction_id and empty reactions array
+          return {
+            reaction_id: generateId(),
+            user_id: r.user_id,
+            emoji: r.emoji,
+            reactions: [],
+          };
+        }
+        // New format - recursively migrate nested reactions
+        return {
+          ...r,
+          reactions: r.reactions ? migrateReactions(r.reactions) : [],
+        };
+      });
+    };
+
+    reactions = migrateReactions(reactions);
 
     return {
       comment_id: row.comment_id as CommentID,
@@ -434,10 +456,19 @@ export class BoardCommentsRepository
   // ============================================================================
 
   /**
-   * Toggle a reaction on a comment
+   * Toggle a reaction on a comment or on another reaction (nested)
    * If user has already reacted with this emoji, remove it. Otherwise, add it.
+   * @param commentId - The comment ID
+   * @param userId - The user ID
+   * @param emoji - The emoji to toggle
+   * @param parentReactionId - Optional parent reaction ID for nested reactions
    */
-  async toggleReaction(commentId: string, userId: string, emoji: string): Promise<BoardComment> {
+  async toggleReaction(
+    commentId: string,
+    userId: string,
+    emoji: string,
+    parentReactionId?: string
+  ): Promise<BoardComment> {
     try {
       const comment = await this.findById(commentId);
       if (!comment) {
@@ -445,16 +476,67 @@ export class BoardCommentsRepository
       }
 
       const reactions = comment.reactions || [];
-      const existingIndex = reactions.findIndex((r) => r.user_id === userId && r.emoji === emoji);
 
-      let updatedReactions: typeof reactions;
-      if (existingIndex >= 0) {
-        // Remove reaction
-        updatedReactions = reactions.filter((_, i) => i !== existingIndex);
-      } else {
-        // Add reaction
-        updatedReactions = [...reactions, { user_id: userId, emoji }];
-      }
+      // Helper function to recursively toggle reaction in a reaction array
+      const toggleInArray = (
+        reactionsArray: CommentReaction[],
+        targetParentId?: string
+      ): CommentReaction[] => {
+        // If no parent, we're toggling at the root level
+        if (!targetParentId) {
+          const existingIndex = reactionsArray.findIndex(
+            (r) => r.user_id === userId && r.emoji === emoji
+          );
+
+          if (existingIndex >= 0) {
+            // Remove reaction
+            return reactionsArray.filter((_, i) => i !== existingIndex);
+          } else {
+            // Add reaction with unique ID
+            return [
+              ...reactionsArray,
+              { reaction_id: generateId(), user_id: userId, emoji, reactions: [] },
+            ];
+          }
+        }
+
+        // Otherwise, find the parent reaction and toggle within its nested reactions
+        return reactionsArray.map((reaction) => {
+          if (reaction.reaction_id === targetParentId) {
+            // Found the parent - toggle within its nested reactions
+            const nestedReactions = reaction.reactions || [];
+            const existingIndex = nestedReactions.findIndex(
+              (r) => r.user_id === userId && r.emoji === emoji
+            );
+
+            if (existingIndex >= 0) {
+              // Remove nested reaction
+              return {
+                ...reaction,
+                reactions: nestedReactions.filter((_, i) => i !== existingIndex),
+              };
+            } else {
+              // Add nested reaction
+              return {
+                ...reaction,
+                reactions: [
+                  ...nestedReactions,
+                  { reaction_id: generateId(), user_id: userId, emoji, reactions: [] },
+                ],
+              };
+            }
+          } else if (reaction.reactions && reaction.reactions.length > 0) {
+            // Recursively search in nested reactions
+            return {
+              ...reaction,
+              reactions: toggleInArray(reaction.reactions, targetParentId),
+            };
+          }
+          return reaction;
+        });
+      };
+
+      const updatedReactions = toggleInArray(reactions, parentReactionId);
 
       return this.update(commentId, { reactions: updatedReactions });
     } catch (error) {

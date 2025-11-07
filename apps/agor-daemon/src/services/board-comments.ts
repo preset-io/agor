@@ -153,15 +153,20 @@ export class BoardCommentsService extends DrizzleService<
   // ============================================================================
 
   /**
-   * Custom method: Toggle reaction on a comment
+   * Custom method: Toggle reaction on a comment or on another reaction (nested)
    * If user has already reacted with this emoji, remove it. Otherwise, add it.
    */
   async toggleReaction(
     commentId: string,
-    data: { user_id: string; emoji: string },
+    data: { user_id: string; emoji: string; parent_reaction_id?: string },
     _params?: BoardCommentsParams
   ): Promise<BoardComment> {
-    return this.commentsRepo.toggleReaction(commentId, data.user_id, data.emoji);
+    return this.commentsRepo.toggleReaction(
+      commentId,
+      data.user_id,
+      data.emoji,
+      data.parent_reaction_id
+    );
   }
 
   /**

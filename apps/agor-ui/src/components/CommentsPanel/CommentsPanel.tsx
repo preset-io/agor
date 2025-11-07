@@ -3,11 +3,10 @@ import type {
   BoardComment,
   BoardObject,
   CommentReaction,
-  ReactionSummary,
   User,
   Worktree,
 } from '@agor/core/types';
-import { groupReactions, isThreadRoot } from '@agor/core/types';
+import { isThreadRoot } from '@agor/core/types';
 import {
   AppstoreOutlined,
   BranchesOutlined,
@@ -54,7 +53,7 @@ export interface CommentsPanelProps {
   onSendComment: (content: string) => void;
   onReplyComment?: (parentId: string, content: string) => void;
   onResolveComment?: (commentId: string) => void;
-  onToggleReaction?: (commentId: string, emoji: string) => void;
+  onToggleReaction?: (commentId: string, emoji: string, parentReactionId?: string) => void;
   onDeleteComment?: (commentId: string) => void;
   hoveredCommentId?: string | null;
   selectedCommentId?: string | null;
@@ -64,62 +63,153 @@ export interface CommentsPanelProps {
 type FilterMode = 'all' | 'active';
 
 /**
- * Reaction display component - shows existing reactions as pills
+ * Single reaction pill component - shows one reaction with count and nested reactions
+ */
+const ReactionPill: React.FC<{
+  reaction: CommentReaction;
+  allReactions: CommentReaction[];
+  currentUserId: string;
+  users: User[];
+  onToggle: (emoji: string, parentReactionId?: string) => void;
+  depth?: number;
+}> = ({ reaction, allReactions, currentUserId, users, onToggle, depth = 0 }) => {
+  const { token } = theme.useToken();
+  const [showEmojiPicker, setShowEmojiPicker] = React.useState(false);
+
+  // Count how many users reacted with this exact emoji at this level
+  const sameEmojiReactions = allReactions.filter(r => r.emoji === reaction.emoji);
+  const userIds = sameEmojiReactions.map(r => r.user_id);
+  const hasReacted = userIds.includes(currentUserId);
+
+  // Build tooltip content
+  const reactedUsers = userIds
+    .map(userId => users.find(u => u.user_id === userId))
+    .filter(Boolean)
+    .map(user => user!.name || user!.email.split('@')[0]);
+
+  const tooltipContent = reactedUsers.length > 0 ? reactedUsers.join(', ') : 'Anonymous users';
+
+  // Get nested reactions for this specific reaction instance
+  const nestedReactions = reaction.reactions || [];
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: token.sizeXS }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: token.sizeXS }}>
+        <Tooltip title={tooltipContent}>
+          <Button
+            size="small"
+            onClick={() => onToggle(reaction.emoji, undefined)}
+            style={{
+              borderRadius: 12,
+              height: 24,
+              padding: '0 8px',
+              fontSize: 12,
+              backgroundColor: hasReacted ? token.colorPrimaryBg : 'transparent',
+              borderColor: token.colorBorder,
+              color: token.colorText,
+              transition: 'background-color 0.2s ease',
+            }}
+            onMouseEnter={e => {
+              e.currentTarget.style.backgroundColor = token.colorPrimaryBgHover;
+            }}
+            onMouseLeave={e => {
+              e.currentTarget.style.backgroundColor = hasReacted
+                ? token.colorPrimaryBg
+                : 'transparent';
+            }}
+          >
+            {reaction.emoji} {userIds.length}
+          </Button>
+        </Tooltip>
+
+        {/* Emoji picker for adding nested reactions */}
+        <Popover
+          content={
+            <EmojiPicker
+              theme={Theme.DARK}
+              onEmojiClick={emojiData => {
+                onToggle(emojiData.emoji, reaction.reaction_id);
+                setShowEmojiPicker(false);
+              }}
+              width={350}
+              height={400}
+            />
+          }
+          trigger="click"
+          open={showEmojiPicker}
+          onOpenChange={setShowEmojiPicker}
+        >
+          <Button
+            size="small"
+            type="text"
+            icon={<SmileOutlined />}
+            style={{
+              height: 20,
+              width: 20,
+              padding: 0,
+              fontSize: 10,
+              opacity: 0.6,
+            }}
+          />
+        </Popover>
+      </div>
+
+      {/* Render nested reactions with indentation */}
+      {nestedReactions.length > 0 && (
+        <div style={{ paddingLeft: token.paddingSM }}>
+          <ReactionDisplay
+            reactions={nestedReactions}
+            currentUserId={currentUserId}
+            users={users}
+            onToggle={onToggle}
+            depth={depth + 1}
+          />
+        </div>
+      )}
+    </div>
+  );
+};
+
+/**
+ * Reaction display component - shows existing reactions as a tree
  */
 const ReactionDisplay: React.FC<{
   reactions: CommentReaction[];
   currentUserId: string;
   users: User[];
-  onToggle: (emoji: string) => void;
-}> = ({ reactions, currentUserId, users, onToggle }) => {
+  onToggle: (emoji: string, parentReactionId?: string) => void;
+  depth?: number;
+}> = ({ reactions, currentUserId, users, onToggle, depth = 0 }) => {
   const { token } = theme.useToken();
-  const grouped: ReactionSummary = groupReactions(reactions);
 
-  if (Object.keys(grouped).length === 0) {
+  if (!reactions || reactions.length === 0) {
     return null;
   }
 
+  // Group reactions by emoji to display them together
+  const emojiGroups = reactions.reduce((acc, reaction) => {
+    if (!acc[reaction.emoji]) {
+      acc[reaction.emoji] = [];
+    }
+    acc[reaction.emoji].push(reaction);
+    return acc;
+  }, {} as Record<string, CommentReaction[]>);
+
   return (
-    <Space size={token.sizeUnit}>
-      {Object.entries(grouped).map(([emoji, userIds]) => {
-        const hasReacted = userIds.includes(currentUserId);
-
-        // Build tooltip content with list of users who reacted
-        const reactedUsers = userIds
-          .map(userId => users.find(u => u.user_id === userId))
-          .filter(Boolean)
-          .map(user => user!.name || user!.email.split('@')[0]);
-
-        const tooltipContent =
-          reactedUsers.length > 0 ? reactedUsers.join(', ') : 'Anonymous users';
-
+    <Space size={token.sizeUnit} direction="vertical" style={{ width: '100%' }}>
+      {Object.entries(emojiGroups).map(([emoji, reactionsForEmoji]) => {
+        // For each emoji group, render the first reaction (which represents all of them)
+        const firstReaction = reactionsForEmoji[0];
         return (
-          <Tooltip key={emoji} title={tooltipContent}>
-            <Button
-              size="small"
-              onClick={() => onToggle(emoji)}
-              style={{
-                borderRadius: 12,
-                height: 24,
-                padding: '0 8px',
-                fontSize: 12,
-                backgroundColor: hasReacted ? token.colorPrimaryBg : 'transparent',
-                borderColor: token.colorBorder,
-                color: token.colorText,
-                transition: 'background-color 0.2s ease',
-              }}
-              onMouseEnter={e => {
-                e.currentTarget.style.backgroundColor = token.colorPrimaryBgHover;
-              }}
-              onMouseLeave={e => {
-                e.currentTarget.style.backgroundColor = hasReacted
-                  ? token.colorPrimaryBg
-                  : 'transparent';
-              }}
-            >
-              {emoji} {userIds.length}
-            </Button>
-          </Tooltip>
+          <ReactionPill
+            key={firstReaction.reaction_id}
+            reaction={firstReaction}
+            allReactions={reactionsForEmoji}
+            currentUserId={currentUserId}
+            users={users}
+            onToggle={onToggle}
+            depth={depth}
+          />
         );
       })}
     </Space>
@@ -171,7 +261,7 @@ const ReplyItem: React.FC<{
   reply: BoardComment;
   users: User[];
   currentUserId: string;
-  onToggleReaction?: (commentId: string, emoji: string) => void;
+  onToggleReaction?: (commentId: string, emoji: string, parentReactionId?: string) => void;
   onDelete?: (commentId: string) => void;
 }> = ({ reply, users, currentUserId, onToggleReaction, onDelete }) => {
   const { token } = theme.useToken();
@@ -215,7 +305,9 @@ const ReplyItem: React.FC<{
                     reactions={reply.reactions || []}
                     currentUserId={currentUserId}
                     users={users}
-                    onToggle={emoji => onToggleReaction(reply.comment_id, emoji)}
+                    onToggle={(emoji, parentReactionId) =>
+                      onToggleReaction(reply.comment_id, emoji, parentReactionId)
+                    }
                   />
                 </div>
               )}
@@ -269,7 +361,7 @@ const CommentThread: React.FC<{
   currentUserId: string;
   onReply?: (parentId: string, content: string) => void;
   onResolve?: (commentId: string) => void;
-  onToggleReaction?: (commentId: string, emoji: string) => void;
+  onToggleReaction?: (commentId: string, emoji: string, parentReactionId?: string) => void;
   onDelete?: (commentId: string) => void;
   isHighlighted?: boolean;
   scrollRef?: React.RefObject<HTMLDivElement>;
@@ -346,7 +438,9 @@ const CommentThread: React.FC<{
                     reactions={comment.reactions || []}
                     currentUserId={currentUserId}
                     users={users}
-                    onToggle={emoji => onToggleReaction(comment.comment_id, emoji)}
+                    onToggle={(emoji, parentReactionId) =>
+                      onToggleReaction(comment.comment_id, emoji, parentReactionId)
+                    }
                   />
                 </div>
               )}

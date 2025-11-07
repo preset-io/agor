@@ -2115,9 +2115,12 @@ async function main() {
     ) => Promise<import('@agor/core/types').BoardComment>;
   };
 
-  // POST /board-comments/:id/toggle-reaction - Toggle emoji reaction on comment
+  // POST /board-comments/:id/toggle-reaction - Toggle emoji reaction on comment or nested reaction
   app.use('/board-comments/:id/toggle-reaction', {
-    async create(data: { user_id: string; emoji: string }, params: RouteParams) {
+    async create(
+      data: { user_id: string; emoji: string; parent_reaction_id?: string },
+      params: RouteParams
+    ) {
       ensureMinimumRole(params, 'member', 'react to board comments');
       const id = params.route?.id;
       if (!id) throw new Error('Comment ID required');

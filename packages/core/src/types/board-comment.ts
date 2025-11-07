@@ -2,11 +2,15 @@ import type { BoardID, CommentID, MessageID, SessionID, TaskID, UserID, Worktree
 
 /**
  * Individual reaction on a comment
- * Stored as JSON array: [{ user_id: "abc", emoji: "👍" }, ...]
+ * Stored as JSON array with nested reactions support
  */
 export interface CommentReaction {
+  /** Unique identifier for this reaction (UUIDv7) */
+  reaction_id: string;
   user_id: string;
   emoji: string;
+  /** Nested reactions on this reaction (emoji reaction tree) */
+  reactions?: CommentReaction[];
 }
 
 /**

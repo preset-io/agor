@@ -851,13 +851,18 @@ function AppContent() {
     }
   };
 
-  const handleToggleReaction = async (commentId: string, emoji: string) => {
+  const handleToggleReaction = async (
+    commentId: string,
+    emoji: string,
+    parentReactionId?: string
+  ) => {
     if (!client) return;
     try {
       // Use the custom route for toggling reactions
       await client.service(`board-comments/${commentId}/toggle-reaction`).create({
         user_id: user?.user_id || 'anonymous',
         emoji,
+        parent_reaction_id: parentReactionId,
       });
     } catch (error) {
       message.error(
