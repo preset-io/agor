@@ -669,6 +669,14 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
             : error.message
           : 'Unknown error';
 
+      // During 'starting' state, don't mark as unhealthy - keep retrying
+      // Only mark as unhealthy when transitioning from healthy->unhealthy in 'running' state
+      if (currentStatus === 'starting') {
+        // Don't update health check during startup - wait for first success
+        // This prevents the UI from showing unhealthy state while environment is still starting
+        return worktree;
+      }
+
       const newHealthStatus = 'unhealthy';
 
       // Only log if health status changed or if this is an error
