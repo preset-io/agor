@@ -172,6 +172,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
           <TextArea
             rows={4}
             placeholder="e.g., Build a JWT authentication system with secure password storage..."
+            autoFocus
           />
         </Form.Item>
 

@@ -248,6 +248,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({ repos, onCreate, onUpdat
               <Input
                 placeholder="https://github.com/apache/superset.git"
                 onChange={handleUrlChange}
+                autoFocus
               />
             </Form.Item>
           )}

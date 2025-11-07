@@ -128,7 +128,7 @@ export const WorktreeFormFields: React.FC<WorktreeFormFieldsProps> = ({
         validateTrigger={['onBlur', 'onChange']}
         tooltip="URL-friendly name (e.g., 'feat-auth', 'fix-cors')"
       >
-        <Input placeholder="feat-auth" />
+        <Input placeholder="feat-auth" autoFocus />
       </Form.Item>
 
       <Form.Item>
