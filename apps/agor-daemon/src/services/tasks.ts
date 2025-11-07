@@ -28,6 +28,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     const taskRepo = new TaskRepository(db);
     super(taskRepo, {
       id: 'task_id',
+      resourceType: 'Task',
       paginate: {
         default: 100,
         max: 500,

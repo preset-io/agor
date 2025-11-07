@@ -29,6 +29,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     const sessionRepo = new SessionRepository(db);
     super(sessionRepo, {
       id: 'session_id',
+      resourceType: 'Session',
       paginate: {
         default: 50,
         max: 1000, // Increased from 100 to allow fetching more sessions

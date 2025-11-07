@@ -27,6 +27,7 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     const boardRepo = new BoardRepository(db);
     super(boardRepo, {
       id: 'board_id',
+      resourceType: 'Board',
       paginate: {
         default: 50,
         max: 100,

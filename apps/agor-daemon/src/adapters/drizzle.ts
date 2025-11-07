@@ -6,6 +6,7 @@
  */
 
 import type { Id, NullableId, Paginated, Params } from '@agor/core/types';
+import { NotFoundError } from '@agor/core/utils/errors';
 
 /**
  * Query operators supported by the adapter
@@ -45,6 +46,11 @@ export interface DrizzleAdapterOptions {
    * Allow multi-record operations (patch/remove without ID)
    */
   multi?: boolean | string[];
+
+  /**
+   * Resource type name for error messages (e.g., 'Worktree', 'Session')
+   */
+  resourceType?: string;
 }
 
 /**
@@ -70,6 +76,7 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
   id: string;
   paginate?: PaginationOptions;
   multi: boolean | string[];
+  resourceType: string;
 
   // Event emitter for FeathersJS (will be injected by framework)
   // biome-ignore lint/suspicious/noExplicitAny: FeathersJS event system
@@ -82,6 +89,7 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
     this.id = options.id ?? 'id';
     this.paginate = options.paginate;
     this.multi = options.multi ?? false;
+    this.resourceType = options.resourceType ?? 'Record';
   }
 
   /**
@@ -238,7 +246,7 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
     const result = await this.repository.findById(String(id));
 
     if (!result) {
-      throw new Error(`No record found for id '${id}'`);
+      throw new NotFoundError(this.resourceType, String(id));
     }
 
     return result;
@@ -269,11 +277,8 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
    * Update a record (complete replacement)
    */
   async update(id: Id, data: D, params?: P): Promise<T> {
-    // Verify record exists
-    const existing = await this.get(id, params);
-    if (!existing) {
-      throw new Error(`No record found for id '${id}'`);
-    }
+    // Verify record exists (throws NotFoundError if not found)
+    await this.get(id, params);
 
     const result = await this.repository.update(String(id), data as Partial<T>);
     this.emit?.('updated', result, params);
@@ -314,10 +319,8 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
     }
 
     // Single patch
-    const existing = await this.get(id, params);
-    if (!existing) {
-      throw new Error(`No record found for id '${id}'`);
-    }
+    // Verify record exists (throws NotFoundError if not found)
+    await this.get(id, params);
 
     const result = await this.repository.update(String(id), data as Partial<T>);
     this.emit?.('patched', result, params);
@@ -351,10 +354,8 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
     }
 
     // Single remove
+    // Get record before deletion (throws NotFoundError if not found)
     const existing = await this.get(id, params);
-    if (!existing) {
-      throw new Error(`No record found for id '${id}'`);
-    }
 
     await this.repository.delete(String(id));
     this.emit?.('removed', existing, params);

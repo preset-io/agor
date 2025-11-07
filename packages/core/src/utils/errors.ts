@@ -6,6 +6,65 @@
  */
 
 /**
+ * Custom error classes for type-safe error handling
+ */
+
+/**
+ * Base class for all Agor errors
+ */
+export class AgorError extends Error {
+  constructor(message: string, public readonly code?: string) {
+    super(message);
+    this.name = this.constructor.name;
+    // Maintains proper stack trace for where our error was thrown (only available on V8)
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, this.constructor);
+    }
+  }
+}
+
+/**
+ * Thrown when a resource is not found in the database
+ */
+export class NotFoundError extends AgorError {
+  constructor(resourceType: string, id: string) {
+    super(`${resourceType} not found: ${id}`, 'NOT_FOUND');
+    this.resourceType = resourceType;
+    this.id = id;
+  }
+
+  public readonly resourceType: string;
+  public readonly id: string;
+}
+
+/**
+ * Thrown when a resource already exists
+ */
+export class AlreadyExistsError extends AgorError {
+  constructor(resourceType: string, identifier: string) {
+    super(`${resourceType} already exists: ${identifier}`, 'ALREADY_EXISTS');
+  }
+}
+
+/**
+ * Thrown when validation fails
+ */
+export class ValidationError extends AgorError {
+  constructor(message: string, public readonly field?: string) {
+    super(message, 'VALIDATION_ERROR');
+  }
+}
+
+/**
+ * Thrown when an operation is not authorized
+ */
+export class UnauthorizedError extends AgorError {
+  constructor(message: string = 'Not authorized') {
+    super(message, 'UNAUTHORIZED');
+  }
+}
+
+/**
  * Extract error message from any value
  * Handles Error objects, strings, and unknown types
  */

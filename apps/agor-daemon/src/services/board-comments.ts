@@ -42,6 +42,7 @@ export class BoardCommentsService extends DrizzleService<
     const commentsRepo = new BoardCommentsRepository(db);
     super(commentsRepo, {
       id: 'comment_id',
+      resourceType: 'BoardComment',
       paginate: {
         default: 100,
         max: 500,

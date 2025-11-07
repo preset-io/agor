@@ -31,6 +31,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     const repoRepo = new RepoRepository(db);
     super(repoRepo, {
       id: 'repo_id',
+      resourceType: 'Repo',
       paginate: {
         default: 50,
         max: 100,

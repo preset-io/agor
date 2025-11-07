@@ -44,6 +44,7 @@ export class MCPServersService extends DrizzleService<
     const mcpServerRepo = new MCPServerRepository(db);
     super(mcpServerRepo, {
       id: 'mcp_server_id',
+      resourceType: 'McpServer',
       paginate: {
         default: 50,
         max: 100,

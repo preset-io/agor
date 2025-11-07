@@ -14,6 +14,7 @@
 import { ENVIRONMENT } from '@agor/core/config';
 import type { Application } from '@agor/core/feathers';
 import type { Worktree, WorktreeID } from '@agor/core/types';
+import { NotFoundError } from '@agor/core/utils/errors';
 import type { WorktreesServiceImpl } from '../declarations';
 
 /**
@@ -134,15 +135,22 @@ export class HealthMonitor {
       // Logging is handled in checkHealth() method - only logs on state changes
       await worktreesService.checkHealth(worktreeId);
     } catch (error) {
+      // If worktree was deleted or not found, stop monitoring silently
+      // This is expected when worktrees are deleted while health checks are in progress
+      if (error instanceof NotFoundError) {
+        this.stopMonitoring(worktreeId);
+        // Only log at debug level - this is normal cleanup, not an error
+        if (process.env.DEBUG) {
+          console.log(`   Health monitoring stopped for deleted worktree ${worktreeId.substring(0, 8)}`);
+        }
+        return;
+      }
+
+      // Log actual errors (not "not found" errors from deleted worktrees)
       console.error(
         `❌ Health check failed for worktree ${worktreeId.substring(0, 8)}:`,
         error instanceof Error ? error.message : error
       );
-
-      // If worktree was deleted or not found, stop monitoring
-      if (error instanceof Error && error.message.includes('not found')) {
-        this.stopMonitoring(worktreeId);
-      }
     }
   }
 

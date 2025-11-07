@@ -29,6 +29,7 @@ export class MessagesService extends DrizzleService<Message, Partial<Message>, M
     const messagesRepo = new MessagesRepository(db);
     super(messagesRepo, {
       id: 'message_id',
+      resourceType: 'Message',
       paginate: {
         default: 100,
         max: 1000, // Allow larger page size for bulk message retrieval

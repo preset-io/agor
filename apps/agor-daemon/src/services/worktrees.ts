@@ -64,6 +64,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     const worktreeRepo = new WorktreeRepository(db);
     super(worktreeRepo, {
       id: 'worktree_id',
+      resourceType: 'Worktree',
       paginate: {
         default: 50,
         max: 100,
