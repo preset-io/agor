@@ -47,7 +47,9 @@ import { PermissionModeSelector } from '../PermissionModeSelector';
 import {
   ContextWindowPill,
   ForkPill,
+  IssuePill,
   MessageCountPill,
+  PullRequestPill,
   RepoPill,
   SessionIdPill,
   SpawnPill,
@@ -551,6 +553,11 @@ const SessionDrawer = ({
                 onStopEnvironment={onStopEnvironment}
                 onViewLogs={onViewLogs}
               />
+            )}
+            {/* Issue and PR Pills */}
+            {worktree?.issue_url && <IssuePill issueUrl={worktree.issue_url} />}
+            {worktree?.pull_request_url && (
+              <PullRequestPill prUrl={worktree.pull_request_url} />
             )}
             {/* MCP Servers */}
             {sessionMcpServerIds
