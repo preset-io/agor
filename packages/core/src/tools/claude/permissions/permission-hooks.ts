@@ -232,6 +232,7 @@ export function createPreToolUseHook(
       const decision = await deps.permissionService.waitForDecision(
         requestId,
         taskId,
+        sessionId,
         options.signal
       );
 
@@ -261,12 +262,33 @@ export function createPreToolUseHook(
         status: decision.allow ? TaskStatus.RUNNING : TaskStatus.FAILED,
       });
 
-      // Restore session status to running (whether approved or denied, session continues)
-      if (deps.sessionsService) {
-        await deps.sessionsService.patch(sessionId, {
-          status: 'running' as const,
-        });
-        console.log(`✅ Session ${sessionId} restored to running after permission decision`);
+      // If permission was denied, immediately stop the task execution
+      if (!decision.allow) {
+        console.log(`🛑 Permission denied for ${input.tool_name}, stopping task execution...`);
+
+        // Cancel all pending permission requests for this session
+        // (in case there are parallel permission requests queued)
+        deps.permissionService.cancelPendingRequests(sessionId);
+
+        // Set session status to idle (execution stopped)
+        if (deps.sessionsService) {
+          await deps.sessionsService.patch(sessionId, {
+            status: 'idle' as const,
+          });
+          console.log(`✅ Session ${sessionId} set to idle after permission denial`);
+        }
+
+        // Throw an error to abort SDK execution
+        // This will be caught by the prompt service's try-catch and properly cleanup
+        throw new Error(`Permission denied for tool: ${input.tool_name}`);
+      } else {
+        // Restore session status to running (only if approved)
+        if (deps.sessionsService) {
+          await deps.sessionsService.patch(sessionId, {
+            status: 'running' as const,
+          });
+          console.log(`✅ Session ${sessionId} restored to running after permission approval`);
+        }
       }
 
       // Persist decision if user clicked "Remember"
@@ -347,22 +369,24 @@ export function createPreToolUseHook(
       try {
         const errorMessage = error instanceof Error ? error.message : String(error);
         const timestamp = new Date().toISOString();
-        await deps.tasksService.patch(taskId, {
-          status: TaskStatus.FAILED,
-          report: `Error: ${errorMessage}\nTimestamp: ${timestamp}`,
-        });
+
+        // Check if this is a permission denial (already marked as failed above)
+        const isPermissionDenial = error instanceof Error && error.message.startsWith('Permission denied for tool:');
+
+        if (!isPermissionDenial) {
+          // Only update task status if not already marked as failed by permission denial
+          await deps.tasksService.patch(taskId, {
+            status: TaskStatus.FAILED,
+            report: `Error: ${errorMessage}\nTimestamp: ${timestamp}`,
+          });
+        }
       } catch (updateError) {
         console.error('Failed to update task status:', updateError);
       }
 
-      // Return deny to SDK so tool doesn't execute
-      return {
-        hookSpecificOutput: {
-          hookEventName: 'PreToolUse',
-          permissionDecision: 'deny',
-          permissionDecisionReason: `Permission hook failed: ${error instanceof Error ? error.message : String(error)}`,
-        },
-      };
+      // Re-throw error to abort SDK execution
+      // This ensures the SDK stops processing and doesn't continue with other operations
+      throw error;
     } finally {
       // STEP 4: Always release the lock when done (success or error)
       // This allows queued hooks to proceed

@@ -186,7 +186,7 @@ describe('PermissionService.waitForDecision', () => {
     const taskId = 'task-456' as TaskID;
     const signal = new AbortController().signal;
 
-    const waitPromise = service.waitForDecision(requestId, taskId, signal);
+    const waitPromise = service.waitForDecision(requestId, taskId, "session-test" as SessionID, signal);
 
     // Resolve immediately
     const decision = createDecision({ requestId, taskId, allow: true });
@@ -201,7 +201,7 @@ describe('PermissionService.waitForDecision', () => {
     const taskId = 'task-allow' as TaskID;
     const signal = new AbortController().signal;
 
-    const waitPromise = service.waitForDecision(requestId, taskId, signal);
+    const waitPromise = service.waitForDecision(requestId, taskId, "session-test" as SessionID, signal);
 
     service.resolvePermission(createDecision({ requestId, taskId, allow: true }));
 
@@ -214,7 +214,7 @@ describe('PermissionService.waitForDecision', () => {
     const taskId = 'task-deny' as TaskID;
     const signal = new AbortController().signal;
 
-    const waitPromise = service.waitForDecision(requestId, taskId, signal);
+    const waitPromise = service.waitForDecision(requestId, taskId, "session-test" as SessionID, signal);
 
     service.resolvePermission(createDecision({ requestId, taskId, allow: false }));
 
@@ -227,7 +227,7 @@ describe('PermissionService.waitForDecision', () => {
     const taskId = 'task-timeout' as TaskID;
     const signal = new AbortController().signal;
 
-    const waitPromise = service.waitForDecision(requestId, taskId, signal);
+    const waitPromise = service.waitForDecision(requestId, taskId, "session-test" as SessionID, signal);
 
     // Fast-forward 60 seconds
     vi.advanceTimersByTime(60000);
@@ -244,7 +244,7 @@ describe('PermissionService.waitForDecision', () => {
     const taskId = 'task-abort' as TaskID;
     const controller = new AbortController();
 
-    const waitPromise = service.waitForDecision(requestId, taskId, controller.signal);
+    const waitPromise = service.waitForDecision(requestId, taskId, "session-test" as SessionID, controller.signal);
 
     // Abort the request
     controller.abort();
@@ -261,7 +261,7 @@ describe('PermissionService.waitForDecision', () => {
     const taskId = 'task-cleanup' as TaskID;
     const controller = new AbortController();
 
-    const waitPromise = service.waitForDecision(requestId, taskId, controller.signal);
+    const waitPromise = service.waitForDecision(requestId, taskId, "session-test" as SessionID, controller.signal);
 
     controller.abort();
     await waitPromise;
@@ -277,9 +277,9 @@ describe('PermissionService.waitForDecision', () => {
   it('should handle multiple concurrent requests', async () => {
     const signal = new AbortController().signal;
 
-    const req1 = service.waitForDecision('req-1', 'task-1' as TaskID, signal);
-    const req2 = service.waitForDecision('req-2', 'task-2' as TaskID, signal);
-    const req3 = service.waitForDecision('req-3', 'task-3' as TaskID, signal);
+    const req1 = service.waitForDecision('req-1', 'task-1' as TaskID, "session-test" as SessionID, signal);
+    const req2 = service.waitForDecision('req-2', 'task-2' as TaskID, "session-test" as SessionID, signal);
+    const req3 = service.waitForDecision('req-3', 'task-3' as TaskID, "session-test" as SessionID, signal);
 
     // Resolve in different order
     service.resolvePermission(
@@ -304,7 +304,7 @@ describe('PermissionService.waitForDecision', () => {
     const taskId = 'task-meta' as TaskID;
     const signal = new AbortController().signal;
 
-    const waitPromise = service.waitForDecision(requestId, taskId, signal);
+    const waitPromise = service.waitForDecision(requestId, taskId, "session-test" as SessionID, signal);
 
     const decision = createDecision({
       requestId,
@@ -332,7 +332,7 @@ describe('PermissionService.waitForDecision', () => {
       const requestId = `req-${scope}`;
       const taskId = `task-${scope}` as TaskID;
 
-      const waitPromise = service.waitForDecision(requestId, taskId, signal);
+      const waitPromise = service.waitForDecision(requestId, taskId, "session-test" as SessionID, signal);
       service.resolvePermission(createDecision({ requestId, taskId, scope }));
 
       const result = await waitPromise;
@@ -345,7 +345,7 @@ describe('PermissionService.waitForDecision', () => {
     const taskId = 'task-specific' as TaskID;
     const signal = new AbortController().signal;
 
-    const waitPromise = service.waitForDecision(requestId, taskId, signal);
+    const waitPromise = service.waitForDecision(requestId, taskId, "session-test" as SessionID, signal);
 
     vi.advanceTimersByTime(60000);
 
@@ -358,7 +358,7 @@ describe('PermissionService.waitForDecision', () => {
     const taskId = 'task-abort-specific' as TaskID;
     const controller = new AbortController();
 
-    const waitPromise = service.waitForDecision(requestId, taskId, controller.signal);
+    const waitPromise = service.waitForDecision(requestId, taskId, "session-test" as SessionID, controller.signal);
 
     controller.abort();
 
@@ -390,7 +390,7 @@ describe('PermissionService.resolvePermission', () => {
     const taskId = 'task-resolve' as TaskID;
     const signal = new AbortController().signal;
 
-    const waitPromise = service.waitForDecision(requestId, taskId, signal);
+    const waitPromise = service.waitForDecision(requestId, taskId, "session-test" as SessionID, signal);
 
     const decision = createDecision({ requestId, taskId });
     service.resolvePermission(decision);
@@ -404,7 +404,7 @@ describe('PermissionService.resolvePermission', () => {
     const taskId = 'task-clear' as TaskID;
     const signal = new AbortController().signal;
 
-    const waitPromise = service.waitForDecision(requestId, taskId, signal);
+    const waitPromise = service.waitForDecision(requestId, taskId, "session-test" as SessionID, signal);
 
     service.resolvePermission(createDecision({ requestId, taskId }));
     await waitPromise;
@@ -426,7 +426,7 @@ describe('PermissionService.resolvePermission', () => {
     const taskId = 'task-multi' as TaskID;
     const signal = new AbortController().signal;
 
-    const waitPromise = service.waitForDecision(requestId, taskId, signal);
+    const waitPromise = service.waitForDecision(requestId, taskId, "session-test" as SessionID, signal);
 
     const decision1 = createDecision({ requestId, taskId, allow: true });
     const decision2 = createDecision({ requestId, taskId, allow: false });
@@ -443,7 +443,7 @@ describe('PermissionService.resolvePermission', () => {
     const taskId = 'task-remove' as TaskID;
     const signal = new AbortController().signal;
 
-    const waitPromise = service.waitForDecision(requestId, taskId, signal);
+    const waitPromise = service.waitForDecision(requestId, taskId, "session-test" as SessionID, signal);
 
     service.resolvePermission(createDecision({ requestId, taskId }));
     await waitPromise;
@@ -460,7 +460,7 @@ describe('PermissionService.resolvePermission', () => {
       const taskId = `task-${userId}` as TaskID;
       const signal = new AbortController().signal;
 
-      const waitPromise = service.waitForDecision(requestId, taskId, signal);
+      const waitPromise = service.waitForDecision(requestId, taskId, "session-test" as SessionID, signal);
       service.resolvePermission(createDecision({ requestId, taskId, decidedBy: userId }));
 
       const result = await waitPromise;
@@ -492,7 +492,7 @@ describe('PermissionService multi-user scenarios', () => {
     const taskId = 'task-race' as TaskID;
     const signal = new AbortController().signal;
 
-    const waitPromise = service.waitForDecision(requestId, taskId, signal);
+    const waitPromise = service.waitForDecision(requestId, taskId, "session-test" as SessionID, signal);
 
     // User B approves first
     service.resolvePermission(
@@ -581,7 +581,7 @@ describe('PermissionService edge cases', () => {
     const taskId = 'task-no-reason' as TaskID;
     const signal = new AbortController().signal;
 
-    const waitPromise = service.waitForDecision(requestId, taskId, signal);
+    const waitPromise = service.waitForDecision(requestId, taskId, "session-test" as SessionID, signal);
 
     service.resolvePermission(createDecision({ requestId, taskId, reason: undefined }));
 
@@ -597,7 +597,7 @@ describe('PermissionService edge cases', () => {
     // Abort before calling waitForDecision
     controller.abort();
 
-    const waitPromise = service.waitForDecision(requestId, taskId, controller.signal);
+    const waitPromise = service.waitForDecision(requestId, taskId, "session-test" as SessionID, controller.signal);
 
     // Since signal is already aborted, event listener won't fire
     // This will hit the timeout instead

@@ -60,6 +60,7 @@ export class PermissionService {
   private pendingRequests = new Map<
     string,
     {
+      sessionId: SessionID;
       resolve: (decision: PermissionDecision) => void;
       timeout: NodeJS.Timeout;
     }
@@ -88,11 +89,13 @@ export class PermissionService {
    *
    * @param requestId - Unique permission request ID
    * @param taskId - Task waiting for permission (used for timeout/cancel fallback)
+   * @param sessionId - Session ID for tracking pending requests per session
    * @param signal - AbortSignal for cancellation
    */
   waitForDecision(
     requestId: string,
     taskId: TaskID,
+    sessionId: SessionID,
     signal: AbortSignal
   ): Promise<PermissionDecision> {
     return new Promise((resolve) => {
@@ -130,7 +133,7 @@ export class PermissionService {
         });
       }, 60000);
 
-      this.pendingRequests.set(requestId, { resolve, timeout });
+      this.pendingRequests.set(requestId, { sessionId, resolve, timeout });
     });
   }
 
@@ -148,6 +151,41 @@ export class PermissionService {
       );
     } else {
       console.warn(`⚠️  No pending request found for ${decision.requestId}`);
+    }
+  }
+
+  /**
+   * Cancel all pending permission requests for a session
+   * Used when a permission is denied and we need to stop task execution
+   *
+   * @param sessionId - Session to cancel pending requests for
+   */
+  cancelPendingRequests(sessionId: SessionID) {
+    let cancelledCount = 0;
+
+    // Iterate through all pending requests and cancel those for this session
+    for (const [requestId, pending] of this.pendingRequests.entries()) {
+      // Only cancel requests for the specified session
+      if (pending.sessionId === sessionId) {
+        clearTimeout(pending.timeout);
+        pending.resolve({
+          requestId,
+          taskId: '' as TaskID, // Will be ignored since we're cancelling
+          allow: false,
+          reason: 'Cancelled due to previous permission denial',
+          remember: false,
+          scope: PermissionScope.ONCE,
+          decidedBy: 'system',
+        });
+        this.pendingRequests.delete(requestId);
+        cancelledCount++;
+      }
+    }
+
+    if (cancelledCount > 0) {
+      console.log(
+        `🛡️  Cancelled ${cancelledCount} pending permission request(s) for session ${sessionId.substring(0, 8)}`
+      );
     }
   }
 }
