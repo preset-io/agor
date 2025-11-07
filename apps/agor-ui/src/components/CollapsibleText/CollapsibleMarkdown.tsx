@@ -9,6 +9,7 @@ interface CollapsibleMarkdownProps {
   maxLines?: number;
   className?: string;
   style?: React.CSSProperties;
+  defaultExpanded?: boolean;
 }
 
 /**
@@ -31,9 +32,10 @@ export const CollapsibleMarkdown: React.FC<CollapsibleMarkdownProps> = ({
   maxLines = TEXT_TRUNCATION.DEFAULT_LINES,
   className,
   style,
+  defaultExpanded = false,
 }) => {
   const { token } = theme.useToken();
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(defaultExpanded);
 
   const lines = children.split('\n');
   // Add threshold to avoid truncating slightly-over-limit content

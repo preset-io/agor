@@ -70,6 +70,7 @@ interface MessageBlockProps {
   sessionId?: string | null;
   taskId?: string;
   isFirstPendingPermission?: boolean; // For sequencing permission requests
+  isLatestMessage?: boolean; // Whether this is the most recent message (don't collapse by default)
   onPermissionDecision?: (
     sessionId: string,
     requestId: string,
@@ -127,6 +128,7 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
   sessionId,
   taskId,
   isFirstPendingPermission = false,
+  isLatestMessage = false,
   onPermissionDecision,
 }) => {
   const { token } = theme.useToken();
@@ -414,7 +416,9 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
                   return (
                     <div key={`text-${idx}-${text.substring(0, 20)}`}>
                       {shouldTruncate ? (
-                        <CollapsibleMarkdown maxLines={10}>{text}</CollapsibleMarkdown>
+                        <CollapsibleMarkdown maxLines={10} defaultExpanded={isLatestMessage}>
+                          {text}
+                        </CollapsibleMarkdown>
                       ) : (
                         <MarkdownRenderer content={text} inline />
                       )}
@@ -467,7 +471,9 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
                   const shouldTruncate = combinedText.split('\n').length > 15;
 
                   return shouldTruncate ? (
-                    <CollapsibleMarkdown maxLines={10}>{combinedText}</CollapsibleMarkdown>
+                    <CollapsibleMarkdown maxLines={10} defaultExpanded={isLatestMessage}>
+                      {combinedText}
+                    </CollapsibleMarkdown>
                   ) : (
                     <MarkdownRenderer content={combinedText} inline />
                   );

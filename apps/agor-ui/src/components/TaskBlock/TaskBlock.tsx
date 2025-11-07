@@ -478,6 +478,10 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                         }
                       }
 
+                      // Check if this is the latest agent message (last message block)
+                      const isLatestMessage =
+                        block.message.role === MessageRole.ASSISTANT && blockIndex === blocks.length - 1;
+
                       return (
                         <MessageBlock
                           key={block.message.message_id}
@@ -489,6 +493,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                           sessionId={sessionId}
                           onPermissionDecision={onPermissionDecision}
                           isFirstPendingPermission={isFirstPending}
+                          isLatestMessage={isLatestMessage}
                           taskId={task.task_id}
                         />
                       );
