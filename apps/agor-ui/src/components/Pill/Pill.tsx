@@ -17,8 +17,9 @@ import {
   ThunderboltOutlined,
   ToolOutlined,
 } from '@ant-design/icons';
-import { message, Tag, Tooltip, theme } from 'antd';
+import { Tag, Tooltip, theme } from 'antd';
 import type React from 'react';
+import { copyToClipboard } from '../../utils/clipboard';
 
 /**
  * Standardized color palette for pills/badges
@@ -311,8 +312,10 @@ export const SessionIdPill: React.FC<SessionIdPillProps> = ({
     : `Agor session ID: ${displayId}`;
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(displayId);
-    message.success(`${sdkSessionId ? 'SDK' : 'Agor'} Session ID copied to clipboard`);
+    copyToClipboard(displayId, {
+      showSuccess: true,
+      successMessage: `${sdkSessionId ? 'SDK' : 'Agor'} Session ID copied to clipboard`,
+    });
   };
 
   if (showCopy) {

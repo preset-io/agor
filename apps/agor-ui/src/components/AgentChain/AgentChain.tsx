@@ -40,6 +40,7 @@ import { ThoughtChain } from '@ant-design/x';
 import { Popover, Space, Spin, Tag, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { useMemo, useState } from 'react';
+import { copyToClipboard } from '../../utils/clipboard';
 import { CollapsibleText } from '../CollapsibleText';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { ToolUseRenderer } from '../ToolUseRenderer';
@@ -488,13 +489,7 @@ export const AgentChain: React.FC<AgentChainProps> = ({ messages }) => {
                         transition: 'opacity 0.2s',
                         flexShrink: 0,
                       }}
-                      onClick={async () => {
-                        try {
-                          await navigator.clipboard.writeText(file);
-                        } catch (error) {
-                          console.error('Failed to copy to clipboard:', error);
-                        }
-                      }}
+                      onClick={() => copyToClipboard(file)}
                       title="Copy to clipboard"
                     />
                   </div>
