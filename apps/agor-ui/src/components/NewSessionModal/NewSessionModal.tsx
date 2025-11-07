@@ -90,14 +90,18 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
 
   const handleCreate = () => {
     form.validateFields().then(values => {
+      // Get user defaults for the selected agent (fallback if form fields weren't mounted)
+      const agentDefaults = currentUser?.default_agentic_config?.[selectedAgent as AgenticToolName];
+
       const config: NewSessionConfig = {
         worktree_id: worktreeId,
         agent: selectedAgent,
         title: values.title,
         initialPrompt: values.initialPrompt,
-        modelConfig: values.modelConfig,
-        mcpServerIds: values.mcpServerIds,
-        permissionMode: values.permissionMode,
+        // Use form values if present (user expanded advanced), otherwise use defaults
+        modelConfig: values.modelConfig ?? agentDefaults?.modelConfig,
+        mcpServerIds: values.mcpServerIds ?? agentDefaults?.mcpServerIds,
+        permissionMode: values.permissionMode ?? (agentDefaults?.permissionMode || getDefaultPermissionMode(selectedAgent as AgenticToolName)),
       };
       onCreate(config);
     });

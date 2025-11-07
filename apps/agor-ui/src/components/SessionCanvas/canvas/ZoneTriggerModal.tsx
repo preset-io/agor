@@ -238,14 +238,19 @@ export const ZoneTriggerModal = ({
     if (mode === 'create_new') {
       // Get form values for new session
       const formValues = form.getFieldsValue();
+
+      // Get user defaults for the selected agent (fallback if form fields weren't mounted)
+      const agentDefaults = currentUser?.default_agentic_config?.[selectedAgent as AgenticToolName];
+
       await onExecute({
         sessionId: 'new',
         action: 'prompt',
         renderedTemplate: editableTemplate, // Use edited template
         agent: selectedAgent,
-        modelConfig: formValues.modelConfig,
-        permissionMode: formValues.permissionMode,
-        mcpServerIds: formValues.mcpServerIds,
+        // Use form values if present (user expanded advanced), otherwise use defaults
+        modelConfig: formValues.modelConfig ?? agentDefaults?.modelConfig,
+        permissionMode: formValues.permissionMode ?? agentDefaults?.permissionMode,
+        mcpServerIds: formValues.mcpServerIds ?? agentDefaults?.mcpServerIds,
       });
     } else {
       // Reuse existing session
