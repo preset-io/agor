@@ -28,11 +28,36 @@ export async function copyToClipboard(
   } = options || {};
 
   try {
-    await navigator.clipboard.writeText(text);
-    if (showSuccess) {
-      message.success(successMessage);
+    // Try modern Clipboard API first (requires HTTPS)
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      if (showSuccess) {
+        message.success(successMessage);
+      }
+      return true;
     }
-    return true;
+
+    // Fallback to execCommand for HTTP/dev mode
+    const textArea = document.createElement('textarea');
+    textArea.value = text;
+    textArea.style.position = 'fixed';
+    textArea.style.left = '-999999px';
+    textArea.style.top = '-999999px';
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+
+    const successful = document.execCommand('copy');
+    document.body.removeChild(textArea);
+
+    if (successful) {
+      if (showSuccess) {
+        message.success(successMessage);
+      }
+      return true;
+    } else {
+      throw new Error('execCommand copy failed');
+    }
   } catch (error) {
     console.error('Failed to copy to clipboard:', error);
     if (showError) {
