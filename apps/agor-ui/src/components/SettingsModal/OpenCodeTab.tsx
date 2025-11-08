@@ -55,24 +55,18 @@ export const OpenCodeTab: React.FC<OpenCodeTabProps> = ({ client }) => {
     loadConfig();
   }, [client]);
 
-  // Test connection to OpenCode server
+  // Test connection to OpenCode server (via daemon proxy)
   const handleTestConnection = async () => {
+    if (!client) return;
+
     setTesting(true);
 
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000);
-      try {
-        const response = await fetch(`${serverUrl}/health`, {
-          signal: controller.signal,
-        });
-        clearTimeout(timeoutId);
-        setIsConnected(response.ok);
-      } catch (error) {
-        clearTimeout(timeoutId);
-        setIsConnected(false);
-      }
+      // Use daemon endpoint to proxy the health check
+      const result = (await client.service('opencode/health').find()) as any;
+      setIsConnected(result.connected === true);
     } catch (error) {
+      console.error('[OpenCodeTab] Health check error:', error);
       setIsConnected(false);
     } finally {
       setTesting(false);

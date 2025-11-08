@@ -985,8 +985,10 @@ async function main() {
 
           if (session.agentic_tool === 'opencode') {
             try {
+              const model = session.model_config?.model;
+              const provider = session.model_config?.provider;
               console.log(
-                `🔧 [OpenCode] Creating OpenCode session for Agor session ${session.session_id.substring(0, 8)}...`
+                `🔧 [OpenCode] Creating OpenCode session for Agor session ${session.session_id.substring(0, 8)} with model: ${model || 'default'} provider: ${provider || 'default'}...`
               );
 
               // Create OpenCode session via OpenCodeTool
@@ -997,6 +999,8 @@ async function main() {
                 title: session.title || 'Agor Session',
                 projectName: sessionWithRepo.repo?.repo_slug || 'default',
                 workingDirectory: sessionWithRepo.repo?.cwd,
+                model: model,
+                provider: provider,
               });
 
               if (ocSession?.sessionId) {
@@ -1766,8 +1770,9 @@ async function main() {
           // OpenCode doesn't support executePromptWithStreaming, so always use executeTask
           console.log('[Daemon] Routing to OpenCodeTool.executeTask');
 
-          // Extract model and OpenCode session ID from session
+          // Extract model, provider, and OpenCode session ID from session
           const model = session.model_config?.model;
+          const provider = session.model_config?.provider;
           const opencodeSessionId = (session as { sdk_session_id?: string }).sdk_session_id;
 
           console.log(
@@ -1775,13 +1780,15 @@ async function main() {
             id,
             'with model:',
             model,
+            'provider:',
+            provider,
             'OpenCode session:',
             opencodeSessionId
           );
 
           // Store session context in OpenCodeTool before calling executeTask
           if (opencodeSessionId) {
-            opencodeTool.setSessionContext(id as SessionID, opencodeSessionId, model);
+            opencodeTool.setSessionContext(id as SessionID, opencodeSessionId, model, provider);
           }
 
           executeMethod = (
@@ -2485,6 +2492,95 @@ async function main() {
     description: 'Health check endpoint (always public)',
     // Override global security to allow unauthenticated access
     security: [],
+  };
+
+  // OpenCode models endpoint - fetch available providers and models dynamically
+  app.use('/opencode/models', {
+    async find() {
+      try {
+        const opencodeConfig = config.opencode;
+        if (!opencodeConfig?.enabled) {
+          throw new Error('OpenCode is not enabled in configuration');
+        }
+
+        const serverUrl = opencodeConfig.serverUrl || 'http://localhost:4096';
+        const response = await fetch(`${serverUrl}/config/providers`);
+
+        if (!response.ok) {
+          throw new Error(`OpenCode server returned ${response.status}: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+
+        // Transform to frontend-friendly format
+        // OpenCode returns: { providers: [{id, name, models: {modelId: {id, name, ...}}}] }
+        // We need to convert models object to array
+        const transformedProviders = (data.providers || []).map((provider: any) => ({
+          id: provider.id,
+          name: provider.name,
+          models: provider.models
+            ? Object.entries(provider.models).map(([modelId, modelMeta]: [string, any]) => ({
+                id: modelId,
+                name: modelMeta.name || modelId,
+              }))
+            : [],
+        }));
+
+        return {
+          providers: transformedProviders,
+          default: data.default,
+          serverUrl: serverUrl,
+        };
+      } catch (error) {
+        console.error('[OpenCode] Failed to fetch models:', error);
+        throw new Error(
+          `Failed to fetch OpenCode models: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    },
+  });
+
+  // Configure docs for OpenCode models endpoint
+  // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service type not fully typed
+  const opencodeModelsService = app.service('opencode/models') as any;
+  opencodeModelsService.docs = {
+    description: 'Get available OpenCode providers and models (requires OpenCode server running)',
+    security: [], // Public endpoint - no auth required
+  };
+
+  // OpenCode health check endpoint - proxy to test connection
+  app.use('/opencode/health', {
+    async find() {
+      try {
+        const opencodeConfig = config.opencode;
+        if (!opencodeConfig?.enabled) {
+          throw new Error('OpenCode is not enabled in configuration');
+        }
+
+        const serverUrl = opencodeConfig.serverUrl || 'http://localhost:4096';
+        const response = await fetch(`${serverUrl}/health`);
+
+        return {
+          connected: response.ok,
+          status: response.status,
+          serverUrl: serverUrl,
+        };
+      } catch (error) {
+        console.error('[OpenCode] Health check failed:', error);
+        return {
+          connected: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+  });
+
+  // Configure docs for OpenCode health endpoint
+  // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service type not fully typed
+  const opencodeHealthService = app.service('opencode/health') as any;
+  opencodeHealthService.docs = {
+    description: 'Test connection to OpenCode server',
+    security: [], // Public endpoint - no auth required
   };
 
   // Setup MCP routes (if enabled)

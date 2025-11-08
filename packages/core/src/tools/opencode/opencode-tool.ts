@@ -32,6 +32,15 @@ export interface OpenCodeConfig {
 }
 
 /**
+ * Session context for an Agor session mapped to OpenCode
+ */
+interface SessionContext {
+  opencodeSessionId: string;
+  model?: string;
+  provider?: string;
+}
+
+/**
  * Service interface for creating messages via FeathersJS
  */
 export interface MessagesService {
@@ -52,8 +61,7 @@ export class OpenCodeTool implements ITool {
   private client: OpenCodeClient | null = null;
   private config: OpenCodeConfig;
   private messagesService?: MessagesService;
-  private sessionMap: Map<string, string> = new Map(); // Agor session ID → OpenCode session ID
-  private sessionModels: Map<string, string | undefined> = new Map(); // Agor session ID → model
+  private sessionContexts: Map<string, SessionContext> = new Map(); // Agor session ID → session context
 
   constructor(config: OpenCodeConfig, messagesService?: MessagesService) {
     this.config = config;
@@ -61,19 +69,32 @@ export class OpenCodeTool implements ITool {
   }
 
   /**
-   * Map an Agor session ID to an OpenCode session ID
+   * Set session context (OpenCode session ID, model, and provider) for an Agor session
+   * Must be called before executeTask
+   *
+   * @param agorSessionId - Agor session ID
+   * @param opencodeSessionId - OpenCode session ID
+   * @param model - Model identifier (e.g., 'gpt-4o', 'claude-sonnet-4-5')
+   * @param provider - Provider ID (e.g., 'openai', 'opencode'). If omitted, uses legacy mapping.
    */
-  mapSession(agorSessionId: string, opencodeSessionId: string): void {
-    this.sessionMap.set(agorSessionId, opencodeSessionId);
+  setSessionContext(
+    agorSessionId: string,
+    opencodeSessionId: string,
+    model?: string,
+    provider?: string
+  ): void {
+    this.sessionContexts.set(agorSessionId, {
+      opencodeSessionId,
+      model,
+      provider,
+    });
   }
 
   /**
-   * Set session context (OpenCode session ID and model) for an Agor session
-   * Must be called before executeTask
+   * Get session context for an Agor session
    */
-  setSessionContext(agorSessionId: string, opencodeSessionId: string, model?: string): void {
-    this.sessionMap.set(agorSessionId, opencodeSessionId);
-    this.sessionModels.set(agorSessionId, model);
+  private getSessionContext(agorSessionId: string): SessionContext | undefined {
+    return this.sessionContexts.get(agorSessionId);
   }
 
   /**
@@ -125,6 +146,7 @@ export class OpenCodeTool implements ITool {
       const session = await client.createSession({
         title: String(config.title || 'Agor Session'),
         project: String(config.projectName || 'default'),
+        model: config.model as string | undefined,
       });
 
       return {
@@ -160,36 +182,45 @@ export class OpenCodeTool implements ITool {
     const client = this.getClient();
 
     try {
-      // Get OpenCode session ID and model from stored context
-      const opencodeSessionId = this.sessionMap.get(sessionId);
-      const model = this.sessionModels.get(sessionId);
+      // Get session context (OpenCode session ID, model, provider)
+      const context = this.getSessionContext(sessionId);
 
       console.log('[OpenCodeTool] executeTask called:', {
         sessionId,
-        opencodeSessionId,
+        opencodeSessionId: context?.opencodeSessionId,
         taskId,
         promptLength: prompt.length,
-        model,
+        model: context?.model,
+        provider: context?.provider,
       });
 
-      if (!opencodeSessionId) {
+      if (!context?.opencodeSessionId) {
         throw new Error(
           `OpenCode session ID not found for Agor session ${sessionId}. Call setSessionContext() first.`
         );
       }
-      console.log('[OpenCodeTool] Using OpenCode session:', opencodeSessionId);
+      console.log('[OpenCodeTool] Using OpenCode session:', context.opencodeSessionId);
 
-      if (model) {
-        console.log('[OpenCodeTool] Using model:', model);
+      if (context.model) {
+        console.log('[OpenCodeTool] Using model:', context.model);
+      }
+      if (context.provider) {
+        console.log('[OpenCodeTool] Using provider:', context.provider);
       }
 
-      // Send prompt to OpenCode with optional model
-      const response = await client.sendPrompt(opencodeSessionId, prompt, model);
-      console.log('[OpenCodeTool] sendPrompt response received:', response.substring(0, 100));
+      // Send prompt to OpenCode with optional model and provider
+      const response = await client.sendPrompt(
+        context.opencodeSessionId,
+        prompt,
+        context.model,
+        context.provider
+      );
+      console.log('[OpenCodeTool] sendPrompt response received:', response.text.substring(0, 100));
+      if (response.metadata) {
+        console.log('[OpenCodeTool] Response metadata:', response.metadata);
+      }
 
-      // Create message in Agor database
-      // Note: In real implementation, would parse OpenCode response properly
-      // For now, treat as simple text response
+      // Create message in Agor database with OpenCode metadata
       if (!this.messagesService) {
         throw new Error('Messages service not available');
       }
@@ -202,13 +233,22 @@ export class OpenCodeTool implements ITool {
         role: MessageRole.ASSISTANT,
         index: 0, // Assistant's first response in this task
         timestamp: new Date().toISOString(),
-        content_preview: response.substring(0, 200),
+        content_preview: response.text.substring(0, 200),
         content: [
           {
             type: 'text',
-            text: response,
+            text: response.text,
           },
         ],
+        // Store OpenCode metadata
+        metadata: response.metadata ? {
+          opencode: {
+            messageId: response.metadata.messageId,
+            parentMessageId: response.metadata.parentMessageId,
+            cost: response.metadata.cost,
+            tokens: response.metadata.tokens,
+          },
+        } : undefined,
       });
 
       console.log('[OpenCodeTool] Message created:', message);

@@ -27,6 +27,26 @@ export interface OpenCodeMessageEvent {
   toolInput?: Record<string, unknown>;
 }
 
+export interface OpenCodeResponseMetadata {
+  messageId?: string;
+  parentMessageId?: string;
+  cost?: number;
+  tokens?: {
+    input?: number;
+    output?: number;
+    reasoning?: number;
+    cache?: {
+      read?: number;
+      write?: number;
+    };
+  };
+}
+
+export interface OpenCodePromptResponse {
+  text: string;
+  metadata?: OpenCodeResponseMetadata;
+}
+
 /**
  * OpenCode client with direct HTTP calls
  *
@@ -68,14 +88,43 @@ export class OpenCodeClient {
   /**
    * Create a new OpenCode session
    */
-  async createSession(params: { title: string; project: string }): Promise<OpenCodeSession> {
+  async createSession(params: {
+    title: string;
+    project: string;
+    model?: string;
+    provider?: string;
+  }): Promise<OpenCodeSession> {
     try {
+      const requestBody: {
+        title: string;
+        model?: { providerID: string; modelID: string };
+      } = {
+        title: params.title,
+      };
+
+      // Include model if provided
+      if (params.model) {
+        // If provider is explicitly provided, use it directly
+        if (params.provider) {
+          console.log(
+            '[OpenCode] Creating session with explicit provider:',
+            JSON.stringify({ providerID: params.provider, modelID: params.model })
+          );
+          requestBody.model = { providerID: params.provider, modelID: params.model };
+        } else {
+          // Fallback to mapping for backwards compatibility
+          const modelConfig = this.mapModelToOpenCodeFormat(params.model);
+          if (modelConfig) {
+            console.log('[OpenCode] Creating session with model:', JSON.stringify(modelConfig));
+            requestBody.model = modelConfig;
+          }
+        }
+      }
+
       const response = await fetch(`${this.config.serverUrl}/session`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title: params.title,
-        }),
+        body: JSON.stringify(requestBody),
       });
 
       if (!response.ok) {
@@ -100,32 +149,71 @@ export class OpenCodeClient {
   /**
    * Map model name to OpenCode format (providerID + modelID)
    * OpenCode expects: { providerID: "openai", modelID: "gpt-4-turbo" }
+   *
+   * Note: OpenCode Zen provides access to multiple models via providerID: "opencode"
+   * This includes Claude models if you have Zen credits but no direct Anthropic API key
    */
   private mapModelToOpenCodeFormat(model: string): { providerID: string; modelID: string } | null {
-    // Simple heuristic-based mapping
+    // OpenAI models - use direct OpenAI provider if you have API key
     if (model.startsWith('gpt-') || model.startsWith('o1-')) {
       return { providerID: 'openai', modelID: model };
     }
+
+    // Claude models - check if it's an OpenCode Zen model first
     if (model.startsWith('claude-')) {
+      // Map Agor's Claude model names to OpenCode Zen model IDs
+      // OpenCode Zen models: claude-sonnet-4-5, claude-haiku-4-5, claude-opus-4-1, claude-3-5-haiku
+      const zenModelMap: Record<string, string> = {
+        'claude-sonnet-4-5': 'claude-sonnet-4-5',
+        'claude-3-7-sonnet': 'claude-sonnet-4-5', // Alias
+        'claude-3-5-sonnet': 'claude-3-5-haiku', // Fallback to 3.5 haiku
+        'claude-3-5-sonnet-20241022': 'claude-3-5-haiku',
+        'claude-3-5-haiku': 'claude-3-5-haiku',
+        'claude-haiku-4-5': 'claude-haiku-4-5',
+        'claude-opus-4-1': 'claude-opus-4-1',
+      };
+
+      const zenModelId = zenModelMap[model];
+      if (zenModelId) {
+        console.log(`[OpenCode] Mapping ${model} to OpenCode Zen model: ${zenModelId}`);
+        return { providerID: 'opencode', modelID: zenModelId };
+      }
+
+      // Fallback to direct Anthropic provider (requires Anthropic API key)
+      console.warn(`[OpenCode] Unknown Claude model ${model}, trying direct Anthropic provider`);
       return { providerID: 'anthropic', modelID: model };
     }
+
+    // Gemini models
     if (model.startsWith('gemini-')) {
       return { providerID: 'google', modelID: model };
     }
+
+    // Together.ai models
     if (model.startsWith('llama-') || model.startsWith('mixtral-')) {
       return { providerID: 'together', modelID: model };
     }
 
-    // Default: try with the model name as-is, provider unknown
-    console.warn(`[OpenCode] Unknown model format: ${model}, using default provider`);
-    return { providerID: 'openai', modelID: model };
+    // Default: try with OpenCode Zen provider
+    console.warn(`[OpenCode] Unknown model format: ${model}, trying OpenCode Zen provider`);
+    return { providerID: 'opencode', modelID: model };
   }
 
   /**
    * Send a prompt to an existing OpenCode session
-   * Returns the response as a string
+   * Returns the response text and metadata
+   *
+   * @param sessionId - OpenCode session ID
+   * @param prompt - User prompt
+   * @param model - Model identifier (modelID)
+   * @param provider - Optional provider ID (providerID) - if provided, uses explicit provider:model, otherwise maps model name
    */
-  async sendPrompt(sessionId: string, prompt: string, model?: string): Promise<string> {
+  async sendPrompt(
+    sessionId: string,
+    prompt: string,
+    model?: string,
+    provider?: string
+  ): Promise<OpenCodePromptResponse> {
     try {
       const requestBody: {
         parts: Array<{ type: string; text: string }>;
@@ -136,13 +224,24 @@ export class OpenCodeClient {
 
       // Model parameter - requires API keys configured via `opencode auth login`
       if (model) {
-        console.log('[OpenCode] Using model:', model);
-        const modelConfig = this.mapModelToOpenCodeFormat(model);
-        if (modelConfig) {
-          console.log('[OpenCode] Mapped to OpenCode format:', JSON.stringify(modelConfig));
-          requestBody.model = modelConfig;
+        console.log('[OpenCode] Using model:', model, 'provider:', provider);
+
+        // If provider is explicitly provided, use it directly (from UI dropdown)
+        if (provider) {
+          console.log(
+            '[OpenCode] Using explicit provider:',
+            JSON.stringify({ providerID: provider, modelID: model })
+          );
+          requestBody.model = { providerID: provider, modelID: model };
         } else {
-          console.warn('[OpenCode] Could not map model to OpenCode format:', model);
+          // Fallback to mapping for backwards compatibility (old sessions without provider)
+          const modelConfig = this.mapModelToOpenCodeFormat(model);
+          if (modelConfig) {
+            console.log('[OpenCode] Mapped to OpenCode format:', JSON.stringify(modelConfig));
+            requestBody.model = modelConfig;
+          } else {
+            console.warn('[OpenCode] Could not map model to OpenCode format:', model);
+          }
         }
       }
 
@@ -174,49 +273,91 @@ export class OpenCodeClient {
       let data: unknown;
       try {
         data = await response.json();
-        console.log('[OpenCode] Response data:', JSON.stringify(data).substring(0, 200));
+        // Log summary instead of full response to avoid log truncation
+        console.log('[OpenCode] Response received (keys):', data && typeof data === 'object' ? Object.keys(data) : typeof data);
       } catch (parseError) {
         // If response body is empty or not JSON, return success message
         const text = await response.text();
         console.log('[OpenCode] Non-JSON response:', text.substring(0, 200));
         if (!text || text.trim() === '') {
-          return 'Message sent to OpenCode successfully';
+          return { text: 'Message sent to OpenCode successfully' };
         }
         throw parseError;
       }
 
-      // Extract text from OpenCode response
-      // OpenCode returns: { parts: [{ type: 'text', text: '...' }, ...] }
+      // Extract text and metadata from OpenCode response
+      // OpenCode returns: { info: {...}, parts: [...], blocked: bool, shouldRetry: bool }
+      let text = '';
+      const metadata: OpenCodeResponseMetadata = {};
+
       if (data && typeof data === 'object') {
-        // Check for parts array (OpenCode's actual response format)
-        if ('parts' in data && Array.isArray(data.parts)) {
-          const textParts = (data.parts as Array<{ type?: string; text?: string }>)
-            .filter(part => part.type === 'text')
-            .map(part => part.text || '')
-            .join('\n');
-          if (textParts) return textParts;
+        // Extract metadata from 'info' field
+        if ('info' in data && data.info && typeof data.info === 'object') {
+          const info = data.info as Record<string, unknown>;
+          if ('id' in info && typeof info.id === 'string') {
+            metadata.messageId = info.id;
+          }
+          if ('parentID' in info && typeof info.parentID === 'string') {
+            metadata.parentMessageId = info.parentID;
+          }
         }
 
-        // Fallback to other possible fields
-        if ('output' in data) {
-          return String(data.output);
+        // Extract text and token/cost metadata from 'parts' array
+        if ('parts' in data && Array.isArray(data.parts)) {
+          const parts = data.parts as Array<Record<string, unknown>>;
+
+          // Extract text parts
+          const textParts = parts
+            .filter(part => part.type === 'text' && typeof part.text === 'string')
+            .map(part => part.text as string);
+          text = textParts.join('\n');
+
+          // Extract metadata from step-finish part
+          const stepFinish = parts.find(part => part.type === 'step-finish');
+          if (stepFinish) {
+            if (typeof stepFinish.cost === 'number') {
+              metadata.cost = stepFinish.cost;
+            }
+            if (stepFinish.tokens && typeof stepFinish.tokens === 'object') {
+              const tokens = stepFinish.tokens as Record<string, unknown>;
+              metadata.tokens = {
+                input: typeof tokens.input === 'number' ? tokens.input : undefined,
+                output: typeof tokens.output === 'number' ? tokens.output : undefined,
+                reasoning: typeof tokens.reasoning === 'number' ? tokens.reasoning : undefined,
+              };
+              if (tokens.cache && typeof tokens.cache === 'object') {
+                const cache = tokens.cache as Record<string, unknown>;
+                metadata.tokens.cache = {
+                  read: typeof cache.read === 'number' ? cache.read : undefined,
+                  write: typeof cache.write === 'number' ? cache.write : undefined,
+                };
+              }
+            }
+          }
         }
-        if ('text' in data) {
-          return String(data.text);
-        }
-        if ('content' in data) {
-          return String(data.content);
-        }
-        if ('message' in data) {
-          return String(data.message);
-        }
-        if ('response' in data) {
-          return String(data.response);
+
+        // Fallback: try other possible text fields if no text found in parts
+        if (!text) {
+          if ('output' in data && typeof data.output === 'string') {
+            text = data.output;
+          } else if ('text' in data && typeof data.text === 'string') {
+            text = data.text;
+          } else if ('content' in data && typeof data.content === 'string') {
+            text = data.content;
+          } else if ('message' in data && typeof data.message === 'string') {
+            text = data.message;
+          } else if ('response' in data && typeof data.response === 'string') {
+            text = data.response;
+          }
         }
       }
 
-      // Last resort: stringify the whole object
-      return JSON.stringify(data);
+      // If still no text, last resort: stringify the whole object
+      if (!text) {
+        text = JSON.stringify(data);
+      }
+
+      return { text, metadata };
     } catch (error) {
       throw new Error(
         `Failed to send prompt to OpenCode: ${error instanceof Error ? error.message : String(error)}`

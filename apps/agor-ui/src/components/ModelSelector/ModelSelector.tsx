@@ -6,12 +6,15 @@ import {
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { Input, Radio, Select, Space, Tooltip, Typography } from 'antd';
 import { useState } from 'react';
+import { OpenCodeModelSelector, type OpenCodeModelConfig } from './OpenCodeModelSelector';
 
 const { Link } = Typography;
 
 export interface ModelConfig {
   mode: 'alias' | 'exact';
   model: string;
+  // OpenCode-specific: provider + model
+  provider?: string;
 }
 
 export interface ModelSelectorProps {
@@ -40,16 +43,6 @@ const GEMINI_MODEL_OPTIONS = Object.entries(GEMINI_MODELS).map(([modelId, meta])
   description: meta.description,
 }));
 
-// OpenCode provider options (75+ providers via Models.dev)
-const OPENCODE_PROVIDER_OPTIONS = [
-  { id: 'claude-3-5-sonnet', label: 'Claude 3.5 Sonnet', description: 'Default Anthropic model' },
-  { id: 'gpt-4o', label: 'GPT-4o', description: 'OpenAI GPT-4o' },
-  { id: 'gpt-4-turbo', label: 'GPT-4 Turbo', description: 'OpenAI GPT-4 Turbo' },
-  { id: 'gemini-2-flash', label: 'Gemini 2 Flash', description: 'Google Gemini' },
-  { id: 'llama-70b', label: 'Llama 70B', description: 'Open-source via Together/Replicate' },
-  { id: 'mixtral-8x7b', label: 'Mixtral 8x7B', description: 'Mistral open model' },
-];
-
 /**
  * Model Selector Component
  *
@@ -67,14 +60,38 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
 }) => {
   // Determine which model list to use based on agentic_tool (with backwards compat for agent prop)
   const effectiveTool = agentic_tool || agent || 'claude-code';
+
+  // OpenCode uses a different UI (2 dropdowns: provider + model)
+  if (effectiveTool === 'opencode') {
+    return (
+      <OpenCodeModelSelector
+        value={
+          value?.provider || value?.model
+            ? {
+                provider: value.provider || '',
+                model: value.model || ''
+              }
+            : undefined
+        }
+        onChange={(openCodeConfig: OpenCodeModelConfig) => {
+          if (onChange) {
+            onChange({
+              mode: 'exact', // OpenCode always uses exact provider+model IDs
+              model: openCodeConfig.model,
+              provider: openCodeConfig.provider,
+            });
+          }
+        }}
+      />
+    );
+  }
+
   const modelList =
     effectiveTool === 'codex'
       ? CODEX_MODEL_OPTIONS
       : effectiveTool === 'gemini'
         ? GEMINI_MODEL_OPTIONS
-        : effectiveTool === 'opencode'
-          ? OPENCODE_PROVIDER_OPTIONS
-          : AVAILABLE_CLAUDE_MODEL_ALIASES;
+        : AVAILABLE_CLAUDE_MODEL_ALIASES;
 
   // Determine initial mode based on whether the value is in the aliases list
   // If no value provided, default to 'alias' mode (recommended)

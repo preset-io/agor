@@ -172,6 +172,12 @@ export interface Session {
     thinkingMode?: 'auto' | 'manual' | 'off';
     /** Manual thinking token budget (used when thinkingMode='manual') */
     manualThinkingTokens?: number;
+    /**
+     * Provider ID for OpenCode sessions (e.g., 'openai', 'anthropic', 'opencode')
+     * Used in combination with model to specify which provider's API to use
+     * Only applicable when agentic_tool='opencode'
+     */
+    provider?: string;
   };
 
   // Custom context for Handlebars templates
