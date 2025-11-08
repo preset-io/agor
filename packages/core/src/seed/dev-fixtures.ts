@@ -51,22 +51,26 @@ export async function seedDevFixtures(options: SeedOptions = {}): Promise<SeedRe
   const baseDir = options.baseDir ?? path.join(os.homedir(), '.agor', 'repos');
   const userId = (options.userId ?? 'anonymous') as UUID;
 
-  // Check if data already exists
-  if (options.skipIfExists) {
-    const existing = await repoRepo.findBySlug('agor');
-    if (existing) {
-      console.log('✓ Dev fixtures already exist, skipping...');
+  // Check if data already exists (always check for idempotency)
+  const existing = await repoRepo.findBySlug('agor');
+  if (existing && options.skipIfExists) {
+    console.log('✓ Dev fixtures already exist, skipping...');
 
-      // Find the test-worktree
-      const worktrees = await worktreeRepo.findAll({ repo_id: existing.repo_id });
-      const testWorktree = worktrees.find(w => w.name === 'test-worktree');
+    // Find the test-worktree
+    const worktrees = await worktreeRepo.findAll({ repo_id: existing.repo_id });
+    const testWorktree = worktrees.find(w => w.name === 'test-worktree');
 
-      return {
-        repo_id: existing.repo_id,
-        worktree_id: testWorktree?.worktree_id ?? (generateId() as WorktreeID),
-        skipped: true,
-      };
-    }
+    return {
+      repo_id: existing.repo_id,
+      worktree_id: testWorktree?.worktree_id ?? (generateId() as WorktreeID),
+      skipped: true,
+    };
+  }
+
+  // If repo exists but skipIfExists is false, delete and recreate
+  if (existing && !options.skipIfExists) {
+    console.log('⚠️  Repo already exists, deleting and recreating...');
+    await repoRepo.delete(existing.repo_id);
   }
 
   console.log('📦 Seeding development fixtures...');
