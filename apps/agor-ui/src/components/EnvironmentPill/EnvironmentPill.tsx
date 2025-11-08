@@ -88,11 +88,12 @@ export function EnvironmentPill({
   };
 
   const status = env?.status || 'stopped';
-  const isProcessing = status === 'starting' || status === 'stopping';
   const isRunning = status === 'running';
+  const isStarting = status === 'starting';
+  const isStopping = status === 'stopping';
   const canStop = status === 'running' || status === 'starting';
-  const startDisabled = !hasConfig || !onStartEnvironment || isProcessing || isRunning;
-  const stopDisabled = !hasConfig || !onStopEnvironment || isProcessing || !canStop;
+  const startDisabled = !hasConfig || !onStartEnvironment || isStarting || isStopping || isRunning;
+  const stopDisabled = !hasConfig || !onStopEnvironment || isStopping || !canStop;
 
   // Build helpful tooltip based on inferred state
   const getTooltipText = () => {
@@ -244,8 +245,10 @@ export function EnvironmentPill({
                   status === 'running'
                     ? 'Stop environment'
                     : status === 'starting'
-                      ? 'Environment is starting'
-                      : 'Environment not running'
+                      ? 'Stop environment (cancel startup)'
+                      : status === 'stopping'
+                        ? 'Environment is stopping'
+                        : 'Environment not running'
                 }
               >
                 <Button
