@@ -20,6 +20,10 @@ services:
       # UI connects to daemon via localhost (inside container)
       - VITE_DAEMON_PORT=${DAEMON_PORT:-3030}
 
+      # Seed development fixtures (optional, set SEED=true to populate test data)
+      # Creates: Agor repo (https://github.com/preset-io/agor.git) + test-worktree
+      - SEED=${SEED:-false}
+
       # Pass through API keys from host (if set)
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}

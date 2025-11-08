@@ -114,6 +114,11 @@
       "types": "./dist/utils/context-window.d.ts",
       "import": "./dist/utils/context-window.js",
       "require": "./dist/utils/context-window.cjs"
+    },
+    "./seed": {
+      "types": "./dist/seed/index.d.ts",
+      "import": "./dist/seed/index.js",
+      "require": "./dist/seed/index.cjs"
     }
   },
   "scripts": {
