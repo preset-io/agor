@@ -36,38 +36,36 @@ interface ModelUsage {
 /**
  * Calculate context window usage from token counts
  *
- * Context window usage = input_tokens + output_tokens + cache_creation_tokens
+ * Context window is the INPUT limit (how much context the model can see).
+ * Output tokens have a separate limit and don't count against context window.
  *
+ * Context window usage = input_tokens + cache_creation_tokens
+ *
+ * NOTE: We do NOT include output_tokens - those have a separate limit!
  * NOTE: cache_read_tokens are FREE and don't count against the limit!
- * This is the whole point of prompt caching - cached reads are free.
  *
  * @param usage - Token usage object
- * @returns Context window usage (tokens that count toward limit)
+ * @returns Context window usage (input tokens that count toward limit)
  */
 export function calculateContextWindowUsage(usage: TokenUsage | undefined): number | undefined {
   if (!usage) return undefined;
 
-  return (
-    (usage.input_tokens || 0) +
-    (usage.output_tokens || 0) +
-    (usage.cache_creation_tokens || 0)
-  );
+  return (usage.input_tokens || 0) + (usage.cache_creation_tokens || 0);
 }
 
 /**
  * Calculate context window usage from SDK model usage
+ *
+ * Context window is the INPUT limit (how much context the model can see).
+ * Output tokens have a separate limit and don't count against context window.
  *
  * The SDK provides individual token counts that must be summed to get total usage.
  * The SDK's `modelUsage.contextWindow` field is the model's LIMIT (e.g., 200k for Sonnet),
  * NOT the current usage - we must calculate usage ourselves by summing token counts.
  *
  * @param modelUsage - Per-model usage object from SDK
- * @returns Context window usage in tokens (sum of input + output + cache_creation)
+ * @returns Context window usage in tokens (input + cache_creation, NO output)
  */
 export function calculateModelContextWindowUsage(modelUsage: ModelUsage): number {
-  return (
-    (modelUsage.inputTokens || 0) +
-    (modelUsage.outputTokens || 0) +
-    (modelUsage.cacheCreationInputTokens || 0)
-  );
+  return (modelUsage.inputTokens || 0) + (modelUsage.cacheCreationInputTokens || 0);
 }
