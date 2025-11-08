@@ -26,8 +26,9 @@ pnpm agor init --skip-if-exists
 
 # Always ensure auth is enabled in docker (create/overwrite config for multiplayer mode)
 # Fix volume permissions (volumes may be created with wrong ownership)
-sudo chown -R agor:agor /home/agor
+# Only chown .agor directory (not .ssh which is mounted read-only)
 mkdir -p /home/agor/.agor
+sudo chown -R agor:agor /home/agor/.agor
 cat > /home/agor/.agor/config.yaml <<EOF
 daemon:
   port: ${DAEMON_PORT:-3030}
