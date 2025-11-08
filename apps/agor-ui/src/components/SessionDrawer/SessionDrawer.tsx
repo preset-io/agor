@@ -38,6 +38,7 @@ import {
 import React from 'react';
 import { useTasks } from '../../hooks/useTasks';
 import spawnSubsessionTemplate from '../../templates/spawn_subsession.hbs?raw';
+import { getContextWindowGradient } from '../../utils/contextWindow';
 import { compileTemplate } from '../../utils/templates';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { ConversationView } from '../ConversationView';
@@ -215,23 +216,10 @@ const SessionDrawer = ({
     return null;
   }, [tasks]);
 
-  // Calculate context window percentage and gradient for footer background
+  // Calculate gradient for footer background
   const footerGradient = React.useMemo(() => {
     if (!latestContextWindow) return undefined;
-
-    const percentage = (latestContextWindow.used / latestContextWindow.limit) * 100;
-
-    // Color-code based on usage
-    let color: string;
-    if (percentage < 50) {
-      color = 'rgba(82, 196, 26, 0.12)'; // Green
-    } else if (percentage < 80) {
-      color = 'rgba(250, 173, 20, 0.12)'; // Orange
-    } else {
-      color = 'rgba(255, 77, 79, 0.12)'; // Red
-    }
-
-    return `linear-gradient(to right, ${color} ${percentage}%, transparent ${percentage}%)`;
+    return getContextWindowGradient(latestContextWindow.used, latestContextWindow.limit);
   }, [latestContextWindow]);
 
   const footerTimerTask = React.useMemo(() => {

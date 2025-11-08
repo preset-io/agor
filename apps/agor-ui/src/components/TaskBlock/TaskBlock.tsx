@@ -34,6 +34,7 @@ import React, { useMemo } from 'react';
 import { useStreamingMessages } from '../../hooks/useStreamingMessages';
 import { useTaskEvents } from '../../hooks/useTaskEvents';
 import { useTaskMessages } from '../../hooks/useTaskMessages';
+import { getContextWindowGradient } from '../../utils/contextWindow';
 import { AgentChain } from '../AgentChain';
 import { AgorAvatar } from '../AgorAvatar';
 import { MessageBlock } from '../MessageBlock';
@@ -313,9 +314,26 @@ export const TaskBlock = React.memo<TaskBlockProps>(
         ? task.tool_use_count
         : messages.reduce((sum, msg) => sum + (msg.tool_uses?.length || 0), 0);
 
+    // Calculate gradient for task header background
+    const taskHeaderGradient = getContextWindowGradient(
+      task.context_window,
+      task.context_window_limit
+    );
+
     // Task header shows when collapsed
     const taskHeader = (
-      <Flex gap={token.sizeUnit * 2} style={{ width: '100%' }}>
+      <Flex
+        gap={token.sizeUnit * 2}
+        style={{
+          width: '100%',
+          background: taskHeaderGradient,
+          padding: taskHeaderGradient ? token.sizeUnit : 0,
+          marginLeft: taskHeaderGradient ? -token.sizeUnit : 0,
+          marginRight: taskHeaderGradient ? -token.sizeUnit : 0,
+          marginTop: taskHeaderGradient ? -token.sizeUnit : 0,
+          borderRadius: taskHeaderGradient ? `${token.borderRadius}px ${token.borderRadius}px 0 0` : 0,
+        }}
+      >
         {/* Left column: Icons stacked vertically */}
         <Flex
           vertical
