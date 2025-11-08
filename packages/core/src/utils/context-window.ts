@@ -21,13 +21,16 @@ interface TokenUsage {
 
 /**
  * Model usage interface from SDK (per-model breakdown)
+ *
+ * NOTE: contextWindow is the model's MAXIMUM context window (the limit),
+ * NOT the current usage. We must sum the token counts to get usage.
  */
 interface ModelUsage {
   inputTokens?: number;
   outputTokens?: number;
   cacheCreationInputTokens?: number;
   cacheReadInputTokens?: number; // Not used in calculations (free!)
-  contextWindow?: number;
+  contextWindow?: number; // The model's LIMIT (e.g., 200k), NOT current usage
 }
 
 /**
@@ -54,8 +57,12 @@ export function calculateContextWindowUsage(usage: TokenUsage | undefined): numb
 /**
  * Calculate context window usage from SDK model usage
  *
+ * The SDK provides individual token counts that must be summed to get total usage.
+ * The SDK's `modelUsage.contextWindow` field is the model's LIMIT (e.g., 200k for Sonnet),
+ * NOT the current usage - we must calculate usage ourselves by summing token counts.
+ *
  * @param modelUsage - Per-model usage object from SDK
- * @returns Context window usage (tokens that count toward limit)
+ * @returns Context window usage in tokens (sum of input + output + cache_creation)
  */
 export function calculateModelContextWindowUsage(modelUsage: ModelUsage): number {
   return (
