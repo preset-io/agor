@@ -3,20 +3,33 @@
  *
  * Calculates context window usage based on the Anthropic API's cumulative token reporting.
  *
- * CRITICAL INSIGHT from https://codelynx.dev/posts/calculate-claude-code-context:
- * "Because the Anthropic API returns cumulative token usage. Each API response includes
- * the total tokens used in that conversation turn—you don't need to sum them up."
+ * CRITICAL INSIGHTS:
+ *
+ * 1. From https://codelynx.dev/posts/calculate-claude-code-context:
+ *    "The Anthropic API returns cumulative token usage. Each API response includes
+ *    the total tokens used in that conversation turn—you don't need to sum them up."
+ *
+ * 2. From https://docs.claude.com/en/docs/build-with-claude/prompt-caching:
+ *    cache_read_tokens are FREE for billing (90% discount) but DO count toward context window!
+ *
+ * 3. IMPORTANT: cache_creation_tokens should NOT be added to context calculation because:
+ *    - When content is cached (cache_creation_tokens), it's part of the current turn's input
+ *    - On FUTURE turns, that cached content appears in cache_read_tokens
+ *    - Adding both would DOUBLE-COUNT the same content!
+ *
+ * CORRECT FORMULA:
+ * context_window_usage = input_tokens + cache_read_tokens
  *
  * This means:
- * - Each task's usage already contains the CUMULATIVE context from all previous turns
+ * - Each task's usage already contains CUMULATIVE context from all previous turns
  * - We only need the LATEST task's token counts
- * - We do NOT sum across tasks (that would double-count cached content)
+ * - We do NOT sum across tasks (that would double-count)
+ * - We do NOT include cache_creation_tokens (already counted in future cache_read_tokens)
  *
- * Context window calculation:
- * input_tokens + cache_read_tokens + cache_creation_tokens
- *
- * NOTE: cache_read_tokens are FREE for billing but DO count toward context window!
- * Reference: https://codelynx.dev/posts/calculate-claude-code-context
+ * References:
+ * - https://codelynx.dev/posts/calculate-claude-code-context
+ * - https://docs.claude.com/en/docs/build-with-claude/prompt-caching
+ * - https://code.claude.com/docs/en/monitoring-usage
  */
 
 /**
@@ -48,14 +61,17 @@ interface ModelUsage {
 /**
  * Calculate context window usage from a single task's token counts
  *
- * Context window includes ALL tokens in the conversation context:
- * - input_tokens: Fresh input after cache breakpoints
- * - cache_read_tokens: Content read from cache (FREE for billing, but IN the context!)
- * - cache_creation_tokens: Content being cached (in the context!)
+ * CORRECT FORMULA: input_tokens + cache_read_tokens
  *
- * Note: output_tokens are NOT included (those are generated tokens, separate from input context)
+ * Context window includes:
+ * - input_tokens: Fresh input tokens (after cache breakpoints)
+ * - cache_read_tokens: Cached content being read (FREE for billing, but IN the context!)
  *
- * Reference: https://codelynx.dev/posts/calculate-claude-code-context
+ * EXCLUDES:
+ * - cache_creation_tokens: Do NOT add these! They represent content being written to cache
+ *   on THIS turn, which will appear as cache_read_tokens on FUTURE turns. Adding both would
+ *   double-count the same content.
+ * - output_tokens: Generated tokens, not part of input context
  *
  * @param usage - Token usage from a single task
  * @returns Context window usage in tokens, or undefined if no usage data
@@ -63,25 +79,20 @@ interface ModelUsage {
 export function calculateContextWindowUsage(usage: TokenUsage | undefined): number | undefined {
   if (!usage) return undefined;
 
-  return (
-    (usage.input_tokens || 0) + (usage.cache_read_tokens || 0) + (usage.cache_creation_tokens || 0)
-  );
+  return (usage.input_tokens || 0) + (usage.cache_read_tokens || 0);
 }
 
 /**
  * Calculate context window usage from SDK model usage
  *
  * Same calculation as above, but for SDK's ModelUsage format.
+ * Formula: inputTokens + cacheReadInputTokens (excludes cacheCreationInputTokens)
  *
  * @param modelUsage - Per-model usage from Agent SDK
  * @returns Context window usage in tokens
  */
 export function calculateModelContextWindowUsage(modelUsage: ModelUsage): number {
-  return (
-    (modelUsage.inputTokens || 0) +
-    (modelUsage.cacheReadInputTokens || 0) +
-    (modelUsage.cacheCreationInputTokens || 0)
-  );
+  return (modelUsage.inputTokens || 0) + (modelUsage.cacheReadInputTokens || 0);
 }
 
 /**
@@ -127,4 +138,77 @@ export function getContextWindowLimit(
     }
   }
   return undefined;
+}
+
+/**
+ * Calculate cumulative context window usage across all tasks in a session
+ *
+ * This represents the ACTUAL conversation context size by summing input + output tokens
+ * across all tasks, with proper handling for compaction events.
+ *
+ * Algorithm:
+ * 1. Iterate through tasks in chronological order
+ * 2. Sum (input_tokens + output_tokens) for each task
+ * 3. When a compaction event is detected, reset the counter (context was trimmed)
+ * 4. Return the cumulative sum
+ *
+ * Why input + output?
+ * - input_tokens: User's prompt for this turn (fresh input)
+ * - output_tokens: Claude's response for this turn
+ * - Together they represent the conversation tokens added in this turn
+ * - Summing across turns gives total conversation size
+ *
+ * Note: This excludes system prompt, tool definitions, and context files which are
+ * cached and not included in these token counts.
+ *
+ * @param tasks - All tasks in the session (ordered chronologically)
+ * @param messages - All messages in the session (needed to detect compaction boundaries)
+ * @returns Cumulative context window usage in tokens
+ */
+export function calculateCumulativeContextWindow(
+  tasks: Array<{ usage?: TokenUsage; task_id: string }>,
+  messages: Array<{ task_id: string; type?: string; content?: unknown }>
+): number {
+  // Find all compaction boundary messages (these mark where context was reset)
+  const compactionTaskIds = new Set<string>();
+  for (const msg of messages) {
+    if (msg.type === 'system' && typeof msg.content === 'object' && msg.content !== null) {
+      const content = msg.content as { type?: string; status?: string };
+      // Check for compact_boundary or compacting status
+      if (
+        (Array.isArray(msg.content) &&
+          msg.content.some(
+            (block: { type?: string; status?: string }) =>
+              block.type === 'system_status' && block.status === 'compacting'
+          )) ||
+        content.status === 'compacting'
+      ) {
+        compactionTaskIds.add(msg.task_id);
+      }
+    }
+  }
+
+  let cumulativeTokens = 0;
+  let lastCompactionIndex = -1;
+
+  // Find the most recent compaction event
+  for (let i = tasks.length - 1; i >= 0; i--) {
+    if (compactionTaskIds.has(tasks[i].task_id)) {
+      lastCompactionIndex = i;
+      break;
+    }
+  }
+
+  // Sum tokens starting from after the last compaction (or from beginning if no compaction)
+  const startIndex = lastCompactionIndex >= 0 ? lastCompactionIndex + 1 : 0;
+  for (let i = startIndex; i < tasks.length; i++) {
+    const task = tasks[i];
+    if (task.usage) {
+      const turnTokens =
+        (task.usage.input_tokens || 0) + (task.usage.output_tokens || 0);
+      cumulativeTokens += turnTokens;
+    }
+  }
+
+  return cumulativeTokens;
 }

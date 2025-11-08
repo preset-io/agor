@@ -83,6 +83,7 @@ import type {
 import { SessionStatus, TaskStatus } from '@agor/core/types';
 import {
   calculateContextWindowUsage,
+  calculateCumulativeContextWindow,
   getContextWindowLimit,
   getSessionContextUsage,
 } from '@agor/core/utils/context-window';
@@ -1913,6 +1914,42 @@ async function main() {
                   // Continue with toolUseCount = 0
                 }
 
+                // Calculate cumulative context window for Claude Code sessions
+                // This represents the actual conversation size (input + output tokens)
+                // across all tasks, with compaction handling
+                let contextWindow: number | undefined;
+                if (session.agentic_tool === 'claude-code') {
+                  try {
+                    // Fetch all tasks and messages for this session
+                    const allTasksResult = (await tasksService.find({
+                      query: { session_id: session.session_id, $limit: 10000 },
+                    })) as Task[] | Paginated<Task>;
+                    const allTasks: Task[] = isPaginated(allTasksResult)
+                      ? allTasksResult.data
+                      : allTasksResult;
+
+                    const allMessagesResult = (await messagesService.find({
+                      query: { session_id: session.session_id, $limit: 10000 },
+                    })) as Message[] | Paginated<Message>;
+                    const allMessages: Message[] = isPaginated(allMessagesResult)
+                      ? allMessagesResult.data
+                      : allMessagesResult;
+
+                    // Calculate cumulative context window (input + output tokens)
+                    contextWindow = calculateCumulativeContextWindow(allTasks, allMessages);
+                  } catch (err) {
+                    console.warn(
+                      `⚠️  Failed to calculate cumulative context window for task ${task.task_id}:`,
+                      err
+                    );
+                    // Fallback to old calculation
+                    contextWindow = calculateContextWindowUsage(usage);
+                  }
+                } else {
+                  // For non-Claude Code tools, use simple calculation
+                  contextWindow = calculateContextWindowUsage(usage);
+                }
+
                 const updated = await safePatch(
                   tasksService,
                   task.task_id,
@@ -1935,7 +1972,7 @@ async function main() {
                       'agentSessionId' in result
                         ? (result.agentSessionId as string | undefined)
                         : undefined,
-                    context_window: calculateContextWindowUsage(usage),
+                    context_window: contextWindow,
                     context_window_limit:
                       'contextWindowLimit' in result
                         ? (result.contextWindowLimit as number | undefined)

@@ -314,7 +314,9 @@ export const TaskBlock = React.memo<TaskBlockProps>(
         ? task.tool_use_count
         : messages.reduce((sum, msg) => sum + (msg.tool_uses?.length || 0), 0);
 
-    // Calculate gradient for task header background
+    // Use pre-calculated context window from backend (cumulative conversation size)
+    // Backend calculates this as sum of (input + output) tokens across all tasks,
+    // with proper handling for compaction events
     const taskHeaderGradient = getContextWindowGradient(
       task.context_window,
       task.context_window_limit
@@ -385,9 +387,9 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                 cacheCreationTokens={task.usage.cache_creation_tokens}
               />
             )}
-            {task.context_window && task.context_window_limit && (
+            {task.context_window !== undefined && task.context_window_limit && (
               <ContextWindowPill
-                used={task.usage?.input_tokens || task.context_window}
+                used={task.context_window}
                 limit={task.context_window_limit}
                 taskMetadata={{
                   usage: task.usage,

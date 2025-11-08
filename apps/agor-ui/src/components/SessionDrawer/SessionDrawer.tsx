@@ -199,30 +199,25 @@ const SessionDrawer = ({
     );
   }, [tasks]);
 
-  // Get latest context window from most recent completed task
+  // Get latest context window from most recent task
+  // Backend pre-calculates this as cumulative (input + output) tokens across all tasks,
+  // with proper handling for compaction events
   const latestContextWindow = React.useMemo(() => {
-    // Find most recent task with context window data
-    const tasksWithContext = tasks
-      .filter(t => t.context_window && t.context_window_limit)
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-
-    if (tasksWithContext.length > 0) {
-      const task = tasksWithContext[0];
-      // Show input_tokens only (fresh input this turn, after cache breakpoints)
-      // Note: The SDK doesn't provide session-level cumulative context tracking.
-      // We only get per-turn metrics. This shows the fresh input for the latest turn.
-      const freshInput = task.usage?.input_tokens || task.context_window || 0;
-
-      return {
-        used: freshInput,
-        limit: task.context_window_limit!,
-        taskMetadata: {
-          usage: task.usage,
-          model: task.model,
-          model_usage: task.model_usage,
-          duration_ms: task.duration_ms,
-        },
-      };
+    // Find most recent task with context window data (checking backwards from newest)
+    for (let i = tasks.length - 1; i >= 0; i--) {
+      const task = tasks[i];
+      if (task.context_window !== undefined && task.context_window_limit) {
+        return {
+          used: task.context_window,
+          limit: task.context_window_limit,
+          taskMetadata: {
+            usage: task.usage,
+            model: task.model,
+            model_usage: task.model_usage,
+            duration_ms: task.duration_ms,
+          },
+        };
+      }
     }
     return null;
   }, [tasks]);
