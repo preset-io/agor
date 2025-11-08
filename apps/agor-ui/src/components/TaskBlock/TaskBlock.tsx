@@ -320,21 +320,31 @@ export const TaskBlock = React.memo<TaskBlockProps>(
         : 0;
 
     // Color-code based on usage: green (<50%), yellow (50-80%), red (>80%)
+    // Use slightly more opaque colors for better visibility
     const getContextWindowColor = () => {
       if (contextWindowPercentage < 50) {
-        return token.colorSuccessBg; // Light green
+        return 'rgba(82, 196, 26, 0.15)'; // Light green
       }
       if (contextWindowPercentage < 80) {
-        return token.colorWarningBg; // Light yellow/orange
+        return 'rgba(250, 173, 20, 0.15)'; // Light orange
       }
-      return token.colorErrorBg; // Light red
+      return 'rgba(255, 77, 79, 0.15)'; // Light red
     };
 
     // Create gradient background for footer based on context window usage
     const footerBackground =
       task.context_window && task.context_window_limit
         ? `linear-gradient(to right, ${getContextWindowColor()} ${contextWindowPercentage}%, transparent ${contextWindowPercentage}%)`
-        : 'transparent';
+        : undefined;
+
+    // Debug logging (remove after testing)
+    if (task.context_window && task.context_window_limit) {
+      console.log(
+        `[TaskBlock] Context window: ${task.context_window}/${task.context_window_limit} (${contextWindowPercentage.toFixed(1)}%)`,
+        'Background:',
+        footerBackground
+      );
+    }
 
     // Task header shows when collapsed
     const taskHeader = (
