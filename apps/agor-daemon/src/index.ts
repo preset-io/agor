@@ -1007,7 +1007,7 @@ async function main() {
                 console.log(`✅ [OpenCode] Created OpenCode session: ${ocSession.sessionId}`);
 
                 // Map Agor session ID to OpenCode session ID
-                opencodeTool.mapSession(session.session_id, ocSession.sessionId);
+                opencodeTool.setSessionContext(session.session_id, ocSession.sessionId);
                 console.log(
                   `🗺️  [OpenCode] Mapped Agor session ${session.session_id.substring(0, 8)} → OpenCode session ${ocSession.sessionId}`
                 );
@@ -2510,16 +2510,19 @@ async function main() {
           throw new Error(`OpenCode server returned ${response.status}: ${response.statusText}`);
         }
 
-        const data = await response.json();
+        // biome-ignore lint/suspicious/noExplicitAny: OpenCode API response structure not formally typed
+        const data = (await response.json()) as { providers?: any[]; default?: string };
 
         // Transform to frontend-friendly format
         // OpenCode returns: { providers: [{id, name, models: {modelId: {id, name, ...}}}] }
         // We need to convert models object to array
+        // biome-ignore lint/suspicious/noExplicitAny: Dynamic provider structure from OpenCode API
         const transformedProviders = (data.providers || []).map((provider: any) => ({
           id: provider.id,
           name: provider.name,
           models: provider.models
-            ? Object.entries(provider.models).map(([modelId, modelMeta]: [string, any]) => ({
+            ? // biome-ignore lint/suspicious/noExplicitAny: Dynamic model metadata from OpenCode API
+              Object.entries(provider.models).map(([modelId, modelMeta]: [string, any]) => ({
                 id: modelId,
                 name: modelMeta.name || modelId,
               }))

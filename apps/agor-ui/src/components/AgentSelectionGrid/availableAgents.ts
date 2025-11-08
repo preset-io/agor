@@ -31,5 +31,6 @@ export const AVAILABLE_AGENTS: AgenticToolOption[] = [
     name: 'OpenCode',
     icon: '🌐',
     description: 'Open-source terminal AI with 75+ LLM providers',
+    beta: true,
   },
 ];

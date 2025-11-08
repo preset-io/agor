@@ -11,4 +11,5 @@ export interface AgenticToolOption {
   icon: string;
   version?: string;
   description?: string;
+  beta?: boolean; // Show beta badge for experimental features
 }
