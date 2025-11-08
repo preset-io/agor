@@ -709,6 +709,8 @@ async function main() {
       patch: [requireMinimumRole('member', 'update messages')],
       remove: [requireMinimumRole('member', 'delete messages')],
     },
+    // No custom 'after' hooks needed - FeathersJS automatically emits 'removed' event
+    // with the full message object (including status, session_id, etc.)
   });
 
   app.service('board-objects').hooks({
@@ -1926,7 +1928,9 @@ async function main() {
                     usage,
                     // Save execution metadata from result
                     duration_ms:
-                      'durationMs' in result ? (result.durationMs as number | undefined) : undefined,
+                      'durationMs' in result
+                        ? (result.durationMs as number | undefined)
+                        : undefined,
                     agent_session_id:
                       'agentSessionId' in result
                         ? (result.agentSessionId as string | undefined)
@@ -1938,7 +1942,9 @@ async function main() {
                         : undefined,
                     model: 'model' in result ? (result.model as string | undefined) : undefined,
                     model_usage:
-                      'modelUsage' in result ? (result.modelUsage as Task['model_usage']) : undefined,
+                      'modelUsage' in result
+                        ? (result.modelUsage as Task['model_usage'])
+                        : undefined,
                   },
                   'Task'
                 );
@@ -2183,7 +2189,11 @@ async function main() {
 
   /**
    * POST /sessions/:id/messages/queue
-   * Queue a message for later execution
+   * GET /sessions/:id/messages/queue
+   * Queue management endpoints (create and list)
+   *
+   * NOTE: Queue deletion is handled via messages service directly (client.service('messages').remove(id))
+   * This keeps the client simple and avoids FeathersJS nested route issues
    */
   app.use('/sessions/:id/messages/queue', {
     async create(data: { prompt: string }, params: RouteParams) {
@@ -2204,7 +2214,7 @@ async function main() {
       );
 
       // Emit event for real-time UI updates
-      app.service('messages').emit('queued', queuedMessage, params);
+      app.service('messages').emit('queued', queuedMessage);
 
       return {
         success: true,
@@ -2226,48 +2236,6 @@ async function main() {
         data: queued,
       };
     },
-  });
-
-  /**
-   * DELETE /sessions/:id/messages/queue/:messageId
-   * Remove a message from queue
-   */
-  app.use('/sessions/:id/messages/queue/:messageId', {
-    async remove(_id: unknown, params: RouteParams & { route?: { messageId?: string } }) {
-      ensureMinimumRole(params, 'member', 'manage queue');
-
-      const sessionId = params.route?.id;
-      const messageId = params.route?.messageId;
-      if (!sessionId || !messageId) throw new Error('Session ID and Message ID required');
-
-      // Verify message belongs to session and is queued
-      const message = await messagesService.get(messageId, params);
-      if (message.session_id !== sessionId) {
-        throw new Error('Message does not belong to this session');
-      }
-      if (message.status !== 'queued') {
-        throw new Error('Message is not queued');
-      }
-
-      // Delete the queued message
-      await messagesService.remove(messageId, params);
-
-      console.log(
-        `🗑️  Removed queued message ${messageId.substring(0, 8)} from session ${sessionId.substring(0, 8)}`
-      );
-
-      // Emit dequeued event for real-time UI updates
-      app.service('messages').emit(
-        'dequeued',
-        {
-          message_id: messageId,
-          session_id: sessionId,
-        },
-        params
-      );
-
-      return { success: true };
-    },
     // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
   } as any);
 
@@ -2288,11 +2256,13 @@ async function main() {
       return;
     }
 
-    // Re-fetch session to ensure it's still idle
+    // Re-fetch session to ensure it's still idle and not awaiting permission
     const session = await sessionsService.get(sessionId, params);
 
     if (session.status !== SessionStatus.IDLE) {
-      console.log(`⚠️  Session ${sessionId.substring(0, 8)} not idle, skipping queue processing`);
+      console.log(
+        `⚠️  Session ${sessionId.substring(0, 8)} is ${session.status}, skipping queue processing`
+      );
       return;
     }
 
@@ -2304,18 +2274,26 @@ async function main() {
     // NOTE: Queued messages always have string content (validated in createQueued)
     const prompt = nextMessage.content as string;
 
-    // Delete the queued message (execution will create new messages)
-    await messageRepo.deleteQueued(nextMessage.message_id);
+    // Verify message still exists (user might have deleted it while we were checking)
+    const messagesService = app.service('messages') as unknown as MessagesServiceImpl;
+    try {
+      const stillExists = await messagesService.get(nextMessage.message_id, params);
+      if (!stillExists || stillExists.status !== 'queued') {
+        console.log(
+          `⚠️  Queued message ${nextMessage.message_id.substring(0, 8)} was deleted or modified, skipping`
+        );
+        return;
+      }
+    } catch (error) {
+      console.log(
+        `⚠️  Queued message ${nextMessage.message_id.substring(0, 8)} no longer exists, skipping`
+      );
+      return;
+    }
 
-    // Emit dequeued event for real-time UI updates
-    app.service('messages').emit(
-      'dequeued',
-      {
-        message_id: nextMessage.message_id,
-        session_id: sessionId,
-      },
-      params
-    );
+    // Delete the queued message (execution will create new messages)
+    // Use the service so the after.remove hook fires and emits the dequeued event
+    await messagesService.remove(nextMessage.message_id, params);
 
     // Trigger prompt execution via existing endpoint
     // This creates task, user message, executes agent, etc.

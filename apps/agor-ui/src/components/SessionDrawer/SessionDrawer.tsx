@@ -3,6 +3,7 @@ import type {
   CodexApprovalPolicy,
   CodexSandboxMode,
   MCPServer,
+  Message,
   PermissionMode,
   PermissionScope,
   Repo,
@@ -130,7 +131,7 @@ const SessionDrawer = ({
   onViewLogs,
 }: SessionDrawerProps) => {
   const { token } = theme.useToken();
-  const { modal } = App.useApp();
+  const { modal, message } = App.useApp();
 
   // Per-session draft storage (persists across session switches, no parent re-renders!)
   const draftsRef = React.useRef<Map<string, string>>(new Map());
@@ -180,9 +181,70 @@ const SessionDrawer = ({
   );
   const [scrollToBottom, setScrollToBottom] = React.useState<(() => void) | null>(null);
   const [isStopping, setIsStopping] = React.useState(false);
+  const [queuedMessages, setQueuedMessages] = React.useState<Message[]>([]);
 
   // Fetch tasks for this session to calculate token totals
   const { tasks } = useTasks(client, session?.session_id || null);
+
+  // Fetch queued messages for this session
+  React.useEffect(() => {
+    if (!client || !session) {
+      return;
+    }
+
+    const fetchQueue = async () => {
+      try {
+        const response = await client
+          .service(`/sessions/${session.session_id}/messages/queue`)
+          .find();
+        setQueuedMessages(response.data || []);
+      } catch (error) {
+        console.error('[SessionDrawer] Failed to fetch queue:', error);
+      }
+    };
+
+    fetchQueue();
+
+    // Listen for queue updates via WebSocket
+    const messagesService = client.service('messages');
+
+    const handleQueued = (message: Message) => {
+      if (message.session_id === session.session_id) {
+        setQueuedMessages(prev => {
+          const updated = [...prev, message].sort(
+            (a, b) => (a.queue_position ?? 0) - (b.queue_position ?? 0)
+          );
+          return updated;
+        });
+      }
+    };
+
+    // Use built-in 'removed' event instead of custom 'dequeued' event
+    const handleMessageRemoved = (message: Message) => {
+      console.log('[SessionDrawer] Message removed event received:', message);
+      // Only process if it's a queued message for this session
+      if (message.status === 'queued' && message.session_id === session.session_id) {
+        console.log('[SessionDrawer] Removing queued message from UI:', message.message_id);
+        setQueuedMessages(prev => {
+          const filtered = prev.filter(m => m.message_id !== message.message_id);
+          console.log('[SessionDrawer] Queue after removal:', filtered);
+          return filtered;
+        });
+      } else {
+        console.log(
+          '[SessionDrawer] Removed event not for queued message in this session, ignoring'
+        );
+      }
+    };
+
+    messagesService.on('queued', handleQueued);
+    messagesService.on('removed', handleMessageRemoved);
+
+    return () => {
+      messagesService.off('queued', handleQueued);
+      messagesService.off('removed', handleMessageRemoved);
+    };
+  }, [client, session]); // Re-run when client or session changes
 
   // Calculate token totals and breakdown across all tasks
   const tokenBreakdown = React.useMemo(() => {
@@ -311,12 +373,47 @@ const SessionDrawer = ({
     });
   };
 
-  const handleSendPrompt = () => {
-    if (inputValue.trim()) {
-      onSendPrompt?.(inputValue, permissionMode);
-      // Clear input and draft after sending
-      setInputValue('');
-      draftsRef.current.delete(session.session_id);
+  const handleSendPrompt = async () => {
+    if (!inputValue.trim()) return;
+
+    const promptToSend = inputValue.trim();
+
+    try {
+      // If session is running, queue the message instead of sending immediately
+      if (isRunning && client) {
+        const response = await client
+          .service(`/sessions/${session.session_id}/messages/queue`)
+          .create({
+            prompt: promptToSend,
+          });
+
+        // Optimistically update the UI immediately (don't wait for WebSocket event)
+        if (response.message) {
+          setQueuedMessages(prev => {
+            const updated = [...prev, response.message].sort(
+              (a, b) => a.queue_position - b.queue_position
+            );
+            return updated;
+          });
+        }
+
+        message.success(`Message queued at position ${response.message.queue_position}`);
+
+        // Clear input immediately after successful queue
+        setInputValue('');
+        draftsRef.current.delete(session.session_id);
+      } else {
+        // Session is idle, send normally
+        // Clear input before sending (onSendPrompt is sync)
+        setInputValue('');
+        draftsRef.current.delete(session.session_id);
+        onSendPrompt?.(promptToSend, permissionMode);
+      }
+    } catch (error) {
+      console.error('[SessionDrawer] Failed to send/queue:', error);
+      message.error(
+        `Failed to ${isRunning ? 'queue' : 'send'} message: ${error instanceof Error ? error.message : String(error)}`
+      );
     }
   };
 
@@ -628,6 +725,102 @@ const SessionDrawer = ({
         />
       </div>
 
+      {/* Queued Messages Drawer - Above Footer */}
+      {queuedMessages.length > 0 && (
+        <div
+          style={{
+            background: token.colorBgElevated,
+            borderTop: `1px solid ${token.colorBorderSecondary}`,
+            borderTopLeftRadius: token.borderRadiusLG,
+            borderTopRightRadius: token.borderRadiusLG,
+            padding: `${token.sizeUnit * 3}px ${token.sizeUnit * 6}px ${token.sizeUnit * 2}px`,
+            marginLeft: -token.sizeUnit * 6 + token.sizeUnit * 2,
+            marginRight: -token.sizeUnit * 6 + token.sizeUnit * 2,
+            marginTop: token.sizeUnit * 2,
+            boxShadow: `0 -2px 8px ${token.colorBgMask}`,
+          }}
+        >
+          <Typography.Text
+            type="secondary"
+            style={{
+              fontSize: token.fontSizeSM,
+              display: 'block',
+              marginBottom: token.sizeUnit * 2,
+              fontWeight: 500,
+              textTransform: 'uppercase',
+              letterSpacing: '0.5px',
+            }}
+          >
+            Queued Messages ({queuedMessages.length})
+          </Typography.Text>
+          <Space direction="vertical" size={8} style={{ width: '100%' }}>
+            {queuedMessages.map((msg, idx) => (
+              <div
+                key={msg.message_id}
+                style={{
+                  background: token.colorBgContainer,
+                  padding: `${token.sizeUnit * 2}px ${token.sizeUnit * 3}px`,
+                  borderRadius: token.borderRadius,
+                  border: `1px solid ${token.colorBorder}`,
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: token.sizeUnit * 2,
+                }}
+              >
+                <Typography.Text ellipsis style={{ flex: 1 }}>
+                  <span style={{ color: token.colorTextSecondary, marginRight: token.sizeUnit }}>
+                    {idx + 1}.
+                  </span>
+                  {msg.content_preview || msg.content}
+                </Typography.Text>
+                <Button
+                  type="text"
+                  size="small"
+                  danger
+                  icon={<DeleteOutlined />}
+                  onClick={async () => {
+                    if (!client) return;
+
+                    try {
+                      console.log('[SessionDrawer] DELETE attempt:', {
+                        sessionId: session.session_id,
+                        messageId: msg.message_id,
+                      });
+
+                      // Optimistically remove from UI
+                      setQueuedMessages(prev => prev.filter(m => m.message_id !== msg.message_id));
+
+                      // Delete via messages service directly
+                      // The backend will validate it's a queued message
+                      const result = await client.service('messages').remove(msg.message_id);
+
+                      console.log('[SessionDrawer] DELETE success:', result);
+                    } catch (error) {
+                      console.error('[SessionDrawer] DELETE error:', {
+                        error,
+                        errorType: error?.constructor?.name,
+                        errorMessage: error instanceof Error ? error.message : String(error),
+                        errorStack: error instanceof Error ? error.stack : undefined,
+                      });
+                      message.error(
+                        `Failed to remove queued message: ${error instanceof Error ? error.message : String(error)}`
+                      );
+
+                      // Re-fetch queue to restore accurate state
+                      const response = await client
+                        .service(`sessions/${session.session_id}/messages/queue`)
+                        .find();
+                      setQueuedMessages(response.data || []);
+                    }
+                  }}
+                />
+              </div>
+            ))}
+          </Space>
+        </div>
+      )}
+
       {/* Input Box Footer */}
       <div
         style={{
@@ -650,8 +843,8 @@ const SessionDrawer = ({
             onKeyPress={e => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
-                // Respect same disabled conditions as Send button (isRunning || !inputValue.trim())
-                if (!isRunning && inputValue.trim()) {
+                // Allow sending/queueing when there's input (queues if running, sends if idle)
+                if (inputValue.trim()) {
                   handleSendPrompt();
                 }
               }
@@ -758,12 +951,12 @@ const SessionDrawer = ({
                     disabled={isRunning || !inputValue.trim()}
                   />
                 </Tooltip>
-                <Tooltip title={isRunning ? 'Session is running...' : 'Send Prompt'}>
+                <Tooltip title={isRunning ? 'Queue Message' : 'Send Prompt'}>
                   <Button
                     type="primary"
                     icon={<SendOutlined />}
                     onClick={handleSendPrompt}
-                    disabled={isRunning || !inputValue.trim()}
+                    disabled={!inputValue.trim()}
                   />
                 </Tooltip>
               </Space.Compact>
