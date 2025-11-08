@@ -197,7 +197,8 @@ const SessionDrawer = ({
         const response = await client
           .service(`/sessions/${session.session_id}/messages/queue`)
           .find();
-        setQueuedMessages(response.data || []);
+        const data = (response as { data: Message[] }).data || [];
+        setQueuedMessages(data);
       } catch (error) {
         console.error('[SessionDrawer] Failed to fetch queue:', error);
       }
@@ -206,7 +207,8 @@ const SessionDrawer = ({
     fetchQueue();
 
     // Listen for queue updates via WebSocket
-    const messagesService = client.service('messages');
+    // biome-ignore lint/suspicious/noExplicitAny: FeathersJS types don't include .on/.off methods
+    const messagesService = client.service('messages') as any;
 
     const handleQueued = (message: Message) => {
       if (message.session_id === session.session_id) {
@@ -381,17 +383,17 @@ const SessionDrawer = ({
     try {
       // If session is running, queue the message instead of sending immediately
       if (isRunning && client) {
-        const response = await client
+        const response = (await client
           .service(`/sessions/${session.session_id}/messages/queue`)
           .create({
             prompt: promptToSend,
-          });
+          })) as { success: boolean; message: Message; queue_position: number };
 
         // Optimistically update the UI immediately (don't wait for WebSocket event)
         if (response.message) {
           setQueuedMessages(prev => {
             const updated = [...prev, response.message].sort(
-              (a, b) => a.queue_position - b.queue_position
+              (a, b) => (a.queue_position ?? 0) - (b.queue_position ?? 0)
             );
             return updated;
           });
@@ -772,7 +774,7 @@ const SessionDrawer = ({
                   <span style={{ color: token.colorTextSecondary, marginRight: token.sizeUnit }}>
                     {idx + 1}.
                   </span>
-                  {msg.content_preview || msg.content}
+                  {msg.content_preview || (typeof msg.content === 'string' ? msg.content : '')}
                 </Typography.Text>
                 <Button
                   type="text"
@@ -811,7 +813,8 @@ const SessionDrawer = ({
                       const response = await client
                         .service(`sessions/${session.session_id}/messages/queue`)
                         .find();
-                      setQueuedMessages(response.data || []);
+                      const data = (response as { data: Message[] }).data || [];
+                      setQueuedMessages(data);
                     }
                   }}
                 />
