@@ -142,53 +142,36 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         custom: {}, // No custom context at creation time
       };
 
-      // Render start_command from template
-      if (repo.environment_config.up_command) {
+      // Helper to render a template with error handling
+      const safeRenderTemplate = (template: string, fieldName: string): string | undefined => {
         try {
-          start_command = renderTemplate(repo.environment_config.up_command, templateContext);
+          return renderTemplate(template, templateContext);
         } catch (err) {
-          console.warn(`Failed to render start_command for ${data.name}:`, err);
+          console.warn(`Failed to render ${fieldName} for ${data.name}:`, err);
+          return undefined;
         }
-      }
+      };
 
-      // Render stop_command from template
-      if (repo.environment_config.down_command) {
-        try {
-          stop_command = renderTemplate(repo.environment_config.down_command, templateContext);
-        } catch (err) {
-          console.warn(`Failed to render stop_command for ${data.name}:`, err);
-        }
-      }
+      // Render all fields from templates
+      start_command = repo.environment_config.up_command
+        ? safeRenderTemplate(repo.environment_config.up_command, 'start_command')
+        : undefined;
 
-      // Render health_check_url from template
-      if (repo.environment_config.health_check?.url_template) {
-        try {
-          health_check_url = renderTemplate(
-            repo.environment_config.health_check.url_template,
-            templateContext
-          );
-        } catch (err) {
-          console.warn(`Failed to render health_check_url for ${data.name}:`, err);
-        }
-      }
+      stop_command = repo.environment_config.down_command
+        ? safeRenderTemplate(repo.environment_config.down_command, 'stop_command')
+        : undefined;
 
-      // Render app_url from template
-      if (repo.environment_config.app_url_template) {
-        try {
-          app_url = renderTemplate(repo.environment_config.app_url_template, templateContext);
-        } catch (err) {
-          console.warn(`Failed to render app_url for ${data.name}:`, err);
-        }
-      }
+      health_check_url = repo.environment_config.health_check?.url_template
+        ? safeRenderTemplate(repo.environment_config.health_check.url_template, 'health_check_url')
+        : undefined;
 
-      // Render logs_command from template
-      if (repo.environment_config.logs_command) {
-        try {
-          logs_command = renderTemplate(repo.environment_config.logs_command, templateContext);
-        } catch (err) {
-          console.warn(`Failed to render logs_command for ${data.name}:`, err);
-        }
-      }
+      app_url = repo.environment_config.app_url_template
+        ? safeRenderTemplate(repo.environment_config.app_url_template, 'app_url')
+        : undefined;
+
+      logs_command = repo.environment_config.logs_command
+        ? safeRenderTemplate(repo.environment_config.logs_command, 'logs_command')
+        : undefined;
     }
 
     // Create worktree record in database using the service (broadcasts WebSocket event)
