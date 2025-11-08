@@ -34,6 +34,61 @@ export interface AgenticToolsSectionProps {
   client: AgorClient | null;
 }
 
+// Helper component for API key tabs
+const ApiKeyTabContent: React.FC<{
+  keyField: keyof ApiKeyStatus;
+  keyStatus: Partial<ApiKeyStatus>;
+  keysError: string | null;
+  savingKeys: Record<string, boolean>;
+  onSave: (field: keyof ApiKeyStatus, value: string) => Promise<void>;
+  onClear: (field: keyof ApiKeyStatus) => Promise<void>;
+  onClearError: () => void;
+}> = ({ keyField, keyStatus, keysError, savingKeys, onSave, onClear, onClearError }) => {
+  const { token } = theme.useToken();
+
+  return (
+    <div style={{ paddingTop: token.paddingMD }}>
+      <Alert
+        message={
+          <span>
+            This is the <strong>global API key</strong> for all users. Per-user keys can be set in
+            the Users tab.{' '}
+            <a
+              href="https://agor.live/guide/authentication"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Learn more →
+            </a>
+          </span>
+        }
+        type="info"
+        showIcon
+        style={{ marginBottom: token.marginLG }}
+      />
+
+      {keysError && (
+        <Alert
+          message={keysError}
+          type="error"
+          icon={<WarningOutlined />}
+          showIcon
+          closable
+          onClose={onClearError}
+          style={{ marginBottom: token.marginLG }}
+        />
+      )}
+
+      <ApiKeyFields
+        keyStatus={{ [keyField]: keyStatus[keyField] }}
+        onSave={onSave}
+        onClear={onClear}
+        saving={savingKeys}
+      />
+    </div>
+  );
+};
+
 export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client }) => {
   const { token } = theme.useToken();
 
@@ -207,26 +262,6 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
 
   return (
     <div style={{ padding: token.paddingMD }}>
-      {/* Authentication Methods Info */}
-      <Alert
-        message={
-          <span>
-            These are <strong>global API keys</strong> for all users. Per-user keys can be set in
-            the Users tab.{' '}
-            <a
-              href="https://agor.live/guide/authentication"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Learn more about authentication →
-            </a>
-          </span>
-        }
-        type="info"
-        showIcon
-        style={{ marginBottom: token.marginLG }}
-      />
-
       {/* Nested tabs for each tool */}
       <Tabs
         defaultActiveKey="claude-code"
@@ -235,78 +270,45 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
             key: 'claude-code',
             label: 'Claude Code',
             children: (
-              <div style={{ paddingTop: token.paddingMD }}>
-                {keysError && (
-                  <Alert
-                    message={keysError}
-                    type="error"
-                    icon={<WarningOutlined />}
-                    showIcon
-                    closable
-                    onClose={() => setKeysError(null)}
-                    style={{ marginBottom: token.marginLG }}
-                  />
-                )}
-
-                <ApiKeyFields
-                  keyStatus={{ ANTHROPIC_API_KEY: keyStatus.ANTHROPIC_API_KEY }}
-                  onSave={handleSaveKey}
-                  onClear={handleClearKey}
-                  saving={savingKeys}
-                />
-              </div>
+              <ApiKeyTabContent
+                keyField="ANTHROPIC_API_KEY"
+                keyStatus={keyStatus}
+                keysError={keysError}
+                savingKeys={savingKeys}
+                onSave={handleSaveKey}
+                onClear={handleClearKey}
+                onClearError={() => setKeysError(null)}
+              />
             ),
           },
           {
             key: 'codex',
             label: 'Codex',
             children: (
-              <div style={{ paddingTop: token.paddingMD }}>
-                {keysError && (
-                  <Alert
-                    message={keysError}
-                    type="error"
-                    icon={<WarningOutlined />}
-                    showIcon
-                    closable
-                    onClose={() => setKeysError(null)}
-                    style={{ marginBottom: token.marginLG }}
-                  />
-                )}
-
-                <ApiKeyFields
-                  keyStatus={{ OPENAI_API_KEY: keyStatus.OPENAI_API_KEY }}
-                  onSave={handleSaveKey}
-                  onClear={handleClearKey}
-                  saving={savingKeys}
-                />
-              </div>
+              <ApiKeyTabContent
+                keyField="OPENAI_API_KEY"
+                keyStatus={keyStatus}
+                keysError={keysError}
+                savingKeys={savingKeys}
+                onSave={handleSaveKey}
+                onClear={handleClearKey}
+                onClearError={() => setKeysError(null)}
+              />
             ),
           },
           {
             key: 'gemini',
             label: 'Gemini',
             children: (
-              <div style={{ paddingTop: token.paddingMD }}>
-                {keysError && (
-                  <Alert
-                    message={keysError}
-                    type="error"
-                    icon={<WarningOutlined />}
-                    showIcon
-                    closable
-                    onClose={() => setKeysError(null)}
-                    style={{ marginBottom: token.marginLG }}
-                  />
-                )}
-
-                <ApiKeyFields
-                  keyStatus={{ GEMINI_API_KEY: keyStatus.GEMINI_API_KEY }}
-                  onSave={handleSaveKey}
-                  onClear={handleClearKey}
-                  saving={savingKeys}
-                />
-              </div>
+              <ApiKeyTabContent
+                keyField="GEMINI_API_KEY"
+                keyStatus={keyStatus}
+                keysError={keysError}
+                savingKeys={savingKeys}
+                onSave={handleSaveKey}
+                onClear={handleClearKey}
+                onClearError={() => setKeysError(null)}
+              />
             ),
           },
           {
