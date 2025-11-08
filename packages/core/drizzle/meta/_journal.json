@@ -29,6 +29,13 @@
       "when": 1762126122238,
       "tag": "0003_tough_iron_lad",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1731024000000,
+      "tag": "0004_add_static_urls",
+      "breakpoints": true
     }
   ]
 }

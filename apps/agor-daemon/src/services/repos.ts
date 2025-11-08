@@ -9,6 +9,7 @@ import { type Database, RepoRepository } from '@agor/core/db';
 import { autoAssignWorktreeUniqueId } from '@agor/core/environment/variable-resolver';
 import type { Application } from '@agor/core/feathers';
 import { cloneRepo, getWorktreePath, createWorktree as gitCreateWorktree } from '@agor/core/git';
+import { renderTemplate } from '@agor/core/templates/handlebars-helpers';
 import type { AuthenticatedParams, QueryParams, Repo, Worktree } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 
@@ -40,51 +41,6 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
 
     this.repoRepo = repoRepo;
     this.app = app;
-  }
-
-  /**
-   * Override patch to recompute access URLs when environment_config changes
-   */
-  async patch(id: string, data: Partial<Repo>, params?: RepoParams): Promise<Repo> {
-    // Check if environment_config is being updated
-    const isUpdatingEnvConfig = !!data.environment_config;
-
-    // Perform the patch - cast since we're patching a single item by ID
-    const updatedRepo = (await super.patch(id, data, params)) as Repo;
-
-    // If environment config was updated, recompute URLs for all active worktrees
-    if (isUpdatingEnvConfig) {
-      console.log(
-        `🔄 Environment config updated for repo ${updatedRepo.slug} - recomputing access URLs...`
-      );
-
-      const worktreesService = this.app.service('worktrees');
-      const worktreesResult = await worktreesService.find({
-        query: { repo_id: id, $limit: 1000 },
-        paginate: false,
-      });
-
-      const worktrees = (
-        Array.isArray(worktreesResult) ? worktreesResult : worktreesResult.data
-      ) as Worktree[];
-
-      // Recompute URLs for each active worktree
-      for (const worktree of worktrees) {
-        const status = worktree.environment_instance?.status;
-        if (status === 'running' || status === 'starting') {
-          // Call recomputeAccessUrls method (exists on WorktreesService but not typed on base service)
-          await (
-            worktreesService as unknown as {
-              recomputeAccessUrls: (id: string) => Promise<Worktree>;
-            }
-          ).recomputeAccessUrls(worktree.worktree_id);
-        }
-      }
-
-      console.log(`✅ Recomputed access URLs for ${worktrees.length} worktree(s)`);
-    }
-
-    return updatedRepo;
   }
 
   /**
@@ -166,6 +122,45 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
 
     const worktreeUniqueId = autoAssignWorktreeUniqueId(existingWorktrees);
 
+    // Initialize static URLs from templates (if repo has environment config)
+    let app_url: string | undefined;
+    let health_check_url: string | undefined;
+
+    if (repo.environment_config) {
+      const templateContext = {
+        worktree: {
+          unique_id: worktreeUniqueId,
+          name: data.name,
+          path: worktreePath,
+        },
+        repo: {
+          slug: repo.slug,
+        },
+        custom: {}, // No custom context at creation time
+      };
+
+      // Render app_url from template
+      if (repo.environment_config.app_url_template) {
+        try {
+          app_url = renderTemplate(repo.environment_config.app_url_template, templateContext);
+        } catch (err) {
+          console.warn(`Failed to render app_url for ${data.name}:`, err);
+        }
+      }
+
+      // Render health_check_url from template
+      if (repo.environment_config.health_check?.url_template) {
+        try {
+          health_check_url = renderTemplate(
+            repo.environment_config.health_check.url_template,
+            templateContext
+          );
+        } catch (err) {
+          console.warn(`Failed to render health_check_url for ${data.name}:`, err);
+        }
+      }
+    }
+
     // Create worktree record in database using the service (broadcasts WebSocket event)
     const worktree = (await worktreesService.create(
       {
@@ -176,6 +171,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         base_ref: data.sourceBranch,
         new_branch: data.createBranch ?? false,
         worktree_unique_id: worktreeUniqueId,
+        app_url, // Static URL initialized from template
+        health_check_url, // Static URL initialized from template
         sessions: [],
         last_used: new Date().toISOString(),
         issue_url: data.issue_url,

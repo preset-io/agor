@@ -206,11 +206,6 @@ export interface WorktreesService extends AgorService<Worktree> {
    * Check environment health
    */
   checkHealth(id: string, params?: Params): Promise<Worktree>;
-
-  /**
-   * Recompute access URLs
-   */
-  recomputeAccessUrls(id: string, params?: Params): Promise<Worktree>;
 }
 
 /**

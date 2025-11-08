@@ -33,9 +33,8 @@ export function EnvironmentPill({
   const hasConfig = !!repo.environment_config;
   const env = worktree.environment_instance;
 
-  // Get URL from backend-computed access_urls
-  const environmentUrl =
-    env?.access_urls && env.access_urls.length > 0 ? env.access_urls[0].url : undefined;
+  // Get static app_url (user-editable, initialized from template)
+  const environmentUrl = worktree.app_url;
 
   // Case 1: No config at all - show grayed discovery pill
   if (!hasConfig) {

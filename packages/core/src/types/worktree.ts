@@ -36,6 +36,27 @@ export interface Worktree {
    */
   worktree_unique_id: number;
 
+  /**
+   * Static app URL (initialized from repo's app_url_template, then user-editable)
+   *
+   * Unlike access_urls (which is ephemeral runtime state), this is a persistent
+   * database field that users can edit directly. Templates are used only for
+   * initial setup when creating the worktree.
+   *
+   * Example: "http://localhost:5173"
+   */
+  app_url?: string;
+
+  /**
+   * Static health check URL (initialized from repo's health_check.url_template, then user-editable)
+   *
+   * Persistent URL used for environment health checks. Set once during worktree
+   * creation from templates, then user-controlled.
+   *
+   * Example: "http://localhost:5173/health"
+   */
+  health_check_url?: string;
+
   /** Timestamps */
   created_at: string;
   updated_at: string;

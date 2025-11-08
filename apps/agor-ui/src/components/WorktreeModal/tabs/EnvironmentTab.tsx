@@ -150,11 +150,18 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   const [isEditingTemplate, setIsEditingTemplate] = useState(false);
   const [upCommand, setUpCommand] = useState(repo.environment_config?.up_command || '');
   const [downCommand, setDownCommand] = useState(repo.environment_config?.down_command || '');
-  const [healthCheckUrl, setHealthCheckUrl] = useState(
+  const [healthCheckUrlTemplate, setHealthCheckUrlTemplate] = useState(
     repo.environment_config?.health_check?.url_template || ''
   );
-  const [appUrl, setAppUrl] = useState(repo.environment_config?.app_url_template || '');
+  const [appUrlTemplate, setAppUrlTemplate] = useState(
+    repo.environment_config?.app_url_template || ''
+  );
   const [logsCommand, setLogsCommand] = useState(repo.environment_config?.logs_command || '');
+
+  // Worktree static URLs state (editable, user-controlled)
+  const [isEditingUrls, setIsEditingUrls] = useState(false);
+  const [staticAppUrl, setStaticAppUrl] = useState(worktree.app_url || '');
+  const [staticHealthCheckUrl, setStaticHealthCheckUrl] = useState(worktree.health_check_url || '');
 
   // Custom context state (editable)
   const [isEditingContext, setIsEditingContext] = useState(false);
@@ -246,15 +253,22 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   // Check if template has unsaved changes
   const hasTemplateChanges = useMemo(() => {
     if (!repo.environment_config)
-      return upCommand || downCommand || healthCheckUrl || appUrl || logsCommand;
+      return upCommand || downCommand || healthCheckUrlTemplate || appUrlTemplate || logsCommand;
     return (
       upCommand !== repo.environment_config.up_command ||
       downCommand !== repo.environment_config.down_command ||
-      healthCheckUrl !== (repo.environment_config.health_check?.url_template || '') ||
-      appUrl !== (repo.environment_config.app_url_template || '') ||
+      healthCheckUrlTemplate !== (repo.environment_config.health_check?.url_template || '') ||
+      appUrlTemplate !== (repo.environment_config.app_url_template || '') ||
       logsCommand !== (repo.environment_config.logs_command || '')
     );
-  }, [upCommand, downCommand, healthCheckUrl, appUrl, logsCommand, repo.environment_config]);
+  }, [
+    upCommand,
+    downCommand,
+    healthCheckUrlTemplate,
+    appUrlTemplate,
+    logsCommand,
+    repo.environment_config,
+  ]);
 
   // Build template context for preview
   const templateContext = useMemo(() => {
@@ -297,13 +311,13 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     const newConfig: RepoEnvironmentConfig = {
       up_command: upCommand,
       down_command: downCommand,
-      health_check: healthCheckUrl
+      health_check: healthCheckUrlTemplate
         ? {
             type: 'http',
-            url_template: healthCheckUrl,
+            url_template: healthCheckUrlTemplate,
           }
         : undefined,
-      app_url_template: appUrl || undefined,
+      app_url_template: appUrlTemplate || undefined,
       logs_command: logsCommand || undefined,
     };
 
@@ -332,8 +346,8 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   const handleCancelTemplate = () => {
     setUpCommand(repo.environment_config?.up_command || '');
     setDownCommand(repo.environment_config?.down_command || '');
-    setHealthCheckUrl(repo.environment_config?.health_check?.url_template || '');
-    setAppUrl(repo.environment_config?.app_url_template || '');
+    setHealthCheckUrlTemplate(repo.environment_config?.health_check?.url_template || '');
+    setAppUrlTemplate(repo.environment_config?.app_url_template || '');
     setLogsCommand(repo.environment_config?.logs_command || '');
     setIsEditingTemplate(false);
   };
@@ -351,8 +365,8 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
 
   const upPreview = renderPreview(upCommand);
   const downPreview = renderPreview(downCommand);
-  const healthPreview = healthCheckUrl ? renderPreview(healthCheckUrl) : null;
-  const appUrlPreview = appUrl ? renderPreview(appUrl) : null;
+  const healthPreview = healthCheckUrlTemplate ? renderPreview(healthCheckUrlTemplate) : null;
+  const appUrlPreview = appUrlTemplate ? renderPreview(appUrlTemplate) : null;
   const logsPreview = logsCommand ? renderPreview(logsCommand) : null;
 
   // Get inferred state by combining runtime status + health check
@@ -615,8 +629,8 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                     Health Check URL (Optional)
                   </Typography.Text>
                   <Input
-                    value={healthCheckUrl}
-                    onChange={e => setHealthCheckUrl(e.target.value)}
+                    value={healthCheckUrlTemplate}
+                    onChange={e => setHealthCheckUrlTemplate(e.target.value)}
                     placeholder="http://localhost:{{add 9000 worktree.unique_id}}/health"
                     style={{ fontFamily: 'monospace', fontSize: 11 }}
                   />
@@ -631,8 +645,8 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                     App URL
                   </Typography.Text>
                   <Input
-                    value={appUrl}
-                    onChange={e => setAppUrl(e.target.value)}
+                    value={appUrlTemplate}
+                    onChange={e => setAppUrlTemplate(e.target.value)}
                     placeholder="http://localhost:{{add 5000 worktree.unique_id}}"
                     style={{ fontFamily: 'monospace', fontSize: 11 }}
                   />
@@ -673,8 +687,8 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
               <Space direction="vertical" size={4} style={{ width: '100%' }}>
                 <TemplateField label="Up Command" value={upCommand} />
                 <TemplateField label="Down Command" value={downCommand} />
-                <TemplateField label="Health Check URL" value={healthCheckUrl} />
-                <TemplateField label="App URL" value={appUrl} />
+                <TemplateField label="Health Check URL" value={healthCheckUrlTemplate} />
+                <TemplateField label="App URL" value={appUrlTemplate} />
                 <TemplateField label="Logs Command" value={logsCommand} />
               </Space>
             )}
@@ -843,6 +857,119 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                 >
                   {customContextJson}
                 </Paragraph>
+              )}
+            </div>
+
+            {/* Static URLs (Editable) */}
+            <div>
+              <Space
+                style={{
+                  width: '100%',
+                  justifyContent: 'space-between',
+                  marginBottom: 8,
+                }}
+              >
+                <Typography.Text strong style={{ fontSize: 13 }}>
+                  Environment URLs (Direct Edit)
+                </Typography.Text>
+                {!isEditingUrls && (
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<EditOutlined />}
+                    onClick={() => setIsEditingUrls(true)}
+                  >
+                    Edit
+                  </Button>
+                )}
+              </Space>
+              <Typography.Text
+                type="secondary"
+                style={{ fontSize: 11, display: 'block', marginBottom: 8 }}
+              >
+                Static URLs initialized from templates at worktree creation. Edit directly to
+                override.
+              </Typography.Text>
+              {isEditingUrls ? (
+                <>
+                  <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                    <div>
+                      <Typography.Text
+                        strong
+                        style={{ fontSize: 12, display: 'block', marginBottom: 4 }}
+                      >
+                        App URL
+                      </Typography.Text>
+                      <Input
+                        value={staticAppUrl}
+                        onChange={e => setStaticAppUrl(e.target.value)}
+                        placeholder="http://localhost:5173"
+                        style={{ fontFamily: 'monospace', fontSize: 11 }}
+                      />
+                    </div>
+                    <div>
+                      <Typography.Text
+                        strong
+                        style={{ fontSize: 12, display: 'block', marginBottom: 4 }}
+                      >
+                        Health Check URL (Optional)
+                      </Typography.Text>
+                      <Input
+                        value={staticHealthCheckUrl}
+                        onChange={e => setStaticHealthCheckUrl(e.target.value)}
+                        placeholder="http://localhost:5173/health"
+                        style={{ fontFamily: 'monospace', fontSize: 11 }}
+                      />
+                    </div>
+                  </Space>
+                  <Space style={{ marginTop: 8 }}>
+                    <Button
+                      type="primary"
+                      size="small"
+                      icon={<SaveOutlined />}
+                      onClick={() => {
+                        if (!onUpdateWorktree) return;
+                        onUpdateWorktree(worktree.worktree_id, {
+                          app_url: staticAppUrl || undefined,
+                          health_check_url: staticHealthCheckUrl || undefined,
+                        });
+                        setIsEditingUrls(false);
+                      }}
+                    >
+                      Save URLs
+                    </Button>
+                    <Button
+                      size="small"
+                      onClick={() => {
+                        setStaticAppUrl(worktree.app_url || '');
+                        setStaticHealthCheckUrl(worktree.health_check_url || '');
+                        setIsEditingUrls(false);
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                  </Space>
+                </>
+              ) : (
+                <Descriptions column={1} bordered size="small" style={{ fontSize: 11 }}>
+                  <Descriptions.Item label="App URL">
+                    <Typography.Text code copyable={staticAppUrl ? { text: staticAppUrl } : false}>
+                      {staticAppUrl || (
+                        <Typography.Text type="secondary">(not set)</Typography.Text>
+                      )}
+                    </Typography.Text>
+                  </Descriptions.Item>
+                  <Descriptions.Item label="Health Check URL">
+                    <Typography.Text
+                      code
+                      copyable={staticHealthCheckUrl ? { text: staticHealthCheckUrl } : false}
+                    >
+                      {staticHealthCheckUrl || (
+                        <Typography.Text type="secondary">(not set)</Typography.Text>
+                      )}
+                    </Typography.Text>
+                  </Descriptions.Item>
+                </Descriptions>
               )}
             </div>
 
