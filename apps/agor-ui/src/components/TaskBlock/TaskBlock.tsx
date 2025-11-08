@@ -322,18 +322,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
 
     // Task header shows when collapsed
     const taskHeader = (
-      <Flex
-        gap={token.sizeUnit * 2}
-        style={{
-          width: '100%',
-          background: taskHeaderGradient,
-          padding: taskHeaderGradient ? token.sizeUnit : 0,
-          marginLeft: taskHeaderGradient ? -token.sizeUnit : 0,
-          marginRight: taskHeaderGradient ? -token.sizeUnit : 0,
-          marginTop: taskHeaderGradient ? -token.sizeUnit : 0,
-          borderRadius: taskHeaderGradient ? `${token.borderRadius}px ${token.borderRadius}px 0 0` : 0,
-        }}
-      >
+      <Flex gap={token.sizeUnit * 2} style={{ width: '100%' }}>
         {/* Left column: Icons stacked vertically */}
         <Flex
           vertical
@@ -435,7 +424,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
             styles: {
               header: {
                 padding: token.sizeUnit * 2,
-                background: token.colorBgContainer,
+                background: taskHeaderGradient || token.colorBgContainer,
                 border: `1px solid ${token.colorBorder}`,
                 borderRadius: token.borderRadius * 1.5,
                 alignItems: 'flex-start',
