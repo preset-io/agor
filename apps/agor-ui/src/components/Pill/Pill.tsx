@@ -229,7 +229,7 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
 
   const pill = (
     <Tag icon={<PercentageOutlined />} color={getColor()} style={style}>
-      {percentage}%
+      {percentage}
     </Tag>
   );
 
