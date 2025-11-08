@@ -245,7 +245,7 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
             size={size}
             placeholder="Sandbox"
             popupMatchSelectWidth={false}
-            style={{ minWidth: 100 }}
+            style={{ minWidth: 80 }}
             options={CODEX_SANDBOX_MODES.map(({ value, label, description }) => ({
               label,
               value,
@@ -258,7 +258,7 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
             size={size}
             placeholder="Approval"
             popupMatchSelectWidth={false}
-            style={{ minWidth: 100 }}
+            style={{ minWidth: 80 }}
             options={CODEX_APPROVAL_POLICIES.map(({ value, label, description }) => ({
               label,
               value,
@@ -274,7 +274,7 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
       <Select
         value={effectiveValue}
         onChange={onChange}
-        style={{ minWidth: width || 120 }}
+        style={{ minWidth: 100 }}
         size={size}
         suffixIcon={<SafetyOutlined />}
         popupMatchSelectWidth={false}

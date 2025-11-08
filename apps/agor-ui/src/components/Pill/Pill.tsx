@@ -105,7 +105,7 @@ interface MessageCountPillProps extends BasePillProps {
 
 export const MessageCountPill: React.FC<MessageCountPillProps> = ({ count, style }) => (
   <Tag icon={<MessageOutlined />} color={PILL_COLORS.message} style={style}>
-    {count}
+    <span>{count}</span>
   </Tag>
 );
 

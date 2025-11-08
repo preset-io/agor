@@ -656,7 +656,7 @@ const SessionDrawer = ({
             users={users}
           />
           <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-            <Space size={8}>
+            <Space size={0}>
               {footerTimerTask && (
                 <TimerPill
                   status={footerTimerTask.status}
