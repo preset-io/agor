@@ -25,7 +25,8 @@ echo "📦 Initializing Agor environment..."
 pnpm agor init --skip-if-exists
 
 # Always ensure auth is enabled in docker (create/overwrite config for multiplayer mode)
-# Note: /home/agor is a volume mount, should already be owned by agor user
+# Fix volume permissions (volumes may be created with wrong ownership)
+sudo chown -R agor:agor /home/agor
 mkdir -p /home/agor/.agor
 cat > /home/agor/.agor/config.yaml <<EOF
 daemon:
