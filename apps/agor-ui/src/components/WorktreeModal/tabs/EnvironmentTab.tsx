@@ -280,65 +280,52 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
       custom: customContext,
     };
 
+    // Helper to render a template with error handling
+    const safeRenderTemplate = (template: string, fieldName: string): string | null => {
+      try {
+        return renderTemplate(template, context);
+      } catch (error) {
+        message.error(
+          `Failed to render ${fieldName}: ${error instanceof Error ? error.message : 'Unknown error'}`
+        );
+        return null;
+      }
+    };
+
     // Render all 5 fields from templates
     const updates: Partial<Worktree> = {};
 
     if (repo.environment_config.up_command) {
-      try {
-        updates.start_command = renderTemplate(repo.environment_config.up_command, context);
-      } catch (error) {
-        message.error(
-          `Failed to render start command: ${error instanceof Error ? error.message : 'Unknown error'}`
-        );
-        return;
-      }
+      const result = safeRenderTemplate(repo.environment_config.up_command, 'start command');
+      if (result === null) return;
+      updates.start_command = result;
     }
 
     if (repo.environment_config.down_command) {
-      try {
-        updates.stop_command = renderTemplate(repo.environment_config.down_command, context);
-      } catch (error) {
-        message.error(
-          `Failed to render stop command: ${error instanceof Error ? error.message : 'Unknown error'}`
-        );
-        return;
-      }
+      const result = safeRenderTemplate(repo.environment_config.down_command, 'stop command');
+      if (result === null) return;
+      updates.stop_command = result;
     }
 
     if (repo.environment_config.health_check?.url_template) {
-      try {
-        updates.health_check_url = renderTemplate(
-          repo.environment_config.health_check.url_template,
-          context
-        );
-      } catch (error) {
-        message.error(
-          `Failed to render health check URL: ${error instanceof Error ? error.message : 'Unknown error'}`
-        );
-        return;
-      }
+      const result = safeRenderTemplate(
+        repo.environment_config.health_check.url_template,
+        'health check URL'
+      );
+      if (result === null) return;
+      updates.health_check_url = result;
     }
 
     if (repo.environment_config.app_url_template) {
-      try {
-        updates.app_url = renderTemplate(repo.environment_config.app_url_template, context);
-      } catch (error) {
-        message.error(
-          `Failed to render app URL: ${error instanceof Error ? error.message : 'Unknown error'}`
-        );
-        return;
-      }
+      const result = safeRenderTemplate(repo.environment_config.app_url_template, 'app URL');
+      if (result === null) return;
+      updates.app_url = result;
     }
 
     if (repo.environment_config.logs_command) {
-      try {
-        updates.logs_command = renderTemplate(repo.environment_config.logs_command, context);
-      } catch (error) {
-        message.error(
-          `Failed to render logs command: ${error instanceof Error ? error.message : 'Unknown error'}`
-        );
-        return;
-      }
+      const result = safeRenderTemplate(repo.environment_config.logs_command, 'logs command');
+      if (result === null) return;
+      updates.logs_command = result;
     }
 
     // Update worktree with regenerated values
