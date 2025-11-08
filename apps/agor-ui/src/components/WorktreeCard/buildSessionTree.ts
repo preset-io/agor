@@ -64,9 +64,9 @@ export function buildSessionTree(sessions: Session[]): SessionTreeNode[] {
 
     const node: SessionTreeNode = {
       key: session.session_id,
+      title: '', // Empty string to prevent default tooltip (titleRender handles display)
       session,
       relationshipType,
-      // title will be rendered by titleRender prop
     };
 
     if (children.length > 0) {
