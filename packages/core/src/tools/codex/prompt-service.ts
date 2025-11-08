@@ -3,6 +3,11 @@
  *
  * Handles live execution of prompts against Codex sessions using OpenAI Codex SDK.
  * Wraps the @openai/codex-sdk for thread management and execution.
+ *
+ * IMPORTANT: This service caches the Codex SDK instance and only recreates it when
+ * the API key or MCP server configuration actually changes. This prevents a memory leak
+ * where new Codex CLI processes would be spawned on every prompt execution without cleanup.
+ * See issue #133 for details.
  */
 
 import * as fs from 'node:fs/promises';
@@ -92,6 +97,7 @@ export type CodexStreamEvent =
 export class CodexPromptService {
   private codex: Codex;
   private lastMCPServersHash: string | null = null;
+  private lastApiKey: string | null = null;
   private stopRequested = new Map<SessionID, boolean>();
   private apiKey: string | undefined;
   private db?: Database;
@@ -107,32 +113,48 @@ export class CodexPromptService {
     // Store API key for reinitializing SDK
     this.apiKey = apiKey;
     this.db = db;
+    const initialApiKey = apiKey || process.env.OPENAI_API_KEY || '';
+    this.lastApiKey = initialApiKey;
     // Initialize Codex SDK
     this.codex = new Codex({
-      apiKey: apiKey || process.env.OPENAI_API_KEY,
+      apiKey: initialApiKey,
     });
   }
 
   /**
    * Reinitialize Codex SDK to pick up config changes
    * Call this after updating ~/.codex/config.toml
+   *
+   * NOTE: This is only called when MCP server config changes, which requires
+   * a full SDK restart to pick up the new config.toml file
    */
   private reinitializeCodex(): void {
     console.log('🔄 [Codex] Reinitializing SDK to pick up config changes...');
+    const apiKey = this.apiKey || process.env.OPENAI_API_KEY || '';
     this.codex = new Codex({
-      apiKey: this.apiKey || process.env.OPENAI_API_KEY,
+      apiKey,
     });
+    this.lastApiKey = apiKey;
     console.log('✅ [Codex] SDK reinitialized');
   }
 
   /**
    * Refresh Codex client with latest API key from config
    * Ensures hot-reload of credentials from Settings UI
+   *
+   * IMPORTANT: Only recreates Codex instance if API key actually changed
+   * This prevents memory leak from spawning multiple Codex CLI processes
    */
-  private refreshClient(): void {
-    this.codex = new Codex({
-      apiKey: getCredential('OPENAI_API_KEY'),
-    });
+  private refreshClient(currentApiKey: string): void {
+    // Only recreate if API key changed (prevents memory leak - issue #133)
+    if (this.lastApiKey !== currentApiKey) {
+      console.log('🔄 [Codex] API key changed, reinitializing SDK...');
+      this.codex = new Codex({
+        apiKey: currentApiKey,
+      });
+      this.lastApiKey = currentApiKey;
+      console.log('✅ [Codex] SDK reinitialized with new API key');
+    }
   }
 
   /**
@@ -358,8 +380,11 @@ ${networkAccessToml}${mcpServersToml}`;
       userId: userIdForApiKey,
       db: this.db,
     });
+
+    let currentApiKey = '';
     if (resolvedApiKey) {
       process.env.OPENAI_API_KEY = resolvedApiKey;
+      currentApiKey = resolvedApiKey;
       console.log(
         `🔑 [Codex] Using per-user/global API key for ${userIdForApiKey?.substring(0, 8) ?? 'unknown user'}`
       );
@@ -368,9 +393,9 @@ ${networkAccessToml}${mcpServersToml}`;
       delete process.env.OPENAI_API_KEY;
     }
 
-    // Recreate Codex client with fresh API key on every prompt
-    // This ensures hot-reload of credentials from Settings UI (and picks up per-user key from process.env)
-    this.refreshClient();
+    // Only recreate Codex client if API key changed (prevents memory leak - issue #133)
+    // This ensures hot-reload of credentials from Settings UI while avoiding process accumulation
+    this.refreshClient(currentApiKey);
 
     console.log(`🔍 [Codex] Starting prompt execution for session ${sessionId.substring(0, 8)}`);
     console.log(`   Permission mode: ${permissionMode || 'not specified (will use default)'}`);
