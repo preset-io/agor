@@ -320,7 +320,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
         : 0;
 
     // Color-code based on usage: green (<50%), yellow (50-80%), red (>80%)
-    const _getContextWindowColor = () => {
+    const getContextWindowColor = () => {
       if (contextWindowPercentage < 50) {
         return token.colorSuccessBg; // Light green
       }
@@ -329,6 +329,12 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       }
       return token.colorErrorBg; // Light red
     };
+
+    // Create gradient background for footer based on context window usage
+    const footerBackground =
+      task.context_window && task.context_window_limit
+        ? `linear-gradient(to right, ${getContextWindowColor()} ${contextWindowPercentage}%, transparent ${contextWindowPercentage}%)`
+        : 'transparent';
 
     // Task header shows when collapsed
     const taskHeader = (
@@ -364,7 +370,18 @@ export const TaskBlock = React.memo<TaskBlockProps>(
           </Flex>
 
           {/* Task metadata */}
-          <Flex wrap gap={token.sizeUnit * 1.5}>
+          <Flex
+            wrap
+            gap={token.sizeUnit * 1.5}
+            style={{
+              background: footerBackground,
+              padding: `${token.sizeUnit}px ${token.sizeUnit * 1.5}px`,
+              marginLeft: -token.sizeUnit * 1.5,
+              marginRight: -token.sizeUnit * 1.5,
+              marginBottom: -token.sizeUnit,
+              borderRadius: `0 0 ${token.borderRadius}px ${token.borderRadius}px`,
+            }}
+          >
             <TimerPill
               status={task.status}
               startedAt={task.message_range?.start_timestamp || task.created_at}
