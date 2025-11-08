@@ -276,7 +276,7 @@ const ContextWindowPopoverContent: React.FC<{
       {/* Primary info - always visible */}
       <div style={{ marginBottom: 16 }}>
         <div style={{ fontWeight: 600, fontSize: '1.05em', marginBottom: 8 }}>
-          Context Window Usage
+          Context Window Usage (Estimated)
         </div>
         <div style={{ fontSize: '1.1em', fontFamily: token.fontFamilyCode }}>
           {used.toLocaleString()} / {limit.toLocaleString()}{' '}
