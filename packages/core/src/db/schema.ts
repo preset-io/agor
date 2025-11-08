@@ -94,6 +94,11 @@ export const sessions = sqliteTable(
         // Model config (session-level model selection)
         model_config?: Session['model_config'];
 
+        // Context window tracking (cumulative usage from latest task)
+        current_context_usage?: number; // Tokens currently in context
+        context_window_limit?: number; // Model's max context (e.g., 200K)
+        last_context_update_at?: string; // ISO 8601 timestamp
+
         // Custom context for Handlebars templates
         custom_context?: Record<string, unknown> & {
           // Scheduled run metadata (populated by scheduler)

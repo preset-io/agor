@@ -52,6 +52,9 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       permission_config: row.data.permission_config,
       scheduled_run_at: row.scheduled_run_at ?? undefined,
       scheduled_from_worktree: row.scheduled_from_worktree ?? false,
+      current_context_usage: row.data.current_context_usage,
+      context_window_limit: row.data.context_window_limit,
+      last_context_update_at: row.data.last_context_update_at,
     };
   }
 
@@ -104,6 +107,9 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
             }
           : undefined,
         custom_context: session.custom_context,
+        current_context_usage: session.current_context_usage,
+        context_window_limit: session.context_window_limit,
+        last_context_update_at: session.last_context_update_at,
       },
     };
   }

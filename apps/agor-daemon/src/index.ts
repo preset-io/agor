@@ -81,7 +81,11 @@ import type {
   User,
 } from '@agor/core/types';
 import { SessionStatus, TaskStatus } from '@agor/core/types';
-import { calculateContextWindowUsage } from '@agor/core/utils/context-window';
+import {
+  calculateContextWindowUsage,
+  getContextWindowLimit,
+  getSessionContextUsage,
+} from '@agor/core/utils/context-window';
 import type { TokenUsage } from '@agor/core/utils/pricing';
 // Import Claude SDK's PermissionMode type for ClaudeTool method signatures
 // (Agor's PermissionMode is a superset of all tool permission modes)
@@ -1924,7 +1928,9 @@ async function main() {
                     usage,
                     // Save execution metadata from result
                     duration_ms:
-                      'durationMs' in result ? (result.durationMs as number | undefined) : undefined,
+                      'durationMs' in result
+                        ? (result.durationMs as number | undefined)
+                        : undefined,
                     agent_session_id:
                       'agentSessionId' in result
                         ? (result.agentSessionId as string | undefined)
@@ -1936,7 +1942,9 @@ async function main() {
                         : undefined,
                     model: 'model' in result ? (result.model as string | undefined) : undefined,
                     model_usage:
-                      'modelUsage' in result ? (result.modelUsage as Task['model_usage']) : undefined,
+                      'modelUsage' in result
+                        ? (result.modelUsage as Task['model_usage'])
+                        : undefined,
                   },
                   'Task'
                 );
@@ -1946,12 +1954,36 @@ async function main() {
                 }
               }
 
+              // Calculate session-level context window usage from all tasks
+              // Algorithm from https://codelynx.dev/posts/calculate-claude-code-context
+              const allTasks = await tasksService.find({
+                query: { session_id: id },
+                paginate: false,
+              });
+              const tasksArray = Array.isArray(allTasks) ? allTasks : [];
+
+              const currentContextUsage = getSessionContextUsage(tasksArray as Task[]);
+              const contextWindowLimit = getContextWindowLimit(tasksArray as Task[]);
+
+              if (currentContextUsage !== undefined) {
+                const percentage = contextWindowLimit
+                  ? ((currentContextUsage / contextWindowLimit) * 100).toFixed(1)
+                  : 'N/A';
+                console.log(
+                  `📊 Session context: ${currentContextUsage.toLocaleString()}/${contextWindowLimit?.toLocaleString() || '?'} (${percentage}%)`
+                );
+              }
+
               await safePatch(
                 sessionsService,
                 id,
                 {
                   message_count: session.message_count + totalMessages,
                   status: SessionStatus.IDLE,
+                  current_context_usage: currentContextUsage,
+                  context_window_limit: contextWindowLimit,
+                  last_context_update_at:
+                    currentContextUsage !== undefined ? new Date().toISOString() : undefined,
                 },
                 'Session'
               );

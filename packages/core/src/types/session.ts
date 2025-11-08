@@ -196,6 +196,36 @@ export interface Session {
     scheduled_run?: ScheduledRunMetadata;
   };
 
+  // ===== Context Window Tracking =====
+
+  /**
+   * Current context window usage (cumulative tokens in context)
+   *
+   * Calculated as: input_tokens + cache_read_tokens + cache_creation_tokens
+   * from the most recent task with usage data.
+   *
+   * Based on algorithm from: https://codelynx.dev/posts/calculate-claude-code-context
+   *
+   * Note: Each API turn returns cumulative totals, so we only need the latest task's usage.
+   * We do NOT sum across tasks (that would double-count cached content).
+   */
+  current_context_usage?: number;
+
+  /**
+   * Context window limit for this session's model
+   *
+   * Examples:
+   * - Claude Sonnet: 200,000 tokens
+   * - Claude Opus: 200,000 tokens
+   * - Extended context models: varies
+   */
+  context_window_limit?: number;
+
+  /**
+   * Timestamp when context was last updated (ISO 8601)
+   */
+  last_context_update_at?: string;
+
   // ===== Scheduler Tracking =====
 
   /**
