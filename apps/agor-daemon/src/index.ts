@@ -1807,6 +1807,14 @@ async function main() {
                     },
                     tool_use_count: toolUseCount,
                     usage,
+                    // Save execution metadata from result
+                    duration_ms: 'durationMs' in result ? result.durationMs : undefined,
+                    agent_session_id: 'agentSessionId' in result ? result.agentSessionId : undefined,
+                    context_window: 'contextWindow' in result ? result.contextWindow : undefined,
+                    context_window_limit:
+                      'contextWindowLimit' in result ? result.contextWindowLimit : undefined,
+                    model: 'model' in result ? result.model : undefined,
+                    model_usage: 'modelUsage' in result ? result.modelUsage : undefined,
                   },
                   'Task'
                 );

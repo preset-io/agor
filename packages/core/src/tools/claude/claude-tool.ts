@@ -189,6 +189,8 @@ export class ClaudeTool implements ITool {
     agentSessionId?: string;
     contextWindow?: number;
     contextWindowLimit?: number;
+    model?: string;
+    modelUsage?: unknown;
   }> {
     if (!this.promptService || !this.messagesRepo) {
       throw new Error('ClaudeTool not initialized with repositories for live execution');
@@ -248,6 +250,7 @@ export class ClaudeTool implements ITool {
     let durationMs: number | undefined;
     let contextWindow: number | undefined;
     let contextWindowLimit: number | undefined;
+    let modelUsage: unknown | undefined;
 
     for await (const event of this.promptService.promptSessionStreaming(
       sessionId,
@@ -341,8 +344,11 @@ export class ClaudeTool implements ITool {
         durationMs = event.duration_ms;
       }
       if ('model_usage' in event && event.model_usage) {
+        // Save full model usage for later (per-model breakdown)
+        modelUsage = event.model_usage;
+
         // Extract context window data from model usage
-        const modelUsage = event.model_usage as Record<
+        const modelUsageTyped = event.model_usage as Record<
           string,
           {
             inputTokens: number;
@@ -356,7 +362,7 @@ export class ClaudeTool implements ITool {
         // (each model has its own context window, not shared)
         let maxUsage = 0;
         let maxLimit = 0;
-        for (const modelData of Object.values(modelUsage)) {
+        for (const modelData of Object.values(modelUsageTyped)) {
           const usage =
             (modelData.inputTokens || 0) +
             (modelData.outputTokens || 0) +
@@ -483,6 +489,8 @@ export class ClaudeTool implements ITool {
       agentSessionId: capturedAgentSessionId,
       contextWindow,
       contextWindowLimit,
+      model: resolvedModel,
+      modelUsage,
     };
   }
 
@@ -541,6 +549,8 @@ export class ClaudeTool implements ITool {
     agentSessionId?: string;
     contextWindow?: number;
     contextWindowLimit?: number;
+    model?: string;
+    modelUsage?: unknown;
   }> {
     if (!this.promptService || !this.messagesRepo) {
       throw new Error('ClaudeTool not initialized with repositories for live execution');
@@ -571,6 +581,7 @@ export class ClaudeTool implements ITool {
     let durationMs: number | undefined;
     let contextWindow: number | undefined;
     let contextWindowLimit: number | undefined;
+    let modelUsage: unknown | undefined;
 
     for await (const event of this.promptService.promptSessionStreaming(
       sessionId,
@@ -597,8 +608,11 @@ export class ClaudeTool implements ITool {
         durationMs = event.duration_ms;
       }
       if ('model_usage' in event && event.model_usage) {
+        // Save full model usage for later (per-model breakdown)
+        modelUsage = event.model_usage;
+
         // Extract context window data from model usage
-        const modelUsage = event.model_usage as Record<
+        const modelUsageTyped = event.model_usage as Record<
           string,
           {
             inputTokens: number;
@@ -612,7 +626,7 @@ export class ClaudeTool implements ITool {
         // (each model has its own context window, not shared)
         let maxUsage = 0;
         let maxLimit = 0;
-        for (const modelData of Object.values(modelUsage)) {
+        for (const modelData of Object.values(modelUsageTyped)) {
           const usage =
             (modelData.inputTokens || 0) +
             (modelData.outputTokens || 0) +
@@ -690,6 +704,8 @@ export class ClaudeTool implements ITool {
       agentSessionId: capturedAgentSessionId,
       contextWindow,
       contextWindowLimit,
+      model: resolvedModel,
+      modelUsage,
     };
   }
 

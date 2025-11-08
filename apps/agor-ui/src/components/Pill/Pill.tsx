@@ -168,9 +168,25 @@ export const TokenCountPill: React.FC<TokenCountPillProps> = ({
 interface ContextWindowPillProps extends BasePillProps {
   used: number;
   limit: number;
+  // Optional: per-model breakdown (for multi-model sessions like Claude Code)
+  modelUsage?: Record<
+    string,
+    {
+      inputTokens: number;
+      outputTokens: number;
+      cacheReadInputTokens?: number;
+      cacheCreationInputTokens?: number;
+      contextWindow: number;
+    }
+  >;
 }
 
-export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({ used, limit, style }) => {
+export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
+  used,
+  limit,
+  modelUsage,
+  style,
+}) => {
   const percentage = Math.round((used / limit) * 100);
 
   // Color-code based on usage: green (<50%), yellow (50-80%), red (>80%)
@@ -186,6 +202,28 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({ used, limi
         Used: {used.toLocaleString()} / {limit.toLocaleString()}
       </div>
       <div>Percentage: {percentage}%</div>
+      {modelUsage && Object.keys(modelUsage).length > 0 && (
+        <>
+          <div style={{ marginTop: 8, fontWeight: 'bold' }}>Per-Model Breakdown:</div>
+          {Object.entries(modelUsage).map(([modelId, usage]) => {
+            const modelUsed =
+              (usage.inputTokens || 0) +
+              (usage.outputTokens || 0) +
+              (usage.cacheReadInputTokens || 0) +
+              (usage.cacheCreationInputTokens || 0);
+            const modelLimit = usage.contextWindow || 0;
+            const modelPercentage = modelLimit > 0 ? Math.round((modelUsed / modelLimit) * 100) : 0;
+            return (
+              <div key={modelId} style={{ marginTop: 4, fontSize: '0.9em' }}>
+                <div style={{ fontWeight: 500 }}>{modelId}:</div>
+                <div style={{ marginLeft: 8 }}>
+                  {modelUsed.toLocaleString()} / {modelLimit.toLocaleString()} ({modelPercentage}%)
+                </div>
+              </div>
+            );
+          })}
+        </>
+      )}
     </div>
   );
 

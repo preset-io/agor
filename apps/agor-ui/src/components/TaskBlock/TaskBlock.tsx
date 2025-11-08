@@ -396,7 +396,11 @@ export const TaskBlock = React.memo<TaskBlockProps>(
               />
             )}
             {task.context_window && task.context_window_limit && (
-              <ContextWindowPill used={task.context_window} limit={task.context_window_limit} />
+              <ContextWindowPill
+                used={task.context_window}
+                limit={task.context_window_limit}
+                modelUsage={task.model_usage}
+              />
             )}
             {task.model && task.model !== sessionModel && <ModelPill model={task.model} />}
             {task.git_state.sha_at_start && task.git_state.sha_at_start !== 'unknown' && (

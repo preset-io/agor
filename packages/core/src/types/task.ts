@@ -70,6 +70,19 @@ export interface Task {
   // Model (resolved model ID used for this task, e.g., "claude-sonnet-4-5-20250929")
   model?: string;
 
+  // Per-model usage breakdown (for multi-model sessions like Claude Code)
+  // Maps model ID to usage stats including context window per model
+  model_usage?: Record<
+    string,
+    {
+      inputTokens: number;
+      outputTokens: number;
+      cacheReadInputTokens?: number;
+      cacheCreationInputTokens?: number;
+      contextWindow: number; // Context window limit for this specific model
+    }
+  >;
+
   // Report (auto-generated after task completion)
   report?: {
     /**

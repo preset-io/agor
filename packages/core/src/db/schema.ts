@@ -168,6 +168,7 @@ export const tasks = sqliteTable(
         agent_session_id?: string;
         context_window?: number;
         context_window_limit?: number;
+        model_usage?: Task['model_usage'];
 
         report?: Task['report'];
         permission_request?: Task['permission_request'];
