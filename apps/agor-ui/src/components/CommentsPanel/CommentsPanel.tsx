@@ -151,7 +151,7 @@ const EmojiPickerButton: React.FC<{
       trigger="click"
       open={pickerOpen}
       onOpenChange={setPickerOpen}
-      placement="topLeft"
+      placement="right"
     >
       <Button
         type="text"
