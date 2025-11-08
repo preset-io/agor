@@ -207,10 +207,16 @@ const SessionDrawer = ({
       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
     if (tasksWithContext.length > 0) {
+      const task = tasksWithContext[0];
       return {
-        used: tasksWithContext[0].context_window!,
-        limit: tasksWithContext[0].context_window_limit!,
-        modelUsage: tasksWithContext[0].model_usage,
+        used: task.context_window!,
+        limit: task.context_window_limit!,
+        taskMetadata: {
+          usage: task.usage,
+          model: task.model,
+          model_usage: task.model_usage,
+          duration_ms: task.duration_ms,
+        },
       };
     }
     return null;
@@ -691,7 +697,7 @@ const SessionDrawer = ({
                 <ContextWindowPill
                   used={latestContextWindow.used}
                   limit={latestContextWindow.limit}
-                  modelUsage={latestContextWindow.modelUsage}
+                  taskMetadata={latestContextWindow.taskMetadata}
                 />
               )}
             </Space>

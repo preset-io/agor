@@ -389,7 +389,12 @@ export const TaskBlock = React.memo<TaskBlockProps>(
               <ContextWindowPill
                 used={task.context_window}
                 limit={task.context_window_limit}
-                modelUsage={task.model_usage}
+                taskMetadata={{
+                  usage: task.usage,
+                  model: task.model,
+                  model_usage: task.model_usage,
+                  duration_ms: task.duration_ms,
+                }}
               />
             )}
             {task.model && task.model !== sessionModel && <ModelPill model={task.model} />}

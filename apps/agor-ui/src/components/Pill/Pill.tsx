@@ -168,23 +168,35 @@ export const TokenCountPill: React.FC<TokenCountPillProps> = ({
 interface ContextWindowPillProps extends BasePillProps {
   used: number;
   limit: number;
-  // Optional: per-model breakdown (for multi-model sessions like Claude Code)
-  modelUsage?: Record<
-    string,
-    {
-      inputTokens: number;
-      outputTokens: number;
-      cacheReadInputTokens?: number;
-      cacheCreationInputTokens?: number;
-      contextWindow: number;
-    }
-  >;
+  // Optional: Full task metadata for detailed tooltip
+  taskMetadata?: {
+    usage?: {
+      input_tokens?: number;
+      output_tokens?: number;
+      cache_creation_tokens?: number;
+      cache_read_tokens?: number;
+      total_tokens?: number;
+      estimated_cost_usd?: number;
+    };
+    model?: string;
+    model_usage?: Record<
+      string,
+      {
+        inputTokens: number;
+        outputTokens: number;
+        cacheReadInputTokens?: number;
+        cacheCreationInputTokens?: number;
+        contextWindow: number;
+      }
+    >;
+    duration_ms?: number;
+  };
 }
 
 export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
   used,
   limit,
-  modelUsage,
+  taskMetadata,
   style,
 }) => {
   const percentage = Math.round((used / limit) * 100);
@@ -197,31 +209,61 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
   };
 
   const tooltipContent = (
-    <div>
+    <div style={{ maxWidth: 400 }}>
+      <div style={{ fontWeight: 'bold', marginBottom: 8 }}>Context Window Usage</div>
       <div>
-        Used: {used.toLocaleString()} / {limit.toLocaleString()}
+        Input tokens: {used.toLocaleString()} / {limit.toLocaleString()} ({percentage}%)
       </div>
-      <div>Percentage: {percentage}%</div>
-      {modelUsage && Object.keys(modelUsage).length > 0 && (
+
+      {taskMetadata?.usage && (
         <>
-          <div style={{ marginTop: 8, fontWeight: 'bold' }}>Per-Model Breakdown:</div>
-          {Object.entries(modelUsage).map(([modelId, usage]) => {
-            const modelUsed =
-              (usage.inputTokens || 0) +
-              (usage.outputTokens || 0) +
-              (usage.cacheReadInputTokens || 0) +
-              (usage.cacheCreationInputTokens || 0);
-            const modelLimit = usage.contextWindow || 0;
-            const modelPercentage = modelLimit > 0 ? Math.round((modelUsed / modelLimit) * 100) : 0;
-            return (
-              <div key={modelId} style={{ marginTop: 4, fontSize: '0.9em' }}>
-                <div style={{ fontWeight: 500 }}>{modelId}:</div>
-                <div style={{ marginLeft: 8 }}>
-                  {modelUsed.toLocaleString()} / {modelLimit.toLocaleString()} ({modelPercentage}%)
-                </div>
+          <div style={{ marginTop: 12, fontWeight: 'bold' }}>Token Breakdown:</div>
+          <div style={{ fontSize: '0.9em', marginLeft: 8 }}>
+            <div>Input (fresh): {taskMetadata.usage.input_tokens?.toLocaleString() || 0}</div>
+            <div>Output: {taskMetadata.usage.output_tokens?.toLocaleString() || 0}</div>
+            <div>
+              Cache creation: {taskMetadata.usage.cache_creation_tokens?.toLocaleString() || 0}
+            </div>
+            <div>Cache read: {taskMetadata.usage.cache_read_tokens?.toLocaleString() || 0}</div>
+            <div>Total: {taskMetadata.usage.total_tokens?.toLocaleString() || 0}</div>
+            {taskMetadata.usage.estimated_cost_usd !== undefined && (
+              <div>Cost: ${taskMetadata.usage.estimated_cost_usd.toFixed(4)}</div>
+            )}
+          </div>
+        </>
+      )}
+
+      {taskMetadata?.model && (
+        <div style={{ marginTop: 8, fontSize: '0.9em' }}>
+          <span style={{ fontWeight: 500 }}>Model:</span> {taskMetadata.model}
+        </div>
+      )}
+
+      {taskMetadata?.duration_ms !== undefined && (
+        <div style={{ marginTop: 4, fontSize: '0.9em' }}>
+          <span style={{ fontWeight: 500 }}>Duration:</span> {(taskMetadata.duration_ms / 1000).toFixed(2)}s
+        </div>
+      )}
+
+      {taskMetadata?.model_usage && Object.keys(taskMetadata.model_usage).length > 0 && (
+        <>
+          <div style={{ marginTop: 12, fontWeight: 'bold' }}>Per-Model Usage:</div>
+          {Object.entries(taskMetadata.model_usage).map(([modelId, usage]) => (
+            <div key={modelId} style={{ marginTop: 8, fontSize: '0.85em', marginLeft: 8 }}>
+              <div style={{ fontWeight: 500 }}>{modelId}:</div>
+              <div style={{ marginLeft: 8 }}>
+                <div>Input: {usage.inputTokens?.toLocaleString() || 0}</div>
+                <div>Output: {usage.outputTokens?.toLocaleString() || 0}</div>
+                {usage.cacheCreationInputTokens !== undefined && (
+                  <div>Cache creation: {usage.cacheCreationInputTokens.toLocaleString()}</div>
+                )}
+                {usage.cacheReadInputTokens !== undefined && (
+                  <div>Cache read: {usage.cacheReadInputTokens.toLocaleString()}</div>
+                )}
+                <div>Limit: {usage.contextWindow?.toLocaleString() || 0}</div>
               </div>
-            );
-          })}
+            </div>
+          ))}
         </>
       )}
     </div>
