@@ -3,13 +3,20 @@ set -e
 
 echo "🚀 Starting Agor development environment..."
 
-# Re-run pnpm install to sync any package.json changes since build
-# Uses --prefer-frozen-lockfile to avoid full reinstall when nothing changed
-# Use yes pipe to auto-confirm any prompts if lockfile needs update
-echo "📦 Syncing dependencies (if package.json changed)..."
-yes | pnpm install --prefer-frozen-lockfile --reporter=default 2>&1 | grep -vE "(Already up to date|up to date, audited)" || true
+# Check if package.json has changed since build (compare timestamps or checksums)
+# Only run install if package.json is newer than node_modules
+if [ /app/package.json -nt /app/node_modules/.modules.yaml ] || \
+   [ /app/apps/agor-daemon/package.json -nt /app/apps/agor-daemon/node_modules ] || \
+   [ /app/apps/agor-cli/package.json -nt /app/apps/agor-cli/node_modules ] || \
+   [ /app/apps/agor-ui/package.json -nt /app/apps/agor-ui/node_modules ] || \
+   [ /app/packages/core/package.json -nt /app/packages/core/node_modules ]; then
+  echo "📦 Package.json changed, syncing dependencies..."
+  yes | pnpm install --prefer-frozen-lockfile --reporter=default
+else
+  echo "📦 Dependencies up to date (skipping install)"
+fi
 
-# Initialize husky git hooks (required in Docker since --prefer-frozen-lockfile skips post-install hooks)
+# Initialize husky git hooks (required for git commit hooks)
 echo "🎣 Initializing git hooks..."
 pnpm husky install
 
