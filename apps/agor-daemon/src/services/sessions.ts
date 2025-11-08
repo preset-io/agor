@@ -6,6 +6,7 @@
  */
 
 import { type Database, SessionRepository } from '@agor/core/db';
+import type { Application } from '@agor/core/feathers';
 import type { Paginated, QueryParams, Session, TaskID } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
@@ -24,8 +25,9 @@ export type SessionParams = QueryParams<{
  */
 export class SessionsService extends DrizzleService<Session, Partial<Session>, SessionParams> {
   private sessionRepo: SessionRepository;
+  private app: Application;
 
-  constructor(db: Database) {
+  constructor(db: Database, app: Application) {
     const sessionRepo = new SessionRepository(db);
     super(sessionRepo, {
       id: 'session_id',
@@ -38,6 +40,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     });
 
     this.sessionRepo = sessionRepo;
+    this.app = app;
   }
 
   /**
@@ -96,6 +99,10 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
    * Custom method: Spawn a child session
    *
    * Creates a new session for delegating a subsession to another agent.
+   *
+   * Settings inheritance:
+   * - If spawning the same agentic tool → inherit parent's settings (permission_config, model_config)
+   * - If spawning a different tool → use user's preferred settings for that tool
    */
   async spawn(
     id: string,
@@ -108,10 +115,63 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     params?: SessionParams
   ): Promise<Session> {
     const parent = await this.get(id, params);
+    const targetTool = data.agentic_tool || parent.agentic_tool;
+    const isSameTool = targetTool === parent.agentic_tool;
+
+    // Determine settings based on whether we're spawning the same tool or a different one
+    let permissionConfig = parent.permission_config;
+    let modelConfig = parent.model_config;
+
+    if (!isSameTool) {
+      // Spawning a different tool - fetch user preferences
+      // We need access to the users service to get preferences
+      const userId = parent.created_by;
+      if (userId && this.app) {
+        try {
+          const user = await this.app.service('users').get(userId);
+          const toolDefaults = user?.default_agentic_config?.[targetTool];
+
+          if (toolDefaults) {
+            // Use user's preferred settings for this tool
+            permissionConfig = {
+              mode: toolDefaults.permissionMode,
+              allowedTools: [],
+              ...(targetTool === 'codex' &&
+              toolDefaults.codexSandboxMode &&
+              toolDefaults.codexApprovalPolicy
+                ? {
+                    codex: {
+                      sandboxMode: toolDefaults.codexSandboxMode,
+                      approvalPolicy: toolDefaults.codexApprovalPolicy,
+                      networkAccess: toolDefaults.codexNetworkAccess,
+                    },
+                  }
+                : {}),
+            };
+
+            if (toolDefaults.modelConfig) {
+              modelConfig = {
+                mode: toolDefaults.modelConfig.mode || 'alias',
+                model: toolDefaults.modelConfig.model || '',
+                updated_at: new Date().toISOString(),
+                thinkingMode: toolDefaults.modelConfig.thinkingMode,
+                manualThinkingTokens: toolDefaults.modelConfig.manualThinkingTokens,
+              };
+            }
+          }
+        } catch (error) {
+          // If we can't fetch user preferences, fall back to parent settings
+          console.warn(
+            'Could not fetch user preferences for spawned session, using parent settings:',
+            error
+          );
+        }
+      }
+    }
 
     const spawnedSession = await this.create(
       {
-        agentic_tool: data.agentic_tool || parent.agentic_tool,
+        agentic_tool: targetTool,
         status: SessionStatus.IDLE,
         title: data.title || data.prompt.substring(0, 100), // Use provided title or first 100 chars
         description: data.prompt,
@@ -126,6 +186,8 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
         contextFiles: [...(parent.contextFiles || [])],
         tasks: [],
         message_count: 0,
+        permission_config: permissionConfig,
+        model_config: modelConfig,
         // Don't copy sdk_session_id - spawn will get its own via forkSession:true
       },
       params
@@ -259,6 +321,6 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
 /**
  * Service factory function
  */
-export function createSessionsService(db: Database): SessionsService {
-  return new SessionsService(db);
+export function createSessionsService(db: Database, app: Application): SessionsService {
+  return new SessionsService(db, app);
 }

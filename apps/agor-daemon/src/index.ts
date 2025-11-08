@@ -659,7 +659,8 @@ async function main() {
   console.log('✅ Database ready');
 
   // Register core services
-  app.use('/sessions', createSessionsService(db));
+  // NOTE: Pass app instance for user preferences access (needed for cross-tool spawning)
+  app.use('/sessions', createSessionsService(db, app));
   app.use('/tasks', createTasksService(db));
   const messagesService = createMessagesService(db) as unknown as MessagesServiceImpl;
 
