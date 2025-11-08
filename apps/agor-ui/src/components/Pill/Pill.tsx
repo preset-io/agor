@@ -209,7 +209,7 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
   };
 
   const tooltipContent = (
-    <div style={{ maxWidth: 400 }}>
+    <div style={{ maxWidth: 600 }}>
       <div style={{ fontWeight: 'bold', marginBottom: 8 }}>Context Window Usage (This Turn)</div>
       <div>
         Fresh input: {used.toLocaleString()} / {limit.toLocaleString()} ({percentage}%)
@@ -269,6 +269,35 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
               </div>
             </div>
           ))}
+        </>
+      )}
+
+      {taskMetadata && (
+        <>
+          <div
+            style={{
+              marginTop: 16,
+              fontWeight: 'bold',
+              borderTop: '1px solid #333',
+              paddingTop: 8,
+            }}
+          >
+            Raw JSON Payload:
+          </div>
+          <pre
+            style={{
+              fontSize: '0.75em',
+              fontFamily: 'monospace',
+              background: '#1a1a1a',
+              padding: 8,
+              borderRadius: 4,
+              overflowX: 'auto',
+              maxHeight: 300,
+              marginTop: 4,
+            }}
+          >
+            {JSON.stringify(taskMetadata, null, 2)}
+          </pre>
         </>
       )}
     </div>
