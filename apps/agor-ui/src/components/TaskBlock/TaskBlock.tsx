@@ -387,7 +387,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
             )}
             {task.context_window && task.context_window_limit && (
               <ContextWindowPill
-                used={task.context_window}
+                used={task.usage?.input_tokens || task.context_window}
                 limit={task.context_window_limit}
                 taskMetadata={{
                   usage: task.usage,
@@ -479,7 +479,8 @@ export const TaskBlock = React.memo<TaskBlockProps>(
 
                       // Check if this is the latest agent message (last message block)
                       const isLatestMessage =
-                        block.message.role === MessageRole.ASSISTANT && blockIndex === blocks.length - 1;
+                        block.message.role === MessageRole.ASSISTANT &&
+                        blockIndex === blocks.length - 1;
 
                       return (
                         <MessageBlock

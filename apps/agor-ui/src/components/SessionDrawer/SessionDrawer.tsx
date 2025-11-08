@@ -208,8 +208,11 @@ const SessionDrawer = ({
 
     if (tasksWithContext.length > 0) {
       const task = tasksWithContext[0];
+      // Recalculate context window correctly from usage.input_tokens
+      // (old database values may have been calculated with buggy formula)
+      const correctContextWindow = task.usage?.input_tokens || task.context_window!;
       return {
-        used: task.context_window!,
+        used: correctContextWindow,
         limit: task.context_window_limit!,
         taskMetadata: {
           usage: task.usage,
@@ -284,7 +287,7 @@ const SessionDrawer = ({
       }, 300);
       return () => clearTimeout(timeoutId);
     }
-  }, [open, scrollToBottom, session?.session_id]);
+  }, [open, scrollToBottom, session]);
 
   // Early return if no session (drawer should not be open without a session)
   // IMPORTANT: Must be after all hooks to satisfy Rules of Hooks
@@ -571,9 +574,7 @@ const SessionDrawer = ({
             )}
             {/* Issue and PR Pills */}
             {worktree?.issue_url && <IssuePill issueUrl={worktree.issue_url} />}
-            {worktree?.pull_request_url && (
-              <PullRequestPill prUrl={worktree.pull_request_url} />
-            )}
+            {worktree?.pull_request_url && <PullRequestPill prUrl={worktree.pull_request_url} />}
             {/* MCP Servers */}
             {sessionMcpServerIds
               .map(serverId => mcpServers.find(s => s.mcp_server_id === serverId))
