@@ -29,6 +29,8 @@ export class MessagesRepository {
       content: (row.data as { content: Message['content'] }).content,
       tool_uses: (row.data as { tool_uses?: Message['tool_uses'] }).tool_uses,
       parent_tool_use_id: row.parent_tool_use_id || undefined,
+      status: row.status as Message['status'],
+      queue_position: row.queue_position ?? undefined,
       metadata: (row.data as { metadata?: Message['metadata'] }).metadata,
     };
   }
@@ -48,6 +50,8 @@ export class MessagesRepository {
       timestamp: new Date(message.timestamp),
       content_preview: message.content_preview,
       parent_tool_use_id: message.parent_tool_use_id || null,
+      status: message.status || null,
+      queue_position: message.queue_position ?? null,
       data: {
         content: message.content,
         tool_uses: message.tool_uses,
@@ -189,5 +193,74 @@ export class MessagesRepository {
    */
   async delete(messageId: MessageID): Promise<void> {
     await this.db.delete(messages).where(eq(messages.message_id, messageId));
+  }
+
+  /**
+   * Create a queued message
+   * NOTE: Queued messages always store prompt as string content
+   * This ensures compatibility with prompt execution endpoint
+   */
+  async createQueued(sessionId: SessionID, prompt: string): Promise<Message> {
+    if (!prompt || typeof prompt !== 'string') {
+      throw new Error('Prompt must be a non-empty string');
+    }
+
+    const { generateId } = await import('../../lib/ids');
+    const { max, and, asc } = await import('drizzle-orm');
+
+    // Get current max queue position for session
+    const result = await this.db
+      .select({ max: max(messages.queue_position) })
+      .from(messages)
+      .where(and(eq(messages.session_id, sessionId), eq(messages.status, 'queued')));
+
+    const nextPosition = (result[0]?.max || 0) + 1;
+
+    // Create queued message
+    const message: Message = {
+      message_id: generateId() as MessageID,
+      session_id: sessionId,
+      type: 'user',
+      role: 'user' as Message['role'],
+      index: -1, // Not in conversation yet
+      timestamp: new Date().toISOString(),
+      content_preview: prompt.substring(0, 200),
+      content: prompt, // Always string for queued messages
+      status: 'queued',
+      queue_position: nextPosition,
+      task_id: undefined,
+    };
+
+    return this.create(message);
+  }
+
+  /**
+   * Find queued messages for a session
+   */
+  async findQueued(sessionId: SessionID): Promise<Message[]> {
+    const { and, asc } = await import('drizzle-orm');
+
+    const rows = await this.db
+      .select()
+      .from(messages)
+      .where(and(eq(messages.session_id, sessionId), eq(messages.status, 'queued')))
+      .orderBy(asc(messages.queue_position));
+
+    return rows.map(r => this.rowToMessage(r));
+  }
+
+  /**
+   * Get next queued message
+   */
+  async getNextQueued(sessionId: SessionID): Promise<Message | null> {
+    const queued = await this.findQueued(sessionId);
+    return queued[0] || null;
+  }
+
+  /**
+   * Delete queued message (when processing or user cancels)
+   */
+  async deleteQueued(messageId: MessageID): Promise<void> {
+    await this.delete(messageId);
   }
 }

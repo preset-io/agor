@@ -133,6 +133,8 @@ import { ensureMinimumRole, requireMinimumRole } from './utils/authorization';
 interface RouteParams extends Params {
   route?: {
     id?: string;
+    messageId?: string;
+    mcpId?: string;
   };
 }
 
@@ -1955,6 +1957,25 @@ async function main() {
                 },
                 'Session'
               );
+
+              // Check for queued messages and auto-process next one
+              // NOTE: Only process queue if task completed successfully
+              // If task failed, stop queue to prevent cascading failures
+              setImmediate(async () => {
+                try {
+                  // Check if the task completed successfully
+                  const completedTask = await tasksService.get(task.task_id, params);
+                  if (completedTask.status === TaskStatus.COMPLETED) {
+                    await processNextQueuedMessage(id as SessionID, params);
+                  } else {
+                    console.log(
+                      `⚠️  Task ${task.task_id.substring(0, 8)} failed - halting queue processing for session ${id.substring(0, 8)}`
+                    );
+                  }
+                } catch (error) {
+                  console.error(`❌ Error processing queued message for session ${id}:`, error);
+                }
+              });
             } catch (error) {
               console.error(`❌ Error completing task ${task.task_id}:`, error);
               // Try to mark task as failed (may also fail if deleted)
@@ -2159,6 +2180,162 @@ async function main() {
       return result;
     },
   });
+
+  /**
+   * POST /sessions/:id/messages/queue
+   * Queue a message for later execution
+   */
+  app.use('/sessions/:id/messages/queue', {
+    async create(data: { prompt: string }, params: RouteParams) {
+      ensureMinimumRole(params, 'member', 'queue messages');
+
+      const sessionId = params.route?.id;
+      if (!sessionId) throw new Error('Session ID required');
+      if (!data.prompt) throw new Error('Prompt required');
+
+      const session = await sessionsService.get(sessionId, params);
+
+      // Create queued message
+      const messageRepo = new MessagesRepository(db);
+      const queuedMessage = await messageRepo.createQueued(sessionId as SessionID, data.prompt);
+
+      console.log(
+        `📬 Queued message for session ${sessionId.substring(0, 8)} at position ${queuedMessage.queue_position}`
+      );
+
+      // Emit event for real-time UI updates
+      app.service('messages').emit('queued', queuedMessage, params);
+
+      return {
+        success: true,
+        message: queuedMessage,
+      };
+    },
+
+    async find(params: RouteParams) {
+      ensureMinimumRole(params, 'member', 'view queue');
+
+      const sessionId = params.route?.id;
+      if (!sessionId) throw new Error('Session ID required');
+
+      const messageRepo = new MessagesRepository(db);
+      const queued = await messageRepo.findQueued(sessionId as SessionID);
+
+      return {
+        total: queued.length,
+        data: queued,
+      };
+    },
+  });
+
+  /**
+   * DELETE /sessions/:id/messages/queue/:messageId
+   * Remove a message from queue
+   */
+  app.use('/sessions/:id/messages/queue/:messageId', {
+    async remove(_id: unknown, params: RouteParams & { route?: { messageId?: string } }) {
+      ensureMinimumRole(params, 'member', 'manage queue');
+
+      const sessionId = params.route?.id;
+      const messageId = params.route?.messageId;
+      if (!sessionId || !messageId) throw new Error('Session ID and Message ID required');
+
+      // Verify message belongs to session and is queued
+      const message = await messagesService.get(messageId, params);
+      if (message.session_id !== sessionId) {
+        throw new Error('Message does not belong to this session');
+      }
+      if (message.status !== 'queued') {
+        throw new Error('Message is not queued');
+      }
+
+      // Delete the queued message
+      await messagesService.remove(messageId, params);
+
+      console.log(
+        `🗑️  Removed queued message ${messageId.substring(0, 8)} from session ${sessionId.substring(0, 8)}`
+      );
+
+      // Emit dequeued event for real-time UI updates
+      app.service('messages').emit(
+        'dequeued',
+        {
+          message_id: messageId,
+          session_id: sessionId,
+        },
+        params
+      );
+
+      return { success: true };
+    },
+    // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
+  } as any);
+
+  /**
+   * Process the next queued message for a session
+   * Called automatically after task completion when session becomes idle
+   */
+  async function processNextQueuedMessage(
+    sessionId: SessionID,
+    params: RouteParams
+  ): Promise<void> {
+    // Get next queued message
+    const messageRepo = new MessagesRepository(db);
+    const nextMessage = await messageRepo.getNextQueued(sessionId);
+
+    if (!nextMessage) {
+      console.log(`📭 No queued messages for session ${sessionId.substring(0, 8)}`);
+      return;
+    }
+
+    // Re-fetch session to ensure it's still idle
+    const session = await sessionsService.get(sessionId, params);
+
+    if (session.status !== SessionStatus.IDLE) {
+      console.log(`⚠️  Session ${sessionId.substring(0, 8)} not idle, skipping queue processing`);
+      return;
+    }
+
+    console.log(
+      `📬 Processing queued message ${nextMessage.message_id.substring(0, 8)} (position ${nextMessage.queue_position})`
+    );
+
+    // Extract prompt from queued message
+    // NOTE: Queued messages always have string content (validated in createQueued)
+    const prompt = nextMessage.content as string;
+
+    // Delete the queued message (execution will create new messages)
+    await messageRepo.deleteQueued(nextMessage.message_id);
+
+    // Emit dequeued event for real-time UI updates
+    app.service('messages').emit(
+      'dequeued',
+      {
+        message_id: nextMessage.message_id,
+        session_id: sessionId,
+      },
+      params
+    );
+
+    // Trigger prompt execution via existing endpoint
+    // This creates task, user message, executes agent, etc.
+    const promptService = app.service('/sessions/:id/prompt') as {
+      create: (data: { prompt: string; stream?: boolean }, params: RouteParams) => Promise<unknown>;
+    };
+
+    await promptService.create(
+      {
+        prompt,
+        stream: true,
+      },
+      {
+        ...params,
+        route: { id: sessionId },
+      }
+    );
+
+    console.log(`✅ Queued message triggered for session ${sessionId.substring(0, 8)}`);
+  }
 
   // Permission decision endpoint
   app.use('/sessions/:id/permission-decision', {

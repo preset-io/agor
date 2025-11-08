@@ -217,6 +217,10 @@ export const messages = sqliteTable(
     // Parent tool use ID (for nested tool calls - e.g., Task tool spawning Read/Grep)
     parent_tool_use_id: text('parent_tool_use_id'),
 
+    // Message queueing fields
+    status: text('status', { enum: ['queued'] }), // 'queued' or null (normal message)
+    queue_position: integer('queue_position'), // Position in queue (1, 2, 3, ...)
+
     // Full data (JSON blob)
     data: text('data', { mode: 'json' })
       .$type<{
@@ -231,6 +235,7 @@ export const messages = sqliteTable(
     sessionIdx: index('messages_session_id_idx').on(table.session_id),
     taskIdx: index('messages_task_id_idx').on(table.task_id),
     sessionIndexIdx: index('messages_session_index_idx').on(table.session_id, table.index),
+    queueIdx: index('messages_queue_idx').on(table.session_id, table.status, table.queue_position),
   })
 );
 

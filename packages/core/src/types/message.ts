@@ -17,6 +17,11 @@ export enum MessageRole {
 }
 
 /**
+ * Message status for queueing
+ */
+export type MessageStatus = 'queued' | null;
+
+/**
  * Message type (from Claude transcript)
  * Distinguishes conversation messages from meta/snapshot messages
  */
@@ -120,6 +125,12 @@ export interface Message {
    * This enables grouping nested tool calls under their parent in the UI.
    */
   parent_tool_use_id?: string | null;
+
+  /** Message status (queued vs normal) */
+  status?: MessageStatus;
+
+  /** Position in queue (for queued messages only) */
+  queue_position?: number | null;
 
   /** Agent-specific metadata */
   metadata?: {
