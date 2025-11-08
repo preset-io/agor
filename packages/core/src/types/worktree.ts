@@ -36,55 +36,19 @@ export interface Worktree {
    */
   worktree_unique_id: number;
 
-  /**
-   * Static start command (initialized from repo's up_command template, then user-editable)
-   *
-   * Persistent command used to start the environment. Set once during worktree
-   * creation from templates, then user-controlled.
-   *
-   * Example: "pnpm dev"
-   */
+  /** Start command - initialized from repo template, then user-editable (e.g., "pnpm dev") */
   start_command?: string;
 
-  /**
-   * Static stop command (initialized from repo's down_command template, then user-editable)
-   *
-   * Persistent command used to stop the environment. Set once during worktree
-   * creation from templates, then user-controlled.
-   *
-   * Example: "pkill -f 'pnpm dev'"
-   */
+  /** Stop command - initialized from repo template, then user-editable (e.g., "pkill -f 'pnpm dev'") */
   stop_command?: string;
 
-  /**
-   * Static health check URL (initialized from repo's health_check.url_template, then user-editable)
-   *
-   * Persistent URL used for environment health checks. Set once during worktree
-   * creation from templates, then user-controlled.
-   *
-   * Example: "http://localhost:5173/health"
-   */
+  /** Health check URL - initialized from repo template, then user-editable (e.g., "http://localhost:5173/health") */
   health_check_url?: string;
 
-  /**
-   * Static app URL (initialized from repo's app_url_template, then user-editable)
-   *
-   * Unlike access_urls (which is ephemeral runtime state), this is a persistent
-   * database field that users can edit directly. Templates are used only for
-   * initial setup when creating the worktree.
-   *
-   * Example: "http://localhost:5173"
-   */
+  /** App URL - initialized from repo template, then user-editable (e.g., "http://localhost:5173") */
   app_url?: string;
 
-  /**
-   * Static logs command (initialized from repo's logs_command template, then user-editable)
-   *
-   * Persistent command used to fetch logs. Set once during worktree
-   * creation from templates, then user-controlled.
-   *
-   * Example: "docker logs agor-daemon"
-   */
+  /** Logs command - initialized from repo template, then user-editable (e.g., "docker logs agor-daemon") */
   logs_command?: string;
 
   /** Timestamps */
