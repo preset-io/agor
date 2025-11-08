@@ -84,6 +84,13 @@ export const ZoneTriggerModal = ({
   // Editable rendered template (user can modify before executing)
   const [editableTemplate, setEditableTemplate] = useState<string>('');
 
+  // Explicit state for session config (survives form mount/unmount cycles)
+  const [sessionConfig, setSessionConfig] = useState<{
+    modelConfig?: ModelConfig;
+    permissionMode?: PermissionMode;
+    mcpServerIds?: string[];
+  }>({});
+
   // Filter sessions for this worktree
   const worktreeSessions = useMemo(() => {
     return sessions.filter(s => s.worktree_id === worktreeId);
@@ -124,35 +131,39 @@ export const ZoneTriggerModal = ({
       setSelectedSessionId(smartDefaultSession);
       setSelectedAction('prompt');
       form.resetFields();
+      setSessionConfig({}); // Clear session config state
     }
   }, [open, smartDefaultSession, form]);
 
-  // Pre-populate form when creating new session
+  // Pre-populate form AND state when creating new session
   // Priority: Most recent session > User defaults > System defaults
   useEffect(() => {
     if (mode === 'create_new' && selectedAgent) {
       // Find the most recent session for this worktree (create a copy to avoid mutating the array)
-      const mostRecentSession = worktreeSessions.length > 0
-        ? [...worktreeSessions].sort(
-            (a, b) =>
-              new Date(b.last_updated || b.created_at).getTime() -
-              new Date(a.last_updated || a.created_at).getTime()
-          )[0]
-        : null;
+      const mostRecentSession =
+        worktreeSessions.length > 0
+          ? [...worktreeSessions].sort(
+              (a, b) =>
+                new Date(b.last_updated || b.created_at).getTime() -
+                new Date(a.last_updated || a.created_at).getTime()
+            )[0]
+          : null;
 
       // Get user defaults for this agent as fallback
       const agentDefaults = currentUser?.default_agentic_config?.[selectedAgent as AgenticToolName];
 
-      // Prepopulate with most recent session settings if available, otherwise use user defaults
-      form.setFieldsValue({
-        permissionMode:
-          mostRecentSession?.permission_config?.mode ||
-          agentDefaults?.permissionMode,
+      // Calculate config values (priority: most recent session > user defaults)
+      const configValues = {
+        permissionMode: mostRecentSession?.permission_config?.mode || agentDefaults?.permissionMode,
         modelConfig:
           mostRecentSession?.model_config ||
-          agentDefaults?.modelConfig,
+          (agentDefaults?.modelConfig as ModelConfig | undefined),
         mcpServerIds: agentDefaults?.mcpServerIds || [],
-      });
+      };
+
+      // Store in both form (for UI) AND component state (for execution)
+      form.setFieldsValue(configValues);
+      setSessionConfig(configValues);
     }
   }, [mode, selectedAgent, currentUser, worktreeSessions, form]);
 
@@ -236,21 +247,16 @@ export const ZoneTriggerModal = ({
 
   const handleExecute = async () => {
     if (mode === 'create_new') {
-      // Get form values for new session
-      const formValues = form.getFieldsValue();
-
-      // Get user defaults for the selected agent (fallback if form fields weren't mounted)
-      const agentDefaults = currentUser?.default_agentic_config?.[selectedAgent as AgenticToolName];
-
+      // Use component state which is guaranteed to have the correct values
+      // regardless of whether the form fields are mounted/visible
       await onExecute({
         sessionId: 'new',
         action: 'prompt',
-        renderedTemplate: editableTemplate, // Use edited template
+        renderedTemplate: editableTemplate,
         agent: selectedAgent,
-        // Use form values if present (user expanded advanced), otherwise use defaults
-        modelConfig: formValues.modelConfig ?? agentDefaults?.modelConfig,
-        permissionMode: formValues.permissionMode ?? agentDefaults?.permissionMode,
-        mcpServerIds: formValues.mcpServerIds ?? agentDefaults?.mcpServerIds,
+        modelConfig: sessionConfig.modelConfig,
+        permissionMode: sessionConfig.permissionMode,
+        mcpServerIds: sessionConfig.mcpServerIds,
       });
     } else {
       // Reuse existing session
@@ -355,7 +361,16 @@ export const ZoneTriggerModal = ({
         )}
 
         {/* Agent Configuration - Always shown (collapsed for reuse, expanded for create_new) */}
-        <Form form={form} layout="vertical">
+        <Form
+          form={form}
+          layout="vertical"
+          onValuesChange={changedValues => {
+            // Sync form changes to component state (only in create_new mode)
+            if (mode === 'create_new') {
+              setSessionConfig(prev => ({ ...prev, ...changedValues }));
+            }
+          }}
+        >
           {mode === 'create_new' && (
             <div>
               <Typography.Text strong style={{ display: 'block', marginBottom: 8 }}>
