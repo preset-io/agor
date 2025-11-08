@@ -210,6 +210,8 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
             onChange={(val) => onCodexChange?.(val, codexApprovalPolicy)}
             size={size}
             placeholder="Sandbox"
+            popupMatchSelectWidth={false}
+            style={{ minWidth: 100 }}
             options={CODEX_SANDBOX_MODES.map(({ value, label, description }) => ({
               label,
               value,
@@ -221,6 +223,8 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
             onChange={(val) => onCodexChange?.(codexSandboxMode, val)}
             size={size}
             placeholder="Approval"
+            popupMatchSelectWidth={false}
+            style={{ minWidth: 100 }}
             options={CODEX_APPROVAL_POLICIES.map(({ value, label, description }) => ({
               label,
               value,
@@ -236,9 +240,10 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
       <Select
         value={effectiveValue}
         onChange={onChange}
-        style={width ? { width } : undefined}
+        style={{ minWidth: width || 120 }}
         size={size}
         suffixIcon={<SafetyOutlined />}
+        popupMatchSelectWidth={false}
         options={modes.map(({ mode, label, description }) => ({
           label,
           value: mode,

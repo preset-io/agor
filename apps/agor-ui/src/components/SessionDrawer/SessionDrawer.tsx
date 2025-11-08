@@ -701,7 +701,7 @@ const SessionDrawer = ({
                 />
               )}
             </Space>
-            <Space size={8}>
+            <Space size={4}>
               {/* Thinking Mode Selector - Claude only */}
               {session.agentic_tool === 'claude-code' && (
                 <ThinkingModeSelector
