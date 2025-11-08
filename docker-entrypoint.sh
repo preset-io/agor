@@ -3,17 +3,13 @@ set -e
 
 echo "🚀 Starting Agor development environment..."
 
-# Check if package.json has changed since build (compare timestamps or checksums)
-# Only run install if package.json is newer than node_modules
-if [ /app/package.json -nt /app/node_modules/.modules.yaml ] || \
-   [ /app/apps/agor-daemon/package.json -nt /app/apps/agor-daemon/node_modules ] || \
-   [ /app/apps/agor-cli/package.json -nt /app/apps/agor-cli/node_modules ] || \
-   [ /app/apps/agor-ui/package.json -nt /app/apps/agor-ui/node_modules ] || \
-   [ /app/packages/core/package.json -nt /app/packages/core/node_modules ]; then
-  echo "📦 Package.json changed, syncing dependencies..."
-  yes | pnpm install --prefer-frozen-lockfile --reporter=default
+# Dependencies are installed during Docker build and node_modules are excluded from volume mount
+# Just verify they exist, don't reinstall unless something is actually missing
+if [ ! -d "/app/node_modules" ]; then
+  echo "📦 Installing dependencies (first run)..."
+  yes | pnpm install --frozen-lockfile --reporter=default
 else
-  echo "📦 Dependencies up to date (skipping install)"
+  echo "📦 Dependencies already installed (from Docker build)"
 fi
 
 # Initialize husky git hooks (required for git commit hooks)
