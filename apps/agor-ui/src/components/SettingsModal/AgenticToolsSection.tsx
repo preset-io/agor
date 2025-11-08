@@ -1,0 +1,513 @@
+/**
+ * Agentic Tools Section
+ *
+ * Top-level tab containing nested tabs for each agentic tool (Claude Code, Codex, Gemini, OpenCode).
+ * Each tool tab displays its API key configuration and tool-specific settings.
+ */
+
+import type { AgorClient } from '@agor/core/api';
+import type { AgorConfig } from '@agor/core/config';
+import {
+  CheckCircleOutlined,
+  CloseCircleOutlined,
+  InfoCircleOutlined,
+  LoadingOutlined,
+  WarningOutlined,
+} from '@ant-design/icons';
+import {
+  Alert,
+  Button,
+  Form,
+  Input,
+  message,
+  Space,
+  Spin,
+  Switch,
+  Tabs,
+  Tooltip,
+  theme,
+} from 'antd';
+import { useEffect, useState } from 'react';
+import { ApiKeyFields, type ApiKeyStatus } from '../ApiKeyFields';
+
+export interface AgenticToolsSectionProps {
+  client: AgorClient | null;
+}
+
+export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client }) => {
+  const { token } = theme.useToken();
+
+  // Shared API keys state
+  const [loadingKeys, setLoadingKeys] = useState(true);
+  const [savingKeys, setSavingKeys] = useState<Record<string, boolean>>({});
+  const [keysError, setKeysError] = useState<string | null>(null);
+  const [keyStatus, setKeyStatus] = useState<ApiKeyStatus>({
+    ANTHROPIC_API_KEY: false,
+    OPENAI_API_KEY: false,
+    GEMINI_API_KEY: false,
+  });
+
+  // OpenCode state
+  const [opencodeForm] = Form.useForm();
+  const [opencodeEnabled, setOpencodeEnabled] = useState(false);
+  const [opencodeServerUrl, setOpencodeServerUrl] = useState('http://localhost:4096');
+  const [opencodeConnected, setOpencodeConnected] = useState<boolean | null>(null);
+  const [opencodeTesting, setOpencodeTesting] = useState(false);
+  const [loadingOpencode, setLoadingOpencode] = useState(true);
+
+  // Load API keys configuration
+  useEffect(() => {
+    if (!client) return;
+
+    const loadKeys = async () => {
+      try {
+        setLoadingKeys(true);
+        setKeysError(null);
+
+        const config = (await client.service('config').get('credentials')) as
+          | AgorConfig['credentials']
+          | undefined;
+
+        setKeyStatus({
+          ANTHROPIC_API_KEY: !!config?.ANTHROPIC_API_KEY,
+          OPENAI_API_KEY: !!config?.OPENAI_API_KEY,
+          GEMINI_API_KEY: !!config?.GEMINI_API_KEY,
+        });
+      } catch (err) {
+        console.error('Failed to load API keys:', err);
+        setKeysError(err instanceof Error ? err.message : 'Failed to load API keys');
+      } finally {
+        setLoadingKeys(false);
+      }
+    };
+
+    loadKeys();
+  }, [client]);
+
+  // Load OpenCode configuration
+  useEffect(() => {
+    if (!client) return;
+
+    const loadOpenCode = async () => {
+      try {
+        setLoadingOpencode(true);
+
+        // biome-ignore lint/suspicious/noExplicitAny: Config service returns dynamic object
+        const config = (await client.service('config').get('opencode')) as any;
+
+        if (config) {
+          setOpencodeEnabled(config.enabled || false);
+          setOpencodeServerUrl(config.serverUrl || 'http://localhost:4096');
+        }
+      } catch (err) {
+        console.error('Failed to load OpenCode config:', err);
+      } finally {
+        setLoadingOpencode(false);
+      }
+    };
+
+    loadOpenCode();
+  }, [client]);
+
+  // Save API key
+  const handleSaveKey = async (field: keyof ApiKeyStatus, value: string) => {
+    if (!client) return;
+
+    try {
+      setSavingKeys(prev => ({ ...prev, [field]: true }));
+      setKeysError(null);
+
+      await client.service('config').patch(null, {
+        credentials: {
+          [field]: value,
+        },
+      });
+
+      setKeyStatus(prev => ({ ...prev, [field]: true }));
+    } catch (err) {
+      console.error(`Failed to save ${field}:`, err);
+      setKeysError(err instanceof Error ? err.message : `Failed to save ${field}`);
+      throw err;
+    } finally {
+      setSavingKeys(prev => ({ ...prev, [field]: false }));
+    }
+  };
+
+  // Clear API key
+  const handleClearKey = async (field: keyof ApiKeyStatus) => {
+    if (!client) return;
+
+    try {
+      setSavingKeys(prev => ({ ...prev, [field]: true }));
+      setKeysError(null);
+
+      await client.service('config').patch(null, {
+        credentials: {
+          [field]: null,
+        },
+      });
+
+      setKeyStatus(prev => ({ ...prev, [field]: false }));
+    } catch (err) {
+      console.error(`Failed to clear ${field}:`, err);
+      setKeysError(err instanceof Error ? err.message : `Failed to clear ${field}`);
+      throw err;
+    } finally {
+      setSavingKeys(prev => ({ ...prev, [field]: false }));
+    }
+  };
+
+  // Test OpenCode connection
+  const handleTestOpenCodeConnection = async () => {
+    if (!client) return;
+
+    setOpencodeTesting(true);
+
+    try {
+      // biome-ignore lint/suspicious/noExplicitAny: Health check returns dynamic result
+      const result = (await client.service('opencode/health').find()) as any;
+      setOpencodeConnected(result.connected === true);
+    } catch (error) {
+      console.error('[OpenCode] Health check error:', error);
+      setOpencodeConnected(false);
+    } finally {
+      setOpencodeTesting(false);
+    }
+  };
+
+  // Save OpenCode configuration
+  const handleSaveOpenCode = async () => {
+    if (!client) return;
+
+    try {
+      await client.service('config').patch(null, {
+        opencode: {
+          enabled: opencodeEnabled,
+          serverUrl: opencodeServerUrl,
+        },
+      });
+
+      message.success('OpenCode settings saved successfully');
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Failed to save OpenCode settings';
+      message.error(errorMsg);
+      console.error('Failed to save OpenCode settings:', err);
+    }
+  };
+
+  const loading = loadingKeys || loadingOpencode;
+
+  if (loading) {
+    return (
+      <div style={{ textAlign: 'center', padding: token.paddingLG }}>
+        <Spin size="large" />
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding: token.paddingMD }}>
+      {/* Authentication Methods Info */}
+      <Alert
+        message="Authentication Methods"
+        description={
+          <div>
+            <p style={{ marginBottom: token.marginXS }}>
+              There are three ways to authenticate with AI providers,{' '}
+              <strong>in order of precedence</strong>:
+            </p>
+            <ol style={{ paddingLeft: token.paddingMD, marginBottom: 0 }}>
+              <li style={{ marginBottom: token.marginXXS }}>
+                <strong>Per-user API keys</strong> - Set in user profile, highest priority
+              </li>
+              <li style={{ marginBottom: token.marginXXS }}>
+                <strong>Global keys (this UI or CLI)</strong> - Keys stored in{' '}
+                <code>~/.agor/config.yaml</code> override environment variables
+              </li>
+              <li style={{ marginBottom: token.marginXXS }}>
+                <strong>Environment variables</strong> - Set <code>ANTHROPIC_API_KEY</code>,{' '}
+                <code>OPENAI_API_KEY</code>, etc. wherever you start the Agor daemon
+              </li>
+              <li>
+                <strong>Individual CLI flows</strong> (e.g., <code>claude login</code>) - Each tool
+                retains authentication in its own config
+              </li>
+            </ol>
+          </div>
+        }
+        type="info"
+        icon={<InfoCircleOutlined />}
+        showIcon
+        style={{ marginBottom: token.marginLG }}
+      />
+
+      {/* Nested tabs for each tool */}
+      <Tabs
+        defaultActiveKey="claude-code"
+        items={[
+          {
+            key: 'claude-code',
+            label: 'Claude Code',
+            children: (
+              <div style={{ paddingTop: token.paddingMD }}>
+                {keysError && (
+                  <Alert
+                    message={keysError}
+                    type="error"
+                    icon={<WarningOutlined />}
+                    showIcon
+                    closable
+                    onClose={() => setKeysError(null)}
+                    style={{ marginBottom: token.marginLG }}
+                  />
+                )}
+
+                <ApiKeyFields
+                  keyStatus={{ ANTHROPIC_API_KEY: keyStatus.ANTHROPIC_API_KEY }}
+                  onSave={handleSaveKey}
+                  onClear={handleClearKey}
+                  saving={savingKeys}
+                />
+              </div>
+            ),
+          },
+          {
+            key: 'codex',
+            label: 'Codex',
+            children: (
+              <div style={{ paddingTop: token.paddingMD }}>
+                {keysError && (
+                  <Alert
+                    message={keysError}
+                    type="error"
+                    icon={<WarningOutlined />}
+                    showIcon
+                    closable
+                    onClose={() => setKeysError(null)}
+                    style={{ marginBottom: token.marginLG }}
+                  />
+                )}
+
+                <ApiKeyFields
+                  keyStatus={{ OPENAI_API_KEY: keyStatus.OPENAI_API_KEY }}
+                  onSave={handleSaveKey}
+                  onClear={handleClearKey}
+                  saving={savingKeys}
+                />
+              </div>
+            ),
+          },
+          {
+            key: 'gemini',
+            label: 'Gemini',
+            children: (
+              <div style={{ paddingTop: token.paddingMD }}>
+                {keysError && (
+                  <Alert
+                    message={keysError}
+                    type="error"
+                    icon={<WarningOutlined />}
+                    showIcon
+                    closable
+                    onClose={() => setKeysError(null)}
+                    style={{ marginBottom: token.marginLG }}
+                  />
+                )}
+
+                <ApiKeyFields
+                  keyStatus={{ GEMINI_API_KEY: keyStatus.GEMINI_API_KEY }}
+                  onSave={handleSaveKey}
+                  onClear={handleClearKey}
+                  saving={savingKeys}
+                />
+              </div>
+            ),
+          },
+          {
+            key: 'opencode',
+            label: 'OpenCode',
+            children: (
+              <div style={{ paddingTop: token.paddingMD }}>
+                {/* OpenCode Info */}
+                <Alert
+                  message="OpenCode.ai Integration"
+                  description={
+                    <div>
+                      <p style={{ marginBottom: token.marginXS }}>
+                        OpenCode provides access to <strong>75+ LLM providers</strong> including
+                        local models, custom endpoints, and privacy-focused options.
+                      </p>
+                      <p style={{ marginBottom: 0 }}>
+                        To use OpenCode sessions, you must run the OpenCode server separately.{' '}
+                        <a
+                          href="https://agor.live/guide/opencode-setup"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          Setup Guide →
+                        </a>
+                      </p>
+                    </div>
+                  }
+                  type="info"
+                  icon={<InfoCircleOutlined />}
+                  showIcon
+                  style={{ marginBottom: token.marginLG }}
+                />
+
+                {/* Configuration Form */}
+                <Form form={opencodeForm} layout="vertical">
+                  {/* Enable Toggle */}
+                  <Form.Item label="Enable OpenCode Integration">
+                    <Space>
+                      <Switch
+                        checked={opencodeEnabled}
+                        onChange={setOpencodeEnabled}
+                        checkedChildren="Enabled"
+                        unCheckedChildren="Disabled"
+                      />
+                      <span style={{ color: token.colorTextSecondary, fontSize: 12 }}>
+                        Enable OpenCode as an agentic tool option in Agor
+                      </span>
+                    </Space>
+                  </Form.Item>
+
+                  {opencodeEnabled && (
+                    <>
+                      {/* Server URL */}
+                      <Form.Item
+                        label="OpenCode Server URL"
+                        help="URL where OpenCode server is running (started with 'opencode serve')"
+                      >
+                        <Input
+                          placeholder="http://localhost:4096"
+                          value={opencodeServerUrl}
+                          onChange={e => setOpencodeServerUrl(e.target.value)}
+                          addonAfter={
+                            <Tooltip title="Test connection to OpenCode server">
+                              <Button
+                                size="small"
+                                type="text"
+                                loading={opencodeTesting}
+                                icon={opencodeTesting ? <LoadingOutlined /> : undefined}
+                                onClick={handleTestOpenCodeConnection}
+                              >
+                                Test
+                              </Button>
+                            </Tooltip>
+                          }
+                        />
+                      </Form.Item>
+
+                      {/* Connection Status */}
+                      {opencodeConnected !== null && (
+                        <Alert
+                          message={
+                            opencodeConnected ? (
+                              <Space>
+                                <CheckCircleOutlined style={{ color: token.colorSuccess }} />
+                                <span>Connected to OpenCode server</span>
+                              </Space>
+                            ) : (
+                              <Space>
+                                <CloseCircleOutlined style={{ color: token.colorError }} />
+                                <span>Cannot connect to OpenCode server</span>
+                              </Space>
+                            )
+                          }
+                          type={opencodeConnected ? 'success' : 'error'}
+                          showIcon={false}
+                          style={{ marginBottom: token.marginLG }}
+                        />
+                      )}
+
+                      {/* Setup Instructions (shown if not connected) */}
+                      {opencodeConnected === false && (
+                        <Alert
+                          message="Server Not Running"
+                          description={
+                            <div>
+                              <p style={{ marginBottom: token.marginXS }}>
+                                Start OpenCode server in a separate terminal:
+                              </p>
+                              <pre
+                                style={{
+                                  background: token.colorBgContainer,
+                                  padding: token.paddingXS,
+                                  borderRadius: token.borderRadius,
+                                  border: `1px solid ${token.colorBorder}`,
+                                  overflowX: 'auto',
+                                  marginBottom: token.marginXS,
+                                  fontSize: 12,
+                                }}
+                              >
+                                opencode serve --port 4096
+                              </pre>
+                              <p style={{ marginBottom: 0, fontSize: 12 }}>
+                                Don't have OpenCode?{' '}
+                                <a
+                                  href="https://opencode.ai/docs"
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                >
+                                  Installation Guide →
+                                </a>
+                              </p>
+                            </div>
+                          }
+                          type="warning"
+                          showIcon
+                          style={{ marginBottom: token.marginLG }}
+                        />
+                      )}
+
+                      {/* Success Status */}
+                      {opencodeConnected === true && (
+                        <Alert
+                          message="Ready to use!"
+                          description="You can now create sessions with OpenCode as the agentic tool."
+                          type="success"
+                          showIcon
+                          style={{ marginBottom: token.marginLG }}
+                        />
+                      )}
+                    </>
+                  )}
+
+                  {/* Save Button */}
+                  <Form.Item>
+                    <Button type="primary" onClick={handleSaveOpenCode}>
+                      Save OpenCode Settings
+                    </Button>
+                  </Form.Item>
+                </Form>
+
+                {/* Information Section */}
+                <div style={{ marginTop: token.marginLG }}>
+                  <h4>About OpenCode</h4>
+                  <ul style={{ fontSize: 12, lineHeight: 1.8, color: token.colorTextSecondary }}>
+                    <li>
+                      <strong>Multi-Provider Support:</strong> Access Claude, GPT-4, Gemini, and 70+
+                      other models
+                    </li>
+                    <li>
+                      <strong>Privacy-First:</strong> All code and context stays local - no cloud
+                      storage
+                    </li>
+                    <li>
+                      <strong>Local Models:</strong> Support for Ollama, LM Studio, and custom
+                      endpoints
+                    </li>
+                    <li>
+                      <strong>Open Source:</strong> 30K+ GitHub stars, active community
+                    </li>
+                  </ul>
+                </div>
+              </div>
+            ),
+          },
+        ]}
+      />
+    </div>
+  );
+};
