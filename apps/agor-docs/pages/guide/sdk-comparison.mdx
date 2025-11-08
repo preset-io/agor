@@ -23,6 +23,7 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 | **Session continuity** | ✅ SDK-managed | ✅ History-based | ✅ History-based | Claude uses `session_id`, others replay message history |
 | **Conversation history** | ✅ Automatic | 🟡 Manual | 🟡 Manual | Claude SDK manages history, others require explicit passing |
 | **Token usage tracking** | ✅ Full | ❌ No | ❌ No | Claude provides input/output/cache tokens, others not yet implemented |
+| **Context window tracking** | 🟡 Estimated | ❌ No | ❌ No | Agor estimates conversation size; official API metrics unavailable |
 
 **Legend:**
 - ✅ **Full support** - Feature works natively via SDK
@@ -270,6 +271,74 @@ Works best with Claude Code due to richer tool metadata.
 - **Analytics** - Compare efficiency across different tasks
 
 **Agor Implementation:** Token data stored in `messages` table, aggregated for session-level analytics. Claude users get immediate benefit; Codex/Gemini support coming soon.
+
+---
+
+### 12. Context Window Tracking
+
+**Claude Code:** 🟡 **Estimated (conversation size only)**
+- Tracks cumulative conversation tokens (input + output)
+- Resets counter on compaction events
+- **Does NOT include system overhead** (~46K tokens for CLAUDE.md + tools + MCP)
+- Labeled as "Estimated" in UI to reflect limitations
+- Shows 0-200K range accurately for conversation size
+
+**Codex:** ❌ **Not implemented**
+- No context tracking available yet
+
+**Gemini:** ❌ **Not implemented**
+- No context tracking available yet
+
+**The Challenge:**
+
+Accurately tracking context window usage is surprisingly difficult because **Anthropic doesn't document which tokens count toward the 200K limit**. Here's what Agor does:
+
+**What we know:**
+- `input_tokens` - Fresh user prompt for this turn (definitely counts)
+- `output_tokens` - Claude's response (definitely counts)
+- `cache_read_tokens` - Reading cached content (counts toward context but inflated by tool executions)
+- `cache_creation_tokens` - Creating new cache entries (~46K baseline for CLAUDE.md + tools + MCP)
+
+**The problem with cache tokens:**
+- `cache_read_tokens` can be **10x inflated** due to tool calls
+  - Example: 38 tool calls × 40K cached system = 1.6M tokens reported (8x the 200K limit!)
+  - This is a **billing metric**, not an accurate context measure
+- `cache_creation_tokens` represents system overhead but grows unpredictably
+  - First task: ~46K (CLAUDE.md + system prompt + tools)
+  - Later tasks: Can grow to 100K+ as more content gets cached
+
+**Agor's approach:**
+```typescript
+// Sum conversation tokens across all tasks
+context_window = Σ (task.input_tokens + task.output_tokens)
+
+// Reset on compaction events
+if (compaction_detected) {
+  context_window = 0; // Start fresh
+}
+```
+
+**What this gives you:**
+- ✅ Accurate tracking of **conversation size** (0-200K range)
+- ✅ Proper accumulation across turns
+- ✅ Automatic reset on compaction
+- ❌ Excludes ~46K system overhead (CLAUDE.md, tools, MCP)
+
+**Example session:**
+```
+Task 1:  8,956 tokens →  4.5% (conversation only)
+Task 2: 10,593 tokens →  5.3% (growing)
+Task 3: 13,540 tokens →  6.8%
+Task 7: 23,546 tokens → 11.8%
+
+Actual context: ~70K tokens (24K conversation + 46K system overhead)
+```
+
+**Why "Estimated":**
+
+Without official Anthropic documentation on the exact formula, we can't be 100% certain our calculation matches their internal tracking. We're confident in the conversation size tracking, but system overhead remains an educated guess.
+
+**Future:** If Anthropic publishes official context window calculation docs, we'll update our implementation immediately.
 
 ---
 

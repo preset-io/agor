@@ -167,7 +167,7 @@ export function getContextWindowLimit(
  */
 export function calculateCumulativeContextWindow(
   tasks: Array<{ usage?: TokenUsage; task_id: string }>,
-  messages: Array<{ task_id: string; type?: string; content?: unknown }>
+  messages: Array<{ task_id?: string; type?: string; content?: unknown }>
 ): number {
   // Find all compaction boundary messages (these mark where context was reset)
   const compactionTaskIds = new Set<string>();
@@ -183,7 +183,10 @@ export function calculateCumulativeContextWindow(
           )) ||
         content.status === 'compacting'
       ) {
-        compactionTaskIds.add(msg.task_id);
+        // Only add task_id if it exists
+        if (msg.task_id) {
+          compactionTaskIds.add(msg.task_id);
+        }
       }
     }
   }
@@ -204,8 +207,7 @@ export function calculateCumulativeContextWindow(
   for (let i = startIndex; i < tasks.length; i++) {
     const task = tasks[i];
     if (task.usage) {
-      const turnTokens =
-        (task.usage.input_tokens || 0) + (task.usage.output_tokens || 0);
+      const turnTokens = (task.usage.input_tokens || 0) + (task.usage.output_tokens || 0);
       cumulativeTokens += turnTokens;
     }
   }
