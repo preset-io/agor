@@ -253,6 +253,107 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     }
   };
 
+  // Regenerate static environment config from repo templates
+  const handleRegenerateFromTemplate = async () => {
+    if (!client || !onUpdateWorktree || !repo.environment_config) {
+      message.warning('No repository environment configuration to regenerate from');
+      return;
+    }
+
+    // Build template context
+    let customContext = {};
+    try {
+      customContext = JSON.parse(customContextJson);
+    } catch {
+      // Invalid JSON, use empty object
+    }
+
+    const context = {
+      worktree: {
+        unique_id: worktree.worktree_unique_id,
+        name: worktree.name,
+        path: worktree.path,
+      },
+      repo: {
+        slug: repo.slug,
+      },
+      custom: customContext,
+    };
+
+    // Render all 5 fields from templates
+    const updates: Partial<Worktree> = {};
+
+    if (repo.environment_config.up_command) {
+      try {
+        updates.start_command = renderTemplate(repo.environment_config.up_command, context);
+      } catch (error) {
+        message.error(
+          `Failed to render start command: ${error instanceof Error ? error.message : 'Unknown error'}`
+        );
+        return;
+      }
+    }
+
+    if (repo.environment_config.down_command) {
+      try {
+        updates.stop_command = renderTemplate(repo.environment_config.down_command, context);
+      } catch (error) {
+        message.error(
+          `Failed to render stop command: ${error instanceof Error ? error.message : 'Unknown error'}`
+        );
+        return;
+      }
+    }
+
+    if (repo.environment_config.health_check?.url_template) {
+      try {
+        updates.health_check_url = renderTemplate(
+          repo.environment_config.health_check.url_template,
+          context
+        );
+      } catch (error) {
+        message.error(
+          `Failed to render health check URL: ${error instanceof Error ? error.message : 'Unknown error'}`
+        );
+        return;
+      }
+    }
+
+    if (repo.environment_config.app_url_template) {
+      try {
+        updates.app_url = renderTemplate(repo.environment_config.app_url_template, context);
+      } catch (error) {
+        message.error(
+          `Failed to render app URL: ${error instanceof Error ? error.message : 'Unknown error'}`
+        );
+        return;
+      }
+    }
+
+    if (repo.environment_config.logs_command) {
+      try {
+        updates.logs_command = renderTemplate(repo.environment_config.logs_command, context);
+      } catch (error) {
+        message.error(
+          `Failed to render logs command: ${error instanceof Error ? error.message : 'Unknown error'}`
+        );
+        return;
+      }
+    }
+
+    // Update worktree with regenerated values
+    onUpdateWorktree(worktree.worktree_id, updates);
+
+    // Update local state
+    if (updates.start_command !== undefined) setStaticStartCommand(updates.start_command);
+    if (updates.stop_command !== undefined) setStaticStopCommand(updates.stop_command);
+    if (updates.health_check_url !== undefined) setStaticHealthCheckUrl(updates.health_check_url);
+    if (updates.app_url !== undefined) setStaticAppUrl(updates.app_url);
+    if (updates.logs_command !== undefined) setStaticLogsCommand(updates.logs_command);
+
+    message.success('Environment configuration regenerated from templates');
+  };
+
   // Check if template has unsaved changes
   const hasTemplateChanges = useMemo(() => {
     if (!repo.environment_config)
@@ -876,14 +977,30 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                   Environment Configuration (Direct Edit)
                 </Typography.Text>
                 {!isEditingUrls && (
-                  <Button
-                    type="text"
-                    size="small"
-                    icon={<EditOutlined />}
-                    onClick={() => setIsEditingUrls(true)}
-                  >
-                    Edit
-                  </Button>
+                  <Space size={4}>
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<ReloadOutlined />}
+                      onClick={handleRegenerateFromTemplate}
+                      disabled={!repo.environment_config}
+                      title={
+                        repo.environment_config
+                          ? 'Regenerate from repository templates'
+                          : 'No repository templates configured'
+                      }
+                    >
+                      Regenerate
+                    </Button>
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<EditOutlined />}
+                      onClick={() => setIsEditingUrls(true)}
+                    >
+                      Edit
+                    </Button>
+                  </Space>
                 )}
               </Space>
               <Typography.Text
