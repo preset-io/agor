@@ -313,39 +313,6 @@ export const TaskBlock = React.memo<TaskBlockProps>(
         ? task.tool_use_count
         : messages.reduce((sum, msg) => sum + (msg.tool_uses?.length || 0), 0);
 
-    // Calculate context window usage percentage for visual progress bar
-    const contextWindowPercentage =
-      task.context_window && task.context_window_limit
-        ? (task.context_window / task.context_window_limit) * 100
-        : 0;
-
-    // Color-code based on usage: green (<50%), yellow (50-80%), red (>80%)
-    // Use slightly more opaque colors for better visibility
-    const getContextWindowColor = () => {
-      if (contextWindowPercentage < 50) {
-        return 'rgba(82, 196, 26, 0.15)'; // Light green
-      }
-      if (contextWindowPercentage < 80) {
-        return 'rgba(250, 173, 20, 0.15)'; // Light orange
-      }
-      return 'rgba(255, 77, 79, 0.15)'; // Light red
-    };
-
-    // Create gradient background for footer based on context window usage
-    const footerBackground =
-      task.context_window && task.context_window_limit
-        ? `linear-gradient(to right, ${getContextWindowColor()} ${contextWindowPercentage}%, transparent ${contextWindowPercentage}%)`
-        : undefined;
-
-    // Debug logging (remove after testing)
-    if (task.context_window && task.context_window_limit) {
-      console.log(
-        `[TaskBlock] Context window: ${task.context_window}/${task.context_window_limit} (${contextWindowPercentage.toFixed(1)}%)`,
-        'Background:',
-        footerBackground
-      );
-    }
-
     // Task header shows when collapsed
     const taskHeader = (
       <Flex gap={token.sizeUnit * 2} style={{ width: '100%' }}>
@@ -380,18 +347,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
           </Flex>
 
           {/* Task metadata */}
-          <Flex
-            wrap
-            gap={token.sizeUnit * 1.5}
-            style={{
-              background: footerBackground,
-              padding: `${token.sizeUnit}px ${token.sizeUnit * 1.5}px`,
-              marginLeft: -token.sizeUnit * 1.5,
-              marginRight: -token.sizeUnit * 1.5,
-              marginBottom: -token.sizeUnit,
-              borderRadius: `0 0 ${token.borderRadius}px ${token.borderRadius}px`,
-            }}
-          >
+          <Flex wrap gap={token.sizeUnit * 1.5}>
             <TimerPill
               status={task.status}
               startedAt={task.message_range?.start_timestamp || task.created_at}

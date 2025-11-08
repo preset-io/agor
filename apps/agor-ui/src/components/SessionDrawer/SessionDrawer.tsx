@@ -209,10 +209,30 @@ const SessionDrawer = ({
       return {
         used: tasksWithContext[0].context_window!,
         limit: tasksWithContext[0].context_window_limit!,
+        modelUsage: tasksWithContext[0].model_usage,
       };
     }
     return null;
   }, [tasks]);
+
+  // Calculate context window percentage and gradient for footer background
+  const footerGradient = React.useMemo(() => {
+    if (!latestContextWindow) return undefined;
+
+    const percentage = (latestContextWindow.used / latestContextWindow.limit) * 100;
+
+    // Color-code based on usage
+    let color: string;
+    if (percentage < 50) {
+      color = 'rgba(82, 196, 26, 0.12)'; // Green
+    } else if (percentage < 80) {
+      color = 'rgba(250, 173, 20, 0.12)'; // Orange
+    } else {
+      color = 'rgba(255, 77, 79, 0.12)'; // Red
+    }
+
+    return `linear-gradient(to right, ${color} ${percentage}%, transparent ${percentage}%)`;
+  }, [latestContextWindow]);
 
   const footerTimerTask = React.useMemo(() => {
     if (tasks.length === 0) {
@@ -616,7 +636,7 @@ const SessionDrawer = ({
         style={{
           position: 'sticky',
           bottom: 0,
-          background: token.colorBgContainer,
+          background: footerGradient || token.colorBgContainer,
           borderTop: `1px solid ${token.colorBorder}`,
           padding: `${token.sizeUnit * 2}px ${token.sizeUnit * 6}px`,
           marginLeft: -token.sizeUnit * 6,
@@ -683,6 +703,7 @@ const SessionDrawer = ({
                 <ContextWindowPill
                   used={latestContextWindow.used}
                   limit={latestContextWindow.limit}
+                  modelUsage={latestContextWindow.modelUsage}
                 />
               )}
             </Space>
