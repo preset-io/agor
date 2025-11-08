@@ -108,9 +108,32 @@ export function extractSlugFromUrl(url: string): RepoSlug {
  * @returns True if valid
  */
 export function isValidSlug(slug: string): boolean {
-  // Must be org/name format with valid characters
-  const slugPattern = /^[a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+$/;
+  // Must be org/name format with valid characters (matching GitHub's naming rules)
+  // - Supports: alphanumeric, hyphens, underscores, and dots
+  // - Safe for use in filesystem paths
+  const slugPattern = /^[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+$/;
   return slugPattern.test(slug);
+}
+
+/**
+ * Validate git URL format
+ *
+ * @param url - Git URL to validate
+ * @returns True if valid git URL
+ *
+ * @example
+ * isValidGitUrl('git@github.com:apache/superset.git') // => true
+ * isValidGitUrl('https://github.com/apache/superset.git') // => true
+ * isValidGitUrl('https://github.com/apache/superset') // => true (page URL is valid)
+ */
+export function isValidGitUrl(url: string): boolean {
+  // SSH format: git@host:path or ssh://git@host/path
+  const sshPattern = /^(ssh:\/\/)?git@[\w.-]+(:\d+)?[:/][\w./-]+$/;
+
+  // HTTP(S) format: https://host/path
+  const httpsPattern = /^https?:\/\/[\w.-]+(:\d+)?\/[\w./-]+$/;
+
+  return sshPattern.test(url) || httpsPattern.test(url);
 }
 
 /**

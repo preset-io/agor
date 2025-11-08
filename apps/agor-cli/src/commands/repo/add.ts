@@ -4,7 +4,7 @@
  * Clones the repo to ~/.agor/repos/<name> and registers it with the daemon.
  */
 
-import { extractSlugFromUrl, isValidSlug } from '@agor/core/config';
+import { extractSlugFromUrl, isValidGitUrl, isValidSlug } from '@agor/core/config';
 import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import { BaseCommand } from '../../base-command';
@@ -37,6 +37,18 @@ export default class RepoAdd extends BaseCommand {
     const client = await this.connectToDaemon();
 
     try {
+      // Validate git URL format
+      if (!isValidGitUrl(args.url)) {
+        await this.cleanupClient(client);
+        this.error(
+          `Invalid git URL: ${args.url}\n\n` +
+            `Please provide a valid git repository URL:\n` +
+            `  SSH: ${chalk.cyan('git@github.com:apache/superset.git')}\n` +
+            `  HTTPS: ${chalk.cyan('https://github.com/apache/superset.git')}\n\n` +
+            `Note: Web page URLs like ${chalk.dim('github.com/org/repo')} are not valid.`
+        );
+      }
+
       // Extract slug from URL or use custom slug
       let slug = flags.slug;
 
@@ -52,7 +64,8 @@ export default class RepoAdd extends BaseCommand {
         await this.cleanupClient(client);
         this.error(
           `Invalid slug format: ${slug}\n` +
-            `Slug must be in format "org/name" (e.g., "apache/superset")\n` +
+            `Slug must be in format "org/name" with alphanumeric characters, dots, hyphens, or underscores\n` +
+            `Examples: ${chalk.cyan('apache/superset')}, ${chalk.cyan('my-org/my.repo')}\n` +
             `Use --slug to specify a custom slug.`
         );
       }

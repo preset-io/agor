@@ -3,6 +3,7 @@ import type { RepoSlug, WorktreeName } from '../types';
 import {
   extractSlugFromUrl,
   formatRepoReference,
+  isValidGitUrl,
   isValidSlug,
   parseRepoReference,
   resolveRepoReference,
@@ -380,6 +381,17 @@ describe('isValidSlug', () => {
     it('should accept alphanumeric mix', () => {
       expect(isValidSlug('org123_test-v2/repo_456-beta')).toBe(true);
     });
+
+    it('should accept slugs with dots', () => {
+      expect(isValidSlug('org.name/repo')).toBe(true);
+      expect(isValidSlug('org/repo.name')).toBe(true);
+      expect(isValidSlug('org.name/repo.name')).toBe(true);
+    });
+
+    it('should accept slugs with dots in middle', () => {
+      expect(isValidSlug('my.org/my.repo')).toBe(true);
+      expect(isValidSlug('org.v2/repo.beta')).toBe(true);
+    });
   });
 
   describe('invalid slugs', () => {
@@ -389,11 +401,6 @@ describe('isValidSlug', () => {
 
     it('should reject slug with multiple slashes', () => {
       expect(isValidSlug('org/sub/repo')).toBe(false);
-    });
-
-    it('should reject slug with dots', () => {
-      expect(isValidSlug('org.name/repo')).toBe(false);
-      expect(isValidSlug('org/repo.name')).toBe(false);
     });
 
     it('should reject slug with spaces', () => {
@@ -436,6 +443,102 @@ describe('isValidSlug', () => {
 
     it('should reject slug with backslash', () => {
       expect(isValidSlug('org\\repo')).toBe(false);
+    });
+  });
+});
+
+describe('isValidGitUrl', () => {
+  describe('valid SSH URLs', () => {
+    it('should accept standard SSH URL with .git', () => {
+      expect(isValidGitUrl('git@github.com:apache/superset.git')).toBe(true);
+    });
+
+    it('should accept SSH URL without .git', () => {
+      expect(isValidGitUrl('git@github.com:apache/superset')).toBe(true);
+    });
+
+    it('should accept GitLab SSH URL', () => {
+      expect(isValidGitUrl('git@gitlab.com:my-group/my-project.git')).toBe(true);
+    });
+
+    it('should accept SSH URL with custom host', () => {
+      expect(isValidGitUrl('git@git.example.com:company/repo.git')).toBe(true);
+    });
+
+    it('should accept SSH URL with port', () => {
+      expect(isValidGitUrl('git@github.com:22/org/repo.git')).toBe(true);
+    });
+
+    it('should accept ssh:// protocol format', () => {
+      expect(isValidGitUrl('ssh://git@github.com/org/repo.git')).toBe(true);
+    });
+
+    it('should accept SSH URL with dots in repo name', () => {
+      expect(isValidGitUrl('git@github.com:org.name/repo.name.git')).toBe(true);
+    });
+  });
+
+  describe('valid HTTPS URLs', () => {
+    it('should accept HTTPS URL with .git', () => {
+      expect(isValidGitUrl('https://github.com/apache/superset.git')).toBe(true);
+    });
+
+    it('should accept HTTPS URL without .git', () => {
+      expect(isValidGitUrl('https://github.com/apache/superset')).toBe(true);
+    });
+
+    it('should accept GitLab HTTPS URL', () => {
+      expect(isValidGitUrl('https://gitlab.com/my-group/my-project.git')).toBe(true);
+    });
+
+    it('should accept Bitbucket HTTPS URL', () => {
+      expect(isValidGitUrl('https://bitbucket.org/team/repo.git')).toBe(true);
+    });
+
+    it('should accept HTTP URL (insecure but valid)', () => {
+      expect(isValidGitUrl('http://github.com/org/repo.git')).toBe(true);
+    });
+
+    it('should accept HTTPS with custom port', () => {
+      expect(isValidGitUrl('https://git.example.com:8443/org/repo.git')).toBe(true);
+    });
+
+    it('should accept HTTPS URL with dots in repo name', () => {
+      expect(isValidGitUrl('https://github.com/org.name/repo.name.git')).toBe(true);
+    });
+
+    it('should accept custom domain HTTPS URL', () => {
+      expect(isValidGitUrl('https://git.internal.company.com/org/repo.git')).toBe(true);
+    });
+  });
+
+  describe('invalid URLs', () => {
+    it('should reject plain text', () => {
+      expect(isValidGitUrl('not-a-url')).toBe(false);
+    });
+
+    it('should reject GitHub web page URL', () => {
+      expect(isValidGitUrl('github.com/org/repo')).toBe(false);
+    });
+
+    it('should reject incomplete SSH URL', () => {
+      expect(isValidGitUrl('git@github.com')).toBe(false);
+    });
+
+    it('should reject URL without protocol or git@', () => {
+      expect(isValidGitUrl('example.com/repo')).toBe(false);
+    });
+
+    it('should reject empty string', () => {
+      expect(isValidGitUrl('')).toBe(false);
+    });
+
+    it('should reject file:// URLs', () => {
+      expect(isValidGitUrl('file:///path/to/repo')).toBe(false);
+    });
+
+    it('should reject ftp:// URLs', () => {
+      expect(isValidGitUrl('ftp://example.com/repo.git')).toBe(false);
     });
   });
 });

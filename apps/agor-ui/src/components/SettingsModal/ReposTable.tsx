@@ -86,7 +86,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({ repos, onCreate, onUpdat
   };
 
   const handleSaveRepo = () => {
-    repoForm.validateFields().then((values) => {
+    repoForm.validateFields().then(values => {
       if (isEditing && editingRepo) {
         // Update existing repo
         onUpdate?.(editingRepo.repo_id, {
@@ -150,7 +150,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({ repos, onCreate, onUpdat
 
       {repos.length > 0 && (
         <Space direction="vertical" size={16} style={{ width: '100%' }}>
-          {repos.map((repo) => (
+          {repos.map(repo => (
             <Card
               key={repo.repo_id}
               size="small"
@@ -242,8 +242,16 @@ export const ReposTable: React.FC<ReposTableProps> = ({ repos, onCreate, onUpdat
             <Form.Item
               label="Repository URL"
               name="url"
-              rules={[{ required: !isEditing, message: 'Please enter a git repository URL' }]}
-              extra="HTTPS or SSH URL"
+              rules={[
+                { required: !isEditing, message: 'Please enter a git repository URL' },
+                {
+                  pattern:
+                    /^((ssh:\/\/)?git@[\w.-]+(:\d+)?[:/][\w./-]+|https?:\/\/[\w.-]+(:\d+)?\/[\w./-]+)$/,
+                  message:
+                    'Please enter a valid git URL (e.g., git@github.com:org/repo.git or https://github.com/org/repo.git)',
+                },
+              ]}
+              extra="HTTPS or SSH URL (e.g., git@github.com:org/repo.git)"
             >
               <Input
                 placeholder="https://github.com/apache/superset.git"
@@ -259,11 +267,11 @@ export const ReposTable: React.FC<ReposTableProps> = ({ repos, onCreate, onUpdat
             rules={[
               { required: true, message: 'Please enter a slug' },
               {
-                pattern: /^[a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+$/,
-                message: 'Slug must be in org/repo format (e.g., apache/superset)',
+                pattern: /^[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+$/,
+                message: 'Slug must be in org/repo format (supports dots, hyphens, underscores)',
               },
             ]}
-            extra="Auto-detected from URL (editable). Format: org/repo"
+            extra="Auto-detected from URL (editable). Format: org/repo (dots allowed)"
           >
             <Input placeholder="apache/superset" disabled={isEditing} />
           </Form.Item>
