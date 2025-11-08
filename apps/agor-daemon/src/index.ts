@@ -1808,13 +1808,23 @@ async function main() {
                     tool_use_count: toolUseCount,
                     usage,
                     // Save execution metadata from result
-                    duration_ms: 'durationMs' in result ? result.durationMs : undefined,
-                    agent_session_id: 'agentSessionId' in result ? result.agentSessionId : undefined,
-                    context_window: 'contextWindow' in result ? result.contextWindow : undefined,
+                    duration_ms:
+                      'durationMs' in result ? (result.durationMs as number | undefined) : undefined,
+                    agent_session_id:
+                      'agentSessionId' in result
+                        ? (result.agentSessionId as string | undefined)
+                        : undefined,
+                    context_window:
+                      'contextWindow' in result
+                        ? (result.contextWindow as number | undefined)
+                        : undefined,
                     context_window_limit:
-                      'contextWindowLimit' in result ? result.contextWindowLimit : undefined,
-                    model: 'model' in result ? result.model : undefined,
-                    model_usage: 'modelUsage' in result ? result.modelUsage : undefined,
+                      'contextWindowLimit' in result
+                        ? (result.contextWindowLimit as number | undefined)
+                        : undefined,
+                    model: 'model' in result ? (result.model as string | undefined) : undefined,
+                    model_usage:
+                      'modelUsage' in result ? (result.modelUsage as Task['model_usage']) : undefined,
                   },
                   'Task'
                 );
