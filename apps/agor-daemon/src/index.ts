@@ -99,6 +99,55 @@ function isPaginated<T>(result: T[] | Paginated<T>): result is Paginated<T> {
   return !Array.isArray(result) && 'data' in result && 'total' in result;
 }
 
+/**
+ * Calculate context window for a completed task (Claude Code only)
+ *
+ * For Claude Code sessions, fetches all tasks and messages to calculate cumulative
+ * conversation size with compaction handling. For other tools, uses simple calculation.
+ *
+ * @param session - Current session
+ * @param usage - Token usage from the completed task
+ * @param tasksService - Tasks service for querying all session tasks
+ * @param messagesService - Messages service for detecting compaction events
+ * @returns Context window usage in tokens, or undefined if calculation fails
+ */
+async function calculateTaskContextWindow(
+  session: Session,
+  usage: TokenUsage | undefined,
+  tasksService: TasksServiceImpl,
+  messagesService: MessagesServiceImpl
+): Promise<number | undefined> {
+  if (session.agentic_tool !== 'claude-code') {
+    // For non-Claude Code tools, use simple calculation
+    return calculateContextWindowUsage(usage);
+  }
+
+  try {
+    // Fetch all tasks and messages for this session
+    const allTasksResult = (await tasksService.find({
+      query: { session_id: session.session_id, $limit: 10000 },
+    })) as Task[] | Paginated<Task>;
+    const allTasks: Task[] = isPaginated(allTasksResult) ? allTasksResult.data : allTasksResult;
+
+    const allMessagesResult = (await messagesService.find({
+      query: { session_id: session.session_id, $limit: 10000 },
+    })) as Message[] | Paginated<Message>;
+    const allMessages: Message[] = isPaginated(allMessagesResult)
+      ? allMessagesResult.data
+      : allMessagesResult;
+
+    // Calculate cumulative context window (input + output tokens)
+    return calculateCumulativeContextWindow(allTasks, allMessages);
+  } catch (err) {
+    console.warn(
+      `⚠️  Failed to calculate cumulative context window for session ${session.session_id}:`,
+      err
+    );
+    // Fallback to simple calculation
+    return calculateContextWindowUsage(usage);
+  }
+}
+
 import { homedir } from 'node:os';
 import cors from 'cors';
 import express from 'express';
@@ -1917,38 +1966,12 @@ async function main() {
                 // Calculate cumulative context window for Claude Code sessions
                 // This represents the actual conversation size (input + output tokens)
                 // across all tasks, with compaction handling
-                let contextWindow: number | undefined;
-                if (session.agentic_tool === 'claude-code') {
-                  try {
-                    // Fetch all tasks and messages for this session
-                    const allTasksResult = (await tasksService.find({
-                      query: { session_id: session.session_id, $limit: 10000 },
-                    })) as Task[] | Paginated<Task>;
-                    const allTasks: Task[] = isPaginated(allTasksResult)
-                      ? allTasksResult.data
-                      : allTasksResult;
-
-                    const allMessagesResult = (await messagesService.find({
-                      query: { session_id: session.session_id, $limit: 10000 },
-                    })) as Message[] | Paginated<Message>;
-                    const allMessages: Message[] = isPaginated(allMessagesResult)
-                      ? allMessagesResult.data
-                      : allMessagesResult;
-
-                    // Calculate cumulative context window (input + output tokens)
-                    contextWindow = calculateCumulativeContextWindow(allTasks, allMessages);
-                  } catch (err) {
-                    console.warn(
-                      `⚠️  Failed to calculate cumulative context window for task ${task.task_id}:`,
-                      err
-                    );
-                    // Fallback to old calculation
-                    contextWindow = calculateContextWindowUsage(usage);
-                  }
-                } else {
-                  // For non-Claude Code tools, use simple calculation
-                  contextWindow = calculateContextWindowUsage(usage);
-                }
+                const contextWindow = await calculateTaskContextWindow(
+                  session,
+                  usage,
+                  tasksService,
+                  messagesService
+                );
 
                 const updated = await safePatch(
                   tasksService,
