@@ -333,9 +333,12 @@ export const worktrees = sqliteTable(
     ref: text('ref').notNull(), // Current branch/tag/commit
     worktree_unique_id: integer('worktree_unique_id').notNull(), // Auto-assigned sequential ID for templates
 
-    // Environment URLs (static, initialized from templates, then user-editable)
-    app_url: text('app_url'), // Application URL (initialized from repo's app_url_template)
+    // Environment configuration (static, initialized from templates, then user-editable)
+    start_command: text('start_command'), // Start command (initialized from repo's up_command template)
+    stop_command: text('stop_command'), // Stop command (initialized from repo's down_command template)
     health_check_url: text('health_check_url'), // Health check URL (initialized from repo's health_check.url_template)
+    app_url: text('app_url'), // Application URL (initialized from repo's app_url_template)
+    logs_command: text('logs_command'), // Logs command (initialized from repo's logs_command template)
 
     // Board relationship (nullable - worktrees can exist without boards)
     board_id: text('board_id', { length: 36 }).references(() => boards.board_id, {

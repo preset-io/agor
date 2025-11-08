@@ -33,8 +33,11 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
       name: row.name,
       ref: row.ref,
       worktree_unique_id: row.worktree_unique_id,
-      app_url: row.app_url ?? undefined, // Static URL fields
+      start_command: row.start_command ?? undefined, // Static environment fields
+      stop_command: row.stop_command ?? undefined,
       health_check_url: row.health_check_url ?? undefined,
+      app_url: row.app_url ?? undefined,
+      logs_command: row.logs_command ?? undefined,
       board_id: (row.board_id as UUID | null) ?? undefined, // Top-level column
       schedule_enabled: Boolean(row.schedule_enabled), // Convert SQLite integer (0/1) to boolean
       schedule_cron: row.schedule_cron ?? undefined,
@@ -60,9 +63,12 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
       name: worktree.name!,
       ref: worktree.ref!,
       worktree_unique_id: worktree.worktree_unique_id!, // Required field
-      // Static URLs (initialized from templates, then user-editable)
-      app_url: worktree.app_url ?? null,
+      // Static environment fields (initialized from templates, then user-editable)
+      start_command: worktree.start_command ?? null,
+      stop_command: worktree.stop_command ?? null,
       health_check_url: worktree.health_check_url ?? null,
+      app_url: worktree.app_url ?? null,
+      logs_command: worktree.logs_command ?? null,
       // Explicitly convert undefined to null for Drizzle (undefined values are ignored in set())
       board_id: worktree.board_id === undefined ? null : worktree.board_id || null,
       schedule_enabled: worktree.schedule_enabled ?? false,

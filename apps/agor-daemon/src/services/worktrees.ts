@@ -360,11 +360,10 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
    */
   async startEnvironment(id: WorktreeID, params?: WorktreeParams): Promise<Worktree> {
     const worktree = await this.get(id, params);
-    const repo = (await this.app.service('repos').get(worktree.repo_id)) as Repo;
 
-    // Validate environment config exists
-    if (!repo.environment_config?.up_command) {
-      throw new Error('No environment configuration found for this repository');
+    // Validate static start command exists
+    if (!worktree.start_command) {
+      throw new Error('No start command configured for this worktree');
     }
 
     // Check if already running
@@ -383,11 +382,8 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     );
 
     try {
-      // Build template context
-      const templateContext = this.buildTemplateContext(worktree, repo);
-
-      // Render command
-      const command = renderTemplate(repo.environment_config.up_command, templateContext);
+      // Use static start_command (initialized from template at worktree creation)
+      const command = worktree.start_command;
 
       console.log(`🚀 Starting environment for worktree ${worktree.name}: ${command}`);
 
@@ -464,7 +460,6 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
    */
   async stopEnvironment(id: WorktreeID, params?: WorktreeParams): Promise<Worktree> {
     const worktree = await this.get(id, params);
-    const repo = (await this.app.service('repos').get(worktree.repo_id)) as Repo;
 
     // Set status to 'stopping'
     await this.updateEnvironment(
@@ -476,13 +471,10 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     );
 
     try {
-      // Check if we have a down command
-      if (repo.environment_config?.down_command) {
-        // Build template context
-        const templateContext = this.buildTemplateContext(worktree, repo);
-
-        // Render command
-        const command = renderTemplate(repo.environment_config.down_command, templateContext);
+      // Check if we have a static stop command
+      if (worktree.stop_command) {
+        // Use static stop_command (initialized from template at worktree creation)
+        const command = worktree.stop_command;
 
         console.log(`🛑 Stopping environment for worktree ${worktree.name}: ${command}`);
 
@@ -710,10 +702,9 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     truncated?: boolean;
   }> {
     const worktree = await this.get(id, params);
-    const repo = (await this.app.service('repos').get(worktree.repo_id)) as Repo;
 
-    // Check if logs command is configured
-    if (!repo.environment_config?.logs_command) {
+    // Check if static logs command is configured
+    if (!worktree.logs_command) {
       return {
         logs: '',
         timestamp: new Date().toISOString(),
@@ -722,9 +713,8 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     }
 
     try {
-      // Build template context and render command
-      const templateContext = this.buildTemplateContext(worktree, repo);
-      const command = renderTemplate(repo.environment_config.logs_command, templateContext);
+      // Use static logs_command (initialized from template at worktree creation)
+      const command = worktree.logs_command;
 
       console.log(`📋 Fetching logs for worktree ${worktree.name}: ${command}`);
 

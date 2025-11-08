@@ -37,6 +37,36 @@ export interface Worktree {
   worktree_unique_id: number;
 
   /**
+   * Static start command (initialized from repo's up_command template, then user-editable)
+   *
+   * Persistent command used to start the environment. Set once during worktree
+   * creation from templates, then user-controlled.
+   *
+   * Example: "pnpm dev"
+   */
+  start_command?: string;
+
+  /**
+   * Static stop command (initialized from repo's down_command template, then user-editable)
+   *
+   * Persistent command used to stop the environment. Set once during worktree
+   * creation from templates, then user-controlled.
+   *
+   * Example: "pkill -f 'pnpm dev'"
+   */
+  stop_command?: string;
+
+  /**
+   * Static health check URL (initialized from repo's health_check.url_template, then user-editable)
+   *
+   * Persistent URL used for environment health checks. Set once during worktree
+   * creation from templates, then user-controlled.
+   *
+   * Example: "http://localhost:5173/health"
+   */
+  health_check_url?: string;
+
+  /**
    * Static app URL (initialized from repo's app_url_template, then user-editable)
    *
    * Unlike access_urls (which is ephemeral runtime state), this is a persistent
@@ -48,14 +78,14 @@ export interface Worktree {
   app_url?: string;
 
   /**
-   * Static health check URL (initialized from repo's health_check.url_template, then user-editable)
+   * Static logs command (initialized from repo's logs_command template, then user-editable)
    *
-   * Persistent URL used for environment health checks. Set once during worktree
+   * Persistent command used to fetch logs. Set once during worktree
    * creation from templates, then user-controlled.
    *
-   * Example: "http://localhost:5173/health"
+   * Example: "docker logs agor-daemon"
    */
-  health_check_url?: string;
+  logs_command?: string;
 
   /** Timestamps */
   created_at: string;

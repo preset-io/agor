@@ -158,10 +158,13 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   );
   const [logsCommand, setLogsCommand] = useState(repo.environment_config?.logs_command || '');
 
-  // Worktree static URLs state (editable, user-controlled)
+  // Worktree static environment config state (editable, user-controlled)
   const [isEditingUrls, setIsEditingUrls] = useState(false);
-  const [staticAppUrl, setStaticAppUrl] = useState(worktree.app_url || '');
+  const [staticStartCommand, setStaticStartCommand] = useState(worktree.start_command || '');
+  const [staticStopCommand, setStaticStopCommand] = useState(worktree.stop_command || '');
   const [staticHealthCheckUrl, setStaticHealthCheckUrl] = useState(worktree.health_check_url || '');
+  const [staticAppUrl, setStaticAppUrl] = useState(worktree.app_url || '');
+  const [staticLogsCommand, setStaticLogsCommand] = useState(worktree.logs_command || '');
 
   // Custom context state (editable)
   const [isEditingContext, setIsEditingContext] = useState(false);
@@ -870,7 +873,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                 }}
               >
                 <Typography.Text strong style={{ fontSize: 13 }}>
-                  Environment URLs (Direct Edit)
+                  Environment Configuration (Direct Edit)
                 </Typography.Text>
                 {!isEditingUrls && (
                   <Button
@@ -887,12 +890,54 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                 type="secondary"
                 style={{ fontSize: 11, display: 'block', marginBottom: 8 }}
               >
-                Static URLs initialized from templates at worktree creation. Edit directly to
-                override.
+                Static configuration initialized from templates at worktree creation. Edit directly
+                to override.
               </Typography.Text>
               {isEditingUrls ? (
                 <>
                   <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                    <div>
+                      <Typography.Text
+                        strong
+                        style={{ fontSize: 12, display: 'block', marginBottom: 4 }}
+                      >
+                        Start Command
+                      </Typography.Text>
+                      <Input
+                        value={staticStartCommand}
+                        onChange={e => setStaticStartCommand(e.target.value)}
+                        placeholder="pnpm dev"
+                        style={{ fontFamily: 'monospace', fontSize: 11 }}
+                      />
+                    </div>
+                    <div>
+                      <Typography.Text
+                        strong
+                        style={{ fontSize: 12, display: 'block', marginBottom: 4 }}
+                      >
+                        Stop Command (Optional)
+                      </Typography.Text>
+                      <Input
+                        value={staticStopCommand}
+                        onChange={e => setStaticStopCommand(e.target.value)}
+                        placeholder="pkill -f 'pnpm dev'"
+                        style={{ fontFamily: 'monospace', fontSize: 11 }}
+                      />
+                    </div>
+                    <div>
+                      <Typography.Text
+                        strong
+                        style={{ fontSize: 12, display: 'block', marginBottom: 4 }}
+                      >
+                        Health Check URL (Optional)
+                      </Typography.Text>
+                      <Input
+                        value={staticHealthCheckUrl}
+                        onChange={e => setStaticHealthCheckUrl(e.target.value)}
+                        placeholder="http://localhost:5173/health"
+                        style={{ fontFamily: 'monospace', fontSize: 11 }}
+                      />
+                    </div>
                     <div>
                       <Typography.Text
                         strong
@@ -912,12 +957,12 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                         strong
                         style={{ fontSize: 12, display: 'block', marginBottom: 4 }}
                       >
-                        Health Check URL (Optional)
+                        Logs Command (Optional)
                       </Typography.Text>
                       <Input
-                        value={staticHealthCheckUrl}
-                        onChange={e => setStaticHealthCheckUrl(e.target.value)}
-                        placeholder="http://localhost:5173/health"
+                        value={staticLogsCommand}
+                        onChange={e => setStaticLogsCommand(e.target.value)}
+                        placeholder="docker logs agor-daemon"
                         style={{ fontFamily: 'monospace', fontSize: 11 }}
                       />
                     </div>
@@ -930,19 +975,25 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                       onClick={() => {
                         if (!onUpdateWorktree) return;
                         onUpdateWorktree(worktree.worktree_id, {
-                          app_url: staticAppUrl || undefined,
+                          start_command: staticStartCommand || undefined,
+                          stop_command: staticStopCommand || undefined,
                           health_check_url: staticHealthCheckUrl || undefined,
+                          app_url: staticAppUrl || undefined,
+                          logs_command: staticLogsCommand || undefined,
                         });
                         setIsEditingUrls(false);
                       }}
                     >
-                      Save URLs
+                      Save Configuration
                     </Button>
                     <Button
                       size="small"
                       onClick={() => {
-                        setStaticAppUrl(worktree.app_url || '');
+                        setStaticStartCommand(worktree.start_command || '');
+                        setStaticStopCommand(worktree.stop_command || '');
                         setStaticHealthCheckUrl(worktree.health_check_url || '');
+                        setStaticAppUrl(worktree.app_url || '');
+                        setStaticLogsCommand(worktree.logs_command || '');
                         setIsEditingUrls(false);
                       }}
                     >
@@ -952,9 +1003,22 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                 </>
               ) : (
                 <Descriptions column={1} bordered size="small" style={{ fontSize: 11 }}>
-                  <Descriptions.Item label="App URL">
-                    <Typography.Text code copyable={staticAppUrl ? { text: staticAppUrl } : false}>
-                      {staticAppUrl || (
+                  <Descriptions.Item label="Start Command">
+                    <Typography.Text
+                      code
+                      copyable={staticStartCommand ? { text: staticStartCommand } : false}
+                    >
+                      {staticStartCommand || (
+                        <Typography.Text type="secondary">(not set)</Typography.Text>
+                      )}
+                    </Typography.Text>
+                  </Descriptions.Item>
+                  <Descriptions.Item label="Stop Command">
+                    <Typography.Text
+                      code
+                      copyable={staticStopCommand ? { text: staticStopCommand } : false}
+                    >
+                      {staticStopCommand || (
                         <Typography.Text type="secondary">(not set)</Typography.Text>
                       )}
                     </Typography.Text>
@@ -965,6 +1029,23 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                       copyable={staticHealthCheckUrl ? { text: staticHealthCheckUrl } : false}
                     >
                       {staticHealthCheckUrl || (
+                        <Typography.Text type="secondary">(not set)</Typography.Text>
+                      )}
+                    </Typography.Text>
+                  </Descriptions.Item>
+                  <Descriptions.Item label="App URL">
+                    <Typography.Text code copyable={staticAppUrl ? { text: staticAppUrl } : false}>
+                      {staticAppUrl || (
+                        <Typography.Text type="secondary">(not set)</Typography.Text>
+                      )}
+                    </Typography.Text>
+                  </Descriptions.Item>
+                  <Descriptions.Item label="Logs Command">
+                    <Typography.Text
+                      code
+                      copyable={staticLogsCommand ? { text: staticLogsCommand } : false}
+                    >
+                      {staticLogsCommand || (
                         <Typography.Text type="secondary">(not set)</Typography.Text>
                       )}
                     </Typography.Text>

@@ -122,9 +122,12 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
 
     const worktreeUniqueId = autoAssignWorktreeUniqueId(existingWorktrees);
 
-    // Initialize static URLs from templates (if repo has environment config)
-    let app_url: string | undefined;
+    // Initialize static environment fields from templates (if repo has environment config)
+    let start_command: string | undefined;
+    let stop_command: string | undefined;
     let health_check_url: string | undefined;
+    let app_url: string | undefined;
+    let logs_command: string | undefined;
 
     if (repo.environment_config) {
       const templateContext = {
@@ -139,12 +142,21 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         custom: {}, // No custom context at creation time
       };
 
-      // Render app_url from template
-      if (repo.environment_config.app_url_template) {
+      // Render start_command from template
+      if (repo.environment_config.up_command) {
         try {
-          app_url = renderTemplate(repo.environment_config.app_url_template, templateContext);
+          start_command = renderTemplate(repo.environment_config.up_command, templateContext);
         } catch (err) {
-          console.warn(`Failed to render app_url for ${data.name}:`, err);
+          console.warn(`Failed to render start_command for ${data.name}:`, err);
+        }
+      }
+
+      // Render stop_command from template
+      if (repo.environment_config.down_command) {
+        try {
+          stop_command = renderTemplate(repo.environment_config.down_command, templateContext);
+        } catch (err) {
+          console.warn(`Failed to render stop_command for ${data.name}:`, err);
         }
       }
 
@@ -159,6 +171,24 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
           console.warn(`Failed to render health_check_url for ${data.name}:`, err);
         }
       }
+
+      // Render app_url from template
+      if (repo.environment_config.app_url_template) {
+        try {
+          app_url = renderTemplate(repo.environment_config.app_url_template, templateContext);
+        } catch (err) {
+          console.warn(`Failed to render app_url for ${data.name}:`, err);
+        }
+      }
+
+      // Render logs_command from template
+      if (repo.environment_config.logs_command) {
+        try {
+          logs_command = renderTemplate(repo.environment_config.logs_command, templateContext);
+        } catch (err) {
+          console.warn(`Failed to render logs_command for ${data.name}:`, err);
+        }
+      }
     }
 
     // Create worktree record in database using the service (broadcasts WebSocket event)
@@ -171,8 +201,11 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         base_ref: data.sourceBranch,
         new_branch: data.createBranch ?? false,
         worktree_unique_id: worktreeUniqueId,
-        app_url, // Static URL initialized from template
-        health_check_url, // Static URL initialized from template
+        start_command, // Static environment fields initialized from templates
+        stop_command,
+        health_check_url,
+        app_url,
+        logs_command,
         sessions: [],
         last_used: new Date().toISOString(),
         issue_url: data.issue_url,
