@@ -81,6 +81,7 @@ import type {
   User,
 } from '@agor/core/types';
 import { SessionStatus, TaskStatus } from '@agor/core/types';
+import { calculateContextWindowUsage } from '@agor/core/utils/context-window';
 import type { TokenUsage } from '@agor/core/utils/pricing';
 // Import Claude SDK's PermissionMode type for ClaudeTool method signatures
 // (Agor's PermissionMode is a superset of all tool permission modes)
@@ -1814,10 +1815,7 @@ async function main() {
                       'agentSessionId' in result
                         ? (result.agentSessionId as string | undefined)
                         : undefined,
-                    context_window:
-                      'contextWindow' in result
-                        ? (result.contextWindow as number | undefined)
-                        : undefined,
+                    context_window: calculateContextWindowUsage(usage),
                     context_window_limit:
                       'contextWindowLimit' in result
                         ? (result.contextWindowLimit as number | undefined)

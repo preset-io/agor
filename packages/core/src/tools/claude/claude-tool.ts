@@ -27,6 +27,7 @@ import {
   type TaskID,
   TaskStatus,
 } from '../../types';
+import { calculateModelContextWindowUsage } from '../../utils/context-window';
 import type { TokenUsage } from '../../utils/pricing';
 import type { ImportOptions, ITool, SessionData, ToolCapabilities } from '../base';
 import { loadClaudeSession } from './import/load-session';
@@ -363,11 +364,7 @@ export class ClaudeTool implements ITool {
         let maxUsage = 0;
         let maxLimit = 0;
         for (const modelData of Object.values(modelUsageTyped)) {
-          const usage =
-            (modelData.inputTokens || 0) +
-            (modelData.outputTokens || 0) +
-            (modelData.cacheReadInputTokens || 0) +
-            (modelData.cacheCreationInputTokens || 0);
+          const usage = calculateModelContextWindowUsage(modelData);
           const limit = modelData.contextWindow || 0;
           if (usage > maxUsage) {
             maxUsage = usage;
@@ -627,11 +624,7 @@ export class ClaudeTool implements ITool {
         let maxUsage = 0;
         let maxLimit = 0;
         for (const modelData of Object.values(modelUsageTyped)) {
-          const usage =
-            (modelData.inputTokens || 0) +
-            (modelData.outputTokens || 0) +
-            (modelData.cacheReadInputTokens || 0) +
-            (modelData.cacheCreationInputTokens || 0);
+          const usage = calculateModelContextWindowUsage(modelData);
           const limit = modelData.contextWindow || 0;
           if (usage > maxUsage) {
             maxUsage = usage;
