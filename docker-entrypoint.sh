@@ -3,10 +3,11 @@ set -e
 
 echo "🚀 Starting Agor development environment..."
 
-# Always run pnpm install to ensure correct platform binaries
-# (macOS host has different binaries than Linux container, e.g., @rollup/rollup-linux-arm64-gnu)
-echo "📦 Installing dependencies..."
-yes | pnpm install --reporter=default
+# Re-run pnpm install to sync any package.json changes since build
+# Uses --prefer-frozen-lockfile to avoid full reinstall when nothing changed
+# Use yes pipe to auto-confirm any prompts if lockfile needs update
+echo "📦 Syncing dependencies (if package.json changed)..."
+yes | pnpm install --prefer-frozen-lockfile --reporter=default 2>&1 | grep -vE "(Already up to date|up to date, audited)" || true
 
 # Initialize husky git hooks (required in Docker since --prefer-frozen-lockfile skips post-install hooks)
 echo "🎣 Initializing git hooks..."
