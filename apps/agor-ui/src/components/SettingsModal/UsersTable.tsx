@@ -1,4 +1,10 @@
-import type { AgenticToolName, CreateUserInput, MCPServer, UpdateUserInput, User } from '@agor/core/types';
+import type {
+  AgenticToolName,
+  CreateUserInput,
+  MCPServer,
+  UpdateUserInput,
+  User,
+} from '@agor/core/types';
 import { getDefaultPermissionMode } from '@agor/core/types';
 import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
 import {
@@ -50,6 +56,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
   const [claudeForm] = Form.useForm();
   const [codexForm] = Form.useForm();
   const [geminiForm] = Form.useForm();
+  const [opencodeForm] = Form.useForm();
 
   // API key management state for user edit
   const [userApiKeyStatus, setUserApiKeyStatus] = useState<ApiKeyStatus>({
@@ -68,6 +75,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
     'claude-code': false,
     codex: false,
     gemini: false,
+    opencode: false,
   });
 
   // Load user's API key and env var status when editing
@@ -126,7 +134,8 @@ export const UsersTable: React.FC<UsersTableProps> = ({
     const defaults = user.default_agentic_config;
 
     claudeForm.setFieldsValue({
-      permissionMode: defaults?.['claude-code']?.permissionMode || getDefaultPermissionMode('claude-code'),
+      permissionMode:
+        defaults?.['claude-code']?.permissionMode || getDefaultPermissionMode('claude-code'),
       modelConfig: defaults?.['claude-code']?.modelConfig,
       mcpServerIds: defaults?.['claude-code']?.mcpServerIds || [],
     });
@@ -273,6 +282,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
       'claude-code': claudeForm,
       codex: codexForm,
       gemini: geminiForm,
+      opencode: opencodeForm,
     };
 
     const currentForm = formMap[tool];
@@ -318,6 +328,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
       'claude-code': claudeForm,
       codex: codexForm,
       gemini: geminiForm,
+      opencode: opencodeForm,
     };
 
     const currentForm = formMap[tool];
@@ -582,7 +593,11 @@ export const UsersTable: React.FC<UsersTableProps> = ({
                     <Input placeholder="user@example.com" />
                   </Form.Item>
 
-                  <Form.Item label="Password" name="password" help="Leave blank to keep current password">
+                  <Form.Item
+                    label="Password"
+                    name="password"
+                    help="Leave blank to keep current password"
+                  >
                     <Input.Password placeholder="••••••••" />
                   </Form.Item>
 
@@ -607,7 +622,8 @@ export const UsersTable: React.FC<UsersTableProps> = ({
               children: (
                 <div style={{ paddingTop: 8 }}>
                   <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
-                    Per-user API keys take precedence over global settings. These keys are encrypted at rest.
+                    Per-user API keys take precedence over global settings. These keys are encrypted
+                    at rest.
                   </Typography.Paragraph>
                   <ApiKeyFields
                     keyStatus={userApiKeyStatus}
@@ -624,7 +640,8 @@ export const UsersTable: React.FC<UsersTableProps> = ({
               children: (
                 <div style={{ paddingTop: 8 }}>
                   <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
-                    Environment variables are encrypted at rest and available to all sessions for this user.
+                    Environment variables are encrypted at rest and available to all sessions for
+                    this user.
                   </Typography.Paragraph>
                   <EnvVarEditor
                     envVars={userEnvVars}
@@ -641,13 +658,20 @@ export const UsersTable: React.FC<UsersTableProps> = ({
               children: (
                 <div style={{ paddingTop: 8 }}>
                   <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
-                    Configure default settings for Claude Code. These will prepopulate session creation forms.
+                    Configure default settings for Claude Code. These will prepopulate session
+                    creation forms.
                   </Typography.Paragraph>
                   <Form form={claudeForm} layout="vertical">
-                    <AgenticToolConfigForm agenticTool="claude-code" mcpServers={mcpServers} showHelpText={false} />
+                    <AgenticToolConfigForm
+                      agenticTool="claude-code"
+                      mcpServers={mcpServers}
+                      showHelpText={false}
+                    />
                   </Form>
                   <div style={{ marginTop: 16 }}>
-                    <Button onClick={() => handleAgenticConfigClear('claude-code')}>Clear Defaults</Button>
+                    <Button onClick={() => handleAgenticConfigClear('claude-code')}>
+                      Clear Defaults
+                    </Button>
                   </div>
                 </div>
               ),
@@ -658,13 +682,20 @@ export const UsersTable: React.FC<UsersTableProps> = ({
               children: (
                 <div style={{ paddingTop: 8 }}>
                   <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
-                    Configure default settings for Codex. These will prepopulate session creation forms.
+                    Configure default settings for Codex. These will prepopulate session creation
+                    forms.
                   </Typography.Paragraph>
                   <Form form={codexForm} layout="vertical">
-                    <AgenticToolConfigForm agenticTool="codex" mcpServers={mcpServers} showHelpText={false} />
+                    <AgenticToolConfigForm
+                      agenticTool="codex"
+                      mcpServers={mcpServers}
+                      showHelpText={false}
+                    />
                   </Form>
                   <div style={{ marginTop: 16 }}>
-                    <Button onClick={() => handleAgenticConfigClear('codex')}>Clear Defaults</Button>
+                    <Button onClick={() => handleAgenticConfigClear('codex')}>
+                      Clear Defaults
+                    </Button>
                   </div>
                 </div>
               ),
@@ -675,13 +706,20 @@ export const UsersTable: React.FC<UsersTableProps> = ({
               children: (
                 <div style={{ paddingTop: 8 }}>
                   <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
-                    Configure default settings for Gemini. These will prepopulate session creation forms.
+                    Configure default settings for Gemini. These will prepopulate session creation
+                    forms.
                   </Typography.Paragraph>
                   <Form form={geminiForm} layout="vertical">
-                    <AgenticToolConfigForm agenticTool="gemini" mcpServers={mcpServers} showHelpText={false} />
+                    <AgenticToolConfigForm
+                      agenticTool="gemini"
+                      mcpServers={mcpServers}
+                      showHelpText={false}
+                    />
                   </Form>
                   <div style={{ marginTop: 16 }}>
-                    <Button onClick={() => handleAgenticConfigClear('gemini')}>Clear Defaults</Button>
+                    <Button onClick={() => handleAgenticConfigClear('gemini')}>
+                      Clear Defaults
+                    </Button>
                   </div>
                 </div>
               ),

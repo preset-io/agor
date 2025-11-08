@@ -42,6 +42,7 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
   const [error, setError] = useState<string | null>(null);
 
   // Fetch providers/models from daemon endpoint
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Only fetch once on mount
   useEffect(() => {
     const fetchProviders = async () => {
       try {
@@ -52,7 +53,9 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
         const daemonUrl = getDaemonUrl();
         const client = createClient(daemonUrl);
 
-        const response = (await client.service('opencode/models').find()) as ProvidersResponse;
+        const response = (await client
+          .service('opencode/models')
+          .find()) as unknown as ProvidersResponse;
 
         setProviders(response.providers || []);
 
@@ -71,9 +74,7 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
       } catch (err) {
         console.error('Failed to fetch OpenCode models:', err);
         setError(
-          err instanceof Error
-            ? err.message
-            : 'Failed to fetch models. Is OpenCode server running?'
+          err instanceof Error ? err.message : 'Failed to fetch models. Is OpenCode server running?'
         );
       } finally {
         setLoading(false);
@@ -83,11 +84,11 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
     fetchProviders();
   }, []); // Only fetch once on mount
 
-  const selectedProvider = providers.find((p) => p.id === value?.provider);
+  const selectedProvider = providers.find(p => p.id === value?.provider);
   const availableModels = selectedProvider?.models || [];
 
   const handleProviderChange = (newProvider: string) => {
-    const provider = providers.find((p) => p.id === newProvider);
+    const provider = providers.find(p => p.id === newProvider);
     if (provider && provider.models.length > 0 && onChange) {
       // When provider changes, select first model
       onChange({
@@ -156,7 +157,7 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
           onChange={handleProviderChange}
           placeholder="Select provider"
         >
-          {providers.map((provider) => (
+          {providers.map(provider => (
             <Select.Option key={provider.id} value={provider.id}>
               <Space>
                 <span>{provider.name}</span>
@@ -183,7 +184,7 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
             showSearch
             optionFilterProp="children"
           >
-            {availableModels.map((model) => (
+            {availableModels.map(model => (
               <Select.Option key={model.id} value={model.id}>
                 {model.name}
               </Select.Option>

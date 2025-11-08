@@ -6,7 +6,7 @@ import {
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { Input, Radio, Select, Space, Tooltip, Typography } from 'antd';
 import { useState } from 'react';
-import { OpenCodeModelSelector, type OpenCodeModelConfig } from './OpenCodeModelSelector';
+import { type OpenCodeModelConfig, OpenCodeModelSelector } from './OpenCodeModelSelector';
 
 const { Link } = Typography;
 
@@ -69,7 +69,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
           value?.provider || value?.model
             ? {
                 provider: value.provider || '',
-                model: value.model || ''
+                model: value.model || '',
               }
             : undefined
         }
@@ -95,7 +95,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
 
   // Determine initial mode based on whether the value is in the aliases list
   // If no value provided, default to 'alias' mode (recommended)
-  const isValueInAliases = value?.model ? modelList.some((m) => m.id === value.model) : true; // Default to true when no value (will use alias mode)
+  const isValueInAliases = value?.model ? modelList.some(m => m.id === value.model) : true; // Default to true when no value (will use alias mode)
 
   const initialMode = value?.mode || (isValueInAliases ? 'alias' : 'exact');
   const [mode, setMode] = useState<'alias' | 'exact'>(initialMode);
@@ -104,16 +104,17 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     setMode(newMode);
     if (onChange) {
       // When switching modes, provide a default model
-      const defaultModel =
-        newMode === 'alias'
-          ? modelList[0].id
-          : effectiveTool === 'codex'
-            ? 'gpt-5-codex'
-            : effectiveTool === 'gemini'
-              ? 'gemini-2.5-flash'
-              : effectiveTool === 'opencode'
-                ? 'claude-3-5-sonnet'
-                : 'claude-sonnet-4-5-20250929';
+      let defaultModel: string;
+      if (newMode === 'alias') {
+        defaultModel = modelList[0].id;
+      } else if (effectiveTool === 'codex') {
+        defaultModel = 'gpt-5-codex';
+      } else if (effectiveTool === 'gemini') {
+        defaultModel = 'gemini-2.5-flash';
+      } else {
+        // claude-code (opencode is handled earlier in the component)
+        defaultModel = 'claude-sonnet-4-5-20250929';
+      }
       onChange({
         mode: newMode,
         model: value?.model || defaultModel,
@@ -132,7 +133,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
 
   return (
     <Space direction="vertical" style={{ width: '100%' }}>
-      <Radio.Group value={mode} onChange={(e) => handleModeChange(e.target.value)}>
+      <Radio.Group value={mode} onChange={e => handleModeChange(e.target.value)}>
         <Space direction="vertical">
           <Radio value="alias">
             <Space>
@@ -149,7 +150,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                 value={value?.model || modelList[0].id}
                 onChange={handleModelChange}
                 style={{ width: '100%', minWidth: 400 }}
-                options={modelList.map((m) => ({
+                options={modelList.map(m => ({
                   value: m.id,
                   label: m.id,
                 }))}
@@ -170,15 +171,13 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
             <div style={{ marginLeft: 24, marginTop: 8 }}>
               <Input
                 value={value?.model}
-                onChange={(e) => handleModelChange(e.target.value)}
+                onChange={e => handleModelChange(e.target.value)}
                 placeholder={
                   effectiveTool === 'codex'
                     ? 'e.g., gpt-5-codex'
                     : effectiveTool === 'gemini'
                       ? 'e.g., gemini-2.5-pro'
-                      : effectiveTool === 'opencode'
-                        ? 'e.g., claude-3-5-sonnet'
-                        : 'e.g., claude-opus-4-20250514'
+                      : 'e.g., claude-opus-4-20250514' // claude-code (opencode handled earlier)
                 }
                 style={{ width: '100%', minWidth: 400 }}
               />
@@ -190,9 +189,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                       ? 'https://platform.openai.com/docs/models'
                       : effectiveTool === 'gemini'
                         ? 'https://ai.google.dev/gemini-api/docs/models'
-                        : effectiveTool === 'opencode'
-                          ? 'https://models.dev'
-                          : 'https://docs.anthropic.com/en/docs/about-claude/models'
+                        : 'https://docs.anthropic.com/en/docs/about-claude/models' // claude-code (opencode handled earlier)
                   }
                   target="_blank"
                   style={{ fontSize: 12 }}
