@@ -56,47 +56,6 @@ interface EnvironmentTabProps {
   onUpdateWorktree?: (worktreeId: string, updates: Partial<Worktree>) => void;
 }
 
-// Helper component for command previews
-const CommandPreview: React.FC<{
-  label: string;
-  preview: { success: boolean; result: string };
-}> = ({ label, preview }) => {
-  const { token } = theme.useToken();
-  const [copied, handleCopy] = useCopyToClipboard();
-
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 32 }}>
-      <Typography.Text type="secondary" style={{ minWidth: 80, textAlign: 'right', fontSize: 13 }}>
-        {label}:
-      </Typography.Text>
-      <Typography.Text
-        code
-        style={{
-          flex: 1,
-          padding: '2px 6px',
-          fontSize: 13,
-          color: preview.success ? token.colorText : token.colorError,
-          wordBreak: 'break-word',
-          overflowWrap: 'break-word',
-          cursor: 'pointer',
-          lineHeight: 1.4,
-        }}
-        onClick={() => handleCopy(preview.result, true)}
-        title="Click to copy"
-      >
-        {preview.result}
-      </Typography.Text>
-      <Button
-        type="text"
-        size="small"
-        icon={copied ? <CheckOutlined /> : <CopyOutlined />}
-        onClick={() => handleCopy(preview.result, true)}
-        style={{ flexShrink: 0 }}
-      />
-    </div>
-  );
-};
-
 // Helper component for template field display (read-only view)
 const TemplateField: React.FC<{ label: string; value: string }> = ({ label, value }) => {
   const [copied, handleCopy] = useCopyToClipboard();
@@ -361,41 +320,6 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     repo.environment_config,
   ]);
 
-  // Build template context for preview
-  const templateContext = useMemo(() => {
-    let customContext = {};
-    try {
-      customContext = JSON.parse(customContextJson);
-    } catch {
-      // Invalid JSON, use empty object
-    }
-
-    return {
-      worktree: {
-        unique_id: worktree.worktree_unique_id,
-        name: worktree.name,
-        path: worktree.path,
-      },
-      repo: {
-        slug: repo.slug,
-      },
-      custom: customContext,
-    };
-  }, [worktree, repo, customContextJson]);
-
-  // Render template with current context
-  const renderPreview = (template: string): { success: boolean; result: string } => {
-    try {
-      const result = renderTemplate(template, templateContext);
-      return { success: true, result };
-    } catch (error) {
-      return {
-        success: false,
-        result: error instanceof Error ? error.message : 'Template error',
-      };
-    }
-  };
-
   const handleSaveTemplate = () => {
     if (!onUpdateRepo) return;
 
@@ -453,12 +377,6 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     // Automatically show the form in edit mode
     setTimeout(() => setIsEditingTemplate(true), 0);
   }
-
-  const upPreview = renderPreview(upCommand);
-  const downPreview = renderPreview(downCommand);
-  const healthPreview = healthCheckUrlTemplate ? renderPreview(healthCheckUrlTemplate) : null;
-  const appUrlPreview = appUrlTemplate ? renderPreview(appUrlTemplate) : null;
-  const logsPreview = logsCommand ? renderPreview(logsCommand) : null;
 
   // Get inferred state by combining runtime status + health check
   const inferredState = getEnvironmentState(worktree.environment_instance);
@@ -1157,22 +1075,6 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                 </Descriptions>
               )}
             </div>
-
-            {/* Resolved Commands Preview */}
-            {hasEnvironmentConfig && (
-              <div>
-                <Typography.Text strong style={{ fontSize: 13, display: 'block', marginBottom: 8 }}>
-                  Resolved Commands (Live Preview)
-                </Typography.Text>
-                <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                  <CommandPreview label="Up" preview={upPreview} />
-                  <CommandPreview label="Down" preview={downPreview} />
-                  {healthPreview && <CommandPreview label="Health Check" preview={healthPreview} />}
-                  {appUrlPreview && <CommandPreview label="App URL" preview={appUrlPreview} />}
-                  {logsPreview && <CommandPreview label="Logs" preview={logsPreview} />}
-                </Space>
-              </div>
-            )}
           </Space>
         </Card>
       </Space>
