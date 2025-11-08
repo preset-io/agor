@@ -24,6 +24,7 @@ export default defineConfig({
     'utils/url': 'src/utils/url.ts', // Shared URL validation helpers
     'utils/permission-mode-mapper': 'src/utils/permission-mode-mapper.ts', // Permission mode mapping for cross-agent compatibility
     'utils/cron': 'src/utils/cron.ts', // Cron validation and parsing utilities
+    'utils/context-window': 'src/utils/context-window.ts', // Context window calculation utilities
   },
   format: ['cjs', 'esm'],
   dts: true,

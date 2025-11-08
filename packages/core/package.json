@@ -109,6 +109,11 @@
       "types": "./dist/utils/cron.d.ts",
       "import": "./dist/utils/cron.js",
       "require": "./dist/utils/cron.cjs"
+    },
+    "./utils/context-window": {
+      "types": "./dist/utils/context-window.d.ts",
+      "import": "./dist/utils/context-window.js",
+      "require": "./dist/utils/context-window.cjs"
     }
   },
   "scripts": {
