@@ -208,16 +208,13 @@ const SessionDrawer = ({
 
     if (tasksWithContext.length > 0) {
       const task = tasksWithContext[0];
-      // Calculate session-level context window:
-      // cache_creation_tokens represents the total cached context size (grows with each turn)
-      // + input_tokens is the fresh input for this turn
-      // This gives us the total context being maintained in the session
-      const cacheSize = task.usage?.cache_creation_tokens || 0;
-      const freshInput = task.usage?.input_tokens || 0;
-      const sessionContextWindow = cacheSize + freshInput;
+      // Show input_tokens only (fresh input this turn, after cache breakpoints)
+      // Note: The SDK doesn't provide session-level cumulative context tracking.
+      // We only get per-turn metrics. This shows the fresh input for the latest turn.
+      const freshInput = task.usage?.input_tokens || task.context_window || 0;
 
       return {
-        used: sessionContextWindow,
+        used: freshInput,
         limit: task.context_window_limit!,
         taskMetadata: {
           usage: task.usage,
