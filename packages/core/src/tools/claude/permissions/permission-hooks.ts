@@ -12,6 +12,7 @@ import type { MessagesRepository } from '../../../db/repositories/messages';
 import type { RepoRepository } from '../../../db/repositories/repos';
 import type { SessionRepository } from '../../../db/repositories/sessions';
 import type { WorktreeRepository } from '../../../db/repositories/worktrees';
+import { isForeignKeyConstraintError, withSessionGuard } from '../../../db/session-guard';
 import { generateId } from '../../../lib/ids';
 import type { PermissionService } from '../../../permissions/permission-service';
 import type { Message, MessageID, SessionID, TaskID } from '../../../types';
@@ -155,14 +156,60 @@ export function createPreToolUseHook(
       const requestId = generateId();
       const timestamp = new Date().toISOString();
 
-      // Defensive check: Verify session still exists before creating permission request
-      // (protects against race condition where session is deleted during execution)
-      const sessionStillExists = await deps.sessionsRepo.findById(sessionId);
-      if (!sessionStillExists) {
-        console.warn(
-          `⚠️  Session ${sessionId.substring(0, 8)} no longer exists, cannot create permission request`
-        );
-        // Return deny decision to abort tool execution gracefully
+      // Execute permission request creation with session guard
+      // This checks session exists upfront and handles FK errors gracefully
+      const permissionMessage = await withSessionGuard(
+        sessionId,
+        deps.sessionsRepo,
+        async (): Promise<Message | null> => {
+          // Get current message index for this session
+          const existingMessages = await deps.messagesRepo.findBySessionId(sessionId);
+          const nextIndex = existingMessages.length;
+
+          // Create permission request message
+          console.log(`🔒 Creating permission request message for ${input.tool_name}`, {
+            request_id: requestId,
+            task_id: taskId,
+            index: nextIndex,
+          });
+
+          const message: Message = {
+            message_id: generateId() as MessageID,
+            session_id: sessionId,
+            task_id: taskId,
+            type: 'permission_request',
+            role: MessageRole.SYSTEM,
+            index: nextIndex,
+            timestamp,
+            content_preview: `Permission required: ${input.tool_name}`,
+            content: {
+              request_id: requestId,
+              tool_name: input.tool_name,
+              tool_input: input.tool_input as Record<string, unknown>,
+              tool_use_id: toolUseID,
+              status: PermissionStatus.PENDING,
+            },
+          };
+
+          try {
+            if (deps.messagesService) {
+              await deps.messagesService.create(message);
+              console.log(`✅ Permission request message created successfully`);
+            }
+            return message;
+          } catch (createError) {
+            // Check if this is a FK constraint error (session was deleted mid-flight)
+            if (isForeignKeyConstraintError(createError)) {
+              console.warn(`   Session deleted during permission request creation`);
+              return null;
+            }
+            throw createError;
+          }
+        }
+      );
+
+      // If session was deleted, return deny decision gracefully
+      if (!permissionMessage) {
         return {
           hookSpecificOutput: {
             hookEventName: 'PreToolUse',
@@ -170,60 +217,6 @@ export function createPreToolUseHook(
             permissionDecisionReason: 'Session no longer exists',
           },
         };
-      }
-
-      // Get current message index for this session
-      const existingMessages = await deps.messagesRepo.findBySessionId(sessionId);
-      const nextIndex = existingMessages.length;
-
-      // Create permission request message
-      console.log(`🔒 Creating permission request message for ${input.tool_name}`, {
-        request_id: requestId,
-        task_id: taskId,
-        index: nextIndex,
-      });
-
-      const permissionMessage: Message = {
-        message_id: generateId() as MessageID,
-        session_id: sessionId,
-        task_id: taskId,
-        type: 'permission_request',
-        role: MessageRole.SYSTEM,
-        index: nextIndex,
-        timestamp,
-        content_preview: `Permission required: ${input.tool_name}`,
-        content: {
-          request_id: requestId,
-          tool_name: input.tool_name,
-          tool_input: input.tool_input as Record<string, unknown>,
-          tool_use_id: toolUseID,
-          status: PermissionStatus.PENDING,
-        },
-      };
-
-      try {
-        if (deps.messagesService) {
-          await deps.messagesService.create(permissionMessage);
-          console.log(`✅ Permission request message created successfully`);
-        }
-      } catch (createError) {
-        console.error(`❌ CRITICAL: Failed to create permission request message:`, createError);
-        // Check if this is a FK constraint error (session was deleted mid-flight)
-        const isFKError =
-          createError instanceof Error &&
-          (createError.message.includes('FOREIGN KEY constraint failed') ||
-            createError.message.includes('SQLITE_CONSTRAINT_FOREIGNKEY'));
-        if (isFKError) {
-          console.warn(`   Session was deleted during permission check, aborting gracefully`);
-          return {
-            hookSpecificOutput: {
-              hookEventName: 'PreToolUse',
-              permissionDecision: 'deny',
-              permissionDecisionReason: 'Session no longer exists',
-            },
-          };
-        }
-        throw createError;
       }
 
       // Update task status to 'awaiting_permission'

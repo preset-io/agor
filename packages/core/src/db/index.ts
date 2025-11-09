@@ -23,5 +23,7 @@ export * from './migrate';
 // Repositories
 export * from './repositories';
 export * from './schema';
+// Session guard utilities (defensive programming for deleted sessions)
+export * from './session-guard';
 // User utilities
 export * from './user-utils';

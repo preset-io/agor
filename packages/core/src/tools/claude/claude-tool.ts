@@ -17,6 +17,7 @@ import type { RepoRepository } from '../../db/repositories/repos';
 import type { SessionMCPServerRepository } from '../../db/repositories/session-mcp-servers';
 import type { SessionRepository } from '../../db/repositories/sessions';
 import type { WorktreeRepository } from '../../db/repositories/worktrees';
+import { withSessionGuard } from '../../db/session-guard';
 import { generateId } from '../../lib/ids';
 import type { PermissionService } from '../../permissions/permission-service';
 import {
@@ -41,6 +42,7 @@ import {
 } from './message-builder';
 import type { ProcessedEvent } from './message-processor';
 import { ClaudePromptService } from './prompt-service';
+import { safeCreateMessage } from './safe-message-service';
 
 /**
  * Service interface for creating messages via FeathersJS
@@ -438,15 +440,8 @@ export class ClaudeTool implements ITool {
           const assistantMessageId =
             currentTextMessageId || currentThinkingMessageId || (generateId() as MessageID);
 
-          // Defensive check: Verify session still exists before creating message
-          // (protects against race condition where session is deleted during execution)
-          const sessionExists = await this.sessionsRepo?.findById(sessionId);
-          if (!sessionExists) {
-            console.warn(
-              `⚠️  Session ${sessionId.substring(0, 8)} no longer exists, skipping assistant message creation`
-            );
-          } else {
-            // Create complete assistant message in DB
+          // Create assistant message with session guard (handles deleted sessions gracefully)
+          const created = await withSessionGuard(sessionId, this.sessionsRepo, async () => {
             await createAssistantMessage(
               sessionId,
               assistantMessageId,
@@ -459,6 +454,10 @@ export class ClaudeTool implements ITool {
               this.tasksService,
               completeEvent.parent_tool_use_id ?? null
             );
+            return true;
+          });
+
+          if (created) {
             assistantMessageIds.push(assistantMessageId);
           }
 
@@ -472,15 +471,8 @@ export class ClaudeTool implements ITool {
           // Type assertion for user message
           const completeEvent = event as Extract<ProcessedEvent, { type: 'complete' }>;
 
-          // Defensive check: Verify session still exists before creating message
-          // (protects against race condition where session is deleted during execution)
-          const sessionExists = await this.sessionsRepo?.findById(sessionId);
-          if (!sessionExists) {
-            console.warn(
-              `⚠️  Session ${sessionId.substring(0, 8)} no longer exists, skipping user message creation`
-            );
-          } else {
-            // Create user message (tool results, etc.)
+          // Create user message with session guard (handles deleted sessions gracefully)
+          await withSessionGuard(sessionId, this.sessionsRepo, async () => {
             const userMessageId = generateId() as MessageID;
             await createUserMessageFromContent(
               sessionId,
@@ -491,8 +483,8 @@ export class ClaudeTool implements ITool {
               this.messagesService!,
               completeEvent.parent_tool_use_id ?? null
             );
-            // Don't add to assistantMessageIds - these are user messages
-          }
+          });
+          // Don't add to assistantMessageIds - these are user messages
         }
       }
     }
@@ -668,41 +660,39 @@ export class ClaudeTool implements ITool {
         const completeEvent = event as Extract<ProcessedEvent, { type: 'complete' }>;
         const messageId = generateId() as MessageID;
 
-        // Defensive check: Verify session still exists before creating message
-        // (protects against race condition where session is deleted during execution)
-        const sessionExists = await this.sessionsRepo?.findById(sessionId);
-        if (!sessionExists) {
-          console.warn(
-            `⚠️  Session ${sessionId.substring(0, 8)} no longer exists, skipping message creation (non-streaming mode)`
-          );
-          continue; // Skip to next event
-        }
+        // Create message with session guard (handles deleted sessions gracefully)
+        const created = await withSessionGuard(sessionId, this.sessionsRepo, async () => {
+          if (completeEvent.role === MessageRole.ASSISTANT) {
+            await createAssistantMessage(
+              sessionId,
+              messageId,
+              completeEvent.content,
+              completeEvent.toolUses,
+              taskId,
+              nextIndex++,
+              resolvedModel,
+              this.messagesService!,
+              this.tasksService,
+              completeEvent.parent_tool_use_id ?? null
+            );
+            return true;
+          } else if (completeEvent.role === MessageRole.SYSTEM) {
+            // Handle system messages (compaction, etc.)
+            await createSystemMessage(
+              sessionId,
+              messageId,
+              completeEvent.content,
+              taskId,
+              nextIndex++,
+              resolvedModel,
+              this.messagesService!
+            );
+            return true;
+          }
+          return false;
+        });
 
-        if (completeEvent.role === MessageRole.ASSISTANT) {
-          await createAssistantMessage(
-            sessionId,
-            messageId,
-            completeEvent.content,
-            completeEvent.toolUses,
-            taskId,
-            nextIndex++,
-            resolvedModel,
-            this.messagesService!,
-            this.tasksService,
-            completeEvent.parent_tool_use_id ?? null
-          );
-          assistantMessageIds.push(messageId);
-        } else if (completeEvent.role === MessageRole.SYSTEM) {
-          // Handle system messages (compaction, etc.)
-          await createSystemMessage(
-            sessionId,
-            messageId,
-            completeEvent.content,
-            taskId,
-            nextIndex++,
-            resolvedModel,
-            this.messagesService!
-          );
+        if (created) {
           assistantMessageIds.push(messageId);
         }
       }
