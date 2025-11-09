@@ -1,15 +1,11 @@
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 import { defineConfig } from 'drizzle-kit';
-
-// Expand ~ to home directory for SQLite path
-const defaultDbPath = `file:${join(homedir(), '.agor', 'agor.db')}`;
+import { expandPath } from './src/utils/path.js';
 
 export default defineConfig({
   schema: './src/db/schema.ts',
   out: './drizzle',
   dialect: 'sqlite',
   dbCredentials: {
-    url: process.env.AGOR_DB_PATH || defaultDbPath,
+    url: expandPath(process.env.AGOR_DB_PATH || 'file:~/.agor/agor.db'),
   },
 });

@@ -2,9 +2,8 @@
  * `agor db status` - Show applied database migrations
  */
 
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 import { createDatabase, sql } from '@agor/core/db';
+import { expandPath } from '@agor/core/utils/path';
 import { Command } from '@oclif/core';
 import chalk from 'chalk';
 
@@ -16,7 +15,7 @@ export default class DbStatus extends Command {
   async run(): Promise<void> {
     try {
       // Determine database path (same logic as daemon)
-      const dbPath = process.env.AGOR_DB_PATH || `file:${join(homedir(), '.agor', 'agor.db')}`;
+      const dbPath = expandPath(process.env.AGOR_DB_PATH || 'file:~/.agor/agor.db');
 
       const db = createDatabase({ url: dbPath });
 

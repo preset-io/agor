@@ -148,7 +148,6 @@ async function calculateTaskContextWindow(
   }
 }
 
-import { homedir } from 'node:os';
 import cors from 'cors';
 import express from 'express';
 import swagger from 'feathers-swagger';
@@ -202,15 +201,7 @@ interface FeathersSocket extends Socket {
 }
 
 // Expand ~ to home directory in database path
-const expandPath = (path: string): string => {
-  if (path.startsWith('~/')) {
-    return join(homedir(), path.slice(2));
-  }
-  if (path.startsWith('file:~/')) {
-    return `file:${join(homedir(), path.slice(7))}`;
-  }
-  return path;
-};
+import { expandPath, extractDbFilePath } from '@agor/core/utils/path';
 
 const DB_PATH = expandPath(process.env.AGOR_DB_PATH || 'file:~/.agor/agor.db');
 
@@ -623,8 +614,8 @@ async function main() {
   // Initialize database (auto-create if it doesn't exist)
   console.log(`📦 Connecting to database: ${DB_PATH}`);
 
-  // Extract file path from DB_PATH (remove 'file:' prefix if present)
-  const dbFilePath = DB_PATH.startsWith('file:') ? DB_PATH.slice(5) : DB_PATH;
+  // Extract file path from DB_PATH (remove 'file:' prefix and expand ~)
+  const dbFilePath = extractDbFilePath(DB_PATH);
   const dbDir = dbFilePath.substring(0, dbFilePath.lastIndexOf('/'));
 
   // Ensure database directory exists

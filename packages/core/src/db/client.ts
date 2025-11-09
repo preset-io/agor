@@ -53,16 +53,7 @@ export class DatabaseConnectionError extends Error {
   }
 }
 
-/**
- * Expand home directory in path
- */
-function expandPath(path: string): string {
-  if (path.startsWith('~/')) {
-    const home = process.env.HOME || process.env.USERPROFILE || '';
-    return path.replace('~', home);
-  }
-  return path;
-}
+import { expandPath } from '../utils/path';
 
 /**
  * Create LibSQL client with configuration
@@ -70,12 +61,7 @@ function expandPath(path: string): string {
 function createLibSQLClient(config: DbConfig): Client {
   try {
     // Expand home directory for local file paths
-    let url = config.url;
-    if (url.startsWith('file:')) {
-      const filePath = url.slice(5); // Remove 'file:' prefix
-      const expandedPath = expandPath(filePath);
-      url = `file:${expandedPath}`;
-    }
+    const url = expandPath(config.url);
 
     const clientConfig: Config = { url };
 

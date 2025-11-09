@@ -115,6 +115,11 @@
       "import": "./dist/utils/context-window.js",
       "require": "./dist/utils/context-window.cjs"
     },
+    "./utils/path": {
+      "types": "./dist/utils/path.d.ts",
+      "import": "./dist/utils/path.js",
+      "require": "./dist/utils/path.cjs"
+    },
     "./seed": {
       "types": "./dist/seed/index.d.ts",
       "import": "./dist/seed/index.js",

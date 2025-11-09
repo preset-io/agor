@@ -25,6 +25,7 @@ export default defineConfig({
     'utils/permission-mode-mapper': 'src/utils/permission-mode-mapper.ts', // Permission mode mapping for cross-agent compatibility
     'utils/cron': 'src/utils/cron.ts', // Cron validation and parsing utilities
     'utils/context-window': 'src/utils/context-window.ts', // Context window calculation utilities
+    'utils/path': 'src/utils/path.ts', // Path expansion utilities (tilde to home directory)
     'seed/index': 'src/seed/index.ts', // Development database seeding
   },
   format: ['cjs', 'esm'],
