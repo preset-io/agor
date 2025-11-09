@@ -13,7 +13,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { UUID, WorktreeID } from '@agor/core/types';
 import { createLocalDatabase } from '../db/client';
-import { RepoRepository, WorktreeRepository } from '../db/repositories';
+import { BoardRepository, RepoRepository, WorktreeRepository } from '../db/repositories';
 import { cloneRepo } from '../git';
 import { generateId } from '../lib/ids';
 
@@ -47,6 +47,7 @@ export async function seedDevFixtures(options: SeedOptions = {}): Promise<SeedRe
   const db = createLocalDatabase();
   const repoRepo = new RepoRepository(db);
   const worktreeRepo = new WorktreeRepository(db);
+  const boardRepo = new BoardRepository(db);
 
   const baseDir = options.baseDir ?? path.join(os.homedir(), '.agor', 'repos');
   const userId = (options.userId ?? 'anonymous') as UUID;
@@ -99,8 +100,13 @@ export async function seedDevFixtures(options: SeedOptions = {}): Promise<SeedRe
 
   console.log(`   ✓ Created repo: ${repo.slug} (${repo.repo_id})`);
 
-  // STEP 2: Create test-worktree
-  console.log('2️⃣  Creating test-worktree...');
+  // STEP 2: Get default board
+  console.log('2️⃣  Getting default board...');
+  const defaultBoard = await boardRepo.getDefault();
+  console.log(`   ✓ Using default board: ${defaultBoard.name} (${defaultBoard.board_id})`);
+
+  // STEP 3: Create test-worktree
+  console.log('3️⃣  Creating test-worktree...');
 
   const worktreeName = 'test-worktree';
   const worktreePath = path.join(baseDir, repoSlug, 'worktrees', worktreeName);
@@ -117,6 +123,7 @@ export async function seedDevFixtures(options: SeedOptions = {}): Promise<SeedRe
     new_branch: false,
     worktree_unique_id: worktreeUniqueId,
     created_by: userId,
+    board_id: defaultBoard.board_id,
   });
 
   console.log(`   ✓ Created worktree: ${worktree.name} (${worktree.worktree_id})`);
