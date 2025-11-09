@@ -1,6 +1,6 @@
 import type { User } from '@agor/core/types';
 import { MenuOutlined } from '@ant-design/icons';
-import { Button, Layout, Space, Typography } from 'antd';
+import { Button, Layout, Space, Typography, theme } from 'antd';
 
 const { Header } = Layout;
 const { Title } = Typography;
@@ -22,6 +22,8 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
   onMenuClick,
   onLogout,
 }) => {
+  const { token } = theme.useToken();
+
   return (
     <Header
       style={{
@@ -29,7 +31,8 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
         alignItems: 'center',
         justifyContent: 'space-between',
         padding: '0 16px',
-        background: '#001529', // Match desktop header
+        background: token.colorBgContainer,
+        borderBottom: `1px solid ${token.colorBorderSecondary}`,
       }}
     >
       <Space size={8} align="center" style={{ flex: 1 }}>
@@ -50,7 +53,8 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
           level={5}
           style={{
             margin: 0,
-            color: '#fff',
+            marginTop: -4,
+            color: token.colorText,
             fontSize: showLogo ? 18 : 16,
             fontWeight: showLogo ? 400 : 500,
           }}
@@ -74,9 +78,8 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
         {showMenu && (
           <Button
             type="text"
-            icon={<MenuOutlined />}
+            icon={<MenuOutlined style={{ fontSize: token.fontSizeLG }} />}
             onClick={onMenuClick}
-            style={{ padding: '4px 8px', color: '#fff' }}
           />
         )}
       </Space>

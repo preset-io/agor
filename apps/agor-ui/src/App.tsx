@@ -21,29 +21,45 @@ import { isMobileDevice } from './utils/deviceDetection';
 
 /**
  * DeviceRouter - Redirects users to mobile or desktop site based on device detection
+ * Responds to window resize events for responsive switching
  */
 function DeviceRouter() {
   const location = useLocation();
   const navigate = useNavigate();
-  const [hasChecked, setHasChecked] = useState(false);
 
   useEffect(() => {
-    if (hasChecked) return;
+    const checkAndRoute = () => {
+      const isMobile = isMobileDevice();
+      const isOnMobilePath = location.pathname.startsWith('/m');
 
-    const isMobile = isMobileDevice();
-    const isOnMobilePath = location.pathname.startsWith('/m');
+      // Redirect mobile devices to mobile site
+      if (isMobile && !isOnMobilePath) {
+        navigate('/m', { replace: true });
+      }
+      // Redirect desktop devices away from mobile site
+      else if (!isMobile && isOnMobilePath) {
+        navigate('/', { replace: true });
+      }
+    };
 
-    // Redirect mobile devices to mobile site
-    if (isMobile && !isOnMobilePath) {
-      navigate('/m', { replace: true });
-    }
-    // Redirect desktop devices away from mobile site
-    else if (!isMobile && isOnMobilePath) {
-      navigate('/', { replace: true });
-    }
+    // Check on mount and route change
+    checkAndRoute();
 
-    setHasChecked(true);
-  }, [location.pathname, navigate, hasChecked]);
+    // Debounced resize handler to avoid excessive redirects
+    let resizeTimeout: NodeJS.Timeout;
+    const handleResize = () => {
+      clearTimeout(resizeTimeout);
+      resizeTimeout = setTimeout(checkAndRoute, 200);
+    };
+
+    // Listen for window resize events for responsive switching
+    window.addEventListener('resize', handleResize);
+
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      clearTimeout(resizeTimeout);
+    };
+  }, [location.pathname, navigate]);
 
   return null;
 }
