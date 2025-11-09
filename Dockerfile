@@ -115,14 +115,11 @@ COPY scripts ./scripts
 COPY docker-entrypoint-prod.sh /app/docker-entrypoint-prod.sh
 
 # Set proper ownership and permissions
-RUN chown -R agor:agor /app && \
-    chmod +x /app/docker-entrypoint-prod.sh
+RUN chown -R agor:agor /app
 
 # Switch to non-root user
 USER agor
 
 # Expose daemon port (serves both API and UI)
 EXPOSE 3030
-
-# Use production entrypoint
-ENTRYPOINT ["/app/docker-entrypoint-prod.sh"]
+CMD ["pnpm", "--workspace", "agor-daemon", "start"]
