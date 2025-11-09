@@ -22,7 +22,7 @@ import type { PermissionService } from '../../permissions/permission-service';
 import type { MCPServersConfig, SessionID, TaskID } from '../../types';
 import type { MessagesService, SessionsService, TasksService } from './claude-tool';
 import { DEFAULT_CLAUDE_MODEL } from './models';
-import { createPreToolUseHook } from './permissions/permission-hooks';
+import { createCanUseToolCallback } from './permissions/permission-hooks';
 import { appendSessionContextToCLAUDEmd } from './session-context';
 import { detectThinkingLevel, resolveThinkingBudget } from './thinking-detector';
 
@@ -249,32 +249,23 @@ export async function setupQuery(
     console.log(`🧠 Thinking disabled (mode: ${session.model_config?.thinkingMode || 'auto'})`);
   }
 
-  // Add PreToolUse hook if permission service is available and taskId provided
-  // This enables Agor's custom permission UI (WebSocket-based) instead of CLI prompts
-  // IMPORTANT: Only skip hook for bypassPermissions (which never asks for permissions)
-  // Note: effectivePermissionMode is the ACTUAL mode after root fallback (queryOptions.permissionMode)
+  // Add canUseTool callback if permission service is available and taskId provided
+  // This enables Agor's custom permission UI (WebSocket-based) when SDK would show a prompt
+  // Fires AFTER SDK checks settings.json - respects user's existing Claude CLI permissions!
+  // IMPORTANT: Only skip for bypassPermissions (which never asks for permissions)
   const effectivePermissionMode = queryOptions.permissionMode;
   if (deps.permissionService && taskId && effectivePermissionMode !== 'bypassPermissions') {
-    queryOptions.hooks = {
-      PreToolUse: [
-        {
-          hooks: [
-            createPreToolUseHook(sessionId, taskId, {
-              permissionService: deps.permissionService,
-              tasksService: deps.tasksService!,
-              sessionsRepo: deps.sessionsRepo,
-              reposRepo: deps.reposRepo,
-              messagesRepo: deps.messagesRepo!,
-              messagesService: deps.messagesService,
-              sessionsService: deps.sessionsService,
-              worktreesRepo: deps.worktreesRepo,
-              permissionLocks: deps.permissionLocks,
-            }),
-          ],
-        },
-      ],
-    };
-    console.log(`🪝 PreToolUse hook added (permission mode: ${effectivePermissionMode})`);
+    queryOptions.canUseTool = createCanUseToolCallback(sessionId, taskId, {
+      permissionService: deps.permissionService,
+      tasksService: deps.tasksService!,
+      messagesRepo: deps.messagesRepo!,
+      messagesService: deps.messagesService,
+      sessionsService: deps.sessionsService,
+      permissionLocks: deps.permissionLocks,
+    });
+    console.log(`✅ canUseTool callback added (permission mode: ${effectivePermissionMode})`);
+    console.log(`   SDK will check settings.json first, then call Agor UI if needed`);
+    console.log(`   Using SDK's built-in permission persistence (updatedPermissions)`);
   }
 
   // Add optional apiKey if provided

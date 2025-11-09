@@ -1,72 +1,17 @@
 /**
  * Permission Hooks for Claude Agent SDK
  *
- * Handles PreToolUse hook for custom permission UI via WebSocket.
- * Provides serialized permission checks to prevent duplicate prompts.
+ * Handles canUseTool callback for custom permission UI via WebSocket.
+ * Fires AFTER SDK checks settings.json, respects user's existing permissions.
+ * Uses SDK's built-in permission persistence via updatedPermissions.
  */
 
-import * as fs from 'node:fs/promises';
-import * as path from 'node:path';
-import type { HookJSONOutput, PreToolUseHookInput } from '@anthropic-ai/claude-agent-sdk/sdk';
 import type { MessagesRepository } from '../../../db/repositories/messages';
-import type { RepoRepository } from '../../../db/repositories/repos';
-import type { SessionRepository } from '../../../db/repositories/sessions';
-import type { WorktreeRepository } from '../../../db/repositories/worktrees';
-import { isForeignKeyConstraintError, withSessionGuard } from '../../../db/session-guard';
 import { generateId } from '../../../lib/ids';
 import type { PermissionService } from '../../../permissions/permission-service';
 import type { Message, MessageID, SessionID, TaskID } from '../../../types';
-import { MessageRole, PermissionStatus, TaskStatus } from '../../../types';
+import { MessageRole, PermissionScope, PermissionStatus, TaskStatus } from '../../../types';
 import type { MessagesService, SessionsService, TasksService } from '../claude-tool';
-
-/**
- * Update project-level permissions in .claude/settings.json
- */
-export async function updateProjectSettings(
-  cwd: string,
-  changes: {
-    allowTools?: string[];
-    denyTools?: string[];
-  }
-) {
-  const settingsPath = path.join(cwd, '.claude', 'settings.json');
-
-  // Read existing settings or create default structure
-  // biome-ignore lint/suspicious/noExplicitAny: Settings JSON structure is dynamic
-  let settings: any = {};
-  try {
-    const content = await fs.readFile(settingsPath, 'utf-8');
-    settings = JSON.parse(content);
-  } catch {
-    // File doesn't exist, create default structure
-    settings = { permissions: { allow: { tools: [] } } };
-  }
-
-  // Ensure permissions structure exists
-  if (!settings.permissions) settings.permissions = {};
-  if (!settings.permissions.allow) settings.permissions.allow = {};
-  if (!settings.permissions.allow.tools) settings.permissions.allow.tools = [];
-
-  // Apply changes
-  if (changes.allowTools) {
-    settings.permissions.allow.tools = [
-      ...new Set([...settings.permissions.allow.tools, ...changes.allowTools]),
-    ];
-  }
-  if (changes.denyTools) {
-    if (!settings.permissions.deny) settings.permissions.deny = [];
-    settings.permissions.deny = [...new Set([...settings.permissions.deny, ...changes.denyTools])];
-  }
-
-  // Ensure .claude directory exists
-  const claudeDir = path.join(cwd, '.claude');
-  try {
-    await fs.mkdir(claudeDir, { recursive: true });
-  } catch {}
-
-  // Write updated settings
-  await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2));
-}
 
 /**
  * Create PreToolUse hook for permission handling
@@ -445,6 +390,259 @@ export function createPreToolUseHook(
         releaseLock();
         deps.permissionLocks.delete(sessionId);
         console.log(`🔓 Released permission lock for session ${sessionId.substring(0, 8)}`);
+      }
+    }
+  };
+}
+
+/**
+ * Create canUseTool callback for permission handling
+ *
+ * This callback is invoked by the SDK when it would show a permission prompt
+ * (i.e., after checking settings.json and permission mode, but no rule matched).
+ * Shows Agor's custom permission UI via WebSocket and uses SDK's built-in permission persistence.
+ */
+export function createCanUseToolCallback(
+  sessionId: SessionID,
+  taskId: TaskID,
+  deps: {
+    permissionService: PermissionService;
+    tasksService: TasksService;
+    messagesRepo: MessagesRepository;
+    messagesService?: MessagesService;
+    sessionsService?: SessionsService;
+    permissionLocks: Map<SessionID, Promise<void>>;
+  }
+) {
+  return async (
+    toolName: string,
+    toolInput: Record<string, unknown>,
+    options: { signal: AbortSignal }
+  ): Promise<{
+    behavior: 'allow' | 'deny';
+    updatedInput?: Record<string, unknown>;
+    updatedPermissions?: Array<{
+      kind: 'addRules';
+      rules: string[];
+      behavior: 'allow';
+      destination: 'session' | 'projectSettings' | 'userSettings' | 'localSettings';
+    }>;
+    message?: string;
+  }> => {
+    // This callback fires AFTER SDK checks settings.json
+    // We show Agor's UI and let SDK handle persistence via updatedPermissions
+
+    // Track lock release function for finally block
+    let releaseLock: (() => void) | undefined;
+
+    try {
+      // STEP 1: Wait for any pending permission check to finish (queue serialization)
+      const existingLock = deps.permissionLocks.get(sessionId);
+      if (existingLock) {
+        console.log(
+          `⏳ [canUseTool] Waiting for pending permission check (session ${sessionId.substring(0, 8)})`
+        );
+        await existingLock;
+        console.log(`✅ [canUseTool] Permission check complete, proceeding...`);
+      }
+
+      // STEP 2: Create lock for this permission check
+      console.log(`🔒 [canUseTool] Requesting permission for ${toolName}...`);
+      const newLock = new Promise<void>(resolve => {
+        releaseLock = resolve;
+      });
+      deps.permissionLocks.set(sessionId, newLock);
+
+      // Generate request ID
+      const requestId = generateId();
+      const timestamp = new Date().toISOString();
+
+      // Get current message index for this session
+      const existingMessages = await deps.messagesRepo.findBySessionId(sessionId);
+      const nextIndex = existingMessages.length;
+
+      // Create permission request message
+      console.log(`🔒 [canUseTool] Creating permission request message for ${toolName}`, {
+        request_id: requestId,
+        task_id: taskId,
+        index: nextIndex,
+      });
+
+      const permissionMessage: Message = {
+        message_id: generateId() as MessageID,
+        session_id: sessionId,
+        task_id: taskId,
+        type: 'permission_request',
+        role: MessageRole.SYSTEM,
+        index: nextIndex,
+        timestamp,
+        content_preview: `Permission required: ${toolName}`,
+        content: {
+          request_id: requestId,
+          tool_name: toolName,
+          tool_input: toolInput,
+          tool_use_id: undefined,
+          status: PermissionStatus.PENDING,
+        },
+      };
+
+      if (deps.messagesService) {
+        await deps.messagesService.create(permissionMessage);
+        console.log(`✅ [canUseTool] Permission request message created`);
+      }
+
+      // Update task status to 'awaiting_permission'
+      await deps.tasksService.patch(taskId, {
+        status: TaskStatus.AWAITING_PERMISSION,
+      });
+      console.log(`✅ [canUseTool] Task ${taskId} updated to awaiting_permission`);
+
+      // Update session status to 'awaiting_permission'
+      if (deps.sessionsService) {
+        await deps.sessionsService.patch(sessionId, {
+          status: 'awaiting_permission' as const,
+        });
+        console.log(`✅ [canUseTool] Session ${sessionId} updated to awaiting_permission`);
+      }
+
+      // Emit WebSocket event for UI (broadcasts to ALL viewers)
+      deps.permissionService.emitRequest(sessionId, {
+        requestId,
+        taskId,
+        toolName,
+        toolInput,
+        toolUseID: undefined,
+        timestamp,
+      });
+
+      // Wait for UI decision (Promise pauses SDK execution)
+      const decision = await deps.permissionService.waitForDecision(
+        requestId,
+        taskId,
+        sessionId,
+        options.signal
+      );
+
+      // Update permission request message with approval/denial
+      if (deps.messagesService) {
+        const baseContent =
+          typeof permissionMessage.content === 'object' && !Array.isArray(permissionMessage.content)
+            ? permissionMessage.content
+            : {};
+        // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service has patch method but type definition is incomplete
+        await (deps.messagesService as any).patch(permissionMessage.message_id, {
+          content: {
+            ...(baseContent as Record<string, unknown>),
+            status: decision.allow ? PermissionStatus.APPROVED : PermissionStatus.DENIED,
+            scope: decision.remember ? decision.scope : undefined,
+            approved_by: decision.decidedBy,
+            approved_at: new Date().toISOString(),
+          },
+        });
+        console.log(
+          `✅ [canUseTool] Permission request updated: ${decision.allow ? 'approved' : 'denied'}`
+        );
+      }
+
+      // Update task status
+      await deps.tasksService.patch(taskId, {
+        status: decision.allow ? TaskStatus.RUNNING : TaskStatus.FAILED,
+      });
+
+      // If permission was denied, stop execution
+      if (!decision.allow) {
+        console.log(`🛑 [canUseTool] Permission denied for ${toolName}, stopping execution...`);
+
+        // Cancel all pending permission requests for this session
+        deps.permissionService.cancelPendingRequests(sessionId);
+
+        // Set session status to idle
+        if (deps.sessionsService) {
+          await deps.sessionsService.patch(sessionId, {
+            status: 'idle' as const,
+          });
+          console.log(`✅ [canUseTool] Session ${sessionId} set to idle after denial`);
+        }
+
+        return {
+          behavior: 'deny' as const,
+          message: `Permission denied for tool: ${toolName}`,
+        };
+      }
+
+      // Restore session status to running (only if approved)
+      if (deps.sessionsService) {
+        await deps.sessionsService.patch(sessionId, {
+          status: 'running' as const,
+        });
+        console.log(`✅ [canUseTool] Session ${sessionId} restored to running after approval`);
+      }
+
+      // Build response with SDK's updatedPermissions for persistence
+      const response: {
+        behavior: 'allow';
+        updatedInput: Record<string, unknown>;
+        updatedPermissions?: Array<{
+          kind: 'addRules';
+          rules: string[];
+          behavior: 'allow';
+          destination: 'session' | 'projectSettings' | 'userSettings' | 'localSettings';
+        }>;
+      } = {
+        behavior: 'allow' as const,
+        updatedInput: toolInput,
+      };
+
+      // If user clicked "Remember", let SDK handle persistence via updatedPermissions
+      if (decision.remember && decision.scope) {
+        const destination =
+          decision.scope === 'session'
+            ? ('session' as const)
+            : decision.scope === 'project'
+              ? ('projectSettings' as const)
+              : ('session' as const); // Default to session if unknown
+
+        response.updatedPermissions = [
+          {
+            kind: 'addRules' as const,
+            rules: [toolName],
+            behavior: 'allow' as const,
+            destination,
+          },
+        ];
+
+        console.log(`✅ [canUseTool] SDK will persist permission: ${toolName} → ${destination}`);
+      } else {
+        console.log(`ℹ️  [canUseTool] User chose "Once" - no persistence needed`);
+      }
+
+      return response;
+    } catch (error) {
+      console.error('[canUseTool] Error in permission flow:', error);
+
+      try {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        const timestamp = new Date().toISOString();
+
+        // Update task status to failed
+        await deps.tasksService.patch(taskId, {
+          status: TaskStatus.FAILED,
+          report: `Error: ${errorMessage}\nTimestamp: ${timestamp}`,
+        });
+      } catch (updateError) {
+        console.error('[canUseTool] Failed to update task status:', updateError);
+      }
+
+      return {
+        behavior: 'deny' as const,
+        message: error instanceof Error ? error.message : 'Unknown error in permission flow',
+      };
+    } finally {
+      // STEP 3: Always release the lock when done (success or error)
+      if (releaseLock) {
+        releaseLock();
+        deps.permissionLocks.delete(sessionId);
+        console.log(`🔓 [canUseTool] Released permission lock for session ${sessionId.substring(0, 8)}`);
       }
     }
   };
