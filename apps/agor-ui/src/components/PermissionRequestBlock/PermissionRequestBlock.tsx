@@ -205,12 +205,12 @@ export const PermissionRequestBlock: React.FC<PermissionRequestBlockProps> = ({
                     value={rememberScope}
                     onChange={setRememberScope}
                     disabled={!remember}
-                    style={{ width: 140 }}
+                    style={{ width: 200 }}
                     size="small"
                     options={[
-                      { value: PermissionScope.PROJECT, label: 'Project' },
-                      { value: PermissionScope.USER, label: 'User (global)' },
-                      { value: PermissionScope.LOCAL, label: 'Local' },
+                      { value: PermissionScope.PROJECT, label: 'Project (.claude/)' },
+                      { value: PermissionScope.USER, label: 'User (~/.claude/)' },
+                      { value: PermissionScope.LOCAL, label: 'Local (gitignored)' },
                     ]}
                   />
                 </Space>
