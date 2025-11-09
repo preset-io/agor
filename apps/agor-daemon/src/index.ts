@@ -2413,14 +2413,6 @@ async function main() {
       if (!data.requestId) throw new Error('requestId required');
       if (typeof data.allow !== 'boolean') throw new Error('allow field required');
 
-      console.log(`📥 Permission decision received:`, {
-        requestId: data.requestId,
-        taskId: data.taskId,
-        allow: data.allow,
-        scope: data.scope,
-        remember: data.remember,
-      });
-
       // Resolve the pending permission request
       permissionService.resolvePermission(data);
 
