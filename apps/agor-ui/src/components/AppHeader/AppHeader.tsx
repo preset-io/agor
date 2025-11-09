@@ -8,7 +8,7 @@ import {
   UserOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import { Badge, Button, Dropdown, Layout, Space, Tooltip, Typography, theme } from 'antd';
+import { Badge, Button, Divider, Dropdown, Layout, Space, Tooltip, Typography, theme } from 'antd';
 import { Facepile } from '../Facepile';
 import { ThemeSwitcher } from '../ThemeSwitcher';
 
@@ -103,6 +103,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
         <Title level={3} style={{ margin: 0, marginTop: -6, color: token.colorText }}>
           agor
         </Title>
+        <Divider type="vertical" style={{ height: 32, margin: '0 8px' }} />
         {currentBoardName && (
           <Tooltip title="Toggle board drawer" placement="bottom">
             <Space
@@ -149,14 +150,17 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
 
       <Space>
         {activeUsers.length > 0 && (
-          <Facepile
-            activeUsers={activeUsers}
-            currentUserId={currentUserId}
-            maxVisible={5}
-            style={{
-              marginRight: 8,
-            }}
-          />
+          <>
+            <Facepile
+              activeUsers={activeUsers}
+              currentUserId={currentUserId}
+              maxVisible={5}
+              style={{
+                marginRight: 8,
+              }}
+            />
+            <Divider type="vertical" style={{ height: 32, margin: '0 8px' }} />
+          </>
         )}
         <Tooltip title="Documentation" placement="bottom">
           <Button
