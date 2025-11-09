@@ -1,9 +1,9 @@
 import type { ActiveUser, User } from '@agor/core/types';
 import {
   CommentOutlined,
-  FileTextOutlined,
   LogoutOutlined,
   MenuOutlined,
+  QuestionCircleOutlined,
   SettingOutlined,
   UserOutlined,
 } from '@ant-design/icons';
@@ -100,7 +100,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             display: 'block',
           }}
         />
-        <Title level={3} style={{ margin: 0, color: token.colorText }}>
+        <Title level={3} style={{ margin: 0, marginTop: -6, color: token.colorText }}>
           agor
         </Title>
         {currentBoardName && (
@@ -122,11 +122,11 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
               }}
               onClick={onMenuClick}
             >
-              <MenuOutlined style={{ fontSize: token.fontSizeLG }} />
               {currentBoardIcon && <span style={{ fontSize: 16 }}>{currentBoardIcon}</span>}
               <Typography.Text style={{ color: token.colorTextSecondary, fontSize: 14 }}>
                 {currentBoardName}
               </Typography.Text>
+              <MenuOutlined style={{ fontSize: token.fontSizeLG }} />
             </Space>
           </Tooltip>
         )}
@@ -161,8 +161,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
         <Tooltip title="Documentation" placement="bottom">
           <Button
             type="text"
-            icon={<FileTextOutlined style={{ fontSize: token.fontSizeLG }} />}
-            href="https://docs.agor.live"
+            icon={<QuestionCircleOutlined style={{ fontSize: token.fontSizeLG }} />}
+            href="https://agor.live/guide"
             target="_blank"
             rel="noopener noreferrer"
           />
