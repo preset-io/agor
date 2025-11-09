@@ -41,8 +41,6 @@ services:
       - agor-home:/home/agor
       # Mount SSH keys for git authentication (dev only)
       - ~/.ssh:/home/agor/.ssh:ro
-      # Mount Claude Code settings for agent auth tokens and preferences
-      - ~/.claude:/home/agor/.claude:ro
     stdin_open: true
     tty: true
 
