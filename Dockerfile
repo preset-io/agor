@@ -49,8 +49,11 @@ COPY --from=deps /app/packages/core/node_modules ./packages/core/node_modules
 # Copy source code
 COPY . .
 
-# Build all packages using turbo
-RUN pnpm build
+# Build only production packages (exclude docs)
+RUN pnpm --filter @agor/core build && \
+    pnpm --filter @agor/daemon build && \
+    pnpm --filter @agor/cli build && \
+    pnpm --filter agor-ui build
 
 # ==========================================
 # Stage 4: Production runtime
@@ -94,7 +97,7 @@ COPY apps/agor-cli/package.json ./apps/agor-cli/
 COPY apps/agor-ui/package.json ./apps/agor-ui/
 COPY packages/core/package.json ./packages/core/
 
-RUN pnpm install --frozen-lockfile --prod --ignore-scripts
+RUN pnpm install --prod --ignore-scripts
 
 # Copy built artifacts from builder stage
 COPY --from=builder /app/packages/core/dist ./packages/core/dist
@@ -120,6 +123,8 @@ RUN chown -R agor:agor /app
 # Switch to non-root user
 USER agor
 
+WORKDIR /app/apps/agor-daemon
+
 # Expose daemon port (serves both API and UI)
 EXPOSE 3030
-CMD ["pnpm", "--workspace", "agor-daemon", "start"]
+CMD ["pnpm", "start"]
