@@ -154,6 +154,7 @@ export const App: React.FC<AppProps> = ({
   const [listDrawerOpen, setListDrawerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsActiveTab, setSettingsActiveTab] = useState<string>('boards');
+  const [settingsEditUserId, setSettingsEditUserId] = useState<string | undefined>(undefined);
 
   // Handle external settings tab control (e.g., from welcome modal)
   const effectiveSettingsOpen = settingsOpen || !!openSettingsTab;
@@ -384,7 +385,11 @@ export const App: React.FC<AppProps> = ({
         onMenuClick={() => setListDrawerOpen(true)}
         onCommentsClick={() => setCommentsPanelCollapsed(!commentsPanelCollapsed)}
         onSettingsClick={() => setSettingsOpen(true)}
-        onTerminalClick={() => handleOpenTerminal()}
+        onUserSettingsClick={() => {
+          setSettingsActiveTab('users');
+          setSettingsEditUserId(user?.user_id);
+          setSettingsOpen(true);
+        }}
         onThemeEditorClick={() => setThemeEditorOpen(true)}
         onLogout={onLogout}
         currentBoardName={currentBoard?.name}
@@ -512,6 +517,7 @@ export const App: React.FC<AppProps> = ({
         open={effectiveSettingsOpen}
         onClose={() => {
           setSettingsOpen(false);
+          setSettingsEditUserId(undefined);
           onSettingsClose?.();
         }}
         client={client}
@@ -524,8 +530,10 @@ export const App: React.FC<AppProps> = ({
         users={users}
         mcpServers={mcpServers}
         activeTab={effectiveSettingsTab}
+        editUserId={settingsEditUserId}
         onTabChange={newTab => {
           setSettingsActiveTab(newTab);
+          setSettingsEditUserId(undefined); // Clear editUserId when switching tabs
           // Clear openSettingsTab when user manually changes tabs
           // This allows normal tab switching after opening from onboarding
           if (openSettingsTab) {

@@ -113,6 +113,7 @@ export const SessionPage: React.FC<SessionPageProps> = ({
           onPermissionDecision={handlePermissionDecision}
           scheduledFromWorktree={session.scheduled_from_worktree}
           scheduledRunAt={session.scheduled_run_at}
+          emptyStateMessage="Tap the menu icon to browse boards and sessions"
         />
       </div>
       <MobilePromptInput

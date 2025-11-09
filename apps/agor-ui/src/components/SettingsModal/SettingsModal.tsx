@@ -37,6 +37,7 @@ export interface SettingsModalProps {
   mcpServers: MCPServer[];
   activeTab?: string; // Control which tab is shown when modal opens
   onTabChange?: (tabKey: string) => void;
+  editUserId?: string; // Auto-open edit modal for this user (for "User Settings" shortcut)
   onCreateBoard?: (board: Partial<Board>) => void;
   onUpdateBoard?: (boardId: string, updates: Partial<Board>) => void;
   onDeleteBoard?: (boardId: string) => void;
@@ -81,6 +82,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   mcpServers,
   activeTab = 'boards',
   onTabChange,
+  editUserId,
   onCreateBoard,
   onUpdateBoard,
   onDeleteBoard,
@@ -212,6 +214,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 onCreate={onCreateUser}
                 onUpdate={onUpdateUser}
                 onDelete={onDeleteUser}
+                editUserId={editUserId}
               />
             ),
           },

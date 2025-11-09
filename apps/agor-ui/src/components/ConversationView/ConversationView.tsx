@@ -77,6 +77,11 @@ export interface ConversationViewProps {
    * Unix timestamp (ms) of when the session was scheduled to run
    */
   scheduledRunAt?: number;
+
+  /**
+   * Custom empty state message (for mobile vs desktop contexts)
+   */
+  emptyStateMessage?: string;
 }
 
 export const ConversationView = React.memo<ConversationViewProps>(
@@ -91,6 +96,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
     onPermissionDecision,
     scheduledFromWorktree,
     scheduledRunAt,
+    emptyStateMessage = 'No messages yet. Send a prompt to start the conversation.',
   }) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const { token } = theme.useToken();
@@ -209,7 +215,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
               borderRadius: '50%',
             }}
           />
-          <Text type="secondary">Tap the menu icon to browse boards and sessions</Text>
+          <Text type="secondary">{emptyStateMessage}</Text>
         </div>
       );
     }

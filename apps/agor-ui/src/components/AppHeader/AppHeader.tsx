@@ -1,15 +1,14 @@
 import type { ActiveUser, User } from '@agor/core/types';
 import {
-  CodeOutlined,
   CommentOutlined,
-  GithubOutlined,
   LogoutOutlined,
   MenuOutlined,
+  QuestionCircleOutlined,
   SettingOutlined,
   UserOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import { Badge, Button, Dropdown, Layout, Space, Typography, theme } from 'antd';
+import { Badge, Button, Divider, Dropdown, Layout, Space, Tooltip, Typography, theme } from 'antd';
 import { Facepile } from '../Facepile';
 import { ThemeSwitcher } from '../ThemeSwitcher';
 
@@ -23,7 +22,7 @@ export interface AppHeaderProps {
   onMenuClick?: () => void;
   onCommentsClick?: () => void;
   onSettingsClick?: () => void;
-  onTerminalClick?: () => void;
+  onUserSettingsClick?: () => void;
   onThemeEditorClick?: () => void;
   onLogout?: () => void;
   currentBoardName?: string;
@@ -38,7 +37,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onMenuClick,
   onCommentsClick,
   onSettingsClick,
-  onTerminalClick,
+  onUserSettingsClick,
   onThemeEditorClick,
   onLogout,
   currentBoardName,
@@ -64,6 +63,12 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     },
     {
       type: 'divider',
+    },
+    {
+      key: 'user-settings',
+      label: 'User Settings',
+      icon: <UserOutlined />,
+      onClick: onUserSettingsClick,
     },
     {
       key: 'logout',
@@ -95,89 +100,89 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             display: 'block',
           }}
         />
-        <Title level={3} style={{ margin: 0, color: token.colorText }}>
+        <Title level={3} style={{ margin: 0, marginTop: -6, color: token.colorText }}>
           agor
         </Title>
+        <Divider type="vertical" style={{ height: 32, margin: '0 8px' }} />
         {currentBoardName && (
-          <Space
-            size={4}
-            align="center"
-            style={{
-              cursor: 'pointer',
-              padding: '4px 8px',
-              borderRadius: token.borderRadius,
-              transition: 'background 0.2s',
-            }}
-            onMouseEnter={e => {
-              e.currentTarget.style.background = token.colorBgTextHover;
-            }}
-            onMouseLeave={e => {
-              e.currentTarget.style.background = 'transparent';
-            }}
-            onClick={onMenuClick}
+          <Tooltip title="Toggle board drawer" placement="bottom">
+            <Space
+              size={8}
+              align="center"
+              style={{
+                cursor: 'pointer',
+                padding: '4px 8px',
+                borderRadius: token.borderRadius,
+                transition: 'background 0.2s',
+              }}
+              onMouseEnter={e => {
+                e.currentTarget.style.background = token.colorBgTextHover;
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.background = 'transparent';
+              }}
+              onClick={onMenuClick}
+            >
+              {currentBoardIcon && <span style={{ fontSize: 16 }}>{currentBoardIcon}</span>}
+              <Typography.Text style={{ color: token.colorTextSecondary, fontSize: 14 }}>
+                {currentBoardName}
+              </Typography.Text>
+              <MenuOutlined style={{ fontSize: token.fontSizeLG }} />
+            </Space>
+          </Tooltip>
+        )}
+        {currentBoardName && (
+          <Badge
+            count={unreadCommentsCount}
+            offset={[-2, 2]}
+            style={{ backgroundColor: token.colorPrimaryBgHover }}
           >
-            {currentBoardIcon && <span style={{ fontSize: 16 }}>{currentBoardIcon}</span>}
-            <Typography.Text style={{ color: token.colorTextSecondary, fontSize: 14 }}>
-              {currentBoardName}
-            </Typography.Text>
-          </Space>
+            <Tooltip title="Toggle comments panel" placement="bottom">
+              <Button
+                type="text"
+                icon={<CommentOutlined style={{ fontSize: token.fontSizeLG }} />}
+                onClick={onCommentsClick}
+              />
+            </Tooltip>
+          </Badge>
         )}
       </Space>
 
       <Space>
         {activeUsers.length > 0 && (
-          <Facepile
-            activeUsers={activeUsers}
-            currentUserId={currentUserId}
-            maxVisible={5}
-            style={{
-              marginRight: 8,
-            }}
-          />
+          <>
+            <Facepile
+              activeUsers={activeUsers}
+              currentUserId={currentUserId}
+              maxVisible={5}
+              style={{
+                marginRight: 8,
+              }}
+            />
+            <Divider type="vertical" style={{ height: 32, margin: '0 8px' }} />
+          </>
         )}
-        <Button
-          type="text"
-          icon={<GithubOutlined style={{ fontSize: token.fontSizeLG }} />}
-          href="https://github.com/preset-io/agor"
-          target="_blank"
-          rel="noopener noreferrer"
-          title="View on GitHub"
-        />
-        <Badge
-          count={unreadCommentsCount}
-          offset={[-2, 2]}
-          style={{ backgroundColor: token.colorPrimaryBgHover }}
-        >
+        <Tooltip title="Documentation" placement="bottom">
           <Button
             type="text"
-            icon={<CommentOutlined style={{ fontSize: token.fontSizeLG }} />}
-            onClick={onCommentsClick}
-            title="Toggle comments panel"
+            icon={<QuestionCircleOutlined style={{ fontSize: token.fontSizeLG }} />}
+            href="https://agor.live/guide"
+            target="_blank"
+            rel="noopener noreferrer"
           />
-        </Badge>
-        <Button
-          type="text"
-          icon={<MenuOutlined style={{ fontSize: token.fontSizeLG }} />}
-          onClick={onMenuClick}
-        />
-        <Button
-          type="text"
-          icon={<CodeOutlined style={{ fontSize: token.fontSizeLG }} />}
-          onClick={onTerminalClick}
-          title="Open Terminal"
-        />
+        </Tooltip>
         <ThemeSwitcher onOpenThemeEditor={onThemeEditorClick} />
-        <Button
-          type="text"
-          icon={<SettingOutlined style={{ fontSize: token.fontSizeLG }} />}
-          onClick={onSettingsClick}
-        />
-        <Dropdown menu={{ items: userMenuItems }} placement="bottomRight" trigger={['click']}>
+        <Tooltip title="Settings" placement="bottom">
           <Button
             type="text"
-            icon={<UserOutlined style={{ fontSize: token.fontSizeLG }} />}
-            title={user?.name || 'User menu'}
+            icon={<SettingOutlined style={{ fontSize: token.fontSizeLG }} />}
+            onClick={onSettingsClick}
           />
+        </Tooltip>
+        <Dropdown menu={{ items: userMenuItems }} placement="bottomRight" trigger={['click']}>
+          <Tooltip title={user?.name || 'User menu'} placement="bottom">
+            <Button type="text" icon={<UserOutlined style={{ fontSize: token.fontSizeLG }} />} />
+          </Tooltip>
         </Dropdown>
       </Space>
     </Header>

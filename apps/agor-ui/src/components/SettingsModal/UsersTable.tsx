@@ -35,6 +35,7 @@ interface UsersTableProps {
   onCreate?: (data: CreateUserInput) => void;
   onUpdate?: (userId: string, updates: UpdateUserInput) => void;
   onDelete?: (userId: string) => void;
+  editUserId?: string; // Auto-open edit modal for this user
 }
 
 export const UsersTable: React.FC<UsersTableProps> = ({
@@ -43,6 +44,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
   onCreate,
   onUpdate,
   onDelete,
+  editUserId,
 }) => {
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
@@ -77,6 +79,17 @@ export const UsersTable: React.FC<UsersTableProps> = ({
     gemini: false,
     opencode: false,
   });
+
+  // Auto-open edit modal if editUserId is provided
+  useEffect(() => {
+    if (editUserId) {
+      const userToEdit = users.find(u => u.user_id === editUserId);
+      if (userToEdit) {
+        handleEdit(userToEdit);
+        setEditModalOpen(true);
+      }
+    }
+  }, [editUserId, users]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load user's API key and env var status when editing
   useEffect(() => {
