@@ -135,7 +135,6 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
             // Use user's preferred settings for this tool
             permissionConfig = {
               mode: toolDefaults.permissionMode,
-              allowedTools: [],
               ...(targetTool === 'codex' &&
               toolDefaults.codexSandboxMode &&
               toolDefaults.codexApprovalPolicy
