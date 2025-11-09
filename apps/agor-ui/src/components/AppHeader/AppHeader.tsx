@@ -8,7 +8,7 @@ import {
   UserOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import { Badge, Button, Dropdown, Layout, Space, Typography, theme } from 'antd';
+import { Badge, Button, Dropdown, Layout, Space, Tooltip, Typography, theme } from 'antd';
 import { Facepile } from '../Facepile';
 import { ThemeSwitcher } from '../ThemeSwitcher';
 
@@ -104,15 +104,9 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           agor
         </Title>
         {currentBoardName && (
-          <>
-            <Button
-              type="text"
-              icon={<MenuOutlined style={{ fontSize: token.fontSizeLG }} />}
-              onClick={onMenuClick}
-              title="Toggle board drawer"
-            />
+          <Tooltip title="Toggle board drawer" placement="bottom">
             <Space
-              size={4}
+              size={8}
               align="center"
               style={{
                 cursor: 'pointer',
@@ -128,12 +122,28 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
               }}
               onClick={onMenuClick}
             >
+              <MenuOutlined style={{ fontSize: token.fontSizeLG }} />
               {currentBoardIcon && <span style={{ fontSize: 16 }}>{currentBoardIcon}</span>}
               <Typography.Text style={{ color: token.colorTextSecondary, fontSize: 14 }}>
                 {currentBoardName}
               </Typography.Text>
             </Space>
-          </>
+          </Tooltip>
+        )}
+        {currentBoardName && (
+          <Badge
+            count={unreadCommentsCount}
+            offset={[-2, 2]}
+            style={{ backgroundColor: token.colorPrimaryBgHover }}
+          >
+            <Tooltip title="Toggle comments panel" placement="bottom">
+              <Button
+                type="text"
+                icon={<CommentOutlined style={{ fontSize: token.fontSizeLG }} />}
+                onClick={onCommentsClick}
+              />
+            </Tooltip>
+          </Badge>
         )}
       </Space>
 
@@ -148,39 +158,27 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             }}
           />
         )}
-        <Button
-          type="text"
-          icon={<FileTextOutlined style={{ fontSize: token.fontSizeLG }} />}
-          href="https://docs.agor.live"
-          target="_blank"
-          rel="noopener noreferrer"
-          title="Documentation"
-        />
-        <Badge
-          count={unreadCommentsCount}
-          offset={[-2, 2]}
-          style={{ backgroundColor: token.colorPrimaryBgHover }}
-        >
+        <Tooltip title="Documentation" placement="bottom">
           <Button
             type="text"
-            icon={<CommentOutlined style={{ fontSize: token.fontSizeLG }} />}
-            onClick={onCommentsClick}
-            title="Toggle comments panel"
+            icon={<FileTextOutlined style={{ fontSize: token.fontSizeLG }} />}
+            href="https://docs.agor.live"
+            target="_blank"
+            rel="noopener noreferrer"
           />
-        </Badge>
+        </Tooltip>
         <ThemeSwitcher onOpenThemeEditor={onThemeEditorClick} />
-        <Button
-          type="text"
-          icon={<SettingOutlined style={{ fontSize: token.fontSizeLG }} />}
-          onClick={onSettingsClick}
-          title="Settings"
-        />
-        <Dropdown menu={{ items: userMenuItems }} placement="bottomRight" trigger={['click']}>
+        <Tooltip title="Settings" placement="bottom">
           <Button
             type="text"
-            icon={<UserOutlined style={{ fontSize: token.fontSizeLG }} />}
-            title={user?.name || 'User menu'}
+            icon={<SettingOutlined style={{ fontSize: token.fontSizeLG }} />}
+            onClick={onSettingsClick}
           />
+        </Tooltip>
+        <Dropdown menu={{ items: userMenuItems }} placement="bottomRight" trigger={['click']}>
+          <Tooltip title={user?.name || 'User menu'} placement="bottom">
+            <Button type="text" icon={<UserOutlined style={{ fontSize: token.fontSizeLG }} />} />
+          </Tooltip>
         </Dropdown>
       </Space>
     </Header>
