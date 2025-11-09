@@ -384,7 +384,10 @@ export const App: React.FC<AppProps> = ({
         onMenuClick={() => setListDrawerOpen(true)}
         onCommentsClick={() => setCommentsPanelCollapsed(!commentsPanelCollapsed)}
         onSettingsClick={() => setSettingsOpen(true)}
-        onTerminalClick={() => handleOpenTerminal()}
+        onUserSettingsClick={() => {
+          setSettingsActiveTab('users');
+          setSettingsOpen(true);
+        }}
         onThemeEditorClick={() => setThemeEditorOpen(true)}
         onLogout={onLogout}
         currentBoardName={currentBoard?.name}

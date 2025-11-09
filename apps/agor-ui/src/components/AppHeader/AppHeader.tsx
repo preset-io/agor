@@ -1,8 +1,7 @@
 import type { ActiveUser, User } from '@agor/core/types';
 import {
-  CodeOutlined,
   CommentOutlined,
-  GithubOutlined,
+  FileTextOutlined,
   LogoutOutlined,
   MenuOutlined,
   SettingOutlined,
@@ -23,7 +22,7 @@ export interface AppHeaderProps {
   onMenuClick?: () => void;
   onCommentsClick?: () => void;
   onSettingsClick?: () => void;
-  onTerminalClick?: () => void;
+  onUserSettingsClick?: () => void;
   onThemeEditorClick?: () => void;
   onLogout?: () => void;
   currentBoardName?: string;
@@ -38,7 +37,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onMenuClick,
   onCommentsClick,
   onSettingsClick,
-  onTerminalClick,
+  onUserSettingsClick,
   onThemeEditorClick,
   onLogout,
   currentBoardName,
@@ -64,6 +63,12 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     },
     {
       type: 'divider',
+    },
+    {
+      key: 'user-settings',
+      label: 'User Settings',
+      icon: <UserOutlined />,
+      onClick: onUserSettingsClick,
     },
     {
       key: 'logout',
@@ -99,28 +104,36 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           agor
         </Title>
         {currentBoardName && (
-          <Space
-            size={4}
-            align="center"
-            style={{
-              cursor: 'pointer',
-              padding: '4px 8px',
-              borderRadius: token.borderRadius,
-              transition: 'background 0.2s',
-            }}
-            onMouseEnter={e => {
-              e.currentTarget.style.background = token.colorBgTextHover;
-            }}
-            onMouseLeave={e => {
-              e.currentTarget.style.background = 'transparent';
-            }}
-            onClick={onMenuClick}
-          >
-            {currentBoardIcon && <span style={{ fontSize: 16 }}>{currentBoardIcon}</span>}
-            <Typography.Text style={{ color: token.colorTextSecondary, fontSize: 14 }}>
-              {currentBoardName}
-            </Typography.Text>
-          </Space>
+          <>
+            <Button
+              type="text"
+              icon={<MenuOutlined style={{ fontSize: token.fontSizeLG }} />}
+              onClick={onMenuClick}
+              title="Toggle board drawer"
+            />
+            <Space
+              size={4}
+              align="center"
+              style={{
+                cursor: 'pointer',
+                padding: '4px 8px',
+                borderRadius: token.borderRadius,
+                transition: 'background 0.2s',
+              }}
+              onMouseEnter={e => {
+                e.currentTarget.style.background = token.colorBgTextHover;
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.background = 'transparent';
+              }}
+              onClick={onMenuClick}
+            >
+              {currentBoardIcon && <span style={{ fontSize: 16 }}>{currentBoardIcon}</span>}
+              <Typography.Text style={{ color: token.colorTextSecondary, fontSize: 14 }}>
+                {currentBoardName}
+              </Typography.Text>
+            </Space>
+          </>
         )}
       </Space>
 
@@ -137,11 +150,11 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
         )}
         <Button
           type="text"
-          icon={<GithubOutlined style={{ fontSize: token.fontSizeLG }} />}
-          href="https://github.com/preset-io/agor"
+          icon={<FileTextOutlined style={{ fontSize: token.fontSizeLG }} />}
+          href="https://docs.agor.live"
           target="_blank"
           rel="noopener noreferrer"
-          title="View on GitHub"
+          title="Documentation"
         />
         <Badge
           count={unreadCommentsCount}
@@ -155,22 +168,12 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             title="Toggle comments panel"
           />
         </Badge>
-        <Button
-          type="text"
-          icon={<MenuOutlined style={{ fontSize: token.fontSizeLG }} />}
-          onClick={onMenuClick}
-        />
-        <Button
-          type="text"
-          icon={<CodeOutlined style={{ fontSize: token.fontSizeLG }} />}
-          onClick={onTerminalClick}
-          title="Open Terminal"
-        />
         <ThemeSwitcher onOpenThemeEditor={onThemeEditorClick} />
         <Button
           type="text"
           icon={<SettingOutlined style={{ fontSize: token.fontSizeLG }} />}
           onClick={onSettingsClick}
+          title="Settings"
         />
         <Dropdown menu={{ items: userMenuItems }} placement="bottomRight" trigger={['click']}>
           <Button
