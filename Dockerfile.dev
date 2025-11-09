@@ -1,6 +1,9 @@
 # Development Dockerfile for Agor
 # Supports hot-reload for both daemon and UI
-FROM node:20-slim
+
+# Node.js version (should match .nvmrc)
+ARG NODE_VERSION=24
+FROM node:${NODE_VERSION}-slim
 
 # Install system dependencies (including git for repo cloning)
 RUN apt-get update && apt-get install -y \
