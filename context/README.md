@@ -30,32 +30,30 @@ This directory contains modular knowledge files that document Agor's concepts, a
 - **[session-worktree-attribute-migration.md](concepts/session-worktree-attribute-migration.md)** - Data attribute migration analysis (issue_url, pull_request_url, etc.)
 - **[mcp-integration.md](concepts/mcp-integration.md)** - MCP server management, CRUD UI/CLI, session-level selection
 - **[permissions.md](concepts/permissions.md)** - Permission system, task-centric approval, audit trails
+- **[agor-mcp-server.md](concepts/agor-mcp-server.md)** - Built-in MCP endpoint that gives agents self-awareness of sessions, boards, and worktrees
+- **[api-docs.md](concepts/api-docs.md)** - Auto-generated Swagger/OpenAPI docs for every Feathers service
+- **[conversation-autocomplete.md](concepts/conversation-autocomplete.md)** - `@` autocomplete for files and users inside prompt inputs
+- **[database-migrations.md](concepts/database-migrations.md)** - Drizzle migration workflow plus `agor db status/migrate`
+- **[environment-logs.md](concepts/environment-logs.md)** - Worktree environment controls, log viewer, and MCP hooks
+- **[mcp-session-tools.md](concepts/mcp-session-tools.md)** - `agor_sessions_*` MCP tools for continuing, forking, and editing sessions
+- **[message-queueing.md](concepts/message-queueing.md)** - Line-up prompts with queued message status and processing rules
+- **[opencode-integration.md](concepts/opencode-integration.md)** - Server-mode OpenCode agent integration
+- **[per-user-api-keys.md](concepts/per-user-api-keys.md)** - Encrypted Anthropic/OpenAI/Gemini key storage with reusable UI component
+- **[scheduler.md](concepts/scheduler.md)** - Worktree-scoped cron scheduler that spawns autonomous sessions
+- **[sdk-compaction-status.md](concepts/sdk-compaction-status.md)** - Surfacing Claude SDK compaction events in UI + metrics
+- **[messaging.md](concepts/messaging.md)** - Product taglines, before/after framing, and visual storytelling cues
+- **[task-tool-message-attribution.md](concepts/task-tool-message-attribution.md)** - Proper labeling for Task tool prompts/results
+- **[text-display.md](concepts/text-display.md)** - Collapsible/ANSI text patterns for readable tool output
+- **[thinking-mode.md](concepts/thinking-mode.md)** - Auto/manual/off thinking controls with keyword detection
+- **[user-env-vars.md](concepts/user-env-vars.md)** - Encrypted per-user environment variables merged into agent subprocesses
 
 ### Explorations (Work in Progress)
 
 Experimental ideas and designs not yet crystallized into concepts. These represent active thinking and may graduate to `concepts/` when ready:
 
-**Future Features:**
-
-- **[native-cli-feature-gaps.md](explorations/native-cli-feature-gaps.md)** - Feature comparison between native agent CLIs and SDK capabilities
-
-**Orchestration & Coordination:**
-
-- **[subsession-orchestration.md](explorations/subsession-orchestration.md)** - Multi-agent task coordination and getting agents to spawn Agor-tracked subsessions
-- **[async-jobs.md](explorations/async-jobs.md)** - Background job processing, queuing strategies, and long-running task management
-
-**Distribution & Launch:**
-
-- **[single-package.md](explorations/single-package.md)** - Distribution strategy (bundled CLI + daemon + UI into single npm package)
-- **[docs-website.md](explorations/docs-website.md)** - Documentation website with Nextra (user guides, REST API reference, MDX support)
-
-**Onboarding & UX:**
-
-- **[init-experience.md](explorations/init-experience.md)** - Init flow, auth checking, API key management, tool availability UI patterns
-
-**Security & Multi-Tenancy:**
-
-- **[unix-user-integration.md](explorations/unix-user-integration.md)** - Deep exploration of OS-level Unix user integration: user management, process impersonation, credential storage, worktree ownership, security implications, and decision framework
+- **[ide-integration.md](explorations/ide-integration.md)** - Evaluating Remote SSH vs code-server for worktree IDE support
+- **[native-cli-feature-gaps.md](explorations/native-cli-feature-gaps.md)** - Pointer to the living SDK comparison guide on agor.live
+- **[unix-user-integration.md](explorations/unix-user-integration.md)** - Deep dive on sudo-based impersonation and OS-level user isolation
 
 **Lifecycle:** `explorations/` → `concepts/` when design is validated and ready to be official
 
@@ -63,8 +61,27 @@ Experimental ideas and designs not yet crystallized into concepts. These represe
 
 Historical documentation and completed research preserved for reference:
 
-- **[gemini-integration-research.md](archives/gemini-integration-research.md)** - Gemini CLI SDK discovery process, API analysis, and integration decisions (completed Oct 2025)
+- **[agor-mcp-server.md](archives/agor-mcp-server.md)** - Research + prototypes for exposing Agor as its own MCP server
 - **[async-jobs.md](archives/async-jobs.md)** - Background job processing exploration (resolved: not needed for local dev tool, use async functions + WebSocket events)
+- **[auto-generated-api-docs.md](archives/auto-generated-api-docs.md)** - Feathers Swagger evaluation and rollout plan
+- **[conversation-autocomplete.md](archives/conversation-autocomplete.md)** - Full UX spec for the `@` autocomplete experience
+- **[database-migrations.md](archives/database-migrations.md)** - Launch-blocker write-up for adopting Drizzle migrations
+- **[environment-logs-and-mcp.md](archives/environment-logs-and-mcp.md)** - Process control + log access blueprint
+- **[gemini-integration-research.md](archives/gemini-integration-research.md)** - Gemini CLI SDK discovery process, API analysis, and integration decisions (completed Oct 2025)
+- **[launch-prep.md](archives/launch-prep.md)** - v0.4.0 release checklist and launch validation
+- **[messaging.md](archives/messaging.md)** - Original brainstorm for taglines, metaphors, and visual cues
+- **[mcp-session-management.md](archives/mcp-session-management.md)** - MCP tool spec for session CRUD, forks, and updates
+- **[message-queueing.md](archives/message-queueing.md)** - Queueing proposal that informed the current implementation
+- **[task-queuing-and-message-lineup.md](archives/task-queuing-and-message-lineup.md)** - Advanced sequencing concepts (interrupt, priority) for future queue iterations
+- **[opencode-integration.md](archives/opencode-integration.md)** - OpenCode server-mode analysis and integration plan
+- **[per-user-api-keys.md](archives/per-user-api-keys.md)** - API key UX + encryption decisions
+- **[scheduler.md](archives/scheduler.md)** - Autonomous worktree automation deep dive
+- **[sdk-compaction-status.md](archives/sdk-compaction-status.md)** - Claude compaction event handling research
+- **[task-tool-message-attribution.md](archives/task-tool-message-attribution.md)** - Bug record + UI fix proposal
+- **[text-display-improvements.md](archives/text-display-improvements.md)** - Exploration that drove Collapsible/ANSI components
+- **[thinking-mode.md](archives/thinking-mode.md)** - Keyword detection + UX decisions for thinking controls
+- **[user-comments-and-conversation.md](archives/user-comments-and-conversation.md)** - Historical notes on conversation surfacing
+- **[user-env-vars.md](archives/user-env-vars.md)** - Per-user environment variable architecture
 
 **Purpose:** Archives preserve the research journey and decision-making context for completed features. They're valuable for understanding "why" things were built certain ways.
 
