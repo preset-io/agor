@@ -210,12 +210,15 @@ export async function setupQuery(
     },
   };
 
-  // Add permissionMode if provided
+  // Add permissionMode if provided, otherwise fall back to session's permission_config
   // For Claude Code sessions, the UI should pass Claude SDK permission modes directly:
   // 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan'
-  if (permissionMode) {
-    queryOptions.permissionMode = permissionMode;
-    console.log(`🔐 Permission mode: ${queryOptions.permissionMode}`);
+  const effectivePermissionMode = permissionMode || session.permission_config?.mode;
+  if (effectivePermissionMode) {
+    queryOptions.permissionMode = effectivePermissionMode;
+    console.log(
+      `🔐 Permission mode: ${queryOptions.permissionMode}${permissionMode ? ' (from request)' : ' (from session config)'}`
+    );
   }
 
   // Configure thinking budget based on mode and prompt keywords
@@ -246,7 +249,6 @@ export async function setupQuery(
   // This enables Agor's custom permission UI (WebSocket-based) when SDK would show a prompt
   // Fires AFTER SDK checks settings.json - respects user's existing Claude CLI permissions!
   // IMPORTANT: Only skip for bypassPermissions (which never asks for permissions)
-  const effectivePermissionMode = queryOptions.permissionMode;
   if (deps.permissionService && taskId && effectivePermissionMode !== 'bypassPermissions') {
     queryOptions.canUseTool = createCanUseToolCallback(sessionId, taskId, {
       permissionService: deps.permissionService,

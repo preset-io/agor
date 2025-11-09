@@ -2010,6 +2010,7 @@ const SessionCanvas = ({
                 case 'prompt': {
                   await client.service(`sessions/${targetSessionId}/prompt`).create({
                     prompt: renderedTemplate,
+                    permissionMode,
                   });
                   console.log(`✓ Sent prompt to session ${targetSessionId.substring(0, 8)}`);
                   break;
@@ -2020,6 +2021,7 @@ const SessionCanvas = ({
                     .create({})) as Session;
                   await client.service(`sessions/${forkedSession.session_id}/prompt`).create({
                     prompt: renderedTemplate,
+                    permissionMode,
                   });
                   console.log(
                     `✓ Forked session and sent prompt to ${forkedSession.session_id.substring(0, 8)}`
@@ -2032,6 +2034,7 @@ const SessionCanvas = ({
                     .create({})) as Session;
                   await client.service(`sessions/${spawnedSession.session_id}/prompt`).create({
                     prompt: renderedTemplate,
+                    permissionMode,
                   });
                   console.log(
                     `✓ Spawned child session and sent prompt to ${spawnedSession.session_id.substring(0, 8)}`
