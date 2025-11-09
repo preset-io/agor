@@ -218,13 +218,6 @@ export async function setupQuery(
     console.log(`🔐 Permission mode: ${queryOptions.permissionMode}`);
   }
 
-  // Add session-level allowed tools from our database
-  // NOTE: Always add allowedTools (even for bypassPermissions workaround)
-  const sessionAllowedTools = session.permission_config?.allowedTools || [];
-  if (sessionAllowedTools.length > 0) {
-    queryOptions.allowedTools = sessionAllowedTools;
-  }
-
   // Configure thinking budget based on mode and prompt keywords
   // Matches Claude Code CLI behavior: auto-detect keywords or use manual setting
   const thinkingBudget = resolveThinkingBudget(prompt, {
@@ -258,6 +251,7 @@ export async function setupQuery(
     queryOptions.canUseTool = createCanUseToolCallback(sessionId, taskId, {
       permissionService: deps.permissionService,
       tasksService: deps.tasksService!,
+      sessionsRepo: deps.sessionsRepo,
       messagesRepo: deps.messagesRepo!,
       messagesService: deps.messagesService,
       sessionsService: deps.sessionsService,

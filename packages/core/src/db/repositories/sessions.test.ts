@@ -169,7 +169,6 @@ describe('SessionRepository.create', () => {
       worktree_id: worktree.worktree_id,
       permission_config: {
         mode: 'acceptEdits',
-        allowedTools: ['read', 'write'],
       },
       model_config: {
         mode: 'exact',
@@ -197,7 +196,6 @@ describe('SessionRepository.create', () => {
     // Verify all JSON fields are preserved
     expect(created.permission_config).toEqual({
       mode: 'acceptEdits',
-      allowedTools: ['read', 'write'],
     });
     expect(created.model_config).toEqual({
       mode: 'exact',
@@ -376,7 +374,7 @@ describe('SessionRepository.findById', () => {
     const worktree = await createTestWorktree(db);
     const data = createSessionData({
       worktree_id: worktree.worktree_id,
-      permission_config: { mode: 'acceptEdits', allowedTools: ['read'] },
+      permission_config: { mode: 'acceptEdits' },
       custom_context: { foo: 'bar' },
       tasks: [generateId(), generateId()],
     });
@@ -418,7 +416,7 @@ describe('SessionRepository.findAll', () => {
     const sessions = await repo.findAll();
 
     expect(sessions).toHaveLength(3);
-    expect(sessions.map((s) => s.title).sort()).toEqual(['Session 1', 'Session 2', 'Session 3']);
+    expect(sessions.map(s => s.title).sort()).toEqual(['Session 1', 'Session 2', 'Session 3']);
   });
 
   dbTest('should return fully populated session objects', async ({ db }) => {
@@ -466,7 +464,7 @@ describe('SessionRepository.findByStatus', () => {
     const idleSessions = await repo.findByStatus(SessionStatus.IDLE);
 
     expect(idleSessions).toHaveLength(2);
-    idleSessions.forEach((session) => {
+    idleSessions.forEach(session => {
       expect(session.status).toBe(SessionStatus.IDLE);
     });
   });
@@ -587,7 +585,7 @@ describe('SessionRepository.findChildren', () => {
     const children = await repo.findChildren(parent.session_id);
 
     expect(children).toHaveLength(2);
-    expect(children.map((c) => c.session_id).sort()).toEqual(
+    expect(children.map(c => c.session_id).sort()).toEqual(
       [child1.session_id, child2.session_id].sort()
     );
   });
@@ -843,7 +841,6 @@ describe('SessionRepository.update', () => {
     const updated = await repo.update(data.session_id!, {
       permission_config: {
         mode: 'bypassPermissions',
-        allowedTools: ['read', 'write', 'execute'],
       },
       tasks: [task1, task2],
       git_state: {
@@ -856,7 +853,6 @@ describe('SessionRepository.update', () => {
     });
 
     expect(updated.permission_config?.mode).toBe('bypassPermissions');
-    expect(updated.permission_config?.allowedTools).toEqual(['read', 'write', 'execute']);
     expect(updated.tasks).toEqual([task1, task2]);
     expect(updated.git_state).toEqual({
       ref: 'feature-branch',
@@ -873,7 +869,7 @@ describe('SessionRepository.update', () => {
     const data = createSessionData({ worktree_id: worktree.worktree_id });
     const created = await repo.create(data);
 
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise(resolve => setTimeout(resolve, 10));
 
     const updated = await repo.update(data.session_id!, { title: 'Updated' });
 
@@ -983,7 +979,7 @@ describe('SessionRepository.findRunning', () => {
     const running = await repo.findRunning();
 
     expect(running).toHaveLength(2);
-    running.forEach((session) => {
+    running.forEach(session => {
       expect(session.status).toBe(SessionStatus.RUNNING);
     });
   });
@@ -1095,7 +1091,7 @@ describe('SessionRepository edge cases', () => {
 
     const children = await repo.findChildren(root.session_id);
     expect(children).toHaveLength(2);
-    expect(children.map((c) => c.session_id).sort()).toEqual(
+    expect(children.map(c => c.session_id).sort()).toEqual(
       [child1.session_id, child2.session_id].sort()
     );
   });
