@@ -107,6 +107,87 @@ async function bootstrapMigrations(db: Database): Promise<void> {
 }
 
 /**
+ * Get migrations folder path
+ */
+function getMigrationsFolder(): string {
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = dirname(__filename);
+  const isProduction = __dirname.includes('/dist/');
+  return join(__dirname, isProduction ? '..' : '../..', 'drizzle');
+}
+
+/**
+ * Check migration status and return pending migrations
+ *
+ * Drizzle stores SHA256 hashes of SQL file content in the hash column.
+ * We compute hashes of our migration files and compare against the database.
+ *
+ * @returns Object with hasPending flag and list of pending migration tags
+ */
+export async function checkMigrationStatus(
+  db: Database
+): Promise<{ hasPending: boolean; pending: string[]; applied: string[] }> {
+  try {
+    const migrationsFolder = getMigrationsFolder();
+
+    // Read expected migrations from journal
+    const journalPath = join(migrationsFolder, 'meta', '_journal.json');
+    const { readFile } = await import('node:fs/promises');
+    const { createHash } = await import('node:crypto');
+    const journalContent = await readFile(journalPath, 'utf-8');
+    const journal = JSON.parse(journalContent);
+    const expectedMigrations: { tag: string; hash: string }[] = [];
+
+    // Compute hash for each migration SQL file
+    for (const entry of journal.entries) {
+      const sqlPath = join(migrationsFolder, `${entry.tag}.sql`);
+      try {
+        const sqlContent = await readFile(sqlPath, 'utf-8');
+        const hash = createHash('sha256').update(sqlContent).digest('hex');
+        expectedMigrations.push({ tag: entry.tag, hash });
+      } catch (err) {
+        console.warn(`Warning: Could not read migration file ${entry.tag}.sql:`, err);
+      }
+    }
+
+    // Get applied migrations from database
+    const hasTable = await hasMigrationsTable(db);
+    if (!hasTable) {
+      // No migrations table = fresh database, all migrations pending
+      return {
+        hasPending: true,
+        pending: expectedMigrations.map(m => m.tag),
+        applied: [],
+      };
+    }
+
+    const result = await db.run(sql`SELECT hash FROM __drizzle_migrations ORDER BY id`);
+    const appliedHashes: string[] = result.rows.map((row: Record<string, unknown>) =>
+      String(row.hash)
+    );
+
+    // Find pending migrations (hash not in database)
+    const pending = expectedMigrations.filter(m => !appliedHashes.includes(m.hash)).map(m => m.tag);
+
+    // Find applied migration tags (hash exists in database)
+    const appliedTags = expectedMigrations
+      .filter(m => appliedHashes.includes(m.hash))
+      .map(m => m.tag);
+
+    return {
+      hasPending: pending.length > 0,
+      pending,
+      applied: appliedTags,
+    };
+  } catch (error) {
+    throw new MigrationError(
+      `Failed to check migration status: ${error instanceof Error ? error.message : String(error)}`,
+      error
+    );
+  }
+}
+
+/**
  * Run all pending database migrations
  *
  * Uses Drizzle's built-in migration system:
@@ -124,13 +205,7 @@ export async function runMigrations(db: Database): Promise<void> {
   try {
     console.log('Running database migrations...');
 
-    // Resolve migrations folder path relative to this file
-    // In production (dist): dist/core/db/migrate.js -> dist/core/drizzle (go up 1 level)
-    // In dev (tsx): packages/core/src/db/migrate.ts -> packages/core/drizzle (go up 2 levels from src/db/)
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = dirname(__filename);
-    const isProduction = __dirname.includes('/dist/');
-    const migrationsFolder = join(__dirname, isProduction ? '..' : '../..', 'drizzle');
+    const migrationsFolder = getMigrationsFolder();
 
     // Drizzle handles everything:
     // 1. Creates __drizzle_migrations table if needed

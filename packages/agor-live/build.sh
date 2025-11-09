@@ -164,6 +164,16 @@ cat > "$SCRIPT_DIR/dist/core/package.json" << 'PKGJSON'
       "types": "./utils/errors.d.ts",
       "import": "./utils/errors.js",
       "require": "./utils/errors.cjs"
+    },
+    "./utils/context-window": {
+      "types": "./utils/context-window.d.ts",
+      "import": "./utils/context-window.js",
+      "require": "./utils/context-window.cjs"
+    },
+    "./seed": {
+      "types": "./seed/index.d.ts",
+      "import": "./seed/index.js",
+      "require": "./seed/index.cjs"
     }
   }
 }

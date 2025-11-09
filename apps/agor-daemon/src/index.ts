@@ -648,11 +648,32 @@ async function main() {
   // Create database with foreign keys enabled
   const db = await createDatabaseAsync({ url: DB_PATH });
 
-  // Run migrations (auto-applies pending migrations from drizzle/ folder)
-  // Safe for both fresh and existing databases
-  console.log('🔄 Running database migrations...');
-  const { runMigrations, seedInitialData } = await import('@agor/core/db');
-  await runMigrations(db);
+  // Check if migrations are needed
+  console.log('🔍 Checking database migration status...');
+  const { checkMigrationStatus, seedInitialData } = await import('@agor/core/db');
+  const migrationStatus = await checkMigrationStatus(db);
+
+  if (migrationStatus.hasPending) {
+    console.error('');
+    console.error('❌ Database migrations required!');
+    console.error('');
+    console.error(`   Found ${migrationStatus.pending.length} pending migration(s):`);
+    migrationStatus.pending.forEach(tag => {
+      console.error(`     - ${tag}`);
+    });
+    console.error('');
+    console.error('⚠️  For safety, please backup your database before running migrations:');
+    console.error(`   cp ~/.agor/agor.db ~/.agor/agor.db.backup-$(date +%s)`);
+    console.error('');
+    console.error('Then run migrations with:');
+    console.error('   agor db migrate');
+    console.error('');
+    console.error('After migrations complete successfully, restart the daemon.');
+    console.error('');
+    process.exit(1);
+  }
+
+  console.log('✅ Database migrations up to date');
 
   // Seed initial data (idempotent - only creates if missing)
   console.log('🌱 Seeding initial data...');
