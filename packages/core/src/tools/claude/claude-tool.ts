@@ -438,20 +438,29 @@ export class ClaudeTool implements ITool {
           const assistantMessageId =
             currentTextMessageId || currentThinkingMessageId || (generateId() as MessageID);
 
-          // Create complete assistant message in DB
-          await createAssistantMessage(
-            sessionId,
-            assistantMessageId,
-            completeEvent.content,
-            completeEvent.toolUses,
-            taskId,
-            nextIndex++,
-            resolvedModel,
-            this.messagesService!,
-            this.tasksService,
-            completeEvent.parent_tool_use_id ?? null
-          );
-          assistantMessageIds.push(assistantMessageId);
+          // Defensive check: Verify session still exists before creating message
+          // (protects against race condition where session is deleted during execution)
+          const sessionExists = await this.sessionsRepo?.findById(sessionId);
+          if (!sessionExists) {
+            console.warn(
+              `⚠️  Session ${sessionId.substring(0, 8)} no longer exists, skipping assistant message creation`
+            );
+          } else {
+            // Create complete assistant message in DB
+            await createAssistantMessage(
+              sessionId,
+              assistantMessageId,
+              completeEvent.content,
+              completeEvent.toolUses,
+              taskId,
+              nextIndex++,
+              resolvedModel,
+              this.messagesService!,
+              this.tasksService,
+              completeEvent.parent_tool_use_id ?? null
+            );
+            assistantMessageIds.push(assistantMessageId);
+          }
 
           // Reset all stream IDs for next message
           // Both thinking and text streams are complete at this point
@@ -462,18 +471,28 @@ export class ClaudeTool implements ITool {
         } else if (event.type === 'complete' && event.role === MessageRole.USER) {
           // Type assertion for user message
           const completeEvent = event as Extract<ProcessedEvent, { type: 'complete' }>;
-          // Create user message (tool results, etc.)
-          const userMessageId = generateId() as MessageID;
-          await createUserMessageFromContent(
-            sessionId,
-            userMessageId,
-            completeEvent.content,
-            taskId,
-            nextIndex++,
-            this.messagesService!,
-            completeEvent.parent_tool_use_id ?? null
-          );
-          // Don't add to assistantMessageIds - these are user messages
+
+          // Defensive check: Verify session still exists before creating message
+          // (protects against race condition where session is deleted during execution)
+          const sessionExists = await this.sessionsRepo?.findById(sessionId);
+          if (!sessionExists) {
+            console.warn(
+              `⚠️  Session ${sessionId.substring(0, 8)} no longer exists, skipping user message creation`
+            );
+          } else {
+            // Create user message (tool results, etc.)
+            const userMessageId = generateId() as MessageID;
+            await createUserMessageFromContent(
+              sessionId,
+              userMessageId,
+              completeEvent.content,
+              taskId,
+              nextIndex++,
+              this.messagesService!,
+              completeEvent.parent_tool_use_id ?? null
+            );
+            // Don't add to assistantMessageIds - these are user messages
+          }
         }
       }
     }
@@ -648,6 +667,16 @@ export class ClaudeTool implements ITool {
         // Type assertion for complete event
         const completeEvent = event as Extract<ProcessedEvent, { type: 'complete' }>;
         const messageId = generateId() as MessageID;
+
+        // Defensive check: Verify session still exists before creating message
+        // (protects against race condition where session is deleted during execution)
+        const sessionExists = await this.sessionsRepo?.findById(sessionId);
+        if (!sessionExists) {
+          console.warn(
+            `⚠️  Session ${sessionId.substring(0, 8)} no longer exists, skipping message creation (non-streaming mode)`
+          );
+          continue; // Skip to next event
+        }
 
         if (completeEvent.role === MessageRole.ASSISTANT) {
           await createAssistantMessage(

@@ -155,6 +155,23 @@ export function createPreToolUseHook(
       const requestId = generateId();
       const timestamp = new Date().toISOString();
 
+      // Defensive check: Verify session still exists before creating permission request
+      // (protects against race condition where session is deleted during execution)
+      const sessionStillExists = await deps.sessionsRepo.findById(sessionId);
+      if (!sessionStillExists) {
+        console.warn(
+          `⚠️  Session ${sessionId.substring(0, 8)} no longer exists, cannot create permission request`
+        );
+        // Return deny decision to abort tool execution gracefully
+        return {
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'deny',
+            permissionDecisionReason: 'Session no longer exists',
+          },
+        };
+      }
+
       // Get current message index for this session
       const existingMessages = await deps.messagesRepo.findBySessionId(sessionId);
       const nextIndex = existingMessages.length;
@@ -191,6 +208,21 @@ export function createPreToolUseHook(
         }
       } catch (createError) {
         console.error(`❌ CRITICAL: Failed to create permission request message:`, createError);
+        // Check if this is a FK constraint error (session was deleted mid-flight)
+        const isFKError =
+          createError instanceof Error &&
+          (createError.message.includes('FOREIGN KEY constraint failed') ||
+            createError.message.includes('SQLITE_CONSTRAINT_FOREIGNKEY'));
+        if (isFKError) {
+          console.warn(`   Session was deleted during permission check, aborting gracefully`);
+          return {
+            hookSpecificOutput: {
+              hookEventName: 'PreToolUse',
+              permissionDecision: 'deny',
+              permissionDecisionReason: 'Session no longer exists',
+            },
+          };
+        }
         throw createError;
       }
 
@@ -238,23 +270,32 @@ export function createPreToolUseHook(
 
       // Update permission request message with approval/denial
       if (deps.messagesService) {
-        const baseContent =
-          typeof permissionMessage.content === 'object' && !Array.isArray(permissionMessage.content)
-            ? permissionMessage.content
-            : {};
-        // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service has patch method but type definition is incomplete
-        await (deps.messagesService as any).patch(permissionMessage.message_id, {
-          content: {
-            ...(baseContent as Record<string, unknown>),
-            status: decision.allow ? PermissionStatus.APPROVED : PermissionStatus.DENIED,
-            scope: decision.remember ? decision.scope : undefined,
-            approved_by: decision.decidedBy,
-            approved_at: new Date().toISOString(),
-          },
-        });
-        console.log(
-          `✅ Permission request message updated: ${decision.allow ? 'approved' : 'denied'}`
-        );
+        try {
+          const baseContent =
+            typeof permissionMessage.content === 'object' &&
+            !Array.isArray(permissionMessage.content)
+              ? permissionMessage.content
+              : {};
+          // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service has patch method but type definition is incomplete
+          await (deps.messagesService as any).patch(permissionMessage.message_id, {
+            content: {
+              ...(baseContent as Record<string, unknown>),
+              status: decision.allow ? PermissionStatus.APPROVED : PermissionStatus.DENIED,
+              scope: decision.remember ? decision.scope : undefined,
+              approved_by: decision.decidedBy,
+              approved_at: new Date().toISOString(),
+            },
+          });
+          console.log(
+            `✅ Permission request message updated: ${decision.allow ? 'approved' : 'denied'}`
+          );
+        } catch (updateError) {
+          console.error(
+            `⚠️  Failed to update permission request message (session may have been deleted):`,
+            updateError
+          );
+          // Don't throw - permission decision is what matters, not message update
+        }
       }
 
       // Update task status
@@ -272,10 +313,18 @@ export function createPreToolUseHook(
 
         // Set session status to idle (execution stopped)
         if (deps.sessionsService) {
-          await deps.sessionsService.patch(sessionId, {
-            status: 'idle' as const,
-          });
-          console.log(`✅ Session ${sessionId} set to idle after permission denial`);
+          try {
+            await deps.sessionsService.patch(sessionId, {
+              status: 'idle' as const,
+            });
+            console.log(`✅ Session ${sessionId} set to idle after permission denial`);
+          } catch (patchError) {
+            console.warn(
+              `⚠️  Failed to update session status to idle (session may have been deleted):`,
+              patchError
+            );
+            // Don't throw - denial is what matters
+          }
         }
 
         // Throw an error to abort SDK execution
@@ -284,10 +333,18 @@ export function createPreToolUseHook(
       } else {
         // Restore session status to running (only if approved)
         if (deps.sessionsService) {
-          await deps.sessionsService.patch(sessionId, {
-            status: 'running' as const,
-          });
-          console.log(`✅ Session ${sessionId} restored to running after permission approval`);
+          try {
+            await deps.sessionsService.patch(sessionId, {
+              status: 'running' as const,
+            });
+            console.log(`✅ Session ${sessionId} restored to running after permission approval`);
+          } catch (patchError) {
+            console.warn(
+              `⚠️  Failed to update session status to running (session may have been deleted):`,
+              patchError
+            );
+            // Don't throw - approval is what matters, continue execution
+          }
         }
       }
 
@@ -371,7 +428,8 @@ export function createPreToolUseHook(
         const timestamp = new Date().toISOString();
 
         // Check if this is a permission denial (already marked as failed above)
-        const isPermissionDenial = error instanceof Error && error.message.startsWith('Permission denied for tool:');
+        const isPermissionDenial =
+          error instanceof Error && error.message.startsWith('Permission denied for tool:');
 
         if (!isPermissionDenial) {
           // Only update task status if not already marked as failed by permission denial
