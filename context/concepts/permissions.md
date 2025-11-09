@@ -1,44 +1,51 @@
 # Permission System
 
-**Status:** ✅ Complete - Full-stack implementation with historical audit trail
+**Status:** ✅ Complete - SDK-integrated permission system with user settings respect
 
-Agor's permission system provides real-time UI-based approval for high-risk tool operations during agent execution, with full audit trails and multi-user support.
+Agor's permission system provides real-time UI-based approval for tool operations while respecting existing Claude CLI permissions in `~/.claude/settings.json` and `.claude/settings.json`. Uses SDK's built-in permission persistence via `updatedPermissions`.
 
 ## Architecture Overview
 
-### Task-Centric Design
+### Three-Tier Permission System
 
-Permission requests are stored at the **Task level**, not as separate entities:
+Agor respects permissions at three levels (in order of precedence):
+
+1. **User-level** (`~/.claude/settings.json`) - SDK checks first
+2. **Project-level** (`.claude/settings.json`) - SDK checks second
+3. **Session-level** (SDK's session memory) - SDK checks third
+4. **Agor UI prompt** - Only shown if no rule matched above
+
+### SDK Integration
+
+Agor uses the SDK's `canUseTool` callback, which fires **AFTER** the SDK has already checked settings.json files. This ensures existing user permissions are always respected.
 
 ```typescript
-export interface Task {
-  status: 'created' | 'running' | 'awaiting_permission' | 'completed' | 'failed';
-
-  permission_request?: {
-    request_id: string;
-    tool_name: string;
-    tool_input: Record<string, unknown>;
-    tool_use_id?: string;
-    requested_at: string;
-    approved_by?: string; // userId who made decision
-    approved_at?: string;
-  };
-}
+// SDK Permission Flow (automatic):
+// 1. Check deny rules in settings.json
+// 2. Check allow rules in settings.json
+// 3. Check ask rules in settings.json
+// 4. Check permission mode
+// 5. Call canUseTool callback ← AGOR HOOKS IN HERE
 ```
-
-When a task needs permission, its status becomes `awaiting_permission` and the UI shows the request inline in the conversation.
 
 ### Components
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                     Claude Agent SDK                         │
+│                  Claude Agent SDK                            │
 │  ┌────────────────────────────────────────────────────┐    │
-│  │ PreToolUse Hook                                     │    │
-│  │ - Pauses execution                                  │    │
-│  │ - Updates task: status='awaiting_permission'       │    │
-│  │ - Waits for PermissionService decision             │    │
+│  │ 1. SDK checks ~/.claude/settings.json               │    │
+│  │ 2. SDK checks .claude/settings.json                 │    │
+│  │ 3. SDK checks session-level rules                   │    │
+│  │ 4. If no match → calls canUseTool callback          │    │
 │  └────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────┐
+│                 Agor canUseTool Callback                     │
+│  - Shows Agor's WebSocket UI for permission request         │
+│  - Waits for user decision                                   │
+│  - Returns with updatedPermissions for SDK to persist       │
 └─────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
@@ -50,7 +57,7 @@ When a task needs permission, its status becomes `awaiting_permission` and the U
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
 │                      FeathersJS Layer                        │
-│  - TasksService.patch() updates task                         │
+│  - TasksService.patch() updates task status                 │
 │  - WebSocket broadcasts to all users                         │
 │  - /sessions/:id/permission-decision endpoint               │
 └─────────────────────────────────────────────────────────────┘
@@ -58,47 +65,87 @@ When a task needs permission, its status becomes `awaiting_permission` and the U
 ┌─────────────────────────────────────────────────────────────┐
 │                          UI                                  │
 │  ┌────────────────────────────────────────────────────┐    │
-│  │ PermissionRequestBlock                              │    │
-│  │ - Active: Yellow card with Approve/Deny buttons    │    │
+│  │ PermissionRequestBlock (3 scopes)                  │    │
+│  │ - Active: Yellow card with [Once|Session|Project]  │    │
 │  │ - Approved: Green card with timestamp (compact)    │    │
 │  │ - Denied: Red card with timestamp (compact)        │    │
 │  └────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────┐
+│            SDK's Built-in Permission Persistence             │
+│  - "Once" → No persistence (one-time approval)              │
+│  - "Session" → SDK writes to session memory                │
+│  - "Project" → SDK writes to .claude/settings.json         │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ## Implementation Flow
 
-### 1. Tool Use Triggers Permission Check
+### 1. SDK Checks Settings Files First
 
-When Claude Agent SDK attempts to use a tool:
+When Claude Agent SDK attempts to use a tool, it **automatically** checks:
+
+1. `~/.claude/settings.json` - User-level permissions
+2. `.claude/settings.json` - Project-level permissions
+3. Session-level rules (in SDK memory)
+
+If a rule matched, SDK proceeds without calling Agor.
+
+### 2. canUseTool Callback (Only if No Rule Matched)
+
+If SDK found no matching rule, it calls Agor's `canUseTool` callback:
 
 ```typescript
-// packages/core/src/tools/claude/prompt-service.ts
-const hook = async (input: PreToolUseHookInput, toolUseID: string) => {
-  // Check session-specific allow list
-  if (session.data?.permission_config?.allowedTools?.includes(input.tool_name)) {
-    return { permissionDecision: 'allow' };
-  }
+// packages/core/src/tools/claude/permissions/permission-hooks.ts
+export function createCanUseToolCallback(sessionId, taskId, deps) {
+  return async (toolName, toolInput, options) => {
+    // Show Agor's WebSocket UI
+    const permissionMessage = await createPermissionRequestMessage(toolName, toolInput);
 
-  // Update task status
-  await tasksService.patch(taskId, {
-    status: 'awaiting_permission',
-    permission_request: {
-      request_id: generateId(),
-      tool_name: input.tool_name,
-      tool_input: input.tool_input,
-      requested_at: new Date().toISOString(),
-    },
-  });
+    // Update task to 'awaiting_permission'
+    await tasksService.patch(taskId, { status: 'awaiting_permission' });
 
-  // Wait for decision (pauses SDK execution)
-  const decision = await permissionService.waitForDecision(requestId, taskId, signal);
+    // Emit WebSocket event for UI
+    permissionService.emitRequest(sessionId, { toolName, toolInput });
 
-  return { permissionDecision: decision.allow ? 'allow' : 'deny' };
-};
+    // Wait for user decision (pauses SDK execution)
+    const decision = await permissionService.waitForDecision(requestId, taskId, signal);
+
+    if (!decision.allow) {
+      return { behavior: 'deny', message: 'Permission denied' };
+    }
+
+    // Build response with SDK's built-in persistence
+    const response = {
+      behavior: 'allow',
+      updatedInput: toolInput,
+    };
+
+    // If user clicked "Remember", tell SDK to persist the permission
+    if (decision.remember && decision.scope) {
+      const destination =
+        decision.scope === 'session' ? 'session' :
+        decision.scope === 'project' ? 'projectSettings' :
+        'session';
+
+      response.updatedPermissions = [{
+        kind: 'addRules',
+        rules: [toolName],
+        behavior: 'allow',
+        destination,
+      }];
+
+      // SDK will automatically write to .claude/settings.json (project)
+      // or session memory (session) - Agor doesn't need to do anything!
+    }
+
+    return response;
+  };
+}
 ```
 
-### 2. UI Receives Real-Time Update
+### 3. UI Receives Real-Time Update
 
 ```typescript
 // apps/agor-ui/src/hooks/useTasks.ts
@@ -113,44 +160,46 @@ useEffect(() => {
 }, [client]);
 ```
 
-### 3. User Makes Decision
+### 4. User Makes Decision (3 Scopes)
 
 ```tsx
 // apps/agor-ui/src/components/PermissionRequestBlock/PermissionRequestBlock.tsx
-<Button onClick={() => onApprove(task.task_id)}>Approve</Button>
+<Button onClick={() => onApprove(task.task_id, 'once')}>Once</Button>
+<Button onClick={() => onApprove(task.task_id, 'session')}>For This Session</Button>
+<Button onClick={() => onApprove(task.task_id, 'project')}>For This Project</Button>
 <Button onClick={() => onDeny(task.task_id)}>Deny</Button>
 ```
 
 ```typescript
 // apps/agor-ui/src/components/App/App.tsx
-const handlePermissionDecision = async (sessionId, requestId, taskId, allow) => {
+const handlePermissionDecision = async (sessionId, requestId, taskId, allow, scope) => {
   await client.service(`sessions/${sessionId}/permission-decision`).create({
     requestId,
     taskId,
     allow,
     decidedBy: user.user_id,
-    scope: 'once',
+    scope,        // 'once' | 'session' | 'project'
+    remember: scope !== 'once',
   });
 };
 ```
 
-### 4. Decision Resolves Promise
+### 5. Decision Resolves Promise & SDK Persists
 
 ```typescript
 // apps/agor-daemon/src/index.ts
 app.use(`sessions/:sessionId/permission-decision`, {
   async create(data: PermissionDecision) {
-    // Update task with decision
+    // Update task status
     await tasksService.patch(data.taskId, {
       status: data.allow ? 'running' : 'failed',
-      permission_request: {
-        ...currentTask.permission_request,
-        approved_by: data.decidedBy,
-        approved_at: new Date().toISOString(),
-      },
     });
 
-    // Resolve waiting promise (SDK continues)
+    // Resolve waiting promise in canUseTool callback
+    // canUseTool returns with updatedPermissions
+    // SDK automatically persists to:
+    //   - Session memory (scope='session')
+    //   - .claude/settings.json (scope='project')
     permissionService.resolvePermission(data);
   },
 });
@@ -204,41 +253,54 @@ The `PermissionRequestBlock` component renders three states:
 
 ## Key Design Decisions
 
-### 1. Full Object Updates for WebSocket Broadcasting
+### 1. Use canUseTool Instead of PreToolUse Hook
 
-**Problem:** Using dot notation (`'permission_request.approved_by'`) in FeathersJS `patch()` updates the database but doesn't broadcast nested fields via WebSocket.
+**Problem:** PreToolUse hook fires on **every** tool call, before SDK checks settings.json. This meant Agor was overriding user's existing Claude CLI permissions.
 
-**Solution:** Fetch current task and send full `permission_request` object:
-
-```typescript
-const currentTask = await tasksService.get(taskId);
-await tasksService.patch(taskId, {
-  status: decision.allow ? 'running' : 'failed',
-  permission_request: {
-    ...currentTask.permission_request, // Spread existing fields
-    approved_by: decision.decidedBy,
-    approved_at: new Date().toISOString(),
-  },
-});
-```
-
-### 2. Distinguish Approved vs Denied by Task Status
-
-**Observation:** Backend sets `approved_by` and `approved_at` for **both** approve and deny decisions (they act as `decided_by`/`decided_at`).
-
-**Solution:** Use task status to distinguish:
-
-- `approved_by` exists + status ≠ `failed` → **Approved**
-- `approved_by` exists + status = `failed` → **Denied**
+**Solution:** Use `canUseTool` callback which fires **AFTER** SDK checks settings files:
 
 ```typescript
-const isApproved = !isActive && approved_by && task.status !== 'failed';
-const isDenied = !isActive && approved_by && task.status === 'failed';
+// SDK permission flow (automatic):
+// 1. Check ~/.claude/settings.json
+// 2. Check .claude/settings.json
+// 3. Check session rules
+// 4. If no match → call canUseTool ← AGOR HOOKS HERE
 ```
 
-### 3. Always Show Permission Requests (Historical Audit Trail)
+### 2. SDK's Built-in Permission Persistence
 
-Permission requests persist after approval/denial, providing a full audit trail of all decisions made during the session.
+**Problem:** We were manually writing to database and `.claude/settings.json` files, duplicating SDK's functionality.
+
+**Solution:** Use SDK's `updatedPermissions` field in canUseTool response:
+
+```typescript
+return {
+  behavior: 'allow',
+  updatedInput: toolInput,
+  updatedPermissions: [{
+    kind: 'addRules',
+    rules: [toolName],
+    behavior: 'allow',
+    destination: 'session' | 'projectSettings', // SDK handles writing
+  }],
+};
+```
+
+**Result:** SDK automatically persists permissions to:
+- Session memory (`destination: 'session'`)
+- `.claude/settings.json` (`destination: 'projectSettings'`)
+
+### 3. Three Permission Scopes
+
+Agor provides three scopes mapped to SDK destinations:
+
+- **Once** → No `updatedPermissions` (one-time approval)
+- **Session** → `destination: 'session'` (SDK's session memory)
+- **Project** → `destination: 'projectSettings'` (writes to `.claude/settings.json`)
+
+### 4. Always Show Permission Requests (Historical Audit Trail)
+
+Permission requests persist after approval/denial in message history, providing a full audit trail.
 
 ```tsx
 {
@@ -267,37 +329,48 @@ All connected users see permission requests in real-time:
 5. **WebSocket broadcast** → All users see green "Permission Approved" card
 6. **SDK resumes** → Agent continues execution
 
-## Future Enhancements
+## Settings File Format
 
-### Remember Decisions
+Agor respects Claude CLI's standard settings.json format:
 
-```typescript
-// Session-level (stored in DB)
-session.data.permission_config.allowedTools.push('Bash');
+### User Settings (`~/.claude/settings.json`)
 
-// Project-level (stored in .claude/settings.json)
+```json
+{
+  "permissions": {
+    "allow": ["Read", "Glob", "Grep"],
+    "deny": []
+  }
+}
+```
+
+### Project Settings (`.claude/settings.json`)
+
+```json
 {
   "permissions": {
     "allow": {
-      "tools": ["Read", "Bash"]
+      "tools": ["Read", "Write", "Bash"]
     }
   }
 }
 ```
 
-### Risk-Based Defaults
+**Wildcards supported:**
+```json
+{
+  "permissions": {
+    "allow": ["*"],  // Allow all tools (like Claude CLI)
+    "deny": ["Bash"] // Except Bash
+  }
+}
+```
 
-Auto-allow low-risk read-only tools:
-
-- `Read`, `Glob`, `Grep`
-- `git status`, `git log`, `git diff`
-
-Always ask for high-risk operations:
-
-- `Bash`, `Write`, `Edit`
-- `git push`, `git commit`
+## Future Enhancements
 
 ### Granular Tool Permissions
+
+Allow fine-grained control over tool parameters:
 
 ```json
 {
@@ -310,14 +383,23 @@ Always ask for high-risk operations:
 }
 ```
 
+### Permission Mode UI
+
+Allow changing permission mode from UI:
+- `ask` - Ask for permission (current default)
+- `allow-all` - Auto-approve all tools
+- `deny-all` - Deny all tools
+
 ## Files
 
 **Core:**
 
 - `packages/core/src/permissions/permission-service.ts` - Request/decision coordination
-- `packages/core/src/tools/claude/prompt-service.ts` - PreToolUse hook
+- `packages/core/src/tools/claude/permissions/permission-hooks.ts` - **canUseTool callback (NEW)**
+- `packages/core/src/tools/claude/query-builder.ts` - SDK query configuration
 - `packages/core/src/tools/claude/claude-tool.ts` - TasksService interface
 - `packages/core/src/types/task.ts` - Task type with permission_request
+- `packages/core/src/types/message.ts` - PermissionScope enum
 
 **Daemon:**
 
@@ -325,13 +407,19 @@ Always ask for high-risk operations:
 
 **UI:**
 
-- `apps/agor-ui/src/components/PermissionRequestBlock/` - Three-state UI component
+- `apps/agor-ui/src/components/PermissionRequestBlock/` - Three-scope UI component
 - `apps/agor-ui/src/components/TaskBlock/TaskBlock.tsx` - Render permission blocks
 - `apps/agor-ui/src/components/App/App.tsx` - Permission decision handler
+
+**Settings Files (SDK-managed):**
+
+- `~/.claude/settings.json` - User-level permissions (SDK reads)
+- `.claude/settings.json` - Project-level permissions (SDK reads/writes)
 
 ## References
 
 - [Claude Agent SDK Hooks](https://docs.anthropic.com/claude/agent-sdk/hooks)
+- [Claude Agent SDK canUseTool](https://docs.anthropic.com/claude/agent-sdk/permissions)
 - [FeathersJS Events](https://feathersjs.com/api/events.html)
 - [Task Model](./models.md#task)
 - [WebSocket Architecture](./websockets.md)

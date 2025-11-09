@@ -137,10 +137,10 @@ export interface Session {
   /** Session description (legacy field, may contain first prompt) */
   description?: string;
 
-  // Permission config (session-level tool approvals)
+  // Permission config (session-level permission settings)
   permission_config?: {
-    allowedTools?: string[];
-    /** Permission mode for agent tool execution (Claude/Gemini unified mode) */
+    /** Permission mode for agent tool execution (Claude/Gemini unified mode)
+     *  Tool-level permissions are handled by SDK via settings.json files */
     mode?: PermissionMode;
     /** Codex-specific dual permission config (sandboxMode + approvalPolicy + networkAccess) */
     codex?: {

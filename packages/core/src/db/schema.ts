@@ -81,10 +81,9 @@ export const sessions = sqliteTable(
         // Aggregates
         message_count: number;
 
-        // Permission config (session-level tool approvals)
+        // Permission config (session-level permission settings)
         permission_config?: {
-          allowedTools?: string[];
-          mode?: PermissionMode; // For Claude/Gemini
+          mode?: PermissionMode; // For Claude/Gemini (SDK handles tool-level permissions)
           codex?: {
             sandboxMode: CodexSandboxMode;
             approvalPolicy: CodexApprovalPolicy;
@@ -306,9 +305,6 @@ export const repos = sqliteTable(
             type: 'http' | 'tcp' | 'process';
             url_template?: string; // Handlebars template
           };
-        };
-        permission_config?: {
-          allowedTools?: string[]; // Tools allowed for all sessions in this repo
         };
       }>()
       .notNull(),

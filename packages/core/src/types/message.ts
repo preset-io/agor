@@ -51,11 +51,13 @@ export interface ToolUse {
 
 /**
  * Permission scope - how long a permission grant lasts
+ * Maps to SDK's PermissionUpdateDestination
  */
 export enum PermissionScope {
-  ONCE = 'once', // Just this one request
-  SESSION = 'session', // For this session
-  PROJECT = 'project', // For this entire project
+  ONCE = 'once', // Just this one request (no updatedPermissions)
+  PROJECT = 'project', // For this entire project (SDK destination: 'projectSettings')
+  USER = 'user', // For all sessions globally (SDK destination: 'userSettings')
+  LOCAL = 'local', // For this project, gitignored (SDK destination: 'localSettings')
 }
 
 /**
