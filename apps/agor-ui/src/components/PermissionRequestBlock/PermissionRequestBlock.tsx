@@ -15,7 +15,7 @@ import {
   PermissionStatus,
 } from '@agor/core/types';
 import { CheckOutlined, CloseOutlined, LockOutlined } from '@ant-design/icons';
-import { Button, Card, Descriptions, Radio, Space, Tag, Typography, theme } from 'antd';
+import { Button, Card, Descriptions, Radio, Select, Space, Tag, Typography, theme } from 'antd';
 import type React from 'react';
 import { useState } from 'react';
 
@@ -39,7 +39,8 @@ export const PermissionRequestBlock: React.FC<PermissionRequestBlockProps> = ({
   onDeny,
 }) => {
   const { token } = theme.useToken();
-  const [scope, setScope] = useState<PermissionScope>(PermissionScope.ONCE);
+  const [remember, setRemember] = useState<boolean>(false);
+  const [rememberScope, setRememberScope] = useState<PermissionScope>(PermissionScope.PROJECT);
 
   const { tool_name, tool_input, status, approved_at } = content;
 
@@ -190,16 +191,29 @@ export const PermissionRequestBlock: React.FC<PermissionRequestBlockProps> = ({
         {/* Action Buttons - show only when active */}
         {isActive && onApprove && onDeny && (
           <Space direction="vertical" size={token.sizeUnit} style={{ width: '100%' }}>
-            {/* Radio group for scope selection */}
+            {/* Radio group for remember choice */}
             <Radio.Group
-              value={scope}
-              onChange={(e) => setScope(e.target.value)}
+              value={remember}
+              onChange={(e) => setRemember(e.target.value)}
               style={{ width: '100%' }}
             >
-              <Space direction="vertical" size={token.sizeUnit / 2}>
-                <Radio value={PermissionScope.ONCE}>Allow once (this request only)</Radio>
-                <Radio value={PermissionScope.SESSION}>Allow for this session</Radio>
-                <Radio value={PermissionScope.PROJECT}>Allow for this project</Radio>
+              <Space direction="vertical" size={token.sizeUnit / 2} style={{ width: '100%' }}>
+                <Radio value={false}>Allow once</Radio>
+                <Space size={token.sizeUnit / 2} style={{ width: '100%', alignItems: 'center' }}>
+                  <Radio value={true}>Remember for this</Radio>
+                  <Select
+                    value={rememberScope}
+                    onChange={setRememberScope}
+                    disabled={!remember}
+                    style={{ width: 140 }}
+                    size="small"
+                    options={[
+                      { value: PermissionScope.PROJECT, label: 'Project' },
+                      { value: PermissionScope.USER, label: 'User (global)' },
+                      { value: PermissionScope.LOCAL, label: 'Local' },
+                    ]}
+                  />
+                </Space>
               </Space>
             </Radio.Group>
 
@@ -208,7 +222,12 @@ export const PermissionRequestBlock: React.FC<PermissionRequestBlockProps> = ({
               <Button
                 type="primary"
                 icon={<CheckOutlined />}
-                onClick={() => onApprove?.(message.message_id, scope)}
+                onClick={() =>
+                  onApprove?.(
+                    message.message_id,
+                    remember ? rememberScope : PermissionScope.ONCE
+                  )
+                }
                 style={{ backgroundColor: token.colorSuccess }}
               >
                 Approve

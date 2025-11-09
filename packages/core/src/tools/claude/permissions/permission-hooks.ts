@@ -408,6 +408,7 @@ export function createCanUseToolCallback(
   deps: {
     permissionService: PermissionService;
     tasksService: TasksService;
+    sessionsRepo: import('../../../db/repositories/sessions').SessionRepository;
     messagesRepo: MessagesRepository;
     messagesService?: MessagesService;
     sessionsService?: SessionsService;
@@ -417,13 +418,13 @@ export function createCanUseToolCallback(
   return async (
     toolName: string,
     toolInput: Record<string, unknown>,
-    options: { signal: AbortSignal }
+    options: { signal: AbortSignal; suggestions?: Array<Record<string, unknown>> }
   ): Promise<{
     behavior: 'allow' | 'deny';
     updatedInput?: Record<string, unknown>;
     updatedPermissions?: Array<{
-      kind: 'addRules';
-      rules: string[];
+      type: 'addRules';
+      rules: Array<{ toolName: string }>;
       behavior: 'allow';
       destination: 'session' | 'projectSettings' | 'userSettings' | 'localSettings';
     }>;
@@ -431,6 +432,9 @@ export function createCanUseToolCallback(
   }> => {
     // This callback fires AFTER SDK checks settings.json
     // We show Agor's UI and let SDK handle persistence via updatedPermissions
+
+    // Log suggestions from SDK to understand expected format
+    console.log(`📋 [canUseTool] SDK suggestions:`, JSON.stringify(options.suggestions, null, 2));
 
     // Track lock release function for finally block
     let releaseLock: (() => void) | undefined;
@@ -583,8 +587,8 @@ export function createCanUseToolCallback(
         behavior: 'allow';
         updatedInput: Record<string, unknown>;
         updatedPermissions?: Array<{
-          kind: 'addRules';
-          rules: string[];
+          type: 'addRules';
+          rules: Array<{ toolName: string }>;
           behavior: 'allow';
           destination: 'session' | 'projectSettings' | 'userSettings' | 'localSettings';
         }>;
@@ -593,29 +597,48 @@ export function createCanUseToolCallback(
         updatedInput: toolInput,
       };
 
-      // If user clicked "Remember", let SDK handle persistence via updatedPermissions
+      // Add updatedPermissions based on user's scope choice
+      // Let's try using SDK's built-in persistence mechanism
       if (decision.remember && decision.scope) {
-        const destination =
-          decision.scope === 'session'
-            ? ('session' as const)
-            : decision.scope === 'project'
-              ? ('projectSettings' as const)
-              : ('session' as const); // Default to session if unknown
+        console.log(`🔧 [canUseTool] Building updatedPermissions for scope: ${decision.scope}`);
+
+        // Map Agor's scopes to SDK destinations
+        let destination: 'projectSettings' | 'userSettings' | 'localSettings';
+
+        switch (decision.scope) {
+          case PermissionScope.PROJECT:
+            destination = 'projectSettings';
+            console.log(`   ℹ️  Mapping PROJECT scope -> 'projectSettings' destination (.claude/settings.json)`);
+            break;
+          case PermissionScope.USER:
+            destination = 'userSettings';
+            console.log(`   ℹ️  Mapping USER scope -> 'userSettings' destination (~/.claude/settings.json)`);
+            break;
+          case PermissionScope.LOCAL:
+            destination = 'localSettings';
+            console.log(`   ℹ️  Mapping LOCAL scope -> 'localSettings' destination (gitignored local settings)`);
+            break;
+          default:
+            // Don't add updatedPermissions for 'once' scope
+            console.log(`   ℹ️  Scope is 'once', skipping updatedPermissions`);
+            return response;
+        }
 
         response.updatedPermissions = [
           {
-            kind: 'addRules' as const,
-            rules: [toolName],
-            behavior: 'allow' as const,
+            type: 'addRules',
+            rules: [{ toolName }],
+            behavior: 'allow',
             destination,
           },
         ];
 
-        console.log(`✅ [canUseTool] SDK will persist permission: ${toolName} → ${destination}`);
+        console.log(`📤 [canUseTool] updatedPermissions:`, JSON.stringify(response.updatedPermissions, null, 2));
       } else {
-        console.log(`ℹ️  [canUseTool] User chose "Once" - no persistence needed`);
+        console.log(`ℹ️  [canUseTool] No persistence requested (remember=${decision.remember}, scope=${decision.scope})`);
       }
 
+      console.log(`✅ [canUseTool] Permission approved, returning response`);
       return response;
     } catch (error) {
       console.error('[canUseTool] Error in permission flow:', error);
