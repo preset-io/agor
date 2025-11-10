@@ -666,7 +666,12 @@ ${networkAccessToml}${mcpServersToml}`;
 
           case 'turn.failed':
             console.error('❌ Codex turn failed:', event.error);
-            throw new Error(`Codex execution failed: ${event.error}`);
+            // Stringify error object for better user-facing error messages
+            const errorMessage =
+              typeof event.error === 'string'
+                ? event.error
+                : JSON.stringify(event.error, null, 2);
+            throw new Error(`Codex execution failed: ${errorMessage}`);
 
           default:
             // Ignore other event types silently
