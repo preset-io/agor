@@ -397,19 +397,22 @@ export const AgentChain: React.FC<AgentChainProps> = ({ messages }) => {
       if (toolUse.name === 'Bash' && toolUse.input.command) {
         titleContent = (
           <span style={{ cursor: 'help' }}>
-            <strong>Bash</strong>: <code>{String(toolUse.input.command)}</code>
+            <strong>Bash: </strong>
+            <Typography.Text code>{String(toolUse.input.command)}</Typography.Text>
           </span>
         );
       } else if (toolUse.name === 'Grep' && toolUse.input.pattern) {
         titleContent = (
           <span style={{ cursor: 'help' }}>
-            <strong>Grep</strong>: <code>{String(toolUse.input.pattern)}</code>
+            <strong>Grep: </strong>
+            <Typography.Text code>{String(toolUse.input.pattern)}</Typography.Text>
           </span>
         );
       } else if (toolUse.name === 'Glob' && toolUse.input.pattern) {
         titleContent = (
           <span style={{ cursor: 'help' }}>
-            <strong>Glob</strong>: <code>{String(toolUse.input.pattern)}</code>
+            <strong>Glob: </strong>
+            <Typography.Text code>{String(toolUse.input.pattern)}</Typography.Text>
           </span>
         );
       } else {
