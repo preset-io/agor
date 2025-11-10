@@ -17,24 +17,24 @@ import {
 const { Text, Paragraph } = Typography;
 
 interface AudioSettingsTabProps {
-  currentUser: User | null;
+  user: User | null;
   onUpdateUser?: (userId: string, updates: UpdateUserInput) => void;
 }
 
-export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({ currentUser, onUpdateUser }) => {
+export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({ user, onUpdateUser }) => {
   const [form] = Form.useForm();
   const [isPlaying, setIsPlaying] = useState(false);
 
   // Get current audio preferences or use defaults
-  const audioPrefs = currentUser?.preferences?.audio || DEFAULT_AUDIO_PREFERENCES;
+  const audioPrefs = user?.preferences?.audio || DEFAULT_AUDIO_PREFERENCES;
 
   const handleSave = async () => {
-    if (!currentUser || !onUpdateUser) return;
+    if (!user || !onUpdateUser) return;
 
     try {
       const values = form.getFieldsValue();
       const updatedPreferences = {
-        ...currentUser.preferences,
+        ...user.preferences,
         audio: {
           enabled: values.enabled,
           chime: values.chime,
@@ -43,7 +43,7 @@ export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({ currentUser,
         },
       };
 
-      onUpdateUser(currentUser.user_id, {
+      onUpdateUser(user.user_id, {
         preferences: updatedPreferences,
       });
 

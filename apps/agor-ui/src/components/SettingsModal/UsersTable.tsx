@@ -26,6 +26,7 @@ import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
 import { ApiKeyFields, type ApiKeyStatus } from '../ApiKeyFields';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { EnvVarEditor } from '../EnvVarEditor';
+import { AudioSettingsTab } from './AudioSettingsTab';
 
 // Using Typography.Text directly to avoid DOM Text interface collision
 
@@ -662,6 +663,15 @@ export const UsersTable: React.FC<UsersTableProps> = ({
                     onDelete={handleEnvVarDelete}
                     loading={savingEnvVars}
                   />
+                </div>
+              ),
+            },
+            {
+              key: 'audio',
+              label: 'Audio',
+              children: (
+                <div style={{ paddingTop: 8 }}>
+                  <AudioSettingsTab user={editingUser} onUpdateUser={onUpdate} />
                 </div>
               ),
             },
