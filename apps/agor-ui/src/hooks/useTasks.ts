@@ -3,8 +3,7 @@
  */
 
 import type { AgorClient } from '@agor/core/api';
-import type { SessionID, Task, User } from '@agor/core/types';
-import { TaskStatus } from '@agor/core/types/task';
+import { TaskStatus, type SessionID, type Task, type User } from '@agor/core/types';
 import { useCallback, useEffect, useState } from 'react';
 import { playTaskCompletionChime } from '../utils/audio';
 
