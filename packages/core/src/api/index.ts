@@ -206,6 +206,18 @@ export interface WorktreesService extends AgorService<Worktree> {
    * Check environment health
    */
   checkHealth(id: string, params?: Params): Promise<Worktree>;
+
+  /**
+   * Archive or delete a worktree with filesystem cleanup options
+   */
+  archiveOrDelete(
+    id: string,
+    options: {
+      metadataAction: 'archive' | 'delete';
+      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
+    },
+    params?: Params
+  ): Promise<Worktree | { deleted: true; worktree_id: string }>;
 }
 
 /**
