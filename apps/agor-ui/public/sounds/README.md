@@ -4,7 +4,7 @@ This directory contains the MP3 files for task completion notifications.
 
 ## Included Files
 
-All files have been downloaded from [Mixkit](https://mixkit.co) and [Pixabay](https://pixabay.com) under free licenses (Mixkit Free License / Pixabay Content License).
+All files have been downloaded from free sources under CC0 or permissive licenses.
 
 1. **gentle-chime.mp3** (66KB)
    - Source: Pixabay
@@ -16,20 +16,20 @@ All files have been downloaded from [Mixkit](https://mixkit.co) and [Pixabay](ht
    - License: Mixkit Free License
    - Clear notification bell
 
-3. **8bit-coin.mp3** (23KB)
-   - Source: Mixkit
-   - License: Mixkit Free License
-   - Retro game coin pickup sound
+3. **8bit-coin.mp3** (13KB)
+   - Source: The Motion Monkey - Retro Arcade Sounds Pack
+   - License: CC0 (public domain)
+   - Retro 8-bit bonus/coin sound
 
-4. **power-up.mp3** (26KB)
-   - Source: Mixkit
-   - License: Mixkit Free License
-   - Satisfying level-up sound
+4. **power-up.mp3** (13KB)
+   - Source: The Motion Monkey - Retro Arcade Sounds Pack
+   - License: CC0 (public domain)
+   - Classic retro power-up sound
 
-5. **you-got-mail.mp3** (23KB)
-   - Source: Mixkit
-   - License: Mixkit Free License
-   - Classic notification tone
+5. **you-got-mail.mp3** (16KB)
+   - Source: The Motion Monkey - Retro Arcade Sounds Pack
+   - License: CC0 (public domain)
+   - Retro bonus notification
 
 6. **success-tone.mp3** (14KB)
    - Source: Mixkit
