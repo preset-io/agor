@@ -167,6 +167,7 @@ import { createConfigService } from './services/config';
 import { createContextService } from './services/context';
 import { createFilesService } from './services/files';
 import { createHealthMonitor } from './services/health-monitor';
+import { createLeaderboardService } from './services/leaderboard';
 import { createMCPServersService } from './services/mcp-servers';
 import { createMessagesService } from './services/messages';
 import { createReposService } from './services/repos';
@@ -676,6 +677,7 @@ async function main() {
   // NOTE: Pass app instance for user preferences access (needed for cross-tool spawning and ready_for_prompt updates)
   app.use('/sessions', createSessionsService(db, app));
   app.use('/tasks', createTasksService(db, app));
+  app.use('/leaderboard', createLeaderboardService(db));
   const messagesService = createMessagesService(db) as unknown as MessagesServiceImpl;
 
   // Register messages service with custom streaming events
@@ -1103,6 +1105,12 @@ async function main() {
           return context;
         },
       ],
+    },
+  });
+
+  app.service('leaderboard').hooks({
+    before: {
+      all: [...getReadAuthHooks()],
     },
   });
 
@@ -2096,8 +2104,7 @@ async function main() {
             // Check if error might be due to stale/invalid Agent SDK resume session
             // Only clear sdk_session_id if we're confident the session is stale, not just any error
             const errorMessage =
-              error.message ||
-              (typeof error === 'string' ? error : JSON.stringify(error, null, 2));
+              error.message || (typeof error === 'string' ? error : JSON.stringify(error, null, 2));
             const isExitCode1 = errorMessage.includes('Claude Code process exited with code 1');
             const hasResumeSession = !!session.sdk_session_id;
 

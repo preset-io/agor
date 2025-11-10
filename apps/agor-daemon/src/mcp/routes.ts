@@ -701,6 +701,70 @@ export function setupMCPRoutes(app: Application): void {
                 required: ['email', 'password'],
               },
             },
+
+            // Analytics tools
+            {
+              name: 'agor_analytics_leaderboard',
+              description:
+                'Get usage analytics leaderboard showing token and cost breakdown. Supports dynamic grouping by user, worktree, or repo (or combinations). Use groupBy parameter to control aggregation level.',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  userId: {
+                    type: 'string',
+                    description: 'Filter by user ID (optional)',
+                  },
+                  worktreeId: {
+                    type: 'string',
+                    description: 'Filter by worktree ID (optional)',
+                  },
+                  repoId: {
+                    type: 'string',
+                    description: 'Filter by repository ID (optional)',
+                  },
+                  startDate: {
+                    type: 'string',
+                    description: 'Filter by start date (ISO 8601 format, optional)',
+                  },
+                  endDate: {
+                    type: 'string',
+                    description: 'Filter by end date (ISO 8601 format, optional)',
+                  },
+                  groupBy: {
+                    type: 'string',
+                    enum: [
+                      'user',
+                      'worktree',
+                      'repo',
+                      'user,worktree',
+                      'user,repo',
+                      'worktree,repo',
+                      'user,worktree,repo',
+                    ],
+                    description:
+                      'Group by dimension(s). Examples: "user" for per-user totals, "worktree" for per-worktree, "user,worktree" for user+worktree breakdown (default: user,worktree,repo)',
+                  },
+                  sortBy: {
+                    type: 'string',
+                    enum: ['tokens', 'cost'],
+                    description: 'Sort by tokens or cost (default: cost)',
+                  },
+                  sortOrder: {
+                    type: 'string',
+                    enum: ['asc', 'desc'],
+                    description: 'Sort order ascending or descending (default: desc)',
+                  },
+                  limit: {
+                    type: 'number',
+                    description: 'Maximum number of results (default: 50)',
+                  },
+                  offset: {
+                    type: 'number',
+                    description: 'Number of results to skip for pagination (default: 0)',
+                  },
+                },
+              },
+            },
           ],
         };
       } else if (mcpRequest.method === 'notifications/initialized') {
@@ -2008,6 +2072,37 @@ export function setupMCPRoutes(app: Application): void {
               {
                 type: 'text',
                 text: JSON.stringify(newUser, null, 2),
+              },
+            ],
+          };
+        } else if (name === 'agor_analytics_leaderboard') {
+          // Get usage analytics leaderboard
+          const query: Record<string, unknown> = {};
+
+          // Add filters
+          if (args?.userId) query.userId = args.userId;
+          if (args?.worktreeId) query.worktreeId = args.worktreeId;
+          if (args?.repoId) query.repoId = args.repoId;
+          if (args?.startDate) query.startDate = args.startDate;
+          if (args?.endDate) query.endDate = args.endDate;
+
+          // Add groupBy
+          if (args?.groupBy) query.groupBy = args.groupBy;
+
+          // Add sorting
+          if (args?.sortBy) query.sortBy = args.sortBy;
+          if (args?.sortOrder) query.sortOrder = args.sortOrder;
+
+          // Add pagination
+          if (args?.limit) query.$limit = args.limit;
+          if (args?.offset) query.$skip = args.offset;
+
+          const leaderboard = await app.service('leaderboard').find({ query });
+          mcpResponse = {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(leaderboard, null, 2),
               },
             ],
           };
