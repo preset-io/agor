@@ -28,8 +28,24 @@ import {
 } from '../../types';
 import type { ITool, StreamingCallbacks, ToolCapabilities } from '../base';
 import type { MessagesService, TasksService } from '../claude/claude-tool';
-import { DEFAULT_GEMINI_MODEL } from './models';
+import type { TokenUsage } from '../../utils/pricing';
+import { DEFAULT_GEMINI_MODEL, getGeminiContextWindowLimit } from './models';
 import { GeminiPromptService } from './prompt-service';
+
+interface GeminiExecutionResult {
+  userMessageId: MessageID;
+  assistantMessageIds: MessageID[];
+  tokenUsage?: TokenUsage;
+  contextWindow?: number;
+  contextWindowLimit?: number;
+  model?: string;
+}
+
+function calculateGeminiContextWindow(usage?: TokenUsage): number | undefined {
+  if (!usage) return undefined;
+  // Gemini context = input tokens + cache read tokens (if caching enabled)
+  return (usage.input_tokens || 0) + (usage.cache_read_tokens || 0);
+}
 
 export class GeminiTool implements ITool {
   readonly toolType = 'gemini' as const;
@@ -104,7 +120,7 @@ export class GeminiTool implements ITool {
     taskId?: TaskID,
     permissionMode?: PermissionMode,
     streamingCallbacks?: StreamingCallbacks
-  ): Promise<{ userMessageId: MessageID; assistantMessageIds: MessageID[] }> {
+  ): Promise<GeminiExecutionResult> {
     if (!this.promptService || !this.messagesRepo) {
       throw new Error('GeminiTool not initialized with repositories for live execution');
     }
@@ -124,6 +140,9 @@ export class GeminiTool implements ITool {
     const assistantMessageIds: MessageID[] = [];
     let resolvedModel: string | undefined;
     let currentMessageId: MessageID | null = null;
+    let tokenUsage: TokenUsage | undefined;
+    let contextWindow: number | undefined;
+    let contextWindowLimit: number | undefined;
     let streamStartTime = Date.now();
     let firstTokenTime: number | null = null;
 
@@ -139,6 +158,15 @@ export class GeminiTool implements ITool {
           resolvedModel = event.resolvedModel;
         } else if (event.type === 'complete') {
           resolvedModel = event.resolvedModel;
+        }
+      }
+
+      // Capture token usage from complete event
+      if (event.type === 'complete' && event.usage) {
+        tokenUsage = event.usage;
+        contextWindow = calculateGeminiContextWindow(event.usage);
+        if (!contextWindowLimit) {
+          contextWindowLimit = getGeminiContextWindowLimit(resolvedModel || DEFAULT_GEMINI_MODEL);
         }
       }
 
@@ -190,7 +218,8 @@ export class GeminiTool implements ITool {
           event.toolUses,
           taskId,
           nextIndex++,
-          resolvedModel
+          resolvedModel,
+          tokenUsage
         );
         assistantMessageIds.push(assistantMessageId);
 
@@ -204,6 +233,10 @@ export class GeminiTool implements ITool {
     return {
       userMessageId: userMessage.message_id,
       assistantMessageIds,
+      tokenUsage,
+      contextWindow,
+      contextWindowLimit,
+      model: resolvedModel,
     };
   }
 
@@ -250,7 +283,8 @@ export class GeminiTool implements ITool {
     toolUses: Array<{ id: string; name: string; input: Record<string, unknown> }> | undefined,
     taskId: TaskID | undefined,
     nextIndex: number,
-    resolvedModel?: string
+    resolvedModel?: string,
+    tokenUsage?: TokenUsage
   ): Promise<Message> {
     // Extract text content for preview
     const textBlocks = content.filter((b) => b.type === 'text').map((b) => b.text || '');
@@ -271,8 +305,8 @@ export class GeminiTool implements ITool {
       metadata: {
         model: resolvedModel || DEFAULT_GEMINI_MODEL,
         tokens: {
-          input: 0, // TODO: Extract from Gemini SDK usage metadata
-          output: 0,
+          input: tokenUsage?.input_tokens || 0,
+          output: tokenUsage?.output_tokens || 0,
         },
       },
     };
@@ -303,7 +337,7 @@ export class GeminiTool implements ITool {
     prompt: string,
     taskId?: TaskID,
     permissionMode?: PermissionMode
-  ): Promise<{ userMessageId: MessageID; assistantMessageIds: MessageID[] }> {
+  ): Promise<GeminiExecutionResult> {
     if (!this.promptService || !this.messagesRepo) {
       throw new Error('GeminiTool not initialized with repositories for live execution');
     }
@@ -322,6 +356,9 @@ export class GeminiTool implements ITool {
     // Execute prompt via Gemini SDK
     const assistantMessageIds: MessageID[] = [];
     let resolvedModel: string | undefined;
+    let tokenUsage: TokenUsage | undefined;
+    let contextWindow: number | undefined;
+    let contextWindowLimit: number | undefined;
 
     for await (const event of this.promptService.promptSessionStreaming(
       sessionId,
@@ -335,6 +372,15 @@ export class GeminiTool implements ITool {
           resolvedModel = event.resolvedModel;
         } else if (event.type === 'complete') {
           resolvedModel = event.resolvedModel;
+        }
+      }
+
+      // Capture token usage from complete event
+      if (event.type === 'complete' && event.usage) {
+        tokenUsage = event.usage;
+        contextWindow = calculateGeminiContextWindow(event.usage);
+        if (!contextWindowLimit) {
+          contextWindowLimit = getGeminiContextWindowLimit(resolvedModel || DEFAULT_GEMINI_MODEL);
         }
       }
 
@@ -357,7 +403,8 @@ export class GeminiTool implements ITool {
           event.toolUses,
           taskId,
           nextIndex++,
-          resolvedModel
+          resolvedModel,
+          tokenUsage
         );
         assistantMessageIds.push(messageId);
       }
@@ -366,6 +413,10 @@ export class GeminiTool implements ITool {
     return {
       userMessageId: userMessage.message_id,
       assistantMessageIds,
+      tokenUsage,
+      contextWindow,
+      contextWindowLimit,
+      model: resolvedModel,
     };
   }
 

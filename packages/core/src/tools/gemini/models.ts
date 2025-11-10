@@ -55,3 +55,34 @@ export const GEMINI_MODELS: Record<
     useCase: 'File search, summaries, simple edits, code formatting',
   },
 };
+
+const DEFAULT_GEMINI_CONTEXT_LIMIT = 1_048_576;
+
+/**
+ * Context window limits for Gemini 2.5 models.
+ * All Gemini 2.5 models support 1M input tokens + 65k output tokens (Nov 2025).
+ * Reference: https://ai.google.dev/gemini-api/docs/models/gemini
+ */
+export const GEMINI_CONTEXT_LIMITS: Record<string, number> = {
+  'gemini-2.5-pro': 1_048_576,
+  'gemini-2.5-flash': 1_048_576,
+  'gemini-2.5-flash-lite': 1_048_576,
+};
+
+export function getGeminiContextWindowLimit(model?: string): number {
+  if (!model) return DEFAULT_GEMINI_CONTEXT_LIMIT;
+
+  const normalized = model.toLowerCase();
+  if (GEMINI_CONTEXT_LIMITS[normalized]) {
+    return GEMINI_CONTEXT_LIMITS[normalized];
+  }
+
+  // Handle versioned models like "gemini-2.5-pro-001"
+  for (const [key, limit] of Object.entries(GEMINI_CONTEXT_LIMITS)) {
+    if (normalized.startsWith(`${key}-`)) {
+      return limit;
+    }
+  }
+
+  return DEFAULT_GEMINI_CONTEXT_LIMIT;
+}

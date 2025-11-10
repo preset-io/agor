@@ -32,7 +32,9 @@ import type { SessionMCPServerRepository } from '../../db/repositories/session-m
 import type { SessionRepository } from '../../db/repositories/sessions';
 import type { WorktreeRepository } from '../../db/repositories/worktrees';
 import type { PermissionMode, SessionID, TaskID } from '../../types';
+import type { TokenUsage } from '../../utils/pricing';
 import { DEFAULT_GEMINI_MODEL, type GeminiModel } from './models';
+import { extractGeminiTokenUsage } from './usage';
 
 /**
  * GeminiClient with internal config property exposed
@@ -65,6 +67,7 @@ export type GeminiStreamEvent =
       toolUses?: Array<{ id: string; name: string; input: Record<string, unknown> }>;
       resolvedModel?: string;
       sessionId?: string;
+      usage?: TokenUsage;
     }
   | {
       type: 'tool_start';
@@ -257,6 +260,11 @@ export class GeminiPromptService {
                 `[Gemini Turn Finished] Text: ${fullTextContent.length} chars, Tools: ${toolUses.length}`
               );
 
+              // Extract token usage from SDK response
+              const mappedUsage = extractGeminiTokenUsage(
+                (event as { value?: { usageMetadata?: unknown } }).value?.usageMetadata
+              );
+
               const content: Array<{
                 type: string;
                 text?: string;
@@ -291,6 +299,7 @@ export class GeminiPromptService {
                   toolUses: toolUses.length > 0 ? toolUses : undefined,
                   resolvedModel: model,
                   sessionId,
+                  usage: mappedUsage,
                 };
               }
 
