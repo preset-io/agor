@@ -106,61 +106,76 @@ export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({ user, onUpda
             </Form.Item>
 
             {/* Chime Selection */}
-            <Form.Item
-              name="chime"
-              label="Chime Sound"
-              tooltip="Choose your preferred notification sound"
-            >
-              <Space.Compact style={{ width: '100%' }}>
-                <Select
-                  style={{ flex: 1 }}
-                  disabled={!form.getFieldValue('enabled')}
-                  options={getAvailableChimes().map((chime) => ({
-                    label: getChimeDisplayName(chime),
-                    value: chime,
-                  }))}
-                />
-                <Button
-                  icon={<PlayCircleOutlined />}
-                  onClick={handlePreview}
-                  disabled={!form.getFieldValue('enabled') || isPlaying}
-                  loading={isPlaying}
-                >
-                  Preview
-                </Button>
-              </Space.Compact>
+            <Form.Item noStyle shouldUpdate={(prev, curr) => prev.enabled !== curr.enabled}>
+              {() => {
+                const enabled = form.getFieldValue('enabled');
+                return (
+                  <Form.Item
+                    name="chime"
+                    label="Chime Sound"
+                    tooltip="Choose your preferred notification sound"
+                  >
+                    <Space.Compact style={{ width: '100%' }}>
+                      <Select
+                        style={{ flex: 1 }}
+                        disabled={!enabled}
+                        options={getAvailableChimes().map((chime) => ({
+                          label: getChimeDisplayName(chime),
+                          value: chime,
+                        }))}
+                      />
+                      <Button
+                        icon={<PlayCircleOutlined />}
+                        onClick={handlePreview}
+                        disabled={!enabled || isPlaying}
+                        loading={isPlaying}
+                      >
+                        Preview
+                      </Button>
+                    </Space.Compact>
+                  </Form.Item>
+                );
+              }}
             </Form.Item>
 
             {/* Volume Slider */}
-            <Form.Item name="volume" label="Volume">
-              <Slider
-                min={0}
-                max={1}
-                step={0.1}
-                marks={{
-                  0: '0%',
-                  0.5: '50%',
-                  1: '100%',
-                }}
-                disabled={!form.getFieldValue('enabled')}
-                tooltip={{ formatter: (value) => `${Math.round((value || 0) * 100)}%` }}
-              />
+            <Form.Item noStyle shouldUpdate={(prev, curr) => prev.enabled !== curr.enabled}>
+              {() => (
+                <Form.Item name="volume" label="Volume">
+                  <Slider
+                    min={0}
+                    max={1}
+                    step={0.1}
+                    marks={{
+                      0: '0%',
+                      0.5: '50%',
+                      1: '100%',
+                    }}
+                    disabled={!form.getFieldValue('enabled')}
+                    tooltip={{ formatter: (value) => `${Math.round((value || 0) * 100)}%` }}
+                  />
+                </Form.Item>
+              )}
             </Form.Item>
 
             {/* Minimum Duration */}
-            <Form.Item
-              name="minDurationSeconds"
-              label="Minimum Task Duration"
-              tooltip="Only play chime for tasks that take longer than this. Set to 0 to always play."
-            >
-              <InputNumber
-                min={0}
-                max={60}
-                step={1}
-                addonAfter="seconds"
-                style={{ width: 200 }}
-                disabled={!form.getFieldValue('enabled')}
-              />
+            <Form.Item noStyle shouldUpdate={(prev, curr) => prev.enabled !== curr.enabled}>
+              {() => (
+                <Form.Item
+                  name="minDurationSeconds"
+                  label="Minimum Task Duration"
+                  tooltip="Only play chime for tasks that take longer than this. Set to 0 to always play."
+                >
+                  <InputNumber
+                    min={0}
+                    max={60}
+                    step={1}
+                    addonAfter="seconds"
+                    style={{ width: 200 }}
+                    disabled={!form.getFieldValue('enabled')}
+                  />
+                </Form.Item>
+              )}
             </Form.Item>
 
             {/* Save Button */}
