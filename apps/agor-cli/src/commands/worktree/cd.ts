@@ -8,11 +8,11 @@
  *   wtcd() { cd "$(agor worktree cd --print "$1")"; }
  */
 
-import { spawn } from 'node:child_process';
 import type { Worktree } from '@agor/core/types';
 import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import { BaseCommand } from '../../base-command';
+import { spawnInteractiveShell } from '../../utils/shell';
 
 export default class WorktreeCd extends BaseCommand {
   static description = 'Navigate to a worktree (opens a new shell)';
@@ -65,36 +65,28 @@ export default class WorktreeCd extends BaseCommand {
       // Cleanup client before spawning shell
       await this.cleanupClient(client);
 
-      // Spawn a new shell in the worktree directory
-      const shell = process.env.SHELL || '/bin/bash';
-      const worktreeName = worktree.name;
-
+      // Display info message
       this.log('');
-      this.log(`${chalk.cyan('→')} Opening shell in worktree: ${chalk.bold(worktreeName)}`);
+      this.log(`${chalk.cyan('→')} Opening shell in worktree: ${chalk.bold(worktree.name)}`);
       this.log(`${chalk.dim('  Path:')} ${worktree.path}`);
       this.log(`${chalk.dim('  Type')} ${chalk.cyan('exit')} ${chalk.dim('to return')}`);
       this.log('');
 
-      // Spawn the shell with stdio inherited so it's interactive
-      const shellProcess = spawn(shell, [], {
+      // Spawn interactive shell in the worktree directory
+      spawnInteractiveShell({
         cwd: worktree.path,
-        stdio: 'inherit',
         env: {
-          ...process.env,
           AGOR_WORKTREE_ID: worktree.worktree_id,
           AGOR_WORKTREE_NAME: worktree.name,
         },
-      });
-
-      // Wait for the shell to exit
-      shellProcess.on('exit', code => {
-        this.log('');
-        this.log(`${chalk.dim('← Exited worktree shell')}`);
-        process.exit(code || 0);
-      });
-
-      shellProcess.on('error', error => {
-        this.error(`Failed to spawn shell: ${error.message}`);
+        onExit: code => {
+          this.log('');
+          this.log(`${chalk.dim('← Exited worktree shell')}`);
+          process.exit(code || 0);
+        },
+        onError: error => {
+          this.error(`Failed to spawn shell: ${error.message}`);
+        },
       });
     } catch (error) {
       await this.cleanupClient(client);
