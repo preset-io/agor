@@ -1,0 +1,166 @@
+# Worktree-Centric RBAC
+
+**Status:** 🔬 Exploration  
+**Scope:** Application-level authorization (FeathersJS services + socket events)  
+**Last Updated:** 2025-01-??  
+
+> This document focuses on Agor’s app-layer RBAC for worktrees and the sessions that belong to them. For OS-level isolation plans (per-user Unix accounts, sudo impersonation, credential segregation) see `@context/explorations/unix-user-integration.md`.
+
+---
+
+## Problem & Goals
+
+Current Agor deployments behave like a shared devbox: every authenticated user can read and mutate every worktree, session, and task. We need an RBAC layer that:
+
+1. Models **worktree ownership** as many-to-many between users and worktrees.
+2. Allows owners to set a coarse sharing mode for “others”: `view`, `prompt`, or `all`.
+3. Propagates the same permission envelope to **sessions/tasks/messages** because every session is scoped to exactly one worktree.
+4. Applies identically across REST, WebSocket, and MCP code paths by leveraging FeathersJS hooks and services.
+5. Plays nicely with the future Unix-isolation work while still delivering practical guardrails today (soft privacy).
+
+Out of scope: filesystem isolation, true “private” worktrees, network/mac-level sandboxing.
+
+---
+
+## Permission Model
+
+### Entities
+
+| Entity      | Notes                                                                 |
+|-------------|-----------------------------------------------------------------------|
+| Worktree    | Primary object. Has many owners, tracks `others_can` sharing mode.    |
+| Session     | Always references a worktree; inherits its permission envelope.       |
+| Task/Message| Tied to a session ⇒ inherits the parent worktree’s permissions.       |
+
+### Ownership
+
+- Introduce `worktree_owners` join table (user_id ⇄ worktree_id).  
+- Ownership implies **full** (`all`) access regardless of the `others_can` mode.  
+- Owners manage the sharing mode and can add/remove other owners (subject to future UX).
+
+### Sharing Modes (`others_can`)
+
+| Mode   | Capabilities for non-owners                                                   |
+|--------|--------------------------------------------------------------------------------|
+| `view` | Read-only: can list/get worktrees/sessions/tasks/messages, but no mutations.   |
+| `prompt` | Everything in `view` plus create new tasks/messages (i.e., “run agents”).   |
+| `all`  | Equivalent to ownership for CRUD purposes (minus managing owners).            |
+
+`none` is intentionally omitted to avoid a silent UX that pretends privacy while events still broadcast over shared sockets. If true privacy is needed later, we’ll revisit channel scoping once Unix-level isolation exists.
+
+### Session Inheritance
+
+- Every session belongs to exactly one worktree.  
+- Permission checks should **never** inspect sessions independently: they should always resolve the worktree first, then apply the same decision to the session.  
+- Derived rules: If you can `prompt` on a worktree you can create tasks/messages in any of its sessions; if you can `view` a worktree you can read all of its sessions/tasks/messages; deleting/patching sessions is treated as `all`.
+
+---
+
+## FeathersJS Enforcement Strategy
+
+### Hook Helpers
+
+Implement shared utilities (similar to `requireMinimumRole`) to centralize worktree authorization:
+
+```ts
+loadWorktree(context, worktreeIdField = 'worktree_id');
+ensureWorktreePermission(context, level: 'view' | 'prompt' | 'all');
+scopeWorktreeQuery(context); // inject owner/others_can filters for find
+```
+
+- `loadWorktree` fetches the worktree once, caches it on `context.params.worktree`, and resolves owners + sharing mode.
+- `ensureWorktreePermission` checks ownership first, then compares the requested level to `others_can`. Throws `Forbidden` for external requests; internal daemon calls (no `params.provider`) bypass as today.
+- `scopeWorktreeQuery` rewrites `context.params.query` so `find` never returns unauthorized rows (owners OR `others_can >= view`).
+
+### Services to Touch
+
+| Service                 | Hook usage                                                             |
+|-------------------------|------------------------------------------------------------------------|
+| `worktrees`             | Gate `get/find/patch/remove` + owner management endpoints.             |
+| `sessions`              | Before hooks load the related worktree and reuse permission checks.    |
+| `tasks`, `messages`     | Require `prompt` for create/update/delete, `view` for reads.           |
+| `board-objects`, `board-comments` | Mirror worktree checks because they surface worktree data. |
+| MCP + custom routes     | Always call Feathers services with `provider: undefined` so hooks run. |
+
+By forcing *every* code path through these hooks, we ensure consistent RBAC across REST, WebSocket, daemon-to-daemon, and MCP tooling.
+
+---
+
+## Real-Time Strategy
+
+- Keep today’s single `everybody` channel (`apps/agor-daemon/src/index.ts:932-938`).  
+- Rely on the same service hooks to prevent unauthorized CRUD; “view” events are still visible to all authenticated sockets (soft privacy).  
+- Future option: move to per-worktree channels once we need true privacy; this doc stays focused on the simpler single-channel design.
+
+---
+
+## Data Model Changes
+
+1. **Drizzle migration**
+   ```sql
+   ALTER TABLE worktrees ADD COLUMN others_can TEXT NOT NULL DEFAULT 'view';
+
+   CREATE TABLE worktree_owners (
+     worktree_id TEXT NOT NULL REFERENCES worktrees(worktree_id) ON DELETE CASCADE,
+     user_id TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+     PRIMARY KEY (worktree_id, user_id)
+   );
+   ```
+2. Repository helpers for adding/removing owners and fetching ownership lists in bulk (to avoid N+1 lookups inside hooks).
+
+---
+
+## Implementation Phases
+
+1. **Schema + Repos**  
+   - Add columns/tables.  
+   - Extend `WorktreeRepository` with ownership helpers and a bulk loader.
+
+2. **Hook Utilities**  
+   - Implement `ensureWorktreePermission`, `scopeWorktreeQuery`, etc.  
+   - Unit-test edge cases (internal calls, anonymous mode, no user on params).
+
+3. **Service Wiring**  
+   - Inject hooks into `worktrees`, `sessions`, `tasks`, `messages`, `board-*`.  
+   - Ensure session creation (which currently enriches repo metadata) still succeeds when hooks run (`apps/agor-daemon/src/index.ts:940-1008`).
+
+4. **UI/CLI Exposure (later)**  
+   - Owner management UI, “others can” selector, error surfacing when actions are blocked.  
+   - CLI commands for listing/managing owners if needed.
+
+5. **Testing**  
+   - Add integration tests covering REST + socket flows.  
+   - Ensure MCP tools (which call services internally) inherit the same enforcement.
+
+6. **Unix Integration Alignment**  
+   - When `unix-user-integration` ships, revisit “none/private” mode knowing sockets and filesystem can be isolated for real.
+
+---
+
+## Complexity & Risks
+
+| Area                      | Complexity | Notes                                                                 |
+|---------------------------|------------|-----------------------------------------------------------------------|
+| Schema/repo changes       | Low-Medium | Straightforward migrations + helpers.                                 |
+| Hook logic & service updates | Medium-High | Touches many services; must respect internal call bypass semantics. |
+| Query scoping performance | Medium     | Need batching/caching to avoid per-request owner lookups.             |
+| UI/UX follow-up           | Medium     | Surfacing permissions, managing owners, clear error messaging.        |
+| Security limitations      | High       | Without Unix isolation, RBAC is advisory—motivated users can still inspect worktree files via shell access. Reference `@context/explorations/unix-user-integration.md` for the roadmap toward real isolation. |
+
+---
+
+## Open Questions
+
+1. Do we need an audit log for owner changes and permission escalations?  
+2. Should “prompt” cover only task/message creation, or also session creation under an existing worktree?  
+3. How do we expose ownership via CLI/API for automation without overcomplicating the UI?  
+4. At what point do we introduce per-worktree socket channels to support a future `none/private` mode once Unix-level isolation exists?
+
+---
+
+## References
+
+- `@context/explorations/unix-user-integration.md` — OS-level isolation plan (sudo impersonation).  
+- `apps/agor-daemon/src/utils/authorization.ts` — existing role helpers to extend.  
+- `apps/agor-daemon/src/index.ts` — service hook registrations and socket setup.  
+- `context/concepts/architecture.md` — rationale for always using service layer so hooks (and future RBAC) apply everywhere.
