@@ -2,10 +2,22 @@
  * AudioSettingsTab - Configure task completion chime settings
  */
 
-import type { UpdateUserInput, User } from '@agor/core/types';
-import type { ChimeSound } from '@agor/core/types/user';
+import type { UpdateUserInput, User, ChimeSound } from '@agor/core/types';
 import { PlayCircleOutlined, SoundOutlined } from '@ant-design/icons';
-import { Button, Card, Form, InputNumber, Select, Slider, Space, Switch, Typography, message } from 'antd';
+import {
+  Button,
+  Card,
+  Col,
+  Form,
+  InputNumber,
+  Row,
+  Select,
+  Slider,
+  Space,
+  Switch,
+  Typography,
+  message,
+} from 'antd';
 import { useState } from 'react';
 import {
   DEFAULT_AUDIO_PREFERENCES,
@@ -80,35 +92,61 @@ export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({ user, onUpda
   };
 
   return (
-    <div style={{ maxWidth: 800, margin: '0 auto' }}>
-      <Card>
-        <Space direction="vertical" size="large" style={{ width: '100%' }}>
-          <div>
-            <Text strong style={{ fontSize: 16 }}>
-              <SoundOutlined /> Task Completion Chimes
-            </Text>
-            <Paragraph type="secondary" style={{ marginTop: 8 }}>
-              Play a sound when agent tasks finish executing. Perfect for long-running tasks!
-            </Paragraph>
-          </div>
+    <div>
+      <div style={{ marginBottom: 16 }}>
+        <Text strong style={{ fontSize: 16 }}>
+          <SoundOutlined /> Task Completion Chimes
+        </Text>
+        <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
+          Play a sound when agent tasks finish executing. Perfect for long-running tasks!
+        </Paragraph>
+      </div>
 
-          <Form
-            form={form}
-            layout="vertical"
-            initialValues={{
-              enabled: audioPrefs.enabled,
-              chime: audioPrefs.chime,
-              volume: audioPrefs.volume,
-              minDurationSeconds: audioPrefs.minDurationSeconds,
-            }}
-            onFinish={handleSave}
-          >
-            {/* Enable/Disable Toggle */}
+      <Form
+        form={form}
+        layout="vertical"
+        initialValues={{
+          enabled: audioPrefs.enabled,
+          chime: audioPrefs.chime,
+          volume: audioPrefs.volume,
+          minDurationSeconds: audioPrefs.minDurationSeconds,
+        }}
+        onFinish={handleSave}
+      >
+        <Row gutter={16}>
+          {/* Enable/Disable Toggle */}
+          <Col span={12}>
             <Form.Item name="enabled" label="Enable Chimes" valuePropName="checked">
               <Switch onChange={handleEnableToggle} />
             </Form.Item>
+          </Col>
 
-            {/* Chime Selection */}
+          {/* Minimum Duration */}
+          <Col span={12}>
+            <Form.Item noStyle shouldUpdate={(prev, curr) => prev.enabled !== curr.enabled}>
+              {() => (
+                <Form.Item
+                  name="minDurationSeconds"
+                  label="Minimum Task Duration"
+                  tooltip="Only play chime for tasks that take longer than this. Set to 0 to always play."
+                >
+                  <InputNumber
+                    min={0}
+                    max={60}
+                    step={1}
+                    addonAfter="seconds"
+                    style={{ width: '100%' }}
+                    disabled={!form.getFieldValue('enabled')}
+                  />
+                </Form.Item>
+              )}
+            </Form.Item>
+          </Col>
+        </Row>
+
+        <Row gutter={16}>
+          {/* Chime Selection */}
+          <Col span={12}>
             <Form.Item noStyle shouldUpdate={(prev, curr) => prev.enabled !== curr.enabled}>
               {() => {
                 const enabled = form.getFieldValue('enabled');
@@ -141,8 +179,10 @@ export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({ user, onUpda
                 );
               }}
             </Form.Item>
+          </Col>
 
-            {/* Volume Slider */}
+          {/* Volume Slider */}
+          <Col span={12}>
             <Form.Item noStyle shouldUpdate={(prev, curr) => prev.enabled !== curr.enabled}>
               {() => (
                 <Form.Item name="volume" label="Volume">
@@ -161,44 +201,24 @@ export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({ user, onUpda
                 </Form.Item>
               )}
             </Form.Item>
+          </Col>
+        </Row>
 
-            {/* Minimum Duration */}
-            <Form.Item noStyle shouldUpdate={(prev, curr) => prev.enabled !== curr.enabled}>
-              {() => (
-                <Form.Item
-                  name="minDurationSeconds"
-                  label="Minimum Task Duration"
-                  tooltip="Only play chime for tasks that take longer than this. Set to 0 to always play."
-                >
-                  <InputNumber
-                    min={0}
-                    max={60}
-                    step={1}
-                    addonAfter="seconds"
-                    style={{ width: 200 }}
-                    disabled={!form.getFieldValue('enabled')}
-                  />
-                </Form.Item>
-              )}
-            </Form.Item>
+        {/* Save Button */}
+        <Form.Item style={{ marginBottom: 16 }}>
+          <Button type="primary" htmlType="submit">
+            Save Settings
+          </Button>
+        </Form.Item>
+      </Form>
 
-            {/* Save Button */}
-            <Form.Item>
-              <Button type="primary" htmlType="submit">
-                Save Settings
-              </Button>
-            </Form.Item>
-          </Form>
-
-          {/* Info Section */}
-          <Card type="inner" size="small">
-            <Text type="secondary">
-              <strong>Note:</strong> Chimes will only play for tasks that complete naturally (finished
-              or failed), not for tasks you manually stop. Make sure your browser allows audio playback
-              - click the Preview button to test!
-            </Text>
-          </Card>
-        </Space>
+      {/* Info Section */}
+      <Card type="inner" size="small" style={{ marginTop: 16 }}>
+        <Text type="secondary">
+          <strong>Note:</strong> Chimes will only play for tasks that complete naturally (finished or
+          failed), not for tasks you manually stop. Make sure your browser allows audio playback - click
+          the Preview button to test!
+        </Text>
       </Card>
     </div>
   );
