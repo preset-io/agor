@@ -257,6 +257,37 @@ export interface Worktree {
    * Only present if schedule_enabled = true.
    */
   schedule?: WorktreeScheduleConfig;
+
+  // ===== Archive State =====
+
+  /**
+   * Whether this worktree is archived (soft deleted)
+   *
+   * Archived worktrees:
+   * - Hidden from board display
+   * - Metadata preserved in database
+   * - Can be unarchived later
+   */
+  archived: boolean;
+
+  /**
+   * When this worktree was archived (if archived)
+   */
+  archived_at?: string;
+
+  /**
+   * User who archived this worktree
+   */
+  archived_by?: UUID;
+
+  /**
+   * Filesystem state after archiving
+   *
+   * - 'preserved': Filesystem left untouched
+   * - 'cleaned': git clean -fdx run (removes node_modules, build artifacts)
+   * - 'deleted': Entire worktree directory deleted from disk
+   */
+  filesystem_status?: 'preserved' | 'cleaned' | 'deleted';
 }
 
 /**

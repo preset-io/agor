@@ -14,7 +14,7 @@ import {
 import type { MenuProps } from 'antd';
 import { Badge, Button, Card, Collapse, Space, Spin, Tag, Tree, Typography, theme } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
-import { DeleteWorktreePopconfirm } from '../DeleteWorktreePopconfirm';
+import { ArchiveDeleteWorktreeModal } from '../ArchiveDeleteWorktreeModal';
 import { EnvironmentPill } from '../EnvironmentPill';
 import { type ForkSpawnAction, ForkSpawnModal } from '../ForkSpawnModal';
 import { CreatedByTag } from '../metadata';
@@ -59,7 +59,13 @@ interface WorktreeCardProps {
   onCreateSession?: (worktreeId: string) => void;
   onForkSession?: (sessionId: string, prompt: string) => Promise<void>;
   onSpawnSession?: (sessionId: string, prompt: string) => Promise<void>;
-  onDelete?: (worktreeId: string, deleteFromFilesystem: boolean) => void;
+  onArchiveOrDelete?: (
+    worktreeId: string,
+    options: {
+      metadataAction: 'archive' | 'delete';
+      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
+    }
+  ) => void;
   onOpenSettings?: (worktreeId: string) => void;
   onOpenTerminal?: (commands: string[]) => void;
   onStartEnvironment?: (worktreeId: string) => void;
@@ -85,7 +91,7 @@ const WorktreeCard = ({
   onCreateSession,
   onForkSession,
   onSpawnSession,
-  onDelete,
+  onArchiveOrDelete,
   onOpenSettings,
   onOpenTerminal,
   onStartEnvironment,
@@ -109,6 +115,9 @@ const WorktreeCard = ({
     action: 'fork',
     session: null,
   });
+
+  // Archive/Delete modal state
+  const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
 
   // Tree expansion state - track which nodes are expanded
   const [expandedKeys, setExpandedKeys] = useState<React.Key[]>([]);
@@ -524,23 +533,18 @@ const WorktreeCard = ({
                 title="Edit worktree"
               />
             )}
-            {onDelete && (
-              <DeleteWorktreePopconfirm
-                worktree={worktree}
-                sessionCount={sessions.length}
-                onConfirm={deleteFromFilesystem =>
-                  onDelete(worktree.worktree_id, deleteFromFilesystem)
-                }
-              >
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<DeleteOutlined />}
-                  onClick={e => e.stopPropagation()}
-                  title="Delete worktree"
-                  danger
-                />
-              </DeleteWorktreePopconfirm>
+            {onArchiveOrDelete && (
+              <Button
+                type="text"
+                size="small"
+                icon={<DeleteOutlined />}
+                onClick={e => {
+                  e.stopPropagation();
+                  setArchiveDeleteModalOpen(true);
+                }}
+                title="Archive or delete worktree"
+                danger
+              />
             )}
           </div>
         </Space>
@@ -658,6 +662,19 @@ const WorktreeCard = ({
             session: null,
           })
         }
+      />
+
+      {/* Archive/Delete Modal */}
+      <ArchiveDeleteWorktreeModal
+        open={archiveDeleteModalOpen}
+        worktree={worktree}
+        sessionCount={sessions.length}
+        environmentRunning={worktree.environment_instance?.status === 'running'}
+        onConfirm={options => {
+          onArchiveOrDelete?.(worktree.worktree_id, options);
+          setArchiveDeleteModalOpen(false);
+        }}
+        onCancel={() => setArchiveDeleteModalOpen(false)}
       />
     </Card>
   );

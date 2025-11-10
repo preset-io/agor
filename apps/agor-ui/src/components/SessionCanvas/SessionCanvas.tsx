@@ -82,7 +82,13 @@ interface SessionCanvasProps {
   onOpenSettings?: (sessionId: string) => void;
   onCreateSessionForWorktree?: (worktreeId: string) => void;
   onOpenWorktree?: (worktreeId: string) => void;
-  onDeleteWorktree?: (worktreeId: string, deleteFromFilesystem: boolean) => void;
+  onArchiveOrDeleteWorktree?: (
+    worktreeId: string,
+    options: {
+      metadataAction: 'archive' | 'delete';
+      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
+    }
+  ) => void;
   onOpenTerminal?: (commands: string[]) => void;
   onStartEnvironment?: (worktreeId: string) => void;
   onStopEnvironment?: (worktreeId: string) => void;
@@ -144,7 +150,13 @@ interface WorktreeNodeData {
   onCreateSession?: (worktreeId: string) => void;
   onForkSession?: (sessionId: string, prompt: string) => Promise<void>;
   onSpawnSession?: (sessionId: string, prompt: string) => Promise<void>;
-  onDelete?: (worktreeId: string, deleteFromFilesystem: boolean) => void;
+  onArchiveOrDelete?: (
+    worktreeId: string,
+    options: {
+      metadataAction: 'archive' | 'delete';
+      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
+    }
+  ) => void;
   onOpenSettings?: (worktreeId: string) => void;
   onOpenTerminal?: (commands: string[]) => void;
   onStartEnvironment?: (worktreeId: string) => void;
@@ -176,7 +188,7 @@ const WorktreeNode = ({ data }: { data: WorktreeNodeData }) => {
         onCreateSession={data.onCreateSession}
         onForkSession={data.onForkSession}
         onSpawnSession={data.onSpawnSession}
-        onDelete={data.onDelete}
+        onArchiveOrDelete={data.onArchiveOrDelete}
         onOpenSettings={data.onOpenSettings}
         onOpenTerminal={data.onOpenTerminal}
         onStartEnvironment={data.onStartEnvironment}
@@ -226,7 +238,7 @@ const SessionCanvas = ({
   onOpenSettings,
   onCreateSessionForWorktree,
   onOpenWorktree,
-  onDeleteWorktree,
+  onArchiveOrDeleteWorktree,
   onOpenTerminal,
   onStartEnvironment,
   onStopEnvironment,
@@ -452,7 +464,7 @@ const SessionCanvas = ({
           onCreateSession: onCreateSessionForWorktree,
           onForkSession,
           onSpawnSession,
-          onDelete: onDeleteWorktree,
+          onArchiveOrDelete: onArchiveOrDeleteWorktree,
           onOpenSettings: onOpenWorktree,
           onOpenTerminal,
           onStartEnvironment,
@@ -483,7 +495,7 @@ const SessionCanvas = ({
     onCreateSessionForWorktree,
     onForkSession,
     onSpawnSession,
-    onDeleteWorktree,
+    onArchiveOrDeleteWorktree,
     onOpenWorktree,
     onOpenTerminal,
     onStartEnvironment,

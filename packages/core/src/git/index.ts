@@ -425,6 +425,38 @@ export async function removeWorktree(repoPath: string, worktreeName: string): Pr
 }
 
 /**
+ * Clean a git worktree (remove untracked files and build artifacts)
+ *
+ * Runs git clean -fdx which removes:
+ * - Untracked files and directories (-f -d)
+ * - Ignored files (node_modules, build artifacts, etc.) (-x)
+ *
+ * Preserves:
+ * - .git directory
+ * - Tracked files
+ * - Git state (commits, branches)
+ *
+ * @param worktreePath - Absolute path to the worktree directory
+ * @returns Disk space freed in bytes (approximate based on removed file count)
+ */
+export async function cleanWorktree(worktreePath: string): Promise<{ filesRemoved: number }> {
+  const git = createGit(worktreePath);
+
+  // Run git clean -fdx (force, directories, ignored files)
+  // -n flag for dry run to count files
+  const dryRunResult = await git.clean('fdxn');
+
+  // Count files that would be removed
+  // CleanSummary has a files array with removed files
+  const filesRemoved = Array.isArray(dryRunResult.files) ? dryRunResult.files.length : 0;
+
+  // Actually clean
+  await git.clean('fdx');
+
+  return { filesRemoved };
+}
+
+/**
  * Prune stale worktree metadata
  */
 export async function pruneWorktrees(repoPath: string): Promise<void> {

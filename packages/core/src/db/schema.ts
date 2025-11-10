@@ -54,9 +54,13 @@ export const sessions = sqliteTable(
       .default(false),
 
     // UI state (materialized for efficient highlighting queries)
-    ready_for_prompt: integer('ready_for_prompt', { mode: 'boolean' })
-      .notNull()
-      .default(false),
+    ready_for_prompt: integer('ready_for_prompt', { mode: 'boolean' }).notNull().default(false),
+
+    // Archive state (cascaded from worktree archive)
+    archived: integer('archived', { mode: 'boolean' }).notNull().default(false),
+    archived_reason: text('archived_reason', {
+      enum: ['worktree_archived', 'manual'],
+    }),
 
     // JSON blob for everything else (cross-DB via json() type)
     data: text('data', { mode: 'json' })
@@ -366,6 +370,14 @@ export const worktrees = sqliteTable(
 
     // UI state (materialized for efficient highlighting queries)
     needs_attention: integer('needs_attention', { mode: 'boolean' }).notNull().default(true), // Default true for new worktrees
+
+    // Archive state (for soft deletes)
+    archived: integer('archived', { mode: 'boolean' }).notNull().default(false),
+    archived_at: integer('archived_at', { mode: 'timestamp_ms' }),
+    archived_by: text('archived_by', { length: 36 }),
+    filesystem_status: text('filesystem_status', {
+      enum: ['preserved', 'cleaned', 'deleted'],
+    }),
 
     // JSON blob for everything else
     data: text('data', { mode: 'json' })

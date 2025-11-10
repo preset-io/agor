@@ -257,6 +257,24 @@ export interface Session {
    * Used to highlight worktree cards to show which sessions need attention.
    */
   ready_for_prompt: boolean;
+
+  // ===== Archive State =====
+
+  /**
+   * Whether this session is archived (soft deleted)
+   *
+   * Usually cascaded from worktree archive, but can also be manually archived.
+   * Archived sessions are hidden from UI but data preserved for analytics.
+   */
+  archived: boolean;
+
+  /**
+   * Reason for archiving
+   *
+   * - 'worktree_archived': Cascaded from parent worktree being archived
+   * - 'manual': User manually archived this session
+   */
+  archived_reason?: 'worktree_archived' | 'manual';
 }
 
 /**

@@ -53,6 +53,8 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       scheduled_run_at: row.scheduled_run_at ?? undefined,
       scheduled_from_worktree: row.scheduled_from_worktree ?? false,
       ready_for_prompt: row.ready_for_prompt ?? false,
+      archived: Boolean(row.archived), // Convert SQLite integer (0/1) to boolean
+      archived_reason: row.archived_reason ?? undefined,
       current_context_usage: row.data.current_context_usage,
       context_window_limit: row.data.context_window_limit,
       last_context_update_at: row.data.last_context_update_at,
@@ -84,6 +86,8 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       scheduled_run_at: session.scheduled_run_at ?? null,
       scheduled_from_worktree: session.scheduled_from_worktree ?? false,
       ready_for_prompt: session.ready_for_prompt ?? false,
+      archived: session.archived ?? false, // Default false for new sessions
+      archived_reason: session.archived_reason ?? null,
       data: {
         agentic_tool_version: session.agentic_tool_version,
         sdk_session_id: session.sdk_session_id, // Preserve SDK session ID for conversation continuity

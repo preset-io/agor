@@ -65,6 +65,7 @@ describe('getRepoReferenceOptions', () => {
         updated_at: new Date('2024-01-01').toISOString(),
         last_used: new Date('2024-01-01').toISOString(),
         schedule_enabled: false,
+        archived: false,
         needs_attention: false,
       },
     ];
@@ -119,6 +120,7 @@ describe('getRepoReferenceOptions', () => {
         updated_at: new Date('2024-01-01').toISOString(),
         last_used: new Date('2024-01-01').toISOString(),
         schedule_enabled: false,
+        archived: false,
         needs_attention: false,
       },
       {
@@ -135,6 +137,7 @@ describe('getRepoReferenceOptions', () => {
         updated_at: new Date('2024-01-01').toISOString(),
         last_used: new Date('2024-01-01').toISOString(),
         schedule_enabled: false,
+        archived: false,
         needs_attention: false,
       },
       {
@@ -151,6 +154,7 @@ describe('getRepoReferenceOptions', () => {
         updated_at: new Date('2024-01-01').toISOString(),
         last_used: new Date('2024-01-01').toISOString(),
         schedule_enabled: false,
+        archived: false,
         needs_attention: false,
       },
     ];
@@ -203,6 +207,7 @@ describe('getRepoReferenceOptions', () => {
         updated_at: new Date('2024-01-01').toISOString(),
         last_used: new Date('2024-01-01').toISOString(),
         schedule_enabled: false,
+        archived: false,
         needs_attention: false,
       },
       {
@@ -219,6 +224,7 @@ describe('getRepoReferenceOptions', () => {
         updated_at: new Date('2024-01-01').toISOString(),
         last_used: new Date('2024-01-01').toISOString(),
         schedule_enabled: false,
+        archived: false,
         needs_attention: false,
       },
     ];
@@ -288,6 +294,7 @@ describe('getRepoReferenceOptions', () => {
         updated_at: new Date('2024-01-01').toISOString(),
         last_used: new Date('2024-01-01').toISOString(),
         schedule_enabled: false,
+        archived: false,
         needs_attention: false,
       },
     ];
@@ -326,6 +333,7 @@ describe('getRepoReferenceOptions', () => {
         updated_at: new Date('2024-01-01').toISOString(),
         last_used: new Date('2024-01-01').toISOString(),
         schedule_enabled: false,
+        archived: false,
         needs_attention: false,
       },
     ];
@@ -428,6 +436,7 @@ describe('getGroupedRepoReferenceOptions', () => {
         updated_at: new Date('2024-01-01').toISOString(),
         last_used: new Date('2024-01-01').toISOString(),
         schedule_enabled: false,
+        archived: false,
         needs_attention: false,
       },
       {
@@ -444,6 +453,7 @@ describe('getGroupedRepoReferenceOptions', () => {
         updated_at: new Date('2024-01-01').toISOString(),
         last_used: new Date('2024-01-01').toISOString(),
         schedule_enabled: false,
+        archived: false,
         needs_attention: false,
       },
     ];
@@ -495,6 +505,7 @@ describe('getGroupedRepoReferenceOptions', () => {
         updated_at: new Date('2024-01-01').toISOString(),
         last_used: new Date('2024-01-01').toISOString(),
         schedule_enabled: false,
+        archived: false,
         needs_attention: false,
       },
       {
@@ -511,6 +522,7 @@ describe('getGroupedRepoReferenceOptions', () => {
         updated_at: new Date('2024-01-01').toISOString(),
         last_used: new Date('2024-01-01').toISOString(),
         schedule_enabled: false,
+        archived: false,
         needs_attention: false,
       },
     ];
@@ -551,6 +563,7 @@ describe('getGroupedRepoReferenceOptions', () => {
         updated_at: new Date('2024-01-01').toISOString(),
         last_used: new Date('2024-01-01').toISOString(),
         schedule_enabled: false,
+        archived: false,
         needs_attention: false,
       },
       {
@@ -567,6 +580,7 @@ describe('getGroupedRepoReferenceOptions', () => {
         updated_at: new Date('2024-01-01').toISOString(),
         last_used: new Date('2024-01-01').toISOString(),
         schedule_enabled: false,
+        archived: false,
         needs_attention: false,
       },
     ];
@@ -636,6 +650,7 @@ describe('getGroupedRepoReferenceOptions', () => {
         updated_at: new Date('2024-01-01').toISOString(),
         last_used: new Date('2024-01-01').toISOString(),
         schedule_enabled: false,
+        archived: false,
         needs_attention: false,
       },
     ];
@@ -674,6 +689,7 @@ describe('getGroupedRepoReferenceOptions', () => {
         updated_at: new Date('2024-01-01').toISOString(),
         last_used: new Date('2024-01-01').toISOString(),
         schedule_enabled: false,
+        archived: false,
         needs_attention: false,
       },
     ];

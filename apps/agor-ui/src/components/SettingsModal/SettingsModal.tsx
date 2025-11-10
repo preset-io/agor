@@ -44,7 +44,13 @@ export interface SettingsModalProps {
   onCreateRepo?: (data: { url: string; slug: string; default_branch: string }) => void;
   onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
   onDeleteRepo?: (repoId: string) => void;
-  onDeleteWorktree?: (worktreeId: string, deleteFromFilesystem: boolean) => void;
+  onArchiveOrDeleteWorktree?: (
+    worktreeId: string,
+    options: {
+      metadataAction: 'archive' | 'delete';
+      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
+    }
+  ) => void;
   onUpdateWorktree?: (worktreeId: string, updates: Partial<Worktree>) => void;
   onCreateWorktree?: (
     repoId: string,
@@ -89,7 +95,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onCreateRepo,
   onUpdateRepo,
   onDeleteRepo,
-  onDeleteWorktree,
+  onArchiveOrDeleteWorktree,
   onUpdateWorktree,
   onCreateWorktree,
   onStartEnvironment,
@@ -122,12 +128,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setWorktreeSessions([]);
   };
 
-  // Wrapper to close modal after deletion
-  const handleDeleteWorktreeWithClose = async (
+  // Wrapper to close modal after archive/delete
+  const handleArchiveOrDeleteWorktreeWithClose = async (
     worktreeId: string,
-    deleteFromFilesystem: boolean
+    options: {
+      metadataAction: 'archive' | 'delete';
+      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
+    }
   ) => {
-    await onDeleteWorktree?.(worktreeId, deleteFromFilesystem);
+    await onArchiveOrDeleteWorktree?.(worktreeId, options);
     handleWorktreeModalClose();
   };
   return (
@@ -179,7 +188,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 repos={repos}
                 boards={boards}
                 sessions={sessions}
-                onDelete={onDeleteWorktree}
+                onArchiveOrDelete={onArchiveOrDeleteWorktree}
                 onCreate={onCreateWorktree}
                 onRowClick={handleWorktreeRowClick}
                 onStartEnvironment={onStartEnvironment}
@@ -242,7 +251,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         client={client}
         onUpdateWorktree={onUpdateWorktree}
         onUpdateRepo={onUpdateRepo}
-        onDelete={handleDeleteWorktreeWithClose}
+        onDelete={handleArchiveOrDeleteWorktreeWithClose}
         onOpenSettings={onClose} // Close worktree modal and keep settings modal open
       />
     </Modal>

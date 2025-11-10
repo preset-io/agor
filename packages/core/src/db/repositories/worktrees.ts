@@ -5,7 +5,7 @@
  */
 
 import type { UUID, Worktree, WorktreeID } from '@agor/core/types';
-import { eq, like, sql } from 'drizzle-orm';
+import { and, eq, like, sql } from 'drizzle-orm';
 import { formatShortId, generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { type WorktreeInsert, type WorktreeRow, worktrees } from '../schema';
@@ -44,6 +44,10 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
       schedule_last_triggered_at: row.schedule_last_triggered_at ?? undefined,
       schedule_next_run_at: row.schedule_next_run_at ?? undefined,
       needs_attention: Boolean(row.needs_attention), // Convert SQLite integer (0/1) to boolean
+      archived: Boolean(row.archived), // Convert SQLite integer (0/1) to boolean
+      archived_at: row.archived_at ? new Date(row.archived_at).toISOString() : undefined,
+      archived_by: (row.archived_by as UUID | null) ?? undefined,
+      filesystem_status: row.filesystem_status ?? undefined,
       ...row.data,
     };
   }
@@ -77,6 +81,10 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
       schedule_last_triggered_at: worktree.schedule_last_triggered_at ?? null,
       schedule_next_run_at: worktree.schedule_next_run_at ?? null,
       needs_attention: worktree.needs_attention ?? true, // Default true for new worktrees
+      archived: worktree.archived ?? false, // Default false for new worktrees
+      archived_at: worktree.archived_at ? new Date(worktree.archived_at) : null,
+      archived_by: worktree.archived_by ?? null,
+      filesystem_status: worktree.filesystem_status ?? null,
       data: {
         path: worktree.path!,
         base_ref: worktree.base_ref,
@@ -140,17 +148,28 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
 
   /**
    * Find all worktrees (with optional filters)
+   *
+   * @param filter - Optional filters (repo_id, includeArchived)
+   * @param filter.repo_id - Filter by repository ID
+   * @param filter.includeArchived - Include archived worktrees (default: false)
    */
-  async findAll(filter?: { repo_id?: UUID }): Promise<Worktree[]> {
+  async findAll(filter?: { repo_id?: UUID; includeArchived?: boolean }): Promise<Worktree[]> {
+    const includeArchived = filter?.includeArchived ?? false;
+
+    // Build where conditions
+    const conditions = [];
     if (filter?.repo_id) {
-      const rows = await this.db
-        .select()
-        .from(worktrees)
-        .where(eq(worktrees.repo_id, filter.repo_id));
-      return rows.map(row => this.rowToWorktree(row));
+      conditions.push(eq(worktrees.repo_id, filter.repo_id));
+    }
+    if (!includeArchived) {
+      conditions.push(eq(worktrees.archived, false));
     }
 
-    const rows = await this.db.select().from(worktrees);
+    const rows = await this.db
+      .select()
+      .from(worktrees)
+      .where(conditions.length > 0 ? and(...conditions) : undefined);
+
     return rows.map(row => this.rowToWorktree(row));
   }
 

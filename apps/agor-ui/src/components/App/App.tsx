@@ -67,7 +67,13 @@ export interface AppProps {
   onCreateRepo?: (data: { url: string; slug: string; default_branch: string }) => void;
   onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
   onDeleteRepo?: (repoId: string) => void;
-  onDeleteWorktree?: (worktreeId: string, deleteFromFilesystem: boolean) => void;
+  onArchiveOrDeleteWorktree?: (
+    worktreeId: string,
+    options: {
+      metadataAction: 'archive' | 'delete';
+      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
+    }
+  ) => void;
   onUpdateWorktree?: (worktreeId: string, updates: Partial<Worktree>) => void;
   onCreateWorktree?: (
     repoId: string,
@@ -129,7 +135,7 @@ export const App: React.FC<AppProps> = ({
   onCreateRepo,
   onUpdateRepo,
   onDeleteRepo,
-  onDeleteWorktree,
+  onArchiveOrDeleteWorktree,
   onUpdateWorktree,
   onCreateWorktree,
   onStartEnvironment,
@@ -461,7 +467,7 @@ export const App: React.FC<AppProps> = ({
             onOpenWorktree={worktreeId => {
               setWorktreeModalWorktreeId(worktreeId);
             }}
-            onDeleteWorktree={onDeleteWorktree}
+            onArchiveOrDeleteWorktree={onArchiveOrDeleteWorktree}
             onOpenTerminal={handleOpenTerminal}
             onStartEnvironment={onStartEnvironment}
             onStopEnvironment={onStopEnvironment}
@@ -562,7 +568,7 @@ export const App: React.FC<AppProps> = ({
         onCreateRepo={onCreateRepo}
         onUpdateRepo={onUpdateRepo}
         onDeleteRepo={onDeleteRepo}
-        onDeleteWorktree={onDeleteWorktree}
+        onArchiveOrDeleteWorktree={onArchiveOrDeleteWorktree}
         onUpdateWorktree={onUpdateWorktree}
         onCreateWorktree={onCreateWorktree}
         onStartEnvironment={onStartEnvironment}
@@ -596,7 +602,7 @@ export const App: React.FC<AppProps> = ({
         client={client}
         onUpdateWorktree={onUpdateWorktree}
         onUpdateRepo={onUpdateRepo}
-        onDelete={onDeleteWorktree}
+        onArchiveOrDelete={onArchiveOrDeleteWorktree}
         onOpenSettings={() => {
           setWorktreeModalWorktreeId(null);
           setSettingsOpen(true);
