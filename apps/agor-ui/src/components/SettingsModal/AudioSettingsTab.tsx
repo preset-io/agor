@@ -58,6 +58,9 @@ export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({ user, onUpda
     const chime = form.getFieldValue('chime');
     const volume = form.getFieldValue('volume');
 
+    console.log('[AudioSettings] Form values:', form.getFieldsValue());
+    console.log('[AudioSettings] Selected chime:', chime);
+
     setIsPlaying(true);
     try {
       await previewChimeSound(chime, volume);
