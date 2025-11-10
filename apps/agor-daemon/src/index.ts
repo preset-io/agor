@@ -2094,7 +2094,9 @@ async function main() {
 
             // Check if error might be due to stale/invalid Agent SDK resume session
             // Only clear sdk_session_id if we're confident the session is stale, not just any error
-            const errorMessage = error.message || String(error);
+            const errorMessage =
+              error.message ||
+              (typeof error === 'string' ? error : JSON.stringify(error, null, 2));
             const isExitCode1 = errorMessage.includes('Claude Code process exited with code 1');
             const hasResumeSession = !!session.sdk_session_id;
 
