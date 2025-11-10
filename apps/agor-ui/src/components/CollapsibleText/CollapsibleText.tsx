@@ -79,12 +79,9 @@ export const CollapsibleText: React.FC<CollapsibleTextProps> = ({
       ...(preserveWhitespace && { whiteSpace: 'pre-wrap' }),
       ...(code && {
         fontFamily: 'Monaco, Menlo, Ubuntu Mono, Consolas, source-code-pro, monospace',
-        background: token.colorBgLayout,
-        padding: token.paddingSM,
-        borderRadius: token.borderRadius,
-        border: `1px solid ${token.colorBorder}`,
       }),
       wordWrap: 'break-word',
+      margin: 0,
     };
 
     return (
@@ -97,15 +94,6 @@ export const CollapsibleText: React.FC<CollapsibleTextProps> = ({
   const displayContent = expanded ? children : lines.slice(0, maxLines).join('\n');
   const lineCount = lines.length;
 
-  const wrapperStyle: React.CSSProperties = code
-    ? {
-        background: token.colorBgLayout,
-        padding: token.paddingSM,
-        borderRadius: token.borderRadius,
-        border: `1px solid ${token.colorBorder}`,
-      }
-    : {};
-
   const contentStyle: React.CSSProperties = {
     ...style,
     ...(preserveWhitespace && { whiteSpace: 'pre-wrap' }),
@@ -116,7 +104,7 @@ export const CollapsibleText: React.FC<CollapsibleTextProps> = ({
   };
 
   return (
-    <div className={className} style={wrapperStyle}>
+    <div className={className}>
       <pre style={contentStyle}>{displayContent}</pre>
 
       <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>

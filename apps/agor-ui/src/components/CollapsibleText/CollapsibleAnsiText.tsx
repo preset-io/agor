@@ -1,5 +1,5 @@
 import Ansi from 'ansi-to-react';
-import { Typography, theme } from 'antd';
+import { Typography } from 'antd';
 import type React from 'react';
 import { TEXT_TRUNCATION } from '../../constants/ui';
 
@@ -28,16 +28,10 @@ export const CollapsibleAnsiText: React.FC<CollapsibleAnsiTextProps> = ({
   className,
   style,
 }) => {
-  const { token } = theme.useToken();
-
   const computedStyle: React.CSSProperties = {
     ...style,
     whiteSpace: 'pre-wrap',
     fontFamily: 'Monaco, Menlo, Ubuntu Mono, Consolas, source-code-pro, monospace',
-    background: token.colorBgLayout,
-    padding: token.paddingSM,
-    borderRadius: token.borderRadius,
-    border: `1px solid ${token.colorBorder}`,
     margin: 0,
   };
 
