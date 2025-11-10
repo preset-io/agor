@@ -60,6 +60,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
   const [codexForm] = Form.useForm();
   const [geminiForm] = Form.useForm();
   const [opencodeForm] = Form.useForm();
+  const [audioForm] = Form.useForm();
 
   // API key management state for user edit
   const [userApiKeyStatus, setUserApiKeyStatus] = useState<ApiKeyStatus>({
@@ -84,13 +85,13 @@ export const UsersTable: React.FC<UsersTableProps> = ({
   // Auto-open edit modal if editUserId is provided
   useEffect(() => {
     if (editUserId) {
-      const userToEdit = users.find(u => u.user_id === editUserId);
+      const userToEdit = users.find((u) => u.user_id === editUserId);
       if (userToEdit) {
         handleEdit(userToEdit);
         setEditModalOpen(true);
       }
     }
-  }, [editUserId, users]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [editUserId, users, handleEdit]);
 
   // Load user's API key and env var status when editing
   useEffect(() => {
@@ -120,7 +121,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
   };
 
   const handleCreate = () => {
-    form.validateFields().then(values => {
+    form.validateFields().then((values) => {
       onCreate?.({
         email: values.email,
         password: values.password,
@@ -195,7 +196,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
         setEditModalOpen(false);
         setEditingUser(null);
       })
-      .catch(err => {
+      .catch((err) => {
         console.error('Validation failed:', err);
       });
   };
@@ -205,7 +206,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
     if (!editingUser) return;
 
     try {
-      setSavingApiKeys(prev => ({ ...prev, [field]: true }));
+      setSavingApiKeys((prev) => ({ ...prev, [field]: true }));
 
       // Update user via onUpdate callback
       await onUpdate?.(editingUser.user_id, {
@@ -215,12 +216,12 @@ export const UsersTable: React.FC<UsersTableProps> = ({
       });
 
       // Update local state
-      setUserApiKeyStatus(prev => ({ ...prev, [field]: true }));
+      setUserApiKeyStatus((prev) => ({ ...prev, [field]: true }));
     } catch (err) {
       console.error(`Failed to save ${field}:`, err);
       throw err;
     } finally {
-      setSavingApiKeys(prev => ({ ...prev, [field]: false }));
+      setSavingApiKeys((prev) => ({ ...prev, [field]: false }));
     }
   };
 
@@ -229,7 +230,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
     if (!editingUser) return;
 
     try {
-      setSavingApiKeys(prev => ({ ...prev, [field]: true }));
+      setSavingApiKeys((prev) => ({ ...prev, [field]: true }));
 
       // Update user via onUpdate callback
       await onUpdate?.(editingUser.user_id, {
@@ -239,12 +240,12 @@ export const UsersTable: React.FC<UsersTableProps> = ({
       });
 
       // Update local state
-      setUserApiKeyStatus(prev => ({ ...prev, [field]: false }));
+      setUserApiKeyStatus((prev) => ({ ...prev, [field]: false }));
     } catch (err) {
       console.error(`Failed to clear ${field}:`, err);
       throw err;
     } finally {
-      setSavingApiKeys(prev => ({ ...prev, [field]: false }));
+      setSavingApiKeys((prev) => ({ ...prev, [field]: false }));
     }
   };
 
@@ -253,16 +254,16 @@ export const UsersTable: React.FC<UsersTableProps> = ({
     if (!editingUser) return;
 
     try {
-      setSavingEnvVars(prev => ({ ...prev, [key]: true }));
+      setSavingEnvVars((prev) => ({ ...prev, [key]: true }));
       await onUpdate?.(editingUser.user_id, {
         env_vars: { [key]: value },
       });
-      setUserEnvVars(prev => ({ ...prev, [key]: true }));
+      setUserEnvVars((prev) => ({ ...prev, [key]: true }));
     } catch (err) {
       console.error(`Failed to save ${key}:`, err);
       throw err;
     } finally {
-      setSavingEnvVars(prev => ({ ...prev, [key]: false }));
+      setSavingEnvVars((prev) => ({ ...prev, [key]: false }));
     }
   };
 
@@ -271,11 +272,11 @@ export const UsersTable: React.FC<UsersTableProps> = ({
     if (!editingUser) return;
 
     try {
-      setSavingEnvVars(prev => ({ ...prev, [key]: true }));
+      setSavingEnvVars((prev) => ({ ...prev, [key]: true }));
       await onUpdate?.(editingUser.user_id, {
         env_vars: { [key]: null },
       });
-      setUserEnvVars(prev => {
+      setUserEnvVars((prev) => {
         const updated = { ...prev };
         delete updated[key];
         return updated;
@@ -284,7 +285,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
       console.error(`Failed to delete ${key}:`, err);
       throw err;
     } finally {
-      setSavingEnvVars(prev => ({ ...prev, [key]: false }));
+      setSavingEnvVars((prev) => ({ ...prev, [key]: false }));
     }
   };
 
@@ -302,7 +303,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
     const currentForm = formMap[tool];
 
     try {
-      setSavingAgenticConfig(prev => ({ ...prev, [tool]: true }));
+      setSavingAgenticConfig((prev) => ({ ...prev, [tool]: true }));
 
       const values = currentForm.getFieldsValue();
 
@@ -332,7 +333,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
       console.error(`Failed to save ${tool} config:`, err);
       throw err;
     } finally {
-      setSavingAgenticConfig(prev => ({ ...prev, [tool]: false }));
+      setSavingAgenticConfig((prev) => ({ ...prev, [tool]: false }));
     }
   };
 
@@ -377,11 +378,40 @@ export const UsersTable: React.FC<UsersTableProps> = ({
         setEditModalOpen(false);
         setEditingUser(null);
         break;
+      case 'audio':
+        await handleAudioSave();
+        break;
       case 'claude-code':
       case 'codex':
       case 'gemini':
         await handleAgenticConfigSave(activeTab as AgenticToolName);
         break;
+    }
+  };
+
+  const handleAudioSave = async () => {
+    if (!editingUser || !onUpdate) return;
+
+    try {
+      const values = audioForm.getFieldsValue();
+      const updatedPreferences = {
+        ...editingUser.preferences,
+        audio: {
+          enabled: values.enabled,
+          chime: values.chime,
+          volume: values.volume,
+          minDurationSeconds: values.minDurationSeconds,
+        },
+      };
+
+      onUpdate(editingUser.user_id, {
+        preferences: updatedPreferences,
+      });
+
+      setEditModalOpen(false);
+      setEditingUser(null);
+    } catch (error) {
+      console.error('Failed to save audio settings:', error);
     }
   };
 
@@ -671,7 +701,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
               label: 'Audio',
               children: (
                 <div style={{ paddingTop: 8 }}>
-                  <AudioSettingsTab user={editingUser} onUpdateUser={onUpdate} />
+                  <AudioSettingsTab user={editingUser} form={audioForm} />
                 </div>
               ),
             },

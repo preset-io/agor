@@ -57,6 +57,13 @@
       "when": 1762565000000,
       "tag": "0007_add_needs_attention",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1762747715738,
+      "tag": "0008_stale_marauders",
+      "breakpoints": true
     }
   ]
 }

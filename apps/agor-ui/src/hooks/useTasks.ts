@@ -97,8 +97,20 @@ export function useTasks(
           const isNowDone =
             task.status === TaskStatus.COMPLETED || task.status === TaskStatus.FAILED;
 
+          console.log('[useTasks] Task patched:', {
+            taskId: task.task_id,
+            oldStatus: oldTask?.status,
+            newStatus: task.status,
+            wasRunning,
+            isNowDone,
+            willPlayChime: wasRunning && isNowDone,
+            audioPrefs: user?.preferences?.audio,
+            duration_ms: task.duration_ms,
+          });
+
           // Play chime if transitioning from RUNNING to COMPLETED/FAILED
           if (wasRunning && isNowDone) {
+            console.log('[useTasks] Calling playTaskCompletionChime');
             playTaskCompletionChime(task, user?.preferences?.audio);
           }
 

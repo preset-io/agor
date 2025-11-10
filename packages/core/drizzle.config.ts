@@ -1,5 +1,5 @@
 import { defineConfig } from 'drizzle-kit';
-import { expandPath } from './src/utils/path.js';
+import { expandPath } from './dist/utils/path.js';
 
 export default defineConfig({
   schema: './src/db/schema.ts',

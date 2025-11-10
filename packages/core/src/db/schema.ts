@@ -145,6 +145,7 @@ export const tasks = sqliteTable(
       .notNull()
       .references(() => sessions.session_id, { onDelete: 'cascade' }),
     created_at: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    started_at: integer('started_at', { mode: 'timestamp_ms' }),
     completed_at: integer('completed_at', { mode: 'timestamp_ms' }),
     status: text('status', {
       enum: [

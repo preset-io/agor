@@ -2,7 +2,7 @@
  * AudioSettingsTab - Configure task completion chime settings
  */
 
-import type { UpdateUserInput, User, ChimeSound } from '@agor/core/types';
+import type { ChimeSound, UpdateUserInput, User } from '@agor/core/types';
 import { PlayCircleOutlined, SoundOutlined } from '@ant-design/icons';
 import {
   Button,
@@ -10,13 +10,13 @@ import {
   Col,
   Form,
   InputNumber,
+  message,
   Row,
   Select,
   Slider,
   Space,
   Switch,
   Typography,
-  message,
 } from 'antd';
 import { useState } from 'react';
 import {
@@ -30,41 +30,14 @@ const { Text, Paragraph } = Typography;
 
 interface AudioSettingsTabProps {
   user: User | null;
-  onUpdateUser?: (userId: string, updates: UpdateUserInput) => void;
+  form: ReturnType<typeof Form.useForm>[0];
 }
 
-export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({ user, onUpdateUser }) => {
-  const [form] = Form.useForm();
+export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({ user, form }) => {
   const [isPlaying, setIsPlaying] = useState(false);
 
   // Get current audio preferences or use defaults
   const audioPrefs = user?.preferences?.audio || DEFAULT_AUDIO_PREFERENCES;
-
-  const handleSave = async () => {
-    if (!user || !onUpdateUser) return;
-
-    try {
-      const values = form.getFieldsValue();
-      const updatedPreferences = {
-        ...user.preferences,
-        audio: {
-          enabled: values.enabled,
-          chime: values.chime,
-          volume: values.volume,
-          minDurationSeconds: values.minDurationSeconds,
-        },
-      };
-
-      onUpdateUser(user.user_id, {
-        preferences: updatedPreferences,
-      });
-
-      message.success('Audio settings saved');
-    } catch (error) {
-      message.error('Failed to save audio settings');
-      console.error('Failed to save audio settings:', error);
-    }
-  };
 
   const handlePreview = async () => {
     const chime = form.getFieldValue('chime');
@@ -111,73 +84,12 @@ export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({ user, onUpda
           volume: audioPrefs.volume,
           minDurationSeconds: audioPrefs.minDurationSeconds,
         }}
-        onFinish={handleSave}
       >
         <Row gutter={16}>
           {/* Enable/Disable Toggle */}
           <Col span={12}>
             <Form.Item name="enabled" label="Enable Chimes" valuePropName="checked">
               <Switch onChange={handleEnableToggle} />
-            </Form.Item>
-          </Col>
-
-          {/* Minimum Duration */}
-          <Col span={12}>
-            <Form.Item noStyle shouldUpdate={(prev, curr) => prev.enabled !== curr.enabled}>
-              {() => (
-                <Form.Item
-                  name="minDurationSeconds"
-                  label="Minimum Task Duration"
-                  tooltip="Only play chime for tasks that take longer than this. Set to 0 to always play."
-                >
-                  <InputNumber
-                    min={0}
-                    max={60}
-                    step={1}
-                    addonAfter="seconds"
-                    style={{ width: '100%' }}
-                    disabled={!form.getFieldValue('enabled')}
-                  />
-                </Form.Item>
-              )}
-            </Form.Item>
-          </Col>
-        </Row>
-
-        <Row gutter={16}>
-          {/* Chime Selection */}
-          <Col span={12}>
-            <Form.Item noStyle shouldUpdate={(prev, curr) => prev.enabled !== curr.enabled}>
-              {() => {
-                const enabled = form.getFieldValue('enabled');
-                return (
-                  <Form.Item
-                    label="Chime Sound"
-                    tooltip="Choose your preferred notification sound"
-                  >
-                    <Space.Compact style={{ width: '100%' }}>
-                      <Form.Item name="chime" noStyle>
-                        <Select
-                          style={{ flex: 1 }}
-                          disabled={!enabled}
-                          options={getAvailableChimes().map((chime) => ({
-                            label: getChimeDisplayName(chime),
-                            value: chime,
-                          }))}
-                        />
-                      </Form.Item>
-                      <Button
-                        icon={<PlayCircleOutlined />}
-                        onClick={handlePreview}
-                        disabled={!enabled || isPlaying}
-                        loading={isPlaying}
-                      >
-                        Preview
-                      </Button>
-                    </Space.Compact>
-                  </Form.Item>
-                );
-              }}
             </Form.Item>
           </Col>
 
@@ -204,20 +116,70 @@ export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({ user, onUpda
           </Col>
         </Row>
 
-        {/* Save Button */}
-        <Form.Item style={{ marginBottom: 16 }}>
-          <Button type="primary" htmlType="submit">
-            Save Settings
-          </Button>
-        </Form.Item>
+        <Row gutter={16}>
+          {/* Chime Selection */}
+          <Col span={12}>
+            <Form.Item noStyle shouldUpdate={(prev, curr) => prev.enabled !== curr.enabled}>
+              {() => {
+                const enabled = form.getFieldValue('enabled');
+                return (
+                  <Form.Item label="Chime Sound" tooltip="Choose your preferred notification sound">
+                    <Space.Compact style={{ width: '100%' }}>
+                      <Form.Item name="chime" noStyle>
+                        <Select
+                          style={{ flex: 1 }}
+                          disabled={!enabled}
+                          options={getAvailableChimes().map((chime) => ({
+                            label: getChimeDisplayName(chime),
+                            value: chime,
+                          }))}
+                        />
+                      </Form.Item>
+                      <Button
+                        icon={<PlayCircleOutlined />}
+                        onClick={handlePreview}
+                        disabled={!enabled || isPlaying}
+                        loading={isPlaying}
+                      >
+                        Preview
+                      </Button>
+                    </Space.Compact>
+                  </Form.Item>
+                );
+              }}
+            </Form.Item>
+          </Col>
+
+          {/* Minimum Duration */}
+          <Col span={12}>
+            <Form.Item noStyle shouldUpdate={(prev, curr) => prev.enabled !== curr.enabled}>
+              {() => (
+                <Form.Item
+                  name="minDurationSeconds"
+                  label="Minimum Task Duration"
+                  tooltip="Only play chime for tasks that take longer than this. Set to 0 to always play."
+                >
+                  <InputNumber
+                    min={0}
+                    max={60}
+                    step={1}
+                    addonAfter="seconds"
+                    style={{ width: '100%' }}
+                    disabled={!form.getFieldValue('enabled')}
+                  />
+                </Form.Item>
+              )}
+            </Form.Item>
+          </Col>
+        </Row>
       </Form>
 
       {/* Info Section */}
       <Card type="inner" size="small" style={{ marginTop: 16 }}>
         <Text type="secondary">
-          <strong>Note:</strong> Chimes will only play for tasks that complete naturally (finished or
-          failed), not for tasks you manually stop. Make sure your browser allows audio playback - click
-          the Preview button to test!
+          <strong>Note:</strong> Chimes will only play for tasks that complete naturally (finished
+          or failed), not for tasks you manually stop. Make sure your browser allows audio playback
+          - click the Preview button to test!
         </Text>
       </Card>
     </div>

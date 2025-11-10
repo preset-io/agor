@@ -1708,6 +1708,7 @@ async function main() {
         {
           session_id: id as SessionID,
           status: TaskStatus.RUNNING, // Start as running, will be updated to completed
+          started_at: new Date().toISOString(), // Set start time in UTC
           description: data.prompt.substring(0, 120),
           full_prompt: data.prompt,
           message_range: {

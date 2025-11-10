@@ -32,10 +32,24 @@ function meetsMinimumDuration(
   minDurationSeconds: number
 ): boolean {
   if (minDurationSeconds === 0) return true;
-  if (!task.duration_ms) return false;
 
-  const durationSeconds = task.duration_ms / 1000;
-  return durationSeconds >= minDurationSeconds;
+  // Try to use duration_ms if available
+  if (task.duration_ms) {
+    const durationSeconds = task.duration_ms / 1000;
+    return durationSeconds >= minDurationSeconds;
+  }
+
+  // Fallback: calculate from timestamps if available
+  if (task.started_at && task.completed_at) {
+    const startTime = new Date(task.started_at).getTime();
+    const endTime = new Date(task.completed_at).getTime();
+    const durationSeconds = (endTime - startTime) / 1000;
+    return durationSeconds >= minDurationSeconds;
+  }
+
+  // If we can't determine duration, allow it to play (optimistic approach)
+  // The user set up audio notifications, so they probably want to hear them
+  return true;
 }
 
 /**
@@ -58,18 +72,41 @@ export async function playTaskCompletionChime(
 ): Promise<void> {
   const prefs = audioPreferences || DEFAULT_AUDIO_PREFERENCES;
 
+  console.log('[playTaskCompletionChime] Called with:', {
+    task: task,
+    prefs,
+  });
+
   // Check if audio is enabled
   if (!prefs.enabled) {
+    console.log('[playTaskCompletionChime] Audio not enabled');
     return;
   }
 
   // Check if task meets minimum duration
-  if (!meetsMinimumDuration(task, prefs.minDurationSeconds)) {
+  const meetsDuration = meetsMinimumDuration(task, prefs.minDurationSeconds);
+  if (!meetsDuration) {
+    // Calculate actual duration for logging
+    let actualDuration = 'unknown';
+    if (task.duration_ms) {
+      actualDuration = `${task.duration_ms / 1000}s (from duration_ms)`;
+    } else if (task.started_at && task.completed_at) {
+      const ms = new Date(task.completed_at).getTime() - new Date(task.started_at).getTime();
+      actualDuration = `${ms / 1000}s (calculated from timestamps)`;
+    }
+
+    console.log('[playTaskCompletionChime] Task does not meet minimum duration', {
+      actualDuration,
+      minDurationSeconds: prefs.minDurationSeconds,
+      started_at: task.started_at,
+      completed_at: task.completed_at,
+    });
     return;
   }
 
   // Check if task status is a natural completion (not user-stopped)
   if (!isNaturalCompletion(task.status)) {
+    console.log('[playTaskCompletionChime] Not a natural completion:', task.status);
     return;
   }
 
@@ -85,12 +122,15 @@ export async function playTaskCompletionChime(
     const audio = new Audio(chimePath);
     audio.volume = Math.max(0, Math.min(1, prefs.volume)); // Clamp between 0-1
 
+    console.log('[playTaskCompletionChime] Playing chime:', chimePath, 'at volume:', audio.volume);
+
     // Play the chime
     await audio.play();
+    console.log('[playTaskCompletionChime] Chime played successfully');
   } catch (error) {
     // Browser blocked autoplay or audio file not found
     // This is expected behavior if user hasn't interacted with the page yet
-    console.debug('Could not play task completion chime:', error);
+    console.error('[playTaskCompletionChime] Could not play task completion chime:', error);
   }
 }
 
