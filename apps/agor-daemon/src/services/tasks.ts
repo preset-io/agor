@@ -6,6 +6,7 @@
  */
 
 import { type Database, TaskRepository } from '@agor/core/db';
+import type { Application } from '@agor/core/feathers';
 import type { Paginated, QueryParams, Task } from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
@@ -23,8 +24,9 @@ export type TaskParams = QueryParams<{
  */
 export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams> {
   private taskRepo: TaskRepository;
+  private app: Application;
 
-  constructor(db: Database) {
+  constructor(db: Database, app: Application) {
     const taskRepo = new TaskRepository(db);
     super(taskRepo, {
       id: 'task_id',
@@ -37,6 +39,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     });
 
     this.taskRepo = taskRepo;
+    this.app = app;
   }
 
   /**
@@ -108,7 +111,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     data: { report?: Task['report'] },
     params?: TaskParams
   ): Promise<Task> {
-    return this.patch(
+    const completedTask = (await this.patch(
       id,
       {
         status: TaskStatus.COMPLETED,
@@ -116,7 +119,20 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         report: data.report,
       },
       params
-    ) as Promise<Task>;
+    )) as Task;
+
+    // Set the session's ready_for_prompt flag to true when task completes successfully
+    if (completedTask.session_id && this.app) {
+      try {
+        await this.app.service('sessions').patch(completedTask.session_id, {
+          ready_for_prompt: true,
+        });
+      } catch (error) {
+        console.warn('Failed to set ready_for_prompt flag:', error);
+      }
+    }
+
+    return completedTask;
   }
 
   /**
@@ -138,6 +154,6 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 /**
  * Service factory function
  */
-export function createTasksService(db: Database): TasksService {
-  return new TasksService(db);
+export function createTasksService(db: Database, app: Application): TasksService {
+  return new TasksService(db, app);
 }

@@ -248,6 +248,15 @@ export interface Session {
    * True = created by scheduler, False = created manually by user
    */
   scheduled_from_worktree: boolean;
+
+  /**
+   * Whether this session is ready to receive a new prompt
+   *
+   * Set to true when a task completes successfully, indicating the agent is ready for more work.
+   * Cleared when the user opens the conversation drawer (acknowledging completion).
+   * Used to highlight worktree cards to show which sessions need attention.
+   */
+  ready_for_prompt: boolean;
 }
 
 /**

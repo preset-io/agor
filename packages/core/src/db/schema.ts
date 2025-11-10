@@ -53,6 +53,11 @@ export const sessions = sqliteTable(
       .notNull()
       .default(false),
 
+    // UI state (materialized for efficient highlighting queries)
+    ready_for_prompt: integer('ready_for_prompt', { mode: 'boolean' })
+      .notNull()
+      .default(false),
+
     // JSON blob for everything else (cross-DB via json() type)
     data: text('data', { mode: 'json' })
       .$type<{

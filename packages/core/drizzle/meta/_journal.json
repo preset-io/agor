@@ -43,6 +43,13 @@
       "when": 1762562246854,
       "tag": "0005_clammy_mole_man",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1762564000000,
+      "tag": "0006_add_ready_for_prompt",
+      "breakpoints": true
     }
   ]
 }

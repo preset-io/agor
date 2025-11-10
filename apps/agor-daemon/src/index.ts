@@ -673,9 +673,9 @@ async function main() {
   console.log('✅ Database ready');
 
   // Register core services
-  // NOTE: Pass app instance for user preferences access (needed for cross-tool spawning)
+  // NOTE: Pass app instance for user preferences access (needed for cross-tool spawning and ready_for_prompt updates)
   app.use('/sessions', createSessionsService(db, app));
-  app.use('/tasks', createTasksService(db));
+  app.use('/tasks', createTasksService(db, app));
   const messagesService = createMessagesService(db) as unknown as MessagesServiceImpl;
 
   // Register messages service with custom streaming events

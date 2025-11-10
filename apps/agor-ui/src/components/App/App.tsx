@@ -253,6 +253,12 @@ export const App: React.FC<AppProps> = ({
 
   const handleSessionClick = (sessionId: string) => {
     setSelectedSessionId(sessionId);
+
+    // Clear the ready_for_prompt flag when opening the conversation
+    const session = sessions.find(s => s.session_id === sessionId);
+    if (session?.ready_for_prompt) {
+      onUpdateSession?.(sessionId, { ready_for_prompt: false });
+    }
   };
 
   const handleSendPrompt = async (prompt: string, permissionMode?: PermissionMode) => {

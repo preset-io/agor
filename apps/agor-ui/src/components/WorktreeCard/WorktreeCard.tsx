@@ -29,6 +29,23 @@ const _WORKTREE_CARD_MAX_WIDTH = 600;
 const SESSION_TITLE_MAX_LINES = 2; // Limit to 2 lines in tree view
 const SESSION_TITLE_FALLBACK_CHARS = 100; // Fallback truncation for unsupported browsers (smaller font = less chars per line)
 
+// Inject CSS animation for pulsing glow effect
+if (typeof document !== 'undefined' && !document.getElementById('worktree-card-animations')) {
+  const style = document.createElement('style');
+  style.id = 'worktree-card-animations';
+  style.textContent = `
+    @keyframes worktree-card-pulse {
+      0%, 100% {
+        opacity: 1;
+      }
+      50% {
+        opacity: 0.8;
+      }
+    }
+  `;
+  document.head.appendChild(style);
+}
+
 interface WorktreeCardProps {
   worktree: Worktree;
   repo: Repo;
@@ -124,6 +141,12 @@ const WorktreeCard = ({
   // Check if any session is running
   const hasRunningSession = useMemo(() => sessions.some(s => s.status === 'running'), [sessions]);
 
+  // Check if any session is ready for a new prompt (needs attention)
+  const hasReadySession = useMemo(
+    () => sessions.some(s => s.ready_for_prompt === true),
+    [sessions]
+  );
+
   // Auto-expand all nodes on mount and when new nodes with children are added
   useEffect(() => {
     // Collect all node keys that have children
@@ -188,14 +211,21 @@ const WorktreeCard = ({
     return (
       <div
         style={{
-          border: `1px solid rgba(255, 255, 255, 0.1)`,
+          border: session.ready_for_prompt
+            ? `2px solid ${token.colorPrimary}`
+            : `1px solid rgba(255, 255, 255, 0.1)`,
           borderRadius: 4,
           padding: 8,
-          background: 'rgba(0, 0, 0, 0.2)',
+          background: session.ready_for_prompt
+            ? `${token.colorPrimary}15`
+            : 'rgba(0, 0, 0, 0.2)',
           display: 'flex',
           alignItems: 'center',
           cursor: 'pointer',
           marginBottom: 4,
+          boxShadow: session.ready_for_prompt
+            ? `0 0 12px ${token.colorPrimary}30`
+            : undefined,
         }}
         onClick={() => onSessionClick?.(session.session_id)}
         onContextMenu={e => {
@@ -383,6 +413,12 @@ const WorktreeCard = ({
         width: 500,
         cursor: 'default', // Override React Flow's drag cursor - only drag handles should show grab cursor
         ...(isPinned && zoneColor ? { borderColor: zoneColor, borderWidth: 1 } : {}),
+        ...(hasReadySession
+          ? {
+              boxShadow: `0 0 0 2px ${token.colorPrimary}, 0 0 24px ${token.colorPrimary}40`,
+              animation: 'worktree-card-pulse 2s ease-in-out infinite',
+            }
+          : {}),
       }}
       styles={{
         body: { padding: 16 },

@@ -52,6 +52,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       permission_config: row.data.permission_config,
       scheduled_run_at: row.scheduled_run_at ?? undefined,
       scheduled_from_worktree: row.scheduled_from_worktree ?? false,
+      ready_for_prompt: row.ready_for_prompt ?? false,
       current_context_usage: row.data.current_context_usage,
       context_window_limit: row.data.context_window_limit,
       last_context_update_at: row.data.last_context_update_at,
@@ -82,6 +83,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       worktree_id: session.worktree_id,
       scheduled_run_at: session.scheduled_run_at ?? null,
       scheduled_from_worktree: session.scheduled_from_worktree ?? false,
+      ready_for_prompt: session.ready_for_prompt ?? false,
       data: {
         agentic_tool_version: session.agentic_tool_version,
         sdk_session_id: session.sdk_session_id, // Preserve SDK session ID for conversation continuity
@@ -375,6 +377,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
           .set({
             status: insert.status,
             updated_at: new Date(),
+            ready_for_prompt: insert.ready_for_prompt,
             data: insert.data,
           })
           .where(eq(sessions.session_id, fullId));
