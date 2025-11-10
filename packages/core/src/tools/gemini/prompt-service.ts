@@ -208,7 +208,13 @@ export class GeminiPromptService {
 
             case GeminiEventType.ToolCallRequest: {
               // Agent wants to call a tool
-              const { name, args, callId } = event.value;
+              let { name, args, callId } = event.value;
+
+              // Normalize tool names to match Claude Code conventions (PascalCase)
+              // This ensures UI renderers work consistently across all agents
+              if (name?.toLowerCase() === 'bash' || name === 'ExecuteCommand' || name === 'command') {
+                name = 'Bash';
+              }
 
               // Track tool use for complete message
               toolUses.push({

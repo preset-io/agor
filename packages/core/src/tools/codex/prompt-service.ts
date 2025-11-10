@@ -302,7 +302,7 @@ ${networkAccessToml}${mcpServersToml}`;
       case 'command_execution':
         return {
           id: item.id,
-          name: 'bash',
+          name: 'Bash', // Normalized to PascalCase for consistency with Claude Code
           input: { command: item.command },
           ...(status === 'completed' && {
             output: item.aggregated_output || '',

@@ -26,6 +26,7 @@
  */
 
 import type React from 'react';
+import { BashRenderer } from './BashRenderer';
 import { TodoListRenderer } from './TodoListRenderer';
 
 /**
@@ -62,9 +63,9 @@ export type ToolRenderer = React.FC<ToolRendererProps>;
 export const TOOL_RENDERERS = new Map<string, ToolRenderer>([
   // Claude Code tools
   ['TodoWrite', TodoListRenderer as unknown as ToolRenderer],
+  ['Bash', BashRenderer as unknown as ToolRenderer],
 
   // Add more custom renderers here:
-  // ['Bash', BashRenderer],
   // ['Read', FileReadRenderer],
   // ['Edit', FileEditRenderer],
   // etc.
@@ -72,7 +73,18 @@ export const TOOL_RENDERERS = new Map<string, ToolRenderer>([
 
 /**
  * Get custom renderer for a tool (if available)
+ *
+ * Note: Uses case-insensitive matching to support different SDK conventions:
+ * - Claude Code uses PascalCase (e.g., "Bash")
+ * - Codex uses lowercase (e.g., "bash")
+ * - Gemini uses various conventions
  */
 export function getToolRenderer(toolName: string): ToolRenderer | undefined {
-  return TOOL_RENDERERS.get(toolName);
+  // Try exact match first
+  const exactMatch = TOOL_RENDERERS.get(toolName);
+  if (exactMatch) return exactMatch;
+
+  // Try case-insensitive match by normalizing to PascalCase
+  const normalized = toolName.charAt(0).toUpperCase() + toolName.slice(1).toLowerCase();
+  return TOOL_RENDERERS.get(normalized);
 }
