@@ -452,7 +452,8 @@ export class ClaudeTool implements ITool {
               resolvedModel,
               this.messagesService!,
               this.tasksService,
-              completeEvent.parent_tool_use_id ?? null
+              completeEvent.parent_tool_use_id ?? null,
+              tokenUsage
             );
             return true;
           });
@@ -485,6 +486,24 @@ export class ClaudeTool implements ITool {
             );
           });
           // Don't add to assistantMessageIds - these are user messages
+        } else if (event.type === 'complete' && event.role === MessageRole.SYSTEM) {
+          // Type assertion for system message
+          const completeEvent = event as Extract<ProcessedEvent, { type: 'complete' }>;
+
+          // Create system message with session guard (handles deleted sessions gracefully)
+          await withSessionGuard(sessionId, this.sessionsRepo, async () => {
+            const systemMessageId = generateId() as MessageID;
+            await createSystemMessage(
+              sessionId,
+              systemMessageId,
+              completeEvent.content,
+              taskId,
+              nextIndex++,
+              resolvedModel,
+              this.messagesService!
+            );
+          });
+          // Don't add to assistantMessageIds - these are system messages
         }
       }
     }
@@ -673,7 +692,8 @@ export class ClaudeTool implements ITool {
               resolvedModel,
               this.messagesService!,
               this.tasksService,
-              completeEvent.parent_tool_use_id ?? null
+              completeEvent.parent_tool_use_id ?? null,
+              tokenUsage
             );
             return true;
           } else if (completeEvent.role === MessageRole.SYSTEM) {

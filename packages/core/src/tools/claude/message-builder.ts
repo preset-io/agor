@@ -131,7 +131,8 @@ export async function createAssistantMessage(
   resolvedModel: string | undefined,
   messagesService: MessagesService,
   tasksService?: TasksService,
-  parentToolUseId?: string | null
+  parentToolUseId?: string | null,
+  tokenUsage?: TokenUsage
 ): Promise<Message> {
   // Extract text content for preview
   const textBlocks = content.filter(b => b.type === 'text').map(b => b.text || '');
@@ -153,8 +154,8 @@ export async function createAssistantMessage(
     metadata: {
       model: resolvedModel || DEFAULT_CLAUDE_MODEL,
       tokens: {
-        input: 0, // TODO: Extract from SDK
-        output: 0,
+        input: tokenUsage?.input_tokens ?? 0,
+        output: tokenUsage?.output_tokens ?? 0,
       },
     },
   };

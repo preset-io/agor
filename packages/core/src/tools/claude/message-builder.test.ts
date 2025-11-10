@@ -809,7 +809,37 @@ describe('createAssistantMessage', () => {
     expect(messagesService.create).toHaveBeenCalled();
   });
 
-  it('should initialize token metadata with zeros', async () => {
+  it('should use token usage when provided', async () => {
+    const messagesService = createMockMessagesService();
+    const sessionId = generateId() as SessionID;
+    const messageId = generateId() as MessageID;
+    const content = [{ type: 'text', text: 'test' }];
+    const tokenUsage = {
+      input_tokens: 1000,
+      output_tokens: 500,
+    };
+
+    const result = await createAssistantMessage(
+      sessionId,
+      messageId,
+      content,
+      undefined,
+      undefined,
+      0,
+      undefined,
+      messagesService,
+      undefined,
+      undefined,
+      tokenUsage
+    );
+
+    expect(result.metadata?.tokens).toEqual({
+      input: 1000,
+      output: 500,
+    });
+  });
+
+  it('should default to zeros when token usage not provided', async () => {
     const messagesService = createMockMessagesService();
     const sessionId = generateId() as SessionID;
     const messageId = generateId() as MessageID;
