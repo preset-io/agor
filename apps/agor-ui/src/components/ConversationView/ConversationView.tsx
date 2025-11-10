@@ -123,7 +123,12 @@ export const ConversationView = React.memo<ConversationViewProps>(
     }, [onScrollRef, scrollToBottom]);
 
     // Fetch tasks for this session
-    const { tasks, loading: tasksLoading, error: tasksError } = useTasks(client, sessionId);
+    const currentUser = users.find((u) => u.user_id === currentUserId) || null;
+    const { tasks, loading: tasksLoading, error: tasksError } = useTasks(
+      client,
+      sessionId,
+      currentUser
+    );
 
     // Track real-time streaming messages (passed to TaskBlock for filtering)
     const streamingMessages = useStreamingMessages(client, sessionId || undefined);

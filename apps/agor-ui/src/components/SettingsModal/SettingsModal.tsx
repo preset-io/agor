@@ -17,6 +17,7 @@ import { useState } from 'react';
 import { WorktreeModal } from '../WorktreeModal';
 import { AboutTab } from './AboutTab';
 import { AgenticToolsSection } from './AgenticToolsSection';
+import { AudioSettingsTab } from './AudioSettingsTab';
 import { BoardsTable } from './BoardsTable';
 import { MCPServersTable } from './MCPServersTable';
 import { ReposTable } from './ReposTable';
@@ -203,6 +204,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             key: 'agentic-tools',
             label: 'Agentic Tools',
             children: <AgenticToolsSection client={client} />,
+          },
+          {
+            key: 'audio',
+            label: 'Audio',
+            children: <AudioSettingsTab currentUser={currentUser} onUpdateUser={onUpdateUser} />,
           },
           {
             key: 'users',

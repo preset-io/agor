@@ -3,8 +3,10 @@
  */
 
 import type { AgorClient } from '@agor/core/api';
-import type { SessionID, Task } from '@agor/core/types';
+import type { SessionID, Task, User } from '@agor/core/types';
+import { TaskStatus } from '@agor/core/types/task';
 import { useCallback, useEffect, useState } from 'react';
+import { playTaskCompletionChime } from '../utils/audio';
 
 interface UseTasksResult {
   tasks: Task[];
@@ -18,9 +20,14 @@ interface UseTasksResult {
  *
  * @param client - Agor client instance
  * @param sessionId - Session ID to fetch tasks for
+ * @param user - Current user (for audio preferences)
  * @returns Tasks array, loading state, error, and refetch function
  */
-export function useTasks(client: AgorClient | null, sessionId: SessionID | null): UseTasksResult {
+export function useTasks(
+  client: AgorClient | null,
+  sessionId: SessionID | null,
+  user: User | null = null
+): UseTasksResult {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -84,7 +91,20 @@ export function useTasks(client: AgorClient | null, sessionId: SessionID | null)
 
     const handleTaskPatched = (task: Task) => {
       if (task.session_id === sessionId) {
-        setTasks((prev) => prev.map((t) => (t.task_id === task.task_id ? task : t)));
+        setTasks((prev) => {
+          // Find the previous task state to detect transitions
+          const oldTask = prev.find((t) => t.task_id === task.task_id);
+          const wasRunning = oldTask?.status === TaskStatus.RUNNING;
+          const isNowDone =
+            task.status === TaskStatus.COMPLETED || task.status === TaskStatus.FAILED;
+
+          // Play chime if transitioning from RUNNING to COMPLETED/FAILED
+          if (wasRunning && isNowDone) {
+            playTaskCompletionChime(task, user?.preferences?.audio);
+          }
+
+          return prev.map((t) => (t.task_id === task.task_id ? task : t));
+        });
       }
     };
 
@@ -106,7 +126,7 @@ export function useTasks(client: AgorClient | null, sessionId: SessionID | null)
       tasksService.removeListener('updated', handleTaskPatched);
       tasksService.removeListener('removed', handleTaskRemoved);
     };
-  }, [client, sessionId, fetchTasks]);
+  }, [client, sessionId, fetchTasks, user]);
 
   return {
     tasks,

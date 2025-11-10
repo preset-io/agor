@@ -184,7 +184,8 @@ const SessionDrawer = ({
   const [queuedMessages, setQueuedMessages] = React.useState<Message[]>([]);
 
   // Fetch tasks for this session to calculate token totals
-  const { tasks } = useTasks(client, session?.session_id || null);
+  const currentUser = users?.find((u) => u.user_id === currentUserId) || null;
+  const { tasks } = useTasks(client, session?.session_id || null, currentUser);
 
   // Fetch queued messages for this session
   React.useEffect(() => {

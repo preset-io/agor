@@ -59,6 +59,40 @@ export interface DefaultAgenticConfig {
 }
 
 /**
+ * Available task completion chime sounds
+ */
+export type ChimeSound =
+  | 'gentle-chime'
+  | 'notification-bell'
+  | '8bit-coin'
+  | 'power-up'
+  | 'you-got-mail'
+  | 'success-tone';
+
+/**
+ * Audio preferences for task completion notifications
+ */
+export interface AudioPreferences {
+  /** Enable/disable task completion chimes */
+  enabled: boolean;
+  /** Selected chime sound */
+  chime: ChimeSound;
+  /** Volume level (0.0 to 1.0) */
+  volume: number;
+  /** Minimum task duration in seconds to play chime (0 = always play) */
+  minDurationSeconds: number;
+}
+
+/**
+ * User preferences structure
+ */
+export interface UserPreferences {
+  audio?: AudioPreferences;
+  // Future preferences can be added here
+  [key: string]: unknown;
+}
+
+/**
  * User type - Authentication and authorization
  */
 export interface User {
@@ -68,7 +102,7 @@ export interface User {
   emoji?: string; // User emoji for visual identity (like boards)
   role: UserRole;
   avatar?: string;
-  preferences?: Record<string, unknown>;
+  preferences?: UserPreferences;
   onboarding_completed: boolean;
   created_at: Date;
   updated_at?: Date;
@@ -105,7 +139,7 @@ export interface UpdateUserInput {
   emoji?: string;
   role?: UserRole;
   avatar?: string;
-  preferences?: Record<string, unknown>;
+  preferences?: UserPreferences;
   onboarding_completed?: boolean;
   // API keys for update (accepts plaintext, encrypted before storage)
   api_keys?: {
