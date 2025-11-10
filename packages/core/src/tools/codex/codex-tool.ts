@@ -22,10 +22,25 @@ import {
   type SessionID,
   type TaskID,
 } from '../../types';
+import type { TokenUsage } from '../../utils/pricing';
 import type { ITool, StreamingCallbacks, ToolCapabilities } from '../base';
 import type { MessagesService, TasksService } from '../claude/claude-tool';
-import { DEFAULT_CODEX_MODEL } from './models';
+import { DEFAULT_CODEX_MODEL, getCodexContextWindowLimit } from './models';
 import { CodexPromptService } from './prompt-service';
+
+interface CodexExecutionResult {
+  userMessageId: MessageID;
+  assistantMessageIds: MessageID[];
+  tokenUsage?: TokenUsage;
+  contextWindow?: number;
+  contextWindowLimit?: number;
+  model?: string;
+}
+
+function calculateCodexContextWindow(usage?: TokenUsage): number | undefined {
+  if (!usage) return undefined;
+  return (usage.input_tokens || 0) + (usage.cache_read_tokens || 0);
+}
 
 export class CodexTool implements ITool {
   readonly toolType = 'codex' as const;
@@ -105,7 +120,7 @@ export class CodexTool implements ITool {
     taskId?: TaskID,
     permissionMode?: PermissionMode,
     streamingCallbacks?: StreamingCallbacks
-  ): Promise<{ userMessageId: MessageID; assistantMessageIds: MessageID[] }> {
+  ): Promise<CodexExecutionResult> {
     if (!this.promptService || !this.messagesRepo) {
       throw new Error('CodexTool not initialized with repositories for live execution');
     }
@@ -126,6 +141,9 @@ export class CodexTool implements ITool {
     let capturedThreadId: string | undefined;
     let resolvedModel: string | undefined;
     let currentMessageId: MessageID | null = null;
+    let tokenUsage: TokenUsage | undefined;
+    let contextWindow: number | undefined;
+    let contextWindowLimit: number | undefined;
     let _streamStartTime = Date.now();
     let _firstTokenTime: number | null = null;
 
@@ -141,6 +159,14 @@ export class CodexTool implements ITool {
           resolvedModel = event.resolvedModel;
         } else if (event.type === 'complete') {
           resolvedModel = event.resolvedModel;
+        }
+      }
+
+      if (event.type === 'complete' && event.usage) {
+        tokenUsage = event.usage;
+        contextWindow = calculateCodexContextWindow(event.usage);
+        if (!contextWindowLimit) {
+          contextWindowLimit = getCodexContextWindowLimit(resolvedModel || DEFAULT_CODEX_MODEL);
         }
       }
 
@@ -223,17 +249,18 @@ export class CodexTool implements ITool {
       }
       // Handle complete message (save to database)
       else if (event.type === 'complete' && event.content) {
+        const usageForMessage = event.usage ?? tokenUsage;
         // Filter out tool_use and tool_result blocks (already saved via tool_complete events)
         // But KEEP text blocks - these contain the response
         const textOnlyContent = event.content.filter(
-          (block) => block.type === 'text' // Only keep text blocks
+          block => block.type === 'text' // Only keep text blocks
         );
 
         // Only create message if there's text content (not just tools)
         if (textOnlyContent.length > 0) {
           // Extract full text for client-side streaming
           const _fullText = textOnlyContent
-            .map((block) => (block as { text?: string }).text || '')
+            .map(block => (block as { text?: string }).text || '')
             .join('');
 
           // Use existing message ID from streaming (if any) or generate new
@@ -251,7 +278,8 @@ export class CodexTool implements ITool {
             undefined, // No tool uses in this message (already saved separately)
             taskId,
             nextIndex++,
-            resolvedModel
+            resolvedModel,
+            usageForMessage
           );
           assistantMessageIds.push(assistantMessageId);
 
@@ -264,9 +292,20 @@ export class CodexTool implements ITool {
       }
     }
 
+    if (!contextWindow && tokenUsage) {
+      contextWindow = calculateCodexContextWindow(tokenUsage);
+    }
+    if (!contextWindowLimit) {
+      contextWindowLimit = getCodexContextWindowLimit(resolvedModel || DEFAULT_CODEX_MODEL);
+    }
+
     return {
       userMessageId: userMessage.message_id,
       assistantMessageIds,
+      tokenUsage,
+      contextWindow,
+      contextWindowLimit,
+      model: resolvedModel || DEFAULT_CODEX_MODEL,
     };
   }
 
@@ -326,10 +365,11 @@ export class CodexTool implements ITool {
     toolUses: Array<{ id: string; name: string; input: Record<string, unknown> }> | undefined,
     taskId: TaskID | undefined,
     nextIndex: number,
-    resolvedModel?: string
+    resolvedModel?: string,
+    tokenUsage?: TokenUsage
   ): Promise<Message> {
     // Extract text content for preview
-    const textBlocks = content.filter((b) => b.type === 'text').map((b) => b.text || '');
+    const textBlocks = content.filter(b => b.type === 'text').map(b => b.text || '');
     const fullTextContent = textBlocks.join('');
     const contentPreview = fullTextContent.substring(0, 200);
 
@@ -347,8 +387,8 @@ export class CodexTool implements ITool {
       metadata: {
         model: resolvedModel || DEFAULT_CODEX_MODEL,
         tokens: {
-          input: 0, // TODO: Extract from Codex SDK
-          output: 0,
+          input: tokenUsage?.input_tokens ?? 0,
+          output: tokenUsage?.output_tokens ?? 0,
         },
       },
     };
@@ -379,7 +419,7 @@ export class CodexTool implements ITool {
     prompt: string,
     taskId?: TaskID,
     permissionMode?: PermissionMode
-  ): Promise<{ userMessageId: MessageID; assistantMessageIds: MessageID[] }> {
+  ): Promise<CodexExecutionResult> {
     if (!this.promptService || !this.messagesRepo) {
       throw new Error('CodexTool not initialized with repositories for live execution');
     }
@@ -399,6 +439,9 @@ export class CodexTool implements ITool {
     const assistantMessageIds: MessageID[] = [];
     let capturedThreadId: string | undefined;
     let resolvedModel: string | undefined;
+    let tokenUsage: TokenUsage | undefined;
+    let contextWindow: number | undefined;
+    let contextWindowLimit: number | undefined;
 
     for await (const event of this.promptService.promptSessionStreaming(
       sessionId,
@@ -412,6 +455,14 @@ export class CodexTool implements ITool {
           resolvedModel = event.resolvedModel;
         } else if (event.type === 'complete') {
           resolvedModel = event.resolvedModel;
+        }
+      }
+
+      if (event.type === 'complete' && event.usage) {
+        tokenUsage = event.usage;
+        contextWindow = calculateCodexContextWindow(event.usage);
+        if (!contextWindowLimit) {
+          contextWindowLimit = getCodexContextWindowLimit(resolvedModel || DEFAULT_CODEX_MODEL);
         }
       }
 
@@ -433,6 +484,7 @@ export class CodexTool implements ITool {
       // Handle complete messages only
       if (event.type === 'complete' && event.content) {
         const messageId = generateId() as MessageID;
+        const usageForMessage = event.usage ?? tokenUsage;
         await this.createAssistantMessage(
           sessionId,
           messageId,
@@ -440,15 +492,27 @@ export class CodexTool implements ITool {
           event.toolUses,
           taskId,
           nextIndex++,
-          resolvedModel
+          resolvedModel,
+          usageForMessage
         );
         assistantMessageIds.push(messageId);
       }
     }
 
+    if (!contextWindow && tokenUsage) {
+      contextWindow = calculateCodexContextWindow(tokenUsage);
+    }
+    if (!contextWindowLimit) {
+      contextWindowLimit = getCodexContextWindowLimit(resolvedModel || DEFAULT_CODEX_MODEL);
+    }
+
     return {
       userMessageId: userMessage.message_id,
       assistantMessageIds,
+      tokenUsage,
+      contextWindow,
+      contextWindowLimit,
+      model: resolvedModel || DEFAULT_CODEX_MODEL,
     };
   }
 

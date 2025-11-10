@@ -20,7 +20,9 @@ import type { SessionMCPServerRepository } from '../../db/repositories/session-m
 import type { SessionRepository } from '../../db/repositories/sessions';
 import type { WorktreeRepository } from '../../db/repositories/worktrees';
 import type { PermissionMode, SessionID, TaskID } from '../../types';
+import type { TokenUsage } from '../../utils/pricing';
 import { DEFAULT_CODEX_MODEL } from './models';
+import { extractCodexTokenUsage } from './usage';
 
 export interface CodexPromptResult {
   /** Complete assistant response from Codex */
@@ -44,6 +46,10 @@ export interface CodexPromptResult {
   outputTokens: number;
   /** Agent SDK thread ID for conversation continuity */
   threadId: string;
+  /** Token usage (if provided by SDK) */
+  tokenUsage?: TokenUsage;
+  /** Resolved model for the turn */
+  resolvedModel?: string;
 }
 
 /**
@@ -92,6 +98,7 @@ export type CodexStreamEvent =
       }>;
       threadId: string;
       resolvedModel?: string;
+      usage?: TokenUsage;
     };
 
 export class CodexPromptService {
@@ -551,7 +558,7 @@ ${networkAccessToml}${mcpServersToml}`;
         is_error?: boolean;
       }> = [];
       let threadId = session.sdk_session_id || '';
-      let resolvedModel: string | undefined;
+      const resolvedModel: string | undefined = session.model_config?.model || undefined;
       let allToolUses: Array<{ id: string; name: string; input: Record<string, unknown> }> = [];
 
       for await (const event of events) {
@@ -648,6 +655,7 @@ ${networkAccessToml}${mcpServersToml}`;
           case 'turn.completed': {
             // Turn complete, emit final message
             threadId = thread.id || '';
+            const mappedUsage = extractCodexTokenUsage((event as { usage?: unknown }).usage);
 
             // Yield complete message with all tool uses
             yield {
@@ -656,6 +664,7 @@ ${networkAccessToml}${mcpServersToml}`;
               toolUses: allToolUses.length > 0 ? allToolUses : undefined,
               threadId,
               resolvedModel: resolvedModel || DEFAULT_CODEX_MODEL,
+              usage: mappedUsage,
             };
 
             // Reset for next message
@@ -664,14 +673,13 @@ ${networkAccessToml}${mcpServersToml}`;
             break;
           }
 
-          case 'turn.failed':
+          case 'turn.failed': {
             console.error('❌ Codex turn failed:', event.error);
             // Stringify error object for better user-facing error messages
             const errorMessage =
-              typeof event.error === 'string'
-                ? event.error
-                : JSON.stringify(event.error, null, 2);
+              typeof event.error === 'string' ? event.error : JSON.stringify(event.error, null, 2);
             throw new Error(`Codex execution failed: ${errorMessage}`);
+          }
 
           default:
             // Ignore other event types silently
@@ -704,8 +712,10 @@ ${networkAccessToml}${mcpServersToml}`;
     // Note: promptSessionStreaming will handle per-user API key resolution and refreshClient()
     const messages: CodexPromptResult['messages'] = [];
     let threadId = '';
-    const inputTokens = 0;
-    const outputTokens = 0;
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let tokenUsage: TokenUsage | undefined;
+    let resolvedModel: string | undefined;
 
     for await (const event of this.promptSessionStreaming(
       sessionId,
@@ -719,6 +729,12 @@ ${networkAccessToml}${mcpServersToml}`;
           toolUses: event.toolUses,
         });
         threadId = event.threadId;
+        resolvedModel = event.resolvedModel || resolvedModel;
+        if (event.usage) {
+          tokenUsage = event.usage;
+          inputTokens = event.usage.input_tokens ?? inputTokens;
+          outputTokens = event.usage.output_tokens ?? outputTokens;
+        }
       }
       // Skip partial events in non-streaming mode
     }
@@ -728,6 +744,8 @@ ${networkAccessToml}${mcpServersToml}`;
       inputTokens,
       outputTokens,
       threadId,
+      tokenUsage,
+      resolvedModel,
     };
   }
 
