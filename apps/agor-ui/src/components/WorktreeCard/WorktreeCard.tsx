@@ -409,21 +409,24 @@ const WorktreeCard = ({
     </div>
   );
 
+  const attentionGlowShadow = `
+    0 0 0 3px ${token.colorPrimary},
+    0 0 20px 4px ${token.colorPrimary}dd,
+    0 0 40px 8px ${token.colorPrimary}88,
+    0 0 60px 12px ${token.colorPrimary}44
+  `;
+
   return (
     <Card
       style={{
         width: 500,
         cursor: 'default', // Override React Flow's drag cursor - only drag handles should show grab cursor
+        transition: 'box-shadow 1s ease-in-out, border 1s ease-in-out',
+        boxShadow: needsAttention ? attentionGlowShadow : undefined,
         ...(isPinned && zoneColor ? { borderColor: zoneColor, borderWidth: 1 } : {}),
         ...(needsAttention
           ? {
               // Intense multi-layer glow for dark mode visibility
-              boxShadow: `
-                0 0 0 3px ${token.colorPrimary},
-                0 0 20px 4px ${token.colorPrimary}dd,
-                0 0 40px 8px ${token.colorPrimary}88,
-                0 0 60px 12px ${token.colorPrimary}44
-              `,
               animation: 'worktree-card-pulse 2s ease-in-out infinite',
               border: `2px solid ${token.colorPrimary}`,
             }
