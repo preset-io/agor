@@ -36,10 +36,10 @@ if (typeof document !== 'undefined' && !document.getElementById('worktree-card-a
   style.textContent = `
     @keyframes worktree-card-pulse {
       0%, 100% {
-        opacity: 1;
+        filter: brightness(1);
       }
       50% {
-        opacity: 0.8;
+        filter: brightness(1.3);
       }
     }
   `;
@@ -438,8 +438,15 @@ const WorktreeCard = ({
         ...(isPinned && zoneColor ? { borderColor: zoneColor, borderWidth: 1 } : {}),
         ...(needsAttention
           ? {
-              boxShadow: `0 0 0 2px ${token.colorPrimary}, 0 0 24px ${token.colorPrimary}40`,
+              // Intense multi-layer glow for dark mode visibility
+              boxShadow: `
+                0 0 0 3px ${token.colorPrimary},
+                0 0 20px 4px ${token.colorPrimary}dd,
+                0 0 40px 8px ${token.colorPrimary}88,
+                0 0 60px 12px ${token.colorPrimary}44
+              `,
               animation: 'worktree-card-pulse 2s ease-in-out infinite',
+              border: `2px solid ${token.colorPrimary}`,
             }
           : {}),
       }}

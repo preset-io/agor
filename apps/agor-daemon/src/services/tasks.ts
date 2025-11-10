@@ -90,6 +90,32 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   }
 
   /**
+   * Override patch to detect task completion and set ready_for_prompt
+   */
+  async patch(id: string, data: Partial<Task>, params?: TaskParams): Promise<Task> {
+    const result = await super.patch(id, data, params);
+
+    // If task is being marked as completed, set session's ready_for_prompt flag
+    if (data.status === TaskStatus.COMPLETED) {
+      const task = result as Task;
+      console.log(`[TasksService] Task ${id} marked as completed via patch, setting ready_for_prompt for session ${task.session_id}`);
+
+      if (task.session_id && this.app) {
+        try {
+          await this.app.service('sessions').patch(task.session_id, {
+            ready_for_prompt: true,
+          });
+          console.log(`✅ [TasksService] Set ready_for_prompt=true for session ${task.session_id}`);
+        } catch (error) {
+          console.error('❌ [TasksService] Failed to set ready_for_prompt flag:', error);
+        }
+      }
+    }
+
+    return result;
+  }
+
+  /**
    * Custom method: Get running tasks across all sessions
    */
   async getRunning(_params?: TaskParams): Promise<Task[]> {
@@ -122,14 +148,18 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     )) as Task;
 
     // Set the session's ready_for_prompt flag to true when task completes successfully
+    console.log(`[TasksService] Task ${id} completed, setting ready_for_prompt for session ${completedTask.session_id}`);
     if (completedTask.session_id && this.app) {
       try {
         await this.app.service('sessions').patch(completedTask.session_id, {
           ready_for_prompt: true,
         });
+        console.log(`✅ [TasksService] Set ready_for_prompt=true for session ${completedTask.session_id}`);
       } catch (error) {
-        console.warn('Failed to set ready_for_prompt flag:', error);
+        console.error('❌ [TasksService] Failed to set ready_for_prompt flag:', error);
       }
+    } else {
+      console.warn(`⚠️ [TasksService] Cannot set ready_for_prompt: session_id=${completedTask.session_id}, app=${!!this.app}`);
     }
 
     return completedTask;
