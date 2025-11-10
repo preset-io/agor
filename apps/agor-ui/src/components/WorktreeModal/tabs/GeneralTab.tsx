@@ -2,7 +2,7 @@ import type { Board, Repo, Session, Worktree } from '@agor/core/types';
 import { DeleteOutlined, FolderOutlined, LinkOutlined } from '@ant-design/icons';
 import { Button, Descriptions, Form, Input, message, Select, Space, Tag, Typography } from 'antd';
 import { useEffect, useState } from 'react';
-import { DeleteWorktreePopconfirm } from '../../DeleteWorktreePopconfirm';
+import { ArchiveDeleteWorktreeModal } from '../../ArchiveDeleteWorktreeModal';
 
 const { TextArea } = Input;
 
@@ -12,7 +12,13 @@ interface GeneralTabProps {
   sessions: Session[];
   boards?: Board[];
   onUpdate?: (worktreeId: string, updates: Partial<Worktree>) => void;
-  onDelete?: (worktreeId: string, deleteFromFilesystem: boolean) => void;
+  onArchiveOrDelete?: (
+    worktreeId: string,
+    options: {
+      metadataAction: 'archive' | 'delete';
+      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
+    }
+  ) => void;
   onClose?: () => void;
 }
 
@@ -22,7 +28,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
   sessions,
   boards = [],
   onUpdate,
-  onDelete,
+  onArchiveOrDelete,
   onClose,
 }) => {
   // Track if this is the initial mount to prevent overwriting user input
@@ -31,6 +37,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
   const [issueUrl, setIssueUrl] = useState(worktree.issue_url || '');
   const [prUrl, setPrUrl] = useState(worktree.pull_request_url || '');
   const [notes, setNotes] = useState(worktree.notes || '');
+  const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
 
   // Only sync local state on first mount, not on every prop change (to prevent overwriting user input)
   useEffect(() => {
@@ -73,8 +80,11 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
     setNotes(worktree.notes || '');
   };
 
-  const handleDelete = (deleteFromFilesystem: boolean) => {
-    onDelete?.(worktree.worktree_id, deleteFromFilesystem);
+  const handleArchiveOrDelete = (options: {
+    metadataAction: 'archive' | 'delete';
+    filesystemAction: 'preserved' | 'cleaned' | 'deleted';
+  }) => {
+    onArchiveOrDelete?.(worktree.worktree_id, options);
   };
 
   return (
@@ -197,17 +207,22 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
           <Button onClick={handleCancel} disabled={!hasChanges}>
             Cancel
           </Button>
-          <DeleteWorktreePopconfirm
-            worktree={worktree}
-            sessionCount={sessions.length}
-            onConfirm={handleDelete}
-          >
-            <Button danger icon={<DeleteOutlined />}>
-              Delete Worktree
-            </Button>
-          </DeleteWorktreePopconfirm>
+          <Button danger icon={<DeleteOutlined />} onClick={() => setArchiveDeleteModalOpen(true)}>
+            Archive/Delete Worktree
+          </Button>
           {/* TODO: Add "Open in Terminal" button once terminal integration is ready */}
         </Space>
+        <ArchiveDeleteWorktreeModal
+          open={archiveDeleteModalOpen}
+          worktree={worktree}
+          sessionCount={sessions.length}
+          environmentRunning={worktree.environment_instance?.status === 'running'}
+          onConfirm={options => {
+            handleArchiveOrDelete(options);
+            setArchiveDeleteModalOpen(false);
+          }}
+          onCancel={() => setArchiveDeleteModalOpen(false)}
+        />
       </Space>
     </div>
   );

@@ -251,7 +251,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         client={client}
         onUpdateWorktree={onUpdateWorktree}
         onUpdateRepo={onUpdateRepo}
-        onDelete={handleArchiveOrDeleteWorktreeWithClose}
+        onArchiveOrDelete={handleArchiveOrDeleteWorktreeWithClose}
         onOpenSettings={onClose} // Close worktree modal and keep settings modal open
       />
     </Modal>

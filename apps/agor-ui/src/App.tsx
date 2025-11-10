@@ -635,17 +635,22 @@ function AppContent() {
     }
   };
 
-  const handleDeleteWorktree = async (worktreeId: string, deleteFromFilesystem: boolean) => {
+  const handleArchiveOrDeleteWorktree = async (
+    worktreeId: string,
+    options: {
+      metadataAction: 'archive' | 'delete';
+      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
+    }
+  ) => {
     if (!client) return;
     try {
-      // Use worktrees service: DELETE /worktrees/:id with query parameter
-      await client.service('worktrees').remove(worktreeId, {
-        query: { deleteFromFilesystem },
-      });
-      message.success('Worktree deleted successfully!');
+      // Call the archiveOrDelete custom method on worktrees service
+      await client.service('worktrees').archiveOrDelete(worktreeId, options);
+      const action = options.metadataAction === 'archive' ? 'archived' : 'deleted';
+      message.success(`Worktree ${action} successfully!`);
     } catch (error) {
       message.error(
-        `Failed to delete worktree: ${error instanceof Error ? error.message : String(error)}`
+        `Failed to ${options.metadataAction} worktree: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   };
@@ -1025,7 +1030,7 @@ function AppContent() {
                 onCreateRepo={handleCreateRepo}
                 onUpdateRepo={handleUpdateRepo}
                 onDeleteRepo={handleDeleteRepo}
-                onDeleteWorktree={handleDeleteWorktree}
+                onArchiveOrDeleteWorktree={handleArchiveOrDeleteWorktree}
                 onUpdateWorktree={handleUpdateWorktree}
                 onCreateWorktree={handleCreateWorktree}
                 onStartEnvironment={handleStartEnvironment}

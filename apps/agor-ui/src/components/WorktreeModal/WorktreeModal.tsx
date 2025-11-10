@@ -18,7 +18,13 @@ export interface WorktreeModalProps {
   client: AgorClient | null;
   onUpdateWorktree?: (worktreeId: string, updates: Partial<Worktree>) => void;
   onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
-  onDelete?: (worktreeId: string, deleteFromFilesystem: boolean) => void;
+  onArchiveOrDelete?: (
+    worktreeId: string,
+    options: {
+      metadataAction: 'archive' | 'delete';
+      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
+    }
+  ) => void;
   onOpenSettings?: () => void; // Navigate to Settings → Repositories
 }
 
@@ -33,7 +39,7 @@ export const WorktreeModal: React.FC<WorktreeModalProps> = ({
   client,
   onUpdateWorktree,
   onUpdateRepo,
-  onDelete,
+  onArchiveOrDelete,
   onOpenSettings,
 }) => {
   const [activeTab, setActiveTab] = useState('general');
@@ -68,7 +74,7 @@ export const WorktreeModal: React.FC<WorktreeModalProps> = ({
                 sessions={sessions}
                 boards={boards}
                 onUpdate={onUpdateWorktree}
-                onDelete={onDelete}
+                onArchiveOrDelete={onArchiveOrDelete}
                 onClose={onClose}
               />
             ),

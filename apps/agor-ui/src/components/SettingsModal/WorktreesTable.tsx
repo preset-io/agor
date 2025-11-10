@@ -29,7 +29,7 @@ import {
   theme,
 } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { DeleteWorktreePopconfirm } from '../DeleteWorktreePopconfirm';
+import { ArchiveDeleteWorktreeModal } from '../ArchiveDeleteWorktreeModal';
 import { WorktreeFormFields } from '../WorktreeFormFields';
 
 interface WorktreesTableProps {
@@ -37,7 +37,13 @@ interface WorktreesTableProps {
   repos: Repo[];
   boards: import('@agor/core/types').Board[];
   sessions: Session[];
-  onDelete?: (worktreeId: string, deleteFromFilesystem: boolean) => void;
+  onArchiveOrDelete?: (
+    worktreeId: string,
+    options: {
+      metadataAction: 'archive' | 'delete';
+      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
+    }
+  ) => void;
   onCreate?: (
     repoId: string,
     data: {
@@ -59,7 +65,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
   repos,
   boards,
   sessions,
-  onDelete,
+  onArchiveOrDelete,
   onCreate,
   onRowClick,
   onStartEnvironment,
@@ -72,6 +78,8 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
   const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null);
   const [isFormValid, setIsFormValid] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
+  const [selectedWorktree, setSelectedWorktree] = useState<Worktree | null>(null);
 
   const reposById = useMemo(() => new Map(repos.map(repo => [repo.repo_id, repo])), [repos]);
 
@@ -196,8 +204,14 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
     form.setFieldValue('sourceBranch', defaultBranch);
   };
 
-  const handleDelete = (worktreeId: string, deleteFromFilesystem: boolean) => {
-    onDelete?.(worktreeId, deleteFromFilesystem);
+  const handleArchiveOrDelete = (
+    worktreeId: string,
+    options: {
+      metadataAction: 'archive' | 'delete';
+      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
+    }
+  ) => {
+    onArchiveOrDelete?.(worktreeId, options);
   };
 
   const handleCreate = async () => {
@@ -382,21 +396,17 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
               onRowClick?.(record);
             }}
           />
-          <DeleteWorktreePopconfirm
-            worktree={record}
-            sessionCount={sessions.filter(s => s.worktree_id === record.worktree_id).length}
-            onConfirm={deleteFromFilesystem =>
-              handleDelete(record.worktree_id, deleteFromFilesystem)
-            }
-          >
-            <Button
-              type="text"
-              size="small"
-              icon={<DeleteOutlined />}
-              danger
-              onClick={e => e.stopPropagation()}
-            />
-          </DeleteWorktreePopconfirm>
+          <Button
+            type="text"
+            size="small"
+            icon={<DeleteOutlined />}
+            danger
+            onClick={e => {
+              e.stopPropagation();
+              setSelectedWorktree(record);
+              setArchiveDeleteModalOpen(true);
+            }}
+          />
         </Space>
       ),
     },
@@ -546,6 +556,24 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
           />
         </Form>
       </Modal>
+
+      {selectedWorktree && (
+        <ArchiveDeleteWorktreeModal
+          open={archiveDeleteModalOpen}
+          worktree={selectedWorktree}
+          sessionCount={sessions.filter(s => s.worktree_id === selectedWorktree.worktree_id).length}
+          environmentRunning={selectedWorktree.environment_instance?.status === 'running'}
+          onConfirm={options => {
+            handleArchiveOrDelete(selectedWorktree.worktree_id, options);
+            setArchiveDeleteModalOpen(false);
+            setSelectedWorktree(null);
+          }}
+          onCancel={() => {
+            setArchiveDeleteModalOpen(false);
+            setSelectedWorktree(null);
+          }}
+        />
+      )}
     </div>
   );
 };
