@@ -77,29 +77,47 @@ export const CollapsibleText: React.FC<CollapsibleTextProps> = ({
     const computedStyle: React.CSSProperties = {
       ...style,
       ...(preserveWhitespace && { whiteSpace: 'pre-wrap' }),
-      ...(code && { fontFamily: 'monospace' }),
+      ...(code && {
+        fontFamily: 'Monaco, Menlo, Ubuntu Mono, Consolas, source-code-pro, monospace',
+        background: token.colorBgLayout,
+        padding: token.paddingSM,
+        borderRadius: token.borderRadius,
+        border: `1px solid ${token.colorBorder}`,
+      }),
       wordWrap: 'break-word',
     };
 
     return (
-      <div className={className} style={computedStyle}>
+      <pre className={className} style={computedStyle}>
         {children}
-      </div>
+      </pre>
     );
   }
 
   const displayContent = expanded ? children : lines.slice(0, maxLines).join('\n');
   const lineCount = lines.length;
 
-  const computedStyle: React.CSSProperties = {
+  const wrapperStyle: React.CSSProperties = code
+    ? {
+        background: token.colorBgLayout,
+        padding: token.paddingSM,
+        borderRadius: token.borderRadius,
+        border: `1px solid ${token.colorBorder}`,
+      }
+    : {};
+
+  const contentStyle: React.CSSProperties = {
     ...style,
     ...(preserveWhitespace && { whiteSpace: 'pre-wrap' }),
-    ...(code && { fontFamily: 'monospace' }),
+    ...(code && {
+      fontFamily: 'Monaco, Menlo, Ubuntu Mono, Consolas, source-code-pro, monospace',
+    }),
+    margin: 0,
   };
 
   return (
-    <div className={className} style={computedStyle}>
-      <div style={{ whiteSpace: 'pre-wrap', wordWrap: 'break-word' }}>{displayContent}</div>
+    <div className={className} style={wrapperStyle}>
+      <pre style={contentStyle}>{displayContent}</pre>
 
       <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
         {!expanded && (
