@@ -2,10 +2,19 @@ export default {
   index: 'Overview',
   'getting-started': 'Getting Started',
   concepts: 'Concepts',
-  architecture: 'Architecture',
+  '--- Features': {
+    type: 'separator',
+    title: 'Features',
+  },
   'internal-mcp': 'Agor MCP Server',
   scheduler: 'Scheduler',
-  development: 'Development Guide',
-  'environment-configuration': 'Environment Configuration',
+  'environment-configuration': 'Environments',
+  'advanced-features': 'Advanced Features',
+  architecture: 'Architecture',
   'sdk-comparison': 'SDK Comparison',
+  '--- Development': {
+    type: 'separator',
+    title: 'Development',
+  },
+  development: 'Development Guide',
 };

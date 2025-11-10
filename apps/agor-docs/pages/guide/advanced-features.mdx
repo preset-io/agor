@@ -1,0 +1,161 @@
+---
+title: Advanced Features
+description: Powerful productivity features in Agor - visual notifications, audio alerts, context tracking, and personalized configuration
+---
+
+# Advanced Features
+
+Power-user features to enhance your AI coding workflow. An image is worth a thousand words, so let's show you what's possible.
+
+---
+
+## 🎯 Worktree Highlighting
+
+**Never miss when an agent finishes working.** Worktree cards pulse with a teal glow when sessions are ready for your attention.
+
+![Worktree card with sessions](/screenshots/worktree_card_with_scheduled_sessions.png)
+
+**What you'll see:**
+- Pulsing teal glow around the entire card
+- Teal border on ready sessions within the tree
+- Animation automatically clears when you open the session
+
+**Pro tip:** The glow only appears when the session is NOT already open in the conversation drawer.
+
+---
+
+## 🔔 Task Completion Chimes
+
+**Hear when your agents finish working.** Set up audio notifications for long-running tasks so you can multitask.
+
+![Audio settings](/Settings.gif)
+
+**Quick setup:**
+1. Open Settings → Audio
+2. Enable chimes and choose a sound (7 options)
+3. Set volume (0-100%)
+4. Set minimum duration (0-60 seconds)
+
+**Available sounds:** Gentle Chime, Notification Bell, 8-Bit Coin, Retro Coin, Power-Up, You Got Mail, Success Tone
+
+**Pro tip:** Set min duration to 30s to only hear chimes for long tasks. Click Preview to test!
+
+---
+
+## 📊 Context Window Progression
+
+**See exactly how much context you're using.** Color-coded underlays show token consumption as you work through conversations.
+
+![Conversation with context indicators](/Convo.gif)
+
+![Context window static view](/screenshots/conversation_full_page.png)
+
+**Color guide:**
+- 🟢 **Green** (0-50%) - Plenty of room
+- 🟠 **Orange** (50-80%) - Getting full
+- 🔴 **Red** (80-100%) - Approaching limit
+
+**Pro tip:** Fork your session around 70-80% (orange) to start fresh while keeping context.
+
+---
+
+## ⚙️ User-Level Configuration
+
+**Personalize Agor without affecting teammates.** Set your own API keys, environment variables, and agent defaults.
+
+### API Keys
+
+![User settings modal](/screenshots/settings_modal.png)
+
+**Supports:** Anthropic, OpenAI, Gemini
+**Security:** AES-256-GCM encrypted at rest
+**Where:** Settings → User Profile or Agentic Tools
+
+**How it works:**
+- Enter keys in masked inputs
+- Green checkmark shows when key exists (without revealing value)
+- Falls back to workspace env vars if not set
+- Automatically injected into all your agent sessions
+
+### Environment Variables
+
+![Environment configuration](/screenshots/env_configuration.png)
+
+**Use for:** Database URLs, service credentials, API tokens, custom paths
+
+**Where:** Settings → Environment Variables
+
+### Agentic Tool Defaults
+
+![Session creation with tool config](/screenshots/create_session_modal.png)
+
+**Configure:**
+- **Permission mode** - bypassPermissions, acceptEdits, plan, ask, auto, on-failure
+- **Default model** - Sonnet 4.5, GPT-4o, Gemini Flash, etc.
+- **MCP servers** - Which tools to include
+
+**Where:** Create Session modal or Settings → Agentic Tools
+
+---
+
+## 💡 Power User Workflows
+
+### Long Task Workflow
+1. Set chime min duration → 30s
+2. Choose distinctive sound (Power-Up recommended)
+3. Start task, switch to another window/worktree
+4. Hear chime → see pulsing glow → review results
+
+### Context Management Strategy
+1. Watch context progression colors in conversations
+2. Fork at 70-80% usage (orange)
+3. Summarize learnings in forked session
+4. Use summary as context for fresh exploration
+
+### Multi-User Team Setup
+1. Each user sets their own API keys
+2. Configure personal env vars for dev databases
+3. Set individual permission modes based on trust level
+4. Work on shared boards without config conflicts
+
+---
+
+## 🎨 Visual Legend
+
+### Worktree Card States
+- **No border** - Idle, waiting
+- **Pulsing teal glow** - Ready for your attention
+- **Spinning icon** - Task actively running
+- **Zone color border** - Pinned to a workflow zone
+
+### Session States (in tree)
+- **White border** - Normal/idle session
+- **Teal border + background** - Ready for prompt
+- **Fork icon** - Forked from parent session
+- **Spawn icon** - Spawned subsession
+
+### Context Window Colors
+- **Green underlay** - Low usage (<50%)
+- **Orange underlay** - Medium usage (50-80%)
+- **Red underlay** - High usage (80-100%)
+
+---
+
+## ⌨️ Quick Access
+
+| Feature | Location |
+|---------|----------|
+| Audio settings | Settings → Audio tab |
+| API keys | Settings → User Profile |
+| Env variables | Settings → Environment Variables |
+| Agent defaults | Create Session → Advanced |
+| Context view | Open any conversation |
+
+---
+
+## 📚 Related Docs
+
+- [Concepts](/guide/concepts) - Understanding worktrees, sessions, and boards
+- [Environments](/guide/environment-configuration) - Dev environment setup
+- [Agor MCP Server](/guide/internal-mcp) - MCP integration and session tools
+- [SDK Comparison](/guide/sdk-comparison) - Claude vs Codex vs Gemini
