@@ -114,19 +114,20 @@ export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({ user, onUpda
                 const enabled = form.getFieldValue('enabled');
                 return (
                   <Form.Item
-                    name="chime"
                     label="Chime Sound"
                     tooltip="Choose your preferred notification sound"
                   >
                     <Space.Compact style={{ width: '100%' }}>
-                      <Select
-                        style={{ flex: 1 }}
-                        disabled={!enabled}
-                        options={getAvailableChimes().map((chime) => ({
-                          label: getChimeDisplayName(chime),
-                          value: chime,
-                        }))}
-                      />
+                      <Form.Item name="chime" noStyle>
+                        <Select
+                          style={{ flex: 1 }}
+                          disabled={!enabled}
+                          options={getAvailableChimes().map((chime) => ({
+                            label: getChimeDisplayName(chime),
+                            value: chime,
+                          }))}
+                        />
+                      </Form.Item>
                       <Button
                         icon={<PlayCircleOutlined />}
                         onClick={handlePreview}
