@@ -5,7 +5,7 @@
  */
 
 import type { AgorClient } from '@agor/core/api';
-import type { AgenticToolName, Session, SessionID } from '@agor/core/types';
+import type { AgenticToolName, PermissionMode, Session, SessionID } from '@agor/core/types';
 import { getDefaultPermissionMode, SessionStatus } from '@agor/core/types';
 import { useState } from 'react';
 import type { NewSessionConfig } from '../components/NewSessionModal';
@@ -51,10 +51,10 @@ export function useSessionActions(
 
       // Create session with worktree_id
       const agenticTool = config.agent as AgenticToolName;
-      const permissionMode =
+      const permissionMode: PermissionMode =
         config.permissionMode || getDefaultPermissionMode(agenticTool);
 
-      const permissionConfig: Session['permission_config'] = {
+      const permissionConfig: NonNullable<Session['permission_config']> = {
         mode: permissionMode,
       };
 

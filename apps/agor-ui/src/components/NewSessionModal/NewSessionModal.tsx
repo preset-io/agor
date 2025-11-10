@@ -3,6 +3,7 @@ import type {
   CodexApprovalPolicy,
   CodexSandboxMode,
   MCPServer,
+  PermissionMode,
   User,
   Worktree,
 } from '@agor/core/types';
@@ -28,7 +29,7 @@ export interface NewSessionConfig {
   // Advanced configuration
   modelConfig?: ModelConfig;
   mcpServerIds?: string[];
-  permissionMode?: string;
+  permissionMode?: PermissionMode;
   codexSandboxMode?: CodexSandboxMode;
   codexApprovalPolicy?: CodexApprovalPolicy;
   codexNetworkAccess?: boolean;
@@ -125,16 +126,19 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         // Use form values if present (user expanded advanced), otherwise use defaults
         modelConfig: values.modelConfig ?? agentDefaults?.modelConfig,
         mcpServerIds: values.mcpServerIds ?? agentDefaults?.mcpServerIds,
-        permissionMode: values.permissionMode ?? (agentDefaults?.permissionMode || getDefaultPermissionMode(selectedAgent as AgenticToolName)),
+        permissionMode:
+          (values.permissionMode as PermissionMode | undefined) ??
+          agentDefaults?.permissionMode ??
+          getDefaultPermissionMode(selectedAgent as AgenticToolName),
       };
 
       if (selectedAgent === 'codex') {
         config.codexSandboxMode =
-          values.codexSandboxMode ??
+          (values.codexSandboxMode as CodexSandboxMode | undefined) ??
           agentDefaults?.codexSandboxMode ??
           ('workspace-write' as CodexSandboxMode);
         config.codexApprovalPolicy =
-          values.codexApprovalPolicy ??
+          (values.codexApprovalPolicy as CodexApprovalPolicy | undefined) ??
           agentDefaults?.codexApprovalPolicy ??
           ('on-request' as CodexApprovalPolicy);
         config.codexNetworkAccess =
