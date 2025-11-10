@@ -392,26 +392,46 @@ export const AgentChain: React.FC<AgentChainProps> = ({ messages }) => {
         />
       );
 
-      // Build additional details line (e.g., command for Bash)
-      let detailsLine: string | null = null;
+      // Build title with inline command/pattern for Bash, Grep, Glob
+      let titleContent: React.ReactNode;
       if (toolUse.name === 'Bash' && toolUse.input.command) {
-        detailsLine = String(toolUse.input.command);
-      } else if (['Read', 'Write', 'Edit'].includes(toolUse.name) && toolUse.input.file_path) {
-        // For file operations, show full path as details
-        detailsLine = String(toolUse.input.file_path);
+        titleContent = (
+          <span style={{ cursor: 'help' }}>
+            <strong>Bash</strong>: <code>{String(toolUse.input.command)}</code>
+          </span>
+        );
       } else if (toolUse.name === 'Grep' && toolUse.input.pattern) {
-        detailsLine = `Pattern: ${toolUse.input.pattern}`;
+        titleContent = (
+          <span style={{ cursor: 'help' }}>
+            <strong>Grep</strong>: <code>{String(toolUse.input.pattern)}</code>
+          </span>
+        );
       } else if (toolUse.name === 'Glob' && toolUse.input.pattern) {
-        detailsLine = `Pattern: ${toolUse.input.pattern}`;
+        titleContent = (
+          <span style={{ cursor: 'help' }}>
+            <strong>Glob</strong>: <code>{String(toolUse.input.pattern)}</code>
+          </span>
+        );
+      } else {
+        // Default: tool name with optional description
+        titleContent = (
+          <span style={{ cursor: 'help' }}>
+            <strong>{toolUse.name}</strong>
+            {description && <>: {description}</>}
+          </span>
+        );
+      }
+
+      // Additional details line for file operations
+      let detailsLine: string | null = null;
+      if (['Read', 'Write', 'Edit'].includes(toolUse.name) && toolUse.input.file_path) {
+        detailsLine = String(toolUse.input.file_path);
       }
 
       return {
         title: (
           <Tooltip title={tooltipContent} placement="right" mouseEnterDelay={0.3}>
-            <span style={{ cursor: 'help' }}>
-              <strong>{toolUse.name}</strong>
-              {description && <>: {description}</>}
-            </span>
+            {titleContent}
           </Tooltip>
         ),
         description: detailsLine ? (

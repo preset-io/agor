@@ -14,7 +14,7 @@ import { CollapsibleAnsiText } from '../../CollapsibleText/CollapsibleAnsiText';
 import { CollapsibleText } from '../../CollapsibleText';
 import type { ToolRendererProps } from './index';
 
-export const BashRenderer: React.FC<ToolRendererProps> = ({ input, result }) => {
+export const BashRenderer: React.FC<ToolRendererProps> = ({ input, result, compact }) => {
   const { token } = theme.useToken();
   const command = input.command as string | undefined;
   const isError = result?.is_error;
@@ -46,20 +46,6 @@ export const BashRenderer: React.FC<ToolRendererProps> = ({ input, result }) => 
 
   return (
     <div>
-      {/* Header with command */}
-      {command && (
-        <div
-          style={{
-            fontSize: token.fontSizeSM,
-            color: token.colorTextSecondary,
-            marginBottom: token.sizeUnit,
-            fontFamily: 'Monaco, Menlo, Ubuntu Mono, Consolas, source-code-pro, monospace',
-          }}
-        >
-          <strong>Bash</strong> ({command})
-        </div>
-      )}
-
       {/* Output with code block styling */}
       {result && (
         <div
