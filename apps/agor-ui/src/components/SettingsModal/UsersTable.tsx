@@ -21,7 +21,7 @@ import {
   Tag,
   Typography,
 } from 'antd';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
 import { ApiKeyFields, type ApiKeyStatus } from '../ApiKeyFields';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
@@ -82,10 +82,52 @@ export const UsersTable: React.FC<UsersTableProps> = ({
     opencode: false,
   });
 
+  const handleEdit = useCallback(
+    (user: User) => {
+      setEditingUser(user);
+      setActiveTab('general'); // Reset to general tab
+
+      form.setFieldsValue({
+        email: user.email,
+        name: user.name,
+        emoji: user.emoji,
+        role: user.role,
+      });
+
+      // Initialize agentic tool forms with user's defaults
+      const defaults = user.default_agentic_config;
+
+      claudeForm.setFieldsValue({
+        permissionMode:
+          defaults?.['claude-code']?.permissionMode || getDefaultPermissionMode('claude-code'),
+        modelConfig: defaults?.['claude-code']?.modelConfig,
+        mcpServerIds: defaults?.['claude-code']?.mcpServerIds || [],
+      });
+
+      codexForm.setFieldsValue({
+        permissionMode: defaults?.codex?.permissionMode || getDefaultPermissionMode('codex'),
+        modelConfig: defaults?.codex?.modelConfig,
+        mcpServerIds: defaults?.codex?.mcpServerIds || [],
+        codexSandboxMode: defaults?.codex?.codexSandboxMode,
+        codexApprovalPolicy: defaults?.codex?.codexApprovalPolicy,
+        codexNetworkAccess: defaults?.codex?.codexNetworkAccess,
+      });
+
+      geminiForm.setFieldsValue({
+        permissionMode: defaults?.gemini?.permissionMode || getDefaultPermissionMode('gemini'),
+        modelConfig: defaults?.gemini?.modelConfig,
+        mcpServerIds: defaults?.gemini?.mcpServerIds || [],
+      });
+
+      setEditModalOpen(true);
+    },
+    [form, claudeForm, codexForm, geminiForm]
+  );
+
   // Auto-open edit modal if editUserId is provided
   useEffect(() => {
     if (editUserId) {
-      const userToEdit = users.find((u) => u.user_id === editUserId);
+      const userToEdit = users.find(u => u.user_id === editUserId);
       if (userToEdit) {
         handleEdit(userToEdit);
         setEditModalOpen(true);
@@ -121,7 +163,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
   };
 
   const handleCreate = () => {
-    form.validateFields().then((values) => {
+    form.validateFields().then(values => {
       onCreate?.({
         email: values.email,
         password: values.password,
@@ -132,45 +174,6 @@ export const UsersTable: React.FC<UsersTableProps> = ({
       form.resetFields();
       setCreateModalOpen(false);
     });
-  };
-
-  const handleEdit = (user: User) => {
-    setEditingUser(user);
-    setActiveTab('general'); // Reset to general tab
-
-    form.setFieldsValue({
-      email: user.email,
-      name: user.name,
-      emoji: user.emoji,
-      role: user.role,
-    });
-
-    // Initialize agentic tool forms with user's defaults
-    const defaults = user.default_agentic_config;
-
-    claudeForm.setFieldsValue({
-      permissionMode:
-        defaults?.['claude-code']?.permissionMode || getDefaultPermissionMode('claude-code'),
-      modelConfig: defaults?.['claude-code']?.modelConfig,
-      mcpServerIds: defaults?.['claude-code']?.mcpServerIds || [],
-    });
-
-    codexForm.setFieldsValue({
-      permissionMode: defaults?.codex?.permissionMode || getDefaultPermissionMode('codex'),
-      modelConfig: defaults?.codex?.modelConfig,
-      mcpServerIds: defaults?.codex?.mcpServerIds || [],
-      codexSandboxMode: defaults?.codex?.codexSandboxMode,
-      codexApprovalPolicy: defaults?.codex?.codexApprovalPolicy,
-      codexNetworkAccess: defaults?.codex?.codexNetworkAccess,
-    });
-
-    geminiForm.setFieldsValue({
-      permissionMode: defaults?.gemini?.permissionMode || getDefaultPermissionMode('gemini'),
-      modelConfig: defaults?.gemini?.modelConfig,
-      mcpServerIds: defaults?.gemini?.mcpServerIds || [],
-    });
-
-    setEditModalOpen(true);
   };
 
   const handleUpdate = () => {
@@ -196,7 +199,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
         setEditModalOpen(false);
         setEditingUser(null);
       })
-      .catch((err) => {
+      .catch(err => {
         console.error('Validation failed:', err);
       });
   };
@@ -206,7 +209,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
     if (!editingUser) return;
 
     try {
-      setSavingApiKeys((prev) => ({ ...prev, [field]: true }));
+      setSavingApiKeys(prev => ({ ...prev, [field]: true }));
 
       // Update user via onUpdate callback
       await onUpdate?.(editingUser.user_id, {
@@ -216,12 +219,12 @@ export const UsersTable: React.FC<UsersTableProps> = ({
       });
 
       // Update local state
-      setUserApiKeyStatus((prev) => ({ ...prev, [field]: true }));
+      setUserApiKeyStatus(prev => ({ ...prev, [field]: true }));
     } catch (err) {
       console.error(`Failed to save ${field}:`, err);
       throw err;
     } finally {
-      setSavingApiKeys((prev) => ({ ...prev, [field]: false }));
+      setSavingApiKeys(prev => ({ ...prev, [field]: false }));
     }
   };
 
@@ -230,7 +233,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
     if (!editingUser) return;
 
     try {
-      setSavingApiKeys((prev) => ({ ...prev, [field]: true }));
+      setSavingApiKeys(prev => ({ ...prev, [field]: true }));
 
       // Update user via onUpdate callback
       await onUpdate?.(editingUser.user_id, {
@@ -240,12 +243,12 @@ export const UsersTable: React.FC<UsersTableProps> = ({
       });
 
       // Update local state
-      setUserApiKeyStatus((prev) => ({ ...prev, [field]: false }));
+      setUserApiKeyStatus(prev => ({ ...prev, [field]: false }));
     } catch (err) {
       console.error(`Failed to clear ${field}:`, err);
       throw err;
     } finally {
-      setSavingApiKeys((prev) => ({ ...prev, [field]: false }));
+      setSavingApiKeys(prev => ({ ...prev, [field]: false }));
     }
   };
 
@@ -254,16 +257,16 @@ export const UsersTable: React.FC<UsersTableProps> = ({
     if (!editingUser) return;
 
     try {
-      setSavingEnvVars((prev) => ({ ...prev, [key]: true }));
+      setSavingEnvVars(prev => ({ ...prev, [key]: true }));
       await onUpdate?.(editingUser.user_id, {
         env_vars: { [key]: value },
       });
-      setUserEnvVars((prev) => ({ ...prev, [key]: true }));
+      setUserEnvVars(prev => ({ ...prev, [key]: true }));
     } catch (err) {
       console.error(`Failed to save ${key}:`, err);
       throw err;
     } finally {
-      setSavingEnvVars((prev) => ({ ...prev, [key]: false }));
+      setSavingEnvVars(prev => ({ ...prev, [key]: false }));
     }
   };
 
@@ -272,11 +275,11 @@ export const UsersTable: React.FC<UsersTableProps> = ({
     if (!editingUser) return;
 
     try {
-      setSavingEnvVars((prev) => ({ ...prev, [key]: true }));
+      setSavingEnvVars(prev => ({ ...prev, [key]: true }));
       await onUpdate?.(editingUser.user_id, {
         env_vars: { [key]: null },
       });
-      setUserEnvVars((prev) => {
+      setUserEnvVars(prev => {
         const updated = { ...prev };
         delete updated[key];
         return updated;
@@ -285,7 +288,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
       console.error(`Failed to delete ${key}:`, err);
       throw err;
     } finally {
-      setSavingEnvVars((prev) => ({ ...prev, [key]: false }));
+      setSavingEnvVars(prev => ({ ...prev, [key]: false }));
     }
   };
 
@@ -303,7 +306,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
     const currentForm = formMap[tool];
 
     try {
-      setSavingAgenticConfig((prev) => ({ ...prev, [tool]: true }));
+      setSavingAgenticConfig(prev => ({ ...prev, [tool]: true }));
 
       const values = currentForm.getFieldsValue();
 
@@ -333,7 +336,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
       console.error(`Failed to save ${tool} config:`, err);
       throw err;
     } finally {
-      setSavingAgenticConfig((prev) => ({ ...prev, [tool]: false }));
+      setSavingAgenticConfig(prev => ({ ...prev, [tool]: false }));
     }
   };
 
