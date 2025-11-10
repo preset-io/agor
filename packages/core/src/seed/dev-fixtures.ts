@@ -124,6 +124,7 @@ export async function seedDevFixtures(options: SeedOptions = {}): Promise<SeedRe
     worktree_unique_id: worktreeUniqueId,
     created_by: userId,
     board_id: defaultBoard.board_id,
+    needs_attention: false,
   });
 
   console.log(`   ✓ Created worktree: ${worktree.name} (${worktree.worktree_id})`);
