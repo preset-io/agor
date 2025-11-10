@@ -53,6 +53,7 @@ interface WorktreeCardProps {
   tasks: Record<string, Task[]>;
   users: User[];
   currentUserId?: string;
+  selectedSessionId?: string | null; // Currently open session in drawer
   onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
   onCreateSession?: (worktreeId: string) => void;
@@ -142,9 +143,11 @@ const WorktreeCard = ({
   const hasRunningSession = useMemo(() => sessions.some(s => s.status === 'running'), [sessions]);
 
   // Check if worktree needs attention (newly created OR has ready sessions)
+  // Don't highlight if a session from this worktree is currently open in the drawer
   const needsAttention = useMemo(() => {
     const hasReadySession = sessions.some(s => s.ready_for_prompt === true);
-    const shouldHighlight = worktree.needs_attention || hasReadySession;
+    const hasOpenSession = sessions.some(s => s.session_id === props.selectedSessionId);
+    const shouldHighlight = (worktree.needs_attention || hasReadySession) && !hasOpenSession;
 
     console.log('[WorktreeCard] Checking attention state:', {
       worktreeName: worktree.name,
@@ -155,10 +158,12 @@ const WorktreeCard = ({
         status: s.status,
       })),
       hasReadySession,
+      hasOpenSession,
+      selectedSessionId: props.selectedSessionId?.substring(0, 8),
       shouldHighlight,
     });
     return shouldHighlight;
-  }, [sessions, worktree.name, worktree.needs_attention]);
+  }, [sessions, worktree.name, worktree.needs_attention, props.selectedSessionId]);
 
   // Auto-expand all nodes on mount and when new nodes with children are added
   useEffect(() => {

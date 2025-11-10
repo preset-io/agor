@@ -16,6 +16,7 @@ interface UseBoardObjectsProps {
   setNodes: React.Dispatch<React.SetStateAction<Node[]>>;
   deletedObjectsRef: React.MutableRefObject<Set<string>>;
   eraserMode?: boolean;
+  selectedSessionId?: string | null;
 }
 
 export const useBoardObjects = ({
@@ -27,6 +28,7 @@ export const useBoardObjects = ({
   setNodes,
   deletedObjectsRef,
   eraserMode = false,
+  selectedSessionId,
 }: UseBoardObjectsProps) => {
   // Use ref to avoid recreating callbacks when board changes
   const boardRef = useRef(board);

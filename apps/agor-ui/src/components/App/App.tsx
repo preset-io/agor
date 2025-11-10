@@ -442,6 +442,7 @@ export const App: React.FC<AppProps> = ({
             boardObjects={boardObjects}
             comments={comments}
             currentUserId={user?.user_id}
+            selectedSessionId={selectedSessionId}
             availableAgents={availableAgents}
             mcpServers={mcpServers}
             sessionMcpServerIds={sessionMcpServerIds}
@@ -507,7 +508,10 @@ export const App: React.FC<AppProps> = ({
         mcpServers={mcpServers}
         sessionMcpServerIds={selectedSessionId ? sessionMcpServerIds[selectedSessionId] || [] : []}
         open={!!selectedSessionId}
-        onClose={() => setSelectedSessionId(null)}
+        onClose={() => {
+          setSelectedSessionId(null);
+          // Note: highlight flags already cleared in handleSessionClick when drawer opened
+        }}
         onSendPrompt={handleSendPrompt}
         onFork={handleFork}
         onSubsession={handleSubsession}
