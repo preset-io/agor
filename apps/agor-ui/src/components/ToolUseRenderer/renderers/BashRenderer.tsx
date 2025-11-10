@@ -14,7 +14,7 @@ import { CollapsibleAnsiText } from '../../CollapsibleText/CollapsibleAnsiText';
 import { CollapsibleText } from '../../CollapsibleText';
 import type { ToolRendererProps } from './index';
 
-export const BashRenderer: React.FC<ToolRendererProps> = ({ input, result, compact }) => {
+export const BashRenderer: React.FC<ToolRendererProps> = ({ input, result }) => {
   const { token } = theme.useToken();
   const command = input.command as string | undefined;
   const isError = result?.is_error;
