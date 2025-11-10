@@ -87,6 +87,7 @@ import {
   getContextWindowLimit,
   getSessionContextUsage,
 } from '@agor/core/utils/context-window';
+import { NotFoundError } from '@agor/core/utils/errors';
 import type { TokenUsage } from '@agor/core/utils/pricing';
 // Import Claude SDK's PermissionMode type for ClaudeTool method signatures
 // (Agor's PermissionMode is a superset of all tool permission modes)
@@ -1642,7 +1643,12 @@ async function main() {
       await service.patch(id, data);
       return true;
     } catch (error) {
-      if (error instanceof Error && error.message.includes('No record found')) {
+      // Handle entity deletion mid-execution (NotFoundError from DrizzleService)
+      // This can happen when worktree → session → task cascade deletes occur
+      if (
+        error instanceof NotFoundError ||
+        (error instanceof Error && error.message.includes('No record found'))
+      ) {
         console.log(
           `⚠️  ${entityType} ${id.substring(0, 8)} was deleted mid-execution - skipping update`
         );
@@ -1662,7 +1668,11 @@ async function main() {
     try {
       return await service.get(id);
     } catch (error) {
-      if (error instanceof Error && error.message.includes('No record found')) {
+      // Handle NotFoundError or legacy error messages
+      if (
+        error instanceof NotFoundError ||
+        (error instanceof Error && error.message.includes('No record found'))
+      ) {
         return null;
       }
       throw error;
@@ -2089,6 +2099,17 @@ async function main() {
                     );
                   }
                 } catch (error) {
+                  // Handle task deletion mid-execution (e.g., worktree deleted during execution)
+                  // This can happen when:
+                  // 1. User deletes worktree while session is running
+                  // 2. Database cascade: worktree → session → task (all deleted)
+                  // 3. Task completion tries to check status but task is gone
+                  if (error instanceof NotFoundError) {
+                    console.log(
+                      `⚠️  Task ${task.task_id.substring(0, 8)} was deleted mid-execution (likely worktree deleted) - skipping queue processing`
+                    );
+                    return;
+                  }
                   console.error(`❌ Error processing queued message for session ${id}:`, error);
                 }
               });
