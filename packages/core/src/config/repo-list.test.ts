@@ -65,6 +65,7 @@ describe('getRepoReferenceOptions', () => {
         updated_at: new Date('2024-01-01').toISOString(),
         last_used: new Date('2024-01-01').toISOString(),
         schedule_enabled: false,
+        needs_attention: false,
       },
     ];
 
@@ -118,6 +119,7 @@ describe('getRepoReferenceOptions', () => {
         updated_at: new Date('2024-01-01').toISOString(),
         last_used: new Date('2024-01-01').toISOString(),
         schedule_enabled: false,
+        needs_attention: false,
       },
       {
         worktree_id: 'wt_01933e4c5678a8f39d2e1c4b5a6f7c35' as UUID,
@@ -133,6 +135,7 @@ describe('getRepoReferenceOptions', () => {
         updated_at: new Date('2024-01-01').toISOString(),
         last_used: new Date('2024-01-01').toISOString(),
         schedule_enabled: false,
+        needs_attention: false,
       },
       {
         worktree_id: 'wt_01934c2e9012a8f39d2e1c4b5a6f7c35' as UUID,
@@ -148,6 +151,7 @@ describe('getRepoReferenceOptions', () => {
         updated_at: new Date('2024-01-01').toISOString(),
         last_used: new Date('2024-01-01').toISOString(),
         schedule_enabled: false,
+        needs_attention: false,
       },
     ];
 
@@ -199,6 +203,7 @@ describe('getRepoReferenceOptions', () => {
         updated_at: new Date('2024-01-01').toISOString(),
         last_used: new Date('2024-01-01').toISOString(),
         schedule_enabled: false,
+        needs_attention: false,
       },
       {
         worktree_id: 'wt_orphaned1234a8f39d2e1c4b5a6f7c35' as UUID,
@@ -214,6 +219,7 @@ describe('getRepoReferenceOptions', () => {
         updated_at: new Date('2024-01-01').toISOString(),
         last_used: new Date('2024-01-01').toISOString(),
         schedule_enabled: false,
+        needs_attention: false,
       },
     ];
 
@@ -282,6 +288,7 @@ describe('getRepoReferenceOptions', () => {
         updated_at: new Date('2024-01-01').toISOString(),
         last_used: new Date('2024-01-01').toISOString(),
         schedule_enabled: false,
+        needs_attention: false,
       },
     ];
 
@@ -319,6 +326,7 @@ describe('getRepoReferenceOptions', () => {
         updated_at: new Date('2024-01-01').toISOString(),
         last_used: new Date('2024-01-01').toISOString(),
         schedule_enabled: false,
+        needs_attention: false,
       },
     ];
 
@@ -420,6 +428,7 @@ describe('getGroupedRepoReferenceOptions', () => {
         updated_at: new Date('2024-01-01').toISOString(),
         last_used: new Date('2024-01-01').toISOString(),
         schedule_enabled: false,
+        needs_attention: false,
       },
       {
         worktree_id: 'wt_01933e4c5678a8f39d2e1c4b5a6f7c35' as UUID,
@@ -435,6 +444,7 @@ describe('getGroupedRepoReferenceOptions', () => {
         updated_at: new Date('2024-01-01').toISOString(),
         last_used: new Date('2024-01-01').toISOString(),
         schedule_enabled: false,
+        needs_attention: false,
       },
     ];
 
@@ -485,6 +495,7 @@ describe('getGroupedRepoReferenceOptions', () => {
         updated_at: new Date('2024-01-01').toISOString(),
         last_used: new Date('2024-01-01').toISOString(),
         schedule_enabled: false,
+        needs_attention: false,
       },
       {
         worktree_id: 'wt_superset_main' as UUID,
@@ -500,6 +511,7 @@ describe('getGroupedRepoReferenceOptions', () => {
         updated_at: new Date('2024-01-01').toISOString(),
         last_used: new Date('2024-01-01').toISOString(),
         schedule_enabled: false,
+        needs_attention: false,
       },
     ];
 
@@ -539,6 +551,7 @@ describe('getGroupedRepoReferenceOptions', () => {
         updated_at: new Date('2024-01-01').toISOString(),
         last_used: new Date('2024-01-01').toISOString(),
         schedule_enabled: false,
+        needs_attention: false,
       },
       {
         worktree_id: 'wt_orphan' as UUID,
@@ -554,6 +567,7 @@ describe('getGroupedRepoReferenceOptions', () => {
         updated_at: new Date('2024-01-01').toISOString(),
         last_used: new Date('2024-01-01').toISOString(),
         schedule_enabled: false,
+        needs_attention: false,
       },
     ];
 
@@ -622,6 +636,7 @@ describe('getGroupedRepoReferenceOptions', () => {
         updated_at: new Date('2024-01-01').toISOString(),
         last_used: new Date('2024-01-01').toISOString(),
         schedule_enabled: false,
+        needs_attention: false,
       },
     ];
 
@@ -659,6 +674,7 @@ describe('getGroupedRepoReferenceOptions', () => {
         updated_at: new Date('2024-01-01').toISOString(),
         last_used: new Date('2024-01-01').toISOString(),
         schedule_enabled: false,
+        needs_attention: false,
       },
     ];
 

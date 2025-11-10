@@ -79,6 +79,7 @@ const WorktreeCard = ({
   tasks,
   users,
   currentUserId,
+  selectedSessionId,
   onTaskClick,
   onSessionClick,
   onCreateSession,
@@ -146,7 +147,7 @@ const WorktreeCard = ({
   // Don't highlight if a session from this worktree is currently open in the drawer
   const needsAttention = useMemo(() => {
     const hasReadySession = sessions.some(s => s.ready_for_prompt === true);
-    const hasOpenSession = sessions.some(s => s.session_id === props.selectedSessionId);
+    const hasOpenSession = sessions.some(s => s.session_id === selectedSessionId);
     const shouldHighlight = (worktree.needs_attention || hasReadySession) && !hasOpenSession;
 
     console.log('[WorktreeCard] Checking attention state:', {
@@ -159,11 +160,11 @@ const WorktreeCard = ({
       })),
       hasReadySession,
       hasOpenSession,
-      selectedSessionId: props.selectedSessionId?.substring(0, 8),
+      selectedSessionId: selectedSessionId?.substring(0, 8),
       shouldHighlight,
     });
     return shouldHighlight;
-  }, [sessions, worktree.name, worktree.needs_attention, props.selectedSessionId]);
+  }, [sessions, worktree.name, worktree.needs_attention, selectedSessionId]);
 
   // Auto-expand all nodes on mount and when new nodes with children are added
   useEffect(() => {
@@ -234,16 +235,12 @@ const WorktreeCard = ({
             : `1px solid rgba(255, 255, 255, 0.1)`,
           borderRadius: 4,
           padding: 8,
-          background: session.ready_for_prompt
-            ? `${token.colorPrimary}15`
-            : 'rgba(0, 0, 0, 0.2)',
+          background: session.ready_for_prompt ? `${token.colorPrimary}15` : 'rgba(0, 0, 0, 0.2)',
           display: 'flex',
           alignItems: 'center',
           cursor: 'pointer',
           marginBottom: 4,
-          boxShadow: session.ready_for_prompt
-            ? `0 0 12px ${token.colorPrimary}30`
-            : undefined,
+          boxShadow: session.ready_for_prompt ? `0 0 12px ${token.colorPrimary}30` : undefined,
         }}
         onClick={() => onSessionClick?.(session.session_id)}
         onContextMenu={e => {

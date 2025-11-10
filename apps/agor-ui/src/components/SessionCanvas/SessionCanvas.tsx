@@ -212,6 +212,7 @@ const SessionCanvas = ({
   tasks,
   users,
   currentUserId,
+  selectedSessionId,
   availableAgents = [],
   mcpServers = [],
   sessionMcpServerIds = {},
