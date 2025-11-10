@@ -43,6 +43,7 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
       schedule_cron: row.schedule_cron ?? undefined,
       schedule_last_triggered_at: row.schedule_last_triggered_at ?? undefined,
       schedule_next_run_at: row.schedule_next_run_at ?? undefined,
+      needs_attention: Boolean(row.needs_attention), // Convert SQLite integer (0/1) to boolean
       ...row.data,
     };
   }
@@ -75,6 +76,7 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
       schedule_cron: worktree.schedule_cron ?? null,
       schedule_last_triggered_at: worktree.schedule_last_triggered_at ?? null,
       schedule_next_run_at: worktree.schedule_next_run_at ?? null,
+      needs_attention: worktree.needs_attention ?? true, // Default true for new worktrees
       data: {
         path: worktree.path!,
         base_ref: worktree.base_ref,

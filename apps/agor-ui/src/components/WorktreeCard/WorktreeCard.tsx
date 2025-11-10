@@ -141,11 +141,24 @@ const WorktreeCard = ({
   // Check if any session is running
   const hasRunningSession = useMemo(() => sessions.some(s => s.status === 'running'), [sessions]);
 
-  // Check if any session is ready for a new prompt (needs attention)
-  const hasReadySession = useMemo(
-    () => sessions.some(s => s.ready_for_prompt === true),
-    [sessions]
-  );
+  // Check if worktree needs attention (newly created OR has ready sessions)
+  const needsAttention = useMemo(() => {
+    const hasReadySession = sessions.some(s => s.ready_for_prompt === true);
+    const shouldHighlight = worktree.needs_attention || hasReadySession;
+
+    console.log('[WorktreeCard] Checking attention state:', {
+      worktreeName: worktree.name,
+      worktreeNeedsAttention: worktree.needs_attention,
+      sessions: sessions.map(s => ({
+        id: s.session_id.substring(0, 8),
+        ready_for_prompt: s.ready_for_prompt,
+        status: s.status,
+      })),
+      hasReadySession,
+      shouldHighlight,
+    });
+    return shouldHighlight;
+  }, [sessions, worktree.name, worktree.needs_attention]);
 
   // Auto-expand all nodes on mount and when new nodes with children are added
   useEffect(() => {
@@ -407,13 +420,23 @@ const WorktreeCard = ({
     </div>
   );
 
+  // Debug: Log when needsAttention changes
+  useEffect(() => {
+    if (needsAttention) {
+      console.log('[WorktreeCard] 🌟 HIGHLIGHTING CARD:', {
+        worktreeName: worktree.name,
+        colorPrimary: token.colorPrimary,
+      });
+    }
+  }, [needsAttention, worktree.name, token.colorPrimary]);
+
   return (
     <Card
       style={{
         width: 500,
         cursor: 'default', // Override React Flow's drag cursor - only drag handles should show grab cursor
         ...(isPinned && zoneColor ? { borderColor: zoneColor, borderWidth: 1 } : {}),
-        ...(hasReadySession
+        ...(needsAttention
           ? {
               boxShadow: `0 0 0 2px ${token.colorPrimary}, 0 0 24px ${token.colorPrimary}40`,
               animation: 'worktree-card-pulse 2s ease-in-out infinite',

@@ -197,6 +197,20 @@ export interface Worktree {
    */
   custom_context?: Record<string, unknown>;
 
+  // ===== UI State =====
+
+  /**
+   * Whether this worktree needs attention (highlighted state)
+   *
+   * Set to true when:
+   * - Worktree is newly created
+   * - Any session in the worktree has ready_for_prompt=true
+   *
+   * Cleared when user interacts with the worktree card.
+   * Used to draw attention to new or ready worktrees on the board.
+   */
+  needs_attention: boolean;
+
   // ===== Scheduler Configuration =====
 
   /**

@@ -363,6 +363,9 @@ export const worktrees = sqliteTable(
     schedule_last_triggered_at: integer('schedule_last_triggered_at'), // Unix timestamp (ms)
     schedule_next_run_at: integer('schedule_next_run_at'), // Unix timestamp (ms)
 
+    // UI state (materialized for efficient highlighting queries)
+    needs_attention: integer('needs_attention', { mode: 'boolean' }).notNull().default(true), // Default true for new worktrees
+
     // JSON blob for everything else
     data: text('data', { mode: 'json' })
       .$type<{

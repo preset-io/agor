@@ -259,6 +259,12 @@ export const App: React.FC<AppProps> = ({
     if (session?.ready_for_prompt) {
       onUpdateSession?.(sessionId, { ready_for_prompt: false });
     }
+
+    // Clear the worktree's needs_attention flag when user interacts with it
+    const worktree = worktrees.find(w => w.worktree_id === session?.worktree_id);
+    if (worktree?.needs_attention) {
+      onUpdateWorktree?.(worktree.worktree_id, { needs_attention: false });
+    }
   };
 
   const handleSendPrompt = async (prompt: string, permissionMode?: PermissionMode) => {

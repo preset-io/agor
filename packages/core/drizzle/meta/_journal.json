@@ -50,6 +50,13 @@
       "when": 1762564000000,
       "tag": "0006_add_ready_for_prompt",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1762565000000,
+      "tag": "0007_add_needs_attention",
+      "breakpoints": true
     }
   ]
 }
