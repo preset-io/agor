@@ -1,4 +1,11 @@
-import type { AgenticToolName, MCPServer, User, Worktree } from '@agor/core/types';
+import type {
+  AgenticToolName,
+  CodexApprovalPolicy,
+  CodexSandboxMode,
+  MCPServer,
+  User,
+  Worktree,
+} from '@agor/core/types';
 import { getDefaultPermissionMode } from '@agor/core/types';
 import { DownOutlined } from '@ant-design/icons';
 import { Alert, Collapse, Form, Input, Modal, Typography } from 'antd';
@@ -22,6 +29,9 @@ export interface NewSessionConfig {
   modelConfig?: ModelConfig;
   mcpServerIds?: string[];
   permissionMode?: string;
+  codexSandboxMode?: CodexSandboxMode;
+  codexApprovalPolicy?: CodexApprovalPolicy;
+  codexNetworkAccess?: boolean;
 }
 
 export interface NewSessionModalProps {
@@ -64,6 +74,9 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
       permissionMode: agentDefaults?.permissionMode || getDefaultPermissionMode('claude-code'),
       mcpServerIds: agentDefaults?.mcpServerIds || [],
       modelConfig: agentDefaults?.modelConfig,
+      codexSandboxMode: agentDefaults?.codexSandboxMode || 'workspace-write',
+      codexApprovalPolicy: agentDefaults?.codexApprovalPolicy || 'on-request',
+      codexNetworkAccess: agentDefaults?.codexNetworkAccess ?? false,
     });
     setIsFormValid(false);
   }, [open, form, currentUser]);
@@ -79,6 +92,17 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
           getDefaultPermissionMode((selectedAgent as AgenticToolName) || 'claude-code'),
         mcpServerIds: agentDefaults?.mcpServerIds || [],
         modelConfig: agentDefaults?.modelConfig,
+        ...(selectedAgent === 'codex'
+          ? {
+              codexSandboxMode: agentDefaults?.codexSandboxMode || 'workspace-write',
+              codexApprovalPolicy: agentDefaults?.codexApprovalPolicy || 'on-request',
+              codexNetworkAccess: agentDefaults?.codexNetworkAccess ?? false,
+            }
+          : {
+              codexSandboxMode: undefined,
+              codexApprovalPolicy: undefined,
+              codexNetworkAccess: undefined,
+            }),
       });
     }
   }, [selectedAgent, form, currentUser]);
@@ -103,6 +127,20 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         mcpServerIds: values.mcpServerIds ?? agentDefaults?.mcpServerIds,
         permissionMode: values.permissionMode ?? (agentDefaults?.permissionMode || getDefaultPermissionMode(selectedAgent as AgenticToolName)),
       };
+
+      if (selectedAgent === 'codex') {
+        config.codexSandboxMode =
+          values.codexSandboxMode ??
+          agentDefaults?.codexSandboxMode ??
+          ('workspace-write' as CodexSandboxMode);
+        config.codexApprovalPolicy =
+          values.codexApprovalPolicy ??
+          agentDefaults?.codexApprovalPolicy ??
+          ('on-request' as CodexApprovalPolicy);
+        config.codexNetworkAccess =
+          values.codexNetworkAccess ?? agentDefaults?.codexNetworkAccess ?? false;
+      }
+
       onCreate(config);
     });
   };

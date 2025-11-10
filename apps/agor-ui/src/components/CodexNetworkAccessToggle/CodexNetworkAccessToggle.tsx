@@ -2,7 +2,9 @@ import { GlobalOutlined, WarningOutlined } from '@ant-design/icons';
 import { Alert, Space, Switch, Typography } from 'antd';
 
 export interface CodexNetworkAccessToggleProps {
+  /** Value passed by parent Form.Item (legacy `value` or Switch-friendly `checked`) */
   value?: boolean;
+  checked?: boolean;
   onChange?: (value: boolean) => void;
   /** Show detailed security warning */
   showWarning?: boolean;
@@ -15,15 +17,18 @@ export interface CodexNetworkAccessToggleProps {
  * Only applies when sandboxMode = 'workspace-write'.
  */
 export const CodexNetworkAccessToggle: React.FC<CodexNetworkAccessToggleProps> = ({
-  value = false,
+  value,
+  checked,
   onChange,
   showWarning = true,
 }) => {
+  const isEnabled = typeof checked === 'boolean' ? checked : !!value;
+
   return (
     <Space direction="vertical" style={{ width: '100%' }}>
       <Space>
         <Switch
-          checked={value}
+          checked={isEnabled}
           onChange={onChange}
           checkedChildren={<GlobalOutlined />}
           unCheckedChildren={<GlobalOutlined />}
@@ -33,12 +38,12 @@ export const CodexNetworkAccessToggle: React.FC<CodexNetworkAccessToggleProps> =
       </Space>
 
       <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
-        {value
+        {isEnabled
           ? 'Allows outbound HTTP/HTTPS requests for package installation and API calls'
           : 'Network access disabled (default, most secure)'}
       </Typography.Text>
 
-      {showWarning && value && (
+      {showWarning && isEnabled && (
         <Alert
           message="Security Warning"
           description={

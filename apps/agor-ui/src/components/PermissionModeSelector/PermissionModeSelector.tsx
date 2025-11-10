@@ -166,7 +166,7 @@ const OPENCODE_MODES: {
 ];
 
 // Codex sandbox mode options
-const CODEX_SANDBOX_MODES = [
+export const CODEX_SANDBOX_MODES = [
   {
     value: 'read-only',
     label: 'read-only',
@@ -185,7 +185,7 @@ const CODEX_SANDBOX_MODES = [
 ];
 
 // Codex approval policy options
-const CODEX_APPROVAL_POLICIES = [
+export const CODEX_APPROVAL_POLICIES = [
   {
     value: 'untrusted',
     label: 'untrusted',

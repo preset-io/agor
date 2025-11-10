@@ -1,4 +1,9 @@
-import type { MCPServer, Session } from '@agor/core/types';
+import type {
+  CodexApprovalPolicy,
+  CodexSandboxMode,
+  MCPServer,
+  Session,
+} from '@agor/core/types';
 import { DownOutlined } from '@ant-design/icons';
 import { Collapse, Form, Modal, Typography } from 'antd';
 import React from 'react';
@@ -42,6 +47,8 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
     mcpServerIds: string[];
     modelConfig: Session['model_config'];
     permissionMode: string;
+    codexSandboxMode: CodexSandboxMode;
+    codexApprovalPolicy: CodexApprovalPolicy;
     codexNetworkAccess: boolean;
     custom_context: string;
   }>({
@@ -49,6 +56,8 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
     mcpServerIds: [],
     modelConfig: undefined,
     permissionMode: 'acceptEdits',
+    codexSandboxMode: 'workspace-write',
+    codexApprovalPolicy: 'on-request',
     codexNetworkAccess: false,
     custom_context: '',
   });
@@ -64,6 +73,8 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
         mcpServerIds: sessionMcpServerIds,
         modelConfig: session.model_config,
         permissionMode: session.permission_config?.mode || defaultPermissionMode,
+        codexSandboxMode: session.permission_config?.codex?.sandboxMode || 'workspace-write',
+        codexApprovalPolicy: session.permission_config?.codex?.approvalPolicy || 'on-request',
         codexNetworkAccess: session.permission_config?.codex?.networkAccess ?? false,
         custom_context: session.custom_context
           ? JSON.stringify(session.custom_context, null, 2)
@@ -79,6 +90,8 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
     session.agentic_tool,
     session.model_config,
     session.permission_config?.mode,
+    session.permission_config?.codex?.sandboxMode,
+    session.permission_config?.codex?.approvalPolicy,
     session.permission_config?.codex?.networkAccess,
     session.custom_context,
     sessionMcpServerIds,
@@ -112,16 +125,27 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
       }
 
       // Update Codex network access (only for Codex sessions)
-      if (session.agentic_tool === 'codex' && values.codexNetworkAccess !== undefined) {
+      if (session.agentic_tool === 'codex') {
+        const sandboxMode: CodexSandboxMode =
+          values.codexSandboxMode ||
+          session.permission_config?.codex?.sandboxMode ||
+          'workspace-write';
+        const approvalPolicy: CodexApprovalPolicy =
+          values.codexApprovalPolicy ||
+          session.permission_config?.codex?.approvalPolicy ||
+          'on-request';
+        const networkAccess =
+          values.codexNetworkAccess ??
+          session.permission_config?.codex?.networkAccess ??
+          false;
+
         updates.permission_config = {
           ...session.permission_config,
           ...updates.permission_config,
           codex: {
-            ...session.permission_config?.codex,
-            sandboxMode:
-              session.permission_config?.codex?.sandboxMode || 'workspace-write',
-            approvalPolicy: session.permission_config?.codex?.approvalPolicy || 'on-request',
-            networkAccess: values.codexNetworkAccess,
+            sandboxMode,
+            approvalPolicy,
+            networkAccess,
           },
         };
       }

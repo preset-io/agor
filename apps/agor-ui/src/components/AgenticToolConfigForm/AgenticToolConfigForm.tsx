@@ -10,11 +10,15 @@
  */
 
 import type { AgenticToolName, MCPServer } from '@agor/core/types';
-import { Form } from 'antd';
+import { Form, Select } from 'antd';
 import { CodexNetworkAccessToggle } from '../CodexNetworkAccessToggle';
 import { MCPServerSelect } from '../MCPServerSelect';
 import { ModelSelector } from '../ModelSelector';
-import { PermissionModeSelector } from '../PermissionModeSelector';
+import {
+  CODEX_APPROVAL_POLICIES,
+  CODEX_SANDBOX_MODES,
+  PermissionModeSelector,
+} from '../PermissionModeSelector';
 
 export interface AgenticToolConfigFormProps {
   /** The agentic tool being configured */
@@ -75,6 +79,44 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
       >
         <PermissionModeSelector agentic_tool={agenticTool} />
       </Form.Item>
+
+      {agenticTool === 'codex' && (
+        <Form.Item
+          name="codexSandboxMode"
+          label="Sandbox Mode"
+          help={
+            showHelpText ? 'Controls where Codex can write files (workspace vs. full access)' : undefined
+          }
+        >
+          <Select
+            placeholder="Select sandbox mode"
+            options={CODEX_SANDBOX_MODES.map(({ value, label, description }) => ({
+              value,
+              label: `${label} · ${description}`,
+            }))}
+          />
+        </Form.Item>
+      )}
+
+      {agenticTool === 'codex' && (
+        <Form.Item
+          name="codexApprovalPolicy"
+          label="Approval Policy"
+          help={
+            showHelpText
+              ? 'Controls whether Codex must ask before executing commands'
+              : undefined
+          }
+        >
+          <Select
+            placeholder="Select approval policy"
+            options={CODEX_APPROVAL_POLICIES.map(({ value, label, description }) => ({
+              value,
+              label: `${label} · ${description}`,
+            }))}
+          />
+        </Form.Item>
+      )}
 
       {agenticTool === 'codex' && (
         <Form.Item
