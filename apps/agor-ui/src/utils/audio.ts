@@ -1,5 +1,5 @@
 // src/utils/audio.ts
-import type { Task, TaskStatus, AudioPreferences, ChimeSound } from '@agor/core/types';
+import type { AudioPreferences, ChimeSound, Task, TaskStatus } from '@agor/core/types';
 
 /**
  * Map of chime sound names to their file paths in public/sounds/
@@ -27,10 +27,7 @@ export const DEFAULT_AUDIO_PREFERENCES: AudioPreferences = {
 /**
  * Check if a task meets the minimum duration threshold
  */
-function meetsMinimumDuration(
-  task: Task,
-  minDurationSeconds: number
-): boolean {
+function meetsMinimumDuration(task: Task, minDurationSeconds: number): boolean {
   if (minDurationSeconds === 0) return true;
 
   // Try to use duration_ms if available
@@ -72,41 +69,18 @@ export async function playTaskCompletionChime(
 ): Promise<void> {
   const prefs = audioPreferences || DEFAULT_AUDIO_PREFERENCES;
 
-  console.log('[playTaskCompletionChime] Called with:', {
-    task: task,
-    prefs,
-  });
-
   // Check if audio is enabled
   if (!prefs.enabled) {
-    console.log('[playTaskCompletionChime] Audio not enabled');
     return;
   }
 
   // Check if task meets minimum duration
-  const meetsDuration = meetsMinimumDuration(task, prefs.minDurationSeconds);
-  if (!meetsDuration) {
-    // Calculate actual duration for logging
-    let actualDuration = 'unknown';
-    if (task.duration_ms) {
-      actualDuration = `${task.duration_ms / 1000}s (from duration_ms)`;
-    } else if (task.started_at && task.completed_at) {
-      const ms = new Date(task.completed_at).getTime() - new Date(task.started_at).getTime();
-      actualDuration = `${ms / 1000}s (calculated from timestamps)`;
-    }
-
-    console.log('[playTaskCompletionChime] Task does not meet minimum duration', {
-      actualDuration,
-      minDurationSeconds: prefs.minDurationSeconds,
-      started_at: task.started_at,
-      completed_at: task.completed_at,
-    });
+  if (!meetsMinimumDuration(task, prefs.minDurationSeconds)) {
     return;
   }
 
   // Check if task status is a natural completion (not user-stopped)
   if (!isNaturalCompletion(task.status)) {
-    console.log('[playTaskCompletionChime] Not a natural completion:', task.status);
     return;
   }
 
@@ -122,15 +96,12 @@ export async function playTaskCompletionChime(
     const audio = new Audio(chimePath);
     audio.volume = Math.max(0, Math.min(1, prefs.volume)); // Clamp between 0-1
 
-    console.log('[playTaskCompletionChime] Playing chime:', chimePath, 'at volume:', audio.volume);
-
     // Play the chime
     await audio.play();
-    console.log('[playTaskCompletionChime] Chime played successfully');
   } catch (error) {
     // Browser blocked autoplay or audio file not found
     // This is expected behavior if user hasn't interacted with the page yet
-    console.error('[playTaskCompletionChime] Could not play task completion chime:', error);
+    console.debug('Could not play task completion chime:', error);
   }
 }
 
@@ -142,10 +113,7 @@ export async function playTaskCompletionChime(
  * @param chime - The chime sound to preview
  * @param volume - Volume level (0.0 to 1.0)
  */
-export async function previewChimeSound(
-  chime: ChimeSound,
-  volume: number = 0.5
-): Promise<void> {
+export async function previewChimeSound(chime: ChimeSound, volume: number = 0.5): Promise<void> {
   const chimePath = CHIME_SOUNDS[chime];
   if (!chimePath) {
     console.warn(`Unknown chime sound: ${chime}`);
@@ -156,7 +124,6 @@ export async function previewChimeSound(
     // Add cache-busting timestamp to force browser to reload the file
     const cacheBreaker = `?t=${Date.now()}`;
     const fullPath = chimePath + cacheBreaker;
-    console.log(`[Audio Preview] Playing chime: ${chime} from ${fullPath}`);
     const audio = new Audio(fullPath);
     audio.volume = Math.max(0, Math.min(1, volume));
     await audio.play();

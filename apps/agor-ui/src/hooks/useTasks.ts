@@ -3,7 +3,7 @@
  */
 
 import type { AgorClient } from '@agor/core/api';
-import { TaskStatus, type SessionID, type Task, type User } from '@agor/core/types';
+import { type SessionID, type Task, TaskStatus, type User } from '@agor/core/types';
 import { useCallback, useEffect, useState } from 'react';
 import { playTaskCompletionChime } from '../utils/audio';
 
@@ -74,9 +74,9 @@ export function useTasks(
     const handleTaskCreated = (task: Task) => {
       // Only add if it belongs to this session
       if (task.session_id === sessionId) {
-        setTasks((prev) => {
+        setTasks(prev => {
           // Check if task already exists (avoid duplicates)
-          if (prev.some((t) => t.task_id === task.task_id)) {
+          if (prev.some(t => t.task_id === task.task_id)) {
             return prev;
           }
           // Insert in correct position based on created_at
@@ -90,38 +90,26 @@ export function useTasks(
 
     const handleTaskPatched = (task: Task) => {
       if (task.session_id === sessionId) {
-        setTasks((prev) => {
+        setTasks(prev => {
           // Find the previous task state to detect transitions
-          const oldTask = prev.find((t) => t.task_id === task.task_id);
+          const oldTask = prev.find(t => t.task_id === task.task_id);
           const wasRunning = oldTask?.status === TaskStatus.RUNNING;
           const isNowDone =
             task.status === TaskStatus.COMPLETED || task.status === TaskStatus.FAILED;
 
-          console.log('[useTasks] Task patched:', {
-            taskId: task.task_id,
-            oldStatus: oldTask?.status,
-            newStatus: task.status,
-            wasRunning,
-            isNowDone,
-            willPlayChime: wasRunning && isNowDone,
-            audioPrefs: user?.preferences?.audio,
-            duration_ms: task.duration_ms,
-          });
-
           // Play chime if transitioning from RUNNING to COMPLETED/FAILED
           if (wasRunning && isNowDone) {
-            console.log('[useTasks] Calling playTaskCompletionChime');
             playTaskCompletionChime(task, user?.preferences?.audio);
           }
 
-          return prev.map((t) => (t.task_id === task.task_id ? task : t));
+          return prev.map(t => (t.task_id === task.task_id ? task : t));
         });
       }
     };
 
     const handleTaskRemoved = (task: Task) => {
       if (task.session_id === sessionId) {
-        setTasks((prev) => prev.filter((t) => t.task_id !== task.task_id));
+        setTasks(prev => prev.filter(t => t.task_id !== task.task_id));
       }
     };
 
