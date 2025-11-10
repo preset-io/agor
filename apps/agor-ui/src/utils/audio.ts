@@ -2,17 +2,32 @@
 import type { AudioPreferences, ChimeSound, Task, TaskStatus } from '@agor/core/types';
 
 /**
- * Map of chime sound names to their file paths in public/sounds/
+ * Map of chime sound names to their filenames in public/sounds/
  */
-const CHIME_SOUNDS: Record<ChimeSound, string> = {
-  'gentle-chime': '/sounds/gentle-chime.mp3',
-  'notification-bell': '/sounds/notification-bell.mp3',
-  '8bit-coin': '/sounds/8bit-coin.mp3',
-  'retro-coin': '/sounds/retro-coin.mp3',
-  'power-up': '/sounds/power-up.mp3',
-  'you-got-mail': '/sounds/you-got-mail.mp3',
-  'success-tone': '/sounds/success-tone.mp3',
+const CHIME_SOUND_FILES: Record<ChimeSound, string> = {
+  'gentle-chime': 'gentle-chime.mp3',
+  'notification-bell': 'notification-bell.mp3',
+  '8bit-coin': '8bit-coin.mp3',
+  'retro-coin': 'retro-coin.mp3',
+  'power-up': 'power-up.mp3',
+  'you-got-mail': 'you-got-mail.mp3',
+  'success-tone': 'success-tone.mp3',
 };
+
+/**
+ * Resolve the full URL for a chime asset, respecting Vite's base path in prod.
+ */
+function getChimeAssetPath(chime: ChimeSound): string | null {
+  const filename = CHIME_SOUND_FILES[chime];
+  if (!filename) {
+    return null;
+  }
+
+  const baseUrl = import.meta.env?.BASE_URL ?? '/';
+  const normalizedBase = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
+
+  return `${normalizedBase}/sounds/${filename}`;
+}
 
 /**
  * Default audio preferences
@@ -85,7 +100,7 @@ export async function playTaskCompletionChime(
   }
 
   // Get the chime file path
-  const chimePath = CHIME_SOUNDS[prefs.chime];
+  const chimePath = getChimeAssetPath(prefs.chime);
   if (!chimePath) {
     console.warn(`Unknown chime sound: ${prefs.chime}`);
     return;
@@ -114,7 +129,7 @@ export async function playTaskCompletionChime(
  * @param volume - Volume level (0.0 to 1.0)
  */
 export async function previewChimeSound(chime: ChimeSound, volume: number = 0.5): Promise<void> {
-  const chimePath = CHIME_SOUNDS[chime];
+  const chimePath = getChimeAssetPath(chime);
   if (!chimePath) {
     console.warn(`Unknown chime sound: ${chime}`);
     return;
