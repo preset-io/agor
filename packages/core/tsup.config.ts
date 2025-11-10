@@ -32,6 +32,7 @@ export default defineConfig({
   dts: true,
   clean: true,
   splitting: false,
+  shims: true, // Enable shims for import.meta.url in CJS builds
   // Don't bundle agent SDKs and Node.js-only dependencies
   external: [
     '@anthropic-ai/claude-agent-sdk',
