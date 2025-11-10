@@ -16,22 +16,27 @@ All files have been downloaded from free sources under CC0 or permissive license
    - License: Mixkit Free License
    - Clear notification bell
 
-3. **8bit-coin.mp3** (13KB)
-   - Source: The Motion Monkey - Retro Arcade Sounds Pack
+3. **8bit-coin.mp3** (20KB)
+   - Source: Freesound.org
    - License: CC0 (public domain)
-   - Retro 8-bit bonus/coin sound
+   - Classic 8-bit coin pickup sound
 
-4. **power-up.mp3** (13KB)
-   - Source: The Motion Monkey - Retro Arcade Sounds Pack
+4. **retro-coin.mp3** (12KB)
+   - Source: Freesound.org
    - License: CC0 (public domain)
-   - Classic retro power-up sound
+   - Alternative retro coin sound
 
-5. **you-got-mail.mp3** (16KB)
-   - Source: The Motion Monkey - Retro Arcade Sounds Pack
+5. **power-up.mp3** (45KB)
+   - Source: Freesound.org
    - License: CC0 (public domain)
-   - Retro bonus notification
+   - Satisfying retro power-up sound
 
-6. **success-tone.mp3** (14KB)
+6. **you-got-mail.mp3** (2.3KB)
+   - Source: Freesound.org
+   - License: CC0 (public domain)
+   - Classic AOL "You've Got Mail" notification
+
+7. **success-tone.mp3** (14KB)
    - Source: Mixkit
    - License: Mixkit Free License
    - Short professional beep

@@ -65,6 +65,7 @@ export type ChimeSound =
   | 'gentle-chime'
   | 'notification-bell'
   | '8bit-coin'
+  | 'retro-coin'
   | 'power-up'
   | 'you-got-mail'
   | 'success-tone';
