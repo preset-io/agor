@@ -115,7 +115,9 @@ export async function previewChimeSound(
   try {
     // Add cache-busting timestamp to force browser to reload the file
     const cacheBreaker = `?t=${Date.now()}`;
-    const audio = new Audio(chimePath + cacheBreaker);
+    const fullPath = chimePath + cacheBreaker;
+    console.log(`[Audio Preview] Playing chime: ${chime} from ${fullPath}`);
+    const audio = new Audio(fullPath);
     audio.volume = Math.max(0, Math.min(1, volume));
     await audio.play();
   } catch (error) {
