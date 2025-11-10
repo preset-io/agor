@@ -46,26 +46,21 @@ export const BashRenderer: React.FC<ToolRendererProps> = ({ input, result, compa
 
   return (
     <div>
-      {/* Output with code block styling */}
+      {/* Output with collapsible code block */}
       {result && (
-        <div
-          style={{
-            background: token.colorBgContainer,
-            border: `1px solid ${isError ? token.colorErrorBorder : token.colorBorder}`,
-            borderRadius: token.borderRadius,
-            padding: token.sizeUnit * 1.5,
-            ...(isError && {
-              background: 'rgba(255, 77, 79, 0.05)',
-            }),
-          }}
-        >
+        <>
           {useAnsi ? (
             <CollapsibleAnsiText
               style={{
                 fontSize: token.fontSizeSM,
                 margin: 0,
-                fontFamily: 'Monaco, Menlo, Ubuntu Mono, Consolas, source-code-pro, monospace',
-                color: token.colorText,
+                ...((!hasContent && {
+                  fontStyle: 'italic',
+                  color: token.colorTextTertiary,
+                }) as React.CSSProperties),
+                ...(isError && {
+                  color: token.colorError,
+                }),
               }}
             >
               {hasContent ? resultText : '(no output)'}
@@ -77,18 +72,19 @@ export const BashRenderer: React.FC<ToolRendererProps> = ({ input, result, compa
               style={{
                 fontSize: token.fontSizeSM,
                 margin: 0,
-                fontFamily: 'Monaco, Menlo, Ubuntu Mono, Consolas, source-code-pro, monospace',
-                color: token.colorText,
                 ...((!hasContent && {
                   fontStyle: 'italic',
                   color: token.colorTextTertiary,
                 }) as React.CSSProperties),
+                ...(isError && {
+                  color: token.colorError,
+                }),
               }}
             >
               {hasContent ? resultText : '(no output)'}
             </CollapsibleText>
           )}
-        </div>
+        </>
       )}
 
       {/* Tool input parameters (collapsible below result) */}
