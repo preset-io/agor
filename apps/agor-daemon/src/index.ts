@@ -83,6 +83,7 @@ import { registerHandlebarsHelpers } from '@agor/core/templates/handlebars-helpe
 import { ClaudeTool, CodexTool, GeminiTool, OpenCodeTool } from '@agor/core/tools';
 import type {
   AuthenticatedParams,
+  Id,
   Message,
   Paginated,
   Params,
