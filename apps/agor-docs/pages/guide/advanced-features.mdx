@@ -95,6 +95,75 @@ Power-user features to enhance your AI coding workflow. An image is worth a thou
 
 ---
 
+## 🎨 Streamdown Markdown Rendering
+
+**Rich AI responses with live streaming.** Agor uses [Streamdown](https://github.com/vercel/streamdown) by Vercel to render AI-generated markdown in real-time.
+
+### What You Get
+
+- **Mermaid diagrams** - Stream flowcharts and sequence diagrams with one-click rendering
+- **Math expressions** - LaTeX/KaTeX support for inline ($E = mc^2$) and block equations
+- **Syntax highlighting** - 100+ languages via Shiki (server-side)
+- **GitHub Flavored Markdown** - Tables, task lists, strikethrough, and more
+- **Streaming-optimized** - Handles incomplete chunks gracefully during real-time delivery
+
+<img src="/screenshots/streamdown.png" alt="Streamdown rendering demo showing Mermaid diagram, math expressions, code blocks, and tables" style={{maxWidth: '800px'}} />
+
+---
+
+## 🗄️ Worktree Archival
+
+**Clean up your workspace without losing valuable data.** Archive completed worktrees to preserve conversation history, analytics, and metadata while keeping your board clutter-free.
+
+### The Smart Way to Clean Up
+
+When a PR is merged or feature is complete, you often want to clean up disk space but keep:
+- Session conversation history for learning/analytics
+- Issue and PR associations for project tracking
+- Environment configurations for future reference
+- Metadata for team insights and cost attribution
+
+### Archive Options
+
+<img src="/screenshots/archive-worktree.png" alt="Archive or Delete Worktree modal showing filesystem and metadata options" style={{maxWidth: '600px'}} />
+
+**Filesystem:**
+- **Leave untouched** - No changes to disk (metadata-only archival)
+- **Clean workspace** - Runs `git clean -fdx` (removes node_modules, builds, untracked files)
+- **Delete completely** - Removes entire worktree directory from disk
+
+**Metadata & Sessions:**
+- **Archive (recommended)** - Hides from board, preserves all data for analytics and history
+- **Delete permanently** - Removes all data including sessions and conversations (no undo)
+
+**Best Practice:** Archive with filesystem cleanup after PR merge. Only delete permanently for experimental worktrees with no valuable data.
+
+---
+
+## 👥 Multiplayer Terminal Sessions
+
+**Collaborate in real-time via shared tmux sessions.** When multiple users open the same worktree terminal, they see each other's keystrokes live.
+
+<img src="/screenshots/tmux.png" alt="Terminal showing multiplayer tmux session with collaborative commands" style={{maxWidth: '800px'}} />
+
+### How It Works
+
+- Each worktree gets a dedicated tmux window in the shared `agor` session
+- Multiple users connecting to the same worktree attach to the same window
+- WebSocket broadcasting ensures all keystrokes and output are synchronized
+- No configuration needed - works automatically when tmux is installed
+
+### Use Cases
+
+- **Pair programming** - Two developers working on the same feature in sync
+- **Live debugging** - One person navigating terminal while another observes
+- **Onboarding** - Senior dev demonstrates commands while junior follows along
+- **Code review** - Reviewer can explore the worktree interactively during review
+
+**Privacy Note:** Terminal sessions are worktree-scoped. Users only see terminals for worktrees they're actively using.
+
+---
+
 ## 📚 Related Docs
 
 - [Concepts](/guide/concepts) - Understanding worktrees, sessions, and boards
