@@ -16,6 +16,7 @@ import {
   ApiOutlined,
   BranchesOutlined,
   CodeOutlined,
+  CopyOutlined,
   DeleteOutlined,
   ForkOutlined,
   SendOutlined,
@@ -767,48 +768,60 @@ const SessionDrawer = ({
                   </span>
                   {msg.content_preview || (typeof msg.content === 'string' ? msg.content : '')}
                 </Typography.Text>
-                <Button
-                  type="text"
-                  size="small"
-                  danger
-                  icon={<DeleteOutlined />}
-                  onClick={async () => {
-                    if (!client) return;
+                <Space size={4}>
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<CopyOutlined />}
+                    onClick={() => {
+                      const textToCopy = msg.content_preview || (typeof msg.content === 'string' ? msg.content : '');
+                      navigator.clipboard.writeText(textToCopy);
+                      message.success('Message copied to clipboard');
+                    }}
+                  />
+                  <Button
+                    type="text"
+                    size="small"
+                    danger
+                    icon={<DeleteOutlined />}
+                    onClick={async () => {
+                      if (!client) return;
 
-                    try {
-                      console.log('[SessionDrawer] DELETE attempt:', {
-                        sessionId: session.session_id,
-                        messageId: msg.message_id,
-                      });
+                      try {
+                        console.log('[SessionDrawer] DELETE attempt:', {
+                          sessionId: session.session_id,
+                          messageId: msg.message_id,
+                        });
 
-                      // Optimistically remove from UI
-                      setQueuedMessages(prev => prev.filter(m => m.message_id !== msg.message_id));
+                        // Optimistically remove from UI
+                        setQueuedMessages(prev => prev.filter(m => m.message_id !== msg.message_id));
 
-                      // Delete via messages service directly
-                      // The backend will validate it's a queued message
-                      const result = await client.service('messages').remove(msg.message_id);
+                        // Delete via messages service directly
+                        // The backend will validate it's a queued message
+                        const result = await client.service('messages').remove(msg.message_id);
 
-                      console.log('[SessionDrawer] DELETE success:', result);
-                    } catch (error) {
-                      console.error('[SessionDrawer] DELETE error:', {
-                        error,
-                        errorType: error?.constructor?.name,
-                        errorMessage: error instanceof Error ? error.message : String(error),
-                        errorStack: error instanceof Error ? error.stack : undefined,
-                      });
-                      message.error(
-                        `Failed to remove queued message: ${error instanceof Error ? error.message : String(error)}`
-                      );
+                        console.log('[SessionDrawer] DELETE success:', result);
+                      } catch (error) {
+                        console.error('[SessionDrawer] DELETE error:', {
+                          error,
+                          errorType: error?.constructor?.name,
+                          errorMessage: error instanceof Error ? error.message : String(error),
+                          errorStack: error instanceof Error ? error.stack : undefined,
+                        });
+                        message.error(
+                          `Failed to remove queued message: ${error instanceof Error ? error.message : String(error)}`
+                        );
 
-                      // Re-fetch queue to restore accurate state
-                      const response = await client
-                        .service(`sessions/${session.session_id}/messages/queue`)
-                        .find();
-                      const data = (response as { data: Message[] }).data || [];
-                      setQueuedMessages(data);
-                    }
-                  }}
-                />
+                        // Re-fetch queue to restore accurate state
+                        const response = await client
+                          .service(`sessions/${session.session_id}/messages/queue`)
+                          .find();
+                        const data = (response as { data: Message[] }).data || [];
+                        setQueuedMessages(data);
+                      }
+                    }}
+                  />
+                </Space>
               </div>
             ))}
           </Space>
