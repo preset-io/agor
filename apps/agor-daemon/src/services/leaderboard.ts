@@ -12,6 +12,7 @@ import {
   desc,
   eq,
   type SQL,
+  messages,
   sessions,
   sql,
   tasks,
@@ -112,6 +113,9 @@ export class LeaderboardService {
     // Build WHERE conditions
     const conditions: SQL[] = [];
 
+    // Only count assistant messages (they have token usage in metadata)
+    conditions.push(eq(messages.role, 'assistant'));
+
     if (userId) {
       conditions.push(eq(tasks.created_by, userId));
     }
@@ -137,11 +141,16 @@ export class LeaderboardService {
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
     // Build dynamic SELECT clause
+    // Aggregate token usage from messages (stored in metadata.tokens.input/output)
     // biome-ignore lint/suspicious/noExplicitAny: Dynamic SQL fields require any
     const selectFields: Record<string, any> = {
-      totalTokens: sql<number>`COALESCE(SUM(CAST(json_extract(${tasks.data}, '$.usage.total_tokens') AS INTEGER)), 0)`,
-      totalCost: sql<number>`COALESCE(SUM(CAST(json_extract(${tasks.data}, '$.usage.estimated_cost_usd') AS REAL)), 0.0)`,
-      taskCount: sql<number>`COUNT(${tasks.task_id})`,
+      totalTokens: sql<number>`COALESCE(SUM(
+        CAST(json_extract(${messages.data}, '$.metadata.tokens.input') AS INTEGER) +
+        CAST(json_extract(${messages.data}, '$.metadata.tokens.output') AS INTEGER)
+      ), 0)`.as('total_tokens'),
+      // TODO: Calculate actual cost based on model and token counts using pricing utility
+      totalCost: sql<number>`CAST(0.0 AS REAL)`.as('total_cost'),
+      taskCount: sql<number>`COUNT(DISTINCT ${tasks.task_id})`.as('task_count'),
     };
 
     if (includeUser) {
@@ -170,9 +179,11 @@ export class LeaderboardService {
     const orderClause = sortOrder === 'desc' ? desc(sortField) : asc(sortField);
 
     // Execute aggregation query
+    // Join: messages -> tasks -> sessions -> worktrees
     const results = await this.db
       .select(selectFields)
-      .from(tasks)
+      .from(messages)
+      .innerJoin(tasks, eq(messages.task_id, tasks.task_id))
       .innerJoin(sessions, eq(tasks.session_id, sessions.session_id))
       .innerJoin(worktrees, eq(sessions.worktree_id, worktrees.worktree_id))
       .where(whereClause)
@@ -183,9 +194,9 @@ export class LeaderboardService {
 
     // Build distinct count for pagination
     const distinctParts: string[] = [];
-    if (includeUser) distinctParts.push(`${tasks.created_by}`);
-    if (includeWorktree) distinctParts.push(`${worktrees.worktree_id}`);
-    if (includeRepo) distinctParts.push(`${worktrees.repo_id}`);
+    if (includeUser) distinctParts.push('tasks.created_by');
+    if (includeWorktree) distinctParts.push('worktrees.worktree_id');
+    if (includeRepo) distinctParts.push('worktrees.repo_id');
     const distinctExpr =
       distinctParts.length > 0
         ? sql`COUNT(DISTINCT ${sql.raw(distinctParts.join(" || '-' || "))})`
@@ -195,7 +206,8 @@ export class LeaderboardService {
       .select({
         count: sql<number>`${distinctExpr}`,
       })
-      .from(tasks)
+      .from(messages)
+      .innerJoin(tasks, eq(messages.task_id, tasks.task_id))
       .innerJoin(sessions, eq(tasks.session_id, sessions.session_id))
       .innerJoin(worktrees, eq(sessions.worktree_id, worktrees.worktree_id))
       .where(whereClause);

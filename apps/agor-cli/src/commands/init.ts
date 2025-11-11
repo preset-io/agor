@@ -41,6 +41,18 @@ export default class Init extends Command {
         'Skip initialization if .agor/ directory already exists (idempotent, safe for Docker)',
       default: false,
     }),
+    'daemon-port': Flags.integer({
+      description: 'Daemon port (reads from DAEMON_PORT env var if not specified)',
+      required: false,
+    }),
+    'daemon-host': Flags.string({
+      description: 'Daemon host (default: localhost)',
+      required: false,
+    }),
+    'set-config': Flags.boolean({
+      description: 'Set daemon config values even if .agor already exists (for Docker/deployment)',
+      default: false,
+    }),
   };
 
   private async pathExists(path: string): Promise<boolean> {
@@ -146,9 +158,16 @@ export default class Init extends Command {
     // Determine base directory early
     const baseDir = flags.local ? join(process.cwd(), '.agor') : join(homedir(), '.agor');
 
-    // If --skip-if-exists and directory already exists, exit gracefully
+    // If --skip-if-exists and directory already exists, handle config and exit
     if (flags['skip-if-exists'] && (await this.pathExists(baseDir))) {
       this.log(chalk.green('✓ Agor already initialized at: ') + chalk.cyan(baseDir));
+
+      // If --set-config is enabled, update daemon config values (for Docker/deployment)
+      if (flags['set-config']) {
+        await this.setDaemonConfig(flags);
+        this.log(chalk.green('✓ Daemon configuration updated'));
+      }
+
       this.log(chalk.dim('Skipping initialization (use --force to re-initialize)\n'));
       return;
     }
