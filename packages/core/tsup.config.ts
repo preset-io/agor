@@ -17,6 +17,7 @@ export default defineConfig({
     'tools/claude/models': 'src/tools/claude/models.ts',
     'permissions/index': 'src/permissions/index.ts',
     'feathers/index': 'src/feathers/index.ts', // FeathersJS runtime re-exports
+    'lib/feathers-validation': 'src/lib/feathers-validation.ts', // FeathersJS query validation schemas
     'templates/handlebars-helpers': 'src/templates/handlebars-helpers.ts', // Handlebars helpers
     'environment/variable-resolver': 'src/environment/variable-resolver.ts', // Environment variable resolution
     'utils/errors': 'src/utils/errors.ts', // Error handling and formatting utilities

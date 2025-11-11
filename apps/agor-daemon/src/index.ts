@@ -67,6 +67,17 @@ import {
   rest,
   socketio,
 } from '@agor/core/feathers';
+import {
+  boardCommentQueryValidator,
+  boardObjectQueryValidator,
+  boardQueryValidator,
+  mcpServerQueryValidator,
+  repoQueryValidator,
+  sessionQueryValidator,
+  taskQueryValidator,
+  userQueryValidator,
+  worktreeQueryValidator,
+} from '@agor/core/lib/feathers-validation';
 import { type PermissionDecision, PermissionService } from '@agor/core/permissions';
 import { registerHandlebarsHelpers } from '@agor/core/templates/handlebars-helpers';
 import { ClaudeTool, CodexTool, GeminiTool, OpenCodeTool } from '@agor/core/tools';
@@ -92,6 +103,7 @@ import type { TokenUsage } from '@agor/core/utils/pricing';
 // Import Claude SDK's PermissionMode type for ClaudeTool method signatures
 // (Agor's PermissionMode is a superset of all tool permission modes)
 import type { PermissionMode as ClaudePermissionMode } from '@anthropic-ai/claude-agent-sdk';
+import { validateQuery } from '@feathersjs/schema';
 
 /**
  * Type guard to check if result is paginated
@@ -786,6 +798,8 @@ async function main() {
   app.service('board-objects').hooks({
     before: {
       all: [
+        // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type compatibility
+        (validateQuery as any)(boardObjectQueryValidator),
         ...getReadAuthHooks(),
         ...(allowAnonymous ? [] : [requireMinimumRole('member', 'manage board objects')]),
       ],
@@ -794,7 +808,11 @@ async function main() {
 
   app.service('board-comments').hooks({
     before: {
-      all: getReadAuthHooks(),
+      all: [
+        // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type compatibility
+        (validateQuery as any)(boardCommentQueryValidator),
+        ...getReadAuthHooks(),
+      ],
       create: [requireMinimumRole('member', 'create board comments')],
       patch: [requireMinimumRole('member', 'update board comments')],
       remove: [requireMinimumRole('member', 'delete board comments')],
@@ -804,6 +822,8 @@ async function main() {
   app.service('repos').hooks({
     before: {
       all: [
+        // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type compatibility
+        (validateQuery as any)(repoQueryValidator),
         ...getReadAuthHooks(),
         ...(allowAnonymous ? [] : [requireMinimumRole('member', 'access repositories')]),
       ],
@@ -816,6 +836,8 @@ async function main() {
   app.service('worktrees').hooks({
     before: {
       all: [
+        // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type compatibility
+        (validateQuery as any)(worktreeQueryValidator),
         ...getReadAuthHooks(),
         ...(allowAnonymous ? [] : [requireMinimumRole('member', 'access worktrees')]),
       ],
@@ -827,7 +849,11 @@ async function main() {
 
   app.service('mcp-servers').hooks({
     before: {
-      all: getReadAuthHooks(),
+      all: [
+        // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type compatibility
+        (validateQuery as any)(mcpServerQueryValidator),
+        ...getReadAuthHooks(),
+      ],
       create: [requireMinimumRole('admin', 'create MCP servers')],
       patch: [requireMinimumRole('admin', 'update MCP servers')],
       remove: [requireMinimumRole('admin', 'delete MCP servers')],
@@ -864,6 +890,10 @@ async function main() {
 
   app.service('users').hooks({
     before: {
+      all: [
+        // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type compatibility
+        (validateQuery as any)(userQueryValidator),
+      ],
       find: [
         context => {
           const params = context.params as AuthenticatedParams;
@@ -943,7 +973,11 @@ async function main() {
   // Add hooks to inject created_by from authenticated user and populate repo from worktree
   app.service('sessions').hooks({
     before: {
-      all: getReadAuthHooks(),
+      all: [
+        // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type compatibility
+        (validateQuery as any)(sessionQueryValidator),
+        ...getReadAuthHooks(),
+      ],
       create: [
         requireMinimumRole('member', 'create sessions'),
         async context => {
@@ -1117,7 +1151,11 @@ async function main() {
 
   app.service('tasks').hooks({
     before: {
-      all: [requireAuth],
+      all: [
+        // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type compatibility
+        (validateQuery as any)(taskQueryValidator),
+        requireAuth,
+      ],
       create: [
         requireMinimumRole('member', 'create tasks'),
         async context => {
@@ -1150,7 +1188,11 @@ async function main() {
 
   app.service('boards').hooks({
     before: {
-      all: getReadAuthHooks(),
+      all: [
+        // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type compatibility
+        (validateQuery as any)(boardQueryValidator),
+        ...getReadAuthHooks(),
+      ],
       create: [
         requireMinimumRole('member', 'create boards'),
         async context => {

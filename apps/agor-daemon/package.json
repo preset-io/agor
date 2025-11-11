@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@agor/core": "workspace:*",
+    "@feathersjs/schema": "^5.0.37",
     "@homebridge/node-pty-prebuilt-multiarch": "^0.13.1",
     "cors": "^2.8.5",
     "cron-parser": "^5.4.0",

@@ -210,11 +210,11 @@ This enables **autonomous multi-agent workflows** where a parent agent can deleg
 The MCP server runs on the **same FeathersJS HTTP server** as the REST and WebSocket APIs:
 
 ```
-http://localhost:3030/
+https://localhost:3030/
 ├── /sessions (REST)
 ├── /tasks (REST)
 ├── /mcp (MCP JSON-RPC 2.0)
-└── ws:// (WebSocket)
+└── wss:// (WebSocket Secure)
 ```
 
 **Why this design?**

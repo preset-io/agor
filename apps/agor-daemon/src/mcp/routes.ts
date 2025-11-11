@@ -786,6 +786,7 @@ export function setupMCPRoutes(app: Application): void {
 
         // Session tools
         if (name === 'agor_sessions_list') {
+          // Build query
           const query: Record<string, unknown> = {};
           if (args?.limit) query.$limit = args.limit;
           if (args?.status) query.status = args.status;

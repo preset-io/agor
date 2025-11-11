@@ -26,3 +26,8 @@ export async function validateDirectory(path: string, context = 'Directory'): Pr
     throw new Error(`${context} is not accessible: ${path} (${error})`);
   }
 }
+
+/**
+ * @deprecated Use FeathersJS schema validation instead
+ * Import from '@agor/core/lib/feathers-validation'
+ */
