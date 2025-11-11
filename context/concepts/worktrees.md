@@ -406,65 +406,22 @@ Socket events:
 
 **How It Works:**
 
-When tmux is installed and a terminal is opened from a worktree card:
+Agor automatically detects tmux and creates a single shared session (`agor`) with one window per worktree:
 
-1. **Session Naming:**
-   - Session name: `agor-{shortId}` (e.g., `agor-3c9683f1`)
-   - Window title: Worktree name (e.g., `tmux-integration`)
-   - Guarantees uniqueness while showing human-readable labels
+- **First terminal open:** Creates window in `agor` session (or creates session if needed)
+- **Reopen same worktree:** Reconnects to existing window
+- **Multiple worktrees:** Each gets its own window in the shared session
+- **After modal closes:** Windows persist with full history and running processes
+- **Switch worktrees:** Use `Ctrl+B w` to navigate between windows
 
-2. **Session Lifecycle:**
-   - **First open:** Creates new tmux session
-   - **Subsequent opens:** Reuses existing session
-   - **Persistence:** Session continues after modal closes
-   - **Navigation:** Users can create windows/tabs within session
-
-3. **User Experience:**
-   - Welcome message shows session status (new/reconnected)
-   - Modal title displays worktree name + tmux session ID
-   - Closing modal preserves tmux session (gentle confirmation)
-   - Install tmux hint shown if not detected
-
-**Modal UI:**
-
-- Size: 90vw × 85vh (nearly full-screen)
-- Title: `Terminal - {worktreeName} (tmux: agor-{shortId})`
-- Subtitle: Session persistence status
-- Admin-only access (system security)
-
-**Backend Detection:**
-
-```typescript
-// apps/agor-daemon/src/services/terminals.ts
-function isTmuxAvailable(): boolean
-function tmuxSessionExists(sessionName: string): boolean
-
-// On terminal creation:
-if (tmux available && worktreeId provided) {
-  // Use tmux with worktree-specific session
-  const sessionName = `agor-${shortId}`;
-  const windowName = worktreeName;
-
-  if (session exists) {
-    tmux attach-session -t sessionName
-  } else {
-    tmux new-session -s sessionName -n windowName
-  }
-}
-```
-
-**Access Points:**
-
-- WorktreeCard → Terminal icon button (passes worktreeId)
-- SessionDrawer → Terminal button (passes worktreeId)
-- Opens TerminalModal with worktree context
+**Multiplayer Bonus:** Multiple users opening the same worktree terminal see each other's keystrokes in real-time (shared tmux window + WebSocket broadcasting).
 
 **Benefits:**
 
-- **Persistence:** Terminal history/state survives UI disconnects
-- **Multi-window:** Users can create tabs within tmux session
-- **Reconnection:** Reliable reattach to long-running processes
-- **Fallback:** Gracefully degrades to ephemeral sessions without tmux
+- Persistent terminal sessions that survive browser disconnects
+- All worktrees in one tmux session for easy navigation
+- Long-running processes continue after closing modal
+- Real-time collaboration when multiple users work in same worktree
 
 ### Future: Terminal Shortcut
 
