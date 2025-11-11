@@ -125,6 +125,11 @@ export const AgentChain: React.FC<AgentChainProps> = ({ messages }) => {
   const { token } = theme.useToken();
   const [expanded, setExpanded] = useState(false);
 
+  // Early return if no messages
+  if (!messages || messages.length === 0) {
+    return null;
+  }
+
   // Extract chain items (thoughts and tools) from messages
   const chainItems = useMemo(() => {
     const items: ChainItem[] = [];
