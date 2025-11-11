@@ -276,6 +276,7 @@ export const boards = sqliteTable(
         description?: string;
         color?: string;
         icon?: string;
+        background_color?: string; // Background color for the board canvas
         objects?: Record<string, import('@agor/core/types').BoardObject>; // Board objects (text, zone)
         custom_context?: Record<string, unknown>; // Custom context for Handlebars templates
       }>()

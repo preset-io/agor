@@ -281,6 +281,17 @@ const SessionCanvas = ({
     trigger: ZoneTrigger;
   } | null>(null);
 
+  // Debug: Log board background color
+  useEffect(() => {
+    if (board) {
+      console.log('🎨 Board loaded:', {
+        board_id: board.board_id,
+        name: board.name,
+        background_color: board.background_color,
+      });
+    }
+  }, [board]);
+
   // Debounce timer ref for position updates
   const layoutUpdateTimerRef = useRef<NodeJS.Timeout | null>(null);
   const pendingLayoutUpdatesRef = useRef<Record<string, { x: number; y: number }>>({});
@@ -1635,8 +1646,9 @@ const SessionCanvas = ({
         panActivationKeyCode={null}
         zoomActivationKeyCode={null}
         disableKeyboardA11y={true}
+        style={board?.background_color ? { backgroundColor: board.background_color } : undefined}
       >
-        <Background />
+        <Background color={board?.background_color} />
         <Controls position="top-left" showInteractive={false}>
           {/* Custom toolbox buttons */}
           <ControlButton

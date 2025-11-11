@@ -3,8 +3,9 @@
  */
 
 import type { BoardComment, BoardObject } from '@agor/core/types';
-import { DeleteOutlined, SettingOutlined } from '@ant-design/icons';
-import { theme } from 'antd';
+import { DeleteOutlined, LockOutlined, SettingOutlined, UnlockOutlined } from '@ant-design/icons';
+import { ColorPicker, theme } from 'antd';
+import type { Color } from 'antd/es/color-picker';
 import React, { useEffect, useRef, useState } from 'react';
 import { NodeResizer, useViewport } from 'reactflow';
 import { DeleteZoneModal } from './DeleteZoneModal';
@@ -37,6 +38,7 @@ interface ZoneNodeData {
   height: number;
   color?: string;
   status?: string;
+  locked?: boolean;
   x: number;
   y: number;
   trigger?: BoardObject extends { type: 'zone'; trigger?: infer T } ? T : never;
@@ -91,6 +93,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
       label: string;
       color?: string;
       status?: string;
+      locked?: boolean;
       trigger?: BoardObject extends { type: 'zone'; trigger?: infer T } ? T : never;
     }>
   ): BoardObject => ({
@@ -102,6 +105,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
     label: data.label,
     color: data.color,
     status: data.status,
+    locked: data.locked,
     trigger: data.trigger,
     ...overrides,
   });
@@ -122,9 +126,15 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
     }
   };
 
-  const handleColorChange = (color: string) => {
+  const handleColorChange = (color: Color, hex: string) => {
     if (data.onUpdate) {
-      data.onUpdate(data.objectId, createObjectData({ color }));
+      data.onUpdate(data.objectId, createObjectData({ color: hex }));
+    }
+  };
+
+  const handleToggleLock = () => {
+    if (data.onUpdate) {
+      data.onUpdate(data.objectId, createObjectData({ locked: !data.locked }));
     }
   };
 
@@ -135,10 +145,13 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
     .padStart(2, '0');
   const backgroundColor = data.color ? `${data.color}${opacityHex}` : `${token.colorBgContainer}40`;
 
+  // Check if current color is a custom color (not in presets)
+  const isCustomColor = data.color && !colors.includes(data.color);
+
   return (
     <>
       <NodeResizer
-        isVisible={selected}
+        isVisible={selected && !data.locked}
         minWidth={200}
         minHeight={200}
         handleStyle={{
@@ -170,15 +183,15 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
         {/* Toolbar - ALWAYS rendered, visibility controlled by CSS only */}
         <div
           className="nodrag nopan"
-          onPointerDown={(e) => {
+          onPointerDown={e => {
             e.preventDefault();
             e.stopPropagation();
           }}
-          onPointerUp={(e) => {
+          onPointerUp={e => {
             e.preventDefault();
             e.stopPropagation();
           }}
-          onClick={(e) => {
+          onClick={e => {
             e.preventDefault();
             e.stopPropagation();
           }}
@@ -203,20 +216,23 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
             transition: 'opacity 0.15s ease',
           }}
         >
-          {colors.map((color) => (
+          {/* Color Presets */}
+          {colors.map(color => (
             <button
               key={color}
               type="button"
-              onPointerDown={(e) => {
+              onPointerDown={e => {
                 e.preventDefault();
                 e.stopPropagation();
               }}
-              onPointerUp={(e) => {
+              onPointerUp={e => {
                 e.preventDefault();
                 e.stopPropagation();
-                handleColorChange(color);
+                if (data.onUpdate) {
+                  data.onUpdate(data.objectId, createObjectData({ color }));
+                }
               }}
-              onClick={(e) => {
+              onClick={e => {
                 e.preventDefault();
                 e.stopPropagation();
               }}
@@ -236,6 +252,115 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
               title={`Change color to ${color}`}
             />
           ))}
+          {/* Custom Color Picker */}
+          <div
+            className="nodrag nopan"
+            onPointerDown={e => {
+              e.stopPropagation(); // Stop React Flow from capturing
+            }}
+            onPointerUp={e => {
+              e.stopPropagation();
+            }}
+          >
+            <ColorPicker
+              value={data.color || token.colorBorder}
+              onChangeComplete={color => {
+                if (data.onUpdate) {
+                  data.onUpdate(data.objectId, createObjectData({ color: color.toHexString() }));
+                }
+              }}
+              trigger="click"
+              destroyTooltipOnHide
+            >
+              <button
+                type="button"
+                style={{
+                  width: '20px',
+                  height: '20px',
+                  borderRadius: '3px',
+                  background: isCustomColor
+                    ? data.color // Show the custom color
+                    : `linear-gradient(135deg,
+                        ${token.red} 0%, ${token.red} 14.28%,
+                        ${token.orange} 14.28%, ${token.orange} 28.56%,
+                        ${token.yellow} 28.56%, ${token.yellow} 42.84%,
+                        ${token.green} 42.84%, ${token.green} 57.12%,
+                        ${token.cyan} 57.12%, ${token.cyan} 71.4%,
+                        ${token.blue} 71.4%, ${token.blue} 85.68%,
+                        ${token.purple} 85.68%, ${token.purple} 100%)`,
+                  border: isCustomColor
+                    ? `2px solid ${token.colorPrimary}` // Highlight when custom color is active
+                    : `1px solid ${token.colorBorder}`,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  userSelect: 'none',
+                  cursor: 'pointer',
+                  padding: 0,
+                  position: 'relative',
+                }}
+                title={isCustomColor ? `Custom color: ${data.color}` : 'Custom color picker'}
+              >
+                <span
+                  style={{
+                    fontSize: '10px',
+                    fontWeight: 'bold',
+                    color: 'white',
+                    textShadow: '0 0 2px rgba(0,0,0,0.8)',
+                    position: 'relative',
+                    zIndex: 1,
+                  }}
+                >
+                  +
+                </span>
+              </button>
+            </ColorPicker>
+          </div>
+          <div
+            style={{
+              width: '1px',
+              height: '20px',
+              backgroundColor: token.colorBorder,
+              margin: '0 2px',
+            }}
+          />
+          {/* Lock/Unlock Button */}
+          <button
+            type="button"
+            onPointerDown={e => {
+              e.preventDefault();
+              e.stopPropagation();
+            }}
+            onPointerUp={e => {
+              e.preventDefault();
+              e.stopPropagation();
+              handleToggleLock();
+            }}
+            onClick={e => {
+              e.preventDefault();
+              e.stopPropagation();
+            }}
+            style={{
+              width: '20px',
+              height: '20px',
+              borderRadius: '3px',
+              backgroundColor: data.locked ? token.colorWarningBg : token.colorBgContainer,
+              border: `1px solid ${data.locked ? token.colorWarning : token.colorBorder}`,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              userSelect: 'none',
+              cursor: 'pointer',
+              padding: 0,
+            }}
+            title={data.locked ? 'Unlock zone' : 'Lock zone'}
+          >
+            {data.locked ? (
+              <LockOutlined style={{ fontSize: '12px', color: token.colorWarning }} />
+            ) : (
+              <UnlockOutlined style={{ fontSize: '12px', color: token.colorText }} />
+            )}
+          </button>
           <div
             style={{
               width: '1px',
@@ -246,16 +371,16 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
           />
           <button
             type="button"
-            onPointerDown={(e) => {
+            onPointerDown={e => {
               e.preventDefault();
               e.stopPropagation();
             }}
-            onPointerUp={(e) => {
+            onPointerUp={e => {
               e.preventDefault();
               e.stopPropagation();
               setConfigModalOpen(true);
             }}
-            onClick={(e) => {
+            onClick={e => {
               e.preventDefault();
               e.stopPropagation();
             }}
@@ -278,24 +403,24 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
           </button>
           <button
             type="button"
-            onPointerDown={(e) => {
+            onPointerDown={e => {
               e.preventDefault();
               e.stopPropagation();
             }}
-            onPointerUp={(e) => {
+            onPointerUp={e => {
               e.preventDefault();
               e.stopPropagation();
               setDeleteModalOpen(true);
             }}
-            onClick={(e) => {
+            onClick={e => {
               e.preventDefault();
               e.stopPropagation();
             }}
-            onMouseEnter={(e) => {
+            onMouseEnter={e => {
               e.currentTarget.style.color = token.colorError;
               e.currentTarget.style.borderColor = token.colorError;
             }}
-            onMouseLeave={(e) => {
+            onMouseLeave={e => {
               e.currentTarget.style.color = token.colorTextSecondary;
               e.currentTarget.style.borderColor = token.colorBorder;
             }}
@@ -329,7 +454,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
               ref={labelInputRef}
               type="text"
               value={label}
-              onChange={(e) => setLabel(e.target.value)}
+              onChange={e => setLabel(e.target.value)}
               onBlur={handleSaveLabel}
               onKeyDown={handleKeyDown}
               className="nodrag" // Prevent node drag when typing
@@ -384,7 +509,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
       <DeleteZoneModal
         open={deleteModalOpen}
         onCancel={() => setDeleteModalOpen(false)}
-        onConfirm={(deleteAssociatedSessions) => {
+        onConfirm={deleteAssociatedSessions => {
           setDeleteModalOpen(false);
           if (data.onDelete) {
             data.onDelete(data.objectId, deleteAssociatedSessions);

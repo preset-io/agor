@@ -1,6 +1,18 @@
 import type { Board, Session, Worktree } from '@agor/core/types';
 import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
-import { Button, Flex, Form, Input, Modal, Popconfirm, Space, Table, Typography } from 'antd';
+import {
+  Button,
+  ColorPicker,
+  Flex,
+  Form,
+  Input,
+  Modal,
+  Popconfirm,
+  Space,
+  Table,
+  Typography,
+} from 'antd';
+import type { Color } from 'antd/es/color-picker';
 import { useMemo, useState } from 'react';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { JSONEditor, validateJSON } from '../JSONEditor';
@@ -33,14 +45,14 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
   const boardSessionCounts = useMemo(() => {
     const counts = new Map<string, number>();
 
-    boards.forEach((board) => {
+    boards.forEach(board => {
       // Get worktrees for this board
-      const boardWorktrees = worktrees.filter((wt) => wt.board_id === board.board_id);
-      const boardWorktreeIds = new Set(boardWorktrees.map((wt) => wt.worktree_id));
+      const boardWorktrees = worktrees.filter(wt => wt.board_id === board.board_id);
+      const boardWorktreeIds = new Set(boardWorktrees.map(wt => wt.worktree_id));
 
       // Count sessions for these worktrees
       const sessionCount = sessions.filter(
-        (session) => session.worktree_id && boardWorktreeIds.has(session.worktree_id)
+        session => session.worktree_id && boardWorktreeIds.has(session.worktree_id)
       ).length;
 
       counts.set(board.board_id, sessionCount);
@@ -50,11 +62,16 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
   }, [boards, sessions, worktrees]);
 
   const handleCreate = () => {
-    form.validateFields().then((values) => {
+    form.validateFields().then(values => {
       onCreate?.({
         name: values.name,
         icon: values.icon || '📋',
         description: values.description,
+        background_color: values.background_color
+          ? typeof values.background_color === 'string'
+            ? values.background_color
+            : values.background_color.toHexString()
+          : undefined,
         custom_context: values.custom_context ? JSON.parse(values.custom_context) : undefined,
       });
       form.resetFields();
@@ -68,6 +85,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
       name: board.name,
       icon: board.icon,
       description: board.description,
+      background_color: board.background_color,
       custom_context: board.custom_context ? JSON.stringify(board.custom_context, null, 2) : '',
     });
     setEditModalOpen(true);
@@ -76,11 +94,16 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
   const handleUpdate = () => {
     if (!editingBoard) return;
 
-    form.validateFields().then((values) => {
+    form.validateFields().then(values => {
       onUpdate?.(editingBoard.board_id, {
         name: values.name,
         icon: values.icon,
         description: values.description,
+        background_color: values.background_color
+          ? typeof values.background_color === 'string'
+            ? values.background_color
+            : values.background_color.toHexString()
+          : undefined,
         custom_context: values.custom_context ? JSON.parse(values.custom_context) : undefined,
       });
       form.resetFields();
@@ -203,6 +226,14 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
           </Form.Item>
 
           <Form.Item
+            label="Background Color"
+            name="background_color"
+            help="Set a custom background color for the board canvas"
+          >
+            <ColorPicker showText format="hex" />
+          </Form.Item>
+
+          <Form.Item
             label="Custom Context (JSON)"
             name="custom_context"
             help="Add custom fields for use in zone trigger templates (e.g., {{ board.context.yourField }})"
@@ -243,6 +274,14 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
 
           <Form.Item label="Description" name="description">
             <Input.TextArea placeholder="Optional description..." rows={3} />
+          </Form.Item>
+
+          <Form.Item
+            label="Background Color"
+            name="background_color"
+            help="Set a custom background color for the board canvas"
+          >
+            <ColorPicker showText format="hex" />
           </Form.Item>
 
           <Form.Item

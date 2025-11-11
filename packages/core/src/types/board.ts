@@ -77,6 +77,8 @@ export interface ZoneBoardObject {
   label: string;
   color?: string;
   status?: string;
+  /** Lock zone to prevent dragging/resizing */
+  locked?: boolean;
   /** Trigger configuration for sessions dropped into this zone */
   trigger?: ZoneTrigger;
 }
@@ -141,6 +143,9 @@ export interface Board {
 
   /** Optional emoji/icon */
   icon?: string;
+
+  /** Background color for the board canvas */
+  background_color?: string;
 
   /**
    * Custom context for Handlebars templates (board-level)

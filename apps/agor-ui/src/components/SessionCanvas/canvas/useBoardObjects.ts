@@ -157,11 +157,12 @@ export const useBoardObjects = ({
         }
 
         // Zone node
+        const isLocked = objectData.type === 'zone' ? objectData.locked : false;
         return {
           id: objectId,
           type: 'zone',
           position: { x: objectData.x, y: objectData.y },
-          draggable: true,
+          draggable: !isLocked, // Respect locked state
           zIndex: 100, // Zones behind worktrees and comments
           className: eraserMode ? 'eraser-mode' : undefined,
           // Set dimensions both as direct props (for collision detection) and style (for rendering)
@@ -178,6 +179,7 @@ export const useBoardObjects = ({
             height: objectData.height,
             color: objectData.color,
             status: objectData.type === 'zone' ? objectData.status : undefined,
+            locked: isLocked,
             x: objectData.x, // Include position in data for updates
             y: objectData.y,
             trigger: objectData.type === 'zone' ? objectData.trigger : undefined,
