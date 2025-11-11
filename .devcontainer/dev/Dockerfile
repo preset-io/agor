@@ -5,6 +5,8 @@ RUN apt-get update && apt-get install -y \
     sqlite3 \
     git \
     curl \
+    tmux \
+    vim \
     && rm -rf /var/lib/apt/lists/*
 
 # Install GitHub CLI (gh)
