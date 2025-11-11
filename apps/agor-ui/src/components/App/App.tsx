@@ -74,6 +74,7 @@ export interface AppProps {
       filesystemAction: 'preserved' | 'cleaned' | 'deleted';
     }
   ) => void;
+  onUnarchiveWorktree?: (worktreeId: string, options?: { boardId?: string }) => void;
   onUpdateWorktree?: (worktreeId: string, updates: Partial<Worktree>) => void;
   onCreateWorktree?: (
     repoId: string,
