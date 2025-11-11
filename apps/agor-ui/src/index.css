@@ -137,3 +137,27 @@
 [data-streamdown="table-wrapper"] button + div button:hover {
   background-color: var(--ant-color-fill-tertiary) !important;
 }
+
+/* Replicate Tailwind dark mode behavior for Streamdown */
+/* Streamdown uses dark:hidden and dark:block which require Tailwind */
+/* Since we don't use Tailwind, manually implement the same behavior */
+
+/* Light mode: hide elements with dark:block class */
+.dark\:block {
+  display: none;
+}
+
+/* Light mode: show elements with dark:hidden class */
+.dark\:hidden {
+  display: block;
+}
+
+/* Dark mode: show elements with dark:block class */
+html.dark .dark\:block {
+  display: block;
+}
+
+/* Dark mode: hide elements with dark:hidden class */
+html.dark .dark\:hidden {
+  display: none;
+}

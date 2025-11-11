@@ -14,6 +14,7 @@
 import { Typography } from 'antd';
 import type React from 'react';
 import { Streamdown } from 'streamdown';
+import { useTheme } from '../../contexts/ThemeContext';
 
 interface MarkdownRendererProps {
   /**
@@ -41,9 +42,13 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
   style,
   isStreaming = false,
 }) => {
+  const { themeMode } = useTheme();
+
   // Handle array of strings: filter empty, join with double newlines
   const text = Array.isArray(content) ? content.filter(t => t.trim()).join('\n\n') : content;
 
+  // Use default dual theme [light, dark] - Streamdown handles CSS-based switching
+  // Note: This may render both themes in the DOM, controlled by CSS media queries
   // Always use Streamdown for rich features (Mermaid, math, GFM, copy/download buttons)
   // Only enable incomplete markdown parsing during active streaming
   return (
@@ -53,6 +58,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
         className={inline ? 'inline-markdown' : 'markdown-content'}
         isAnimating={isStreaming} // Disable buttons during streaming
         controls={true} // Always show controls (copy/download buttons)
+        // Use default ['github-light', 'github-dark'] for automatic theme switching
       >
         {text}
       </Streamdown>

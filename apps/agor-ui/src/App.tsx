@@ -9,6 +9,7 @@ import { MobileApp } from './components/mobile/MobileApp';
 import { SandboxBanner } from './components/SandboxBanner';
 import { WelcomeModal } from './components/WelcomeModal';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
+import { StreamdownDemoPage } from './pages/StreamdownDemoPage';
 import {
   useAgorClient,
   useAgorData,
@@ -973,6 +974,9 @@ function AppContent() {
     <>
       <DeviceRouter />
       <Routes>
+        {/* Demo route */}
+        <Route path="/demo/streamdown" element={<StreamdownDemoPage />} />
+
         {/* Mobile routes */}
         <Route
           path="/m/*"
