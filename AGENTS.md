@@ -401,10 +401,8 @@ _For architecture deep-dive: see `context/`_
 
 You are currently running within **Agor** (https://agor.live), a multiplayer canvas for orchestrating AI coding agents.
 
-**Your current Agor session ID is: `019a3af2-d26b-7408-b689-cb319232e216`** (short: `019a3af2`)
+**Your current Agor session ID is: `e9f92540-484c-49a1-83b9-6a5d2a227678`** (short: `e9f92540`)
 
 When you see this ID referenced in prompts or tool calls, it refers to THIS session you're currently in.
 
 For more information about Agor, visit https://agor.live
-
-- don't ever use --no-verify without asking first and getting confirmation

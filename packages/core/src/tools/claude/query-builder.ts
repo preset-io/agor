@@ -23,7 +23,7 @@ import type { MCPServersConfig, SessionID, TaskID } from '../../types';
 import type { MessagesService, SessionsService, TasksService } from './claude-tool';
 import { DEFAULT_CLAUDE_MODEL } from './models';
 import { createCanUseToolCallback } from './permissions/permission-hooks';
-import { appendSessionContextToCLAUDEmd } from './session-context';
+import { generateSessionContext } from './session-context';
 import { detectThinkingLevel, resolveThinkingBudget } from './thinking-detector';
 
 /**
@@ -166,10 +166,6 @@ export async function setupQuery(
     } catch (listError) {
       console.warn(`⚠️  Could not list directory contents:`, listError);
     }
-
-    // Append Agor session context to CLAUDE.md
-    // This makes the agent aware of its session ID
-    await appendSessionContextToCLAUDEmd(cwd, sessionId);
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error(`❌ Working directory validation failed: ${errorMessage}`);
@@ -190,7 +186,11 @@ export async function setupQuery(
 
   const queryOptions: Record<string, unknown> = {
     cwd,
-    systemPrompt: { type: 'preset', preset: 'claude_code' },
+    systemPrompt: {
+      type: 'preset',
+      preset: 'claude_code',
+      append: generateSessionContext(sessionId), // Append Agor session context dynamically
+    },
     settingSources: ['user', 'project'], // Load user + project permissions, auto-loads CLAUDE.md
     model, // Use configured model or default
     pathToClaudeCodeExecutable: claudeCodePath,
