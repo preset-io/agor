@@ -625,6 +625,7 @@ const SessionDrawer = ({
           flexDirection: 'column',
           height: '100%',
           overflow: 'hidden',
+          background: token.colorBgElevated,
         },
       }}
     >
@@ -815,6 +816,7 @@ const SessionDrawer = ({
       {/* Input Box Footer */}
       <div
         style={{
+          position: 'relative',
           flexShrink: 0,
           background: token.colorBgContainer,
           borderTop: `1px solid ${token.colorBorder}`,

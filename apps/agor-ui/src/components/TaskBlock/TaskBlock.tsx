@@ -422,7 +422,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
         activeKey={isExpanded ? ['task-content'] : []}
         onChange={keys => onExpandChange(keys.length > 0)}
         expandIcon={() => null}
-        style={{ background: 'transparent', margin: `${token.sizeUnit}px 0` }}
+        style={{ background: 'transparent', margin: `${token.sizeUnit * 3}px 0` }}
         items={[
           {
             key: 'task-content',
@@ -431,10 +431,12 @@ export const TaskBlock = React.memo<TaskBlockProps>(
               header: {
                 padding: token.sizeUnit * 2,
                 alignItems: 'flex-start',
+                background: taskHeaderGradient || 'transparent',
+                borderRadius: isExpanded ? '8px 8px 0 0' : 8,
               },
               body: {
                 background: 'transparent',
-                padding: `${token.sizeUnit}px ${token.sizeUnit * 1.5}px`,
+                padding: `${token.sizeUnit * 2}px ${token.sizeUnit * 2}px`,
               },
             },
             children: (
