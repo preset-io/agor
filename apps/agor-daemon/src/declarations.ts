@@ -150,4 +150,17 @@ export interface WorktreesServiceImpl extends Service<Worktree, Partial<Worktree
     error?: string;
     truncated?: boolean;
   }>;
+  archiveOrDelete(
+    id: WorktreeID,
+    options: {
+      metadataAction: 'archive' | 'delete';
+      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
+    },
+    params?: FeathersParams
+  ): Promise<Worktree | { deleted: true; worktree_id: WorktreeID }>;
+  unarchive(
+    id: WorktreeID,
+    options?: { boardId?: import('@agor/core/types').BoardID },
+    params?: FeathersParams
+  ): Promise<Worktree>;
 }

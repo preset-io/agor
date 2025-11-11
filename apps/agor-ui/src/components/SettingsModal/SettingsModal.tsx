@@ -51,6 +51,7 @@ export interface SettingsModalProps {
       filesystemAction: 'preserved' | 'cleaned' | 'deleted';
     }
   ) => void;
+  onUnarchiveWorktree?: (worktreeId: string, options?: { boardId?: string }) => void;
   onUpdateWorktree?: (worktreeId: string, updates: Partial<Worktree>) => void;
   onCreateWorktree?: (
     repoId: string,
@@ -96,6 +97,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onUpdateRepo,
   onDeleteRepo,
   onArchiveOrDeleteWorktree,
+  onUnarchiveWorktree,
   onUpdateWorktree,
   onCreateWorktree,
   onStartEnvironment,
@@ -189,6 +191,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 boards={boards}
                 sessions={sessions}
                 onArchiveOrDelete={onArchiveOrDeleteWorktree}
+                onUnarchive={onUnarchiveWorktree}
                 onCreate={onCreateWorktree}
                 onRowClick={handleWorktreeRowClick}
                 onStartEnvironment={onStartEnvironment}

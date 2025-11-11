@@ -4,7 +4,9 @@ import {
   BranchesOutlined,
   CheckCircleOutlined,
   CloseCircleOutlined,
+  CodeSandboxOutlined,
   DeleteOutlined,
+  DropboxOutlined,
   EditOutlined,
   FolderOutlined,
   GlobalOutlined,
@@ -22,6 +24,7 @@ import {
   Form,
   Input,
   Modal,
+  Select,
   Space,
   Table,
   Tooltip,
@@ -44,6 +47,7 @@ interface WorktreesTableProps {
       filesystemAction: 'preserved' | 'cleaned' | 'deleted';
     }
   ) => void;
+  onUnarchive?: (worktreeId: string, options?: { boardId?: string }) => void;
   onCreate?: (
     repoId: string,
     data: {
@@ -66,6 +70,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
   boards,
   sessions,
   onArchiveOrDelete,
+  onUnarchive,
   onCreate,
   onRowClick,
   onStartEnvironment,
@@ -78,8 +83,10 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
   const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null);
   const [isFormValid, setIsFormValid] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [archiveFilter, setArchiveFilter] = useState<'all' | 'active' | 'archived'>('active');
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
   const [selectedWorktree, setSelectedWorktree] = useState<Worktree | null>(null);
+  const [hoveredArchiveButton, setHoveredArchiveButton] = useState<string | null>(null);
 
   const reposById = useMemo(() => new Map(repos.map(repo => [repo.repo_id, repo])), [repos]);
 
@@ -384,9 +391,41 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
     {
       title: 'Actions',
       key: 'actions',
-      width: 100,
+      width: 130,
       render: (_: unknown, record: Worktree) => (
         <Space size="small">
+          <Tooltip title={record.archived ? 'Archived • Click to unarchive' : 'Click to archive'}>
+            <Button
+              type="text"
+              size="small"
+              icon={
+                hoveredArchiveButton === record.worktree_id ? (
+                  // Hovered: show opposite icon (preview the action)
+                  record.archived ? (
+                    <DropboxOutlined style={{ color: token.colorSuccess }} />
+                  ) : (
+                    <CodeSandboxOutlined style={{ color: token.colorWarning }} />
+                  )
+                ) : // Not hovered: show current state
+                record.archived ? (
+                  <CodeSandboxOutlined style={{ color: token.colorWarning }} />
+                ) : (
+                  <DropboxOutlined style={{ color: token.colorTextSecondary }} />
+                )
+              }
+              onMouseEnter={() => setHoveredArchiveButton(record.worktree_id)}
+              onMouseLeave={() => setHoveredArchiveButton(null)}
+              onClick={e => {
+                e.stopPropagation();
+                if (record.archived) {
+                  onUnarchive?.(record.worktree_id);
+                } else {
+                  setSelectedWorktree(record);
+                  setArchiveDeleteModalOpen(true);
+                }
+              }}
+            />
+          </Tooltip>
           <Button
             type="text"
             size="small"
@@ -418,11 +457,20 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
       (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
     );
 
-    if (!term) {
-      return sorted;
+    // Filter by archive status
+    let filtered = sorted;
+    if (archiveFilter === 'active') {
+      filtered = sorted.filter(w => !w.archived);
+    } else if (archiveFilter === 'archived') {
+      filtered = sorted.filter(w => w.archived);
     }
 
-    return sorted.filter(worktree => {
+    // Filter by search term
+    if (!term) {
+      return filtered;
+    }
+
+    return filtered.filter(worktree => {
       const repo = reposById.get(worktree.repo_id);
       const haystacks = [
         worktree.name,
@@ -440,7 +488,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
         return value.toString().toLowerCase().includes(term);
       });
     });
-  }, [reposById, searchTerm, worktrees]);
+  }, [archiveFilter, reposById, searchTerm, worktrees]);
 
   return (
     <div>
@@ -453,13 +501,25 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
           Manage git worktrees for isolated development contexts across sessions.
         </Typography.Text>
         <Space style={{ width: '100%', display: 'flex', justifyContent: 'space-between' }}>
-          <Input
-            allowClear
-            placeholder="Search by name, repo, slug, path, or ID"
-            value={searchTerm}
-            onChange={event => setSearchTerm(event.target.value)}
-            style={{ maxWidth: token.sizeUnit * 40 }}
-          />
+          <Space>
+            <Input
+              allowClear
+              placeholder="Search by name, repo, slug, path, or ID"
+              value={searchTerm}
+              onChange={event => setSearchTerm(event.target.value)}
+              style={{ maxWidth: token.sizeUnit * 40 }}
+            />
+            <Select
+              value={archiveFilter}
+              onChange={value => setArchiveFilter(value)}
+              style={{ width: 120 }}
+              options={[
+                { value: 'active', label: 'Active' },
+                { value: 'all', label: 'All' },
+                { value: 'archived', label: 'Archived' },
+              ]}
+            />
+          </Space>
           <Button
             type="primary"
             icon={<PlusOutlined />}

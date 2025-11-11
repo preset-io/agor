@@ -16,6 +16,7 @@ import { cleanWorktree, removeWorktree } from '@agor/core/git';
 import { renderTemplate } from '@agor/core/templates/handlebars-helpers';
 import type {
   BoardEntityObject,
+  BoardID,
   QueryParams,
   Repo,
   UUID,
@@ -353,6 +354,64 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       console.log(`✅ Permanently deleted worktree ${worktree.name}`);
       return { deleted: true, worktree_id: id };
     }
+  }
+
+  /**
+   * Custom method: Unarchive a worktree
+   */
+  async unarchive(
+    id: WorktreeID,
+    options?: { boardId?: BoardID },
+    params?: WorktreeParams
+  ): Promise<Worktree> {
+    const worktree = await this.get(id, params);
+
+    if (!worktree.archived) {
+      throw new Error(`Worktree ${worktree.name} is not archived`);
+    }
+
+    console.log(`📦 Unarchiving worktree: ${worktree.name}`);
+
+    // Update worktree - clear archive metadata
+    const unarchivedWorktree = await this.patch(
+      id,
+      {
+        archived: false,
+        archived_at: undefined,
+        archived_by: undefined,
+        filesystem_status: undefined,
+        board_id: options?.boardId, // Optionally restore to board
+        updated_at: new Date().toISOString(),
+      },
+      params
+    );
+
+    // Unarchive all sessions that were archived due to worktree archival
+    const sessionsService = this.app.service('sessions');
+    const sessionsResult = await sessionsService.find({
+      query: {
+        worktree_id: id,
+        archived: true,
+        archived_reason: 'worktree_archived',
+        $limit: 1000,
+      },
+      paginate: false,
+    });
+    const sessions = Array.isArray(sessionsResult) ? sessionsResult : sessionsResult.data;
+
+    for (const session of sessions) {
+      await sessionsService.patch(
+        session.session_id,
+        {
+          archived: false,
+          archived_reason: undefined,
+        },
+        params
+      );
+    }
+
+    console.log(`✅ Unarchived worktree ${worktree.name} and ${sessions.length} session(s)`);
+    return unarchivedWorktree as Worktree;
   }
 
   /**

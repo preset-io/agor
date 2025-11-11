@@ -218,6 +218,11 @@ export interface WorktreesService extends AgorService<Worktree> {
     },
     params?: Params
   ): Promise<Worktree | { deleted: true; worktree_id: string }>;
+
+  /**
+   * Unarchive a worktree
+   */
+  unarchive(id: string, options?: { boardId?: string }, params?: Params): Promise<Worktree>;
 }
 
 /**

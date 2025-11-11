@@ -2596,6 +2596,41 @@ async function main() {
     // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
   } as any);
 
+  // POST /worktrees/:id/archive-or-delete - Archive or delete worktree
+  app.use('/worktrees/:id/archive-or-delete', {
+    async create(data: unknown, params: RouteParams) {
+      ensureMinimumRole(params, 'admin', 'archive or delete worktrees');
+      const id = params.route?.id;
+      if (!id) throw new Error('Worktree ID required');
+      const options = data as {
+        metadataAction: 'archive' | 'delete';
+        filesystemAction: 'preserved' | 'cleaned' | 'deleted';
+      };
+      return worktreesService.archiveOrDelete(
+        id as import('@agor/core/types').WorktreeID,
+        options,
+        params
+      );
+    },
+    // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
+  } as any);
+
+  // POST /worktrees/:id/unarchive - Unarchive worktree
+  app.use('/worktrees/:id/unarchive', {
+    async create(data: unknown, params: RouteParams) {
+      ensureMinimumRole(params, 'admin', 'unarchive worktrees');
+      const id = params.route?.id;
+      if (!id) throw new Error('Worktree ID required');
+      const options = data as { boardId?: import('@agor/core/types').BoardID };
+      return worktreesService.unarchive(
+        id as import('@agor/core/types').WorktreeID,
+        options,
+        params
+      );
+    },
+    // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
+  } as any);
+
   // GET /worktrees/logs?worktree_id=xxx - Get environment logs
   app.use('/worktrees/logs', {
     async find(params: Params) {

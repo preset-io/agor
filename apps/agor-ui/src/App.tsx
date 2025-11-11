@@ -644,14 +644,33 @@ function AppContent() {
   ) => {
     if (!client) return;
     try {
-      // Call the archiveOrDelete custom method on worktrees service
-      await client.service('worktrees').archiveOrDelete(worktreeId, options);
       const action = options.metadataAction === 'archive' ? 'archived' : 'deleted';
-      message.success(`Worktree ${action} successfully!`);
+      message.loading({
+        content: `${options.metadataAction === 'archive' ? 'Archiving' : 'Deleting'} worktree...`,
+        key: 'archive-delete',
+        duration: 0,
+      });
+      await client.service(`worktrees/${worktreeId}/archive-or-delete`).create(options);
+      message.success({ content: `Worktree ${action} successfully!`, key: 'archive-delete' });
     } catch (error) {
-      message.error(
-        `Failed to ${options.metadataAction} worktree: ${error instanceof Error ? error.message : String(error)}`
-      );
+      message.error({
+        content: `Failed to ${options.metadataAction} worktree: ${error instanceof Error ? error.message : String(error)}`,
+        key: 'archive-delete',
+      });
+    }
+  };
+
+  const handleUnarchiveWorktree = async (worktreeId: string, options?: { boardId?: string }) => {
+    if (!client) return;
+    try {
+      message.loading({ content: 'Unarchiving worktree...', key: 'unarchive', duration: 0 });
+      await client.service(`worktrees/${worktreeId}/unarchive`).create(options || {});
+      message.success({ content: 'Worktree unarchived successfully!', key: 'unarchive' });
+    } catch (error) {
+      message.error({
+        content: `Failed to unarchive worktree: ${error instanceof Error ? error.message : String(error)}`,
+        key: 'unarchive',
+      });
     }
   };
 
@@ -1031,6 +1050,7 @@ function AppContent() {
                 onUpdateRepo={handleUpdateRepo}
                 onDeleteRepo={handleDeleteRepo}
                 onArchiveOrDeleteWorktree={handleArchiveOrDeleteWorktree}
+                onUnarchiveWorktree={handleUnarchiveWorktree}
                 onUpdateWorktree={handleUpdateWorktree}
                 onCreateWorktree={handleCreateWorktree}
                 onStartEnvironment={handleStartEnvironment}

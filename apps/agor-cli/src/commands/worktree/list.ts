@@ -16,12 +16,22 @@ export default class WorktreeList extends BaseCommand {
 
   static examples = [
     '<%= config.bin %> <%= command.id %>',
+    '<%= config.bin %> <%= command.id %> --all',
+    '<%= config.bin %> <%= command.id %> --archived',
     '<%= config.bin %> <%= command.id %> --repo-id 01933e4a',
   ];
 
   static flags = {
     'repo-id': Flags.string({
       description: 'Filter by repository ID',
+    }),
+    all: Flags.boolean({
+      description: 'Show both active and archived worktrees',
+      default: false,
+    }),
+    archived: Flags.boolean({
+      description: 'Show only archived worktrees',
+      default: false,
     }),
   };
 
@@ -73,7 +83,16 @@ export default class WorktreeList extends BaseCommand {
         ) as Worktree[];
       }
 
-      if (allWorktrees.length === 0) {
+      // Filter by archive status
+      let filteredWorktrees = allWorktrees;
+      if (flags.archived) {
+        filteredWorktrees = allWorktrees.filter(w => w.archived);
+      } else if (!flags.all) {
+        // Default: show only active (not archived)
+        filteredWorktrees = allWorktrees.filter(w => !w.archived);
+      }
+
+      if (filteredWorktrees.length === 0) {
         this.log(chalk.dim('No worktrees found.'));
         this.log('');
         this.log(`Create one with: ${chalk.cyan('agor worktree add <name> --repo-id <id>')}`);
@@ -135,13 +154,16 @@ export default class WorktreeList extends BaseCommand {
         colWidths: [10, 18, 18, 22, 10, 15],
       });
 
-      for (const worktree of allWorktrees) {
+      for (const worktree of filteredWorktrees) {
         const repo = repoCache.get(worktree.repo_id);
         const sessionCount = sessionCounts.get(worktree.worktree_id) || 0;
+        const nameDisplay = worktree.archived
+          ? `${worktree.name} ${chalk.dim('□')}`
+          : worktree.name;
         table.push([
           chalk.dim(formatShortId(worktree.worktree_id)),
           repo ? repo.slug : chalk.dim(formatShortId(worktree.repo_id)),
-          worktree.name,
+          nameDisplay,
           worktree.ref,
           sessionCount.toString(),
           chalk.dim(this.formatRelativeTime(worktree.last_used || worktree.created_at)),
@@ -151,7 +173,7 @@ export default class WorktreeList extends BaseCommand {
       this.log(table.toString());
       this.log('');
 
-      this.log(chalk.dim(`Showing ${allWorktrees.length} worktree(s)`));
+      this.log(chalk.dim(`Showing ${filteredWorktrees.length} worktree(s)`));
       this.log('');
 
       // Cleanup
