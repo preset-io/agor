@@ -1,7 +1,12 @@
 import { createRoot } from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
+import { installClipboardPolyfill } from './utils/clipboard-polyfill';
 import { initializeHandlebarsHelpers } from './utils/handlebars-helpers';
+
+// Install clipboard polyfill for non-HTTPS environments
+// This ensures Streamdown's copy buttons work on HTTP and local network IPs
+installClipboardPolyfill();
 
 // Cleanup WebSocket connections on Vite HMR
 if (import.meta.hot) {

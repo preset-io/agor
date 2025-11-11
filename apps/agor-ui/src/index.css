@@ -11,3 +11,129 @@
     opacity: 0;
   }
 }
+
+/* Streamdown styling adjustments to match Ant Design theme */
+/* Override Tailwind classes with Ant Design token-based styles */
+[data-streamdown] {
+  /* Let Ant Design Typography handle font family */
+  font-family: inherit;
+}
+
+/* Headings - reduce excessive margins from Tailwind defaults */
+[data-streamdown="heading-1"],
+[data-streamdown="heading-2"],
+[data-streamdown="heading-3"],
+[data-streamdown="heading-4"],
+[data-streamdown="heading-5"],
+[data-streamdown="heading-6"] {
+  margin-top: 1em;
+  margin-bottom: 0.5em;
+}
+
+/* Links - inherit primary color from Ant Design */
+[data-streamdown="link"] {
+  color: var(--ant-color-primary);
+  text-decoration: underline;
+}
+
+[data-streamdown="link"]:hover {
+  color: var(--ant-color-primary-hover);
+}
+
+/* Code blocks - use Ant Design's neutral colors */
+[data-streamdown="inline-code"] {
+  background-color: rgba(0, 0, 0, 0.06);
+  padding: 0.2em 0.4em;
+  border-radius: 3px;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+}
+
+/* Dark mode adjustments for inline code */
+@media (prefers-color-scheme: dark) {
+  [data-streamdown="inline-code"] {
+    background-color: rgba(255, 255, 255, 0.08);
+  }
+}
+
+/* Tables - match Ant Design table styling */
+[data-streamdown="table"] {
+  border-color: var(--ant-color-border);
+}
+
+[data-streamdown="table-header"] {
+  background-color: var(--ant-color-bg-container);
+}
+
+[data-streamdown="table-body"] {
+  background-color: var(--ant-color-bg-layout);
+}
+
+/* Blockquotes - use Ant Design's text colors */
+[data-streamdown="blockquote"] {
+  border-left-color: var(--ant-color-border);
+  color: var(--ant-color-text-secondary);
+}
+
+/* Lists - reduce spacing for better density */
+[data-streamdown="ordered-list"],
+[data-streamdown="unordered-list"] {
+  margin-top: 0.5em;
+  margin-bottom: 0.5em;
+}
+
+/* Code block controls - match Ant Design button styling */
+[data-code-block-header] {
+  background-color: var(--ant-color-bg-container);
+  border-bottom: 1px solid var(--ant-color-border);
+}
+
+/* Copy/Download button styling - override Tailwind classes */
+[data-code-block-header] button,
+[data-streamdown="mermaid-block"] button,
+[data-streamdown="table-wrapper"] button,
+[data-streamdown="image-wrapper"] button {
+  /* Override Tailwind text-muted-foreground */
+  color: var(--ant-color-text-secondary) !important;
+  background-color: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  padding: 4px;
+  transition: all 0.2s;
+}
+
+[data-code-block-header] button:hover:not(:disabled),
+[data-streamdown="mermaid-block"] button:hover:not(:disabled),
+[data-streamdown="table-wrapper"] button:hover:not(:disabled),
+[data-streamdown="image-wrapper"] button:hover:not(:disabled) {
+  /* Override Tailwind hover:text-foreground */
+  color: var(--ant-color-text) !important;
+  background-color: var(--ant-color-fill-quaternary);
+  border-color: var(--ant-color-border);
+}
+
+[data-code-block-header] button:disabled,
+[data-streamdown="mermaid-block"] button:disabled,
+[data-streamdown="table-wrapper"] button:disabled,
+[data-streamdown="image-wrapper"] button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Table dropdown menu styling */
+[data-streamdown="table-wrapper"] button + div {
+  background-color: var(--ant-color-bg-elevated) !important;
+  border: 1px solid var(--ant-color-border) !important;
+  box-shadow: var(--ant-box-shadow);
+}
+
+[data-streamdown="table-wrapper"] button + div button {
+  padding: 8px 12px;
+  text-align: left;
+  width: 100%;
+  font-size: 14px;
+}
+
+[data-streamdown="table-wrapper"] button + div button:hover {
+  background-color: var(--ant-color-fill-tertiary) !important;
+}

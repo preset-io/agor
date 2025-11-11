@@ -10,6 +10,10 @@ interface CollapsibleMarkdownProps {
   className?: string;
   style?: React.CSSProperties;
   defaultExpanded?: boolean;
+  /**
+   * If true, uses Streamdown for incomplete markdown handling
+   */
+  isStreaming?: boolean;
 }
 
 /**
@@ -33,6 +37,7 @@ export const CollapsibleMarkdown: React.FC<CollapsibleMarkdownProps> = ({
   className,
   style,
   defaultExpanded = false,
+  isStreaming = false,
 }) => {
   const { token } = theme.useToken();
   const [expanded, setExpanded] = useState(defaultExpanded);
@@ -44,7 +49,7 @@ export const CollapsibleMarkdown: React.FC<CollapsibleMarkdownProps> = ({
   if (!shouldTruncate) {
     return (
       <div className={className} style={style}>
-        <MarkdownRenderer content={children} />
+        <MarkdownRenderer content={children} isStreaming={isStreaming} />
       </div>
     );
   }
@@ -55,7 +60,7 @@ export const CollapsibleMarkdown: React.FC<CollapsibleMarkdownProps> = ({
 
   return (
     <div className={className} style={style}>
-      <MarkdownRenderer content={displayContent} />
+      <MarkdownRenderer content={displayContent} isStreaming={isStreaming} />
 
       <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
         {!expanded && (

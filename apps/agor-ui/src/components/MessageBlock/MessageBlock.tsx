@@ -416,11 +416,15 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
                   return (
                     <div key={`text-${idx}-${text.substring(0, 20)}`}>
                       {shouldTruncate ? (
-                        <CollapsibleMarkdown maxLines={10} defaultExpanded={isLatestMessage}>
+                        <CollapsibleMarkdown
+                          maxLines={10}
+                          defaultExpanded={isLatestMessage}
+                          isStreaming={isStreaming}
+                        >
                           {text}
                         </CollapsibleMarkdown>
                       ) : (
-                        <MarkdownRenderer content={text} inline />
+                        <MarkdownRenderer content={text} inline isStreaming={isStreaming} />
                       )}
                     </div>
                   );
@@ -471,11 +475,15 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
                   const shouldTruncate = combinedText.split('\n').length > 15;
 
                   return shouldTruncate ? (
-                    <CollapsibleMarkdown maxLines={10} defaultExpanded={isLatestMessage}>
+                    <CollapsibleMarkdown
+                      maxLines={10}
+                      defaultExpanded={isLatestMessage}
+                      isStreaming={isStreaming}
+                    >
                       {combinedText}
                     </CollapsibleMarkdown>
                   ) : (
-                    <MarkdownRenderer content={combinedText} inline />
+                    <MarkdownRenderer content={combinedText} inline isStreaming={isStreaming} />
                   );
                 })()}
               </div>
