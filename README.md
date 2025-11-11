@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/preset-io-agor-badge.png)](https://mseep.ai/app/preset-io-agor)
+
 <img src=".github/logo_circle.png" alt="Agor Logo" width="160" />
 
 # Agor
