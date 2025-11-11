@@ -37,6 +37,7 @@ import {
   theme,
 } from 'antd';
 import React from 'react';
+import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useTasks } from '../../hooks/useTasks';
 import spawnSubsessionTemplate from '../../templates/spawn_subsession.hbs?raw';
 import { getContextWindowGradient } from '../../utils/contextWindow';
@@ -132,6 +133,7 @@ const SessionDrawer = ({
 }: SessionDrawerProps) => {
   const { token } = theme.useToken();
   const { modal, message } = App.useApp();
+  const connectionDisabled = useConnectionDisabled();
 
   // Per-session draft storage (persists across session switches, no parent re-renders!)
   const draftsRef = React.useRef<Map<string, string>>(new Map());
@@ -951,14 +953,14 @@ const SessionDrawer = ({
                   <Button
                     icon={<ForkOutlined />}
                     onClick={handleFork}
-                    disabled={isRunning || !inputValue.trim()}
+                    disabled={connectionDisabled || isRunning || !inputValue.trim()}
                   />
                 </Tooltip>
                 <Tooltip title={isRunning ? 'Session is running...' : 'Spawn Subsession'}>
                   <Button
                     icon={<BranchesOutlined />}
                     onClick={handleSubsession}
-                    disabled={isRunning || !inputValue.trim()}
+                    disabled={connectionDisabled || isRunning || !inputValue.trim()}
                   />
                 </Tooltip>
                 <Tooltip title={isRunning ? 'Queue Message' : 'Send Prompt'}>
@@ -966,7 +968,7 @@ const SessionDrawer = ({
                     type="primary"
                     icon={<SendOutlined />}
                     onClick={handleSendPrompt}
-                    disabled={!inputValue.trim()}
+                    disabled={connectionDisabled || !inputValue.trim()}
                   />
                 </Tooltip>
               </Space.Compact>

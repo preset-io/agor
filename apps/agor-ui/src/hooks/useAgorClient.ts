@@ -39,6 +39,7 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
   useEffect(() => {
     let mounted = true;
     let client: AgorClient | null = null;
+    let hasConnectedOnce = false; // Track if we've ever connected successfully
 
     async function connect() {
       // Don't create client if no access token and anonymous not allowed
@@ -71,6 +72,7 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
       client.io.on('connect', async () => {
         if (mounted) {
           console.log('🔌 Connected to daemon');
+          hasConnectedOnce = true; // Mark that we've successfully connected
 
           // Re-authenticate on reconnection (e.g., after daemon restart)
           try {
@@ -115,9 +117,19 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
 
       client.io.on('connect_error', (_err: Error) => {
         if (mounted) {
-          setError('Daemon is not running. Start it with: cd apps/agor-daemon && pnpm dev');
-          setConnecting(false);
-          setConnected(false);
+          // Only show error on initial connection failure, not during reconnection attempts
+          // If we've connected before, keep showing "reconnecting" state instead of error
+          if (!hasConnectedOnce) {
+            setError('Daemon is not running. Start it with: cd apps/agor-daemon && pnpm dev');
+            setConnecting(false);
+            setConnected(false);
+          } else {
+            // During reconnection, keep connecting=true so UI shows reconnecting indicator
+            console.log('🔄 Reconnection attempt failed, will retry...');
+            setConnecting(true);
+            setConnected(false);
+            // Don't set error - socket.io will keep trying
+          }
         }
       });
 

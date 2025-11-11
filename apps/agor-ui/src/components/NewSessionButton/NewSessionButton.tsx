@@ -1,5 +1,6 @@
 import { PlusOutlined } from '@ant-design/icons';
 import { FloatButton } from 'antd';
+import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 
 export interface NewSessionButtonProps {
   onClick?: () => void;
@@ -7,7 +8,12 @@ export interface NewSessionButtonProps {
 }
 
 export const NewSessionButton: React.FC<NewSessionButtonProps> = ({ onClick, hasRepos = true }) => {
-  const tooltip = hasRepos ? 'Create new worktree' : 'Create a repository first';
+  const connectionDisabled = useConnectionDisabled();
+  const tooltip = connectionDisabled
+    ? 'Disconnected from daemon'
+    : hasRepos
+      ? 'Create new worktree'
+      : 'Create a repository first';
 
   return (
     <FloatButton
@@ -15,6 +21,7 @@ export const NewSessionButton: React.FC<NewSessionButtonProps> = ({ onClick, has
       type="primary"
       onClick={onClick}
       tooltip={tooltip}
+      disabled={connectionDisabled}
       style={{ right: 24, top: 80 }}
     />
   );

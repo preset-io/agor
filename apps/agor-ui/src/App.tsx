@@ -8,8 +8,8 @@ import { LoginPage } from './components/LoginPage';
 import { MobileApp } from './components/mobile/MobileApp';
 import { SandboxBanner } from './components/SandboxBanner';
 import { WelcomeModal } from './components/WelcomeModal';
+import { ConnectionProvider } from './contexts/ConnectionContext';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
-import { StreamdownDemoPage } from './pages/StreamdownDemoPage';
 import {
   useAgorClient,
   useAgorData,
@@ -18,6 +18,7 @@ import {
   useBoardActions,
   useSessionActions,
 } from './hooks';
+import { StreamdownDemoPage } from './pages/StreamdownDemoPage';
 import { isMobileDevice } from './utils/deviceDetection';
 
 /**
@@ -133,6 +134,17 @@ function AppContent() {
   // Per-session prompt drafts (persists across session switches)
   const [promptDrafts, setPromptDrafts] = useState<Map<string, string>>(new Map());
 
+  // Track if we've successfully loaded data at least once
+  // This prevents UI from unmounting during reconnections
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
+
+  // Mark as loaded once we have data
+  useEffect(() => {
+    if (!loading && (sessions.length > 0 || boards.length > 0 || repos.length > 0)) {
+      setHasLoadedOnce(true);
+    }
+  }, [loading, sessions.length, boards.length, repos.length]);
+
   // Get current user from users array (real-time updates via WebSocket)
   // This ensures we get the latest onboarding_completed status
   // Fall back to user from auth if users array hasn't loaded yet
@@ -222,7 +234,8 @@ function AppContent() {
   }
 
   // Show reconnecting state if we have tokens but lost connection
-  if (authConfig?.requireAuth && hasTokens && (!connected || !authenticated)) {
+  // ONLY show fullscreen on initial connection, not during reconnections
+  if (authConfig?.requireAuth && hasTokens && (!connected || !authenticated) && !hasLoadedOnce) {
     return (
       <ConfigProvider theme={getCurrentThemeConfig()}>
         <div
@@ -304,8 +317,9 @@ function AppContent() {
     );
   }
 
-  // Show loading state
-  if (connecting || loading) {
+  // Show loading state ONLY on initial load, not during reconnections
+  // Once data is loaded, keep UI mounted and show connection status in header instead
+  if ((connecting || loading) && !hasLoadedOnce) {
     return (
       <ConfigProvider theme={getCurrentThemeConfig()}>
         <div
@@ -971,7 +985,7 @@ function AppContent() {
 
   // Render main app
   return (
-    <>
+    <ConnectionProvider value={{ connected, connecting }}>
       <DeviceRouter />
       <Routes>
         {/* Demo route */}
@@ -1025,6 +1039,8 @@ function AppContent() {
               <AgorApp
                 client={client}
                 user={currentUser}
+                connected={connected}
+                connecting={connecting}
                 sessions={sessions}
                 tasks={tasks}
                 availableAgents={AVAILABLE_AGENTS}
@@ -1078,7 +1094,7 @@ function AppContent() {
           }
         />
       </Routes>
-    </>
+    </ConnectionProvider>
   );
 }
 

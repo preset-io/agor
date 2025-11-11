@@ -14,6 +14,7 @@ import {
 import type { MenuProps } from 'antd';
 import { Badge, Button, Card, Collapse, Space, Spin, Tag, Tree, Typography, theme } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
+import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { ArchiveDeleteWorktreeModal } from '../ArchiveDeleteWorktreeModal';
 import { EnvironmentPill } from '../EnvironmentPill';
 import { type ForkSpawnAction, ForkSpawnModal } from '../ForkSpawnModal';
@@ -104,6 +105,7 @@ const WorktreeCard = ({
   defaultExpanded = true,
 }: WorktreeCardProps) => {
   const { token } = theme.useToken();
+  const connectionDisabled = useConnectionDisabled();
 
   // Fork/Spawn modal state
   const [forkSpawnModal, setForkSpawnModal] = useState<{
@@ -201,6 +203,7 @@ const WorktreeCard = ({
         key: 'fork',
         icon: <ForkOutlined />,
         label: 'Fork Session',
+        disabled: connectionDisabled,
         onClick: () => {
           setForkSpawnModal({
             open: true,
@@ -213,6 +216,7 @@ const WorktreeCard = ({
         key: 'spawn',
         icon: <SubnodeOutlined />,
         label: 'Spawn Subsession',
+        disabled: connectionDisabled,
         onClick: () => {
           setForkSpawnModal({
             open: true,
@@ -332,6 +336,7 @@ const WorktreeCard = ({
             type="default"
             size="small"
             icon={<PlusOutlined />}
+            disabled={connectionDisabled}
             onClick={e => {
               e.stopPropagation();
               onCreateSession(worktree.worktree_id);
@@ -538,6 +543,7 @@ const WorktreeCard = ({
                 type="text"
                 size="small"
                 icon={<DeleteOutlined />}
+                disabled={connectionDisabled}
                 onClick={e => {
                   e.stopPropagation();
                   setArchiveDeleteModalOpen(true);
@@ -570,6 +576,7 @@ const WorktreeCard = ({
             onStartEnvironment={onStartEnvironment}
             onStopEnvironment={onStopEnvironment}
             onViewLogs={onViewLogs}
+            connectionDisabled={connectionDisabled}
           />
         </Space>
       </div>
@@ -601,6 +608,7 @@ const WorktreeCard = ({
               <Button
                 type="primary"
                 icon={<PlusOutlined />}
+                disabled={connectionDisabled}
                 onClick={e => {
                   e.stopPropagation();
                   onCreateSession(worktree.worktree_id);

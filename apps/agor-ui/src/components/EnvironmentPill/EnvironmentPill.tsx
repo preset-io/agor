@@ -19,6 +19,7 @@ interface EnvironmentPillProps {
   onStartEnvironment?: (worktreeId: string) => void;
   onStopEnvironment?: (worktreeId: string) => void;
   onViewLogs?: (worktreeId: string) => void;
+  connectionDisabled?: boolean; // Disable actions when disconnected
 }
 
 export function EnvironmentPill({
@@ -28,6 +29,7 @@ export function EnvironmentPill({
   onStartEnvironment,
   onStopEnvironment,
   onViewLogs,
+  connectionDisabled = false,
 }: EnvironmentPillProps) {
   const { token } = theme.useToken();
   const hasConfig = !!repo.environment_config;
@@ -92,8 +94,15 @@ export function EnvironmentPill({
   const isStarting = status === 'starting';
   const isStopping = status === 'stopping';
   const canStop = status === 'running' || status === 'starting';
-  const startDisabled = !hasConfig || !onStartEnvironment || isStarting || isStopping || isRunning;
-  const stopDisabled = !hasConfig || !onStopEnvironment || isStopping || !canStop;
+  const startDisabled =
+    connectionDisabled ||
+    !hasConfig ||
+    !onStartEnvironment ||
+    isStarting ||
+    isStopping ||
+    isRunning;
+  const stopDisabled =
+    connectionDisabled || !hasConfig || !onStopEnvironment || isStopping || !canStop;
 
   // Build helpful tooltip based on inferred state
   const getTooltipText = () => {

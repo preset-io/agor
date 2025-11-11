@@ -306,19 +306,27 @@ export function createClient(
   options?: {
     /** Show connection status logs (useful for CLI) */
     verbose?: boolean;
+    /** Limit reconnection attempts (useful for CLI to avoid hanging) */
+    reconnectionAttempts?: number;
   }
 ): AgorClient {
+  // Detect if running in browser vs Node.js (CLI)
+  // Use 'in' operator to avoid TypeScript index signature errors during DTS build
+  const isBrowser = typeof globalThis !== 'undefined' && 'window' in globalThis;
+
   // Configure socket.io with better defaults for React StrictMode and reconnection
   const socket = io(url, {
     // Auto-connect by default for CLI, manual control for React hooks
     autoConnect,
-    // Reconnection settings (less aggressive to prevent socket exhaustion)
+    // Reconnection settings
     reconnection: true,
     reconnectionDelay: 1000, // Wait 1s before first reconnect attempt
-    reconnectionDelayMax: 2000, // Max 2s between attempts
-    reconnectionAttempts: 2, // Only try 2 times before giving up (fast fail for CLI)
+    reconnectionDelayMax: 5000, // Max 5s between attempts
+    // Browser: keep trying indefinitely, CLI: fail fast (2 attempts)
+    reconnectionAttempts:
+      options?.reconnectionAttempts ?? (isBrowser ? Number.POSITIVE_INFINITY : 2),
     // Timeout settings
-    timeout: 2000, // 2s timeout for initial connection
+    timeout: 20000, // 20s timeout for initial connection
     // Transports (WebSocket preferred, fallback to polling)
     transports: ['websocket', 'polling'],
     // Connection lifecycle settings

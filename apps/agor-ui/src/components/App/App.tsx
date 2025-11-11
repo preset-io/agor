@@ -39,6 +39,8 @@ const { Content } = Layout;
 export interface AppProps {
   client: AgorClient | null;
   user?: User | null;
+  connected?: boolean;
+  connecting?: boolean;
   sessions: Session[];
   tasks: Record<string, Task[]>;
   availableAgents: AgenticToolOption[];
@@ -108,6 +110,8 @@ export interface AppProps {
 export const App: React.FC<AppProps> = ({
   client,
   user,
+  connected = false,
+  connecting = false,
   sessions,
   tasks,
   availableAgents,
@@ -401,6 +405,8 @@ export const App: React.FC<AppProps> = ({
         user={user}
         activeUsers={allActiveUsers}
         currentUserId={user?.user_id}
+        connected={connected}
+        connecting={connecting}
         onMenuClick={() => setListDrawerOpen(true)}
         onCommentsClick={() => setCommentsPanelCollapsed(!commentsPanelCollapsed)}
         onSettingsClick={() => setSettingsOpen(true)}

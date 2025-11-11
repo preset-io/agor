@@ -9,6 +9,7 @@ import {
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { Badge, Button, Divider, Dropdown, Layout, Space, Tooltip, Typography, theme } from 'antd';
+import { ConnectionStatus } from '../ConnectionStatus';
 import { Facepile } from '../Facepile';
 import { ThemeSwitcher } from '../ThemeSwitcher';
 
@@ -19,6 +20,8 @@ export interface AppHeaderProps {
   user?: User | null;
   activeUsers?: ActiveUser[];
   currentUserId?: string;
+  connected?: boolean;
+  connecting?: boolean;
   onMenuClick?: () => void;
   onCommentsClick?: () => void;
   onSettingsClick?: () => void;
@@ -34,6 +37,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   user,
   activeUsers = [],
   currentUserId,
+  connected = false,
+  connecting = false,
   onMenuClick,
   onCommentsClick,
   onSettingsClick,
@@ -149,6 +154,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       </Space>
 
       <Space>
+        <ConnectionStatus connected={connected} connecting={connecting} />
         {activeUsers.length > 0 && (
           <>
             <Facepile
