@@ -131,11 +131,6 @@ async function calculateTaskContextWindow(
   tasksService: TasksServiceImpl,
   messagesService: MessagesServiceImpl
 ): Promise<number | undefined> {
-  if (session.agentic_tool !== 'claude-code') {
-    // For non-Claude Code tools, use simple calculation
-    return calculateContextWindowUsage(usage);
-  }
-
   try {
     // Fetch all tasks and messages for this session
     const allTasksResult = (await tasksService.find({
@@ -151,7 +146,10 @@ async function calculateTaskContextWindow(
       : allMessagesResult;
 
     // Calculate cumulative context window (input + output tokens)
-    return calculateCumulativeContextWindow(allTasks, allMessages);
+    // This represents the actual conversation size across all turns
+    // For all agents: Codex, Claude Code, Gemini, etc.
+    // Pass agenticTool so normalization can handle different token reporting formats
+    return calculateCumulativeContextWindow(allTasks, allMessages, session.agentic_tool);
   } catch (err) {
     console.warn(
       `⚠️  Failed to calculate cumulative context window for session ${session.session_id}:`,

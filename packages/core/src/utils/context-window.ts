@@ -45,6 +45,45 @@ interface TokenUsage {
 }
 
 /**
+ * Normalize token usage from different agentic tools into a consistent format
+ *
+ * Different tools report tokens differently:
+ * - **Codex/OpenAI**: input_tokens INCLUDES cached tokens (cache_read_tokens is a subset)
+ * - **Claude**: input_tokens EXCLUDES cached tokens (cache_read_tokens is additional)
+ * - **Gemini**: No caching, just input/output
+ *
+ * This function normalizes to a consistent model where:
+ * - input_tokens = fresh (non-cached) input tokens only
+ * - cache_read_tokens = cached tokens (if any)
+ * - output_tokens = output tokens
+ *
+ * @param usage - Raw token usage from the SDK
+ * @param agenticTool - The tool that generated this usage ('codex', 'claude-code', 'gemini', etc.)
+ * @returns Normalized token usage where input_tokens always means fresh tokens
+ */
+export function normalizeTokenUsage(
+  usage: TokenUsage | undefined,
+  agenticTool?: string
+): TokenUsage | undefined {
+  if (!usage) return undefined;
+
+  // For Codex/OpenAI: input_tokens includes cached tokens, so we need to subtract
+  if (agenticTool === 'codex') {
+    return {
+      ...usage,
+      // Fresh input = total input - cached portion
+      input_tokens: (usage.input_tokens || 0) - (usage.cache_read_tokens || 0),
+      // Keep cache_read_tokens as-is for reference
+      cache_read_tokens: usage.cache_read_tokens,
+      output_tokens: usage.output_tokens,
+    };
+  }
+
+  // For Claude, Gemini, and others: input_tokens already represents fresh tokens
+  return usage;
+}
+
+/**
  * Model usage interface from SDK (per-model breakdown)
  *
  * NOTE: contextWindow is the model's MAXIMUM context window (the limit),
@@ -148,13 +187,14 @@ export function getContextWindowLimit(
  *
  * Algorithm:
  * 1. Iterate through tasks in chronological order
- * 2. Sum (input_tokens + output_tokens) for each task
- * 3. When a compaction event is detected, reset the counter (context was trimmed)
- * 4. Return the cumulative sum
+ * 2. Normalize token usage based on agentic_tool (Codex reports differently than Claude)
+ * 3. Sum (normalized_input_tokens + output_tokens) for each task
+ * 4. When a compaction event is detected, reset the counter (context was trimmed)
+ * 5. Return the cumulative sum
  *
  * Why input + output?
- * - input_tokens: User's prompt for this turn (fresh input)
- * - output_tokens: Claude's response for this turn
+ * - input_tokens: User's prompt for this turn (fresh input, after normalization)
+ * - output_tokens: Agent's response for this turn
  * - Together they represent the conversation tokens added in this turn
  * - Summing across turns gives total conversation size
  *
@@ -163,11 +203,13 @@ export function getContextWindowLimit(
  *
  * @param tasks - All tasks in the session (ordered chronologically)
  * @param messages - All messages in the session (needed to detect compaction boundaries)
+ * @param agenticTool - The agentic tool used ('codex', 'claude-code', 'gemini')
  * @returns Cumulative context window usage in tokens
  */
 export function calculateCumulativeContextWindow(
   tasks: Array<{ usage?: TokenUsage; task_id: string }>,
-  messages: Array<{ task_id?: string; type?: string; content?: unknown }>
+  messages: Array<{ task_id?: string; type?: string; content?: unknown }>,
+  agenticTool?: string
 ): number {
   // Find all compaction boundary messages (these mark where context was reset)
   const compactionTaskIds = new Set<string>();
@@ -207,8 +249,13 @@ export function calculateCumulativeContextWindow(
   for (let i = startIndex; i < tasks.length; i++) {
     const task = tasks[i];
     if (task.usage) {
-      const turnTokens = (task.usage.input_tokens || 0) + (task.usage.output_tokens || 0);
-      cumulativeTokens += turnTokens;
+      // Normalize token usage based on agentic tool
+      // This ensures consistent calculation regardless of how each tool reports tokens
+      const normalized = normalizeTokenUsage(task.usage, agenticTool);
+      if (normalized) {
+        const turnTokens = (normalized.input_tokens || 0) + (normalized.output_tokens || 0);
+        cumulativeTokens += turnTokens;
+      }
     }
   }
 

@@ -12,7 +12,6 @@ import {
   desc,
   eq,
   type SQL,
-  messages,
   sessions,
   sql,
   tasks,
@@ -113,9 +112,6 @@ export class LeaderboardService {
     // Build WHERE conditions
     const conditions: SQL[] = [];
 
-    // Only count assistant messages (they have token usage in metadata)
-    conditions.push(eq(messages.role, 'assistant'));
-
     if (userId) {
       conditions.push(eq(tasks.created_by, userId));
     }
@@ -141,15 +137,26 @@ export class LeaderboardService {
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
     // Build dynamic SELECT clause
-    // Aggregate token usage from messages (stored in metadata.tokens.input/output)
+    // Aggregate token usage from tasks (stored in usage.input_tokens/output_tokens)
+    // IMPORTANT: Normalize tokens based on agentic_tool since different tools report differently:
+    // - Codex: input_tokens INCLUDES cached tokens (cache_read_tokens is a subset)
+    // - Claude/Gemini: input_tokens EXCLUDES cached tokens
     // biome-ignore lint/suspicious/noExplicitAny: Dynamic SQL fields require any
     const selectFields: Record<string, any> = {
       totalTokens: sql<number>`COALESCE(SUM(
-        CAST(json_extract(${messages.data}, '$.metadata.tokens.input') AS INTEGER) +
-        CAST(json_extract(${messages.data}, '$.metadata.tokens.output') AS INTEGER)
+        CASE
+          WHEN json_extract(${sessions.data}, '$.agentic_tool') = 'codex' THEN
+            (CAST(json_extract(${tasks.data}, '$.usage.input_tokens') AS INTEGER) -
+             COALESCE(CAST(json_extract(${tasks.data}, '$.usage.cache_read_tokens') AS INTEGER), 0)) +
+            CAST(json_extract(${tasks.data}, '$.usage.output_tokens') AS INTEGER)
+          ELSE
+            CAST(json_extract(${tasks.data}, '$.usage.input_tokens') AS INTEGER) +
+            CAST(json_extract(${tasks.data}, '$.usage.output_tokens') AS INTEGER)
+        END
       ), 0)`.as('total_tokens'),
-      // TODO: Calculate actual cost based on model and token counts using pricing utility
-      totalCost: sql<number>`CAST(0.0 AS REAL)`.as('total_cost'),
+      totalCost: sql<number>`COALESCE(SUM(
+        CAST(json_extract(${tasks.data}, '$.usage.estimated_cost_usd') AS REAL)
+      ), 0.0)`.as('total_cost'),
       taskCount: sql<number>`COUNT(DISTINCT ${tasks.task_id})`.as('task_count'),
     };
 
@@ -179,11 +186,10 @@ export class LeaderboardService {
     const orderClause = sortOrder === 'desc' ? desc(sortField) : asc(sortField);
 
     // Execute aggregation query
-    // Join: messages -> tasks -> sessions -> worktrees
+    // Join: tasks -> sessions -> worktrees
     const results = await this.db
       .select(selectFields)
-      .from(messages)
-      .innerJoin(tasks, eq(messages.task_id, tasks.task_id))
+      .from(tasks)
       .innerJoin(sessions, eq(tasks.session_id, sessions.session_id))
       .innerJoin(worktrees, eq(sessions.worktree_id, worktrees.worktree_id))
       .where(whereClause)
@@ -206,8 +212,7 @@ export class LeaderboardService {
       .select({
         count: sql<number>`${distinctExpr}`,
       })
-      .from(messages)
-      .innerJoin(tasks, eq(messages.task_id, tasks.task_id))
+      .from(tasks)
       .innerJoin(sessions, eq(tasks.session_id, sessions.session_id))
       .innerJoin(worktrees, eq(sessions.worktree_id, worktrees.worktree_id))
       .where(whereClause);

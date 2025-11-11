@@ -252,19 +252,34 @@ const SessionDrawer = ({
   }, [client, session]); // Re-run when client or session changes
 
   // Calculate token totals and breakdown across all tasks
+  // IMPORTANT: Normalize tokens based on agentic_tool since different tools report differently:
+  // - Codex: input_tokens INCLUDES cached tokens (cache_read_tokens is a subset)
+  // - Claude/Gemini: input_tokens EXCLUDES cached tokens
   const tokenBreakdown = React.useMemo(() => {
     return tasks.reduce(
-      (acc, task) => ({
-        total: acc.total + (task.usage?.total_tokens || 0),
-        input: acc.input + (task.usage?.input_tokens || 0),
-        output: acc.output + (task.usage?.output_tokens || 0),
-        cacheRead: acc.cacheRead + (task.usage?.cache_read_tokens || 0),
-        cacheCreation: acc.cacheCreation + (task.usage?.cache_creation_tokens || 0),
-        cost: acc.cost + (task.usage?.estimated_cost_usd || 0),
-      }),
+      (acc, task) => {
+        const rawInput = task.usage?.input_tokens || 0;
+        const rawOutput = task.usage?.output_tokens || 0;
+        const cacheRead = task.usage?.cache_read_tokens || 0;
+
+        // Normalize input tokens based on agentic tool
+        const normalizedInput =
+          session?.agentic_tool === 'codex'
+            ? rawInput - cacheRead // For Codex: subtract cached portion
+            : rawInput; // For Claude/Gemini: already fresh
+
+        return {
+          total: acc.total + normalizedInput + rawOutput,
+          input: acc.input + normalizedInput,
+          output: acc.output + rawOutput,
+          cacheRead: acc.cacheRead + cacheRead,
+          cacheCreation: acc.cacheCreation + (task.usage?.cache_creation_tokens || 0),
+          cost: acc.cost + (task.usage?.estimated_cost_usd || 0),
+        };
+      },
       { total: 0, input: 0, output: 0, cacheRead: 0, cacheCreation: 0, cost: 0 }
     );
-  }, [tasks]);
+  }, [tasks, session?.agentic_tool]);
 
   // Get latest context window from most recent task
   // Backend pre-calculates this as cumulative (input + output) tokens across all tasks,
