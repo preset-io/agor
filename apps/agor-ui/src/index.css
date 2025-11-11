@@ -120,22 +120,190 @@
   cursor: not-allowed;
 }
 
-/* Table dropdown menu styling */
-[data-streamdown="table-wrapper"] button + div {
-  background-color: var(--ant-color-bg-elevated) !important;
-  border: 1px solid var(--ant-color-border) !important;
-  box-shadow: var(--ant-box-shadow);
+/* Replicate Tailwind utility classes used by Streamdown */
+/* Streamdown uses Tailwind utilities which we need to implement manually */
+/* Only minimal utilities needed for layout - let Streamdown handle its own styling */
+
+.flex {
+  display: flex;
 }
 
-[data-streamdown="table-wrapper"] button + div button {
-  padding: 8px 12px;
-  text-align: left;
+.flex-col {
+  flex-direction: column;
+}
+
+.items-center {
+  align-items: center;
+}
+
+.justify-between {
+  justify-content: space-between;
+}
+
+.justify-end {
+  justify-content: flex-end;
+}
+
+.gap-1 {
+  gap: 0.25rem;
+}
+
+.gap-2 {
+  gap: 0.5rem;
+}
+
+.space-y-2 > * + * {
+  margin-top: 0.5rem;
+}
+
+.w-full {
   width: 100%;
-  font-size: 14px;
 }
 
-[data-streamdown="table-wrapper"] button + div button:hover {
-  background-color: var(--ant-color-fill-tertiary) !important;
+.min-w-full {
+  min-width: 100%;
+}
+
+.overflow-x-auto {
+  overflow-x: auto;
+}
+
+.border-t {
+  border-top-width: 1px;
+}
+
+.my-4 {
+  margin-top: 1rem;
+  margin-bottom: 1rem;
+}
+
+.space-y-4 > * + * {
+  margin-top: 1rem;
+}
+
+.rounded {
+  border-radius: 0.25rem;
+}
+
+.rounded-xl {
+  border-radius: 0.75rem;
+}
+
+.px-1\.5 {
+  padding-left: 0.375rem;
+  padding-right: 0.375rem;
+}
+
+.py-0\.5 {
+  padding-top: 0.125rem;
+  padding-bottom: 0.125rem;
+}
+
+.p-1 {
+  padding: 0.25rem;
+}
+
+.p-3 {
+  padding: 0.75rem;
+}
+
+.p-4 {
+  padding: 1rem;
+}
+
+.px-4 {
+  padding-left: 1rem;
+  padding-right: 1rem;
+}
+
+.py-2 {
+  padding-top: 0.5rem;
+  padding-bottom: 0.5rem;
+}
+
+.text-xs {
+  font-size: 0.75rem;
+  line-height: 1rem;
+}
+
+.text-sm {
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+}
+
+.text-2xl {
+  font-size: 1.5rem;
+  line-height: 2rem;
+}
+
+.font-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.font-semibold {
+  font-weight: 600;
+}
+
+.text-left {
+  text-align: left;
+}
+
+.whitespace-nowrap {
+  white-space: nowrap;
+}
+
+.border {
+  border-width: 1px;
+}
+
+.border-b {
+  border-bottom-width: 1px;
+}
+
+.border-collapse {
+  border-collapse: collapse;
+}
+
+.divide-y > * + * {
+  border-top-width: 1px;
+}
+
+.overflow-hidden {
+  overflow: hidden;
+}
+
+.cursor-pointer {
+  cursor: pointer;
+}
+
+.transition-all {
+  transition-property: all;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 150ms;
+}
+
+.relative {
+  position: relative;
+}
+
+.ml-1 {
+  margin-left: 0.25rem;
+}
+
+.mt-6 {
+  margin-top: 1.5rem;
+}
+
+.mb-2 {
+  margin-bottom: 0.5rem;
+}
+
+.lowercase {
+  text-transform: lowercase;
+}
+
+.hidden {
+  display: none;
 }
 
 /* Replicate Tailwind dark mode behavior for Streamdown */
