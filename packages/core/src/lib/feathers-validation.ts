@@ -123,6 +123,7 @@ export const worktreeQuerySchema = createQuerySchema(
     worktree_id: Type.Optional(CommonSchemas.uuid),
     repo_id: Type.Optional(CommonSchemas.uuid),
     board_id: Type.Optional(CommonSchemas.uuid),
+    name: Type.Optional(Type.String({ maxLength: 255 })),
     archived: Type.Optional(CommonSchemas.boolean),
     created_at: Type.Optional(CommonSchemas.timestamp),
     updated_at: Type.Optional(CommonSchemas.timestamp),
@@ -135,6 +136,8 @@ export const worktreeQuerySchema = createQuerySchema(
 export const boardQuerySchema = createQuerySchema(
   Type.Object({
     board_id: Type.Optional(CommonSchemas.uuid),
+    name: Type.Optional(Type.String({ maxLength: 255 })),
+    slug: Type.Optional(Type.String({ maxLength: 255 })),
     created_by: Type.Optional(CommonSchemas.uuid),
     created_at: Type.Optional(CommonSchemas.timestamp),
     updated_at: Type.Optional(CommonSchemas.timestamp),
@@ -147,6 +150,15 @@ export const boardQuerySchema = createQuerySchema(
 export const userQuerySchema = createQuerySchema(
   Type.Object({
     user_id: Type.Optional(CommonSchemas.uuid),
+    email: Type.Optional(Type.String({ maxLength: 255 })),
+    role: Type.Optional(
+      Type.Union([
+        Type.Literal('owner'),
+        Type.Literal('admin'),
+        Type.Literal('member'),
+        Type.Literal('viewer'),
+      ])
+    ),
     created_at: Type.Optional(CommonSchemas.timestamp),
     updated_at: Type.Optional(CommonSchemas.timestamp),
   })
@@ -180,6 +192,7 @@ export const boardCommentQuerySchema = createQuerySchema(
 export const repoQuerySchema = createQuerySchema(
   Type.Object({
     repo_id: Type.Optional(CommonSchemas.uuid),
+    slug: Type.Optional(Type.String({ maxLength: 255 })),
     created_at: Type.Optional(CommonSchemas.timestamp),
   })
 );
