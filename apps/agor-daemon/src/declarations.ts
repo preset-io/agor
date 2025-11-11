@@ -73,6 +73,7 @@ export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersP
     params?: FeathersParams
   ): Promise<Task>;
   fail(id: string, data: { error?: string }, params?: FeathersParams): Promise<Task>;
+  getOrphaned(params?: FeathersParams): Promise<Task[]>;
 }
 
 /**

@@ -3018,16 +3018,18 @@ async function main() {
 
   // Also check for sessions that had orphaned tasks (even if session status wasn't RUNNING)
   // This handles cases where task was stuck but session status wasn't updated
-  const sessionIdsWithOrphanedTasks = new Set(orphanedTasks.map(t => t.session_id));
+  const sessionIdsWithOrphanedTasks = new Set(
+    orphanedTasks.map((t: Task) => t.session_id as string)
+  );
   if (sessionIdsWithOrphanedTasks.size > 0) {
     console.log(
       `   Checking ${sessionIdsWithOrphanedTasks.size} session(s) with orphaned tasks...`
     );
     for (const sessionId of sessionIdsWithOrphanedTasks) {
-      const session = await sessionsService.get(sessionId);
+      const session = await sessionsService.get(sessionId as Id);
       // If session is still marked as RUNNING after orphaned task cleanup, set to IDLE
       if (session.status === SessionStatus.RUNNING) {
-        await sessionsService.patch(sessionId, {
+        await sessionsService.patch(sessionId as Id, {
           status: SessionStatus.IDLE,
         });
         console.log(
