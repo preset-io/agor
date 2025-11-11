@@ -127,13 +127,14 @@ export const ZoneTriggerModal = ({
   // Reset to defaults when modal opens
   useEffect(() => {
     if (open) {
-      setMode('create_new');
+      // Default to 'reuse_existing' if sessions are available, otherwise 'create_new'
+      setMode(worktreeSessions.length > 0 ? 'reuse_existing' : 'create_new');
       setSelectedSessionId(smartDefaultSession);
       setSelectedAction('prompt');
       form.resetFields();
       setSessionConfig({}); // Clear session config state
     }
-  }, [open, smartDefaultSession, form]);
+  }, [open, smartDefaultSession, form, worktreeSessions.length]);
 
   // Pre-populate form AND state when creating new session
   // Priority: Most recent session > User defaults > System defaults
