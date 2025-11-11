@@ -655,4 +655,34 @@ export default class Init extends Command {
       chalk.gray('Note: API keys are stored in ~/.agor/config.yaml (keep this file secure!)')
     );
   }
+
+  /**
+   * Set daemon configuration from flags or environment variables
+   */
+  private async setDaemonConfig(flags: {
+    'daemon-port'?: number;
+    'daemon-host'?: string;
+  }): Promise<void> {
+    // Get daemon port from flag or environment variable
+    const daemonPort = flags['daemon-port'] || process.env.DAEMON_PORT;
+    if (daemonPort) {
+      await setConfigValue('daemon.port', Number(daemonPort));
+      this.log(`${chalk.green('   ✓')} Set daemon.port = ${daemonPort}`);
+    }
+
+    // Get daemon host from flag or default
+    const daemonHost = flags['daemon-host'] || 'localhost';
+    await setConfigValue('daemon.host', daemonHost);
+    this.log(`${chalk.green('   ✓')} Set daemon.host = ${daemonHost}`);
+
+    // Enable authentication for Docker/deployment environments
+    await setConfigValue('daemon.requireAuth', true);
+    await setConfigValue('daemon.allowAnonymous', false);
+    this.log(`${chalk.green('   ✓')} Enabled authentication`);
+
+    // Set OpenCode server URL (Docker-specific)
+    await setConfigValue('opencode.enabled', true);
+    await setConfigValue('opencode.serverUrl', 'http://host.docker.internal:4096');
+    this.log(`${chalk.green('   ✓')} Configured OpenCode server`);
+  }
 }
