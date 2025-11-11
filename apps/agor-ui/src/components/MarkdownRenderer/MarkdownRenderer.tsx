@@ -1,19 +1,19 @@
 /**
- * MarkdownRenderer - Renders markdown content using Streamdown or markdown-it
+ * MarkdownRenderer - Renders markdown content using Streamdown
  *
- * Uses Streamdown for streaming content (handles incomplete markdown gracefully)
- * Falls back to markdown-it for static/completed content (lighter weight)
+ * Uses Streamdown for all markdown rendering with support for:
+ * - Incomplete markdown during streaming (handles partial syntax gracefully)
+ * - Mermaid diagrams
+ * - LaTeX math expressions
+ * - GFM tables with copy/download buttons
+ * - Code blocks with syntax highlighting and copy buttons
+ *
  * Typography wrapper provides consistent Ant Design styling.
  */
 
 import { Typography } from 'antd';
-import markdownit from 'markdown-it';
 import type React from 'react';
 import { Streamdown } from 'streamdown';
-
-// Initialize markdown-it instance (cached) for completed messages
-// Security: html disabled to prevent XSS from AI-generated content
-const md = markdownit({ html: false, breaks: true });
 
 interface MarkdownRendererProps {
   /**
