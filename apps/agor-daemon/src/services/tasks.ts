@@ -131,6 +131,13 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   }
 
   /**
+   * Custom method: Get orphaned tasks (running, stopping, awaiting permission)
+   */
+  async getOrphaned(_params?: TaskParams): Promise<Task[]> {
+    return this.taskRepo.findOrphaned();
+  }
+
+  /**
    * Custom method: Bulk create tasks (for imports)
    */
   async createMany(taskList: Partial<Task>[]): Promise<Task[]> {

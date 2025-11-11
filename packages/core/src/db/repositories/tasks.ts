@@ -250,6 +250,29 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
   }
 
   /**
+   * Find orphaned tasks (running, stopping, or awaiting permission)
+   * These are tasks that were interrupted when daemon stopped
+   */
+  async findOrphaned(): Promise<Task[]> {
+    try {
+      const rows = await this.db
+        .select()
+        .from(tasks)
+        .where(
+          sql`${tasks.status} IN ('running', 'stopping', 'awaiting_permission')`
+        )
+        .all();
+
+      return rows.map(row => this.rowToTask(row));
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to find orphaned tasks: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
    * Find tasks by status
    */
   async findByStatus(status: Task['status']): Promise<Task[]> {

@@ -2982,14 +2982,8 @@ async function main() {
   // When daemon restarts (crashes, code changes, etc.), tasks/sessions remain in 'running' state
   console.log('🧹 Cleaning up orphaned tasks and sessions...');
 
-  // Find all running or stopping tasks
-  const orphanedTasksResult = (await tasksService.find({
-    query: {
-      status: { $in: [TaskStatus.RUNNING, TaskStatus.STOPPING, TaskStatus.AWAITING_PERMISSION] },
-      $limit: 1000, // High limit to catch all orphaned tasks
-    },
-  })) as unknown as Paginated<Task>;
-  const orphanedTasks = orphanedTasksResult.data;
+  // Find all orphaned tasks (running, stopping, awaiting_permission)
+  const orphanedTasks = await tasksService.getOrphaned();
 
   if (orphanedTasks.length > 0) {
     console.log(`   Found ${orphanedTasks.length} orphaned task(s)`);
