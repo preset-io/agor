@@ -98,7 +98,7 @@ interface SessionDrawerProps {
   ) => void;
   onOpenSettings?: (sessionId: string) => void;
   onOpenWorktree?: (worktreeId: string) => void;
-  onOpenTerminal?: (commands: string[]) => void;
+  onOpenTerminal?: (commands: string[], worktreeId?: string) => void;
   onUpdateSession?: (sessionId: string, updates: Partial<Session>) => void;
   onDelete?: (sessionId: string) => void;
   onStartEnvironment?: (worktreeId: string) => void;
@@ -601,7 +601,7 @@ const SessionDrawer = ({
               <Button
                 type="text"
                 icon={<CodeOutlined />}
-                onClick={() => onOpenTerminal([`cd ${worktree.path}`])}
+                onClick={() => onOpenTerminal([`cd ${worktree.path}`], worktree.worktree_id)}
               />
             </Tooltip>
           )}

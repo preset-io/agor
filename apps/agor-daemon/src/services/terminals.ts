@@ -9,13 +9,15 @@
  * - Job control (Ctrl+C, Ctrl+Z)
  * - Terminal resizing
  * - ANSI colors and escape codes
+ * - Tmux integration for persistent sessions
  */
 
+import { execSync } from 'node:child_process';
 import os from 'node:os';
 import { resolveUserEnvironment } from '@agor/core/config';
-import type { Database } from '@agor/core/db';
+import { formatShortId, WorktreeRepository, type Database } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { UserID } from '@agor/core/types';
+import type { UserID, WorktreeID } from '@agor/core/types';
 import type { IPty } from '@homebridge/node-pty-prebuilt-multiarch';
 import * as pty from '@homebridge/node-pty-prebuilt-multiarch';
 
@@ -25,6 +27,8 @@ interface TerminalSession {
   shell: string;
   cwd: string;
   userId?: UserID; // User context for env resolution
+  worktreeId?: WorktreeID; // Worktree context for tmux session naming
+  tmuxSession?: string; // Tmux session name if using tmux
   createdAt: Date;
 }
 
@@ -34,11 +38,60 @@ interface CreateTerminalData {
   rows?: number;
   cols?: number;
   userId?: UserID; // User context for env resolution
+  worktreeId?: WorktreeID; // Worktree context for tmux integration
 }
 
 interface ResizeTerminalData {
   rows: number;
   cols: number;
+}
+
+/**
+ * Check if tmux is installed
+ */
+function isTmuxAvailable(): boolean {
+  try {
+    execSync('which tmux', { stdio: 'pipe' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Check if a tmux session exists
+ */
+function tmuxSessionExists(sessionName: string): boolean {
+  try {
+    execSync(`tmux has-session -t "${sessionName}" 2>/dev/null`, { stdio: 'pipe' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Find a tmux window by name in a session
+ * Returns the window index if found, null otherwise
+ */
+function findTmuxWindow(sessionName: string, windowName: string): number | null {
+  try {
+    // List windows in session and grep for the window name
+    const output = execSync(
+      `tmux list-windows -t "${sessionName}" -F "#{window_index}:#{window_name}" 2>/dev/null`,
+      { encoding: 'utf-8' }
+    );
+
+    for (const line of output.trim().split('\n')) {
+      const [index, name] = line.split(':');
+      if (name === windowName) {
+        return parseInt(index, 10);
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -48,19 +101,95 @@ export class TerminalsService {
   private sessions = new Map<string, TerminalSession>();
   private app: Application;
   private db: Database;
+  private hasTmux: boolean;
 
   constructor(app: Application, db: Database) {
     this.app = app;
     this.db = db;
+    this.hasTmux = isTmuxAvailable();
+
+    if (this.hasTmux) {
+      console.log('✅ tmux detected - persistent terminal sessions enabled');
+    } else {
+      console.log('ℹ️  tmux not found - using ephemeral terminal sessions');
+    }
   }
 
   /**
    * Create a new terminal session
    */
-  async create(data: CreateTerminalData): Promise<{ terminalId: string; cwd: string }> {
+  async create(data: CreateTerminalData): Promise<{
+    terminalId: string;
+    cwd: string;
+    tmuxSession?: string;
+    tmuxReused?: boolean;
+    worktreeName?: string;
+  }> {
     const terminalId = `term-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    const cwd = data.cwd || os.homedir();
-    const shell = data.shell || (os.platform() === 'win32' ? 'powershell.exe' : 'bash');
+
+    // Resolve worktree context if provided
+    let worktree = null;
+    let cwd = data.cwd || os.homedir();
+    let worktreeName: string | undefined;
+
+    if (data.worktreeId) {
+      const worktreeRepo = new WorktreeRepository(this.db);
+      worktree = await worktreeRepo.findById(data.worktreeId);
+      if (worktree) {
+        cwd = worktree.path;
+        worktreeName = worktree.name;
+      }
+    }
+
+    // Determine shell and tmux configuration
+    let shell: string;
+    let shellArgs: string[] = [];
+    let tmuxSession: string | undefined;
+    let tmuxReused = false;
+
+    if (this.hasTmux && worktree) {
+      // Use single shared tmux session with one window per worktree
+      tmuxSession = 'agor';
+      const sessionExists = tmuxSessionExists(tmuxSession);
+      const windowName = worktreeName || 'unnamed';
+
+      shell = 'tmux';
+
+      if (sessionExists) {
+        // Session exists - check if this worktree has a window
+        const windowIndex = findTmuxWindow(tmuxSession, windowName);
+
+        if (windowIndex !== null) {
+          // Window exists - attach and select it
+          shellArgs = ['attach-session', '-t', `${tmuxSession}:${windowIndex}`];
+          tmuxReused = true;
+          console.log(`🔗 Reusing tmux window: ${tmuxSession}:${windowIndex} (${windowName})`);
+        } else {
+          // Window doesn't exist - attach and create new window
+          shellArgs = [
+            'attach-session',
+            '-t',
+            tmuxSession,
+            '\;',
+            'new-window',
+            '-n',
+            windowName,
+            '-c',
+            cwd,
+          ];
+          tmuxReused = false;
+          console.log(`🪟 Creating new window in tmux session: ${tmuxSession} (${windowName})`);
+        }
+      } else {
+        // Session doesn't exist - create it with first window
+        shellArgs = ['new-session', '-s', tmuxSession, '-n', windowName, '-c', cwd];
+        tmuxReused = false;
+        console.log(`🚀 Creating tmux session: ${tmuxSession} with window (${windowName})`);
+      }
+    } else {
+      // Fallback to regular shell
+      shell = data.shell || (os.platform() === 'win32' ? 'powershell.exe' : 'bash');
+    }
 
     // Resolve environment with user env vars if userId provided
     let env: Record<string, string> = process.env as Record<string, string>;
@@ -72,7 +201,7 @@ export class TerminalsService {
     }
 
     // Spawn PTY process
-    const ptyProcess = pty.spawn(shell, [], {
+    const ptyProcess = pty.spawn(shell, shellArgs, {
       name: 'xterm-color',
       cols: data.cols || 80,
       rows: data.rows || 30,
@@ -87,6 +216,8 @@ export class TerminalsService {
       shell,
       cwd,
       userId: data.userId,
+      worktreeId: data.worktreeId,
+      tmuxSession,
       createdAt: new Date(),
     });
 
@@ -108,7 +239,7 @@ export class TerminalsService {
       });
     });
 
-    return { terminalId, cwd };
+    return { terminalId, cwd, tmuxSession, tmuxReused, worktreeName };
   }
 
   /**

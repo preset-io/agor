@@ -10,6 +10,7 @@ export interface TerminalModalProps {
   onClose: () => void;
   client: AgorClient | null;
   user?: User | null;
+  worktreeId?: string; // Worktree context for tmux integration
   initialCommands?: string[]; // Commands to execute after connection
 }
 
@@ -18,6 +19,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
   onClose,
   client,
   user,
+  worktreeId,
   initialCommands = [],
 }) => {
   const { modal } = App.useApp();
@@ -25,6 +27,11 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
   const terminalRef = useRef<Terminal | null>(null);
   const [_terminalId, setTerminalId] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
+  const [sessionInfo, setSessionInfo] = useState<{
+    tmuxSession?: string;
+    tmuxReused?: boolean;
+    worktreeName?: string;
+  }>({});
 
   // Check if user has admin role
   const isAdmin = user?.role === 'admin' || user?.role === 'owner';
@@ -40,14 +47,14 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
 
     // Create terminal instance and connect to backend
     const setupTerminal = async () => {
-      // Create xterm instance
+      // Create xterm instance with larger size to fit modal
       const terminal = new Terminal({
         fontSize: 14,
         fontFamily: 'Menlo, Monaco, "Courier New", monospace',
         cursorBlink: true,
         scrollback: 1000,
-        rows: 30,
-        cols: 100,
+        rows: 40,
+        cols: 160,
       });
 
       terminal.open(terminalDivRef.current!);
@@ -58,9 +65,16 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
       try {
         // Create terminal session on backend
         const result = (await client.service('terminals').create({
-          rows: 30,
-          cols: 100,
-        })) as { terminalId: string; cwd: string };
+          rows: 40,
+          cols: 160,
+          worktreeId,
+        })) as {
+          terminalId: string;
+          cwd: string;
+          tmuxSession?: string;
+          tmuxReused?: boolean;
+          worktreeName?: string;
+        };
 
         if (!mounted) {
           // If unmounted during connection, clean up immediately
@@ -71,8 +85,33 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
         currentTerminalId = result.terminalId;
         setTerminalId(result.terminalId);
         setIsConnected(true);
+        setSessionInfo({
+          tmuxSession: result.tmuxSession,
+          tmuxReused: result.tmuxReused,
+          worktreeName: result.worktreeName,
+        });
         terminal.clear();
-        terminal.writeln(`✅ Connected! Working directory: ${result.cwd}`);
+
+        // Display welcome message with context
+        if (result.tmuxSession) {
+          if (result.tmuxReused) {
+            terminal.writeln(
+              `🔗 Reconnected to tmux window for ${result.worktreeName || 'worktree'}`
+            );
+            terminal.writeln(`📂 Current directory preserved from last session`);
+          } else {
+            terminal.writeln(`🪟 Created new tmux window for ${result.worktreeName || 'worktree'}`);
+            terminal.writeln(`📂 Working directory: ${result.cwd}`);
+          }
+          terminal.writeln(
+            `💡 Tip: Switch worktrees with Ctrl+B w | Session: "${result.tmuxSession}"`
+          );
+        } else {
+          terminal.writeln(`✅ Connected! Working directory: ${result.cwd}`);
+          if (worktreeId) {
+            terminal.writeln('ℹ️  Install tmux for persistent sessions');
+          }
+        }
         terminal.writeln('');
 
         // Execute initial commands if provided
@@ -84,8 +123,9 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
         }
 
         // Handle user input - send to backend
+        // FeathersJS automatically uses WebSocket when available, REST as fallback
         terminal.onData((data) => {
-          if (result.terminalId) {
+          if (result.terminalId && client) {
             client.service('terminals').patch(result.terminalId, { input: data });
           }
         });
@@ -135,16 +175,22 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
       }
       setTerminalId(null);
       setIsConnected(false);
+      setSessionInfo({});
     };
-  }, [open, client, initialCommands, isAdmin]);
+  }, [open, client, initialCommands, isAdmin, worktreeId]);
 
   const handleClose = () => {
     if (isConnected) {
+      // Different messaging for tmux (persistent) vs ephemeral sessions
+      const content = sessionInfo.tmuxSession
+        ? `The tmux session will continue running in the background. You can reconnect by reopening the terminal.`
+        : 'The terminal session and history will be lost. This cannot be undone.';
+
       modal.confirm({
         title: 'Close Terminal?',
-        content: 'The terminal session and history will be lost. This cannot be undone.',
+        content,
         okText: 'Close',
-        okType: 'danger',
+        okType: sessionInfo.tmuxSession ? 'primary' : 'danger',
         cancelText: 'Cancel',
         onOk: () => {
           onClose();
@@ -159,23 +205,25 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
     <Modal
       title={
         <div>
-          Terminal{' '}
+          Terminal{sessionInfo.worktreeName ? ` - ${sessionInfo.worktreeName}` : ''}{' '}
           <span style={{ fontSize: '12px', fontWeight: 'normal', opacity: 0.6 }}>
-            (ephemeral session - closes with modal)
+            {sessionInfo.tmuxSession
+              ? `(tmux: ${sessionInfo.tmuxSession})`
+              : '(ephemeral session)'}
           </span>
         </div>
       }
       open={open}
       onCancel={handleClose}
       footer={null}
-      width={900}
+      width="auto"
       styles={{
         body: {
-          padding: 0,
-          height: '600px',
+          padding: '16px',
           background: '#000',
         },
       }}
+      centered
     >
       {!isAdmin ? (
         <div style={{ padding: '24px' }}>
@@ -197,9 +245,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
           />
         </div>
       ) : (
-        <div style={{ height: '100%', width: '100%', padding: '16px' }}>
-          <div ref={terminalDivRef} style={{ height: '100%', width: '100%' }} />
-        </div>
+        <div ref={terminalDivRef} />
       )}
     </Modal>
   );

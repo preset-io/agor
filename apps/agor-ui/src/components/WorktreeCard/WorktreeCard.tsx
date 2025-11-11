@@ -68,7 +68,7 @@ interface WorktreeCardProps {
     }
   ) => void;
   onOpenSettings?: (worktreeId: string) => void;
-  onOpenTerminal?: (commands: string[]) => void;
+  onOpenTerminal?: (commands: string[], worktreeId?: string) => void;
   onStartEnvironment?: (worktreeId: string) => void;
   onStopEnvironment?: (worktreeId: string) => void;
   onViewLogs?: (worktreeId: string) => void;
@@ -521,7 +521,7 @@ const WorktreeCard = ({
                 icon={<CodeOutlined />}
                 onClick={e => {
                   e.stopPropagation();
-                  onOpenTerminal([`cd ${worktree.path}`]);
+                  onOpenTerminal([`cd ${worktree.path}`], worktree.worktree_id);
                 }}
                 title="Open terminal in worktree directory"
               />

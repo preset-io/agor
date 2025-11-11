@@ -363,35 +363,108 @@ POST /worktrees/:id/environment/restart
 
 ### Embedded Terminal ✅
 
-**Implementation:** WorktreeModal → Terminal tab
+**Implementation:** WorktreeModal → Terminal tab + TerminalModal
 
 **Tech Stack:**
 
 - xterm.js (frontend terminal emulator)
 - node-pty (backend pseudoterminal)
 - Socket.io (bidirectional communication)
+- tmux (optional, for persistent sessions)
 
-**Service:** `apps/agor-daemon/src/services/terminal.ts`
+**Service:** `apps/agor-daemon/src/services/terminals.ts`
 
 ```typescript
-POST /worktrees/:id/terminal
-→ Spawns pty with cwd = worktree.path
-→ Returns { terminalId: string }
+POST /terminals
+→ Spawns pty with optional worktree context
+→ Returns {
+    terminalId: string,
+    cwd: string,
+    tmuxSession?: string,
+    tmuxReused?: boolean,
+    worktreeName?: string
+  }
 
 Socket events:
-- 'terminal:data' → pty output
-- 'terminal:input' → user input
-- 'terminal:resize' → terminal size change
-- 'terminal:exit' → pty closed
+- 'terminals/data' → pty output
+- 'terminals/input' → user input
+- 'terminals/resize' → terminal size change
+- 'terminals/exit' → pty closed
 ```
 
 **Features:**
 
 - Full shell access (bash/zsh)
-- Working directory = worktree path
+- Working directory = worktree path (when worktreeId provided)
 - Resize support
-- Multiple terminals per worktree
 - Auto-cleanup on disconnect
+- **Tmux integration for persistent sessions**
+
+### Tmux Integration ✅
+
+**Status:** Fully implemented
+
+**How It Works:**
+
+When tmux is installed and a terminal is opened from a worktree card:
+
+1. **Session Naming:**
+   - Session name: `agor-{shortId}` (e.g., `agor-3c9683f1`)
+   - Window title: Worktree name (e.g., `tmux-integration`)
+   - Guarantees uniqueness while showing human-readable labels
+
+2. **Session Lifecycle:**
+   - **First open:** Creates new tmux session
+   - **Subsequent opens:** Reuses existing session
+   - **Persistence:** Session continues after modal closes
+   - **Navigation:** Users can create windows/tabs within session
+
+3. **User Experience:**
+   - Welcome message shows session status (new/reconnected)
+   - Modal title displays worktree name + tmux session ID
+   - Closing modal preserves tmux session (gentle confirmation)
+   - Install tmux hint shown if not detected
+
+**Modal UI:**
+
+- Size: 90vw × 85vh (nearly full-screen)
+- Title: `Terminal - {worktreeName} (tmux: agor-{shortId})`
+- Subtitle: Session persistence status
+- Admin-only access (system security)
+
+**Backend Detection:**
+
+```typescript
+// apps/agor-daemon/src/services/terminals.ts
+function isTmuxAvailable(): boolean
+function tmuxSessionExists(sessionName: string): boolean
+
+// On terminal creation:
+if (tmux available && worktreeId provided) {
+  // Use tmux with worktree-specific session
+  const sessionName = `agor-${shortId}`;
+  const windowName = worktreeName;
+
+  if (session exists) {
+    tmux attach-session -t sessionName
+  } else {
+    tmux new-session -s sessionName -n windowName
+  }
+}
+```
+
+**Access Points:**
+
+- WorktreeCard → Terminal icon button (passes worktreeId)
+- SessionDrawer → Terminal button (passes worktreeId)
+- Opens TerminalModal with worktree context
+
+**Benefits:**
+
+- **Persistence:** Terminal history/state survives UI disconnects
+- **Multi-window:** Users can create tabs within tmux session
+- **Reconnection:** Reliable reattach to long-running processes
+- **Fallback:** Gracefully degrades to ephemeral sessions without tmux
 
 ### Future: Terminal Shortcut
 

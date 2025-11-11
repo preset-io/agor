@@ -89,7 +89,7 @@ interface SessionCanvasProps {
       filesystemAction: 'preserved' | 'cleaned' | 'deleted';
     }
   ) => void;
-  onOpenTerminal?: (commands: string[]) => void;
+  onOpenTerminal?: (commands: string[], worktreeId?: string) => void;
   onStartEnvironment?: (worktreeId: string) => void;
   onStopEnvironment?: (worktreeId: string) => void;
   onViewLogs?: (worktreeId: string) => void;
@@ -158,7 +158,7 @@ interface WorktreeNodeData {
     }
   ) => void;
   onOpenSettings?: (worktreeId: string) => void;
-  onOpenTerminal?: (commands: string[]) => void;
+  onOpenTerminal?: (commands: string[], worktreeId?: string) => void;
   onStartEnvironment?: (worktreeId: string) => void;
   onStopEnvironment?: (worktreeId: string) => void;
   onViewLogs?: (worktreeId: string) => void;

@@ -186,6 +186,7 @@ export const App: React.FC<AppProps> = ({
 
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [terminalCommands, setTerminalCommands] = useState<string[]>([]);
+  const [terminalWorktreeId, setTerminalWorktreeId] = useState<string | undefined>(undefined);
   const [sessionSettingsId, setSessionSettingsId] = useState<string | null>(null);
   const [worktreeModalWorktreeId, setWorktreeModalWorktreeId] = useState<string | null>(null);
   const [logsModalWorktreeId, setLogsModalWorktreeId] = useState<string | null>(null);
@@ -220,14 +221,16 @@ export const App: React.FC<AppProps> = ({
     }
   }, [boards, currentBoardId]);
 
-  const handleOpenTerminal = (commands: string[] = []) => {
+  const handleOpenTerminal = (commands: string[] = [], worktreeId?: string) => {
     setTerminalCommands(commands);
+    setTerminalWorktreeId(worktreeId);
     setTerminalOpen(true);
   };
 
   const handleCloseTerminal = () => {
     setTerminalOpen(false);
     setTerminalCommands([]);
+    setTerminalWorktreeId(undefined);
   };
 
   const handleCreateSession = async (config: NewSessionConfig) => {
@@ -630,6 +633,7 @@ export const App: React.FC<AppProps> = ({
         onClose={handleCloseTerminal}
         client={client}
         user={user}
+        worktreeId={terminalWorktreeId}
         initialCommands={terminalCommands}
       />
       <NewWorktreeModal
