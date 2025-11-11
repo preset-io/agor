@@ -723,7 +723,7 @@ const SessionDrawer = ({
             borderTop: `1px solid ${token.colorBorderSecondary}`,
             borderTopLeftRadius: token.borderRadiusLG,
             borderTopRightRadius: token.borderRadiusLG,
-            padding: `${token.sizeUnit * 3}px ${token.sizeUnit * 6}px ${token.sizeUnit * 2}px`,
+            padding: `${token.sizeUnit * 3}px ${token.sizeUnit * 6}px`,
             marginLeft: -token.sizeUnit * 6 + token.sizeUnit * 2,
             marginRight: -token.sizeUnit * 6 + token.sizeUnit * 2,
             marginTop: token.sizeUnit * 2,
@@ -815,14 +815,12 @@ const SessionDrawer = ({
       {/* Input Box Footer */}
       <div
         style={{
-          position: 'sticky',
-          bottom: 0,
+          flexShrink: 0,
           background: token.colorBgContainer,
           borderTop: `1px solid ${token.colorBorder}`,
-          padding: `${token.sizeUnit * 2}px ${token.sizeUnit * 6}px`,
+          padding: `${token.sizeUnit * 2}px ${token.sizeUnit * 6}px ${token.sizeUnit * 3}px`,
           marginLeft: -token.sizeUnit * 6,
           marginRight: -token.sizeUnit * 6,
-          marginBottom: -token.sizeUnit * 6,
         }}
       >
         {/* Context window gradient overlay */}
