@@ -231,7 +231,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
         style={{
           flex: 1,
           overflowY: 'auto',
-          padding: '12px',
+          padding: '12px 0',
           minHeight: 0,
         }}
       >
