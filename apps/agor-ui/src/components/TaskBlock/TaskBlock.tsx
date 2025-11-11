@@ -356,7 +356,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
           </Flex>
 
           {/* Task metadata */}
-          <Flex wrap gap={token.sizeUnit * 1.5}>
+          <Flex wrap gap={token.sizeUnit}>
             <TimerPill
               status={task.status}
               startedAt={task.message_range?.start_timestamp || task.created_at}
