@@ -870,18 +870,10 @@ export function setupMCPRoutes(app: Application): void {
 
           // Call spawn method on sessions service
           console.log(`🌱 MCP spawning subsession from ${context.sessionId.substring(0, 8)}`);
-          console.log(`🔍 [DEBUG] Parent session ID: ${context.sessionId}`);
           const childSession = await (
             app.service('sessions') as unknown as SessionsServiceImpl
           ).spawn(context.sessionId, spawnData, baseServiceParams);
           console.log(`✅ Subsession created: ${childSession.session_id.substring(0, 8)}`);
-          console.log(`🔍 [DEBUG] Child session ID (full): ${childSession.session_id}`);
-          console.log(
-            `🔍 [DEBUG] Child session parent_session_id: ${childSession.genealogy?.parent_session_id}`
-          );
-          console.log(
-            `🔍 [DEBUG] Child === Parent? ${childSession.session_id === context.sessionId}`
-          );
 
           // Trigger child execution (spawns start fresh by default - see query-builder.ts)
           console.log(
