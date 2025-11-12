@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 export interface ConnectionStatusProps {
   connected: boolean;
   connecting: boolean;
+  onRetry?: () => void;
 }
 
 /**
@@ -13,11 +14,11 @@ export interface ConnectionStatusProps {
  * States:
  * - Connected: Green checkmark (only shown briefly after reconnect)
  * - Reconnecting: Yellow spinner (shown during reconnection)
- * - Disconnected: Red warning (shown when connection lost)
+ * - Disconnected: Red warning (shown when connection lost, click to retry)
  *
  * Auto-hides after 3 seconds when connected to reduce visual clutter
  */
-export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({ connected, connecting }) => {
+export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({ connected, connecting, onRetry }) => {
   const { token } = theme.useToken();
   const [showConnected, setShowConnected] = useState(false);
   const [justReconnected, setJustReconnected] = useState(false);
@@ -49,10 +50,11 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({ connected, c
   // Disconnected state
   if (!connected && !connecting) {
     return (
-      <Tooltip title="Connection lost. Waiting for daemon..." placement="bottom">
+      <Tooltip title="Connection lost. Click to retry connection..." placement="bottom">
         <Tag
           icon={<WarningOutlined />}
           color="error"
+          onClick={onRetry}
           style={{
             margin: 0,
             display: 'flex',

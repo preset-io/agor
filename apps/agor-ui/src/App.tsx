@@ -97,6 +97,7 @@ function AppContent() {
     connected,
     connecting,
     error: connectionError,
+    retryConnection,
   } = useAgorClient({
     accessToken: authenticated ? accessToken : null,
     allowAnonymous: authConfig?.allowAnonymous ?? false,
@@ -1089,6 +1090,7 @@ function AppContent() {
                 onToggleReaction={handleToggleReaction}
                 onDeleteComment={handleDeleteComment}
                 onLogout={logout}
+                onRetryConnection={retryConnection}
               />
             </>
           }

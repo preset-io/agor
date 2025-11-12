@@ -15,6 +15,7 @@ interface UseAgorClientResult {
   connected: boolean;
   connecting: boolean;
   error: string | null;
+  retryConnection: () => void;
 }
 
 interface UseAgorClientOptions {
@@ -226,10 +227,33 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
     };
   }, [url, accessToken, allowAnonymous]);
 
+  /**
+   * Manually retry connection
+   * Useful when auto-reconnect fails or user wants to force reconnect
+   */
+  const retryConnection = () => {
+    const client = clientRef.current;
+    if (!client?.io) return;
+
+    console.log('🔄 Manual reconnection requested');
+
+    // If already connected, disconnect first
+    if (client.io.connected) {
+      console.log('🔌 Disconnecting before retry...');
+      client.io.disconnect();
+    }
+
+    // Trigger reconnection
+    setConnecting(true);
+    setError(null);
+    client.io.connect();
+  };
+
   return {
     client: clientRef.current,
     connected,
     connecting,
     error,
+    retryConnection,
   };
 }

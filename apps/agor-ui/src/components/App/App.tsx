@@ -105,6 +105,7 @@ export interface AppProps {
   onToggleReaction?: (commentId: string, emoji: string) => void;
   onDeleteComment?: (commentId: string) => void;
   onLogout?: () => void;
+  onRetryConnection?: () => void;
 }
 
 export const App: React.FC<AppProps> = ({
@@ -141,6 +142,7 @@ export const App: React.FC<AppProps> = ({
   onUpdateRepo,
   onDeleteRepo,
   onArchiveOrDeleteWorktree,
+  onUnarchiveWorktree,
   onUpdateWorktree,
   onCreateWorktree,
   onStartEnvironment,
@@ -158,6 +160,7 @@ export const App: React.FC<AppProps> = ({
   onToggleReaction,
   onDeleteComment,
   onLogout,
+  onRetryConnection,
 }) => {
   const [newSessionWorktreeId, setNewSessionWorktreeId] = useState<string | null>(null);
   const [newWorktreeModalOpen, setNewWorktreeModalOpen] = useState(false);
@@ -420,6 +423,7 @@ export const App: React.FC<AppProps> = ({
         }}
         onThemeEditorClick={() => setThemeEditorOpen(true)}
         onLogout={onLogout}
+        onRetryConnection={onRetryConnection}
         currentBoardName={currentBoard?.name}
         currentBoardIcon={currentBoard?.icon}
         unreadCommentsCount={

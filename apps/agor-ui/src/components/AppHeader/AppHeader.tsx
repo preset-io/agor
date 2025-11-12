@@ -28,6 +28,7 @@ export interface AppHeaderProps {
   onUserSettingsClick?: () => void;
   onThemeEditorClick?: () => void;
   onLogout?: () => void;
+  onRetryConnection?: () => void;
   currentBoardName?: string;
   currentBoardIcon?: string;
   unreadCommentsCount?: number;
@@ -45,6 +46,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onUserSettingsClick,
   onThemeEditorClick,
   onLogout,
+  onRetryConnection,
   currentBoardName,
   currentBoardIcon,
   unreadCommentsCount = 0,
@@ -154,7 +156,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       </Space>
 
       <Space>
-        <ConnectionStatus connected={connected} connecting={connecting} />
+        <ConnectionStatus connected={connected} connecting={connecting} onRetry={onRetryConnection} />
         {activeUsers.length > 0 && (
           <>
             <Facepile
