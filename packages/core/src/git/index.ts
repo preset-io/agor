@@ -102,20 +102,34 @@ function createGit(baseDir?: string, env?: Record<string, string>) {
   //
   // How it works:
   // 1. Git needs credentials for HTTPS clone/fetch
-  // 2. Git calls our credential helper (a shell function defined below)
+  // 2. Git calls our credential helper (reads from environment)
   // 3. Helper outputs username and password in the format Git expects
   // 4. Git uses those credentials for authentication
   //
-  // The `!f() { ... }; f` syntax defines a shell function inline.
-  // GitHub expects username='x-access-token' and password=<PAT> for token auth.
+  // We use a simpler approach: just pass the token via environment and let Git
+  // use its built-in credential helper that can read from GIT_ASKPASS or similar.
+  // However, Git doesn't read GITHUB_TOKEN directly, so we use an inline helper.
+  //
+  // CRITICAL: The inline shell function must be properly escaped for Git's config parser.
+  // Using double-quoted string with escaped inner quotes to ensure proper parsing.
   if (env?.GITHUB_TOKEN) {
     const token = env.GITHUB_TOKEN;
-    const credentialHelper = `!f() { echo "username=x-access-token"; echo "password=${token}"; }; f`;
+    // Use simpler echo-based credential helper with proper quoting
+    const credentialHelper = `!f() { echo username=x-access-token; echo password=${token}; }; f`;
     config.push(`credential.helper=${credentialHelper}`);
+    console.log('🔑 DEBUG: Configured credential helper with GITHUB_TOKEN (length:', token.length, ')');
+    console.log('🔍 DEBUG: Credential helper command:', credentialHelper.substring(0, 80) + '...');
   } else if (env?.GH_TOKEN) {
     const token = env.GH_TOKEN;
-    const credentialHelper = `!f() { echo "username=x-access-token"; echo "password=${token}"; }; f`;
+    const credentialHelper = `!f() { echo username=x-access-token; echo password=${token}; }; f`;
     config.push(`credential.helper=${credentialHelper}`);
+    console.log('🔑 DEBUG: Configured credential helper with GH_TOKEN (length:', token.length, ')');
+    console.log('🔍 DEBUG: Credential helper command:', credentialHelper.substring(0, 80) + '...');
+  } else {
+    console.log('⚠️  DEBUG: No GITHUB_TOKEN or GH_TOKEN in env, credential helper NOT configured');
+    if (env) {
+      console.log('🔍 DEBUG: Available env keys:', Object.keys(env).filter(k => k.includes('GIT') || k.includes('GITHUB') || k.includes('TOKEN')));
+    }
   }
 
   // Create git instance with extended spawnOptions to include environment variables
@@ -193,16 +207,25 @@ export function extractRepoName(url: string): string {
  */
 export async function cloneRepo(options: CloneOptions): Promise<CloneResult> {
   // Use URL as provided by user
-  const normalizedUrl = options.url;
+  let cloneUrl = options.url;
 
-  const repoName = extractRepoName(normalizedUrl);
+  const repoName = extractRepoName(cloneUrl);
   const reposDir = getReposDir();
   const targetPath = options.targetDir || join(reposDir, repoName);
 
-  // Authentication is handled automatically via credential helper (configured in createGit)
-  // If options.env contains GITHUB_TOKEN or GH_TOKEN, createGit will configure a credential
-  // helper that provides those credentials when Git requests them during clone/fetch operations.
-  // This keeps URLs clean and tokens secure in environment variables.
+  // WORKAROUND: Inject token directly into URL for GitHub HTTPS URLs
+  // The credential helper approach is cleaner but has issues with shell escaping
+  // in some environments. URL injection is more reliable across different systems.
+  // This is how many CI systems (GitHub Actions, GitLab CI) handle auth.
+  if (options.env?.GITHUB_TOKEN && cloneUrl.startsWith('https://github.com/')) {
+    const token = options.env.GITHUB_TOKEN;
+    cloneUrl = cloneUrl.replace('https://github.com/', `https://x-access-token:${token}@github.com/`);
+    console.log('🔑 Injected GITHUB_TOKEN into URL for authentication');
+  } else if (options.env?.GH_TOKEN && cloneUrl.startsWith('https://github.com/')) {
+    const token = options.env.GH_TOKEN;
+    cloneUrl = cloneUrl.replace('https://github.com/', `https://x-access-token:${token}@github.com/`);
+    console.log('🔑 Injected GH_TOKEN into URL for authentication');
+  }
 
   // Ensure repos directory exists
   await mkdir(reposDir, { recursive: true });
@@ -243,9 +266,9 @@ export async function cloneRepo(options: CloneOptions): Promise<CloneResult> {
     });
   }
 
-  // Clone the repo using normalized URL
-  console.log(`Cloning ${normalizedUrl} to ${targetPath}...`);
-  await git.clone(normalizedUrl, targetPath, options.bare ? ['--bare'] : []);
+  // Clone the repo using the URL (potentially with injected token)
+  console.log(`Cloning ${options.url} to ${targetPath}...`);
+  await git.clone(cloneUrl, targetPath, options.bare ? ['--bare'] : []);
 
   // Get default branch from remote HEAD
   const defaultBranch = await getDefaultBranch(targetPath);
