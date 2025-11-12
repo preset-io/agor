@@ -424,7 +424,24 @@ const WorktreeCard = ({
   );
 
   // Use colorTextBase for glow - hex color that adapts to light/dark mode
-  const glowColor = token.colorTextBase;
+  // Fallback to detecting dark mode if colorTextBase is not available
+  const isDarkMode =
+    token.colorBgLayout?.startsWith?.('#0') || token.colorBgLayout?.startsWith?.('rgb(0');
+  const rawGlowColor = token.colorTextBase || (isDarkMode ? '#ffffff' : '#000000');
+
+  // Expand shorthand hex to full 6-digit format (e.g., #fff -> #ffffff)
+  // This is needed because we append alpha values (dd, 88, 44) to create 8-digit hex colors
+  const expandHex = (hex: string): string => {
+    if (!hex.startsWith('#')) return isDarkMode ? '#ffffff' : '#000000';
+    const cleanHex = hex.replace('#', '');
+    if (cleanHex.length === 3) {
+      // Expand shorthand: #fff -> #ffffff
+      return `#${cleanHex[0]}${cleanHex[0]}${cleanHex[1]}${cleanHex[1]}${cleanHex[2]}${cleanHex[2]}`;
+    }
+    return hex;
+  };
+
+  const glowColor = expandHex(rawGlowColor);
 
   const attentionGlowShadow = `
     0 0 0 3px ${glowColor},
@@ -439,13 +456,13 @@ const WorktreeCard = ({
         width: 500,
         cursor: 'default', // Override React Flow's drag cursor - only drag handles should show grab cursor
         transition: 'box-shadow 1s ease-in-out, border 1s ease-in-out',
-        boxShadow: needsAttention ? attentionGlowShadow : undefined,
         ...(isPinned && zoneColor ? { borderColor: zoneColor, borderWidth: 1 } : {}),
         ...(needsAttention
           ? {
               // Intense multi-layer glow for dark mode visibility
               animation: 'worktree-card-pulse 2s ease-in-out infinite',
-              border: `2px solid ${glowColor}`,
+              boxShadow: attentionGlowShadow,
+              border: 'none',
             }
           : {}),
       }}
