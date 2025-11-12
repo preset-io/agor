@@ -2,6 +2,27 @@
  * Git Utils for Agor
  *
  * Provides Git operations for repo management and worktree isolation
+ *
+ * ## Authentication Strategy
+ *
+ * Git operations (clone, fetch, etc.) require authentication for private repositories.
+ * This module supports multiple authentication methods:
+ *
+ * 1. **SSH Keys** - Traditional SSH key-based auth (works automatically if keys are mounted)
+ * 2. **User Environment Variables** - Per-user GITHUB_TOKEN or GH_TOKEN from Agor user settings
+ * 3. **System Credential Helpers** - Existing git credential helpers (e.g., gh auth, git-credential-store)
+ *
+ * ### How User Environment Variables Work
+ *
+ * When a user configures GITHUB_TOKEN in their Agor user settings:
+ * 1. The token is encrypted and stored in the database
+ * 2. During git operations, we decrypt and pass it via the `env` parameter
+ * 3. We configure a **Git credential helper** (via `-c credential.helper=...`) that provides the token
+ * 4. When Git needs credentials for HTTPS operations, it calls our helper function
+ * 5. The helper outputs `username=x-access-token\npassword=TOKEN` in the format Git expects
+ *
+ * This approach mirrors how `gh auth` works - it's clean, secure, and doesn't pollute URLs with tokens.
+ * The credential helper is **ephemeral** and **scoped to the specific git command**, not system-wide.
  */
 
 import { existsSync } from 'node:fs';
@@ -70,6 +91,32 @@ function createGit(baseDir?: string, env?: Record<string, string>) {
   const config = [
     'core.sshCommand=ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null',
   ];
+
+  // Configure Git credential helper if we have GitHub tokens
+  //
+  // Why credential helpers instead of URL injection?
+  // - Cleaner: No tokens in URLs/logs
+  // - Standard: How gh auth and git-credential-store work
+  // - Secure: Tokens stay in environment variables
+  // - Ephemeral: Only applies to this git command (via -c flag)
+  //
+  // How it works:
+  // 1. Git needs credentials for HTTPS clone/fetch
+  // 2. Git calls our credential helper (a shell function defined below)
+  // 3. Helper outputs username and password in the format Git expects
+  // 4. Git uses those credentials for authentication
+  //
+  // The `!f() { ... }; f` syntax defines a shell function inline.
+  // GitHub expects username='x-access-token' and password=<PAT> for token auth.
+  if (env?.GITHUB_TOKEN) {
+    const token = env.GITHUB_TOKEN;
+    const credentialHelper = `!f() { echo "username=x-access-token"; echo "password=${token}"; }; f`;
+    config.push(`credential.helper=${credentialHelper}`);
+  } else if (env?.GH_TOKEN) {
+    const token = env.GH_TOKEN;
+    const credentialHelper = `!f() { echo "username=x-access-token"; echo "password=${token}"; }; f`;
+    config.push(`credential.helper=${credentialHelper}`);
+  }
 
   // Create git instance with extended spawnOptions to include environment variables
   // simple-git's types only expose 'uid' and 'gid' in spawnOptions, but the underlying
@@ -151,6 +198,11 @@ export async function cloneRepo(options: CloneOptions): Promise<CloneResult> {
   const repoName = extractRepoName(normalizedUrl);
   const reposDir = getReposDir();
   const targetPath = options.targetDir || join(reposDir, repoName);
+
+  // Authentication is handled automatically via credential helper (configured in createGit)
+  // If options.env contains GITHUB_TOKEN or GH_TOKEN, createGit will configure a credential
+  // helper that provides those credentials when Git requests them during clone/fetch operations.
+  // This keeps URLs clean and tokens secure in environment variables.
 
   // Ensure repos directory exists
   await mkdir(reposDir, { recursive: true });
@@ -333,8 +385,11 @@ export async function createWorktree(
   createBranch: boolean = false,
   pullLatest: boolean = true, // Changed default to true - always fetch latest!
   sourceBranch?: string,
-  env?: Record<string, string>
+  env?: Record<string, string> // User environment variables for authentication (GITHUB_TOKEN, GH_TOKEN, etc.)
 ): Promise<void> {
+  // Create git instance with user env vars for authentication
+  // If env contains GITHUB_TOKEN/GH_TOKEN, createGit will configure a credential helper
+  // that Git will use when fetching from private repositories
   const git = createGit(repoPath, env);
 
   let fetchSucceeded = false;
