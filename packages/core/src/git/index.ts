@@ -193,12 +193,6 @@ export async function cloneRepo(options: CloneOptions): Promise<CloneResult> {
 
   // Clone the repo using normalized URL
   console.log(`Cloning ${normalizedUrl} to ${targetPath}...`);
-  if (options.env) {
-    const envVarCount = Object.keys(options.env).length - Object.keys(process.env).length;
-    if (envVarCount > 0) {
-      console.log(`🔐 Using ${envVarCount} user-specific environment variables for git clone`);
-    }
-  }
   await git.clone(normalizedUrl, targetPath, options.bare ? ['--bare'] : []);
 
   // Get default branch from remote HEAD

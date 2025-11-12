@@ -69,12 +69,6 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
 
     if (userId) {
       userEnv = await resolveUserEnvironment(userId, this.db);
-      const envVarCount = Object.keys(userEnv).length - Object.keys(process.env).length;
-      if (envVarCount > 0) {
-        console.log(
-          `🔐 Resolved ${envVarCount} user-specific env vars for clone operation (user: ${userId.substring(0, 8)})`
-        );
-      }
     }
 
     // Clone using git-utils with user env vars (normal clone - worktrees need working files)
@@ -125,12 +119,6 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
 
     if (userId) {
       userEnv = await resolveUserEnvironment(userId, this.db);
-      const envVarCount = Object.keys(userEnv).length - Object.keys(process.env).length;
-      if (envVarCount > 0) {
-        console.log(
-          `🔐 Resolved ${envVarCount} user-specific env vars for worktree creation (user: ${userId.substring(0, 8)})`
-        );
-      }
     }
 
     // Create git worktree with optional pull-latest and source branch
