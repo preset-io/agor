@@ -107,6 +107,23 @@ export interface AgorCredentials {
 }
 
 /**
+ * Analytics settings
+ */
+export interface AgorAnalyticsSettings {
+  /** Enable analytics (default: true if SEGMENT_WRITE_KEY set) */
+  enabled?: boolean;
+
+  /** Segment write key (can also be set via SEGMENT_WRITE_KEY env var) */
+  segmentWriteKey?: string;
+
+  /** Filter mode: passthrough (no filtering), denylist (exclude patterns), allowlist (include only patterns) */
+  filterMode?: 'passthrough' | 'denylist' | 'allowlist';
+
+  /** Regex patterns for filtering events (default: production denylist) */
+  filterPatterns?: string[];
+}
+
+/**
  * Complete Agor configuration
  */
 export interface AgorConfig {
@@ -125,6 +142,9 @@ export interface AgorConfig {
   /** OpenCode.ai integration settings */
   opencode?: AgorOpenCodeSettings;
 
+  /** Analytics settings */
+  analytics?: AgorAnalyticsSettings;
+
   /** Tool credentials (API keys, tokens) */
   credentials?: AgorCredentials;
 }
@@ -138,4 +158,5 @@ export type ConfigKey =
   | `daemon.${keyof AgorDaemonSettings}`
   | `ui.${keyof AgorUISettings}`
   | `opencode.${keyof AgorOpenCodeSettings}`
+  | `analytics.${keyof AgorAnalyticsSettings}`
   | `credentials.${keyof AgorCredentials}`;

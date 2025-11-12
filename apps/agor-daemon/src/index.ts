@@ -165,6 +165,9 @@ import express from 'express';
 import swagger from 'feathers-swagger';
 import jwt from 'jsonwebtoken';
 import type { Socket } from 'socket.io';
+import { type EventFilter, PRODUCTION_DENYLIST } from './analytics/filters';
+import { NoOpProcessor } from './analytics/processor';
+import { SegmentProcessor } from './analytics/segment-processor';
 import type {
   BoardsServiceImpl,
   MessagesServiceImpl,
@@ -172,6 +175,7 @@ import type {
   SessionsServiceImpl,
   TasksServiceImpl,
 } from './declarations';
+import { AnalyticsService } from './services/analytics';
 import { createBoardCommentsService } from './services/board-comments';
 import { createBoardObjectsService } from './services/board-objects';
 import { createBoardsService } from './services/boards';
@@ -2977,6 +2981,32 @@ async function main() {
   // Error handling
   app.use(errorHandler());
 
+  // Initialize analytics
+  const analyticsConfig = config.analytics || {};
+  const segmentWriteKey = process.env.SEGMENT_WRITE_KEY || analyticsConfig.segmentWriteKey;
+  const isAnalyticsEnabled = analyticsConfig.enabled !== false;
+
+  const analyticsProcessor =
+    isAnalyticsEnabled && segmentWriteKey
+      ? new SegmentProcessor(segmentWriteKey)
+      : new NoOpProcessor();
+
+  const analyticsFilter: EventFilter = {
+    mode: analyticsConfig.filterMode || 'denylist',
+    patterns: analyticsConfig.filterPatterns || PRODUCTION_DENYLIST.patterns,
+  };
+
+  const analyticsService = new AnalyticsService(analyticsProcessor, analyticsFilter);
+  analyticsService.registerHooks(app);
+
+  if (segmentWriteKey && isAnalyticsEnabled) {
+    console.log('📊 Analytics enabled (Segment)');
+  } else if (!isAnalyticsEnabled) {
+    console.log('📊 Analytics disabled via config');
+  } else {
+    console.log('📊 Analytics disabled (no SEGMENT_WRITE_KEY)');
+  }
+
   // Cleanup orphaned running tasks and sessions from previous daemon instance
   // When daemon restarts (crashes, code changes, etc.), tasks/sessions remain in 'running' state
   console.log('🧹 Cleaning up orphaned tasks and sessions...');
@@ -3104,6 +3134,10 @@ async function main() {
     console.log(`\n⏳ Received ${signal}, shutting down gracefully...`);
 
     try {
+      // Flush analytics events
+      console.log('📊 Flushing analytics events...');
+      await analyticsService.flush();
+
       // Clean up health monitor
       healthMonitor.cleanup();
 
