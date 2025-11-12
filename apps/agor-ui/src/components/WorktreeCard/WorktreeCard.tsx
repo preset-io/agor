@@ -12,7 +12,19 @@ import {
   SubnodeOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import { Badge, Button, Card, Collapse, Space, Spin, Tag, Tree, Typography, theme } from 'antd';
+import {
+  Badge,
+  Button,
+  Card,
+  Collapse,
+  ColorPicker,
+  Space,
+  Spin,
+  Tag,
+  Tree,
+  Typography,
+  theme,
+} from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { ArchiveDeleteWorktreeModal } from '../ArchiveDeleteWorktreeModal';
@@ -429,19 +441,17 @@ const WorktreeCard = ({
     token.colorBgLayout?.startsWith?.('#0') || token.colorBgLayout?.startsWith?.('rgb(0');
   const rawGlowColor = token.colorTextBase || (isDarkMode ? '#ffffff' : '#000000');
 
-  // Expand shorthand hex to full 6-digit format (e.g., #fff -> #ffffff)
-  // This is needed because we append alpha values (dd, 88, 44) to create 8-digit hex colors
-  const expandHex = (hex: string): string => {
-    if (!hex.startsWith('#')) return isDarkMode ? '#ffffff' : '#000000';
-    const cleanHex = hex.replace('#', '');
-    if (cleanHex.length === 3) {
-      // Expand shorthand: #fff -> #ffffff
-      return `#${cleanHex[0]}${cleanHex[0]}${cleanHex[1]}${cleanHex[1]}${cleanHex[2]}${cleanHex[2]}`;
-    }
-    return hex;
-  };
-
-  const glowColor = expandHex(rawGlowColor);
+  // Use Ant Design's Color class to normalize and convert to full hex format
+  // This handles shorthand hex (#fff -> #ffffff) and ensures we can append alpha values
+  let glowColor: string;
+  try {
+    const color = new ColorPicker.Color(rawGlowColor);
+    // toHexString() always returns full 6 or 8 digit hex
+    glowColor = color.toHexString();
+  } catch {
+    // Fallback if color parsing fails
+    glowColor = isDarkMode ? '#ffffff' : '#000000';
+  }
 
   const attentionGlowShadow = `
     0 0 0 3px ${glowColor},

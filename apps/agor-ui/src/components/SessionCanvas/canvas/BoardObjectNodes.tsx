@@ -190,21 +190,17 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
   // Backwards compatibility: fall back to `color` if new fields not set
   const borderColor = data.borderColor || data.color || token.colorBorder;
 
-  // Helper to convert hex to rgba with custom alpha (for backwards compatibility with old `color` field)
-  const hexToRgba = (hex: string, alpha: number): string => {
-    const cleanHex = hex.replace('#', '');
-    const hasAlpha = cleanHex.length === 8;
-
-    const r = Number.parseInt(cleanHex.substring(0, 2), 16);
-    const g = Number.parseInt(cleanHex.substring(2, 4), 16);
-    const b = Number.parseInt(cleanHex.substring(4, 6), 16);
-
-    if (hasAlpha) {
-      const existingAlpha = Number.parseInt(cleanHex.substring(6, 8), 16) / 255;
-      return `rgba(${r}, ${g}, ${b}, ${existingAlpha * alpha})`;
+  // Helper to convert color to rgba with custom alpha (for backwards compatibility with old `color` field)
+  const colorToRgba = (colorStr: string, alpha: number): string => {
+    try {
+      const color = new ColorPicker.Color(colorStr);
+      // If the color already has alpha, multiply it with the requested alpha
+      const finalAlpha = color.a * alpha;
+      return `rgba(${color.r}, ${color.g}, ${color.b}, ${finalAlpha})`;
+    } catch {
+      // Fallback to token if parsing fails
+      return `${token.colorBgContainer}40`;
     }
-
-    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
   };
 
   // Backwards compatibility: derive background from border if backgroundColor not set
@@ -213,53 +209,27 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
     (data.borderColor
       ? data.borderColor // Use borderColor directly if set (supports alpha)
       : data.color
-        ? hexToRgba(data.color, ZONE_CONTENT_OPACITY) // Old behavior for backwards compat
+        ? colorToRgba(data.color, ZONE_CONTENT_OPACITY) // Old behavior for backwards compat
         : `${token.colorBgContainer}40`);
 
   // Calculate text color based on background color luminance for readability
   const getTextColor = (bgColor: string): string => {
-    // Parse background color - handle both hex and rgba formats
-    let r: number,
-      g: number,
-      b: number,
-      alpha = 1;
+    try {
+      // Use Ant Design's Color class to parse any color format
+      const color = new ColorPicker.Color(bgColor);
 
-    if (bgColor.startsWith('rgba')) {
-      // Parse rgba(r, g, b, a) format
-      const match = bgColor.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/);
-      if (match) {
-        r = Number.parseInt(match[1]);
-        g = Number.parseInt(match[2]);
-        b = Number.parseInt(match[3]);
-        alpha = match[4] ? Number.parseFloat(match[4]) : 1;
-      } else {
-        // Fallback to theme text
+      // For very transparent backgrounds, use theme text color (text will be over board background)
+      if (color.a < 0.3) {
         return token.colorText;
       }
-    } else if (bgColor.startsWith('#')) {
-      // Parse hex color (with or without alpha)
-      const cleanHex = bgColor.replace('#', '');
-      r = Number.parseInt(cleanHex.substring(0, 2), 16);
-      g = Number.parseInt(cleanHex.substring(2, 4), 16);
-      b = Number.parseInt(cleanHex.substring(4, 6), 16);
-      if (cleanHex.length === 8) {
-        alpha = Number.parseInt(cleanHex.substring(6, 8), 16) / 255;
-      }
-    } else {
-      // Fallback to theme text for unknown formats
+
+      // Use built-in isLight() method which uses WCAG luminance formula
+      // Return black text for light backgrounds, white for dark
+      return color.isLight() ? '#000000' : '#ffffff';
+    } catch {
+      // Fallback to theme text for invalid colors
       return token.colorText;
     }
-
-    // For very transparent backgrounds, use theme text color (text will be over board background)
-    if (alpha < 0.3) {
-      return token.colorText;
-    }
-
-    // Calculate relative luminance (WCAG formula)
-    const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-
-    // Use white text for dark backgrounds, black for light backgrounds
-    return luminance > 0.5 ? '#000000' : '#ffffff';
   };
 
   const textColor = getTextColor(backgroundColor);
