@@ -49,9 +49,14 @@ function getGitBinary(): string | undefined {
  * Always disabled by default to prevent interactive prompts.
  * Agor is an automation tool and should not require user interaction for SSH operations.
  *
+ * **User Environment Variables:**
+ * If env is provided (e.g., from resolveUserEnvironment), it will be merged with process.env
+ * to support per-user credentials like GITHUB_TOKEN, GH_TOKEN, etc.
+ *
  * @param baseDir - Base directory for git operations
+ * @param env - Optional environment variables to merge with process.env
  */
-function createGit(baseDir?: string) {
+function createGit(baseDir?: string, env?: Record<string, string>) {
   const gitBinary = getGitBinary();
 
   // NOTE: Git environment variables (GIT_TERMINAL_PROMPT, GIT_ASKPASS) are set
@@ -66,11 +71,24 @@ function createGit(baseDir?: string) {
     'core.sshCommand=ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null',
   ];
 
-  return simpleGit({
+  // Create git instance with extended spawnOptions to include environment variables
+  // simple-git's types only expose 'uid' and 'gid' in spawnOptions, but the underlying
+  // child_process.spawn accepts 'env'. We use a type assertion to pass environment variables.
+  const git = simpleGit({
     baseDir,
     binary: gitBinary,
     config,
+    spawnOptions: env
+      ? ({
+          // Merge user env vars with process.env (user vars take precedence)
+          // This allows per-user GitHub PATs, SSH keys, etc. to work with git operations
+          env: { ...process.env, ...env } as NodeJS.ProcessEnv,
+          // biome-ignore lint/suspicious/noExplicitAny: simple-git types don't expose env in spawnOptions but it works at runtime
+        } as any)
+      : undefined,
   });
+
+  return git;
 }
 
 export interface CloneOptions {
@@ -78,6 +96,7 @@ export interface CloneOptions {
   targetDir?: string;
   bare?: boolean;
   onProgress?: (progress: CloneProgress) => void;
+  env?: Record<string, string>; // User environment variables (e.g., from resolveUserEnvironment)
 }
 
 export interface CloneProgress {
@@ -161,8 +180,8 @@ export async function cloneRepo(options: CloneOptions): Promise<CloneResult> {
     }
   }
 
-  // Create git instance (SSH host key checking is always disabled)
-  const git = createGit();
+  // Create git instance with user env vars (SSH host key checking is always disabled)
+  const git = createGit(undefined, options.env);
 
   if (options.onProgress) {
     git.outputHandler((_command, _stdout, _stderr) => {
@@ -174,6 +193,12 @@ export async function cloneRepo(options: CloneOptions): Promise<CloneResult> {
 
   // Clone the repo using normalized URL
   console.log(`Cloning ${normalizedUrl} to ${targetPath}...`);
+  if (options.env) {
+    const envVarCount = Object.keys(options.env).length - Object.keys(process.env).length;
+    if (envVarCount > 0) {
+      console.log(`🔐 Using ${envVarCount} user-specific environment variables for git clone`);
+    }
+  }
   await git.clone(normalizedUrl, targetPath, options.bare ? ['--bare'] : []);
 
   // Get default branch from remote HEAD
@@ -305,6 +330,7 @@ export interface WorktreeInfo {
  * @param createBranch - Whether to create a new branch
  * @param pullLatest - Whether to fetch from remote before creating worktree (defaults to true)
  * @param sourceBranch - Source branch to base new branch on (used with createBranch)
+ * @param env - Optional user environment variables (e.g., for private repo access)
  */
 export async function createWorktree(
   repoPath: string,
@@ -312,9 +338,10 @@ export async function createWorktree(
   ref: string,
   createBranch: boolean = false,
   pullLatest: boolean = true, // Changed default to true - always fetch latest!
-  sourceBranch?: string
+  sourceBranch?: string,
+  env?: Record<string, string>
 ): Promise<void> {
-  const git = createGit(repoPath);
+  const git = createGit(repoPath, env);
 
   let fetchSucceeded = false;
 
