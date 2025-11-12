@@ -75,6 +75,11 @@ export interface ZoneBoardObject {
   width: number;
   height: number;
   label: string;
+  /** Border color (supports alpha) - falls back to `color` for backwards compatibility */
+  borderColor?: string;
+  /** Background color (supports alpha) - falls back to derived from `color` for backwards compatibility */
+  backgroundColor?: string;
+  /** @deprecated Use borderColor instead. Kept for backwards compatibility */
   color?: string;
   status?: string;
   /** Lock zone to prevent dragging/resizing */

@@ -177,7 +177,9 @@ export const useBoardObjects = ({
             label: objectData.type === 'zone' ? objectData.label : '',
             width: objectData.width,
             height: objectData.height,
-            color: objectData.color,
+            borderColor: objectData.type === 'zone' ? objectData.borderColor : undefined,
+            backgroundColor: objectData.type === 'zone' ? objectData.backgroundColor : undefined,
+            color: objectData.color, // Backwards compatibility
             status: objectData.type === 'zone' ? objectData.status : undefined,
             locked: isLocked,
             x: objectData.x, // Include position in data for updates

@@ -423,11 +423,14 @@ const WorktreeCard = ({
     </div>
   );
 
+  // Use colorTextBase for glow - hex color that adapts to light/dark mode
+  const glowColor = token.colorTextBase;
+
   const attentionGlowShadow = `
-    0 0 0 3px ${token.colorPrimary},
-    0 0 20px 4px ${token.colorPrimary}dd,
-    0 0 40px 8px ${token.colorPrimary}88,
-    0 0 60px 12px ${token.colorPrimary}44
+    0 0 0 3px ${glowColor},
+    0 0 20px 4px ${glowColor}dd,
+    0 0 40px 8px ${glowColor}88,
+    0 0 60px 12px ${glowColor}44
   `;
 
   return (
@@ -442,7 +445,7 @@ const WorktreeCard = ({
           ? {
               // Intense multi-layer glow for dark mode visibility
               animation: 'worktree-card-pulse 2s ease-in-out infinite',
-              border: `2px solid ${token.colorPrimary}`,
+              border: `2px solid ${glowColor}`,
             }
           : {}),
       }}

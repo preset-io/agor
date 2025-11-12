@@ -36,6 +36,9 @@ interface ZoneNodeData {
   label: string;
   width: number;
   height: number;
+  borderColor?: string;
+  backgroundColor?: string;
+  /** @deprecated Use borderColor instead */
   color?: string;
   status?: string;
   locked?: boolean;
@@ -47,6 +50,33 @@ interface ZoneNodeData {
   onDelete?: (objectId: string, deleteAssociatedSessions: boolean) => void;
 }
 
+// Local storage key for recent colors
+const RECENT_COLORS_KEY = 'agor-zone-recent-colors';
+
+// Helper to get recent colors from localStorage
+const getRecentColors = (): string[] => {
+  try {
+    const saved = localStorage.getItem(RECENT_COLORS_KEY);
+    return saved ? JSON.parse(saved) : [];
+  } catch {
+    return [];
+  }
+};
+
+// Helper to save a color to recent colors
+const saveRecentColor = (color: string) => {
+  try {
+    const recent = getRecentColors();
+    // Remove duplicate if exists
+    const filtered = recent.filter(c => c.toLowerCase() !== color.toLowerCase());
+    // Add to front, limit to 12 recent colors
+    const updated = [color, ...filtered].slice(0, 12);
+    localStorage.setItem(RECENT_COLORS_KEY, JSON.stringify(updated));
+  } catch (error) {
+    console.warn('Failed to save recent color:', error);
+  }
+};
+
 const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: boolean }) => {
   const { token } = theme.useToken();
   const { zoom } = useViewport();
@@ -55,6 +85,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
   const [configModalOpen, setConfigModalOpen] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [toolbarVisible, setToolbarVisible] = useState(false);
+  const [recentColors, setRecentColors] = useState<string[]>(getRecentColors());
   const labelInputRef = useRef<HTMLInputElement>(null);
   const colors = getColorPalette(token);
 
@@ -91,6 +122,8 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
       width: number;
       height: number;
       label: string;
+      borderColor?: string;
+      backgroundColor?: string;
       color?: string;
       status?: string;
       locked?: boolean;
@@ -103,6 +136,8 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
     width: data.width,
     height: data.height,
     label: data.label,
+    borderColor: data.borderColor,
+    backgroundColor: data.backgroundColor,
     color: data.color,
     status: data.status,
     locked: data.locked,
@@ -126,10 +161,24 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
     }
   };
 
-  const handleColorChange = (color: Color, hex: string) => {
+  const handleBorderColorChange = (color: Color) => {
+    const hexColor = color.toHexString();
     if (data.onUpdate) {
-      data.onUpdate(data.objectId, createObjectData({ color: hex }));
+      data.onUpdate(data.objectId, createObjectData({ borderColor: hexColor }));
     }
+    // Save to recent colors and update state
+    saveRecentColor(hexColor);
+    setRecentColors(getRecentColors());
+  };
+
+  const handleBackgroundColorChange = (color: Color) => {
+    const hexColor = color.toHexString();
+    if (data.onUpdate) {
+      data.onUpdate(data.objectId, createObjectData({ backgroundColor: hexColor }));
+    }
+    // Save to recent colors and update state
+    saveRecentColor(hexColor);
+    setRecentColors(getRecentColors());
   };
 
   const handleToggleLock = () => {
@@ -138,15 +187,82 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
     }
   };
 
-  const borderColor = data.color || token.colorBorder;
-  // Convert ZONE_CONTENT_OPACITY to hex (0.15 * 255 = 38 = 0x26)
-  const opacityHex = Math.round(ZONE_CONTENT_OPACITY * 255)
-    .toString(16)
-    .padStart(2, '0');
-  const backgroundColor = data.color ? `${data.color}${opacityHex}` : `${token.colorBgContainer}40`;
+  // Backwards compatibility: fall back to `color` if new fields not set
+  const borderColor = data.borderColor || data.color || token.colorBorder;
 
-  // Check if current color is a custom color (not in presets)
-  const isCustomColor = data.color && !colors.includes(data.color);
+  // Helper to convert hex to rgba with custom alpha (for backwards compatibility with old `color` field)
+  const hexToRgba = (hex: string, alpha: number): string => {
+    const cleanHex = hex.replace('#', '');
+    const hasAlpha = cleanHex.length === 8;
+
+    const r = Number.parseInt(cleanHex.substring(0, 2), 16);
+    const g = Number.parseInt(cleanHex.substring(2, 4), 16);
+    const b = Number.parseInt(cleanHex.substring(4, 6), 16);
+
+    if (hasAlpha) {
+      const existingAlpha = Number.parseInt(cleanHex.substring(6, 8), 16) / 255;
+      return `rgba(${r}, ${g}, ${b}, ${existingAlpha * alpha})`;
+    }
+
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  };
+
+  // Backwards compatibility: derive background from border if backgroundColor not set
+  const backgroundColor =
+    data.backgroundColor ||
+    (data.borderColor
+      ? data.borderColor // Use borderColor directly if set (supports alpha)
+      : data.color
+        ? hexToRgba(data.color, ZONE_CONTENT_OPACITY) // Old behavior for backwards compat
+        : `${token.colorBgContainer}40`);
+
+  // Calculate text color based on background color luminance for readability
+  const getTextColor = (bgColor: string): string => {
+    // Parse background color - handle both hex and rgba formats
+    let r: number,
+      g: number,
+      b: number,
+      alpha = 1;
+
+    if (bgColor.startsWith('rgba')) {
+      // Parse rgba(r, g, b, a) format
+      const match = bgColor.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/);
+      if (match) {
+        r = Number.parseInt(match[1]);
+        g = Number.parseInt(match[2]);
+        b = Number.parseInt(match[3]);
+        alpha = match[4] ? Number.parseFloat(match[4]) : 1;
+      } else {
+        // Fallback to theme text
+        return token.colorText;
+      }
+    } else if (bgColor.startsWith('#')) {
+      // Parse hex color (with or without alpha)
+      const cleanHex = bgColor.replace('#', '');
+      r = Number.parseInt(cleanHex.substring(0, 2), 16);
+      g = Number.parseInt(cleanHex.substring(2, 4), 16);
+      b = Number.parseInt(cleanHex.substring(4, 6), 16);
+      if (cleanHex.length === 8) {
+        alpha = Number.parseInt(cleanHex.substring(6, 8), 16) / 255;
+      }
+    } else {
+      // Fallback to theme text for unknown formats
+      return token.colorText;
+    }
+
+    // For very transparent backgrounds, use theme text color (text will be over board background)
+    if (alpha < 0.3) {
+      return token.colorText;
+    }
+
+    // Calculate relative luminance (WCAG formula)
+    const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+
+    // Use white text for dark backgrounds, black for light backgrounds
+    return luminance > 0.5 ? '#000000' : '#ffffff';
+  };
+
+  const textColor = getTextColor(backgroundColor);
 
   return (
     <>
@@ -216,104 +332,137 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
             transition: 'opacity 0.15s ease',
           }}
         >
-          {/* Color Presets */}
-          {colors.map(color => (
-            <button
-              key={color}
-              type="button"
-              onPointerDown={e => {
-                e.preventDefault();
-                e.stopPropagation();
-              }}
-              onPointerUp={e => {
-                e.preventDefault();
-                e.stopPropagation();
-                if (data.onUpdate) {
-                  data.onUpdate(data.objectId, createObjectData({ color }));
-                }
-              }}
-              onClick={e => {
-                e.preventDefault();
-                e.stopPropagation();
-              }}
-              style={{
-                width: '20px',
-                height: '20px',
-                borderRadius: '3px',
-                backgroundColor: color,
-                border:
-                  data.color === color
-                    ? `2px solid ${token.colorPrimary}`
-                    : `1px solid ${token.colorBorder}`,
-                userSelect: 'none',
-                cursor: 'pointer',
-                padding: 0,
-              }}
-              title={`Change color to ${color}`}
-            />
-          ))}
-          {/* Custom Color Picker */}
+          {/* Border Color Picker */}
           <div
             className="nodrag nopan"
             onPointerDown={e => {
-              e.stopPropagation(); // Stop React Flow from capturing
+              e.stopPropagation();
             }}
             onPointerUp={e => {
               e.stopPropagation();
             }}
+            style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
           >
-            <ColorPicker
-              value={data.color || token.colorBorder}
-              onChangeComplete={color => {
-                if (data.onUpdate) {
-                  data.onUpdate(data.objectId, createObjectData({ color: color.toHexString() }));
-                }
+            <span
+              style={{
+                fontSize: '11px',
+                color: token.colorTextSecondary,
+                fontWeight: 500,
+                userSelect: 'none',
               }}
+            >
+              Border
+            </span>
+            <ColorPicker
+              value={borderColor}
+              onChange={handleBorderColorChange}
               trigger="click"
               destroyTooltipOnHide
+              showText={false}
+              format="hex"
+              presets={[
+                {
+                  label: 'Presets',
+                  colors: colors,
+                },
+                ...(recentColors.length > 0
+                  ? [
+                      {
+                        label: 'Recent',
+                        colors: recentColors,
+                      },
+                    ]
+                  : []),
+              ]}
             >
               <button
                 type="button"
                 style={{
-                  width: '20px',
-                  height: '20px',
-                  borderRadius: '3px',
-                  background: isCustomColor
-                    ? data.color // Show the custom color
-                    : `linear-gradient(135deg,
-                        ${token.red} 0%, ${token.red} 14.28%,
-                        ${token.orange} 14.28%, ${token.orange} 28.56%,
-                        ${token.yellow} 28.56%, ${token.yellow} 42.84%,
-                        ${token.green} 42.84%, ${token.green} 57.12%,
-                        ${token.cyan} 57.12%, ${token.cyan} 71.4%,
-                        ${token.blue} 71.4%, ${token.blue} 85.68%,
-                        ${token.purple} 85.68%, ${token.purple} 100%)`,
-                  border: isCustomColor
-                    ? `2px solid ${token.colorPrimary}` // Highlight when custom color is active
-                    : `1px solid ${token.colorBorder}`,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
+                  width: '24px',
+                  height: '24px',
+                  borderRadius: '4px',
+                  backgroundColor: borderColor,
+                  border: `2px solid ${token.colorBorder}`,
                   userSelect: 'none',
                   cursor: 'pointer',
                   padding: 0,
-                  position: 'relative',
+                  boxShadow: token.boxShadowSecondary,
                 }}
-                title={isCustomColor ? `Custom color: ${data.color}` : 'Custom color picker'}
-              >
-                <span
-                  style={{
-                    fontSize: '10px',
-                    fontWeight: 'bold',
-                    color: 'white',
-                    textShadow: '0 0 2px rgba(0,0,0,0.8)',
-                    position: 'relative',
-                    zIndex: 1,
-                  }}
-                >
-                  +
-                </span>
-              </button>
+                title="Change border color"
+              />
+            </ColorPicker>
+          </div>
+          <div
+            style={{
+              width: '1px',
+              height: '20px',
+              backgroundColor: token.colorBorder,
+              margin: '0 2px',
+            }}
+          />
+          {/* Background Color Picker */}
+          <div
+            className="nodrag nopan"
+            onPointerDown={e => {
+              e.stopPropagation();
+            }}
+            onPointerUp={e => {
+              e.stopPropagation();
+            }}
+            style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
+          >
+            <span
+              style={{
+                fontSize: '11px',
+                color: token.colorTextSecondary,
+                fontWeight: 500,
+                userSelect: 'none',
+              }}
+            >
+              Fill
+            </span>
+            <ColorPicker
+              value={backgroundColor}
+              onChange={handleBackgroundColorChange}
+              trigger="click"
+              destroyTooltipOnHide
+              showText={false}
+              format="hex"
+              presets={[
+                {
+                  label: 'Presets',
+                  colors: colors.map(
+                    c =>
+                      `${c}${Math.round(ZONE_CONTENT_OPACITY * 255)
+                        .toString(16)
+                        .padStart(2, '0')}`
+                  ),
+                },
+                ...(recentColors.length > 0
+                  ? [
+                      {
+                        label: 'Recent',
+                        colors: recentColors,
+                      },
+                    ]
+                  : []),
+              ]}
+            >
+              <button
+                type="button"
+                style={{
+                  width: '24px',
+                  height: '24px',
+                  borderRadius: '4px',
+                  backgroundColor: backgroundColor,
+                  border: `2px solid ${token.colorBorder}`,
+                  userSelect: 'none',
+                  cursor: 'pointer',
+                  padding: 0,
+                  boxShadow: token.boxShadowSecondary,
+                }}
+                title="Change background color"
+              />
             </ColorPicker>
           </div>
           <div
@@ -465,7 +614,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
                 border: 'none',
                 outline: 'none',
                 background: 'transparent',
-                color: borderColor,
+                color: textColor,
                 padding: 0,
                 width: '100%',
               }}
@@ -476,7 +625,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
                 margin: 0,
                 fontSize: '24px',
                 fontWeight: 600,
-                color: borderColor,
+                color: textColor,
               }}
             >
               {label}
@@ -489,7 +638,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
               marginTop: '8px',
               fontSize: '12px',
               fontWeight: 500,
-              color: borderColor,
+              color: textColor,
               textTransform: 'uppercase',
               letterSpacing: '0.5px',
             }}

@@ -435,9 +435,10 @@ const SessionCanvas = ({
 
       const dbZoneId = zoneId?.replace('zone-', ''); // Strip prefix for zoneLabels lookup
       const zoneName = dbZoneId ? zoneLabels[dbZoneId] || 'Unknown Zone' : undefined;
+      const zoneObj = zoneId && board?.objects?.[zoneId] ? board.objects[zoneId] : undefined;
       const zoneColor =
-        zoneId && board?.objects?.[zoneId]
-          ? (board.objects[zoneId] as { color?: string }).color
+        zoneObj && 'borderColor' in zoneObj
+          ? zoneObj.borderColor || zoneObj.color // Backwards compat
           : undefined;
 
       // Get sessions for this worktree
@@ -1390,6 +1391,10 @@ const SessionCanvas = ({
         // Create zone with drawn dimensions
         const objectId = `zone-${Date.now()}`;
 
+        // Default colors for new zones
+        const defaultBorderColor = '#d9d9d9';
+        const defaultBackgroundColor = '#d9d9d91a'; // 10% opacity
+
         // Optimistic update
         setNodes(nodes => [
           ...nodes,
@@ -1405,7 +1410,8 @@ const SessionCanvas = ({
               label: 'New Zone',
               width,
               height,
-              color: '#d9d9d9',
+              borderColor: defaultBorderColor,
+              backgroundColor: defaultBackgroundColor,
               onUpdate: (id: string, data: BoardObject) => {
                 if (board && client) {
                   client
@@ -1437,7 +1443,8 @@ const SessionCanvas = ({
                 width,
                 height,
                 label: 'New Zone',
-                color: '#d9d9d9',
+                borderColor: defaultBorderColor,
+                backgroundColor: defaultBackgroundColor,
               },
               // biome-ignore lint/suspicious/noExplicitAny: Board patch with custom _action field
             } as any)
