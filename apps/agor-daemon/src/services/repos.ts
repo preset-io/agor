@@ -5,12 +5,13 @@
  * Uses DrizzleService adapter with RepoRepository.
  */
 
+import { resolveUserEnvironment } from '@agor/core/config';
 import { type Database, RepoRepository } from '@agor/core/db';
 import { autoAssignWorktreeUniqueId } from '@agor/core/environment/variable-resolver';
 import type { Application } from '@agor/core/feathers';
 import { cloneRepo, getWorktreePath, createWorktree as gitCreateWorktree } from '@agor/core/git';
 import { renderTemplate } from '@agor/core/templates/handlebars-helpers';
-import type { AuthenticatedParams, QueryParams, Repo, Worktree } from '@agor/core/types';
+import type { AuthenticatedParams, QueryParams, Repo, UserID, Worktree } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 
 /**
@@ -27,6 +28,7 @@ export type RepoParams = QueryParams<{
 export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams> {
   private repoRepo: RepoRepository;
   private app: Application;
+  private db: Database;
 
   constructor(db: Database, app: Application) {
     const repoRepo = new RepoRepository(db);
@@ -41,6 +43,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
 
     this.repoRepo = repoRepo;
     this.app = app;
+    this.db = db;
   }
 
   /**
@@ -60,8 +63,20 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       throw new Error(`Repository '${data.slug}' already exists in database`);
     }
 
-    // Clone using git-utils (normal clone - worktrees need working files)
-    const result = await cloneRepo({ url: data.url, bare: false });
+    // Resolve user environment variables if authenticated
+    let userEnv: Record<string, string> | undefined;
+    const userId = (params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined;
+
+    if (userId) {
+      userEnv = await resolveUserEnvironment(userId, this.db);
+    }
+
+    // Clone using git-utils with user env vars (normal clone - worktrees need working files)
+    const result = await cloneRepo({
+      url: data.url,
+      bare: false,
+      env: userEnv, // Pass user env vars to git operations
+    });
 
     // Create database record
     return this.create(
@@ -98,6 +113,14 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // Generate worktree path
     const worktreePath = getWorktreePath(repo.slug, data.name);
 
+    // Resolve user environment variables if authenticated
+    let userEnv: Record<string, string> | undefined;
+    const userId = (params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined;
+
+    if (userId) {
+      userEnv = await resolveUserEnvironment(userId, this.db);
+    }
+
     // Create git worktree with optional pull-latest and source branch
     await gitCreateWorktree(
       repo.local_path,
@@ -105,7 +128,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       data.ref,
       data.createBranch,
       data.pullLatest,
-      data.sourceBranch
+      data.sourceBranch,
+      userEnv // Pass user env vars to git operations
     );
 
     // Get all existing worktrees to auto-assign unique ID
