@@ -74,6 +74,9 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         colorInfo: '#2e9a92',
         colorLink: '#2e9a92',
         borderRadius: 8,
+        // Use Inter font from Bunny Fonts CDN with system font fallbacks
+        fontFamily:
+          "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif",
       },
     };
 
