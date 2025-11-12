@@ -6,6 +6,7 @@ import type { BoardComment, BoardObject } from '@agor/core/types';
 import { DeleteOutlined, LockOutlined, SettingOutlined, UnlockOutlined } from '@ant-design/icons';
 import { ColorPicker, theme } from 'antd';
 import type { Color } from 'antd/es/color-picker';
+import { AggregationColor } from 'antd/es/color-picker/color';
 import React, { useEffect, useRef, useState } from 'react';
 import { NodeResizer, useViewport } from 'reactflow';
 import { DeleteZoneModal } from './DeleteZoneModal';
@@ -193,10 +194,11 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
   // Helper to convert color to rgba with custom alpha (for backwards compatibility with old `color` field)
   const colorToRgba = (colorStr: string, alpha: number): string => {
     try {
-      const color = new ColorPicker.Color(colorStr);
+      const color = new AggregationColor(colorStr);
+      const rgb = color.toRgb();
       // If the color already has alpha, multiply it with the requested alpha
-      const finalAlpha = color.a * alpha;
-      return `rgba(${color.r}, ${color.g}, ${color.b}, ${finalAlpha})`;
+      const finalAlpha = rgb.a * alpha;
+      return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${finalAlpha})`;
     } catch {
       // Fallback to token if parsing fails
       return `${token.colorBgContainer}40`;
@@ -216,16 +218,19 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
   const getTextColor = (bgColor: string): string => {
     try {
       // Use Ant Design's Color class to parse any color format
-      const color = new ColorPicker.Color(bgColor);
+      const color = new AggregationColor(bgColor);
+      const rgb = color.toRgb();
 
       // For very transparent backgrounds, use theme text color (text will be over board background)
-      if (color.a < 0.3) {
+      if (rgb.a < 0.3) {
         return token.colorText;
       }
 
-      // Use built-in isLight() method which uses WCAG luminance formula
-      // Return black text for light backgrounds, white for dark
-      return color.isLight() ? '#000000' : '#ffffff';
+      // Calculate relative luminance (WCAG formula)
+      const luminance = (0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b) / 255;
+
+      // Use white text for dark backgrounds, black for light backgrounds
+      return luminance > 0.5 ? '#000000' : '#ffffff';
     } catch {
       // Fallback to theme text for invalid colors
       return token.colorText;

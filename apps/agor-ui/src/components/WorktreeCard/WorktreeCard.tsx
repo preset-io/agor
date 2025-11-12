@@ -12,19 +12,8 @@ import {
   SubnodeOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import {
-  Badge,
-  Button,
-  Card,
-  Collapse,
-  ColorPicker,
-  Space,
-  Spin,
-  Tag,
-  Tree,
-  Typography,
-  theme,
-} from 'antd';
+import { Badge, Button, Card, Collapse, Space, Spin, Tag, Tree, Typography, theme } from 'antd';
+import { AggregationColor } from 'antd/es/color-picker/color';
 import { useEffect, useMemo, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { ArchiveDeleteWorktreeModal } from '../ArchiveDeleteWorktreeModal';
@@ -445,7 +434,7 @@ const WorktreeCard = ({
   // This handles shorthand hex (#fff -> #ffffff) and ensures we can append alpha values
   let glowColor: string;
   try {
-    const color = new ColorPicker.Color(rawGlowColor);
+    const color = new AggregationColor(rawGlowColor);
     // toHexString() always returns full 6 or 8 digit hex
     glowColor = color.toHexString();
   } catch {
