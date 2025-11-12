@@ -1,17 +1,20 @@
-name: Build Codespaces Playground Image
+name: Build Production Docker Image
 
 on:
   # Manual trigger
   workflow_dispatch:
 
-  # Trigger on new release tags
   push:
+    # Trigger on pushes to main branch
+    branches:
+      - main
+    # Trigger on new release tags
     tags:
       - 'v*.*.*'
 
 # Cancel previous runs of this workflow
 concurrency:
-  group: devcontainer-build
+  group: production-build-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -43,21 +46,27 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/agor-playground
+          images: ghcr.io/${{ github.repository_owner }}/agor
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=sha-
             type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: .devcontainer/playground/Dockerfile
+          file: Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             NODE_VERSION=${{ steps.node-version.outputs.version }}
-          cache-from: type=registry,ref=ghcr.io/${{ github.repository_owner }}/agor-playground:latest
+          cache-from: type=registry,ref=ghcr.io/${{ github.repository_owner }}/agor:latest
           cache-to: type=inline
+          platforms: linux/amd64,linux/arm64
+
+      - name: Image digest
+        run: echo "Image pushed with digest ${{ steps.build.outputs.digest }}"

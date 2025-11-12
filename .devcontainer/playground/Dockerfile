@@ -1,4 +1,6 @@
-FROM mcr.microsoft.com/devcontainers/typescript-node:20
+# Node.js version (should match .nvmrc)
+ARG NODE_VERSION=24
+FROM mcr.microsoft.com/devcontainers/typescript-node:${NODE_VERSION}
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
