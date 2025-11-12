@@ -305,13 +305,17 @@ export async function setupQuery(
 
   // Handle resume, fork, and spawn cases
   if (resume) {
-    // CASE 1: Fork/Spawn on first prompt (has genealogy, no sdk_session_id yet)
-    const parentSessionId =
-      session.genealogy?.forked_from_session_id || session.genealogy?.parent_session_id;
+    // IMPORTANT DISTINCTION:
+    // - FORK (forked_from_session_id) = should resume from parent SDK session with forkSession:true
+    // - SPAWN (parent_session_id only) = should start FRESH, no resume, no fork
 
-    if (parentSessionId && !session.sdk_session_id && deps.sessionsRepo) {
-      // This is a fork/spawn - load parent's sdk_session_id
-      const parentSession = await deps.sessionsRepo.findById(parentSessionId);
+    const forkedFromSessionId = session.genealogy?.forked_from_session_id;
+    const parentSessionId = session.genealogy?.parent_session_id;
+
+    // CASE 1: Fork on first prompt (has forked_from_session_id, no sdk_session_id yet)
+    if (forkedFromSessionId && !session.sdk_session_id && deps.sessionsRepo) {
+      // This is a FORK - load parent's sdk_session_id and fork from it
+      const parentSession = await deps.sessionsRepo.findById(forkedFromSessionId);
 
       if (parentSession?.sdk_session_id) {
         queryOptions.resume = parentSession.sdk_session_id;
@@ -322,9 +326,18 @@ export async function setupQuery(
         console.log(`   SDK will return new session ID for this fork`);
       } else {
         console.warn(
-          `⚠️  Parent session ${parentSessionId.substring(0, 8)} has no sdk_session_id - starting fresh`
+          `⚠️  Parent session ${forkedFromSessionId.substring(0, 8)} has no sdk_session_id - starting fresh`
         );
       }
+    }
+    // CASE 1b: Spawn on first prompt (has parent_session_id but NOT forked_from_session_id)
+    else if (parentSessionId && !forkedFromSessionId && !session.sdk_session_id) {
+      // This is a SPAWN - start FRESH, do NOT resume from parent
+      console.log(
+        `🌱 Spawning fresh session (parent: ${parentSessionId.substring(0, 8)}) - NOT forking SDK session`
+      );
+      console.log(`   Child will start with clean context (spawns don't inherit parent history)`);
+      // Don't set queryOptions.resume - let it start completely fresh
     }
     // CASE 2: Normal resume (session has its own sdk_session_id)
     else if (session?.sdk_session_id) {

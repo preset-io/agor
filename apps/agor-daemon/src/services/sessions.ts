@@ -168,6 +168,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
       }
     }
 
+    console.log(`🔍 [SPAWN DEBUG] Creating child session for parent ${id.substring(0, 8)}`);
     const spawnedSession = await this.create(
       {
         agentic_tool: targetTool,
@@ -192,10 +193,15 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
       params
     );
 
+    // Cast spawnedSession to Session to handle return type (create returns Session | Session[])
+    const session = spawnedSession as Session;
+    console.log(`🔍 [SPAWN DEBUG] Created session: ${session.session_id.substring(0, 8)}`);
+
     // Update parent's children list
     const parentChildren = parent.genealogy?.children || [];
-    // Cast spawnedSession to Session to handle return type
-    const session = spawnedSession as Session;
+    console.log(
+      `🔍 [SPAWN DEBUG] About to patch parent ${id.substring(0, 8)} with child ${session.session_id.substring(0, 8)}`
+    );
     await this.patch(
       id,
       {
@@ -205,6 +211,9 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
         },
       },
       params
+    );
+    console.log(
+      `🔍 [SPAWN DEBUG] Patched parent, now returning child: ${session.session_id.substring(0, 8)}`
     );
 
     return session;
