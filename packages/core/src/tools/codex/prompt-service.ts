@@ -248,8 +248,7 @@ export class CodexPromptService {
       managedServerConfigs[serverName] = serverConfig;
     }
 
-    // Create hash to detect changes (include network access and worktree path in hash)
-    // IMPORTANT: Include worktreePath so different worktrees can have different configs
+    // Create hash to detect changes (include network access in hash)
     const configHashPayload = stdioServers.map(server => ({
       id: server.mcp_server_id,
       transport: server.transport,
@@ -257,7 +256,7 @@ export class CodexPromptService {
       args: server.args,
       env: server.env,
     }));
-    const configHash = `${worktreePath}:${approvalPolicy}:${networkAccess}:${JSON.stringify(configHashPayload)}`;
+    const configHash = `${approvalPolicy}:${networkAccess}:${JSON.stringify(configHashPayload)}`;
 
     // Skip if config hasn't changed (avoid unnecessary file I/O)
     if (this.lastMCPServersHash === configHash) {
@@ -265,127 +264,105 @@ export class CodexPromptService {
       return stdioServers.length;
     }
 
-    const configTargets: Array<{ label: 'global' | 'worktree'; path: string }> = [];
-
-    // CRITICAL: Write to worktree-local .codex/config.toml first (highest priority)
-    // Codex reads repo-local config before global config, so this ensures MCP servers are visible
-    if (worktreePath) {
-      configTargets.push({
-        label: 'worktree',
-        path: path.join(worktreePath, '.codex', 'config.toml'),
-      });
-    }
-
-    // Also write to global config as fallback
+    // Write to global ~/.codex/config.toml only
+    // NOTE: Codex does NOT support repo-local .codex/config.toml (verified from docs)
     const homeDir = process.env.HOME || process.env.USERPROFILE;
-    if (homeDir) {
-      configTargets.push({
-        label: 'global',
-        path: path.join(homeDir, '.codex', 'config.toml'),
-      });
-    } else {
-      console.warn(
-        '⚠️  [Codex MCP] Could not determine home directory, skipping global Codex config'
-      );
-    }
-
-    if (configTargets.length === 0) {
-      console.warn('⚠️  [Codex MCP] No writable locations found for Codex config');
+    if (!homeDir) {
+      console.warn('⚠️  [Codex MCP] Could not determine home directory, cannot write Codex config');
       return stdioServers.length;
     }
 
-    for (const target of configTargets) {
-      let config: CodexTomlConfig = {};
-      let previouslyManaged = new Set<string>();
+    const configPath = path.join(homeDir, '.codex', 'config.toml');
+    console.log(`📝 [Codex MCP] Writing config to: ${configPath}`);
 
-      try {
-        const existing = await fs.readFile(target.path, 'utf-8');
-        config = parseToml(existing) as CodexTomlConfig;
-        const managedList = Array.isArray(config.agor_managed_servers)
-          ? config.agor_managed_servers.map((value: unknown) => String(value)).filter(Boolean)
-          : [];
-        previouslyManaged = new Set<string>(managedList);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
-          console.warn(
-            `⚠️  [Codex MCP] Failed to read existing ${target.label} config (${target.path}):`,
-            error
-          );
-        }
-        config = {};
-        previouslyManaged = new Set<string>();
+    let config: CodexTomlConfig = {};
+    let previouslyManaged = new Set<string>();
+
+    try {
+      const existing = await fs.readFile(configPath, 'utf-8');
+      config = parseToml(existing) as CodexTomlConfig;
+      const managedList = Array.isArray(config.agor_managed_servers)
+        ? config.agor_managed_servers.map((value: unknown) => String(value)).filter(Boolean)
+        : [];
+      previouslyManaged = new Set<string>(managedList);
+      console.log(`   Found existing config with ${previouslyManaged.size} Agor-managed server(s)`);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+        console.warn(`⚠️  [Codex MCP] Failed to read existing config (${configPath}):`, error);
       }
+      config = {};
+      previouslyManaged = new Set<string>();
+      console.log(`   No existing config found, creating new`);
+    }
 
-      // Upsert approval policy
-      config.approval_policy = approvalPolicy;
+    // Upsert approval policy
+    config.approval_policy = approvalPolicy;
 
-      // Upsert sandbox workspace settings
-      if (networkAccess) {
-        const sandbox =
-          typeof config.sandbox_workspace_write === 'object' &&
-          config.sandbox_workspace_write !== null
-            ? { ...config.sandbox_workspace_write }
-            : {};
-        sandbox.network_access = true;
-        config.sandbox_workspace_write = sandbox;
-      } else if (
+    // Upsert sandbox workspace settings
+    if (networkAccess) {
+      const sandbox =
         typeof config.sandbox_workspace_write === 'object' &&
         config.sandbox_workspace_write !== null
-      ) {
-        const sandbox = { ...config.sandbox_workspace_write };
-        delete sandbox.network_access;
-        if (Object.keys(sandbox).length === 0) {
-          delete config.sandbox_workspace_write;
-        } else {
-          config.sandbox_workspace_write = sandbox;
-        }
-      }
-
-      // Prepare MCP servers table
-      const mcpServersTable: Record<string, CodexTomlServerConfig> =
-        typeof config.mcp_servers === 'object' && config.mcp_servers !== null
-          ? { ...config.mcp_servers }
+          ? { ...config.sandbox_workspace_write }
           : {};
-
-      // Remove previously managed entries no longer present
-      for (const name of previouslyManaged) {
-        if (!managedServerNames.has(name)) {
-          delete mcpServersTable[name];
-        }
-      }
-
-      // Upsert current managed servers
-      for (const [name, serverConfig] of Object.entries(managedServerConfigs)) {
-        mcpServersTable[name] = serverConfig;
-      }
-
-      if (Object.keys(mcpServersTable).length > 0) {
-        config.mcp_servers = mcpServersTable;
+      sandbox.network_access = true;
+      config.sandbox_workspace_write = sandbox;
+    } else if (
+      typeof config.sandbox_workspace_write === 'object' &&
+      config.sandbox_workspace_write !== null
+    ) {
+      const sandbox = { ...config.sandbox_workspace_write };
+      delete sandbox.network_access;
+      if (Object.keys(sandbox).length === 0) {
+        delete config.sandbox_workspace_write;
       } else {
-        delete config.mcp_servers;
+        config.sandbox_workspace_write = sandbox;
       }
+    }
 
-      if (managedServerNames.size > 0) {
-        config.agor_managed_servers = Array.from(managedServerNames).sort();
-      } else {
-        delete config.agor_managed_servers;
+    // Prepare MCP servers table
+    const mcpServersTable: Record<string, CodexTomlServerConfig> =
+      typeof config.mcp_servers === 'object' && config.mcp_servers !== null
+        ? { ...config.mcp_servers }
+        : {};
+
+    // Remove previously managed entries no longer present
+    for (const name of previouslyManaged) {
+      if (!managedServerNames.has(name)) {
+        console.log(`   🗑️  Removing previously managed server: ${name}`);
+        delete mcpServersTable[name];
       }
+    }
 
-      const header = `# Codex configuration\n# Generated by Agor - ${new Date().toISOString()}\n\n`;
-      const body = stringifyToml(config as JsonMap);
+    // Upsert current managed servers
+    for (const [name, serverConfig] of Object.entries(managedServerConfigs)) {
+      mcpServersTable[name] = serverConfig;
+    }
 
-      try {
-        await fs.mkdir(path.dirname(target.path), { recursive: true });
-        await fs.writeFile(target.path, header + body, 'utf-8');
-        console.log(
-          `✅ [Codex MCP] Updated ${target.label} config with ${managedServerNames.size} managed MCP server(s)`
-        );
-      } catch (error) {
-        console.error(
-          `❌ [Codex MCP] Failed to write ${target.label} config (${target.path}):`,
-          error
-        );
-      }
+    if (Object.keys(mcpServersTable).length > 0) {
+      config.mcp_servers = mcpServersTable;
+    } else {
+      delete config.mcp_servers;
+    }
+
+    if (managedServerNames.size > 0) {
+      config.agor_managed_servers = Array.from(managedServerNames).sort();
+    } else {
+      delete config.agor_managed_servers;
+    }
+
+    const header = `# Codex configuration\n# Generated by Agor - ${new Date().toISOString()}\n\n`;
+    const body = stringifyToml(config as JsonMap);
+
+    try {
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, header + body, 'utf-8');
+      console.log(
+        `✅ [Codex MCP] Updated global config with ${managedServerNames.size} managed MCP server(s)`
+      );
+      console.log(`   Config written to: ${configPath}`);
+    } catch (error) {
+      console.error(`❌ [Codex MCP] Failed to write config (${configPath}):`, error);
     }
 
     this.lastMCPServersHash = configHash;
