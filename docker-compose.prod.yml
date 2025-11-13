@@ -1,0 +1,32 @@
+services:
+  agor-prod:
+    image: agor-prod
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.prod
+    # No container_name - allows multiple instances
+    ports:
+      # Expose daemon port (daemon serves both API and UI)
+      - '${DAEMON_PORT:-3030}:${DAEMON_PORT:-3030}'
+    environment:
+      # Daemon configuration
+      - NODE_ENV=production
+      - DAEMON_PORT=${DAEMON_PORT:-3030}
+      - DAEMON_HOST=0.0.0.0
+      - CORS_ORIGIN=${CORS_ORIGIN:-*}
+
+      # Pass through API keys from host (if set)
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+    volumes:
+      # Persist entire home directory (database, config, agent auth tokens, etc.)
+      - agor-home:/home/agor
+      # Mount SSH keys for git authentication (optional)
+      # - ~/.ssh:/home/agor/.ssh:ro
+    restart: unless-stopped
+
+volumes:
+  # Named volume for persistent data
+  # Persists: database, config, agent auth tokens, caches, etc.
+  agor-home:
