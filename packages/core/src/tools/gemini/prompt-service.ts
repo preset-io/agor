@@ -33,7 +33,9 @@ import type { SessionRepository } from '../../db/repositories/sessions';
 import type { WorktreeRepository } from '../../db/repositories/worktrees';
 import type { PermissionMode, SessionID, TaskID } from '../../types';
 import type { TokenUsage } from '../../utils/pricing';
+import { convertConversationToHistory } from './conversation-converter';
 import { DEFAULT_GEMINI_MODEL, type GeminiModel } from './models';
+import { mapPermissionMode } from './permission-mapper';
 import { extractGeminiTokenUsage } from './usage';
 
 /**
@@ -528,7 +530,7 @@ export class GeminiPromptService {
     }
 
     // Map Agor permission mode to Gemini ApprovalMode
-    const approvalMode = this.mapPermissionMode(permissionMode || 'ask');
+    const approvalMode = mapPermissionMode(permissionMode || 'ask');
 
     // Check if client exists - NEVER clear the cache to preserve conversation history
     if (this.sessionClients.has(sessionId)) {
@@ -831,7 +833,7 @@ export class GeminiPromptService {
 
         // Also restore to client history for API continuity
         // Convert ConversationRecord messages to Content[] format
-        const history = this.convertConversationToHistory(resumedSessionData.conversation);
+        const history = convertConversationToHistory(resumedSessionData.conversation);
         client.setHistory(history);
       }
     }
@@ -855,62 +857,6 @@ export class GeminiPromptService {
    * - AUTO_EDIT: Auto-approve file edits, prompt for shell/web commands
    * - YOLO: Auto-approve all operations
    */
-  private mapPermissionMode(permissionMode: PermissionMode): ApprovalMode {
-    switch (permissionMode) {
-      case 'default':
-      case 'ask':
-        return ApprovalMode.DEFAULT; // Prompt for each tool use
-
-      case 'acceptEdits':
-      case 'auto':
-        // TEMPORARY: Map to YOLO since AUTO_EDIT blocks shell commands in non-interactive mode
-        // TODO: Implement proper approval handling for AUTO_EDIT mode
-        return ApprovalMode.YOLO; // Auto-approve all operations (was: AUTO_EDIT)
-
-      case 'bypassPermissions':
-      case 'allow-all':
-        return ApprovalMode.YOLO; // Auto-approve all operations
-
-      default:
-        return ApprovalMode.DEFAULT;
-    }
-  }
-
-  /**
-   * Convert SDK's ConversationRecord to Gemini Content[] format
-   *
-   * This converts the SDK's session file format into the API format needed for setHistory()
-   */
-  private convertConversationToHistory(conversation: {
-    messages: Array<{
-      type: 'user' | 'gemini';
-      content: unknown;
-    }>;
-  }): Content[] {
-    const history: Content[] = [];
-
-    for (const msg of conversation.messages) {
-      const role = msg.type === 'user' ? 'user' : 'model';
-      const parts: Part[] = [];
-
-      // SDK stores content as PartListUnion (array or single part)
-      const content = msg.content;
-      if (Array.isArray(content)) {
-        // Already in parts format
-        parts.push(...(content as Part[]));
-      } else if (content && typeof content === 'object' && 'text' in content) {
-        // Single part with text
-        parts.push(content as Part);
-      }
-
-      if (parts.length > 0) {
-        history.push({ role: role as 'user' | 'model', parts });
-      }
-    }
-
-    return history;
-  }
-
   /**
    * Update session history after turn completion
    *

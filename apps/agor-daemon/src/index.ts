@@ -271,6 +271,41 @@ import { expandPath, extractDbFilePath } from '@agor/core/utils/path';
 
 const DB_PATH = expandPath(process.env.AGOR_DB_PATH || 'file:~/.agor/agor.db');
 
+/**
+ * Initialize Gemini API key with OAuth fallback support
+ *
+ * Priority: config.yaml > env var
+ * If no API key is found, GeminiTool will fall back to OAuth via Gemini CLI
+ *
+ * @param config - Application config object
+ * @param envApiKey - GEMINI_API_KEY from process.env
+ * @returns Resolved API key or undefined (triggers OAuth fallback)
+ */
+export function initializeGeminiApiKey(
+  config: { credentials?: { GEMINI_API_KEY?: string } },
+  envApiKey?: string
+): string | undefined {
+  // Handle GEMINI_API_KEY with priority: config.yaml > env var
+  // Config service will update process.env when credentials change (hot-reload)
+  // GeminiTool will read fresh credentials dynamically via refreshAuth()
+  // If no API key is found, GeminiTool will fall back to OAuth via Gemini CLI
+  if (config.credentials?.GEMINI_API_KEY && !envApiKey) {
+    process.env.GEMINI_API_KEY = config.credentials.GEMINI_API_KEY;
+    console.log('✅ Set GEMINI_API_KEY from config for Gemini');
+  }
+
+  const geminiApiKey = config.credentials?.GEMINI_API_KEY || envApiKey;
+
+  if (!geminiApiKey) {
+    console.warn('⚠️  No GEMINI_API_KEY found - will use OAuth authentication');
+    console.warn('   To use API key: agor config set credentials.GEMINI_API_KEY <your-key>');
+    console.warn('   Or set GEMINI_API_KEY environment variable');
+    console.warn('   OAuth requires: gemini CLI installed and authenticated');
+  }
+
+  return geminiApiKey;
+}
+
 // Main async function
 async function main() {
   // Initialize Handlebars helpers for template rendering
@@ -1652,16 +1687,8 @@ async function main() {
     console.warn('   Or set OPENAI_API_KEY environment variable');
   }
 
-  // Handle GEMINI_API_KEY with priority: config.yaml > env var
-  // Config service will update process.env when credentials change (hot-reload)
-  // GeminiTool will read fresh credentials dynamically via refreshAuth()
-  // If no API key is found, GeminiTool will fall back to OAuth via Gemini CLI
-  if (config.credentials?.GEMINI_API_KEY && !process.env.GEMINI_API_KEY) {
-    process.env.GEMINI_API_KEY = config.credentials.GEMINI_API_KEY;
-    console.log('✅ Set GEMINI_API_KEY from config for Gemini');
-  }
-
-  const geminiApiKey = config.credentials?.GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+  // Initialize Gemini API key (with OAuth fallback support)
+  const geminiApiKey = initializeGeminiApiKey(config, process.env.GEMINI_API_KEY);
   const geminiTool = new GeminiTool(
     messagesRepo,
     sessionsRepo,
@@ -1674,13 +1701,6 @@ async function main() {
     config.daemon?.mcpEnabled !== false, // Pass MCP enabled flag
     db // Database for env var resolution
   );
-
-  if (!geminiApiKey) {
-    console.warn('⚠️  No GEMINI_API_KEY found - will use OAuth authentication');
-    console.warn('   To use API key: agor config set credentials.GEMINI_API_KEY <your-key>');
-    console.warn('   Or set GEMINI_API_KEY environment variable');
-    console.warn('   OAuth requires: gemini CLI installed and authenticated');
-  }
 
   // Initialize OpenCodeTool
   // OpenCode server must be running separately: opencode serve --port 4096
