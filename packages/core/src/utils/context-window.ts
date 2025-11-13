@@ -183,14 +183,17 @@ export function getContextWindowLimit(
  * Calculate cumulative context window usage across all tasks in a session
  *
  * This represents the ACTUAL conversation context size by summing input + output tokens
- * across all tasks, with proper handling for compaction events.
+ * across all tasks, with proper handling for compaction events and baseline context.
  *
  * Algorithm:
  * 1. Iterate through tasks in chronological order
  * 2. Normalize token usage based on agentic_tool (Codex reports differently than Claude)
  * 3. Sum (normalized_input_tokens + output_tokens) for each task
  * 4. When a compaction event is detected, reset the counter (context was trimmed)
- * 5. Return the cumulative sum
+ * 5. On FIRST message only, add baseline context:
+ *    - Fresh session: cache_read + cache_creation (~23K-27K for system prompt + tools + CLAUDE.md)
+ *    - Post-compaction: cache_creation only (the newly compacted conversation summary)
+ * 6. Return the cumulative sum
  *
  * Why input + output?
  * - input_tokens: User's prompt for this turn (fresh input, after normalization)
@@ -198,8 +201,9 @@ export function getContextWindowLimit(
  * - Together they represent the conversation tokens added in this turn
  * - Summing across turns gives total conversation size
  *
- * Note: This excludes system prompt, tool definitions, and context files which are
- * cached and not included in these token counts.
+ * Baseline context (first message only):
+ * - Fresh session: Includes system prompt (~20K) + CLAUDE.md + MCP tools (~3-7K)
+ * - Post-compaction: Includes only the compacted conversation summary (variable size)
  *
  * @param tasks - All tasks in the session (ordered chronologically)
  * @param messages - All messages in the session (needed to detect compaction boundaries)
@@ -255,6 +259,25 @@ export function calculateCumulativeContextWindow(
       if (normalized) {
         const turnTokens = (normalized.input_tokens || 0) + (normalized.output_tokens || 0);
         cumulativeTokens += turnTokens;
+
+        // Special handling for first message to capture baseline context
+        if (i === startIndex) {
+          // First message in session (no compaction yet)
+          if (lastCompactionIndex === -1) {
+            // cache_read: Claude Code system prompt + tool definitions (~20K tokens)
+            // cache_creation: CLAUDE.md + MCP server tools (Agor, Playwright, Context7, etc.) (~3-7K tokens)
+            // Total baseline: ~23K-27K tokens for a fresh session
+            cumulativeTokens += task.usage.cache_read_tokens || 0;
+            cumulativeTokens += task.usage.cache_creation_tokens || 0;
+          } else {
+            // First message after compaction
+            // cache_creation: The newly compacted conversation summary (typically 50K-200K+ tokens)
+            // Note: We exclude cache_read here because it can shoot above 200K context window
+            // limits post-compaction (observed values: 248K-1.9M tokens), likely due to cumulative
+            // caching behavior. cache_creation alone accurately reflects the compacted conversation.
+            cumulativeTokens += task.usage.cache_creation_tokens || 0;
+          }
+        }
       }
     }
   }

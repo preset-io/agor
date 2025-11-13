@@ -354,6 +354,16 @@ export class ClaudeTool implements ITool {
           await withSessionGuard(sessionId, this.sessionsRepo, async () => {
             const completeMessageId = generateId() as MessageID;
 
+            // Start streaming event for this system message
+            if (streamingCallbacks) {
+              streamingCallbacks.onStreamStart(completeMessageId, {
+                session_id: sessionId,
+                task_id: taskId,
+                role: MessageRole.ASSISTANT,
+                timestamp: new Date().toISOString(),
+              });
+            }
+
             await createSystemMessage(
               sessionId,
               completeMessageId,
@@ -372,6 +382,12 @@ export class ClaudeTool implements ITool {
               resolvedModel,
               this.messagesService!
             );
+
+            // End streaming for this system message
+            // This ensures UI removes the spinner immediately
+            if (streamingCallbacks) {
+              streamingCallbacks.onStreamEnd(completeMessageId);
+            }
           });
         }
       }
@@ -398,19 +414,18 @@ export class ClaudeTool implements ITool {
             contextWindow: number;
           }
         >;
-        // Find the model with the highest context usage
-        // (each model has its own context window, not shared)
-        let maxUsage = 0;
+        // Sum context usage across ALL models
+        // When multiple models are used (e.g., Sonnet + Haiku for tools/thinking),
+        // all their tokens contribute to the total context window
+        let totalUsage = 0;
         let maxLimit = 0;
         for (const modelData of Object.values(modelUsageTyped)) {
           const usage = calculateModelContextWindowUsage(modelData);
           const limit = modelData.contextWindow || 0;
-          if (usage > maxUsage) {
-            maxUsage = usage;
-            maxLimit = limit;
-          }
+          totalUsage += usage; // Sum across all models
+          maxLimit = Math.max(maxLimit, limit); // Track largest context window limit
         }
-        contextWindow = maxUsage;
+        contextWindow = totalUsage;
         contextWindowLimit = maxLimit;
         console.log(
           `🔍 [ClaudeTool] Context window: ${contextWindow}/${contextWindowLimit} (${((contextWindow / contextWindowLimit) * 100).toFixed(1)}%)`
@@ -539,6 +554,12 @@ export class ClaudeTool implements ITool {
               resolvedModel,
               this.messagesService!
             );
+
+            // End streaming for system messages (e.g., compaction complete)
+            // This ensures UI spinners stop when system events finish
+            if (streamingCallbacks) {
+              streamingCallbacks.onStreamEnd(systemMessageId);
+            }
           });
           // Don't add to assistantMessageIds - these are system messages
         }
@@ -686,19 +707,18 @@ export class ClaudeTool implements ITool {
             contextWindow: number;
           }
         >;
-        // Find the model with the highest context usage
-        // (each model has its own context window, not shared)
-        let maxUsage = 0;
+        // Sum context usage across ALL models
+        // When multiple models are used (e.g., Sonnet + Haiku for tools/thinking),
+        // all their tokens contribute to the total context window
+        let totalUsage = 0;
         let maxLimit = 0;
         for (const modelData of Object.values(modelUsageTyped)) {
           const usage = calculateModelContextWindowUsage(modelData);
           const limit = modelData.contextWindow || 0;
-          if (usage > maxUsage) {
-            maxUsage = usage;
-            maxLimit = limit;
-          }
+          totalUsage += usage; // Sum across all models
+          maxLimit = Math.max(maxLimit, limit); // Track largest context window limit
         }
-        contextWindow = maxUsage;
+        contextWindow = totalUsage;
         contextWindowLimit = maxLimit;
         console.log(
           `🔍 [ClaudeTool] Context window: ${contextWindow}/${contextWindowLimit} (${((contextWindow / contextWindowLimit) * 100).toFixed(1)}%)`

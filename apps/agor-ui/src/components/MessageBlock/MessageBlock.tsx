@@ -212,132 +212,12 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
     return null;
   }
 
-  // Special handling for system messages (compaction, etc.)
+  // Special handling for system messages
+  // Note: Compaction events are now handled by CompactionBlock in TaskBlock grouping
+  // This section can be used for other system message types in the future
   if (isSystem && Array.isArray(message.content)) {
-    const systemStatusBlock = message.content.find(b => b.type === 'system_status');
-    const systemCompleteBlock = message.content.find(b => b.type === 'system_complete');
-
-    // Handle compaction status (in progress)
-    if (systemStatusBlock && 'status' in systemStatusBlock) {
-      const status = systemStatusBlock.status;
-
-      if (status === 'compacting') {
-        const avatar = agentic_tool ? (
-          <ToolIcon tool={agentic_tool} size={32} />
-        ) : (
-          <AgorAvatar
-            icon={<RobotOutlined />}
-            style={{ backgroundColor: token.colorBgContainer }}
-          />
-        );
-
-        return (
-          <div style={{ margin: `${token.sizeUnit}px 0` }}>
-            <Bubble
-              placement="start"
-              avatar={
-                message.timestamp ? (
-                  <Tooltip
-                    title={() => formatTimestampWithRelative(message.timestamp)}
-                    mouseEnterDelay={0.5}
-                    fresh
-                  >
-                    <span>{avatar}</span>
-                  </Tooltip>
-                ) : (
-                  avatar
-                )
-              }
-              content={
-                <Space>
-                  <Spin size="small" />
-                  <Text type="secondary">Compacting conversation context...</Text>
-                </Space>
-              }
-              variant="outlined"
-            />
-          </div>
-        );
-      }
-    }
-
-    // Handle compaction complete with aggregation
-    if (
-      systemCompleteBlock &&
-      'systemType' in systemCompleteBlock &&
-      systemCompleteBlock.systemType === 'compaction'
-    ) {
-      // Find the matching compaction start message
-      const compactionStartMessage = allMessages
-        .slice(
-          0,
-          allMessages.findIndex(m => m.message_id === message.message_id)
-        )
-        .reverse()
-        .find(m => {
-          if (m.role !== 'system' || !Array.isArray(m.content)) return false;
-          const hasCompactingStatus = m.content.some(
-            b => b.type === 'system_status' && 'status' in b && b.status === 'compacting'
-          );
-          return hasCompactingStatus;
-        });
-
-      // Calculate duration if we found the start message
-      const startTime = compactionStartMessage
-        ? new Date(compactionStartMessage.timestamp).getTime()
-        : null;
-      const endTime = new Date(message.timestamp).getTime();
-      const duration = startTime ? endTime - startTime : null;
-
-      // Extract metadata from the complete block
-      const trigger = (
-        'trigger' in systemCompleteBlock ? systemCompleteBlock.trigger : undefined
-      ) as string | undefined;
-      const preTokens = (
-        'pre_tokens' in systemCompleteBlock ? systemCompleteBlock.pre_tokens : undefined
-      ) as number | undefined;
-
-      return (
-        <div style={{ margin: `${token.sizeUnit}px 0` }}>
-          <Bubble
-            placement="start"
-            avatar={
-              agentic_tool ? (
-                <ToolIcon tool={agentic_tool} size={32} />
-              ) : (
-                <AgorAvatar
-                  icon={<RobotOutlined />}
-                  style={{ backgroundColor: token.colorBgContainer }}
-                />
-              )
-            }
-            content={
-              <Space direction="vertical" size="small" style={{ width: '100%' }}>
-                <Space>
-                  <CheckCircleFilled style={{ color: token.colorSuccess, fontSize: 14 }} />
-                  <Text type="secondary">Context compacted successfully</Text>
-                </Space>
-                {/* Show metadata if available */}
-                {(trigger || preTokens || duration) && (
-                  <div
-                    style={{
-                      fontSize: 12,
-                      color: token.colorTextTertiary,
-                      paddingLeft: 22,
-                    }}
-                  >
-                    {trigger && <div>Trigger: {trigger}</div>}
-                    {preTokens && <div>Pre-compaction tokens: {preTokens.toLocaleString()}</div>}
-                    {duration && <div>Duration: {(duration / 1000).toFixed(2)}s</div>}
-                  </div>
-                )}
-              </Space>
-            }
-            variant="outlined"
-          />
-        </div>
-      );
-    }
+    // Future: Handle other system message types here
+    // For now, compaction is the only system message type, and it's handled elsewhere
   }
 
   // Parse content blocks from message, preserving order
@@ -483,79 +363,80 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
       )}
 
       {/* Text before tools (if any) - rare but possible */}
-      {hasTextBefore && (() => {
-        const avatar = isUser ? (
-          <AgorAvatar>{userEmoji}</AgorAvatar>
-        ) : agentic_tool ? (
-          <ToolIcon tool={agentic_tool} size={32} />
-        ) : (
-          <AgorAvatar
-            icon={<RobotOutlined />}
-            style={{ backgroundColor: token.colorBgContainer }}
-          />
-        );
-
-        return (
-          <div style={{ margin: `${token.sizeUnit}px 0` }}>
-            <Bubble
-              placement={isUser ? 'end' : 'start'}
-              avatar={
-                message.timestamp ? (
-                  <Tooltip
-                    title={() => formatTimestampWithRelative(message.timestamp)}
-                    mouseEnterDelay={0.5}
-                    fresh
-                  >
-                    <span>{avatar}</span>
-                  </Tooltip>
-                ) : (
-                  avatar
-                )
-              }
-              loading={isLoading}
-              typing={shouldUseTyping ? { step: 5, interval: 20 } : false}
-              content={
-                <div
-                  style={{
-                    wordWrap: 'break-word',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: token.sizeUnit,
-                  }}
-                >
-                  {textBeforeTools.map((text, idx) => {
-                    // Use CollapsibleMarkdown for long text blocks (15+ lines)
-                    const shouldTruncate = text.split('\n').length > 15;
-
-                    return (
-                      <div key={`text-${idx}-${text.substring(0, 20)}`}>
-                        {shouldTruncate ? (
-                          <CollapsibleMarkdown
-                            maxLines={10}
-                            defaultExpanded={isLatestMessage}
-                            isStreaming={isStreaming}
-                          >
-                            {text}
-                          </CollapsibleMarkdown>
-                        ) : (
-                          <MarkdownRenderer content={text} inline isStreaming={isStreaming} />
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              }
-              variant={isUser ? 'filled' : 'outlined'}
-              styles={{
-                content: {
-                  backgroundColor: isUser ? token.colorPrimaryBg : undefined,
-                  color: isUser ? '#fff' : undefined,
-                },
-              }}
+      {hasTextBefore &&
+        (() => {
+          const avatar = isUser ? (
+            <AgorAvatar>{userEmoji}</AgorAvatar>
+          ) : agentic_tool ? (
+            <ToolIcon tool={agentic_tool} size={32} />
+          ) : (
+            <AgorAvatar
+              icon={<RobotOutlined />}
+              style={{ backgroundColor: token.colorBgContainer }}
             />
-          </div>
-        );
-      })()}
+          );
+
+          return (
+            <div style={{ margin: `${token.sizeUnit}px 0` }}>
+              <Bubble
+                placement={isUser ? 'end' : 'start'}
+                avatar={
+                  message.timestamp ? (
+                    <Tooltip
+                      title={() => formatTimestampWithRelative(message.timestamp)}
+                      mouseEnterDelay={0.5}
+                      fresh
+                    >
+                      <span>{avatar}</span>
+                    </Tooltip>
+                  ) : (
+                    avatar
+                  )
+                }
+                loading={isLoading}
+                typing={shouldUseTyping ? { step: 5, interval: 20 } : false}
+                content={
+                  <div
+                    style={{
+                      wordWrap: 'break-word',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: token.sizeUnit,
+                    }}
+                  >
+                    {textBeforeTools.map((text, idx) => {
+                      // Use CollapsibleMarkdown for long text blocks (15+ lines)
+                      const shouldTruncate = text.split('\n').length > 15;
+
+                      return (
+                        <div key={`text-${idx}-${text.substring(0, 20)}`}>
+                          {shouldTruncate ? (
+                            <CollapsibleMarkdown
+                              maxLines={10}
+                              defaultExpanded={isLatestMessage}
+                              isStreaming={isStreaming}
+                            >
+                              {text}
+                            </CollapsibleMarkdown>
+                          ) : (
+                            <MarkdownRenderer content={text} inline isStreaming={isStreaming} />
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                }
+                variant={isUser ? 'filled' : 'outlined'}
+                styles={{
+                  content: {
+                    backgroundColor: isUser ? token.colorPrimaryBg : undefined,
+                    color: isUser ? '#fff' : undefined,
+                  },
+                }}
+              />
+            </div>
+          );
+        })()}
 
       {/* Tools (compact, no bubble) */}
       {hasTools && (
@@ -567,60 +448,61 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
       )}
 
       {/* Response text after tools */}
-      {hasTextAfter && (() => {
-        const avatar = agentic_tool ? (
-          <ToolIcon tool={agentic_tool} size={32} />
-        ) : (
-          <AgorAvatar
-            icon={<RobotOutlined />}
-            style={{ backgroundColor: token.colorBgContainer }}
-          />
-        );
-
-        return (
-          <div style={{ margin: `${token.sizeUnit}px 0` }}>
-            <Bubble
-              placement="start"
-              avatar={
-                message.timestamp ? (
-                  <Tooltip
-                    title={() => formatTimestampWithRelative(message.timestamp)}
-                    mouseEnterDelay={0.5}
-                    fresh
-                  >
-                    <span>{avatar}</span>
-                  </Tooltip>
-                ) : (
-                  avatar
-                )
-              }
-              loading={isLoading}
-              typing={shouldUseTyping ? { step: 5, interval: 20 } : false}
-              content={
-                <div style={{ wordWrap: 'break-word' }}>
-                  {(() => {
-                    const combinedText = textAfterTools.join('\n\n');
-                    const shouldTruncate = combinedText.split('\n').length > 15;
-
-                    return shouldTruncate ? (
-                      <CollapsibleMarkdown
-                        maxLines={10}
-                        defaultExpanded={isLatestMessage}
-                        isStreaming={isStreaming}
-                      >
-                        {combinedText}
-                      </CollapsibleMarkdown>
-                    ) : (
-                      <MarkdownRenderer content={combinedText} inline isStreaming={isStreaming} />
-                    );
-                  })()}
-                </div>
-              }
-              variant="outlined"
+      {hasTextAfter &&
+        (() => {
+          const avatar = agentic_tool ? (
+            <ToolIcon tool={agentic_tool} size={32} />
+          ) : (
+            <AgorAvatar
+              icon={<RobotOutlined />}
+              style={{ backgroundColor: token.colorBgContainer }}
             />
-          </div>
-        );
-      })()}
+          );
+
+          return (
+            <div style={{ margin: `${token.sizeUnit}px 0` }}>
+              <Bubble
+                placement="start"
+                avatar={
+                  message.timestamp ? (
+                    <Tooltip
+                      title={() => formatTimestampWithRelative(message.timestamp)}
+                      mouseEnterDelay={0.5}
+                      fresh
+                    >
+                      <span>{avatar}</span>
+                    </Tooltip>
+                  ) : (
+                    avatar
+                  )
+                }
+                loading={isLoading}
+                typing={shouldUseTyping ? { step: 5, interval: 20 } : false}
+                content={
+                  <div style={{ wordWrap: 'break-word' }}>
+                    {(() => {
+                      const combinedText = textAfterTools.join('\n\n');
+                      const shouldTruncate = combinedText.split('\n').length > 15;
+
+                      return shouldTruncate ? (
+                        <CollapsibleMarkdown
+                          maxLines={10}
+                          defaultExpanded={isLatestMessage}
+                          isStreaming={isStreaming}
+                        >
+                          {combinedText}
+                        </CollapsibleMarkdown>
+                      ) : (
+                        <MarkdownRenderer content={combinedText} inline isStreaming={isStreaming} />
+                      );
+                    })()}
+                  </div>
+                }
+                variant="outlined"
+              />
+            </div>
+          );
+        })()}
     </>
   );
 };

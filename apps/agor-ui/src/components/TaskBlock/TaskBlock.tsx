@@ -37,6 +37,7 @@ import { useTaskMessages } from '../../hooks/useTaskMessages';
 import { getContextWindowGradient } from '../../utils/contextWindow';
 import { AgentChain } from '../AgentChain';
 import { AgorAvatar } from '../AgorAvatar';
+import { CompactionBlock } from '../CompactionBlock';
 import { MessageBlock } from '../MessageBlock';
 import { CreatedByTag } from '../metadata/CreatedByTag';
 import {
@@ -59,7 +60,10 @@ const { Paragraph } = Typography;
 /**
  * Block types for rendering
  */
-type Block = { type: 'message'; message: Message } | { type: 'agent-chain'; messages: Message[] };
+type Block =
+  | { type: 'message'; message: Message }
+  | { type: 'agent-chain'; messages: Message[] }
+  | { type: 'compaction'; messages: Message[] }; // System messages (start + optional complete)
 
 interface TaskBlockProps {
   task: Task;
@@ -142,12 +146,40 @@ function isAgentChainMessage(message: Message): boolean {
  * - Consecutive assistant messages with thoughts/tools → AgentChain
  * - User messages and assistant text responses → individual MessageBlocks
  * - Task tool nested operations → AgentChain (grouped by parent_tool_use_id)
+ * - Compaction events (system_status + system_complete) → Compaction block
  * - Permission requests are now just messages, rendered inline naturally
  */
 function groupMessagesIntoBlocks(messages: Message[]): Block[] {
   // Separate top-level messages from nested (parent_tool_use_id)
   const topLevel = messages.filter(m => !m.parent_tool_use_id);
   const nested = messages.filter(m => m.parent_tool_use_id);
+
+  // Build compaction event map: task_id -> [start_message, complete_message?]
+  // We aggregate compaction events that share the same task_id
+  const compactionEventsByTask = new Map<string, Message[]>();
+  for (const msg of topLevel) {
+    if (msg.role === MessageRole.SYSTEM && Array.isArray(msg.content)) {
+      const hasCompactionStatus = msg.content.some(
+        b =>
+          (b.type === 'system_status' && 'status' in b && b.status === 'compacting') ||
+          (b.type === 'system_complete' && 'systemType' in b && b.systemType === 'compaction')
+      );
+      if (hasCompactionStatus && msg.task_id) {
+        if (!compactionEventsByTask.has(msg.task_id)) {
+          compactionEventsByTask.set(msg.task_id, []);
+        }
+        compactionEventsByTask.get(msg.task_id)!.push(msg);
+      }
+    }
+  }
+
+  // Get set of message IDs that are part of compaction blocks (to skip in main loop)
+  const compactionMessageIds = new Set<string>();
+  for (const compactionMessages of compactionEventsByTask.values()) {
+    for (const msg of compactionMessages) {
+      compactionMessageIds.add(msg.message_id);
+    }
+  }
 
   // Collect all Task tool use IDs for special handling
   const taskToolIds = new Set<string>();
@@ -190,6 +222,11 @@ function groupMessagesIntoBlocks(messages: Message[]): Block[] {
   let agentBuffer: Message[] = [];
 
   for (const msg of topLevel) {
+    // Skip compaction messages - they'll be added as aggregated blocks later
+    if (compactionMessageIds.has(msg.message_id)) {
+      continue;
+    }
+
     // Check if this is a Task tool result (user message with tool_result for a Task tool)
     const isTaskResult =
       msg.role === MessageRole.USER &&
@@ -249,6 +286,40 @@ function groupMessagesIntoBlocks(messages: Message[]): Block[] {
   // Flush remaining buffer
   if (agentBuffer.length > 0) {
     blocks.push({ type: 'agent-chain', messages: agentBuffer });
+  }
+
+  // Add compaction blocks, inserting them at the correct position based on first message's index
+  // Sort compaction events by their first message's index
+  const compactionBlocks: Array<{ block: Block; index: number }> = [];
+  for (const compactionMessages of compactionEventsByTask.values()) {
+    if (compactionMessages.length > 0) {
+      // Sort messages within each compaction group (start should come before complete)
+      const sortedMessages = [...compactionMessages].sort((a, b) => a.index - b.index);
+      compactionBlocks.push({
+        block: { type: 'compaction', messages: sortedMessages },
+        index: sortedMessages[0].index, // Use first message's index for positioning
+      });
+    }
+  }
+
+  // Insert compaction blocks at their correct positions
+  for (const { block, index: compactionIndex } of compactionBlocks) {
+    // Find where to insert based on message index
+    let insertPosition = 0;
+    for (let i = 0; i < blocks.length; i++) {
+      const currentBlock = blocks[i];
+      const blockIndex =
+        currentBlock.type === 'message'
+          ? currentBlock.message.index
+          : (currentBlock.messages[0]?.index ?? 0);
+
+      if (blockIndex < compactionIndex) {
+        insertPosition = i + 1;
+      } else {
+        break;
+      }
+    }
+    blocks.splice(insertPosition, 0, block);
   }
 
   return blocks;
@@ -502,6 +573,17 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                       // Use first message ID as key for agent chain
                       const blockKey = `agent-chain-${block.messages[0]?.message_id || 'unknown'}`;
                       return <AgentChain key={blockKey} messages={block.messages} />;
+                    }
+                    if (block.type === 'compaction') {
+                      // Render compaction block with aggregated messages
+                      const blockKey = `compaction-${block.messages[0]?.message_id || 'unknown'}`;
+                      return (
+                        <CompactionBlock
+                          key={blockKey}
+                          messages={block.messages}
+                          agentic_tool={agentic_tool}
+                        />
+                      );
                     }
                     return null;
                   })}
