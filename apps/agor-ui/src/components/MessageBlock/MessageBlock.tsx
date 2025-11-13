@@ -19,11 +19,12 @@ import {
 } from '@agor/core/types';
 import { RobotOutlined } from '@ant-design/icons';
 import { Bubble } from '@ant-design/x';
-import { Space, Spin, Typography, theme } from 'antd';
+import { Space, Spin, Tooltip, Typography, theme } from 'antd';
 
 const { Text } = Typography;
 
 import type React from 'react';
+import { formatTimestampWithRelative } from '../../utils/time';
 import { AgorAvatar } from '../AgorAvatar';
 import { CollapsibleMarkdown } from '../CollapsibleText/CollapsibleMarkdown';
 import { MarkdownRenderer } from '../MarkdownRenderer';
@@ -211,18 +212,30 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
       const status = systemStatusBlock.status;
 
       if (status === 'compacting') {
+        const avatar = agentic_tool ? (
+          <ToolIcon tool={agentic_tool} size={32} />
+        ) : (
+          <AgorAvatar
+            icon={<RobotOutlined />}
+            style={{ backgroundColor: token.colorBgContainer }}
+          />
+        );
+
         return (
           <div style={{ margin: `${token.sizeUnit}px 0` }}>
             <Bubble
               placement="start"
               avatar={
-                agentic_tool ? (
-                  <ToolIcon tool={agentic_tool} size={32} />
+                message.timestamp ? (
+                  <Tooltip
+                    title={() => formatTimestampWithRelative(message.timestamp)}
+                    mouseEnterDelay={0.5}
+                    fresh
+                  >
+                    <span>{avatar}</span>
+                  </Tooltip>
                 ) : (
-                  <AgorAvatar
-                    icon={<RobotOutlined />}
-                    style={{ backgroundColor: token.colorBgContainer }}
-                  />
+                  avatar
                 )
               }
               content={
@@ -382,65 +395,79 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
       )}
 
       {/* Text before tools (if any) - rare but possible */}
-      {hasTextBefore && (
-        <div style={{ margin: `${token.sizeUnit}px 0` }}>
-          <Bubble
-            placement={isUser ? 'end' : 'start'}
-            avatar={
-              isUser ? (
-                <AgorAvatar>{userEmoji}</AgorAvatar>
-              ) : agentic_tool ? (
-                <ToolIcon tool={agentic_tool} size={32} />
-              ) : (
-                <AgorAvatar
-                  icon={<RobotOutlined />}
-                  style={{ backgroundColor: token.colorBgContainer }}
-                />
-              )
-            }
-            loading={isLoading}
-            typing={shouldUseTyping ? { step: 5, interval: 20 } : false}
-            content={
-              <div
-                style={{
-                  wordWrap: 'break-word',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: token.sizeUnit,
-                }}
-              >
-                {textBeforeTools.map((text, idx) => {
-                  // Use CollapsibleMarkdown for long text blocks (15+ lines)
-                  const shouldTruncate = text.split('\n').length > 15;
-
-                  return (
-                    <div key={`text-${idx}-${text.substring(0, 20)}`}>
-                      {shouldTruncate ? (
-                        <CollapsibleMarkdown
-                          maxLines={10}
-                          defaultExpanded={isLatestMessage}
-                          isStreaming={isStreaming}
-                        >
-                          {text}
-                        </CollapsibleMarkdown>
-                      ) : (
-                        <MarkdownRenderer content={text} inline isStreaming={isStreaming} />
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            }
-            variant={isUser ? 'filled' : 'outlined'}
-            styles={{
-              content: {
-                backgroundColor: isUser ? token.colorPrimaryBg : undefined,
-                color: isUser ? '#fff' : undefined,
-              },
-            }}
+      {hasTextBefore && (() => {
+        const avatar = isUser ? (
+          <AgorAvatar>{userEmoji}</AgorAvatar>
+        ) : agentic_tool ? (
+          <ToolIcon tool={agentic_tool} size={32} />
+        ) : (
+          <AgorAvatar
+            icon={<RobotOutlined />}
+            style={{ backgroundColor: token.colorBgContainer }}
           />
-        </div>
-      )}
+        );
+
+        return (
+          <div style={{ margin: `${token.sizeUnit}px 0` }}>
+            <Bubble
+              placement={isUser ? 'end' : 'start'}
+              avatar={
+                message.timestamp ? (
+                  <Tooltip
+                    title={() => formatTimestampWithRelative(message.timestamp)}
+                    mouseEnterDelay={0.5}
+                    fresh
+                  >
+                    <span>{avatar}</span>
+                  </Tooltip>
+                ) : (
+                  avatar
+                )
+              }
+              loading={isLoading}
+              typing={shouldUseTyping ? { step: 5, interval: 20 } : false}
+              content={
+                <div
+                  style={{
+                    wordWrap: 'break-word',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: token.sizeUnit,
+                  }}
+                >
+                  {textBeforeTools.map((text, idx) => {
+                    // Use CollapsibleMarkdown for long text blocks (15+ lines)
+                    const shouldTruncate = text.split('\n').length > 15;
+
+                    return (
+                      <div key={`text-${idx}-${text.substring(0, 20)}`}>
+                        {shouldTruncate ? (
+                          <CollapsibleMarkdown
+                            maxLines={10}
+                            defaultExpanded={isLatestMessage}
+                            isStreaming={isStreaming}
+                          >
+                            {text}
+                          </CollapsibleMarkdown>
+                        ) : (
+                          <MarkdownRenderer content={text} inline isStreaming={isStreaming} />
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              }
+              variant={isUser ? 'filled' : 'outlined'}
+              styles={{
+                content: {
+                  backgroundColor: isUser ? token.colorPrimaryBg : undefined,
+                  color: isUser ? '#fff' : undefined,
+                },
+              }}
+            />
+          </div>
+        );
+      })()}
 
       {/* Tools (compact, no bubble) */}
       {hasTools && (
@@ -452,46 +479,60 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
       )}
 
       {/* Response text after tools */}
-      {hasTextAfter && (
-        <div style={{ margin: `${token.sizeUnit}px 0` }}>
-          <Bubble
-            placement="start"
-            avatar={
-              agentic_tool ? (
-                <ToolIcon tool={agentic_tool} size={32} />
-              ) : (
-                <AgorAvatar
-                  icon={<RobotOutlined />}
-                  style={{ backgroundColor: token.colorBgContainer }}
-                />
-              )
-            }
-            loading={isLoading}
-            typing={shouldUseTyping ? { step: 5, interval: 20 } : false}
-            content={
-              <div style={{ wordWrap: 'break-word' }}>
-                {(() => {
-                  const combinedText = textAfterTools.join('\n\n');
-                  const shouldTruncate = combinedText.split('\n').length > 15;
-
-                  return shouldTruncate ? (
-                    <CollapsibleMarkdown
-                      maxLines={10}
-                      defaultExpanded={isLatestMessage}
-                      isStreaming={isStreaming}
-                    >
-                      {combinedText}
-                    </CollapsibleMarkdown>
-                  ) : (
-                    <MarkdownRenderer content={combinedText} inline isStreaming={isStreaming} />
-                  );
-                })()}
-              </div>
-            }
-            variant="outlined"
+      {hasTextAfter && (() => {
+        const avatar = agentic_tool ? (
+          <ToolIcon tool={agentic_tool} size={32} />
+        ) : (
+          <AgorAvatar
+            icon={<RobotOutlined />}
+            style={{ backgroundColor: token.colorBgContainer }}
           />
-        </div>
-      )}
+        );
+
+        return (
+          <div style={{ margin: `${token.sizeUnit}px 0` }}>
+            <Bubble
+              placement="start"
+              avatar={
+                message.timestamp ? (
+                  <Tooltip
+                    title={() => formatTimestampWithRelative(message.timestamp)}
+                    mouseEnterDelay={0.5}
+                    fresh
+                  >
+                    <span>{avatar}</span>
+                  </Tooltip>
+                ) : (
+                  avatar
+                )
+              }
+              loading={isLoading}
+              typing={shouldUseTyping ? { step: 5, interval: 20 } : false}
+              content={
+                <div style={{ wordWrap: 'break-word' }}>
+                  {(() => {
+                    const combinedText = textAfterTools.join('\n\n');
+                    const shouldTruncate = combinedText.split('\n').length > 15;
+
+                    return shouldTruncate ? (
+                      <CollapsibleMarkdown
+                        maxLines={10}
+                        defaultExpanded={isLatestMessage}
+                        isStreaming={isStreaming}
+                      >
+                        {combinedText}
+                      </CollapsibleMarkdown>
+                    ) : (
+                      <MarkdownRenderer content={combinedText} inline isStreaming={isStreaming} />
+                    );
+                  })()}
+                </div>
+              }
+              variant="outlined"
+            />
+          </div>
+        );
+      })()}
     </>
   );
 };
