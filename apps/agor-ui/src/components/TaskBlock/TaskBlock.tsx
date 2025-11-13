@@ -494,6 +494,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                           isFirstPendingPermission={isFirstPending}
                           isLatestMessage={isLatestMessage}
                           taskId={task.task_id}
+                          allMessages={messages}
                         />
                       );
                     }
