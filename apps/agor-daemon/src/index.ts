@@ -101,10 +101,9 @@ import type {
 import { SessionStatus, TaskStatus } from '@agor/core/types';
 import {
   calculateContextWindowUsage,
-  calculateCumulativeContextWindow,
-  calculateCumulativeContextWindowWithCurrent,
   getContextWindowLimit,
   getSessionContextUsage,
+  normalizeTokenUsage,
 } from '@agor/core/utils/context-window';
 import { NotFoundError } from '@agor/core/utils/errors';
 import type { TokenUsage } from '@agor/core/utils/pricing';
@@ -121,45 +120,80 @@ function isPaginated<T>(result: T[] | Paginated<T>): result is Paginated<T> {
 }
 
 /**
- * Calculate context window for a completed task including its own tokens
+ * Calculate context window for a completed task using incremental approach
  *
- * Fetches all saved tasks and messages, then calculates cumulative context window
- * including the current task's tokens (which hasn't been saved yet).
+ * Simple algorithm:
+ * A) First task: cache_read + cache_creation + (input + output)
+ * B) Other tasks: previous_task.context_window + (input + output)
+ * C) First task after compaction: cache_creation + (input + output)
  *
  * @param session - Current session
  * @param currentTaskUsage - Token usage from the task being completed
- * @param tasksService - Tasks service for querying saved tasks
+ * @param currentTaskId - ID of the task being completed
+ * @param tasksService - Tasks service for querying previous task
  * @param messagesService - Messages service for detecting compaction events
  * @returns Context window usage in tokens, or undefined if calculation fails
  */
 async function calculateTaskContextWindow(
   session: Session,
   currentTaskUsage: TokenUsage | undefined,
+  currentTaskId: string,
   tasksService: TasksServiceImpl,
   messagesService: MessagesServiceImpl
 ): Promise<number | undefined> {
   try {
-    // Fetch all saved tasks and messages for this session
-    const allTasksResult = (await tasksService.find({
-      query: { session_id: session.session_id, $limit: 10000 },
-    })) as Task[] | Paginated<Task>;
-    const allTasks: Task[] = isPaginated(allTasksResult) ? allTasksResult.data : allTasksResult;
+    if (!currentTaskUsage) {
+      return undefined;
+    }
 
+    // Normalize current task tokens (handles Codex vs Claude differences)
+    const normalized = normalizeTokenUsage(currentTaskUsage, session.agentic_tool);
+    const currentTaskTokens = normalized
+      ? (normalized.input_tokens || 0) + (normalized.output_tokens || 0)
+      : 0;
+
+    // Check if there's a compaction event for the current task
     const allMessagesResult = (await messagesService.find({
-      query: { session_id: session.session_id, $limit: 10000 },
+      query: { session_id: session.session_id, task_id: currentTaskId, $limit: 100 },
     })) as Message[] | Paginated<Message>;
-    const allMessages: Message[] = isPaginated(allMessagesResult)
+    const taskMessages: Message[] = isPaginated(allMessagesResult)
       ? allMessagesResult.data
       : allMessagesResult;
 
-    // Calculate cumulative context window including current task's tokens
-    // This handles compaction, normalization, and adds the current task
-    return calculateCumulativeContextWindowWithCurrent(
-      allTasks,
-      allMessages,
-      currentTaskUsage,
-      session.agentic_tool
+    const hasCompaction = taskMessages.some(
+      msg =>
+        msg.type === 'system' &&
+        typeof msg.content === 'object' &&
+        msg.content !== null &&
+        (Array.isArray(msg.content)
+          ? msg.content.some(
+              (block: { type?: string; status?: string }) =>
+                block.type === 'system_status' && block.status === 'compacting'
+            )
+          : (msg.content as { status?: string }).status === 'compacting')
     );
+
+    // A) First task in session
+    if (session.tasks.length === 0) {
+      return (
+        (currentTaskUsage.cache_read_tokens || 0) +
+        (currentTaskUsage.cache_creation_tokens || 0) +
+        currentTaskTokens
+      );
+    }
+
+    // Get previous task
+    const previousTaskId = session.tasks[session.tasks.length - 1];
+    const previousTask = await tasksService.get(previousTaskId);
+
+    // C) First task after compaction (reset to just cache_creation + current)
+    if (hasCompaction) {
+      return (currentTaskUsage.cache_creation_tokens || 0) + currentTaskTokens;
+    }
+
+    // B) Regular task: previous context + current tokens
+    const previousContextWindow = previousTask.context_window || 0;
+    return previousContextWindow + currentTaskTokens;
   } catch (err) {
     console.warn(
       `⚠️  Failed to calculate cumulative context window for session ${session.session_id}:`,
@@ -2104,11 +2138,11 @@ async function main() {
                 }
 
                 // Calculate cumulative context window including current task's tokens
-                // This represents the actual conversation size (input + output tokens)
-                // across all tasks, with compaction handling
+                // Uses simple incremental approach: previous.context_window + current tokens
                 const contextWindow = await calculateTaskContextWindow(
                   session,
                   usage,
+                  task.task_id,
                   tasksService,
                   messagesService
                 );
