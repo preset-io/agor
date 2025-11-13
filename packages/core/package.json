@@ -125,6 +125,11 @@
       "import": "./dist/utils/path.js",
       "require": "./dist/utils/path.cjs"
     },
+    "./utils/logger": {
+      "types": "./dist/utils/logger.d.ts",
+      "import": "./dist/utils/logger.js",
+      "require": "./dist/utils/logger.cjs"
+    },
     "./seed": {
       "types": "./dist/seed/index.d.ts",
       "import": "./dist/seed/index.js",
