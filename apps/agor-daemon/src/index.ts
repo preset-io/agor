@@ -182,11 +182,7 @@ async function calculateTaskContextWindow(
 
     // A) First task in session
     if (session.tasks.length === 0) {
-      return (
-        (currentTaskUsage.cache_read_tokens || 0) +
-        (currentTaskUsage.cache_creation_tokens || 0) +
-        currentTaskTokens
-      );
+      return (currentTaskUsage.cache_creation_tokens || 0) + currentTaskTokens;
     }
 
     // Get previous task
