@@ -1655,6 +1655,7 @@ async function main() {
   // Handle GEMINI_API_KEY with priority: config.yaml > env var
   // Config service will update process.env when credentials change (hot-reload)
   // GeminiTool will read fresh credentials dynamically via refreshAuth()
+  // If no API key is found, GeminiTool will fall back to OAuth via Gemini CLI
   if (config.credentials?.GEMINI_API_KEY && !process.env.GEMINI_API_KEY) {
     process.env.GEMINI_API_KEY = config.credentials.GEMINI_API_KEY;
     console.log('✅ Set GEMINI_API_KEY from config for Gemini');
@@ -1675,9 +1676,10 @@ async function main() {
   );
 
   if (!geminiApiKey) {
-    console.warn('⚠️  No GEMINI_API_KEY found - Gemini sessions will fail');
-    console.warn('   Run: agor config set credentials.GEMINI_API_KEY <your-key>');
+    console.warn('⚠️  No GEMINI_API_KEY found - will use OAuth authentication');
+    console.warn('   To use API key: agor config set credentials.GEMINI_API_KEY <your-key>');
     console.warn('   Or set GEMINI_API_KEY environment variable');
+    console.warn('   OAuth requires: gemini CLI installed and authenticated');
   }
 
   // Initialize OpenCodeTool
