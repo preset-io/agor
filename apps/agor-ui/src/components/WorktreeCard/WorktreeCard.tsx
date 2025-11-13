@@ -498,7 +498,7 @@ const WorktreeCard = ({
           </div>
           <div style={{ display: 'flex', flexDirection: 'column' }}>
             <Typography.Text strong className="nodrag">
-              {worktree.name}
+              {repo.slug} / {worktree.name}
             </Typography.Text>
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               {repo.slug}

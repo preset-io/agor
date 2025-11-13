@@ -77,7 +77,10 @@ export interface AppProps {
     }
   ) => void;
   onUnarchiveWorktree?: (worktreeId: string, options?: { boardId?: string }) => void;
-  onUpdateWorktree?: (worktreeId: string, updates: Partial<Worktree>) => void;
+  onUpdateWorktree?: (
+    worktreeId: string,
+    updates: import('../WorktreeModal/tabs/GeneralTab').WorktreeUpdate
+  ) => void;
   onCreateWorktree?: (
     repoId: string,
     data: {

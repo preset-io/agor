@@ -4,7 +4,7 @@ import { Modal, Tabs } from 'antd';
 import { useState } from 'react';
 import { ConceptsTab } from './tabs/ConceptsTab';
 import { EnvironmentTab } from './tabs/EnvironmentTab';
-import { GeneralTab } from './tabs/GeneralTab';
+import { GeneralTab, type WorktreeUpdate } from './tabs/GeneralTab';
 import { ScheduleTab } from './tabs/ScheduleTab';
 
 export interface WorktreeModalProps {
@@ -16,7 +16,7 @@ export interface WorktreeModalProps {
   boards?: Board[];
   boardObjects?: BoardEntityObject[];
   client: AgorClient | null;
-  onUpdateWorktree?: (worktreeId: string, updates: Partial<Worktree>) => void;
+  onUpdateWorktree?: (worktreeId: string, updates: WorktreeUpdate) => void;
   onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
   onArchiveOrDelete?: (
     worktreeId: string,

@@ -6,12 +6,22 @@ import { ArchiveDeleteWorktreeModal } from '../../ArchiveDeleteWorktreeModal';
 
 const { TextArea } = Input;
 
+export type WorktreeUpdate = Omit<
+  Partial<Worktree>,
+  'issue_url' | 'pull_request_url' | 'notes' | 'board_id'
+> & {
+  board_id?: string | null | undefined;
+  issue_url?: string | null | undefined;
+  pull_request_url?: string | null | undefined;
+  notes?: string | null | undefined;
+};
+
 interface GeneralTabProps {
   worktree: Worktree;
   repo: Repo;
   sessions: Session[];
   boards?: Board[];
-  onUpdate?: (worktreeId: string, updates: Partial<Worktree>) => void;
+  onUpdate?: (worktreeId: string, updates: WorktreeUpdate) => void;
   onArchiveOrDelete?: (
     worktreeId: string,
     options: {
@@ -63,12 +73,13 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
     notes !== (worktree.notes || '');
 
   const handleSave = () => {
-    onUpdate?.(worktree.worktree_id, {
+    const updates = {
       board_id: boardId || undefined,
-      issue_url: issueUrl || undefined,
-      pull_request_url: prUrl || undefined,
-      notes: notes || undefined,
-    });
+      issue_url: (issueUrl.trim() === '' ? null : issueUrl) as string | null | undefined,
+      pull_request_url: (prUrl.trim() === '' ? null : prUrl) as string | null | undefined,
+      notes: (notes.trim() === '' ? null : notes) as string | null | undefined,
+    };
+    onUpdate?.(worktree.worktree_id, updates);
     message.success('Worktree updated');
     onClose?.();
   };

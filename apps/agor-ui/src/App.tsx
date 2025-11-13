@@ -692,11 +692,15 @@ function AppContent() {
 
   const handleUpdateWorktree = async (
     worktreeId: string,
-    updates: Partial<import('@agor/core/types').Worktree>
+    updates: import('./components/WorktreeModal/tabs/GeneralTab').WorktreeUpdate
   ) => {
     if (!client) return;
     try {
-      await client.service('worktrees').patch(worktreeId, updates);
+      // Cast to Partial<Worktree> to satisfy Feathers type checking
+      // The backend MCP handler properly handles null values for clearing fields
+      await client
+        .service('worktrees')
+        .patch(worktreeId, updates as Partial<import('@agor/core/types').Worktree>);
       message.success('Worktree updated successfully!');
     } catch (error) {
       message.error(
