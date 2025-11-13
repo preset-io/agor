@@ -33,6 +33,7 @@ import { TerminalModal } from '../TerminalModal';
 import { ThemeEditorModal } from '../ThemeEditorModal';
 import { WorktreeListDrawer } from '../WorktreeListDrawer';
 import { WorktreeModal } from '../WorktreeModal';
+import type { WorktreeUpdate } from '../WorktreeModal/tabs/GeneralTab';
 
 const { Content } = Layout;
 
@@ -77,10 +78,7 @@ export interface AppProps {
     }
   ) => void;
   onUnarchiveWorktree?: (worktreeId: string, options?: { boardId?: string }) => void;
-  onUpdateWorktree?: (
-    worktreeId: string,
-    updates: import('../WorktreeModal/tabs/GeneralTab').WorktreeUpdate
-  ) => void;
+  onUpdateWorktree?: (worktreeId: string, updates: WorktreeUpdate) => void;
   onCreateWorktree?: (
     repoId: string,
     data: {

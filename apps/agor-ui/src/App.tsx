@@ -1,4 +1,5 @@
 import { getRepoReferenceOptions } from '@agor/core/config/browser';
+import type { Worktree } from '@agor/core/types';
 import { Alert, App as AntApp, ConfigProvider, Spin, theme } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { BrowserRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
@@ -8,6 +9,7 @@ import { LoginPage } from './components/LoginPage';
 import { MobileApp } from './components/mobile/MobileApp';
 import { SandboxBanner } from './components/SandboxBanner';
 import { WelcomeModal } from './components/WelcomeModal';
+import type { WorktreeUpdate } from './components/WorktreeModal/tabs/GeneralTab';
 import { ConnectionProvider } from './contexts/ConnectionContext';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import {
@@ -690,17 +692,12 @@ function AppContent() {
     }
   };
 
-  const handleUpdateWorktree = async (
-    worktreeId: string,
-    updates: import('./components/WorktreeModal/tabs/GeneralTab').WorktreeUpdate
-  ) => {
+  const handleUpdateWorktree = async (worktreeId: string, updates: WorktreeUpdate) => {
     if (!client) return;
     try {
       // Cast to Partial<Worktree> to satisfy Feathers type checking
       // The backend MCP handler properly handles null values for clearing fields
-      await client
-        .service('worktrees')
-        .patch(worktreeId, updates as Partial<import('@agor/core/types').Worktree>);
+      await client.service('worktrees').patch(worktreeId, updates as Partial<Worktree>);
       message.success('Worktree updated successfully!');
     } catch (error) {
       message.error(
