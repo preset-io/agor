@@ -10,6 +10,7 @@ import 'dotenv/config';
 // Patch console methods to respect LOG_LEVEL env var
 // This allows all console.log/debug calls to be filtered by log level
 import { patchConsole } from '@agor/core/utils/logger';
+
 patchConsole();
 
 // Read package version once at startup (not on every /health request)
@@ -101,6 +102,7 @@ import { SessionStatus, TaskStatus } from '@agor/core/types';
 import {
   calculateContextWindowUsage,
   calculateCumulativeContextWindow,
+  calculateCumulativeContextWindowWithCurrent,
   getContextWindowLimit,
   getSessionContextUsage,
 } from '@agor/core/utils/context-window';
@@ -119,25 +121,25 @@ function isPaginated<T>(result: T[] | Paginated<T>): result is Paginated<T> {
 }
 
 /**
- * Calculate context window for a completed task (Claude Code only)
+ * Calculate context window for a completed task including its own tokens
  *
- * For Claude Code sessions, fetches all tasks and messages to calculate cumulative
- * conversation size with compaction handling. For other tools, uses simple calculation.
+ * Fetches all saved tasks and messages, then calculates cumulative context window
+ * including the current task's tokens (which hasn't been saved yet).
  *
  * @param session - Current session
- * @param usage - Token usage from the completed task
- * @param tasksService - Tasks service for querying all session tasks
+ * @param currentTaskUsage - Token usage from the task being completed
+ * @param tasksService - Tasks service for querying saved tasks
  * @param messagesService - Messages service for detecting compaction events
  * @returns Context window usage in tokens, or undefined if calculation fails
  */
 async function calculateTaskContextWindow(
   session: Session,
-  usage: TokenUsage | undefined,
+  currentTaskUsage: TokenUsage | undefined,
   tasksService: TasksServiceImpl,
   messagesService: MessagesServiceImpl
 ): Promise<number | undefined> {
   try {
-    // Fetch all tasks and messages for this session
+    // Fetch all saved tasks and messages for this session
     const allTasksResult = (await tasksService.find({
       query: { session_id: session.session_id, $limit: 10000 },
     })) as Task[] | Paginated<Task>;
@@ -150,18 +152,21 @@ async function calculateTaskContextWindow(
       ? allMessagesResult.data
       : allMessagesResult;
 
-    // Calculate cumulative context window (input + output tokens)
-    // This represents the actual conversation size across all turns
-    // For all agents: Codex, Claude Code, Gemini, etc.
-    // Pass agenticTool so normalization can handle different token reporting formats
-    return calculateCumulativeContextWindow(allTasks, allMessages, session.agentic_tool);
+    // Calculate cumulative context window including current task's tokens
+    // This handles compaction, normalization, and adds the current task
+    return calculateCumulativeContextWindowWithCurrent(
+      allTasks,
+      allMessages,
+      currentTaskUsage,
+      session.agentic_tool
+    );
   } catch (err) {
     console.warn(
       `⚠️  Failed to calculate cumulative context window for session ${session.session_id}:`,
       err
     );
-    // Fallback to simple calculation
-    return calculateContextWindowUsage(usage);
+    // Fallback to simple calculation (current task only)
+    return calculateContextWindowUsage(currentTaskUsage);
   }
 }
 
@@ -1800,6 +1805,23 @@ async function main() {
         }
       }
 
+      // Get previous task's context window for initial UI display
+      // This gives users an immediate sense of context size before the task completes
+      let initialContextWindow: number | undefined;
+      let initialContextWindowLimit: number | undefined;
+      if (session.tasks.length > 0) {
+        try {
+          // Get the most recent task
+          const previousTaskId = session.tasks[session.tasks.length - 1];
+          const previousTask = await tasksService.get(previousTaskId, params);
+          initialContextWindow = previousTask.context_window;
+          initialContextWindowLimit = previousTask.context_window_limit;
+        } catch (error) {
+          console.debug('Could not get previous task context window:', error);
+          // Not critical - just won't show initial estimate
+        }
+      }
+
       // PHASE 1: Create task immediately with 'running' status (UI shows task instantly)
       const task = await tasksService.create(
         {
@@ -1819,6 +1841,9 @@ async function main() {
             ref_at_start: refAtStart, // Now always a string (never undefined)
             sha_at_start: gitStateAtStart,
           },
+          // Set initial context window from previous task (will be updated on completion)
+          context_window: initialContextWindow,
+          context_window_limit: initialContextWindowLimit,
         },
         params
       );
@@ -2078,7 +2103,7 @@ async function main() {
                   // Continue with toolUseCount = 0
                 }
 
-                // Calculate cumulative context window for Claude Code sessions
+                // Calculate cumulative context window including current task's tokens
                 // This represents the actual conversation size (input + output tokens)
                 // across all tasks, with compaction handling
                 const contextWindow = await calculateTaskContextWindow(

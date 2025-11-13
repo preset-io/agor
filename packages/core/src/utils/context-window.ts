@@ -135,6 +135,40 @@ export function calculateModelContextWindowUsage(modelUsage: ModelUsage): number
 }
 
 /**
+ * Calculate cumulative context window including a current (not-yet-saved) task
+ *
+ * This is a convenience wrapper around calculateCumulativeContextWindow that:
+ * 1. Calculates cumulative tokens from all saved tasks
+ * 2. Adds the current task's tokens (normalized for the agentic tool)
+ *
+ * Use this when completing a task and you need its context_window value
+ * BEFORE saving it to the database.
+ *
+ * @param tasks - All saved tasks in the session (excludes current task)
+ * @param messages - All messages in the session
+ * @param currentTaskUsage - Token usage from the current (not-yet-saved) task
+ * @param agenticTool - The agentic tool used ('codex', 'claude-code', 'gemini')
+ * @returns Total context window usage including the current task
+ */
+export function calculateCumulativeContextWindowWithCurrent(
+  tasks: Array<{ usage?: TokenUsage; task_id: string }>,
+  messages: Array<{ task_id?: string; type?: string; content?: unknown }>,
+  currentTaskUsage: TokenUsage | undefined,
+  agenticTool?: string
+): number {
+  // Get cumulative from all saved tasks
+  const cumulativeBeforeCurrent = calculateCumulativeContextWindow(tasks, messages, agenticTool);
+
+  // Add current task's tokens
+  const normalized = normalizeTokenUsage(currentTaskUsage, agenticTool);
+  const currentTaskTokens = normalized
+    ? (normalized.input_tokens || 0) + (normalized.output_tokens || 0)
+    : 0;
+
+  return cumulativeBeforeCurrent + currentTaskTokens;
+}
+
+/**
  * Get session-level context window usage
  *
  * Algorithm (from https://codelynx.dev/posts/calculate-claude-code-context):
