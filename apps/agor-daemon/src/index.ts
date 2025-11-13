@@ -1320,7 +1320,7 @@ async function main() {
       audience: 'https://agor.dev',
       issuer: 'agor',
       algorithm: 'HS256',
-      expiresIn: '1h', // Access token: 1 hour
+      expiresIn: '7d', // Access token: 7 days (refresh token: 30 days)
     },
     local: {
       usernameField: 'email',
@@ -1494,15 +1494,30 @@ async function main() {
           },
           jwtSecret,
           {
-            expiresIn: '1h',
+            expiresIn: '7d',
             issuer: 'agor',
             audience: 'https://agor.dev',
           }
         );
 
-        // Return new access token and user
+        // Generate new refresh token (rotate on each refresh for better security)
+        const newRefreshToken = jwt.sign(
+          {
+            sub: user.user_id,
+            type: 'refresh',
+          },
+          jwtSecret,
+          {
+            expiresIn: '30d',
+            issuer: 'agor',
+            audience: 'https://agor.dev',
+          }
+        );
+
+        // Return new access token, new refresh token, and user
         return {
           accessToken,
+          refreshToken: newRefreshToken,
           user: {
             user_id: user.user_id,
             email: user.email,

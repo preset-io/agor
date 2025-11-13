@@ -45,7 +45,7 @@ export function useAuth(): UseAuthReturn {
    */
   const reAuthenticate = useCallback(async (retryCount = 0) => {
     const MAX_RETRIES = 5;
-    setState((prev) => ({ ...prev, loading: true, error: null }));
+    setState(prev => ({ ...prev, loading: true, error: null }));
 
     // Move client outside try block so it's accessible in finally
     let client: ReturnType<typeof createClient> | null = null;
@@ -87,7 +87,7 @@ export function useAuth(): UseAuthReturn {
           resolve();
         });
 
-        client.io.once('connect_error', (err) => {
+        client.io.once('connect_error', err => {
           clearTimeout(timeout);
           reject(err);
         });
@@ -127,8 +127,11 @@ export function useAuth(): UseAuthReturn {
             refreshToken: storedRefreshToken,
           });
 
-          // Store new access token
+          // Store new access token and refresh token (if rotated)
           localStorage.setItem(ACCESS_TOKEN_KEY, refreshResult.accessToken);
+          if (refreshResult.refreshToken) {
+            localStorage.setItem(REFRESH_TOKEN_KEY, refreshResult.refreshToken);
+          }
 
           setState({
             user: refreshResult.user,
@@ -180,7 +183,7 @@ export function useAuth(): UseAuthReturn {
         console.log(
           `Connection failed (attempt ${retryCount + 1}/${MAX_RETRIES}), retrying in ${Math.round(delay)}ms...`
         );
-        await new Promise((resolve) => setTimeout(resolve, delay));
+        await new Promise(resolve => setTimeout(resolve, delay));
         return reAuthenticate(retryCount + 1);
       }
 
@@ -263,12 +266,12 @@ export function useAuth(): UseAuthReturn {
     };
   }, [state.authenticated, state.loading, reAuthenticate]);
 
-  // Auto-refresh token 5 minutes before expiration
+  // Auto-refresh token before expiration
   useEffect(() => {
     if (!state.authenticated || !state.accessToken) return;
 
-    // Access token expires in 1 hour, refresh after 55 minutes
-    const REFRESH_INTERVAL = 55 * 60 * 1000; // 55 minutes in milliseconds
+    // Access token expires in 7 days, refresh after 6 days (conservative approach)
+    const REFRESH_INTERVAL = 6 * 24 * 60 * 60 * 1000; // 6 days in milliseconds
 
     const refreshTimer = setInterval(async () => {
       const refreshToken = localStorage.getItem(REFRESH_TOKEN_KEY);
@@ -298,7 +301,7 @@ export function useAuth(): UseAuthReturn {
             resolve();
           });
 
-          client.io.once('connect_error', (err) => {
+          client.io.once('connect_error', err => {
             clearTimeout(timeout);
             reject(err);
           });
@@ -308,10 +311,13 @@ export function useAuth(): UseAuthReturn {
           refreshToken,
         });
 
-        // Store new access token
+        // Store new access token and refresh token (if rotated)
         localStorage.setItem(ACCESS_TOKEN_KEY, refreshResult.accessToken);
+        if (refreshResult.refreshToken) {
+          localStorage.setItem(REFRESH_TOKEN_KEY, refreshResult.refreshToken);
+        }
 
-        setState((prev) => ({
+        setState(prev => ({
           ...prev,
           accessToken: refreshResult.accessToken,
           user: refreshResult.user,
@@ -347,7 +353,7 @@ export function useAuth(): UseAuthReturn {
    * Login with email and password
    */
   const login = async (email: string, password: string): Promise<boolean> => {
-    setState((prev) => ({ ...prev, loading: true, error: null }));
+    setState(prev => ({ ...prev, loading: true, error: null }));
 
     let client: ReturnType<typeof createClient> | null = null;
 
@@ -374,7 +380,7 @@ export function useAuth(): UseAuthReturn {
           resolve();
         });
 
-        client.io.once('connect_error', (err) => {
+        client.io.once('connect_error', err => {
           clearTimeout(timeout);
           reject(err);
         });
@@ -422,7 +428,7 @@ export function useAuth(): UseAuthReturn {
       console.error('❌ Login failed:', error);
       const errorMessage = error instanceof Error ? error.message : 'Login failed';
       console.error('❌ Error message:', errorMessage);
-      setState((prev) => ({
+      setState(prev => ({
         ...prev,
         loading: false,
         error: errorMessage,
