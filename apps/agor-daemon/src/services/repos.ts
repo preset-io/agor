@@ -12,7 +12,10 @@ import type { Application } from '@agor/core/feathers';
 import { cloneRepo, getWorktreePath, createWorktree as gitCreateWorktree } from '@agor/core/git';
 import { renderTemplate } from '@agor/core/templates/handlebars-helpers';
 import type { AuthenticatedParams, QueryParams, Repo, UserID, Worktree } from '@agor/core/types';
+import { createLogger } from '@agor/core/utils/logger';
 import { DrizzleService } from '../adapters/drizzle';
+
+const log = createLogger('repos');
 
 /**
  * Repo service params

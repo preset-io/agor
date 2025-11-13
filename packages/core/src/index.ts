@@ -10,3 +10,4 @@ export * from './db/index.js';
 export * from './git/index.js';
 // Re-export everything from submodules
 export * from './types/index.js';
+export * from './utils/logger.js';
