@@ -504,6 +504,9 @@ importers:
       '@google/genai':
         specifier: ^1.26.0
         version: 1.29.0(@modelcontextprotocol/sdk@1.21.0)
+      '@iarna/toml':
+        specifier: ^3.0.0
+        version: 3.0.0
       '@libsql/client':
         specifier: ^0.15.15
         version: 0.15.15
@@ -544,6 +547,9 @@ importers:
       '@types/bcryptjs':
         specifier: ^2.4.6
         version: 2.4.6
+      '@types/iarna__toml':
+        specifier: ^2.0.2
+        version: 2.0.5
       '@types/js-yaml':
         specifier: ^4.0.9
         version: 4.0.9
@@ -1530,6 +1536,9 @@ packages:
   '@homebridge/node-pty-prebuilt-multiarch@0.13.1':
     resolution: {integrity: sha512-ccQ60nMcbEGrQh0U9E6x0ajW9qJNeazpcM/9CH6J8leyNtJgb+gu24WTBAfBUVeO486ZhscnaxLEITI2HXwhow==}
     engines: {node: '>=18.0.0 <25.0.0'}
+
+  '@iarna/toml@3.0.0':
+    resolution: {integrity: sha512-td6ZUkz2oS3VeleBcN+m//Q6HlCFCPrnI0FZhrt/h4XqLEdOyYp2u21nd8MdsR+WJy5r9PTDaHTDDfhf4H4l6Q==}
 
   '@iconify/types@2.0.0':
     resolution: {integrity: sha512-+wluvCrRhXrhyOmRDJ3q8mux9JkKy5SJ/v8ol2tu4FVjyYvtEzkc/3pK15ET6RKg4b4w4BmTk1+gsCUhf21Ykg==}
@@ -3443,6 +3452,9 @@ packages:
 
   '@types/http-errors@2.0.5':
     resolution: {integrity: sha512-r8Tayk8HJnX0FztbZN7oVqGccWgw98T/0neJphO91KkmOzug1KkofZURD4UaD5uH8AqcFLfdPErnBod0u71/qg==}
+
+  '@types/iarna__toml@2.0.5':
+    resolution: {integrity: sha512-I55y+SxI0ayM4MBU6yfGJGmi4wRll6wtSeKiFYAZj+Z5Q1DVbMgBSVDYY+xQZbjIlLs/pN4fidnvR8faDrmxPg==}
 
   '@types/js-yaml@4.0.9':
     resolution: {integrity: sha512-k4MGaQl5TGo/iipqb2UDG2UwjXziSWkh0uysQelTlJpX1qGlpUZYm8PnO4DxG1qBomtJUdYJ6qR6xdIah10JLg==}
@@ -9535,6 +9547,8 @@ snapshots:
       node-addon-api: 7.1.1
       prebuild-install: 7.1.3
 
+  '@iarna/toml@3.0.0': {}
+
   '@iconify/types@2.0.0': {}
 
   '@iconify/utils@3.0.2':
@@ -11733,7 +11747,7 @@ snapshots:
 
   '@types/connect@3.4.38':
     dependencies:
-      '@types/node': 22.19.0
+      '@types/node': 24.10.0
 
   '@types/cookiejar@2.1.5': {}
 
@@ -11920,6 +11934,10 @@ snapshots:
 
   '@types/http-errors@2.0.5': {}
 
+  '@types/iarna__toml@2.0.5':
+    dependencies:
+      '@types/node': 24.10.0
+
   '@types/js-yaml@4.0.9': {}
 
   '@types/json-schema@7.0.15': {}
@@ -11994,11 +12012,11 @@ snapshots:
   '@types/send@0.17.6':
     dependencies:
       '@types/mime': 1.3.5
-      '@types/node': 22.19.0
+      '@types/node': 24.10.0
 
   '@types/send@1.2.1':
     dependencies:
-      '@types/node': 22.19.0
+      '@types/node': 24.10.0
 
   '@types/serve-static@1.15.10':
     dependencies:

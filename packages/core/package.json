@@ -166,6 +166,7 @@
     "@feathersjs/typebox": "^5.0.37",
     "@google/gemini-cli-core": "^0.9.0",
     "@google/genai": "^1.26.0",
+    "@iarna/toml": "^3.0.0",
     "@libsql/client": "^0.15.15",
     "@openai/codex-sdk": "^0.47.0",
     "@opencode-ai/sdk": "^1.0.30",
@@ -181,6 +182,7 @@
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
     "@types/js-yaml": "^4.0.9",
+    "@types/iarna__toml": "^2.0.2",
     "@types/node": "^22.10.2",
     "@vitest/coverage-v8": "^4.0.3",
     "drizzle-kit": "^0.31.5",

@@ -64,6 +64,26 @@ MCP (Model Context Protocol) servers extend agent capabilities by connecting to 
 }
 ```
 
+**STDIO bridge for HTTP MCP servers:**
+
+Use Agor's built-in bridge when an MCP client only speaks stdio but the target server is HTTP-only (e.g., Codex → Agor MCP).
+
+```typescript
+{
+  transport: 'stdio',
+  command: 'node',
+  args: [
+    './scripts/agor-mcp-stdio-bridge.js',
+    '--session-token',
+    '<SESSION_TOKEN>',
+    '--url',
+    'http://localhost:3030/mcp'
+  ]
+}
+```
+
+The bridge forwards JSON-RPC requests between stdio and the HTTP endpoint (`sessionToken` may also be provided via `AGOR_MCP_SESSION_TOKEN`).
+
 **HTTP (Remote Server):**
 
 ```typescript
