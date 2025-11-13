@@ -414,17 +414,37 @@ export class ClaudeTool implements ITool {
             contextWindow: number;
           }
         >;
-        // Sum context usage across ALL models
+        // Sum ALL token fields across ALL models
         // When multiple models are used (e.g., Sonnet + Haiku for tools/thinking),
-        // all their tokens contribute to the total context window
+        // all their tokens contribute to the total
+        let totalInput = 0;
+        let totalOutput = 0;
+        let totalCacheRead = 0;
+        let totalCacheCreation = 0;
         let totalUsage = 0;
         let maxLimit = 0;
         for (const modelData of Object.values(modelUsageTyped)) {
+          totalInput += modelData.inputTokens || 0;
+          totalOutput += modelData.outputTokens || 0;
+          totalCacheRead += modelData.cacheReadInputTokens || 0;
+          totalCacheCreation += modelData.cacheCreationInputTokens || 0;
+
           const usage = calculateModelContextWindowUsage(modelData);
           const limit = modelData.contextWindow || 0;
           totalUsage += usage; // Sum across all models
           maxLimit = Math.max(maxLimit, limit); // Track largest context window limit
         }
+
+        // Override tokenUsage with summed values across all models
+        // (SDK's top-level token_usage only reflects primary model)
+        tokenUsage = {
+          input_tokens: totalInput,
+          output_tokens: totalOutput,
+          cache_read_tokens: totalCacheRead,
+          cache_creation_tokens: totalCacheCreation,
+          total_tokens: totalInput + totalOutput,
+        };
+
         contextWindow = totalUsage;
         contextWindowLimit = maxLimit;
         console.log(
@@ -707,17 +727,37 @@ export class ClaudeTool implements ITool {
             contextWindow: number;
           }
         >;
-        // Sum context usage across ALL models
+        // Sum ALL token fields across ALL models
         // When multiple models are used (e.g., Sonnet + Haiku for tools/thinking),
-        // all their tokens contribute to the total context window
+        // all their tokens contribute to the total
+        let totalInput = 0;
+        let totalOutput = 0;
+        let totalCacheRead = 0;
+        let totalCacheCreation = 0;
         let totalUsage = 0;
         let maxLimit = 0;
         for (const modelData of Object.values(modelUsageTyped)) {
+          totalInput += modelData.inputTokens || 0;
+          totalOutput += modelData.outputTokens || 0;
+          totalCacheRead += modelData.cacheReadInputTokens || 0;
+          totalCacheCreation += modelData.cacheCreationInputTokens || 0;
+
           const usage = calculateModelContextWindowUsage(modelData);
           const limit = modelData.contextWindow || 0;
           totalUsage += usage; // Sum across all models
           maxLimit = Math.max(maxLimit, limit); // Track largest context window limit
         }
+
+        // Override tokenUsage with summed values across all models
+        // (SDK's top-level token_usage only reflects primary model)
+        tokenUsage = {
+          input_tokens: totalInput,
+          output_tokens: totalOutput,
+          cache_read_tokens: totalCacheRead,
+          cache_creation_tokens: totalCacheCreation,
+          total_tokens: totalInput + totalOutput,
+        };
+
         contextWindow = totalUsage;
         contextWindowLimit = maxLimit;
         console.log(
