@@ -36,7 +36,14 @@ export type MessageType =
  * Content block (for multi-modal messages)
  */
 export interface ContentBlock {
-  type: 'text' | 'image' | 'tool_use' | 'tool_result' | 'thinking' | 'system_status';
+  type:
+    | 'text'
+    | 'image'
+    | 'tool_use'
+    | 'tool_result'
+    | 'thinking'
+    | 'system_status'
+    | 'system_complete';
   [key: string]: unknown; // Additional type-specific fields
 }
 

@@ -339,6 +339,43 @@ export class ClaudeTool implements ITool {
         }
       }
 
+      // Handle system_complete events (e.g., compaction finished)
+      // Store as NEW message to preserve timeline and metadata
+      if (event.type === 'system_complete') {
+        const systemCompleteEvent = event as Extract<ProcessedEvent, { type: 'system_complete' }>;
+        if (systemCompleteEvent.systemType === 'compaction') {
+          const metadata = systemCompleteEvent.metadata;
+          console.log(
+            `✅ Compaction complete (trigger: ${metadata?.trigger || 'unknown'}, pre_tokens: ${metadata?.pre_tokens || 'unknown'})`
+          );
+
+          // Create a NEW system message for compaction complete
+          // This preserves the event stream and allows UI to aggregate
+          await withSessionGuard(sessionId, this.sessionsRepo, async () => {
+            const completeMessageId = generateId() as MessageID;
+
+            await createSystemMessage(
+              sessionId,
+              completeMessageId,
+              [
+                {
+                  type: 'system_complete',
+                  systemType: 'compaction',
+                  text: 'Context compacted successfully',
+                  // Store metadata for UI rendering
+                  trigger: metadata?.trigger,
+                  pre_tokens: metadata?.pre_tokens,
+                },
+              ],
+              taskId,
+              nextIndex++,
+              resolvedModel,
+              this.messagesService!
+            );
+          });
+        }
+      }
+
       // Capture metadata from result events (SDK may not type this properly)
       if ('token_usage' in event && event.token_usage) {
         tokenUsage = extractTokenUsage(event.token_usage);

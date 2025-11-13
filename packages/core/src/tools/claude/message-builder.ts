@@ -202,6 +202,7 @@ export async function createSystemMessage(
     type: string;
     text?: string;
     status?: string;
+    [key: string]: unknown; // Allow additional properties for system_complete, etc.
   }>,
   taskId: TaskID | undefined,
   nextIndex: number,

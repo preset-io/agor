@@ -17,7 +17,7 @@ import {
   PermissionStatus,
   type User,
 } from '@agor/core/types';
-import { RobotOutlined } from '@ant-design/icons';
+import { CheckCircleFilled, RobotOutlined } from '@ant-design/icons';
 import { Bubble } from '@ant-design/x';
 import { Space, Spin, Typography, theme } from 'antd';
 
@@ -71,6 +71,7 @@ interface MessageBlockProps {
   taskId?: string;
   isFirstPendingPermission?: boolean; // For sequencing permission requests
   isLatestMessage?: boolean; // Whether this is the most recent message (don't collapse by default)
+  allMessages?: Message[]; // All messages for aggregation (e.g., finding matching compaction events)
   onPermissionDecision?: (
     sessionId: string,
     requestId: string,
@@ -129,6 +130,7 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
   taskId,
   isFirstPendingPermission = false,
   isLatestMessage = false,
+  allMessages = [],
   onPermissionDecision,
 }) => {
   const { token } = theme.useToken();
@@ -204,9 +206,17 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
     return null;
   }
 
+  // Skip rendering if message has empty content array (can happen during patch events)
+  if (Array.isArray(message.content) && message.content.length === 0) {
+    return null;
+  }
+
   // Special handling for system messages (compaction, etc.)
   if (isSystem && Array.isArray(message.content)) {
     const systemStatusBlock = message.content.find(b => b.type === 'system_status');
+    const systemCompleteBlock = message.content.find(b => b.type === 'system_complete');
+
+    // Handle compaction status (in progress)
     if (systemStatusBlock && 'status' in systemStatusBlock) {
       const status = systemStatusBlock.status;
 
@@ -236,6 +246,84 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
           </div>
         );
       }
+    }
+
+    // Handle compaction complete with aggregation
+    if (
+      systemCompleteBlock &&
+      'systemType' in systemCompleteBlock &&
+      systemCompleteBlock.systemType === 'compaction'
+    ) {
+      // Find the matching compaction start message
+      const compactionStartMessage = allMessages
+        .slice(
+          0,
+          allMessages.findIndex(m => m.message_id === message.message_id)
+        )
+        .reverse()
+        .find(m => {
+          if (m.role !== 'system' || !Array.isArray(m.content)) return false;
+          const hasCompactingStatus = m.content.some(
+            b => b.type === 'system_status' && 'status' in b && b.status === 'compacting'
+          );
+          return hasCompactingStatus;
+        });
+
+      // Calculate duration if we found the start message
+      const startTime = compactionStartMessage
+        ? new Date(compactionStartMessage.timestamp).getTime()
+        : null;
+      const endTime = new Date(message.timestamp).getTime();
+      const duration = startTime ? endTime - startTime : null;
+
+      // Extract metadata from the complete block
+      const trigger = (
+        'trigger' in systemCompleteBlock ? systemCompleteBlock.trigger : undefined
+      ) as string | undefined;
+      const preTokens = (
+        'pre_tokens' in systemCompleteBlock ? systemCompleteBlock.pre_tokens : undefined
+      ) as number | undefined;
+
+      return (
+        <div style={{ margin: `${token.sizeUnit}px 0` }}>
+          <Bubble
+            placement="start"
+            avatar={
+              agentic_tool ? (
+                <ToolIcon tool={agentic_tool} size={32} />
+              ) : (
+                <AgorAvatar
+                  icon={<RobotOutlined />}
+                  style={{ backgroundColor: token.colorBgContainer }}
+                />
+              )
+            }
+            content={
+              <Space direction="vertical" size="small" style={{ width: '100%' }}>
+                <Space>
+                  <CheckCircleFilled style={{ color: token.colorSuccess, fontSize: 14 }} />
+                  <Text type="secondary">Context compacted successfully</Text>
+                </Space>
+                {/* Show metadata if available */}
+                {(trigger || preTokens || duration) && (
+                  <div
+                    style={{
+                      fontSize: 12,
+                      color: token.colorTextTertiary,
+                      paddingLeft: 22,
+                    }}
+                  >
+                    {trigger && <div>Trigger: {trigger}</div>}
+                    {preTokens && <div>Pre-compaction tokens: {preTokens.toLocaleString()}</div>}
+                    {duration && <div>Duration: {(duration / 1000).toFixed(2)}s</div>}
+                  </div>
+                )}
+              </Space>
+            }
+            variant="outlined"
+          />
+        </div>
+      );
     }
   }
 

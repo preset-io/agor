@@ -114,6 +114,10 @@ export type ProcessedEvent =
       type: 'system_complete';
       systemType: string;
       agentSessionId?: string;
+      metadata?: {
+        trigger?: 'manual' | 'auto';
+        pre_tokens?: number;
+      };
     }
   | {
       type: 'end';
@@ -543,12 +547,23 @@ export class SDKMessageProcessor {
   private handleSystem(msg: SDKSystemMessage | SDKCompactBoundaryMessage): ProcessedEvent[] {
     if ('subtype' in msg && msg.subtype === 'compact_boundary') {
       console.log(`📦 SDK compact_boundary (compaction finished)`);
-      // Emit event to mark compaction as complete
+      console.log(`📊 Full compact_boundary message:`, JSON.stringify(msg, null, 2));
+
+      // Extract metadata from compact_boundary message
+      const metadata = 'compact_metadata' in msg ? msg.compact_metadata : undefined;
+
+      // Emit event to mark compaction as complete with full metadata
       return [
         {
           type: 'system_complete',
           systemType: 'compaction',
           agentSessionId: this.state.capturedAgentSessionId,
+          metadata: metadata
+            ? {
+                trigger: metadata.trigger,
+                pre_tokens: metadata.pre_tokens,
+              }
+            : undefined,
         },
       ];
     }
