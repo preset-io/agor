@@ -437,8 +437,8 @@ const SessionCanvas = ({
       const zoneName = dbZoneId ? zoneLabels[dbZoneId] || 'Unknown Zone' : undefined;
       const zoneObj = zoneId && board?.objects?.[zoneId] ? board.objects[zoneId] : undefined;
       const zoneColor =
-        zoneObj && 'borderColor' in zoneObj
-          ? zoneObj.borderColor || zoneObj.color // Backwards compat
+        zoneObj && zoneObj.type === 'zone'
+          ? zoneObj.borderColor || zoneObj.color // Backwards compat: borderColor first, then fall back to deprecated color
           : undefined;
 
       // Get sessions for this worktree

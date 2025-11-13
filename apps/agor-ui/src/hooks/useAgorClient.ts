@@ -9,6 +9,12 @@ import type { AgorClient } from '@agor/core/api';
 import { createClient } from '@agor/core/api';
 import { useEffect, useRef, useState } from 'react';
 import { getDaemonUrl } from '../config/daemon';
+import {
+  ACCESS_TOKEN_KEY,
+  getStoredRefreshToken,
+  REFRESH_TOKEN_KEY,
+  refreshAndStoreTokens,
+} from '../utils/tokenRefresh';
 
 interface UseAgorClientResult {
   client: AgorClient | null;
@@ -75,28 +81,69 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
           console.log('🔌 Connected to daemon');
           hasConnectedOnce = true; // Mark that we've successfully connected
 
-          // Re-authenticate on reconnection (e.g., after daemon restart)
+          // Re-authenticate on reconnection (e.g., after daemon restart or network recovery)
           try {
             if (accessToken) {
-              await client.authenticate({
-                strategy: 'jwt',
-                accessToken,
-              });
-              console.log('✓ Re-authenticated with stored token after reconnect');
+              // Try to authenticate with access token first
+              try {
+                await client.authenticate({
+                  strategy: 'jwt',
+                  accessToken,
+                });
+                console.log('✓ Re-authenticated with stored token after reconnect');
+                setConnected(true);
+                setConnecting(false);
+                setError(null);
+                return;
+              } catch (accessTokenErr) {
+                // Access token expired or invalid - try refresh token
+                console.log('Access token failed on reconnect, attempting refresh...');
+
+                // Check if we have a refresh token in localStorage
+                const refreshToken = getStoredRefreshToken();
+                if (refreshToken) {
+                  try {
+                    const refreshResult = await refreshAndStoreTokens(client, refreshToken);
+
+                    // Authenticate with new access token
+                    await client.authenticate({
+                      strategy: 'jwt',
+                      accessToken: refreshResult.accessToken,
+                    });
+
+                    console.log('✓ Re-authenticated with refresh token after reconnect');
+                    setConnected(true);
+                    setConnecting(false);
+                    setError(null);
+
+                    // Trigger useAuth to reload (in case it's not in sync)
+                    window.dispatchEvent(new Event('storage'));
+                    return;
+                  } catch (refreshErr) {
+                    console.error('❌ Refresh token also failed:', refreshErr);
+                    // Fall through to error handling
+                  }
+                }
+              }
             } else if (allowAnonymous) {
               await client.authenticate({
                 strategy: 'anonymous',
               });
               console.log('✓ Re-authenticated anonymously after reconnect');
+              setConnected(true);
+              setConnecting(false);
+              setError(null);
+              return;
             }
 
-            setConnected(true);
+            // If we get here, authentication failed
+            console.error('❌ Re-authentication failed after reconnect - all tokens expired');
             setConnecting(false);
-            setError(null);
+            setConnected(false);
+            setError('Session expired. Please log in again.');
           } catch (err) {
             console.error('❌ Re-authentication failed after reconnect:', err);
-            // Don't set error immediately - the token might just be expired
-            // Let useAuth handle token refresh logic instead
+            // Don't set error immediately - let useAuth handle it
             setConnecting(false);
             setConnected(false);
           }

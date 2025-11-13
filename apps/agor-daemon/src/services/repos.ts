@@ -63,19 +63,16 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       throw new Error(`Repository '${data.slug}' already exists in database`);
     }
 
-    // Resolve user environment variables if authenticated
     let userEnv: Record<string, string> | undefined;
     const userId = (params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined;
 
     if (userId) {
       userEnv = await resolveUserEnvironment(userId, this.db);
     }
-
-    // Clone using git-utils with user env vars (normal clone - worktrees need working files)
     const result = await cloneRepo({
       url: data.url,
       bare: false,
-      env: userEnv, // Pass user env vars to git operations
+      env: userEnv,
     });
 
     // Create database record
@@ -110,10 +107,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
   ): Promise<Worktree> {
     const repo = await this.get(id, params);
 
-    // Generate worktree path
     const worktreePath = getWorktreePath(repo.slug, data.name);
 
-    // Resolve user environment variables if authenticated
     let userEnv: Record<string, string> | undefined;
     const userId = (params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined;
 
@@ -121,7 +116,6 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       userEnv = await resolveUserEnvironment(userId, this.db);
     }
 
-    // Create git worktree with optional pull-latest and source branch
     await gitCreateWorktree(
       repo.local_path,
       worktreePath,
@@ -129,24 +123,20 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       data.createBranch,
       data.pullLatest,
       data.sourceBranch,
-      userEnv // Pass user env vars to git operations
+      userEnv
     );
 
-    // Get all existing worktrees to auto-assign unique ID
     const worktreesService = this.app.service('worktrees');
     const worktreesResult = await worktreesService.find({
       query: { $limit: 1000 },
       paginate: false,
     });
 
-    // Handle both array and paginated response formats
     const existingWorktrees = (
       Array.isArray(worktreesResult) ? worktreesResult : worktreesResult.data
     ) as Worktree[];
 
     const worktreeUniqueId = autoAssignWorktreeUniqueId(existingWorktrees);
-
-    // Initialize static environment fields from templates (if repo has environment config)
     let start_command: string | undefined;
     let stop_command: string | undefined;
     let health_check_url: string | undefined;
@@ -163,10 +153,9 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         repo: {
           slug: repo.slug,
         },
-        custom: {}, // No custom context at creation time
+        custom: {},
       };
 
-      // Helper to render a template with error handling
       const safeRenderTemplate = (template: string, fieldName: string): string | undefined => {
         try {
           return renderTemplate(template, templateContext);
@@ -175,8 +164,6 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
           return undefined;
         }
       };
-
-      // Render all fields from templates
       start_command = repo.environment_config.up_command
         ? safeRenderTemplate(repo.environment_config.up_command, 'start_command')
         : undefined;
@@ -198,7 +185,6 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         : undefined;
     }
 
-    // Create worktree record in database using the service (broadcasts WebSocket event)
     const worktree = (await worktreesService.create(
       {
         repo_id: repo.repo_id,
@@ -208,7 +194,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         base_ref: data.sourceBranch,
         new_branch: data.createBranch ?? false,
         worktree_unique_id: worktreeUniqueId,
-        start_command, // Static environment fields initialized from templates
+        start_command,
         stop_command,
         health_check_url,
         app_url,
@@ -217,19 +203,17 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         last_used: new Date().toISOString(),
         issue_url: data.issue_url,
         pull_request_url: data.pull_request_url,
-        board_id: data.boardId, // Optional: assign to board
-        created_by: (params as AuthenticatedParams | undefined)?.user?.user_id || 'anonymous', // Set created_by from authenticated user
+        board_id: data.boardId,
+        created_by: (params as AuthenticatedParams | undefined)?.user?.user_id || 'anonymous',
       },
       params
     )) as Worktree;
-
-    // If boardId provided, create board_object to position worktree on board
     if (data.boardId) {
       const boardObjectsService = this.app.service('board-objects');
       await boardObjectsService.create({
         board_id: data.boardId,
         worktree_id: worktree.worktree_id,
-        position: { x: 100, y: 100 }, // Default position, user can drag to reposition
+        position: { x: 100, y: 100 },
       });
     }
 

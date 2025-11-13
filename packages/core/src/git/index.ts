@@ -1,28 +1,8 @@
 /**
  * Git Utils for Agor
  *
- * Provides Git operations for repo management and worktree isolation
- *
- * ## Authentication Strategy
- *
- * Git operations (clone, fetch, etc.) require authentication for private repositories.
- * This module supports multiple authentication methods:
- *
- * 1. **SSH Keys** - Traditional SSH key-based auth (works automatically if keys are mounted)
- * 2. **User Environment Variables** - Per-user GITHUB_TOKEN or GH_TOKEN from Agor user settings
- * 3. **System Credential Helpers** - Existing git credential helpers (e.g., gh auth, git-credential-store)
- *
- * ### How User Environment Variables Work
- *
- * When a user configures GITHUB_TOKEN in their Agor user settings:
- * 1. The token is encrypted and stored in the database
- * 2. During git operations, we decrypt and pass it via the `env` parameter
- * 3. We configure a **Git credential helper** (via `-c credential.helper=...`) that provides the token
- * 4. When Git needs credentials for HTTPS operations, it calls our helper function
- * 5. The helper outputs `username=x-access-token\npassword=TOKEN` in the format Git expects
- *
- * This approach mirrors how `gh auth` works - it's clean, secure, and doesn't pollute URLs with tokens.
- * The credential helper is **ephemeral** and **scoped to the specific git command**, not system-wide.
+ * Provides Git operations for repo management and worktree isolation.
+ * Supports SSH keys, user environment variables (GITHUB_TOKEN), and system credential helpers.
  */
 
 import { existsSync } from 'node:fs';
@@ -55,82 +35,36 @@ function getGitBinary(): string | undefined {
 }
 
 /**
- * Create a configured simple-git instance
- *
- * Automatically detects git binary path for consistent behavior
- * across different environments (native, Docker, etc.)
- *
- * **Non-Interactive Mode:**
- * GIT_TERMINAL_PROMPT=0 and GIT_ASKPASS=echo are set globally at daemon startup
- * to prevent interactive prompts while allowing credential helpers to work.
- * This enables gh auth, SSH keys, and credential stores while still failing fast
- * in automated environments.
- *
- * **SSH Host Key Checking:**
- * Always disabled by default to prevent interactive prompts.
- * Agor is an automation tool and should not require user interaction for SSH operations.
- *
- * **User Environment Variables:**
- * If env is provided (e.g., from resolveUserEnvironment), it will be merged with process.env
- * to support per-user credentials like GITHUB_TOKEN, GH_TOKEN, etc.
- *
- * @param baseDir - Base directory for git operations
- * @param env - Optional environment variables to merge with process.env
+ * Create a configured simple-git instance with user environment variables.
  */
 function createGit(baseDir?: string, env?: Record<string, string>) {
   const gitBinary = getGitBinary();
 
-  // NOTE: Git environment variables (GIT_TERMINAL_PROMPT, GIT_ASKPASS) are set
-  // globally at daemon startup in apps/agor-daemon/src/index.ts
-  // These environment variables prevent interactive credential prompts while still
-  // allowing credential helpers (gh auth, SSH keys, credential stores) to work.
-  // Git will fail fast if credentials are needed but not available.
-
-  // Always disable strict host key checking for SSH operations
-  // This prevents interactive prompts for unknown hosts in automated environments
   const config = [
     'core.sshCommand=ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null',
   ];
 
-  // Configure Git credential helper if we have GitHub tokens
-  //
-  // Why credential helpers instead of URL injection?
-  // - Cleaner: No tokens in URLs/logs
-  // - Standard: How gh auth and git-credential-store work
-  // - Secure: Tokens stay in environment variables
-  // - Ephemeral: Only applies to this git command (via -c flag)
-  //
-  // How it works:
-  // 1. Git needs credentials for HTTPS clone/fetch
-  // 2. Git calls our credential helper (a shell function defined below)
-  // 3. Helper outputs username and password in the format Git expects
-  // 4. Git uses those credentials for authentication
-  //
-  // The `!f() { ... }; f` syntax defines a shell function inline.
-  // GitHub expects username='x-access-token' and password=<PAT> for token auth.
+  // Configure credential helper for GitHub tokens
   if (env?.GITHUB_TOKEN) {
     const token = env.GITHUB_TOKEN;
-    const credentialHelper = `!f() { echo "username=x-access-token"; echo "password=${token}"; }; f`;
+    const credentialHelper = `!f() { echo username=x-access-token; echo password=${token}; }; f`;
     config.push(`credential.helper=${credentialHelper}`);
+    console.debug('🔑 Configured credential helper with GITHUB_TOKEN');
   } else if (env?.GH_TOKEN) {
     const token = env.GH_TOKEN;
-    const credentialHelper = `!f() { echo "username=x-access-token"; echo "password=${token}"; }; f`;
+    const credentialHelper = `!f() { echo username=x-access-token; echo password=${token}; }; f`;
     config.push(`credential.helper=${credentialHelper}`);
+    console.debug('🔑 Configured credential helper with GH_TOKEN');
   }
 
-  // Create git instance with extended spawnOptions to include environment variables
-  // simple-git's types only expose 'uid' and 'gid' in spawnOptions, but the underlying
-  // child_process.spawn accepts 'env'. We use a type assertion to pass environment variables.
   const git = simpleGit({
     baseDir,
     binary: gitBinary,
     config,
     spawnOptions: env
       ? ({
-          // Merge user env vars with process.env (user vars take precedence)
-          // This allows per-user GitHub PATs, SSH keys, etc. to work with git operations
           env: { ...process.env, ...env } as NodeJS.ProcessEnv,
-          // biome-ignore lint/suspicious/noExplicitAny: simple-git types don't expose env in spawnOptions but it works at runtime
+          // biome-ignore lint/suspicious/noExplicitAny: simple-git types don't expose env in spawnOptions
         } as any)
       : undefined,
   });
@@ -184,25 +118,24 @@ export function extractRepoName(url: string): string {
 
 /**
  * Clone a Git repository to ~/.agor/repos/<name>
- *
- * If the repository already exists and is valid, returns existing repo info.
- * If directory exists but is not a valid repo, throws an error with suggestion to delete.
- *
- * @param options - Clone options
- * @returns Clone result with path and metadata
  */
 export async function cloneRepo(options: CloneOptions): Promise<CloneResult> {
-  // Use URL as provided by user
-  const normalizedUrl = options.url;
+  let cloneUrl = options.url;
 
-  const repoName = extractRepoName(normalizedUrl);
+  const repoName = extractRepoName(cloneUrl);
   const reposDir = getReposDir();
   const targetPath = options.targetDir || join(reposDir, repoName);
 
-  // Authentication is handled automatically via credential helper (configured in createGit)
-  // If options.env contains GITHUB_TOKEN or GH_TOKEN, createGit will configure a credential
-  // helper that provides those credentials when Git requests them during clone/fetch operations.
-  // This keeps URLs clean and tokens secure in environment variables.
+  // Inject token into URL for reliability (credential helper is also configured as backup)
+  if (options.env?.GITHUB_TOKEN && cloneUrl.startsWith('https://github.com/')) {
+    const token = options.env.GITHUB_TOKEN;
+    cloneUrl = cloneUrl.replace('https://github.com/', `https://x-access-token:${token}@github.com/`);
+    console.debug('🔑 Injected GITHUB_TOKEN into URL');
+  } else if (options.env?.GH_TOKEN && cloneUrl.startsWith('https://github.com/')) {
+    const token = options.env.GH_TOKEN;
+    cloneUrl = cloneUrl.replace('https://github.com/', `https://x-access-token:${token}@github.com/`);
+    console.debug('🔑 Injected GH_TOKEN into URL');
+  }
 
   // Ensure repos directory exists
   await mkdir(reposDir, { recursive: true });
@@ -243,9 +176,9 @@ export async function cloneRepo(options: CloneOptions): Promise<CloneResult> {
     });
   }
 
-  // Clone the repo using normalized URL
-  console.log(`Cloning ${normalizedUrl} to ${targetPath}...`);
-  await git.clone(normalizedUrl, targetPath, options.bare ? ['--bare'] : []);
+  // Clone the repo using the URL (potentially with injected token)
+  console.log(`Cloning ${options.url} to ${targetPath}...`);
+  await git.clone(cloneUrl, targetPath, options.bare ? ['--bare'] : []);
 
   // Get default branch from remote HEAD
   const defaultBranch = await getDefaultBranch(targetPath);
@@ -369,27 +302,16 @@ export interface WorktreeInfo {
 
 /**
  * Create a git worktree
- *
- * @param repoPath - Path to repository
- * @param worktreePath - Path where worktree should be created
- * @param ref - Branch/tag/commit to checkout
- * @param createBranch - Whether to create a new branch
- * @param pullLatest - Whether to fetch from remote before creating worktree (defaults to true)
- * @param sourceBranch - Source branch to base new branch on (used with createBranch)
- * @param env - Optional user environment variables (e.g., for private repo access)
  */
 export async function createWorktree(
   repoPath: string,
   worktreePath: string,
   ref: string,
   createBranch: boolean = false,
-  pullLatest: boolean = true, // Changed default to true - always fetch latest!
+  pullLatest: boolean = true,
   sourceBranch?: string,
-  env?: Record<string, string> // User environment variables for authentication (GITHUB_TOKEN, GH_TOKEN, etc.)
+  env?: Record<string, string>
 ): Promise<void> {
-  // Create git instance with user env vars for authentication
-  // If env contains GITHUB_TOKEN/GH_TOKEN, createGit will configure a credential helper
-  // that Git will use when fetching from private repositories
   const git = createGit(repoPath, env);
 
   let fetchSucceeded = false;

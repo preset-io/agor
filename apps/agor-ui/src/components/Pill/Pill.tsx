@@ -489,6 +489,108 @@ interface SessionIdPillProps extends BasePillProps {
   showCopy?: boolean;
 }
 
+/**
+ * Session ID Popover Content Component
+ * Displays both Agor session ID and agentic tool session ID with copy buttons
+ */
+const SessionIdPopoverContent: React.FC<{
+  sessionId: string;
+  sdkSessionId?: string;
+  agenticTool?: string;
+}> = ({ sessionId, sdkSessionId, agenticTool }) => {
+  const { token } = theme.useToken();
+
+  const handleCopyAgor = () => {
+    copyToClipboard(sessionId, {
+      showSuccess: true,
+      successMessage: 'Agor session ID copied to clipboard',
+    });
+  };
+
+  const handleCopySdk = () => {
+    if (sdkSessionId) {
+      copyToClipboard(sdkSessionId, {
+        showSuccess: true,
+        successMessage: `${agenticTool || 'SDK'} session ID copied to clipboard`,
+      });
+    }
+  };
+
+  return (
+    <div style={{ width: 400, maxWidth: '90vw' }}>
+      {/* Agor Session ID */}
+      <div style={{ marginBottom: sdkSessionId ? 16 : 0 }}>
+        <div style={{ fontWeight: 600, fontSize: '0.95em', marginBottom: 8 }}>Agor Session ID</div>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: 8,
+            background: token.colorBgContainer,
+            borderRadius: token.borderRadius,
+            border: `1px solid ${token.colorBorder}`,
+          }}
+        >
+          <div style={{ flex: 1, fontFamily: token.fontFamilyCode, fontSize: '0.9em' }}>
+            <div style={{ color: token.colorTextSecondary, fontSize: '0.85em', marginBottom: 2 }}>
+              {sessionId.substring(0, 8)}
+            </div>
+            <div style={{ wordBreak: 'break-all', fontSize: '0.75em', opacity: 0.7 }}>
+              {sessionId}
+            </div>
+          </div>
+          <Tag
+            icon={<CopyOutlined />}
+            color={PILL_COLORS.session}
+            style={{ cursor: 'pointer', margin: 0 }}
+            onClick={handleCopyAgor}
+          >
+            Copy
+          </Tag>
+        </div>
+      </div>
+
+      {/* SDK Session ID (if available) */}
+      {sdkSessionId && (
+        <div>
+          <div style={{ fontWeight: 600, fontSize: '0.95em', marginBottom: 8 }}>
+            {agenticTool || 'SDK'} Session ID
+          </div>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: 8,
+              background: token.colorBgContainer,
+              borderRadius: token.borderRadius,
+              border: `1px solid ${token.colorBorder}`,
+            }}
+          >
+            <div style={{ flex: 1, fontFamily: token.fontFamilyCode, fontSize: '0.9em' }}>
+              <div style={{ color: token.colorTextSecondary, fontSize: '0.85em', marginBottom: 2 }}>
+                {sdkSessionId.substring(0, 8)}
+              </div>
+              <div style={{ wordBreak: 'break-all', fontSize: '0.75em', opacity: 0.7 }}>
+                {sdkSessionId}
+              </div>
+            </div>
+            <Tag
+              icon={<CopyOutlined />}
+              color={PILL_COLORS.session}
+              style={{ cursor: 'pointer', margin: 0 }}
+              onClick={handleCopySdk}
+            >
+              Copy
+            </Tag>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 export const SessionIdPill: React.FC<SessionIdPillProps> = ({
   sessionId,
   sdkSessionId,
@@ -502,39 +604,36 @@ export const SessionIdPill: React.FC<SessionIdPillProps> = ({
   const displayId = sdkSessionId || sessionId;
   const shortId = displayId.substring(0, 8);
 
-  // Generate tooltip based on what we're showing
-  const tooltipTitle = sdkSessionId
-    ? `${agenticTool || 'SDK'} session ID: ${displayId}`
-    : `Agor session ID: ${displayId}`;
+  const pill = (
+    <Tag
+      icon={showCopy ? <CopyOutlined /> : <CodeOutlined />}
+      color={PILL_COLORS.session}
+      style={{ cursor: showCopy ? 'pointer' : 'default', ...style }}
+    >
+      <span style={{ fontFamily: token.fontFamilyCode }}>{shortId}</span>
+    </Tag>
+  );
 
-  const handleCopy = () => {
-    copyToClipboard(displayId, {
-      showSuccess: true,
-      successMessage: `${sdkSessionId ? 'SDK' : 'Agor'} Session ID copied to clipboard`,
-    });
-  };
-
-  if (showCopy) {
-    return (
-      <Tooltip title={tooltipTitle}>
-        <Tag
-          icon={<CopyOutlined />}
-          color={PILL_COLORS.session}
-          style={{ cursor: 'pointer', ...style }}
-          onClick={handleCopy}
-        >
-          <span style={{ fontFamily: token.fontFamilyCode }}>{shortId}</span>
-        </Tag>
-      </Tooltip>
-    );
+  if (!showCopy) {
+    return pill;
   }
 
   return (
-    <Tooltip title={tooltipTitle}>
-      <Tag icon={<CodeOutlined />} color={PILL_COLORS.session} style={style}>
-        <span style={{ fontFamily: token.fontFamilyCode }}>{shortId}</span>
-      </Tag>
-    </Tooltip>
+    <Popover
+      content={
+        <SessionIdPopoverContent
+          sessionId={sessionId}
+          sdkSessionId={sdkSessionId}
+          agenticTool={agenticTool}
+        />
+      }
+      title={null}
+      trigger="hover"
+      placement="top"
+      mouseEnterDelay={0.3}
+    >
+      {pill}
+    </Popover>
   );
 };
 
