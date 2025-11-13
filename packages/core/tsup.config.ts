@@ -27,6 +27,7 @@ export default defineConfig({
     'utils/cron': 'src/utils/cron.ts', // Cron validation and parsing utilities
     'utils/context-window': 'src/utils/context-window.ts', // Context window calculation utilities
     'utils/path': 'src/utils/path.ts', // Path expansion utilities (tilde to home directory)
+    'utils/logger': 'src/utils/logger.ts', // Console monkey-patch for log level filtering
     'seed/index': 'src/seed/index.ts', // Development database seeding
   },
   format: ['cjs', 'esm'],
