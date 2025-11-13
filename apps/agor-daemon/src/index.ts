@@ -160,18 +160,25 @@ async function calculateTaskContextWindow(
       ? allMessagesResult.data
       : allMessagesResult;
 
-    const hasCompaction = taskMessages.some(
-      msg =>
-        msg.type === 'system' &&
-        typeof msg.content === 'object' &&
-        msg.content !== null &&
-        (Array.isArray(msg.content)
-          ? msg.content.some(
-              (block: { type?: string; status?: string }) =>
-                block.type === 'system_status' && block.status === 'compacting'
-            )
-          : (msg.content as { status?: string }).status === 'compacting')
-    );
+    // Helper to check if a message contains a compaction event
+    const isCompactionMessage = (msg: Message): boolean => {
+      if (msg.type !== 'system' || typeof msg.content !== 'object' || msg.content === null) {
+        return false;
+      }
+
+      // Handle array content (list of blocks)
+      if (Array.isArray(msg.content)) {
+        return msg.content.some(
+          (block: { type?: string; status?: string }) =>
+            block.type === 'system_status' && block.status === 'compacting'
+        );
+      }
+
+      // Handle object content (single block)
+      return (msg.content as { status?: string }).status === 'compacting';
+    };
+
+    const hasCompaction = taskMessages.some(isCompactionMessage);
 
     // A) First task in session
     if (session.tasks.length === 0) {
