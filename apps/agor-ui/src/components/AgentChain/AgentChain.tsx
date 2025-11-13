@@ -560,33 +560,33 @@ export const AgentChain: React.FC<AgentChainProps> = ({ messages }) => {
           e.currentTarget.style.borderColor = token.colorBorder;
         }}
       >
-        <Space direction="vertical" size={token.sizeUnit} style={{ width: '100%' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: token.sizeUnit }}>
-            {/* Expand/collapse icon */}
-            {expanded ? (
-              <DownOutlined style={{ fontSize: 12, color: token.colorTextSecondary }} />
-            ) : (
-              <RightOutlined style={{ fontSize: 12, color: token.colorTextSecondary }} />
-            )}
+        <div
+          style={{ display: 'flex', alignItems: 'center', gap: token.sizeUnit, flexWrap: 'wrap' }}
+        >
+          {/* Expand/collapse icon */}
+          {expanded ? (
+            <DownOutlined style={{ fontSize: 12, color: token.colorTextSecondary }} />
+          ) : (
+            <RightOutlined style={{ fontSize: 12, color: token.colorTextSecondary }} />
+          )}
 
-            {/* Status icon */}
-            {hasErrors ? (
-              <CloseCircleOutlined style={{ color: token.colorError, fontSize: 16 }} />
-            ) : (
-              <CheckCircleOutlined style={{ color: token.colorTextSecondary, fontSize: 16 }} />
-            )}
+          {/* Status icon */}
+          {hasErrors ? (
+            <CloseCircleOutlined style={{ color: token.colorError, fontSize: 16 }} />
+          ) : (
+            <CheckCircleOutlined style={{ color: token.colorTextSecondary, fontSize: 16 }} />
+          )}
 
-            {/* Summary text */}
-            <Typography.Text strong>
-              <BulbOutlined /> {stats.thoughtCount > 0 && `${stats.thoughtCount} thoughts`}
-              {stats.thoughtCount > 0 && stats.toolCount > 0 && ', '}
-              {stats.toolCount > 0 && `${stats.toolCount} tools`}
-            </Typography.Text>
-          </div>
+          {/* Summary text */}
+          <Typography.Text strong>
+            <BulbOutlined /> {stats.thoughtCount > 0 && `${stats.thoughtCount} thoughts`}
+            {stats.thoughtCount > 0 && stats.toolCount > 0 && ', '}
+            {stats.toolCount > 0 && `${stats.toolCount} tools`}
+          </Typography.Text>
 
           {/* Only show details when collapsed */}
           {!expanded && summaryDescription}
-        </Space>
+        </div>
       </div>
 
       {/* Expanded chain */}
