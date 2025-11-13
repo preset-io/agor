@@ -1,4 +1,4 @@
-.PHONY: help build-base build-dev build-prod dev prod clean
+.PHONY: help build-dev build-prod dev prod clean
 
 help: ## Show this help message
 	@echo "Agor Docker Commands:"
@@ -8,15 +8,11 @@ help: ## Show this help message
 	@echo "Examples:"
 	@echo "  make dev          # Start development environment"
 	@echo "  make prod         # Start production environment"
-	@echo "  make build-base   # Build shared base image"
 
-build-base: ## Build shared base image
-	docker compose build agor-base
-
-build-dev: build-base ## Build development image
+build-dev: ## Build development image (includes base)
 	docker compose build agor-dev
 
-build-prod: build-base ## Build production image
+build-prod: ## Build production image (includes base)
 	docker compose -f docker-compose.prod.yml build agor-prod
 
 dev: ## Start development environment (daemon + UI with hot-reload)

@@ -1,6 +1,8 @@
-# Base Dockerfile for Agor (shared by dev and prod)
-# Contains all system dependencies and base setup
-FROM node:20-slim
+# Production Dockerfile for Agor
+# Installs agor-live from npm and runs daemon only
+
+# Stage 1: Base image with system dependencies
+FROM node:20-slim AS base
 
 # Install system dependencies (including git for repo cloning)
 RUN apt-get update && apt-get install -y \
@@ -35,3 +37,27 @@ WORKDIR /app
 
 # Switch to agor user
 USER agor
+
+# Stage 2: Production image
+FROM base
+
+# Switch back to root to install global npm packages
+USER root
+
+# Install agor-live globally from npm
+# This installs both the CLI and daemon binaries
+RUN npm install -g agor-live@latest
+
+# Switch back to agor user
+USER agor
+
+# Copy production entrypoint script
+COPY docker/docker-entrypoint-prod.sh /usr/local/bin/
+RUN sudo chmod +x /usr/local/bin/docker-entrypoint-prod.sh && \
+    sudo chown agor:agor /usr/local/bin/docker-entrypoint-prod.sh
+
+# Expose daemon port (UI will be served via static files by daemon)
+EXPOSE ${DAEMON_PORT:-3030}
+
+# Use production entrypoint script
+ENTRYPOINT ["docker-entrypoint-prod.sh"]

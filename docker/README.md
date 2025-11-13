@@ -5,12 +5,18 @@ Agor provides both **development** and **production** Docker configurations with
 ## Architecture
 
 ```
-Dockerfile.base              # Shared base (system deps, Node, pnpm, AI CLIs, user setup)
-├── Dockerfile.dev           # Development build (mounts source, hot-reload)
-│   └── docker-entrypoint.sh           # Dev startup (pnpm dev for daemon + UI)
-└── Dockerfile.prod          # Production build (npm install -g agor-live)
-    └── docker-entrypoint-prod.sh      # Prod startup (agor daemon only)
+docker/
+├── Dockerfile.dev               # Dev build (multi-stage: base + dev dependencies)
+├── Dockerfile.prod              # Prod build (multi-stage: base + npm agor-live)
+├── docker-entrypoint.sh         # Dev startup (pnpm dev for daemon + UI)
+├── docker-entrypoint-prod.sh    # Prod startup (agor daemon only)
+└── .env.prod.example            # Production environment template
 ```
+
+Both Dockerfiles use multi-stage builds with a shared base stage:
+- **Base stage**: System deps, Node 20, pnpm, AI CLIs, user setup (~500MB)
+- **Dev stage**: Copies monorepo source, installs dev dependencies (~1.5GB)
+- **Prod stage**: Installs `agor-live` from npm globally (~600MB)
 
 ## Quick Start
 
@@ -182,7 +188,7 @@ This is already configured in `docker-compose.yml` (commented out by default).
 Pin to a specific version:
 
 ```dockerfile
-# In Dockerfile.prod, change:
+# In docker/Dockerfile.prod, change:
 RUN npm install -g agor-live@latest
 
 # To:

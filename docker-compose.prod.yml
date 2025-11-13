@@ -1,21 +1,9 @@
 services:
-  # Base image (shared by dev and prod)
-  agor-base:
-    image: agor-base
-    build:
-      context: .
-      dockerfile: Dockerfile.base
-    # This service is only for building the base image
-    # It won't be run directly
-    profiles:
-      - base-only
-
   agor-prod:
+    image: agor-prod
     build:
       context: .
-      dockerfile: Dockerfile.prod
-    depends_on:
-      - agor-base
+      dockerfile: docker/Dockerfile.prod
     # No container_name - allows multiple instances
     ports:
       # Expose daemon port (daemon serves both API and UI)
