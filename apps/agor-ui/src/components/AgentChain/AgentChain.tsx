@@ -252,6 +252,11 @@ export const AgentChain: React.FC<AgentChainProps> = ({ messages }) => {
     return items;
   }, [messages]);
 
+  // Early return if no items (prevents empty bordered boxes)
+  if (chainItems.length === 0) {
+    return null;
+  }
+
   // Calculate stats
   const stats = useMemo(() => {
     let thoughtCount = 0;
