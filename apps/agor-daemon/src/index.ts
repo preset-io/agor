@@ -7,6 +7,11 @@
 
 import 'dotenv/config';
 
+// Patch console methods to respect LOG_LEVEL env var
+// This allows all console.log/debug calls to be filtered by log level
+import { patchConsole } from '@agor/core/utils/logger';
+patchConsole();
+
 // Read package version once at startup (not on every /health request)
 // Use fs.readFile instead of import (works reliably with tsx and node)
 import { readFile } from 'node:fs/promises';

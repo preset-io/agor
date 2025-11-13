@@ -1,5 +1,9 @@
 /**
- * Simple logging utility with environment-aware log levels.
+ * Console monkey-patch for environment-aware logging.
+ *
+ * Patches global console methods to respect LOG_LEVEL environment variable.
+ * This allows all existing console.log/debug calls throughout the codebase
+ * to automatically respect log levels without code changes.
  *
  * Respects LOG_LEVEL or DEBUG environment variables:
  * - LOG_LEVEL=debug: Show all logs (debug, info, warn, error)
@@ -10,6 +14,8 @@
  *
  * In development (NODE_ENV=development), defaults to debug level.
  * In production (NODE_ENV=production), defaults to info level.
+ *
+ * Call patchConsole() once at daemon startup.
  */
 
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -54,41 +60,76 @@ function shouldLog(level: LogLevel): boolean {
 }
 
 /**
- * Logger with environment-aware log levels
+ * Patch global console methods to respect log levels.
+ *
+ * This allows existing console.debug/log/warn/error calls throughout the
+ * codebase to automatically respect LOG_LEVEL without code changes.
+ *
+ * Call this once at daemon startup.
  */
-export const logger = {
-  debug: (...args: unknown[]) => {
+export function patchConsole() {
+  const originalDebug = console.debug;
+  const originalLog = console.log;
+  const originalInfo = console.info;
+  const originalWarn = console.warn;
+  const originalError = console.error;
+
+  // Patch console.debug to respect log level
+  console.debug = (...args: unknown[]) => {
     if (shouldLog('debug')) {
-      console.debug(...args);
+      originalDebug(...args);
     }
-  },
-  info: (...args: unknown[]) => {
+  };
+
+  // Treat console.log as debug level (most verbose)
+  console.log = (...args: unknown[]) => {
+    if (shouldLog('debug')) {
+      originalLog(...args);
+    }
+  };
+
+  // console.info respects info level
+  console.info = (...args: unknown[]) => {
     if (shouldLog('info')) {
-      console.info(...args);
+      originalInfo(...args);
     }
-  },
-  warn: (...args: unknown[]) => {
+  };
+
+  // console.warn respects warn level
+  console.warn = (...args: unknown[]) => {
     if (shouldLog('warn')) {
-      console.warn(...args);
+      originalWarn(...args);
     }
-  },
-  error: (...args: unknown[]) => {
+  };
+
+  // console.error always shows (highest priority)
+  console.error = (...args: unknown[]) => {
     if (shouldLog('error')) {
-      console.error(...args);
+      originalError(...args);
     }
-  },
-};
+  };
+
+  // Store originals in case we need to restore
+  (console as any).__originalMethods = {
+    debug: originalDebug,
+    log: originalLog,
+    info: originalInfo,
+    warn: originalWarn,
+    error: originalError,
+  };
+}
 
 /**
- * Create a namespaced logger for a specific module
- *
- * @param namespace - Module name (e.g., 'git', 'auth', 'repos')
+ * Restore original console methods (useful for testing)
  */
-export function createLogger(namespace: string) {
-  return {
-    debug: (...args: unknown[]) => logger.debug(`[${namespace}]`, ...args),
-    info: (...args: unknown[]) => logger.info(`[${namespace}]`, ...args),
-    warn: (...args: unknown[]) => logger.warn(`[${namespace}]`, ...args),
-    error: (...args: unknown[]) => logger.error(`[${namespace}]`, ...args),
-  };
+export function unpatchConsole() {
+  const originals = (console as any).__originalMethods;
+  if (originals) {
+    console.debug = originals.debug;
+    console.log = originals.log;
+    console.info = originals.info;
+    console.warn = originals.warn;
+    console.error = originals.error;
+    delete (console as any).__originalMethods;
+  }
 }

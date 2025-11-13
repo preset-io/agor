@@ -30,9 +30,6 @@ import { mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { simpleGit } from 'simple-git';
-import { createLogger } from '../utils/logger';
-
-const log = createLogger('git');
 
 /**
  * Get git binary path
@@ -120,18 +117,18 @@ function createGit(baseDir?: string, env?: Record<string, string>) {
     // Use simpler echo-based credential helper with proper quoting
     const credentialHelper = `!f() { echo username=x-access-token; echo password=${token}; }; f`;
     config.push(`credential.helper=${credentialHelper}`);
-    log.debug('🔑 Configured credential helper with GITHUB_TOKEN (length:', token.length, ')');
-    log.debug('🔍 Credential helper command:', credentialHelper.substring(0, 80) + '...');
+    console.debug('🔑 Configured credential helper with GITHUB_TOKEN (length:', token.length, ')');
+    console.debug('🔍 Credential helper command:', credentialHelper.substring(0, 80) + '...');
   } else if (env?.GH_TOKEN) {
     const token = env.GH_TOKEN;
     const credentialHelper = `!f() { echo username=x-access-token; echo password=${token}; }; f`;
     config.push(`credential.helper=${credentialHelper}`);
-    log.debug('🔑 Configured credential helper with GH_TOKEN (length:', token.length, ')');
-    log.debug('🔍 Credential helper command:', credentialHelper.substring(0, 80) + '...');
+    console.debug('🔑 Configured credential helper with GH_TOKEN (length:', token.length, ')');
+    console.debug('🔍 Credential helper command:', credentialHelper.substring(0, 80) + '...');
   } else {
-    log.debug('⚠️  No GITHUB_TOKEN or GH_TOKEN in env, credential helper NOT configured');
+    console.debug('⚠️  No GITHUB_TOKEN or GH_TOKEN in env, credential helper NOT configured');
     if (env) {
-      log.debug('🔍 Available env keys:', Object.keys(env).filter(k => k.includes('GIT') || k.includes('GITHUB') || k.includes('TOKEN')));
+      console.debug('🔍 Available env keys:', Object.keys(env).filter(k => k.includes('GIT') || k.includes('GITHUB') || k.includes('TOKEN')));
     }
   }
 
@@ -223,11 +220,11 @@ export async function cloneRepo(options: CloneOptions): Promise<CloneResult> {
   if (options.env?.GITHUB_TOKEN && cloneUrl.startsWith('https://github.com/')) {
     const token = options.env.GITHUB_TOKEN;
     cloneUrl = cloneUrl.replace('https://github.com/', `https://x-access-token:${token}@github.com/`);
-    log.debug('🔑 Injected GITHUB_TOKEN into URL for authentication');
+    console.debug('🔑 Injected GITHUB_TOKEN into URL for authentication');
   } else if (options.env?.GH_TOKEN && cloneUrl.startsWith('https://github.com/')) {
     const token = options.env.GH_TOKEN;
     cloneUrl = cloneUrl.replace('https://github.com/', `https://x-access-token:${token}@github.com/`);
-    log.debug('🔑 Injected GH_TOKEN into URL for authentication');
+    console.debug('🔑 Injected GH_TOKEN into URL for authentication');
   }
 
   // Ensure repos directory exists

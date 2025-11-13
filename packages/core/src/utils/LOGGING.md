@@ -1,6 +1,10 @@
 # Logging in Agor
 
-Agor uses an environment-aware logging system that respects log levels.
+Agor uses a **console monkey-patch** for environment-aware logging. This means all existing `console.log()` and `console.debug()` calls throughout the codebase automatically respect log levels.
+
+## How it works
+
+At daemon startup, we patch the global console methods to check `LOG_LEVEL` before outputting. This gives you zero-config log level filtering without changing any code.
 
 ## Configuration
 
@@ -26,16 +30,23 @@ DEBUG=* pnpm dev
 
 ## Usage
 
+Just use normal console methods - they're automatically filtered:
+
 ```typescript
-import { createLogger } from '@agor/core/utils/logger';
-
-const log = createLogger('my-module');
-
-log.debug('Detailed debugging info');
-log.info('General information');
-log.warn('Warning message');
-log.error('Error message');
+console.debug('Detailed debugging info');  // Hidden in production
+console.log('Also treated as debug');      // Hidden in production
+console.info('General information');       // Shown in production
+console.warn('Warning message');           // Shown in production
+console.error('Error message');            // Always shown
 ```
+
+## Log Level Mapping
+
+- `console.log()` → **debug** level (hidden in production)
+- `console.debug()` → **debug** level (hidden in production)
+- `console.info()` → **info** level (shown in production)
+- `console.warn()` → **warn** level (shown in production)
+- `console.error()` → **error** level (always shown)
 
 ## Default Behavior
 
@@ -62,14 +73,13 @@ LOG_LEVEL=debug pnpm start
 DEBUG=agor:* pnpm start
 ```
 
-## Namespaces
+## Implementation
 
-Each module creates its own namespaced logger:
+The monkey-patch is applied once at daemon startup in `apps/agor-daemon/src/index.ts`:
 
 ```typescript
-const log = createLogger('git');     // [git] prefix
-const log = createLogger('repos');   // [repos] prefix
-const log = createLogger('auth');    // [auth] prefix
+import { patchConsole } from '@agor/core/utils/logger';
+patchConsole();
 ```
 
-This makes it easy to filter logs by module in production.
+This works across the entire codebase without requiring any imports or code changes.
