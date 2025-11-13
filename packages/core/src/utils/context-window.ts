@@ -161,9 +161,21 @@ export function calculateCumulativeContextWindowWithCurrent(
 
   // Add current task's tokens
   const normalized = normalizeTokenUsage(currentTaskUsage, agenticTool);
-  const currentTaskTokens = normalized
-    ? (normalized.input_tokens || 0) + (normalized.output_tokens || 0)
-    : 0;
+  if (!normalized) {
+    return cumulativeBeforeCurrent;
+  }
+
+  let currentTaskTokens = (normalized.input_tokens || 0) + (normalized.output_tokens || 0);
+
+  // Special case: If this is the first task (no saved tasks yet), add baseline context
+  // This matches the logic in calculateCumulativeContextWindow for the first message
+  if (tasks.length === 0 && currentTaskUsage) {
+    // First task in session - include baseline context
+    // cache_read: Claude Code system prompt + tool definitions (~20K tokens)
+    // cache_creation: CLAUDE.md + MCP server tools (Agor, Playwright, Context7, etc.) (~3-7K tokens)
+    currentTaskTokens += currentTaskUsage.cache_read_tokens || 0;
+    currentTaskTokens += currentTaskUsage.cache_creation_tokens || 0;
+  }
 
   return cumulativeBeforeCurrent + currentTaskTokens;
 }
