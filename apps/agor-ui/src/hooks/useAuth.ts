@@ -9,6 +9,15 @@ import { createClient } from '@agor/core/api';
 import type { User } from '@agor/core/types';
 import { useCallback, useEffect, useState } from 'react';
 import { getDaemonUrl } from '../config/daemon';
+import {
+  ACCESS_TOKEN_KEY,
+  clearTokens,
+  getStoredAccessToken,
+  getStoredRefreshToken,
+  REFRESH_TOKEN_KEY,
+  refreshAndStoreTokens,
+  storeTokens,
+} from '../utils/tokenRefresh';
 
 interface AuthState {
   user: User | null;
@@ -23,9 +32,6 @@ interface UseAuthReturn extends AuthState {
   logout: () => Promise<void>;
   reAuthenticate: () => Promise<void>;
 }
-
-export const ACCESS_TOKEN_KEY = 'agor-access-token';
-export const REFRESH_TOKEN_KEY = 'agor-refresh-token';
 
 /**
  * Authentication hook
@@ -51,8 +57,8 @@ export function useAuth(): UseAuthReturn {
     let client: ReturnType<typeof createClient> | null = null;
 
     try {
-      const storedAccessToken = localStorage.getItem(ACCESS_TOKEN_KEY);
-      const storedRefreshToken = localStorage.getItem(REFRESH_TOKEN_KEY);
+      const storedAccessToken = getStoredAccessToken();
+      const storedRefreshToken = getStoredRefreshToken();
 
       if (!storedAccessToken && !storedRefreshToken) {
         setState({
@@ -123,15 +129,7 @@ export function useAuth(): UseAuthReturn {
       // Access token expired or missing, try refresh token
       if (storedRefreshToken) {
         try {
-          const refreshResult = await client.service('authentication/refresh').create({
-            refreshToken: storedRefreshToken,
-          });
-
-          // Store new access token and refresh token (if rotated)
-          localStorage.setItem(ACCESS_TOKEN_KEY, refreshResult.accessToken);
-          if (refreshResult.refreshToken) {
-            localStorage.setItem(REFRESH_TOKEN_KEY, refreshResult.refreshToken);
-          }
+          const refreshResult = await refreshAndStoreTokens(client, storedRefreshToken);
 
           setState({
             user: refreshResult.user,
@@ -156,8 +154,7 @@ export function useAuth(): UseAuthReturn {
       // Both tokens invalid or expired
       console.error('❌ CLEARING TOKENS (both access and refresh tokens invalid/expired)');
       console.trace('Token clearing stack trace');
-      localStorage.removeItem(ACCESS_TOKEN_KEY);
-      localStorage.removeItem(REFRESH_TOKEN_KEY);
+      clearTokens();
       setState({
         user: null,
         accessToken: null,
@@ -196,8 +193,7 @@ export function useAuth(): UseAuthReturn {
         console.error('❌ CLEARING TOKENS due to authentication failure (not connection error)');
         console.error('Error details:', error);
         console.trace('Token clearing stack trace');
-        localStorage.removeItem(ACCESS_TOKEN_KEY);
-        localStorage.removeItem(REFRESH_TOKEN_KEY);
+        clearTokens();
       } else {
         console.log(
           '✓ Keeping tokens in localStorage despite connection failure (daemon may be restarting)'
@@ -232,8 +228,7 @@ export function useAuth(): UseAuthReturn {
     const handleVisibilityChange = () => {
       // When tab becomes visible again, check if we need to re-auth
       if (document.visibilityState === 'visible' && !state.authenticated) {
-        const hasTokens =
-          localStorage.getItem(ACCESS_TOKEN_KEY) || localStorage.getItem(REFRESH_TOKEN_KEY);
+        const hasTokens = getStoredAccessToken() || getStoredRefreshToken();
         if (hasTokens) {
           console.log('Tab became visible, attempting re-authentication...');
           reAuthenticate();
@@ -245,8 +240,7 @@ export function useAuth(): UseAuthReturn {
     // This handles the case where daemon restarts and we need to reconnect
     let pollInterval: NodeJS.Timeout | null = null;
     if (!state.authenticated && !state.loading) {
-      const hasTokens =
-        localStorage.getItem(ACCESS_TOKEN_KEY) || localStorage.getItem(REFRESH_TOKEN_KEY);
+      const hasTokens = getStoredAccessToken() || getStoredRefreshToken();
       if (hasTokens) {
         console.log('Starting reconnection polling (have tokens but not authenticated)...');
         pollInterval = setInterval(() => {
@@ -274,7 +268,7 @@ export function useAuth(): UseAuthReturn {
     const REFRESH_INTERVAL = 6 * 24 * 60 * 60 * 1000; // 6 days in milliseconds
 
     const refreshTimer = setInterval(async () => {
-      const refreshToken = localStorage.getItem(REFRESH_TOKEN_KEY);
+      const refreshToken = getStoredRefreshToken();
       if (!refreshToken) {
         console.log('No refresh token available');
         return;
@@ -307,15 +301,7 @@ export function useAuth(): UseAuthReturn {
           });
         });
 
-        const refreshResult = await client.service('authentication/refresh').create({
-          refreshToken,
-        });
-
-        // Store new access token and refresh token (if rotated)
-        localStorage.setItem(ACCESS_TOKEN_KEY, refreshResult.accessToken);
-        if (refreshResult.refreshToken) {
-          localStorage.setItem(REFRESH_TOKEN_KEY, refreshResult.refreshToken);
-        }
+        const refreshResult = await refreshAndStoreTokens(client, refreshToken);
 
         setState(prev => ({
           ...prev,
@@ -327,8 +313,7 @@ export function useAuth(): UseAuthReturn {
       } catch (error) {
         console.error('Failed to auto-refresh token:', error);
         // Token refresh failed, user needs to login again
-        localStorage.removeItem(ACCESS_TOKEN_KEY);
-        localStorage.removeItem(REFRESH_TOKEN_KEY);
+        clearTokens();
         setState({
           user: null,
           accessToken: null,
@@ -402,14 +387,11 @@ export function useAuth(): UseAuthReturn {
 
       // Store both access and refresh tokens
       console.log('💾 Saving tokens to localStorage...');
-      localStorage.setItem(ACCESS_TOKEN_KEY, result.accessToken);
-      if (result.refreshToken) {
-        localStorage.setItem(REFRESH_TOKEN_KEY, result.refreshToken);
-      }
+      storeTokens(result.accessToken, result.refreshToken);
 
       // Verify tokens were saved
-      const savedAccessToken = localStorage.getItem(ACCESS_TOKEN_KEY);
-      const savedRefreshToken = localStorage.getItem(REFRESH_TOKEN_KEY);
+      const savedAccessToken = getStoredAccessToken();
+      const savedRefreshToken = getStoredRefreshToken();
       console.log('✓ Tokens stored in localStorage:', {
         accessTokenSaved: !!savedAccessToken,
         refreshTokenSaved: !!savedRefreshToken,
@@ -450,8 +432,7 @@ export function useAuth(): UseAuthReturn {
   const logout = async () => {
     console.log('🚪 Logout called, clearing tokens');
     console.trace('Logout stack trace');
-    localStorage.removeItem(ACCESS_TOKEN_KEY);
-    localStorage.removeItem(REFRESH_TOKEN_KEY);
+    clearTokens();
     setState({
       user: null,
       accessToken: null,

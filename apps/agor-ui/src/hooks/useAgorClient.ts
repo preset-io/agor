@@ -9,6 +9,12 @@ import type { AgorClient } from '@agor/core/api';
 import { createClient } from '@agor/core/api';
 import { useEffect, useRef, useState } from 'react';
 import { getDaemonUrl } from '../config/daemon';
+import {
+  ACCESS_TOKEN_KEY,
+  getStoredRefreshToken,
+  REFRESH_TOKEN_KEY,
+  refreshAndStoreTokens,
+} from '../utils/tokenRefresh';
 
 interface UseAgorClientResult {
   client: AgorClient | null;
@@ -94,18 +100,10 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
                 console.log('Access token failed on reconnect, attempting refresh...');
 
                 // Check if we have a refresh token in localStorage
-                const refreshToken = localStorage.getItem('agor-refresh-token');
+                const refreshToken = getStoredRefreshToken();
                 if (refreshToken) {
                   try {
-                    const refreshResult = await client.service('authentication/refresh').create({
-                      refreshToken,
-                    });
-
-                    // Store new tokens
-                    localStorage.setItem('agor-access-token', refreshResult.accessToken);
-                    if (refreshResult.refreshToken) {
-                      localStorage.setItem('agor-refresh-token', refreshResult.refreshToken);
-                    }
+                    const refreshResult = await refreshAndStoreTokens(client, refreshToken);
 
                     // Authenticate with new access token
                     await client.authenticate({
