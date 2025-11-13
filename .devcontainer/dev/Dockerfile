@@ -19,7 +19,7 @@ RUN curl -fsSL "$(curl -s https://api.github.com/repos/cli/cli/releases/latest |
 # and agor-live from npm for quick start
 RUN npm install -g pnpm@latest agor-live@latest @anthropic-ai/claude-code@latest @google/gemini-cli@latest @openai/codex@latest
 
-WORKDIR /workspace
+WORKDIR /workspaces
 
 # Note: Source code is available in /workspaces/agor for development
 # To develop on Agor itself: cd /workspaces/agor && pnpm install && pnpm build
