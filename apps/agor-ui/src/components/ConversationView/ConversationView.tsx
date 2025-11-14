@@ -13,13 +13,30 @@
  */
 
 import type { AgorClient } from '@agor/core/api';
-import type { Message, PermissionScope, SessionID, User } from '@agor/core/types';
+import type { Message, MessageID, PermissionScope, SessionID, User } from '@agor/core/types';
 import { Alert, Spin, Typography, theme } from 'antd';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useStreamingMessages, useTasks } from '../../hooks';
+import type { StreamingMessage } from '../../hooks/useStreamingMessages';
 import { TaskBlock } from '../TaskBlock';
 
 const { Text } = Typography;
+
+/**
+ * Check if two Maps are equal (same keys and same content)
+ * Used to maintain stable Map references for React memoization
+ */
+function mapsAreEqual<K, V>(map1: Map<K, V>, map2: Map<K, V>): boolean {
+  if (map1.size !== map2.size) return false;
+
+  for (const [key, value1] of map1.entries()) {
+    const value2 = map2.get(key);
+    // For StreamingMessage objects, compare by reference (they're immutable updates)
+    if (value1 !== value2) return false;
+  }
+
+  return true;
+}
 
 export interface ConversationViewProps {
   /**
@@ -136,8 +153,48 @@ export const ConversationView = React.memo<ConversationViewProps>(
       error: tasksError,
     } = useTasks(client, sessionId, currentUser);
 
-    // Track real-time streaming messages (passed to TaskBlock for filtering)
-    const streamingMessages = useStreamingMessages(client, sessionId || undefined);
+    // Track real-time streaming messages for the session
+    const allStreamingMessages = useStreamingMessages(client, sessionId || undefined);
+
+    // Store previous task maps to maintain stable references
+    const prevTaskMapsRef = useRef<Map<string, Map<MessageID, StreamingMessage>>>(new Map());
+
+    // Create stable Map references per task to avoid unnecessary re-renders
+    // Only return new Map objects when the actual messages for that task change
+    const streamingMessagesByTask = useMemo(() => {
+      const result = new Map<string, Map<MessageID, StreamingMessage>>();
+      const prevMaps = prevTaskMapsRef.current;
+
+      // Group messages by task_id
+      const tempByTask = new Map<string, Map<MessageID, StreamingMessage>>();
+      for (const [msgId, streamingMsg] of allStreamingMessages.entries()) {
+        if (streamingMsg.task_id) {
+          if (!tempByTask.has(streamingMsg.task_id)) {
+            tempByTask.set(streamingMsg.task_id, new Map());
+          }
+          tempByTask.get(streamingMsg.task_id)!.set(msgId, streamingMsg);
+        }
+      }
+
+      // For each task, reuse previous Map if content is identical
+      for (const [taskId, newTaskMap] of tempByTask.entries()) {
+        const prevTaskMap = prevMaps.get(taskId);
+
+        // Check if maps are equal (same keys and values)
+        if (prevTaskMap && mapsAreEqual(prevTaskMap, newTaskMap)) {
+          // Reuse the previous Map reference (stable reference = no re-render)
+          result.set(taskId, prevTaskMap);
+        } else {
+          // Content changed, use new Map
+          result.set(taskId, newTaskMap);
+        }
+      }
+
+      // Update ref for next render
+      prevTaskMapsRef.current = result;
+
+      return result;
+    }, [allStreamingMessages]);
 
     const loading = tasksLoading;
     const error = tasksError;
@@ -187,7 +244,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
       if (isNearBottom()) {
         scrollToBottom();
       }
-    }, [streamingMessages, tasks]);
+    }, [allStreamingMessages, tasks]);
 
     if (error) {
       return (
@@ -254,6 +311,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
             isExpanded={expandedTaskIds.has(task.task_id)}
             onExpandChange={expanded => handleTaskExpandChange(task.task_id, expanded)}
             sessionId={sessionId}
+            streamingMessagesForTask={streamingMessagesByTask.get(task.task_id) || new Map()}
             onPermissionDecision={onPermissionDecision}
             worktreeName={worktreeName}
             scheduledFromWorktree={scheduledFromWorktree}

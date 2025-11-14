@@ -66,7 +66,13 @@ export function useTaskMessages(
 
   // Subscribe to real-time message updates
   useEffect(() => {
-    if (!client || !taskId || !enabled) return;
+    if (!client || !taskId) return;
+
+    // If not enabled, clear messages and unsubscribe
+    if (!enabled) {
+      setMessages([]);
+      return;
+    }
 
     // Initial fetch
     fetchMessages();
