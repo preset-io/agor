@@ -620,8 +620,8 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                   </div>
                 )}
 
-                {/* Show sticky TODO (latest) above typing indicator when task is running */}
-                {task.status === TaskStatus.RUNNING && <StickyTodoRenderer messages={messages} />}
+                {/* Show sticky TODO (latest) - persists after task completion for reference */}
+                <StickyTodoRenderer messages={messages} />
 
                 {/* Show typing indicator whenever task is actively running */}
                 {task.status === TaskStatus.RUNNING && (
