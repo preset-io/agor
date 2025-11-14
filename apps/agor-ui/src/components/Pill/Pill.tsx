@@ -438,12 +438,14 @@ export const GitShaPill: React.FC<GitShaPillProps> = ({
 interface GitStatePillProps extends BasePillProps {
   branch?: string; // Branch name (renamed from 'ref' to avoid React reserved word)
   sha: string;
+  worktreeName?: string; // Hide branch name if it matches worktree name
   showDirtyIndicator?: boolean;
 }
 
 export const GitStatePill: React.FC<GitStatePillProps> = ({
   branch,
   sha,
+  worktreeName,
   showDirtyIndicator = true,
   style,
 }) => {
@@ -451,6 +453,9 @@ export const GitStatePill: React.FC<GitStatePillProps> = ({
   const isDirty = sha.endsWith('-dirty');
   const cleanSha = sha.replace('-dirty', '');
   const displaySha = cleanSha.substring(0, 7);
+
+  // Only show branch if it differs from worktree name
+  const shouldShowBranch = branch && branch !== worktreeName;
 
   const handleClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -468,7 +473,7 @@ export const GitStatePill: React.FC<GitStatePillProps> = ({
         style={{ ...style, cursor: 'pointer' }}
         onClick={handleClick}
       >
-        {branch && <span>{branch} : </span>}
+        {shouldShowBranch && <span>{branch} : </span>}
         <span style={{ fontFamily: token.fontFamilyCode }}>{displaySha}</span>
         {isDirty && showDirtyIndicator && ' (dirty)'}
       </Tag>

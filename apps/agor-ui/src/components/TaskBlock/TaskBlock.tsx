@@ -82,6 +82,7 @@ interface TaskBlockProps {
     allow: boolean,
     scope: PermissionScope
   ) => void;
+  worktreeName?: string;
   scheduledFromWorktree?: boolean;
   scheduledRunAt?: number;
 }
@@ -389,10 +390,10 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     // Only Claude, Codex, and Gemini provide contextWindow (OpenCode doesn't)
     const sdkResponse = task.raw_sdk_response;
     const contextWindowUsed =
-      sdkResponse && 'contextWindow' in sdkResponse ? sdkResponse.contextWindow ?? 0 : 0;
+      sdkResponse && 'contextWindow' in sdkResponse ? (sdkResponse.contextWindow ?? 0) : 0;
     const contextWindowLimit =
       sdkResponse && 'contextWindowLimit' in sdkResponse
-        ? sdkResponse.contextWindowLimit ?? 200000
+        ? (sdkResponse.contextWindowLimit ?? 200000)
         : 200000;
     const taskHeaderGradient = getContextWindowGradient(contextWindowUsed, contextWindowLimit);
 
@@ -471,16 +472,17 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                   taskMetadata={{
                     model: task.model,
                     duration_ms: task.duration_ms,
-                  raw_sdk_response: task.raw_sdk_response,
-                }}
-              />
-            )}
+                    raw_sdk_response: task.raw_sdk_response,
+                  }}
+                />
+              )}
             {task.model && task.model !== sessionModel && <ModelPill model={task.model} />}
             {task.git_state.sha_at_start && task.git_state.sha_at_start !== 'unknown' && (
               <Flex gap={token.sizeUnit / 2} align="center">
                 <GitStatePill
                   branch={task.git_state.ref_at_start}
                   sha={task.git_state.sha_at_start}
+                  worktreeName={worktreeName}
                   style={{ fontSize: 11 }}
                 />
                 {task.git_state.sha_at_end &&
@@ -492,6 +494,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                       </Typography.Text>
                       <GitStatePill
                         sha={task.git_state.sha_at_end}
+                        worktreeName={worktreeName}
                         showDirtyIndicator={true}
                         style={{ fontSize: 11 }}
                       />

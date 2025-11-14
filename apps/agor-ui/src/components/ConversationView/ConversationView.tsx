@@ -69,6 +69,11 @@ export interface ConversationViewProps {
   ) => void;
 
   /**
+   * Worktree name for hiding redundant branch names
+   */
+  worktreeName?: string;
+
+  /**
    * Whether this session was created by the scheduler
    */
   scheduledFromWorktree?: boolean;
@@ -94,6 +99,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
     currentUserId,
     onScrollRef,
     onPermissionDecision,
+    worktreeName,
     scheduledFromWorktree,
     scheduledRunAt,
     emptyStateMessage = 'No messages yet. Send a prompt to start the conversation.',
@@ -249,6 +255,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
             onExpandChange={expanded => handleTaskExpandChange(task.task_id, expanded)}
             sessionId={sessionId}
             onPermissionDecision={onPermissionDecision}
+            worktreeName={worktreeName}
             scheduledFromWorktree={scheduledFromWorktree}
             scheduledRunAt={scheduledRunAt}
           />

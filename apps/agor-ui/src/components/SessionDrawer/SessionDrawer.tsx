@@ -737,6 +737,7 @@ const SessionDrawer = ({
         currentUserId={currentUserId}
         onScrollRef={setScrollToBottom}
         onPermissionDecision={onPermissionDecision}
+        worktreeName={worktree?.name}
         scheduledFromWorktree={session.scheduled_from_worktree}
         scheduledRunAt={session.scheduled_run_at}
       />
@@ -797,7 +798,8 @@ const SessionDrawer = ({
                     size="small"
                     icon={<CopyOutlined />}
                     onClick={() => {
-                      const textToCopy = msg.content_preview || (typeof msg.content === 'string' ? msg.content : '');
+                      const textToCopy =
+                        msg.content_preview || (typeof msg.content === 'string' ? msg.content : '');
                       navigator.clipboard.writeText(textToCopy);
                       message.success('Message copied to clipboard');
                     }}
@@ -817,7 +819,9 @@ const SessionDrawer = ({
                         });
 
                         // Optimistically remove from UI
-                        setQueuedMessages(prev => prev.filter(m => m.message_id !== msg.message_id));
+                        setQueuedMessages(prev =>
+                          prev.filter(m => m.message_id !== msg.message_id)
+                        );
 
                         // Delete via messages service directly
                         // The backend will validate it's a queued message
