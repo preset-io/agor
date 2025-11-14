@@ -338,6 +338,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     onExpandChange,
     sessionId,
     onPermissionDecision,
+    worktreeName,
     scheduledFromWorktree,
     scheduledRunAt,
   }) => {
