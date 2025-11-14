@@ -13,8 +13,14 @@
  */
 
 import { generateId } from '../../lib/ids';
-import type { Message, SessionID, TaskID } from '../../types';
+import type { Message, Session, SessionID, TaskID } from '../../types';
 import { MessageRole } from '../../types';
+import type {
+  CalculatedTokenUsage,
+  NormalizedSdkResponse,
+  OpenCodeSdkResponse,
+  RawSdkResponse,
+} from '../../types/sdk-response';
 import type {
   CreateSessionConfig,
   SessionHandle,
@@ -334,4 +340,42 @@ export class OpenCodeTool implements ITool {
       );
     }
   }
+
+  // ============================================================
+  // Token Accounting (NEW)
+  // ============================================================
+
+  /**
+   * Normalize OpenCode SDK response to common format
+   *
+   * OpenCode is early stage, token accounting may be limited.
+   */
+  normalizedSdkResponse(rawResponse: RawSdkResponse): NormalizedSdkResponse {
+    if (rawResponse.tool !== 'opencode') {
+      throw new Error(`Expected opencode response, got ${rawResponse.tool}`);
+    }
+
+    const opencodeResponse = rawResponse as OpenCodeSdkResponse;
+
+    // Extract token usage with defaults (OpenCode may not provide detailed usage)
+    const tokenUsage = opencodeResponse.tokenUsage || {
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+    };
+
+    return {
+      userMessageId: opencodeResponse.userMessageId,
+      assistantMessageIds: opencodeResponse.assistantMessageIds,
+      tokenUsage: {
+        inputTokens: tokenUsage.input_tokens || 0,
+        outputTokens: tokenUsage.output_tokens || 0,
+        totalTokens: tokenUsage.total_tokens || tokenUsage.input_tokens! + tokenUsage.output_tokens! || 0,
+        cacheReadTokens: 0, // OpenCode caching TBD
+        cacheCreationTokens: 0, // OpenCode caching TBD
+      },
+      model: opencodeResponse.model,
+    };
+  }
+
 }

@@ -11,7 +11,8 @@
  * - Don't split into Client/Session unless runtime separation is clear
  */
 
-import type { Message } from '../../types';
+import type { Message, Session } from '../../types';
+import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response';
 import type {
   CreateSessionConfig,
   ImportOptions,
@@ -175,4 +176,24 @@ export interface ITool {
     partialResult?: Partial<TaskResult>;
     reason?: string;
   }>;
+
+  // ============================================================
+  // Token Accounting (Required for all tools)
+  // ============================================================
+
+  /**
+   * Normalize raw SDK response to common format
+   *
+   * Converts tool-specific SDK response into a normalized structure
+   * with consistent field names and types across all agentic tools.
+   *
+   * This enables:
+   * - Consistent UI display
+   * - Cross-tool token accounting
+   * - Easier debugging
+   *
+   * @param rawResponse - Raw SDK response from executeTask/executePrompt
+   * @returns Normalized response with common structure
+   */
+  normalizedSdkResponse(rawResponse: RawSdkResponse): NormalizedSdkResponse;
 }

@@ -1,6 +1,7 @@
 // src/types/task.ts
 import type { SessionID, TaskID } from './id';
 import type { ReportPath, ReportTemplate } from './report';
+import type { RawSdkResponse } from './sdk-response';
 
 export const TaskStatus = {
   CREATED: 'created',
@@ -51,37 +52,17 @@ export interface Task {
     commit_message?: string; // Commit message if task resulted in a commit (optional)
   };
 
-  // Token usage and cost tracking
-  usage?: {
-    input_tokens?: number;
-    output_tokens?: number;
-    total_tokens?: number;
-    cache_read_tokens?: number; // Claude-specific: prompt caching reads
-    cache_creation_tokens?: number; // Claude-specific: prompt caching writes
-    estimated_cost_usd?: number; // Calculated cost based on model pricing
-  };
-
   // Task execution metadata
   duration_ms?: number; // Total execution time from SDK
   agent_session_id?: string; // SDK's internal session ID for debugging
-  context_window?: number; // Context window size (total input + output tokens in window)
-  context_window_limit?: number; // Maximum context window size for the model(s) used
 
   // Model (resolved model ID used for this task, e.g., "claude-sonnet-4-5-20250929")
   model?: string;
 
-  // Per-model usage breakdown (for multi-model sessions like Claude Code)
-  // Maps model ID to usage stats including context window per model
-  model_usage?: Record<
-    string,
-    {
-      inputTokens: number;
-      outputTokens: number;
-      cacheReadInputTokens?: number;
-      cacheCreationInputTokens?: number;
-      contextWindow: number; // Context window limit for this specific model
-    }
-  >;
+  // Raw SDK response - single source of truth for token accounting
+  // Access token usage, context window, costs, etc. directly from this field
+  // Optional to support legacy tasks that don't have this field
+  raw_sdk_response?: RawSdkResponse;
 
   // Report (auto-generated after task completion)
   report?: {

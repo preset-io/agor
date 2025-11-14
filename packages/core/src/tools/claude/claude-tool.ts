@@ -24,12 +24,20 @@ import {
   type Message,
   type MessageID,
   MessageRole,
+  type Session,
   type SessionID,
   type TaskID,
   TaskStatus,
 } from '../../types';
 import { calculateModelContextWindowUsage } from '../../utils/context-window';
 import type { TokenUsage } from '../../utils/pricing';
+import { calculateTokenCost } from '../../utils/pricing';
+import type {
+  CalculatedTokenUsage,
+  ClaudeCodeSdkResponse,
+  NormalizedSdkResponse,
+  RawSdkResponse,
+} from '../../types/sdk-response';
 import type { ImportOptions, ITool, SessionData, ToolCapabilities } from '../base';
 import { loadClaudeSession } from './import/load-session';
 import { transcriptsToMessages } from './import/message-converter';
@@ -875,5 +883,64 @@ export class ClaudeTool implements ITool {
     }
 
     return result;
+  }
+
+  // ============================================================
+  // Token Accounting (NEW)
+  // ============================================================
+
+  /**
+   * Normalize Claude SDK response to common format
+   *
+   * Converts Claude-specific fields to normalized structure.
+   */
+  normalizedSdkResponse(rawResponse: RawSdkResponse): NormalizedSdkResponse {
+    if (rawResponse.tool !== 'claude-code') {
+      throw new Error(`Expected claude-code response, got ${rawResponse.tool}`);
+    }
+
+    const claudeResponse = rawResponse as ClaudeCodeSdkResponse;
+
+    // Extract token usage with defaults
+    const tokenUsage = claudeResponse.tokenUsage || {
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+      cache_read_tokens: 0,
+      cache_creation_tokens: 0,
+    };
+
+    // Build per-model usage if available
+    let perModelUsage: NormalizedSdkResponse['perModelUsage'];
+    if (claudeResponse.modelUsage) {
+      perModelUsage = {};
+      for (const [modelId, usage] of Object.entries(claudeResponse.modelUsage)) {
+        perModelUsage[modelId] = {
+          inputTokens: usage.inputTokens || 0,
+          outputTokens: usage.outputTokens || 0,
+          cacheReadTokens: usage.cacheReadInputTokens || 0,
+          cacheCreationTokens: usage.cacheCreationInputTokens || 0,
+          contextWindowLimit: usage.contextWindow || 0,
+        };
+      }
+    }
+
+    return {
+      userMessageId: claudeResponse.userMessageId,
+      assistantMessageIds: claudeResponse.assistantMessageIds,
+      tokenUsage: {
+        inputTokens: tokenUsage.input_tokens || 0,
+        outputTokens: tokenUsage.output_tokens || 0,
+        totalTokens: tokenUsage.total_tokens || tokenUsage.input_tokens! + tokenUsage.output_tokens! || 0,
+        cacheReadTokens: tokenUsage.cache_read_tokens || 0,
+        cacheCreationTokens: tokenUsage.cache_creation_tokens || 0,
+      },
+      contextWindow: claudeResponse.contextWindow,
+      contextWindowLimit: claudeResponse.contextWindowLimit,
+      model: claudeResponse.model,
+      durationMs: claudeResponse.durationMs,
+      agentSessionId: claudeResponse.agentSessionId,
+      perModelUsage,
+    };
   }
 }

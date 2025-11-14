@@ -170,26 +170,10 @@ interface ContextWindowPillProps extends BasePillProps {
   limit: number;
   // Optional: Full task metadata for detailed tooltip
   taskMetadata?: {
-    usage?: {
-      input_tokens?: number;
-      output_tokens?: number;
-      cache_creation_tokens?: number;
-      cache_read_tokens?: number;
-      total_tokens?: number;
-      estimated_cost_usd?: number;
-    };
     model?: string;
-    model_usage?: Record<
-      string,
-      {
-        inputTokens: number;
-        outputTokens: number;
-        cacheReadInputTokens?: number;
-        cacheCreationInputTokens?: number;
-        contextWindow: number;
-      }
-    >;
     duration_ms?: number;
+    // Raw SDK response - single source of truth for token accounting
+    raw_sdk_response?: import('@agor/core/types').RawSdkResponse;
   };
 }
 
@@ -208,17 +192,19 @@ const ContextWindowPopoverContent: React.FC<{
   // Build collapsible items for advanced sections
   const advancedItems = [];
 
-  // Add per-model usage as collapsible
-  if (taskMetadata?.model_usage && Object.keys(taskMetadata.model_usage).length > 0) {
+  // Extract token usage from raw SDK response
+  const sdkResponse = taskMetadata?.raw_sdk_response;
+  const tokenUsage = sdkResponse?.tokenUsage;
+
+  // Add per-model usage if available (Claude Code multi-model)
+  if (sdkResponse?.tool === 'claude-code' && sdkResponse.modelUsage && Object.keys(sdkResponse.modelUsage).length > 0) {
     advancedItems.push({
       key: 'per-model',
       label: 'Per-Model Usage',
       children: (
         <div style={{ fontSize: '0.9em' }}>
-          {Object.entries(taskMetadata.model_usage).map(([modelId, usage]) => {
-            // Per-model breakdown: input + output tokens for this turn
-            const modelContextUsage =
-              (usage.inputTokens || 0) + (usage.outputTokens || 0);
+          {Object.entries(sdkResponse.modelUsage).map(([modelId, usage]) => {
+            const modelContextUsage = (usage.inputTokens || 0) + (usage.outputTokens || 0);
 
             return (
               <div key={modelId} style={{ marginBottom: 12 }}>
@@ -226,16 +212,14 @@ const ContextWindowPopoverContent: React.FC<{
                 <div style={{ marginLeft: 12, fontSize: '0.95em', color: token.colorTextSecondary }}>
                   <div>Input: {usage.inputTokens?.toLocaleString() || 0}</div>
                   <div>Output: {usage.outputTokens?.toLocaleString() || 0}</div>
-                  {usage.cacheCreationInputTokens !== undefined &&
-                    usage.cacheCreationInputTokens > 0 && (
-                      <div>Cache creation: {usage.cacheCreationInputTokens.toLocaleString()}</div>
-                    )}
+                  {usage.cacheCreationInputTokens !== undefined && usage.cacheCreationInputTokens > 0 && (
+                    <div>Cache creation: {usage.cacheCreationInputTokens.toLocaleString()}</div>
+                  )}
                   {usage.cacheReadInputTokens !== undefined && usage.cacheReadInputTokens > 0 && (
                     <div>Cache read: {usage.cacheReadInputTokens.toLocaleString()}</div>
                   )}
                   <div style={{ marginTop: 4, fontWeight: 500, color: token.colorText }}>
-                    Context used: {modelContextUsage.toLocaleString()} /{' '}
-                    {usage.contextWindow?.toLocaleString() || 0}
+                    Context limit: {usage.contextWindow?.toLocaleString() || 0}
                   </div>
                 </div>
               </div>
@@ -246,11 +230,11 @@ const ContextWindowPopoverContent: React.FC<{
     });
   }
 
-  // Add raw JSON as collapsible
-  if (taskMetadata) {
+  // Add raw SDK response as collapsible (exact, unaltered response)
+  if (sdkResponse) {
     advancedItems.push({
-      key: 'raw-json',
-      label: 'Raw JSON',
+      key: 'raw-sdk-response',
+      label: '🔍 Raw SDK Response',
       children: (
         <pre
           style={{
@@ -265,7 +249,7 @@ const ContextWindowPopoverContent: React.FC<{
             border: `1px solid ${token.colorBorder}`,
           }}
         >
-          {JSON.stringify(taskMetadata, null, 2)}
+          {JSON.stringify(sdkResponse, null, 2)}
         </pre>
       ),
     });
@@ -276,42 +260,35 @@ const ContextWindowPopoverContent: React.FC<{
       {/* Primary info - always visible */}
       <div style={{ marginBottom: 16 }}>
         <div style={{ fontWeight: 600, fontSize: '1.05em', marginBottom: 8 }}>
-          Context Window Usage (Estimated)
+          Context Window Usage
         </div>
         <div style={{ fontSize: '1.1em', fontFamily: token.fontFamilyCode }}>
           {used.toLocaleString()} / {limit.toLocaleString()}{' '}
           <span style={{ color: token.colorTextSecondary }}>({percentage}%)</span>
         </div>
         <div style={{ fontSize: '0.85em', color: token.colorTextTertiary, marginTop: 6 }}>
-          Cumulative conversation tokens (input + output, resets on compaction)
+          Cumulative conversation tokens (directly from SDK)
         </div>
       </div>
 
-      {/* Token breakdown - always visible if available */}
-      {taskMetadata?.usage && (
+      {/* Token breakdown - from raw SDK response */}
+      {tokenUsage && (
         <div style={{ marginBottom: 16 }}>
           <div style={{ fontWeight: 500, marginBottom: 6 }}>Token Breakdown</div>
           <div style={{ fontSize: '0.9em', marginLeft: 12, color: token.colorTextSecondary }}>
-            <div>Input: {taskMetadata.usage.input_tokens?.toLocaleString() || 0}</div>
-            <div>Output: {taskMetadata.usage.output_tokens?.toLocaleString() || 0}</div>
-            {taskMetadata.usage.cache_creation_tokens !== undefined &&
-              taskMetadata.usage.cache_creation_tokens > 0 && (
-                <div>
-                  Cache creation: {taskMetadata.usage.cache_creation_tokens.toLocaleString()}
-                </div>
+            <div>Input: {tokenUsage.input_tokens?.toLocaleString() || 0}</div>
+            <div>Output: {tokenUsage.output_tokens?.toLocaleString() || 0}</div>
+            {tokenUsage.cache_creation_tokens !== undefined &&
+              tokenUsage.cache_creation_tokens > 0 && (
+                <div>Cache creation: {tokenUsage.cache_creation_tokens.toLocaleString()}</div>
               )}
-            {taskMetadata.usage.cache_read_tokens !== undefined &&
-              taskMetadata.usage.cache_read_tokens > 0 && (
-                <div>Cache read: {taskMetadata.usage.cache_read_tokens.toLocaleString()}</div>
+            {tokenUsage.cache_read_tokens !== undefined &&
+              tokenUsage.cache_read_tokens > 0 && (
+                <div>Cache read: {tokenUsage.cache_read_tokens.toLocaleString()}</div>
               )}
             <div style={{ marginTop: 4, fontWeight: 500, color: token.colorText }}>
-              Total: {taskMetadata.usage.total_tokens?.toLocaleString() || 0}
+              Total: {tokenUsage.total_tokens?.toLocaleString() || 0}
             </div>
-            {taskMetadata.usage.estimated_cost_usd !== undefined && (
-              <div style={{ marginTop: 4, color: token.colorWarning }}>
-                Cost: ${taskMetadata.usage.estimated_cost_usd.toFixed(4)}
-              </div>
-            )}
           </div>
         </div>
       )}

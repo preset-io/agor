@@ -252,16 +252,19 @@ const SessionDrawer = ({
     };
   }, [client, session]); // Re-run when client or session changes
 
-  // Calculate token totals and breakdown across all tasks
+  // Calculate token totals and breakdown across all tasks (from raw SDK responses)
   // IMPORTANT: Normalize tokens based on agentic_tool since different tools report differently:
   // - Codex: input_tokens INCLUDES cached tokens (cache_read_tokens is a subset)
   // - Claude/Gemini: input_tokens EXCLUDES cached tokens
   const tokenBreakdown = React.useMemo(() => {
     return tasks.reduce(
       (acc, task) => {
-        const rawInput = task.usage?.input_tokens || 0;
-        const rawOutput = task.usage?.output_tokens || 0;
-        const cacheRead = task.usage?.cache_read_tokens || 0;
+        const tokenUsage = task.raw_sdk_response?.tokenUsage;
+        if (!tokenUsage) return acc;
+
+        const rawInput = tokenUsage.input_tokens || 0;
+        const rawOutput = tokenUsage.output_tokens || 0;
+        const cacheRead = tokenUsage.cache_read_tokens || 0;
 
         // Normalize input tokens based on agentic tool
         const normalizedInput =
@@ -274,30 +277,27 @@ const SessionDrawer = ({
           input: acc.input + normalizedInput,
           output: acc.output + rawOutput,
           cacheRead: acc.cacheRead + cacheRead,
-          cacheCreation: acc.cacheCreation + (task.usage?.cache_creation_tokens || 0),
-          cost: acc.cost + (task.usage?.estimated_cost_usd || 0),
+          cacheCreation: acc.cacheCreation + (tokenUsage.cache_creation_tokens || 0),
+          cost: acc.cost, // Cost calculation removed - can be computed on the fly if needed
         };
       },
       { total: 0, input: 0, output: 0, cacheRead: 0, cacheCreation: 0, cost: 0 }
     );
   }, [tasks, session?.agentic_tool]);
 
-  // Get latest context window from most recent task
-  // Backend pre-calculates this as cumulative (input + output) tokens across all tasks,
-  // with proper handling for compaction events
+  // Get latest context window from most recent task (directly from SDK response)
   const latestContextWindow = React.useMemo(() => {
-    // Find most recent task with context window data (checking backwards from newest)
+    // Find most recent task with raw SDK response
     for (let i = tasks.length - 1; i >= 0; i--) {
       const task = tasks[i];
-      if (task.context_window !== undefined && task.context_window_limit) {
+      if (task.raw_sdk_response?.contextWindow !== undefined && task.raw_sdk_response.contextWindowLimit) {
         return {
-          used: task.context_window,
-          limit: task.context_window_limit,
+          used: task.raw_sdk_response.contextWindow,
+          limit: task.raw_sdk_response.contextWindowLimit,
           taskMetadata: {
-            usage: task.usage,
             model: task.model,
-            model_usage: task.model_usage,
             duration_ms: task.duration_ms,
+            raw_sdk_response: task.raw_sdk_response,
           },
         };
       }

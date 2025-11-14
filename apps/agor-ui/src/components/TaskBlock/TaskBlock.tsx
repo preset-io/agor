@@ -385,13 +385,10 @@ export const TaskBlock = React.memo<TaskBlockProps>(
         ? task.tool_use_count
         : messages.reduce((sum, msg) => sum + (msg.tool_uses?.length || 0), 0);
 
-    // Use pre-calculated context window from backend (cumulative conversation size)
-    // Backend calculates this as sum of (input + output) tokens across all tasks,
-    // with proper handling for compaction events
-    const taskHeaderGradient = getContextWindowGradient(
-      task.context_window,
-      task.context_window_limit
-    );
+    // Get context window directly from raw SDK response
+    const contextWindowUsed = task.raw_sdk_response?.contextWindow ?? 0;
+    const contextWindowLimit = task.raw_sdk_response?.contextWindowLimit ?? 200000;
+    const taskHeaderGradient = getContextWindowGradient(contextWindowUsed, contextWindowLimit);
 
     // Task header shows when collapsed
     const taskHeader = (
@@ -448,25 +445,23 @@ export const TaskBlock = React.memo<TaskBlockProps>(
             )}
             <MessageCountPill count={messageCount} />
             <ToolCountPill count={toolCount} />
-            {task.usage?.total_tokens && (
+            {task.raw_sdk_response?.tokenUsage && (
               <TokenCountPill
-                count={task.usage.total_tokens}
-                estimatedCost={task.usage.estimated_cost_usd}
-                inputTokens={task.usage.input_tokens}
-                outputTokens={task.usage.output_tokens}
-                cacheReadTokens={task.usage.cache_read_tokens}
-                cacheCreationTokens={task.usage.cache_creation_tokens}
+                count={task.raw_sdk_response.tokenUsage.total_tokens ?? 0}
+                inputTokens={task.raw_sdk_response.tokenUsage.input_tokens}
+                outputTokens={task.raw_sdk_response.tokenUsage.output_tokens}
+                cacheReadTokens={task.raw_sdk_response.tokenUsage.cache_read_tokens}
+                cacheCreationTokens={task.raw_sdk_response.tokenUsage.cache_creation_tokens}
               />
             )}
-            {task.context_window !== undefined && task.context_window_limit && (
+            {task.raw_sdk_response?.contextWindow !== undefined && task.raw_sdk_response.contextWindowLimit && (
               <ContextWindowPill
-                used={task.context_window}
-                limit={task.context_window_limit}
+                used={task.raw_sdk_response.contextWindow}
+                limit={task.raw_sdk_response.contextWindowLimit}
                 taskMetadata={{
-                  usage: task.usage,
                   model: task.model,
-                  model_usage: task.model_usage,
                   duration_ms: task.duration_ms,
+                  raw_sdk_response: task.raw_sdk_response,
                 }}
               />
             )}

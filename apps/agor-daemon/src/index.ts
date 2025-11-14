@@ -2099,25 +2099,15 @@ async function main() {
                 );
               } else {
                 // Safe to mark as completed
-                // Calculate estimated cost if usage data is available
-                let usage: typeof task.usage | undefined;
-                if ('tokenUsage' in result && result.tokenUsage) {
-                  const tokenUsage = result.tokenUsage as TokenUsage;
-                  const { calculateTokenCost } = await import('@agor/core/utils/pricing');
-                  const estimatedCost = calculateTokenCost(tokenUsage, session.agentic_tool);
 
-                  // Calculate total_tokens if SDK didn't provide it
-                  const totalTokens =
-                    tokenUsage.total_tokens ||
-                    (tokenUsage.input_tokens || 0) + (tokenUsage.output_tokens || 0);
-
-                  // Spread tokenUsage (type-safe) and add calculated fields
-                  usage = {
-                    ...tokenUsage,
-                    total_tokens: totalTokens,
-                    estimated_cost_usd: estimatedCost,
-                  };
-                }
+                // Store raw SDK response - single source of truth for token accounting
+                const rawSdkResponse: import('@agor/core/types').RawSdkResponse | undefined =
+                  result
+                    ? {
+                        tool: session.agentic_tool,
+                        ...result,
+                      } as import('@agor/core/types').RawSdkResponse
+                    : undefined;
 
                 // Calculate tool_use_count from all messages in this task
                 let toolUseCount = 0;
@@ -2140,16 +2130,6 @@ async function main() {
                   // Continue with toolUseCount = 0
                 }
 
-                // Calculate cumulative context window including current task's tokens
-                // Uses simple incremental approach: previous.context_window + current tokens
-                const contextWindow = await calculateTaskContextWindow(
-                  session,
-                  usage,
-                  task.task_id,
-                  tasksService,
-                  messagesService
-                );
-
                 const updated = await safePatch(
                   tasksService,
                   task.task_id,
@@ -2162,7 +2142,6 @@ async function main() {
                       end_timestamp: endTimestamp,
                     },
                     tool_use_count: toolUseCount,
-                    usage,
                     // Save execution metadata from result
                     duration_ms:
                       'durationMs' in result
@@ -2172,16 +2151,10 @@ async function main() {
                       'agentSessionId' in result
                         ? (result.agentSessionId as string | undefined)
                         : undefined,
-                    context_window: contextWindow,
-                    context_window_limit:
-                      'contextWindowLimit' in result
-                        ? (result.contextWindowLimit as number | undefined)
-                        : undefined,
                     model: 'model' in result ? (result.model as string | undefined) : undefined,
-                    model_usage:
-                      'modelUsage' in result
-                        ? (result.modelUsage as Task['model_usage'])
-                        : undefined,
+
+                    // Store raw SDK response - single source of truth
+                    raw_sdk_response: rawSdkResponse,
                   },
                   'Task'
                 );

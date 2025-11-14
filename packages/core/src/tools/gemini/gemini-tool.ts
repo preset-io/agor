@@ -23,12 +23,20 @@ import {
   type MessageID,
   MessageRole,
   type PermissionMode,
+  type Session,
   type SessionID,
   type TaskID,
 } from '../../types';
 import type { ITool, StreamingCallbacks, ToolCapabilities } from '../base';
 import type { MessagesService, TasksService } from '../claude/claude-tool';
 import type { TokenUsage } from '../../utils/pricing';
+import { calculateTokenCost } from '../../utils/pricing';
+import type {
+  CalculatedTokenUsage,
+  GeminiSdkResponse,
+  NormalizedSdkResponse,
+  RawSdkResponse,
+} from '../../types/sdk-response';
 import { DEFAULT_GEMINI_MODEL, getGeminiContextWindowLimit } from './models';
 import { GeminiPromptService } from './prompt-service';
 
@@ -39,12 +47,6 @@ interface GeminiExecutionResult {
   contextWindow?: number;
   contextWindowLimit?: number;
   model?: string;
-}
-
-function calculateGeminiContextWindow(usage?: TokenUsage): number | undefined {
-  if (!usage) return undefined;
-  // Gemini context = input tokens + cache read tokens (if caching enabled)
-  return (usage.input_tokens || 0) + (usage.cache_read_tokens || 0);
 }
 
 export class GeminiTool implements ITool {
@@ -164,9 +166,9 @@ export class GeminiTool implements ITool {
       // Capture token usage from complete event
       if (event.type === 'complete' && event.usage) {
         tokenUsage = event.usage;
-        contextWindow = calculateGeminiContextWindow(event.usage);
+        contextWindow = event.contextWindow; // SDK provides this directly!
         if (!contextWindowLimit) {
-          contextWindowLimit = getGeminiContextWindowLimit(resolvedModel || DEFAULT_GEMINI_MODEL);
+          contextWindowLimit = event.contextWindowLimit || getGeminiContextWindowLimit(resolvedModel || DEFAULT_GEMINI_MODEL);
         }
       }
 
@@ -378,9 +380,9 @@ export class GeminiTool implements ITool {
       // Capture token usage from complete event
       if (event.type === 'complete' && event.usage) {
         tokenUsage = event.usage;
-        contextWindow = calculateGeminiContextWindow(event.usage);
+        contextWindow = event.contextWindow; // SDK provides this directly!
         if (!contextWindowLimit) {
-          contextWindowLimit = getGeminiContextWindowLimit(resolvedModel || DEFAULT_GEMINI_MODEL);
+          contextWindowLimit = event.contextWindowLimit || getGeminiContextWindowLimit(resolvedModel || DEFAULT_GEMINI_MODEL);
         }
       }
 
@@ -458,4 +460,45 @@ export class GeminiTool implements ITool {
 
     return result;
   }
+
+  // ============================================================
+  // Token Accounting (NEW)
+  // ============================================================
+
+  /**
+   * Normalize Gemini SDK response to common format
+   *
+   * Gemini may support caching in the future, for now cache tokens are 0.
+   */
+  normalizedSdkResponse(rawResponse: RawSdkResponse): NormalizedSdkResponse {
+    if (rawResponse.tool !== 'gemini') {
+      throw new Error(`Expected gemini response, got ${rawResponse.tool}`);
+    }
+
+    const geminiResponse = rawResponse as GeminiSdkResponse;
+
+    // Extract token usage with defaults
+    const tokenUsage = geminiResponse.tokenUsage || {
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+      cache_read_tokens: 0, // Gemini may support caching in future
+    };
+
+    return {
+      userMessageId: geminiResponse.userMessageId,
+      assistantMessageIds: geminiResponse.assistantMessageIds,
+      tokenUsage: {
+        inputTokens: tokenUsage.input_tokens || 0,
+        outputTokens: tokenUsage.output_tokens || 0,
+        totalTokens: tokenUsage.total_tokens || tokenUsage.input_tokens! + tokenUsage.output_tokens! || 0,
+        cacheReadTokens: tokenUsage.cache_read_tokens || 0,
+        cacheCreationTokens: 0, // Not exposed in Gemini response yet
+      },
+      contextWindow: geminiResponse.contextWindow,
+      contextWindowLimit: geminiResponse.contextWindowLimit,
+      model: geminiResponse.model,
+    };
+  }
+
 }
