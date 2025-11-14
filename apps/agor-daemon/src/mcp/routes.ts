@@ -765,6 +765,92 @@ export function setupMCPRoutes(app: Application): void {
                 },
               },
             },
+
+            // Pattern tools for agent orchestration
+            {
+              name: 'agor_patterns_search',
+              description:
+                'Search for successful development patterns to apply to current task. Returns patterns with confidence scores and usage statistics.',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  query: {
+                    type: 'string',
+                    description:
+                      'Search query describing the pattern you need (e.g., "React state management", "error handling")',
+                  },
+                  category: {
+                    type: 'string',
+                    enum: [
+                      'architecture',
+                      'frontend',
+                      'backend',
+                      'mobile',
+                      'devops',
+                      'testing',
+                      'documentation',
+                      'security',
+                      'performance',
+                      'general',
+                    ],
+                    description: 'Filter patterns by category (optional)',
+                  },
+                  minConfidence: {
+                    type: 'number',
+                    description: 'Minimum confidence score (0-100, default: 70)',
+                  },
+                  limit: {
+                    type: 'number',
+                    description: 'Maximum number of results (default: 5)',
+                  },
+                },
+                required: ['query'],
+              },
+            },
+            {
+              name: 'agor_patterns_capture',
+              description:
+                'Capture a successful pattern from the current task for future reuse. Use this when you complete a task successfully and want to save the approach for similar future tasks.',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  category: {
+                    type: 'string',
+                    enum: [
+                      'architecture',
+                      'frontend',
+                      'backend',
+                      'mobile',
+                      'devops',
+                      'testing',
+                      'documentation',
+                      'security',
+                      'performance',
+                      'general',
+                    ],
+                    description: 'Pattern category',
+                  },
+                  summary: {
+                    type: 'string',
+                    description: 'Short description of the pattern (1-2 sentences)',
+                  },
+                  context: {
+                    type: 'string',
+                    description: 'When/where this pattern applies (the problem it solves)',
+                  },
+                  implementation: {
+                    type: 'string',
+                    description: 'How to implement this pattern (the solution)',
+                  },
+                  tags: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: 'Optional tags for better searchability',
+                  },
+                },
+                required: ['category', 'summary', 'context', 'implementation'],
+              },
+            },
           ],
         };
       } else if (mcpRequest.method === 'notifications/initialized') {
@@ -2103,6 +2189,71 @@ export function setupMCPRoutes(app: Application): void {
               {
                 type: 'text',
                 text: JSON.stringify(leaderboard, null, 2),
+              },
+            ],
+          };
+        } else if (name === 'agor_patterns_search') {
+          // Search for development patterns
+          if (!args?.query) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message: 'Invalid params: query is required',
+              },
+            });
+          }
+
+          const patterns = await app.service('patterns').search(args.query, {
+            category: args.category,
+            minConfidence: args.minConfidence || 70,
+            limit: args.limit || 5,
+          });
+
+          mcpResponse = {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(patterns, null, 2),
+              },
+            ],
+          };
+        } else if (name === 'agor_patterns_capture') {
+          // Capture a new pattern
+          if (!args?.category || !args?.summary || !args?.context || !args?.implementation) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message:
+                  'Invalid params: category, summary, context, and implementation are required',
+              },
+            });
+          }
+
+          // Get current session to capture source
+          const session = await app.service('sessions').get(context.sessionId);
+
+          const pattern = await app.service('patterns').captureFromTask(
+            {
+              category: args.category,
+              summary: args.summary,
+              context: args.context,
+              implementation: args.implementation,
+              tags: args.tags,
+              session_id: context.sessionId,
+              worktree_id: session.worktree_id,
+            },
+            baseServiceParams
+          );
+
+          mcpResponse = {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(pattern, null, 2),
               },
             ],
           };

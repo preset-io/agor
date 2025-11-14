@@ -8,6 +8,7 @@ export * from './board-objects';
 export * from './boards';
 export * from './mcp-servers';
 export * from './messages';
+export * from './patterns';
 export * from './repos';
 export * from './session-mcp-servers';
 export * from './sessions';

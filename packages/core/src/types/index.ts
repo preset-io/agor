@@ -9,6 +9,7 @@ export * from './feathers';
 export * from './id';
 export * from './mcp';
 export * from './message';
+export * from './pattern';
 export * from './presence';
 export * from './repo';
 export * from './report';

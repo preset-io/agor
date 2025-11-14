@@ -23,6 +23,27 @@ export const SessionStatus = {
 export type SessionStatus = (typeof SessionStatus)[keyof typeof SessionStatus];
 
 /**
+ * Agent role for specialized agent orchestration
+ *
+ * Defines the role/specialization of an agent within a multi-agent workflow.
+ * Used for pattern learning, prompt customization, and workflow coordination.
+ */
+export const AgentRole = {
+  ARCHITECT: 'architect',
+  FRONTEND: 'frontend',
+  BACKEND: 'backend',
+  MOBILE: 'mobile',
+  DEVOPS: 'devops',
+  REVIEWER: 'reviewer',
+  TESTER: 'tester',
+  DOCUMENTER: 'documenter',
+  SECURITY: 'security',
+  PERFORMANCE: 'performance',
+} as const;
+
+export type AgentRole = (typeof AgentRole)[keyof typeof AgentRole];
+
+/**
  * Permission mode controls how agentic tools handle execution approvals
  *
  * Claude Code modes (Claude Agent SDK):
@@ -82,6 +103,8 @@ export interface Session {
 
   /** Which agentic coding tool is running this session (Claude Code, Codex, Gemini) */
   agentic_tool: AgenticToolName;
+  /** Agent role for specialized orchestration (optional) */
+  agent_role?: AgentRole;
   /** Agentic tool/CLI version */
   agentic_tool_version?: string;
   /** SDK session ID for maintaining conversation history (Claude Agent SDK, Codex SDK, etc.) */

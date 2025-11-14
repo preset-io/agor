@@ -141,6 +141,10 @@ import { createHealthMonitor } from './services/health-monitor';
 import { createLeaderboardService } from './services/leaderboard';
 import { createMCPServersService } from './services/mcp-servers';
 import { createMessagesService } from './services/messages';
+import {
+  createPatternApplicationsService,
+  createPatternsService,
+} from './services/patterns';
 import { createReposService } from './services/repos';
 import { SchedulerService } from './services/scheduler';
 import { createSessionMCPServersService } from './services/session-mcp-servers';
@@ -752,6 +756,10 @@ async function main() {
   app.use('/repos', createReposService(db, app));
 
   app.use('/mcp-servers', createMCPServersService(db));
+
+  // Register patterns services for agent orchestration and pattern learning
+  app.use('/patterns', createPatternsService(db));
+  app.use('/pattern-applications', createPatternApplicationsService(db));
 
   // Register config service for API key management
   app.use('/config', createConfigService());

@@ -34,6 +34,20 @@ export const sessions = sqliteTable(
     agentic_tool: text('agentic_tool', {
       enum: ['claude-code', 'codex', 'gemini', 'opencode'],
     }).notNull(),
+    agent_role: text('agent_role', {
+      enum: [
+        'architect',
+        'frontend',
+        'backend',
+        'mobile',
+        'devops',
+        'reviewer',
+        'tester',
+        'documenter',
+        'security',
+        'performance',
+      ],
+    }),
     board_id: text('board_id', { length: 36 }), // NULL = no board
 
     // Genealogy (materialized for tree queries)
@@ -708,6 +722,120 @@ export const sessionMcpServers = sqliteTable(
 );
 
 /**
+ * Patterns table - Pattern learning for agent orchestration
+ *
+ * Stores successful development patterns discovered through completed tasks.
+ * Patterns are categorized by agent role and include embeddings for semantic search.
+ */
+export const patterns = sqliteTable(
+  'patterns',
+  {
+    // Primary identity
+    pattern_id: text('pattern_id', { length: 36 }).primaryKey(),
+    created_at: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updated_at: integer('updated_at', { mode: 'timestamp_ms' }),
+
+    // Pattern categorization (materialized for filtering)
+    category: text('category', {
+      enum: [
+        'architecture',
+        'frontend',
+        'backend',
+        'mobile',
+        'devops',
+        'testing',
+        'documentation',
+        'security',
+        'performance',
+        'general',
+      ],
+    }).notNull(),
+
+    // Pattern metadata (materialized for queries)
+    confidence: integer('confidence').notNull().default(50), // 0-100 confidence score
+    usage_count: integer('usage_count').notNull().default(0),
+    success_count: integer('success_count').notNull().default(0),
+
+    // User attribution
+    created_by: text('created_by', { length: 36 }).notNull().default('anonymous'),
+
+    // JSON blob for pattern data
+    data: text('data', { mode: 'json' })
+      .$type<{
+        summary: string; // Short description of the pattern
+        context: string; // When/where this pattern applies
+        implementation: string; // How to implement this pattern
+        tags?: string[]; // Additional searchable tags
+        related_patterns?: string[]; // Pattern IDs of related patterns
+
+        // Source tracking (where this pattern came from)
+        source?: {
+          session_id?: string;
+          task_id?: string;
+          worktree_id?: string;
+        };
+      }>()
+      .notNull(),
+  },
+  table => ({
+    categoryIdx: index('patterns_category_idx').on(table.category),
+    confidenceIdx: index('patterns_confidence_idx').on(table.confidence),
+    usageIdx: index('patterns_usage_idx').on(table.usage_count),
+    createdIdx: index('patterns_created_idx').on(table.created_at),
+    createdByIdx: index('patterns_created_by_idx').on(table.created_by),
+  })
+);
+
+/**
+ * Pattern Applications table - Track pattern usage and outcomes
+ *
+ * Records when patterns are applied to tasks and whether they succeeded.
+ * Used for reinforcement learning and pattern confidence scoring.
+ */
+export const patternApplications = sqliteTable(
+  'pattern_applications',
+  {
+    // Primary identity
+    application_id: text('application_id', { length: 36 }).primaryKey(),
+    created_at: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+
+    // Foreign keys
+    pattern_id: text('pattern_id', { length: 36 })
+      .notNull()
+      .references(() => patterns.pattern_id, { onDelete: 'cascade' }),
+    session_id: text('session_id', { length: 36 })
+      .notNull()
+      .references(() => sessions.session_id, { onDelete: 'cascade' }),
+    task_id: text('task_id', { length: 36 }).references(() => tasks.task_id, {
+      onDelete: 'set null',
+    }),
+
+    // Outcome (materialized for statistics)
+    outcome: text('outcome', {
+      enum: ['success', 'failure', 'partial'],
+    }).notNull(),
+
+    // User attribution
+    created_by: text('created_by', { length: 36 }).notNull().default('anonymous'),
+
+    // JSON blob for feedback
+    data: text('data', { mode: 'json' })
+      .$type<{
+        feedback?: string; // User feedback about pattern application
+        modifications?: string; // How the pattern was adapted
+      }>()
+      .notNull(),
+  },
+  table => ({
+    patternIdx: index('pattern_applications_pattern_idx').on(table.pattern_id),
+    sessionIdx: index('pattern_applications_session_idx').on(table.session_id),
+    taskIdx: index('pattern_applications_task_idx').on(table.task_id),
+    outcomeIdx: index('pattern_applications_outcome_idx').on(table.outcome),
+    createdIdx: index('pattern_applications_created_idx').on(table.created_at),
+  })
+);
+
+/**
  * Board Comments table - Human-to-human conversations and collaboration
  *
  * Flexible attachment strategy:
@@ -825,3 +953,7 @@ export type BoardObjectRow = typeof boardObjects.$inferSelect;
 export type BoardObjectInsert = typeof boardObjects.$inferInsert;
 export type BoardCommentRow = typeof boardComments.$inferSelect;
 export type BoardCommentInsert = typeof boardComments.$inferInsert;
+export type PatternRow = typeof patterns.$inferSelect;
+export type PatternInsert = typeof patterns.$inferInsert;
+export type PatternApplicationRow = typeof patternApplications.$inferSelect;
+export type PatternApplicationInsert = typeof patternApplications.$inferInsert;

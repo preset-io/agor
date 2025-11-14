@@ -142,6 +142,16 @@ export type WorktreeID = UUID;
 export type CommentID = UUID;
 
 /**
+ * Pattern identifier
+ *
+ * Uniquely identifies a learned development pattern.
+ *
+ * @example
+ * const patternId: PatternID = "0193i1j2-3k4l-7m5n-a8f3-9d2e1c4b5a6f";
+ */
+export type PatternID = UUID;
+
+/**
  * Note: Concepts and Reports use file paths as identifiers, not UUIDs.
  *
  * - Concepts: ConceptPath (e.g., "core.md", "explorations/cli.md")
