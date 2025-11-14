@@ -14,6 +14,7 @@ import {
   CloseCircleOutlined,
   CodeOutlined,
   CopyOutlined,
+  DownloadOutlined,
   EditOutlined,
   FileTextOutlined,
   LoadingOutlined,
@@ -21,6 +22,7 @@ import {
   PoweroffOutlined,
   ReloadOutlined,
   SaveOutlined,
+  UploadOutlined,
   WarningOutlined,
 } from '@ant-design/icons';
 import {
@@ -372,6 +374,44 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     setIsEditingContext(false);
   };
 
+  // Import from .agor.yml
+  const handleImport = async () => {
+    if (!client || !onUpdateRepo) return;
+
+    try {
+      const updated = (await client
+        .service(`repos/${repo.repo_id}/import-agor-yml`)
+        .create({})) as Repo;
+      message.success('Imported environment configuration from .agor.yml');
+
+      // Update local state
+      if (updated.environment_config) {
+        setUpCommand(updated.environment_config.up_command || '');
+        setDownCommand(updated.environment_config.down_command || '');
+        setHealthCheckUrlTemplate(updated.environment_config.health_check?.url_template || '');
+        setAppUrlTemplate(updated.environment_config.app_url_template || '');
+        setLogsCommand(updated.environment_config.logs_command || '');
+      }
+
+      // Notify parent
+      onUpdateRepo(repo.repo_id, { environment_config: updated.environment_config });
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : 'Failed to import .agor.yml');
+    }
+  };
+
+  // Export to .agor.yml
+  const handleExport = async () => {
+    if (!client) return;
+
+    try {
+      await client.service(`repos/${repo.repo_id}/export-agor-yml`).create({});
+      message.success('Exported environment configuration to .agor.yml in repository root');
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : 'Failed to export .agor.yml');
+    }
+  };
+
   // Auto-enable editing if no config exists
   if (!hasEnvironmentConfig && !isEditingTemplate) {
     // Automatically show the form in edit mode
@@ -567,14 +607,39 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
           size="small"
           extra={
             !isEditingTemplate && (
-              <Button
-                type="text"
-                size="small"
-                icon={<EditOutlined />}
-                onClick={() => setIsEditingTemplate(true)}
-              >
-                Edit
-              </Button>
+              <Space size="small">
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<DownloadOutlined />}
+                  onClick={handleImport}
+                  title="Import from .agor.yml in repository root"
+                >
+                  Import
+                </Button>
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<UploadOutlined />}
+                  onClick={handleExport}
+                  disabled={!hasEnvironmentConfig}
+                  title={
+                    hasEnvironmentConfig
+                      ? 'Export to .agor.yml in repository root'
+                      : 'No configuration to export'
+                  }
+                >
+                  Export
+                </Button>
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<EditOutlined />}
+                  onClick={() => setIsEditingTemplate(true)}
+                >
+                  Edit
+                </Button>
+              </Space>
             )
           }
         >

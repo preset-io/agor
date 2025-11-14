@@ -2669,6 +2669,24 @@ async function main() {
     },
   });
 
+  app.use('/repos/:id/import-agor-yml', {
+    async create(_data: unknown, params: RouteParams) {
+      ensureMinimumRole(params, 'member', 'import .agor.yml');
+      const id = params.route?.id;
+      if (!id) throw new Error('Repo ID required');
+      return reposService.importFromAgorYml(id, {}, params);
+    },
+  });
+
+  app.use('/repos/:id/export-agor-yml', {
+    async create(_data: unknown, params: RouteParams) {
+      ensureMinimumRole(params, 'member', 'export .agor.yml');
+      const id = params.route?.id;
+      if (!id) throw new Error('Repo ID required');
+      return reposService.exportToAgorYml(id, {}, params);
+    },
+  });
+
   // Configure custom methods for board-comments service (Phase 2: Threading + Reactions)
   const boardCommentsService = app.service('board-comments') as unknown as {
     toggleReaction: (

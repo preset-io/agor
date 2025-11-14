@@ -1,0 +1,6 @@
+environment:
+  start: DAEMON_PORT={{add 3000 worktree.unique_id}} UI_PORT={{add 5000 worktree.unique_id}} docker compose -p agor-{{worktree.name}} up -d
+  stop: docker compose -p agor-{{worktree.name}} down
+  health: http://localhost:{{add 3000 worktree.unique_id}}/health
+  app: http://localhost:{{add 5000 worktree.unique_id}}
+  logs: docker compose -p agor-{{worktree.name}} logs --tail=100

@@ -5,13 +5,21 @@
  * Uses DrizzleService adapter with RepoRepository.
  */
 
-import { resolveUserEnvironment } from '@agor/core/config';
+import path from 'node:path';
+import { parseAgorYml, resolveUserEnvironment, writeAgorYml } from '@agor/core/config';
 import { type Database, RepoRepository } from '@agor/core/db';
 import { autoAssignWorktreeUniqueId } from '@agor/core/environment/variable-resolver';
 import type { Application } from '@agor/core/feathers';
 import { cloneRepo, getWorktreePath, createWorktree as gitCreateWorktree } from '@agor/core/git';
 import { renderTemplate } from '@agor/core/templates/handlebars-helpers';
-import type { AuthenticatedParams, QueryParams, Repo, UserID, Worktree } from '@agor/core/types';
+import type {
+  AuthenticatedParams,
+  QueryParams,
+  Repo,
+  RepoEnvironmentConfig,
+  UserID,
+  Worktree,
+} from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 
 /**
@@ -75,6 +83,22 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       env: userEnv,
     });
 
+    // Auto-import .agor.yml if present
+    const agorYmlPath = path.join(result.path, '.agor.yml');
+    let environmentConfig: RepoEnvironmentConfig | null = null;
+
+    try {
+      environmentConfig = parseAgorYml(agorYmlPath);
+      if (environmentConfig) {
+        console.log(`✅ Loaded environment config from .agor.yml for ${data.slug}`);
+      }
+    } catch (error) {
+      console.warn(
+        `⚠️  Failed to parse .agor.yml for ${data.slug}:`,
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+
     // Create database record
     return this.create(
       {
@@ -83,6 +107,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         remote_url: data.url,
         local_path: result.path,
         default_branch: result.defaultBranch,
+        environment_config: environmentConfig || undefined,
       },
       params
     ) as Promise<Repo>;
@@ -218,6 +243,46 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     }
 
     return worktree;
+  }
+
+  /**
+   * Custom method: Import environment config from .agor.yml
+   */
+  async importFromAgorYml(id: string, _data: unknown, params?: RepoParams): Promise<Repo> {
+    const repo = await this.get(id, params);
+    const agorYmlPath = path.join(repo.local_path, '.agor.yml');
+
+    // Parse .agor.yml
+    const config = parseAgorYml(agorYmlPath);
+
+    if (!config) {
+      throw new Error('.agor.yml not found or has no environment configuration');
+    }
+
+    // Update repo with imported config
+    return this.patch(id, { environment_config: config }, params) as Promise<Repo>;
+  }
+
+  /**
+   * Custom method: Export environment config to .agor.yml
+   */
+  async exportToAgorYml(
+    id: string,
+    _data: unknown,
+    params?: RepoParams
+  ): Promise<{ path: string }> {
+    const repo = await this.get(id, params);
+
+    if (!repo.environment_config) {
+      throw new Error('Repository has no environment configuration to export');
+    }
+
+    const agorYmlPath = path.join(repo.local_path, '.agor.yml');
+
+    // Write .agor.yml
+    writeAgorYml(agorYmlPath, repo.environment_config);
+
+    return { path: agorYmlPath };
   }
 }
 

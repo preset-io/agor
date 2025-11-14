@@ -4,6 +4,7 @@
  * Exports configuration management, repo reference parsing utilities.
  */
 
+export * from './agor-yml';
 export * from './config-manager';
 export * from './constants';
 export * from './env-blocklist';

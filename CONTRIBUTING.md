@@ -258,3 +258,103 @@ Your contributions make this project better for everyone. Whether you're fixing 
 **Remember: Use Agor to contribute to Agor!** Experience the tool, find the rough edges, and help us smooth them out.
 
 Let's build the future of multiplayer AI development together. 🚀
+
+---
+
+## `.agor.yml` Configuration
+
+Agor supports automatic environment configuration via `.agor.yml` in your repository root.
+
+### Schema
+
+Place a `.agor.yml` file in your repository root with the following structure:
+
+```yaml
+environment:
+  start: 'docker compose up -d'
+  stop: 'docker compose down'
+  health: 'http://localhost:{{add 9000 worktree.unique_id}}/health'
+  app: 'http://localhost:{{add 5000 worktree.unique_id}}'
+  logs: 'docker compose logs --tail=100'
+```
+
+**Required fields:**
+
+- `start` - Command to start the environment
+- `stop` - Command to stop the environment
+
+**Optional fields:**
+
+- `health` - HTTP URL for health checks
+- `app` - Application URL to open in browser
+- `logs` - Command to fetch recent logs
+
+### Template Variables
+
+Use Handlebars syntax in your commands:
+
+- `{{worktree.unique_id}}` - Auto-assigned unique number (1, 2, 3, ...) for port allocation
+- `{{worktree.name}}` - Worktree name (e.g., "feat-auth", "main")
+- `{{worktree.path}}` - Absolute path to worktree directory
+- `{{repo.slug}}` - Repository slug
+- `{{add a b}}` - Math helpers: `add`, `sub`, `mul`, `div`, `mod`
+- `{{custom.your_var}}` - Custom context variables (defined per worktree)
+
+### Examples
+
+**Docker Compose with dynamic ports:**
+
+```yaml
+environment:
+  start: 'DAEMON_PORT={{add 3000 worktree.unique_id}} UI_PORT={{add 5000 worktree.unique_id}} docker compose -p {{worktree.name}} up -d'
+  stop: 'docker compose -p {{worktree.name}} down'
+  health: 'http://localhost:{{add 5000 worktree.unique_id}}/health'
+  app: 'http://localhost:{{add 5000 worktree.unique_id}}'
+  logs: 'docker compose -p {{worktree.name}} logs --tail=100'
+```
+
+**Simple dev server:**
+
+```yaml
+environment:
+  start: 'PORT={{add 5000 worktree.unique_id}} pnpm dev'
+  stop: "pkill -f 'vite.*{{add 5000 worktree.unique_id}}'"
+  health: 'http://localhost:{{add 5000 worktree.unique_id}}/api/health'
+  app: 'http://localhost:{{add 5000 worktree.unique_id}}'
+```
+
+### Workflow
+
+**Auto-Import (Recommended):**
+
+1. Add `.agor.yml` to your repo root and commit it
+2. Clone the repo in Agor → configuration auto-loaded ✨
+3. All worktrees created from this repo inherit the configuration
+
+**Manual Import:**
+
+1. Open any worktree from the repository
+2. Go to WorktreeModal → Environment tab
+3. Click "Import" button (⬇️ icon)
+4. Configuration loaded from `.agor.yml`
+
+**Manual Export:**
+
+1. Configure environment in the UI
+2. Click "Export" button (⬆️ icon)
+3. `.agor.yml` written to repository root
+4. Commit and share with your team
+
+### Benefits
+
+- **Share configuration** across team via version control
+- **Automatic port allocation** prevents conflicts between worktrees
+- **Consistent setup** for all developers
+- **No manual configuration** when cloning repos
+
+### Notes
+
+- Start command should run in background (e.g., `docker compose up -d`, not `docker compose up`)
+- Health check URL should return 200 OK when environment is ready
+- Templates are rendered when worktree is created (not at runtime)
+- After creation, values are editable per-worktree in the UI
