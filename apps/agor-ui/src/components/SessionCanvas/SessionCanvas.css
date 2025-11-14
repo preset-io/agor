@@ -36,6 +36,14 @@
   cursor: crosshair;
 }
 
+.react-flow.tool-mode-markdown .react-flow__pane {
+  cursor: crosshair;
+}
+
+.react-flow.tool-mode-markdown .react-flow__node {
+  cursor: crosshair;
+}
+
 .react-flow.tool-mode-eraser .react-flow__pane {
   cursor: pointer;
 }
