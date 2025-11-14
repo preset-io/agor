@@ -197,7 +197,11 @@ const ContextWindowPopoverContent: React.FC<{
   const tokenUsage = sdkResponse?.tokenUsage;
 
   // Add per-model usage if available (Claude Code multi-model)
-  if (sdkResponse?.tool === 'claude-code' && sdkResponse.modelUsage && Object.keys(sdkResponse.modelUsage).length > 0) {
+  if (
+    sdkResponse?.tool === 'claude-code' &&
+    sdkResponse.modelUsage &&
+    Object.keys(sdkResponse.modelUsage).length > 0
+  ) {
     advancedItems.push({
       key: 'per-model',
       label: 'Per-Model Usage',
@@ -209,12 +213,15 @@ const ContextWindowPopoverContent: React.FC<{
             return (
               <div key={modelId} style={{ marginBottom: 12 }}>
                 <div style={{ fontWeight: 500, marginBottom: 4 }}>{modelId}</div>
-                <div style={{ marginLeft: 12, fontSize: '0.95em', color: token.colorTextSecondary }}>
+                <div
+                  style={{ marginLeft: 12, fontSize: '0.95em', color: token.colorTextSecondary }}
+                >
                   <div>Input: {usage.inputTokens?.toLocaleString() || 0}</div>
                   <div>Output: {usage.outputTokens?.toLocaleString() || 0}</div>
-                  {usage.cacheCreationInputTokens !== undefined && usage.cacheCreationInputTokens > 0 && (
-                    <div>Cache creation: {usage.cacheCreationInputTokens.toLocaleString()}</div>
-                  )}
+                  {usage.cacheCreationInputTokens !== undefined &&
+                    usage.cacheCreationInputTokens > 0 && (
+                      <div>Cache creation: {usage.cacheCreationInputTokens.toLocaleString()}</div>
+                    )}
                   {usage.cacheReadInputTokens !== undefined && usage.cacheReadInputTokens > 0 && (
                     <div>Cache read: {usage.cacheReadInputTokens.toLocaleString()}</div>
                   )}
@@ -282,10 +289,9 @@ const ContextWindowPopoverContent: React.FC<{
               tokenUsage.cache_creation_tokens > 0 && (
                 <div>Cache creation: {tokenUsage.cache_creation_tokens.toLocaleString()}</div>
               )}
-            {tokenUsage.cache_read_tokens !== undefined &&
-              tokenUsage.cache_read_tokens > 0 && (
-                <div>Cache read: {tokenUsage.cache_read_tokens.toLocaleString()}</div>
-              )}
+            {tokenUsage.cache_read_tokens !== undefined && tokenUsage.cache_read_tokens > 0 && (
+              <div>Cache read: {tokenUsage.cache_read_tokens.toLocaleString()}</div>
+            )}
             <div style={{ marginTop: 4, fontWeight: 500, color: token.colorText }}>
               Total: {tokenUsage.total_tokens?.toLocaleString() || 0}
             </div>
@@ -446,16 +452,27 @@ export const GitStatePill: React.FC<GitStatePillProps> = ({
   const cleanSha = sha.replace('-dirty', '');
   const displaySha = cleanSha.substring(0, 7);
 
+  const handleClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    copyToClipboard(cleanSha, {
+      showSuccess: true,
+      successMessage: 'Git SHA copied to clipboard',
+    });
+  };
+
   return (
-    <Tag
-      icon={<ForkOutlined />}
-      color={isDirty && showDirtyIndicator ? 'cyan' : PILL_COLORS.git}
-      style={style}
-    >
-      {branch && <span>{branch} : </span>}
-      <span style={{ fontFamily: token.fontFamilyCode }}>{displaySha}</span>
-      {isDirty && showDirtyIndicator && ' (dirty)'}
-    </Tag>
+    <Tooltip title="Click to copy full SHA">
+      <Tag
+        icon={<ForkOutlined />}
+        color={isDirty && showDirtyIndicator ? 'cyan' : PILL_COLORS.git}
+        style={{ ...style, cursor: 'pointer' }}
+        onClick={handleClick}
+      >
+        {branch && <span>{branch} : </span>}
+        <span style={{ fontFamily: token.fontFamilyCode }}>{displaySha}</span>
+        {isDirty && showDirtyIndicator && ' (dirty)'}
+      </Tag>
+    </Tooltip>
   );
 };
 
