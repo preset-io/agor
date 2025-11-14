@@ -29,7 +29,6 @@ import {
   type TaskID,
   TaskStatus,
 } from '../../types';
-import { calculateModelContextWindowUsage } from '../../utils/context-window';
 import type { TokenUsage } from '../../utils/pricing';
 import { calculateTokenCost } from '../../utils/pricing';
 import type {
@@ -400,6 +399,7 @@ export class ClaudeTool implements ITool {
       }
 
       // Capture metadata from result events (SDK may not type this properly)
+      // Store RAW values from SDK - no calculations, no mutations
       if ('token_usage' in event && event.token_usage) {
         tokenUsage = extractTokenUsage(event.token_usage);
       }
@@ -409,54 +409,13 @@ export class ClaudeTool implements ITool {
       if ('model_usage' in event && event.model_usage) {
         // Save full model usage for later (per-model breakdown)
         modelUsage = event.model_usage;
-
-        // Extract context window data from model usage
-        const modelUsageTyped = event.model_usage as Record<
-          string,
-          {
-            inputTokens: number;
-            outputTokens: number;
-            cacheReadInputTokens?: number;
-            cacheCreationInputTokens?: number;
-            contextWindow: number;
-          }
-        >;
-        // Sum ALL token fields across ALL models
-        // When multiple models are used (e.g., Sonnet + Haiku for tools/thinking),
-        // all their tokens contribute to the total
-        let totalInput = 0;
-        let totalOutput = 0;
-        let totalCacheRead = 0;
-        let totalCacheCreation = 0;
-        let totalUsage = 0;
-        let maxLimit = 0;
-        for (const modelData of Object.values(modelUsageTyped)) {
-          totalInput += modelData.inputTokens || 0;
-          totalOutput += modelData.outputTokens || 0;
-          totalCacheRead += modelData.cacheReadInputTokens || 0;
-          totalCacheCreation += modelData.cacheCreationInputTokens || 0;
-
-          const usage = calculateModelContextWindowUsage(modelData);
-          const limit = modelData.contextWindow || 0;
-          totalUsage += usage; // Sum across all models
-          maxLimit = Math.max(maxLimit, limit); // Track largest context window limit
-        }
-
-        // Override tokenUsage with summed values across all models
-        // (SDK's top-level token_usage only reflects primary model)
-        tokenUsage = {
-          input_tokens: totalInput,
-          output_tokens: totalOutput,
-          cache_read_tokens: totalCacheRead,
-          cache_creation_tokens: totalCacheCreation,
-          total_tokens: totalInput + totalOutput,
-        };
-
-        contextWindow = totalUsage;
-        contextWindowLimit = maxLimit;
-        console.log(
-          `🔍 [ClaudeTool] Context window: ${contextWindow}/${contextWindowLimit} (${((contextWindow / contextWindowLimit) * 100).toFixed(1)}%)`
-        );
+      }
+      // Capture context window directly from SDK if provided
+      if ('context_window' in event && typeof event.context_window === 'number') {
+        contextWindow = event.context_window;
+      }
+      if ('context_window_limit' in event && typeof event.context_window_limit === 'number') {
+        contextWindowLimit = event.context_window_limit;
       }
 
       // Handle partial streaming events (token-level chunks)
@@ -713,6 +672,7 @@ export class ClaudeTool implements ITool {
       }
 
       // Capture metadata from result events (SDK may not type this properly)
+      // Store RAW values from SDK - no calculations, no mutations
       if ('token_usage' in event && event.token_usage) {
         tokenUsage = extractTokenUsage(event.token_usage);
       }
@@ -722,54 +682,13 @@ export class ClaudeTool implements ITool {
       if ('model_usage' in event && event.model_usage) {
         // Save full model usage for later (per-model breakdown)
         modelUsage = event.model_usage;
-
-        // Extract context window data from model usage
-        const modelUsageTyped = event.model_usage as Record<
-          string,
-          {
-            inputTokens: number;
-            outputTokens: number;
-            cacheReadInputTokens?: number;
-            cacheCreationInputTokens?: number;
-            contextWindow: number;
-          }
-        >;
-        // Sum ALL token fields across ALL models
-        // When multiple models are used (e.g., Sonnet + Haiku for tools/thinking),
-        // all their tokens contribute to the total
-        let totalInput = 0;
-        let totalOutput = 0;
-        let totalCacheRead = 0;
-        let totalCacheCreation = 0;
-        let totalUsage = 0;
-        let maxLimit = 0;
-        for (const modelData of Object.values(modelUsageTyped)) {
-          totalInput += modelData.inputTokens || 0;
-          totalOutput += modelData.outputTokens || 0;
-          totalCacheRead += modelData.cacheReadInputTokens || 0;
-          totalCacheCreation += modelData.cacheCreationInputTokens || 0;
-
-          const usage = calculateModelContextWindowUsage(modelData);
-          const limit = modelData.contextWindow || 0;
-          totalUsage += usage; // Sum across all models
-          maxLimit = Math.max(maxLimit, limit); // Track largest context window limit
-        }
-
-        // Override tokenUsage with summed values across all models
-        // (SDK's top-level token_usage only reflects primary model)
-        tokenUsage = {
-          input_tokens: totalInput,
-          output_tokens: totalOutput,
-          cache_read_tokens: totalCacheRead,
-          cache_creation_tokens: totalCacheCreation,
-          total_tokens: totalInput + totalOutput,
-        };
-
-        contextWindow = totalUsage;
-        contextWindowLimit = maxLimit;
-        console.log(
-          `🔍 [ClaudeTool] Context window: ${contextWindow}/${contextWindowLimit} (${((contextWindow / contextWindowLimit) * 100).toFixed(1)}%)`
-        );
+      }
+      // Capture context window directly from SDK if provided
+      if ('context_window' in event && typeof event.context_window === 'number') {
+        contextWindow = event.context_window;
+      }
+      if ('context_window_limit' in event && typeof event.context_window_limit === 'number') {
+        contextWindowLimit = event.context_window_limit;
       }
 
       // Skip partial events in non-streaming mode
