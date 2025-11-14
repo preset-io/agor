@@ -30,12 +30,12 @@ import {
   Button,
   Card,
   Descriptions,
-  Divider,
   Input,
   message,
   Space,
   Spin,
   Tag,
+  Tooltip,
   Typography,
   theme,
 } from 'antd';
@@ -506,6 +506,23 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   return (
     <div style={{ width: '100%', maxHeight: '70vh', overflowY: 'auto' }}>
       <Space direction="vertical" size="large" style={{ width: '100%' }}>
+        <Alert
+          message={
+            <span>
+              Environment templates can be version-controlled using <code>.agor.yml</code>.{' '}
+              <a
+                href="https://agor.live/guide/environment-configuration"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                View documentation
+              </a>
+            </span>
+          }
+          type="info"
+          showIcon
+        />
+
         {/* ========== ENVIRONMENT CONTROLS (Top) ========== */}
         {hasEnvironmentConfig && (
           <Card size="small">
@@ -591,8 +608,6 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
           </Card>
         )}
 
-        <Divider style={{ margin: '8px 0' }} />
-
         {/* ========== REPOSITORY TEMPLATE (Top Level) ========== */}
         <Card
           title={
@@ -608,29 +623,33 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
           extra={
             !isEditingTemplate && (
               <Space size="small">
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<DownloadOutlined />}
-                  onClick={handleImport}
-                  title="Import from .agor.yml in repository root"
-                >
-                  Import
-                </Button>
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<UploadOutlined />}
-                  onClick={handleExport}
-                  disabled={!hasEnvironmentConfig}
+                <Tooltip title="Import environment configuration from .agor.yml in repository root">
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<DownloadOutlined />}
+                    onClick={handleImport}
+                  >
+                    Import
+                  </Button>
+                </Tooltip>
+                <Tooltip
                   title={
                     hasEnvironmentConfig
-                      ? 'Export to .agor.yml in repository root'
+                      ? 'Export current environment configuration to .agor.yml in repository root'
                       : 'No configuration to export'
                   }
                 >
-                  Export
-                </Button>
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<UploadOutlined />}
+                    onClick={handleExport}
+                    disabled={!hasEnvironmentConfig}
+                  >
+                    Export
+                  </Button>
+                </Tooltip>
                 <Button
                   type="text"
                   size="small"
@@ -820,8 +839,6 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
             )}
           </Space>
         </Card>
-
-        <Divider style={{ margin: '8px 0' }} />
 
         {/* ========== WORKTREE INSTANCE (Bottom Level) ========== */}
         <Card
