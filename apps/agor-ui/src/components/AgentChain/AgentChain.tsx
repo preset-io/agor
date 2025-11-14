@@ -38,8 +38,7 @@ import {
 import type { ThoughtChainProps } from '@ant-design/x';
 import { ThoughtChain } from '@ant-design/x';
 import { Popover, Space, Spin, Tag, Tooltip, Typography, theme } from 'antd';
-import type React from 'react';
-import { useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { copyToClipboard } from '../../utils/clipboard';
 import { CollapsibleText } from '../CollapsibleText';
 import { MarkdownRenderer } from '../MarkdownRenderer';
@@ -121,7 +120,7 @@ function getToolIcon(toolName: string): React.ReactElement {
   }
 }
 
-export const AgentChain: React.FC<AgentChainProps> = ({ messages }) => {
+export const AgentChain = React.memo<AgentChainProps>(({ messages }) => {
   const { token } = theme.useToken();
   const [expanded, setExpanded] = useState(false);
 
@@ -602,4 +601,6 @@ export const AgentChain: React.FC<AgentChainProps> = ({ messages }) => {
       )}
     </div>
   );
-};
+});
+
+AgentChain.displayName = 'AgentChain';

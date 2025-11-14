@@ -12,6 +12,7 @@
 import type { AgorClient } from '@agor/core/api';
 import {
   type Message,
+  type MessageID,
   MessageRole,
   type PermissionRequestContent,
   type PermissionScope,
@@ -31,7 +32,7 @@ import {
 import { Bubble } from '@ant-design/x';
 import { Collapse, Flex, Space, Spin, Tag, Typography, theme } from 'antd';
 import React, { useMemo } from 'react';
-import { useStreamingMessages } from '../../hooks/useStreamingMessages';
+import type { StreamingMessage } from '../../hooks/useStreamingMessages';
 import { useTaskEvents } from '../../hooks/useTaskEvents';
 import { useTaskMessages } from '../../hooks/useTaskMessages';
 import { getContextWindowGradient } from '../../utils/contextWindow';
@@ -75,6 +76,7 @@ interface TaskBlockProps {
   isExpanded: boolean;
   onExpandChange: (expanded: boolean) => void;
   sessionId?: SessionID | null;
+  streamingMessagesForTask?: Map<MessageID, StreamingMessage>;
   onPermissionDecision?: (
     sessionId: string,
     requestId: string,
@@ -337,6 +339,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     isExpanded,
     onExpandChange,
     sessionId,
+    streamingMessagesForTask = new Map(),
     onPermissionDecision,
     worktreeName,
     scheduledFromWorktree,
@@ -354,24 +357,22 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       isExpanded
     );
 
-    // Track real-time streaming messages (for running tasks)
-    const streamingMessages = useStreamingMessages(client, sessionId ?? undefined);
-
     // Merge task messages with streaming messages (for running tasks)
+    // Note: streamingMessagesForTask is passed from parent and already filtered for this task
     const messages = useMemo(() => {
-      // Filter streaming messages for this task
-      const streamingForTask = Array.from(streamingMessages.values()).filter(
-        msg => msg.task_id === task.task_id
-      );
+      // Convert streaming messages to array
+      const streamingForTask = Array.from(streamingMessagesForTask.values());
 
       // Filter out DB messages that are already in streaming (avoid duplicates)
-      const dbOnlyMessages = taskMessages.filter(msg => !streamingMessages.has(msg.message_id));
+      const dbOnlyMessages = taskMessages.filter(
+        msg => !streamingMessagesForTask.has(msg.message_id)
+      );
 
       // Combine and sort by index
       return ([...dbOnlyMessages, ...streamingForTask] as Message[]).sort(
         (a, b) => a.index - b.index
       );
-    }, [taskMessages, streamingMessages, task.task_id]);
+    }, [taskMessages, streamingMessagesForTask]);
 
     // Group messages into blocks
     const blocks = useMemo(() => groupMessagesIntoBlocks(messages), [messages]);
