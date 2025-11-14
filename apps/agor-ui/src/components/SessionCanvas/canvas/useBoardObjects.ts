@@ -153,7 +153,7 @@ export const useBoardObjects = ({
             position: { x: objectData.x, y: objectData.y },
             draggable: true,
             selectable: true,
-            zIndex: 600, // Above worktrees (500), below comments (1000)
+            zIndex: 300, // Above zones (100), below worktrees (500)
             className: eraserMode ? 'eraser-mode' : undefined,
             data: {
               objectId,

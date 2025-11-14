@@ -1652,7 +1652,7 @@ const SessionCanvas = ({
           type: 'markdown',
           position,
           draggable: true,
-          zIndex: 600, // Above worktrees (500), below comments (1000)
+          zIndex: 300, // Above zones (100), below worktrees (500)
           data: {
             objectId,
             content: markdownContent,
@@ -2176,25 +2176,24 @@ const SessionCanvas = ({
           onOk={handleCreateMarkdownNote}
           okText={markdownModal.objectId ? 'Save' : 'Create'}
           okButtonProps={{ disabled: !markdownContent.trim() }}
-          width={800}
+          width={1000}
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16, marginBottom: 16 }}>
             {/* Width selector */}
             <div>
               <Typography.Text strong>Width:</Typography.Text>
               <Slider
-                min={300}
-                max={800}
-                step={50}
+                min={200}
+                max={2000}
+                step={100}
                 value={markdownWidth}
                 onChange={setMarkdownWidth}
                 marks={{
-                  300: '300px',
-                  400: '400px',
+                  200: '200px',
                   500: '500px',
-                  600: '600px',
-                  700: '700px',
-                  800: '800px',
+                  1000: '1000px',
+                  1500: '1500px',
+                  2000: '2000px',
                 }}
                 style={{ marginTop: 8 }}
               />
