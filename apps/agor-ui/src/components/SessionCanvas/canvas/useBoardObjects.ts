@@ -17,6 +17,7 @@ interface UseBoardObjectsProps {
   deletedObjectsRef: React.MutableRefObject<Set<string>>;
   eraserMode?: boolean;
   selectedSessionId?: string | null;
+  onEditMarkdown?: (objectId: string, content: string, width: number) => void;
 }
 
 export const useBoardObjects = ({
@@ -29,6 +30,7 @@ export const useBoardObjects = ({
   deletedObjectsRef,
   eraserMode = false,
   selectedSessionId,
+  onEditMarkdown,
 }: UseBoardObjectsProps) => {
   // Use ref to avoid recreating callbacks when board changes
   const boardRef = useRef(board);
@@ -143,6 +145,26 @@ export const useBoardObjects = ({
         return hasValidPosition;
       })
       .map(([objectId, objectData]) => {
+        // Markdown note node
+        if (objectData.type === 'markdown') {
+          return {
+            id: objectId,
+            type: 'markdown',
+            position: { x: objectData.x, y: objectData.y },
+            draggable: true,
+            selectable: true,
+            zIndex: 600, // Above worktrees (500), below comments (1000)
+            className: eraserMode ? 'eraser-mode' : undefined,
+            data: {
+              objectId,
+              content: objectData.content,
+              width: objectData.width,
+              onUpdate: handleUpdateObject,
+              onEdit: onEditMarkdown,
+            },
+          };
+        }
+
         // Calculate worktree count for this zone (worktree-centric model)
         let sessionCount = 0;
         if (objectData.type === 'zone') {
@@ -191,7 +213,15 @@ export const useBoardObjects = ({
           },
         };
       });
-  }, [board?.objects, boardObjects, sessions, handleUpdateObject, deleteZone, eraserMode]);
+  }, [
+    board?.objects,
+    boardObjects,
+    sessions,
+    handleUpdateObject,
+    deleteZone,
+    eraserMode,
+    onEditMarkdown,
+  ]);
 
   /**
    * Add a zone node at the specified position

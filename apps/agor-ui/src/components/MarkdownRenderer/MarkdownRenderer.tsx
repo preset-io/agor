@@ -11,10 +11,9 @@
  * Typography wrapper provides consistent Ant Design styling.
  */
 
-import { Typography } from 'antd';
+import { Typography, theme } from 'antd';
 import type React from 'react';
 import { Streamdown } from 'streamdown';
-import { useTheme } from '../../contexts/ThemeContext';
 
 interface MarkdownRendererProps {
   /**
@@ -42,10 +41,19 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
   style,
   isStreaming = false,
 }) => {
-  const { themeMode } = useTheme();
+  const { token } = theme.useToken();
 
   // Handle array of strings: filter empty, join with double newlines
   const text = Array.isArray(content) ? content.filter(t => t.trim()).join('\n\n') : content;
+
+  // Detect dark mode from Ant Design token system
+  const isDarkMode =
+    token.colorBgLayout?.startsWith?.('#0') || token.colorBgLayout?.startsWith?.('rgb(0');
+
+  // Configure Mermaid theme based on current theme mode
+  const mermaidConfig = {
+    theme: isDarkMode ? 'dark' : 'default',
+  };
 
   // Use default dual theme [light, dark] - Streamdown handles CSS-based switching
   // Note: This may render both themes in the DOM, controlled by CSS media queries
@@ -58,6 +66,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
         className={inline ? 'inline-markdown' : 'markdown-content'}
         isAnimating={isStreaming} // Disable buttons during streaming
         controls={true} // Always show controls (copy/download buttons)
+        mermaidConfig={mermaidConfig} // Set Mermaid theme based on current theme mode
         // Use default ['github-light', 'github-dark'] for automatic theme switching
       >
         {text}

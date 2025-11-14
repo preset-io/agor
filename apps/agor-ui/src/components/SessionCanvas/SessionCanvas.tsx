@@ -1,7 +1,21 @@
 import type { AgorClient } from '@agor/core/api';
-import type { BoardID, MCPServer, User, UserID, WorktreeID, ZoneTrigger } from '@agor/core/types';
-import { BorderOutlined, CommentOutlined, DeleteOutlined, SelectOutlined } from '@ant-design/icons';
-import { Button, Input, Modal, Popover, Typography, theme } from 'antd';
+import type {
+  BoardID,
+  BoardObject,
+  MCPServer,
+  User,
+  UserID,
+  WorktreeID,
+  ZoneTrigger,
+} from '@agor/core/types';
+import {
+  BorderOutlined,
+  CommentOutlined,
+  DeleteOutlined,
+  FileMarkdownOutlined,
+  SelectOutlined,
+} from '@ant-design/icons';
+import { Button, Input, Modal, Popover, Slider, Typography, theme } from 'antd';
 import Handlebars from 'handlebars';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -23,7 +37,6 @@ import type {
   Board,
   BoardComment,
   BoardCommentCreate,
-  BoardObject,
   Repo,
   Session,
   Task,
@@ -32,10 +45,12 @@ import type {
 import { useCursorTracking } from '../../hooks/useCursorTracking';
 import { usePresence } from '../../hooks/usePresence';
 import type { AgenticToolOption } from '../../types';
+import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
 import SessionCard from '../SessionCard';
 import WorktreeCard from '../WorktreeCard';
 import { CommentNode, ZoneNode } from './canvas/BoardObjectNodes';
 import { CursorNode } from './canvas/CursorNode';
+import { MarkdownNode } from './canvas/MarkdownNode';
 import { useBoardObjects } from './canvas/useBoardObjects';
 import {
   findIntersectingObjects,
@@ -211,6 +226,7 @@ const nodeTypes = {
   zone: ZoneNode,
   cursor: CursorNode,
   comment: CommentNode,
+  markdown: MarkdownNode,
 };
 
 const SessionCanvas = ({
@@ -250,7 +266,9 @@ const SessionCanvas = ({
   const { token } = theme.useToken();
 
   // Tool state for canvas annotations
-  const [activeTool, setActiveTool] = useState<'select' | 'zone' | 'comment' | 'eraser'>('select');
+  const [activeTool, setActiveTool] = useState<
+    'select' | 'zone' | 'comment' | 'eraser' | 'markdown'
+  >('select');
 
   // Zone drawing state (drag-to-draw)
   const [drawingZone, setDrawingZone] = useState<{
@@ -264,6 +282,14 @@ const SessionCanvas = ({
     screenPosition: { x: number; y: number }; // Screen coordinates for popover
   } | null>(null);
   const [commentInput, setCommentInput] = useState('');
+
+  // Markdown note placement state (click-to-place)
+  const [markdownModal, setMarkdownModal] = useState<{
+    position: { x: number; y: number }; // React Flow coordinates
+    objectId?: string; // For editing existing note
+  } | null>(null);
+  const [markdownContent, setMarkdownContent] = useState('');
+  const [markdownWidth, setMarkdownWidth] = useState(500); // Default width
 
   // Trigger confirmation modal state
   const [triggerModal, setTriggerModal] = useState<{
@@ -337,6 +363,20 @@ const SessionCanvas = ({
   const resizeTimerRef = useRef<NodeJS.Timeout | null>(null);
   const pendingResizeUpdatesRef = useRef<Record<string, { width: number; height: number }>>({});
 
+  // Handler to open edit modal for existing markdown note
+  const handleEditMarkdownNote = useCallback((objectId: string, content: string, width: number) => {
+    const node = reactFlowInstanceRef.current?.getNode(objectId);
+    if (!node) return;
+
+    setMarkdownContent(content);
+    setMarkdownWidth(width);
+    setMarkdownModal({
+      position: node.position,
+      objectId,
+    });
+    setActiveTool('markdown');
+  }, []);
+
   // Board objects hook
   const { getBoardObjectNodes, batchUpdateObjectPositions, deleteObject } = useBoardObjects({
     board,
@@ -348,6 +388,7 @@ const SessionCanvas = ({
     deletedObjectsRef,
     eraserMode: activeTool === 'eraser',
     selectedSessionId,
+    onEditMarkdown: handleEditMarkdownNote,
   });
 
   // Extract zone labels - memoized to only change when labels actually change
@@ -747,6 +788,7 @@ const SessionCanvas = ({
   const partitionNodesByType = useCallback((nodes: Node[]) => {
     return {
       zones: nodes.filter(n => n.type === 'zone'),
+      markdown: nodes.filter(n => n.type === 'markdown'),
       worktrees: nodes.filter(n => n.type === 'worktreeNode'),
       comments: nodes.filter(n => n.type === 'comment'),
       cursors: nodes.filter(n => n.type === 'cursor'),
@@ -754,15 +796,15 @@ const SessionCanvas = ({
   }, []);
 
   // Helper: Apply consistent z-ordering to nodes
-  // Z-order: zones < worktrees < comments < cursors (cursors always on top)
+  // Z-order: zones < worktrees < markdown < comments < cursors (cursors always on top)
   const applyZOrder = useCallback(
-    (zones: Node[], worktrees: Node[], comments: Node[], cursors: Node[]) => {
-      return [...zones, ...worktrees, ...comments, ...cursors];
+    (zones: Node[], markdown: Node[], worktrees: Node[], comments: Node[], cursors: Node[]) => {
+      return [...zones, ...worktrees, ...markdown, ...comments, ...cursors];
     },
     []
   );
 
-  // Sync ZONE nodes separately
+  // Sync ZONE and MARKDOWN nodes separately
   useEffect(() => {
     if (isDraggingRef.current) return;
 
@@ -771,15 +813,22 @@ const SessionCanvas = ({
     setNodes(currentNodes => {
       const { worktrees, comments, cursors } = partitionNodesByType(currentNodes);
 
-      // Update zones with preserved selection state
+      // Separate zones and markdown from boardObjectNodes
       const zones = boardObjectNodes
-        .filter(z => !deletedObjectsRef.current.has(z.id))
+        .filter(n => n.type === 'zone' && !deletedObjectsRef.current.has(n.id))
         .map(newZone => {
           const existingZone = currentNodes.find(n => n.id === newZone.id);
           return { ...newZone, selected: existingZone?.selected };
         });
 
-      return applyZOrder(zones, worktrees, comments, cursors);
+      const markdown = boardObjectNodes
+        .filter(n => n.type === 'markdown' && !deletedObjectsRef.current.has(n.id))
+        .map(newMarkdown => {
+          const existingMarkdown = currentNodes.find(n => n.id === newMarkdown.id);
+          return { ...newMarkdown, selected: existingMarkdown?.selected };
+        });
+
+      return applyZOrder(zones, markdown, worktrees, comments, cursors);
     });
   }, [getBoardObjectNodes, setNodes, applyZOrder, partitionNodesByType]);
 
@@ -788,8 +837,8 @@ const SessionCanvas = ({
     if (isDraggingRef.current) return;
 
     setNodes(currentNodes => {
-      const { zones, worktrees, comments } = partitionNodesByType(currentNodes);
-      return applyZOrder(zones, worktrees, comments, cursorNodes);
+      const { zones, markdown, worktrees, comments } = partitionNodesByType(currentNodes);
+      return applyZOrder(zones, markdown, worktrees, comments, cursorNodes);
     });
   }, [cursorNodes, setNodes, applyZOrder, partitionNodesByType]);
 
@@ -798,7 +847,7 @@ const SessionCanvas = ({
     if (isDraggingRef.current) return;
 
     setNodes(currentNodes => {
-      const { zones, worktrees, cursors } = partitionNodesByType(currentNodes);
+      const { zones, markdown, worktrees, cursors } = partitionNodesByType(currentNodes);
 
       // Apply local position overrides to comment nodes (to prevent flicker during drag)
       const commentsWithLocalPositions = commentNodes.map(newNode => {
@@ -842,7 +891,7 @@ const SessionCanvas = ({
         return newNode;
       });
 
-      return applyZOrder(zones, worktrees, commentsWithLocalPositions, cursors);
+      return applyZOrder(zones, markdown, worktrees, commentsWithLocalPositions, cursors);
     });
   }, [commentNodes, setNodes, applyZOrder, partitionNodesByType]);
 
@@ -978,13 +1027,14 @@ const SessionCanvas = ({
         pendingLayoutUpdatesRef.current = {};
 
         try {
-          // Separate updates for worktrees vs zones vs comments
+          // Separate updates for worktrees vs zones vs markdown vs comments
           const worktreeUpdates: Array<{
             worktree_id: string;
             position: { x: number; y: number };
             zone_id?: string;
           }> = [];
           const zoneUpdates: Record<string, { x: number; y: number }> = {};
+          const markdownUpdates: Record<string, { x: number; y: number }> = {};
           const commentUpdates: Array<{
             comment_id: string;
             position: { x: number; y: number };
@@ -1002,6 +1052,9 @@ const SessionCanvas = ({
             if (draggedNode?.type === 'zone') {
               // Zone moved - update position via batchUpdateObjectPositions
               zoneUpdates[nodeId] = position;
+            } else if (draggedNode?.type === 'markdown') {
+              // Markdown note moved - update position via batchUpdateObjectPositions
+              markdownUpdates[nodeId] = position;
             } else if (draggedNode?.type === 'comment') {
               // Comment pin moved - extract comment_id from node id
               const commentId = nodeId.replace('comment-', '');
@@ -1205,6 +1258,11 @@ const SessionCanvas = ({
           // Update zone positions
           if (Object.keys(zoneUpdates).length > 0) {
             await batchUpdateObjectPositions(zoneUpdates);
+          }
+
+          // Update markdown positions
+          if (Object.keys(markdownUpdates).length > 0) {
+            await batchUpdateObjectPositions(markdownUpdates);
           }
 
           // Update comment positions
@@ -1475,6 +1533,16 @@ const SessionCanvas = ({
           screenPosition: { x: event.clientX, y: event.clientY }, // Screen coords for popover
         });
       }
+
+      // Markdown tool: click-to-place
+      if (activeTool === 'markdown' && reactFlowInstanceRef.current) {
+        const position = reactFlowInstanceRef.current.screenToFlowPosition({
+          x: event.clientX,
+          y: event.clientY,
+        });
+
+        setMarkdownModal({ position });
+      }
     },
     [activeTool]
   );
@@ -1549,12 +1617,110 @@ const SessionCanvas = ({
     }
   }, [commentPlacement, board, client, currentUserId, commentInput]);
 
+  // Handler to create/update markdown note
+  const handleCreateMarkdownNote = useCallback(async () => {
+    if (!markdownModal || !board || !client || !markdownContent.trim()) {
+      return;
+    }
+
+    const objectId = markdownModal.objectId || `markdown-${Date.now()}`;
+    const position = markdownModal.position;
+
+    // Optimistic update
+    setNodes(nodes => {
+      // If editing, update existing node
+      if (markdownModal.objectId) {
+        return nodes.map(n =>
+          n.id === objectId
+            ? {
+                ...n,
+                data: {
+                  ...n.data,
+                  content: markdownContent,
+                  width: markdownWidth,
+                },
+              }
+            : n
+        );
+      }
+
+      // If creating new, add node
+      return [
+        ...nodes,
+        {
+          id: objectId,
+          type: 'markdown',
+          position,
+          draggable: true,
+          zIndex: 600, // Above worktrees (500), below comments (1000)
+          data: {
+            objectId,
+            content: markdownContent,
+            width: markdownWidth,
+            onUpdate: (id: string, data: BoardObject) => {
+              if (board && client) {
+                client
+                  .service('boards')
+                  .patch(board.board_id, {
+                    _action: 'upsertObject',
+                    objectId: id,
+                    objectData: data,
+                    // biome-ignore lint/suspicious/noExplicitAny: Board patch with custom _action field
+                  } as any)
+                  .catch(console.error);
+              }
+            },
+            onEdit: handleEditMarkdownNote,
+          },
+        },
+      ];
+    });
+
+    // Persist to backend
+    try {
+      await client.service('boards').patch(board.board_id, {
+        _action: 'upsertObject',
+        objectId,
+        objectData: {
+          type: 'markdown',
+          x: position.x,
+          y: position.y,
+          width: markdownWidth,
+          content: markdownContent,
+        },
+        // biome-ignore lint/suspicious/noExplicitAny: Board patch with custom _action field
+      } as any);
+
+      console.log(`✓ ${markdownModal.objectId ? 'Updated' : 'Created'} markdown note ${objectId}`);
+    } catch (error) {
+      console.error('Failed to save markdown note:', error);
+      // Rollback optimistic update
+      if (!markdownModal.objectId) {
+        setNodes(nodes => nodes.filter(n => n.id !== objectId));
+      }
+    }
+
+    // Reset state
+    setMarkdownModal(null);
+    setMarkdownContent('');
+    setMarkdownWidth(500);
+    setActiveTool('select');
+  }, [
+    markdownModal,
+    board,
+    client,
+    markdownContent,
+    markdownWidth,
+    setNodes,
+    handleEditMarkdownNote,
+  ]);
+
   // Node click handler for eraser mode and comment placement
   const handleNodeClick = useCallback(
     (event: React.MouseEvent, node: Node) => {
       if (activeTool === 'eraser') {
-        // Only delete board objects (zones), not worktrees or cursors
-        if (node.type === 'zone') {
+        // Only delete board objects (zones, markdown), not worktrees or cursors
+        if (node.type === 'zone' || node.type === 'markdown') {
           deleteObject(node.id);
         }
         return;
@@ -1704,6 +1870,18 @@ const SessionCanvas = ({
             <ControlButton
               onClick={e => {
                 e.stopPropagation();
+                setActiveTool('markdown');
+              }}
+              title="Add Markdown Note"
+              style={{
+                borderLeft: activeTool === 'markdown' ? '3px solid #1677ff' : 'none',
+              }}
+            >
+              <FileMarkdownOutlined style={{ fontSize: '16px' }} />
+            </ControlButton>
+            <ControlButton
+              onClick={e => {
+                e.stopPropagation();
                 setActiveTool(activeTool === 'eraser' ? 'select' : 'eraser');
               }}
               title="Eraser - Click to toggle"
@@ -1723,6 +1901,9 @@ const SessionCanvas = ({
 
               // Handle comment nodes - 100% alpha for top hierarchy
               if (node.type === 'comment') return token.colorText;
+
+              // Handle markdown notes - 70% alpha for middle layer
+              if (node.type === 'markdown') return `${token.colorText}B3`;
 
               // Handle board objects (zones) - 40% alpha for middle-low layer
               if (node.type === 'zone') return `${token.colorText}66`;
@@ -1980,6 +2161,85 @@ const SessionCanvas = ({
             </Modal>
           );
         })()}
+
+      {/* Markdown note creation/edit modal */}
+      {markdownModal && (
+        <Modal
+          open={true}
+          title={markdownModal.objectId ? 'Edit Markdown Note' : 'Add Markdown Note'}
+          onCancel={() => {
+            setMarkdownModal(null);
+            setMarkdownContent('');
+            setMarkdownWidth(500);
+            setActiveTool('select');
+          }}
+          onOk={handleCreateMarkdownNote}
+          okText={markdownModal.objectId ? 'Save' : 'Create'}
+          okButtonProps={{ disabled: !markdownContent.trim() }}
+          width={800}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16, marginBottom: 16 }}>
+            {/* Width selector */}
+            <div>
+              <Typography.Text strong>Width:</Typography.Text>
+              <Slider
+                min={300}
+                max={800}
+                step={50}
+                value={markdownWidth}
+                onChange={setMarkdownWidth}
+                marks={{
+                  300: '300px',
+                  400: '400px',
+                  500: '500px',
+                  600: '600px',
+                  700: '700px',
+                  800: '800px',
+                }}
+                style={{ marginTop: 8 }}
+              />
+            </div>
+          </div>
+
+          {/* Side-by-side layout for editor and preview */}
+          <div style={{ display: 'flex', gap: 16 }}>
+            {/* Left: Markdown textarea */}
+            <div style={{ flex: 1 }}>
+              <Typography.Text strong>Content (Markdown supported):</Typography.Text>
+              <Input.TextArea
+                value={markdownContent}
+                onChange={e => setMarkdownContent(e.target.value)}
+                placeholder={`# Title\n\n- Bullet point\n- Another point\n\n**Bold** and *italic*\n\n\`\`\`javascript\nconst code = "example";\n\`\`\``}
+                autoFocus
+                rows={20}
+                style={{ fontFamily: 'monospace', marginTop: 8, height: '500px' }}
+              />
+            </div>
+
+            {/* Right: Preview */}
+            <div style={{ flex: 1 }}>
+              <Typography.Text strong>Preview:</Typography.Text>
+              <div
+                style={{
+                  marginTop: 8,
+                  padding: 12,
+                  border: `1px solid ${token.colorBorder}`,
+                  borderRadius: 4,
+                  height: '500px',
+                  overflow: 'auto',
+                  background: token.colorBgContainer,
+                }}
+              >
+                {markdownContent.trim() ? (
+                  <MarkdownRenderer content={markdownContent} />
+                ) : (
+                  <Typography.Text type="secondary">Preview will appear here...</Typography.Text>
+                )}
+              </div>
+            </div>
+          </div>
+        </Modal>
+      )}
 
       {/* Worktree Zone Trigger Modal */}
       {worktreeTriggerModal && (

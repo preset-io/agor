@@ -3,7 +3,7 @@ import type { BoardID, WorktreeID } from './id';
 /**
  * Board object types for canvas annotations
  */
-export type BoardObjectType = 'text' | 'zone';
+export type BoardObjectType = 'text' | 'zone' | 'markdown';
 
 /**
  * Positioned worktree card on a board
@@ -89,9 +89,24 @@ export interface ZoneBoardObject {
 }
 
 /**
+ * Markdown note annotation object
+ * Rich text notes with markdown rendering, user-selected width, auto-expanding height
+ */
+export interface MarkdownBoardObject {
+  type: 'markdown';
+  x: number;
+  y: number;
+  width: number; // User-selected width (300-800px)
+  content: string; // Markdown text
+  // Optional future enhancements:
+  fontSize?: number; // Font size multiplier (default: 1.0)
+  backgroundColor?: string; // Background color with alpha (default: card background)
+}
+
+/**
  * Union type for all board objects
  */
-export type BoardObject = TextBoardObject | ZoneBoardObject;
+export type BoardObject = TextBoardObject | ZoneBoardObject | MarkdownBoardObject;
 
 export interface Board {
   /** Unique board identifier (UUIDv7) */
