@@ -52,7 +52,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
 
   // Configure Mermaid theme based on current theme mode
   const mermaidConfig = {
-    theme: isDarkMode ? 'dark' : 'default',
+    theme: (isDarkMode ? 'dark' : 'default') as 'dark' | 'default',
   };
 
   // Use default dual theme [light, dark] - Streamdown handles CSS-based switching
