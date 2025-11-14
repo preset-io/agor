@@ -477,11 +477,27 @@ export const TaskBlock = React.memo<TaskBlockProps>(
             )}
             {task.model && task.model !== sessionModel && <ModelPill model={task.model} />}
             {task.git_state.sha_at_start && task.git_state.sha_at_start !== 'unknown' && (
-              <GitStatePill
-                branch={task.git_state.ref_at_start}
-                sha={task.git_state.sha_at_start}
-                style={{ fontSize: 11 }}
-              />
+              <Flex gap={token.sizeUnit / 2} align="center">
+                <GitStatePill
+                  branch={task.git_state.ref_at_start}
+                  sha={task.git_state.sha_at_start}
+                  style={{ fontSize: 11 }}
+                />
+                {task.git_state.sha_at_end &&
+                  task.git_state.sha_at_end !== 'unknown' &&
+                  task.git_state.sha_at_end !== task.git_state.sha_at_start && (
+                    <>
+                      <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                        →
+                      </Typography.Text>
+                      <GitStatePill
+                        sha={task.git_state.sha_at_end}
+                        showDirtyIndicator={true}
+                        style={{ fontSize: 11 }}
+                      />
+                    </>
+                  )}
+              </Flex>
             )}
             {task.report && (
               <Tag icon={<FileTextOutlined />} color="green" style={{ fontSize: 11 }}>

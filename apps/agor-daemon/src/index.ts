@@ -2042,6 +2042,20 @@ async function main() {
                   // Continue with toolUseCount = 0
                 }
 
+                // Capture git state at task end for transition tracking
+                let gitStateAtEnd = 'unknown';
+                if (session.worktree_id) {
+                  try {
+                    const worktree = await worktreesService.get(session.worktree_id, params);
+                    gitStateAtEnd = await getGitState(worktree.path);
+                  } catch (error) {
+                    console.warn(
+                      `Failed to get end git state for worktree ${session.worktree_id}:`,
+                      error
+                    );
+                  }
+                }
+
                 const updated = await safePatch(
                   tasksService,
                   task.task_id,
@@ -2067,6 +2081,12 @@ async function main() {
 
                     // Store raw SDK response - single source of truth
                     raw_sdk_response: rawSdkResponse,
+
+                    // Git state transition tracking
+                    git_state: {
+                      ...task.git_state,
+                      sha_at_end: gitStateAtEnd,
+                    },
                   },
                   'Task'
                 );

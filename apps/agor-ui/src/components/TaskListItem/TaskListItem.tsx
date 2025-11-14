@@ -25,9 +25,15 @@ const TaskListItem = ({ task, onClick, compact = false }: TaskListItemProps) => 
   const messageCount = task.message_range.end_index - task.message_range.start_index + 1;
   const hasReport = !!task.report;
 
-  // Check if git state is dirty
-  const isDirty = task.git_state.sha_at_end?.endsWith('-dirty');
-  const cleanSha = task.git_state.sha_at_end?.replace('-dirty', '');
+  // Git state transition tracking
+  const shaAtStart = task.git_state.sha_at_start;
+  const shaAtEnd = task.git_state.sha_at_end;
+  const hasTransition = shaAtEnd && shaAtEnd !== 'unknown' && shaAtEnd !== shaAtStart;
+
+  // Check if end state is dirty (or start state if no end)
+  const displaySha = shaAtEnd && shaAtEnd !== 'unknown' ? shaAtEnd : shaAtStart;
+  const isDirty = displaySha?.endsWith('-dirty');
+  const cleanSha = displaySha?.replace('-dirty', '');
 
   // Truncate description if too long
   const description = task.description || task.full_prompt || 'Untitled task';
@@ -73,11 +79,20 @@ const TaskListItem = ({ task, onClick, compact = false }: TaskListItemProps) => 
               </Tag>
             )}
             {!compact && cleanSha && (
-              <Tooltip title={isDirty ? 'Uncommitted changes' : 'Clean git state'}>
+              <Tooltip
+                title={
+                  hasTransition
+                    ? 'Git state changed during task'
+                    : isDirty
+                      ? 'Uncommitted changes'
+                      : 'Clean git state'
+                }
+              >
                 <span>
                   <Tag icon={<GithubOutlined />} color={isDirty ? 'orange' : 'purple'}>
                     <Space size={4}>
                       <Typography.Text style={{ fontSize: 11, fontFamily: 'monospace' }}>
+                        {hasTransition && '→ '}
                         {cleanSha.substring(0, 7)}
                       </Typography.Text>
                       {isDirty && <EditOutlined style={{ fontSize: 10 }} />}
