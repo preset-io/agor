@@ -38,8 +38,11 @@ export const ExampleCustomRenderer: React.FC<ToolRendererProps> = ({
 
     if (Array.isArray(result.content)) {
       return result.content
-        .filter((block: any): block is { type: 'text'; text: string } => block.type === 'text')
-        .map((block) => block.text)
+        .filter(
+          (block: unknown): block is { type: 'text'; text: string } =>
+            typeof block === 'object' && block !== null && 'type' in block && block.type === 'text'
+        )
+        .map(block => block.text)
         .join('\n\n');
     }
 
