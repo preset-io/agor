@@ -28,7 +28,8 @@ import { DEFAULT_GEMINI_MODEL, getGeminiContextWindowLimit } from './models';
 export class GeminiNormalizer implements INormalizer<GeminiSdkResponse> {
   normalize(event: GeminiSdkResponse): NormalizedSdkData {
     // Extract usageMetadata from ServerGeminiFinishedEvent
-    const usageMetadata = event.value.usageMetadata;
+    // Note: event.value can be undefined in some cases (e.g., errors, incomplete responses)
+    const usageMetadata = event.value?.usageMetadata;
     const inputTokens = usageMetadata?.promptTokenCount ?? 0;
     const outputTokens = usageMetadata?.candidatesTokenCount ?? 0;
     const cacheReadTokens = usageMetadata?.cachedContentTokenCount ?? 0;
