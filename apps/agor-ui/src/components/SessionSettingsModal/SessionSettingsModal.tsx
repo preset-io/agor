@@ -4,6 +4,7 @@ import { Collapse, Form, Modal, Typography } from 'antd';
 import React from 'react';
 import { AdvancedSettingsForm } from '../AdvancedSettingsForm';
 import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
+import { CallbackConfigForm } from '../CallbackConfigForm';
 import { SessionMetadataForm } from '../SessionMetadataForm';
 
 export interface SessionSettingsModalProps {
@@ -46,6 +47,11 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
     codexApprovalPolicy: CodexApprovalPolicy;
     codexNetworkAccess: boolean;
     custom_context: string;
+    callbackConfig: {
+      enabled: boolean;
+      includeLastMessage: boolean;
+      template?: string;
+    };
   }>({
     title: '',
     mcpServerIds: [],
@@ -55,6 +61,11 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
     codexApprovalPolicy: 'on-request',
     codexNetworkAccess: false,
     custom_context: '',
+    callbackConfig: {
+      enabled: true,
+      includeLastMessage: true,
+      template: undefined,
+    },
   });
 
   // Reset form values only when modal opens (not on every prop change)
@@ -74,6 +85,11 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
         custom_context: session.custom_context
           ? JSON.stringify(session.custom_context, null, 2)
           : '',
+        callbackConfig: {
+          enabled: session.callback_config?.enabled ?? true,
+          includeLastMessage: session.callback_config?.include_last_message ?? true,
+          template: session.callback_config?.template,
+        },
       };
 
       setInitialValues(values);
@@ -89,6 +105,9 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
     session.permission_config?.codex?.approvalPolicy,
     session.permission_config?.codex?.networkAccess,
     session.custom_context,
+    session.callback_config?.enabled,
+    session.callback_config?.include_last_message,
+    session.callback_config?.template,
     sessionMcpServerIds,
     form,
   ]);
@@ -157,6 +176,15 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
         updates.custom_context = undefined;
       }
 
+      // Update callback config
+      if (values.callbackConfig) {
+        updates.callback_config = {
+          enabled: values.callbackConfig.enabled ?? true,
+          include_last_message: values.callbackConfig.includeLastMessage ?? true,
+          template: values.callbackConfig.template || undefined,
+        };
+      }
+
       // Apply session updates if any
       if (Object.keys(updates).length > 0 && onUpdate) {
         onUpdate(session.session_id, updates);
@@ -212,6 +240,11 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
                   showHelpText={true}
                 />
               ),
+            },
+            {
+              key: 'callback-config',
+              label: <Typography.Text strong>Callback Configuration</Typography.Text>,
+              children: <CallbackConfigForm showHelpText={true} />,
             },
             {
               key: 'advanced',
