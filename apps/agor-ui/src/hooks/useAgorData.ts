@@ -164,6 +164,13 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
     // Subscribe to session events
     const sessionsService = client.service('sessions');
     const handleSessionCreated = (session: Session) => {
+      console.log('🔔 [useAgorData] SESSION CREATED EVENT:', {
+        session_id: session.session_id.substring(0, 8),
+        status: session.status,
+        ready_for_prompt: session.ready_for_prompt,
+        parent_id: session.genealogy?.parent_session_id?.substring(0, 8),
+        timestamp: new Date().toISOString(),
+      });
       setSessions(prev => [...prev, session]);
     };
     const handleSessionPatched = (session: Session) => {
@@ -213,27 +220,6 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
           t.task_id === task.task_id ? task : t
         ),
       }));
-
-      // POLLING FALLBACK: When task completes, poll for session update
-      // This catches missed WebSocket events due to disconnections during task completion
-      // The session status update might be lost if WebSocket disconnects between task
-      // completion and session idle events (race condition with auth reconnection)
-      if (task.status === 'completed' || task.status === 'failed') {
-        setTimeout(async () => {
-          try {
-            const session = await client.service('sessions').get(task.session_id);
-            console.log('🔄 [useAgorData] Polling session after task completion (fallback):', {
-              session_id: session.session_id.substring(0, 8),
-              status: session.status,
-              ready_for_prompt: session.ready_for_prompt,
-              message_count: session.message_count,
-            });
-            setSessions(prev => prev.map(s => (s.session_id === session.session_id ? session : s)));
-          } catch (err) {
-            console.error('❌ [useAgorData] Failed to poll session after task completion:', err);
-          }
-        }, 200); // 200ms delay allows WebSocket event to arrive first if connection is stable
-      }
     };
     const handleTaskRemoved = (task: Task) => {
       setTasks(prev => ({
