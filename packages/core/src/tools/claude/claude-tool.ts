@@ -194,6 +194,7 @@ export class ClaudeTool implements ITool {
     contextWindowLimit?: number;
     model?: string;
     modelUsage?: unknown;
+    rawSdkResponse?: import('@anthropic-ai/claude-agent-sdk/sdk').SDKResultMessage;
   }> {
     if (!this.promptService || !this.messagesRepo) {
       throw new Error('ClaudeTool not initialized with repositories for live execution');
@@ -254,6 +255,7 @@ export class ClaudeTool implements ITool {
     let contextWindow: number | undefined;
     let contextWindowLimit: number | undefined;
     let modelUsage: unknown | undefined;
+    let rawSdkResponse: import('@anthropic-ai/claude-agent-sdk/sdk').SDKResultMessage | undefined;
 
     for await (const event of this.promptService.promptSessionStreaming(
       sessionId,
@@ -390,6 +392,11 @@ export class ClaudeTool implements ITool {
             }
           });
         }
+      }
+
+      // Capture raw SDK response for token accounting
+      if (event.type === 'result') {
+        rawSdkResponse = event.raw_sdk_message;
       }
 
       // Capture metadata from result events (SDK may not type this properly)
@@ -549,6 +556,7 @@ export class ClaudeTool implements ITool {
       contextWindowLimit,
       model: resolvedModel,
       modelUsage,
+      rawSdkResponse,
     };
   }
 
@@ -609,6 +617,7 @@ export class ClaudeTool implements ITool {
     contextWindowLimit?: number;
     model?: string;
     modelUsage?: unknown;
+    rawSdkResponse?: import('@anthropic-ai/claude-agent-sdk/sdk').SDKResultMessage;
   }> {
     if (!this.promptService || !this.messagesRepo) {
       throw new Error('ClaudeTool not initialized with repositories for live execution');
@@ -640,6 +649,7 @@ export class ClaudeTool implements ITool {
     let contextWindow: number | undefined;
     let contextWindowLimit: number | undefined;
     let modelUsage: unknown | undefined;
+    let rawSdkResponse: import('@anthropic-ai/claude-agent-sdk/sdk').SDKResultMessage | undefined;
 
     for await (const event of this.promptService.promptSessionStreaming(
       sessionId,
@@ -656,6 +666,11 @@ export class ClaudeTool implements ITool {
       if (!capturedAgentSessionId && 'agentSessionId' in event && event.agentSessionId) {
         capturedAgentSessionId = event.agentSessionId;
         await this.captureAgentSessionId(sessionId, capturedAgentSessionId);
+      }
+
+      // Capture raw SDK response for token accounting
+      if (event.type === 'result') {
+        rawSdkResponse = event.raw_sdk_message;
       }
 
       // Capture metadata from result events (SDK may not type this properly)
@@ -741,6 +756,7 @@ export class ClaudeTool implements ITool {
       contextWindowLimit,
       model: resolvedModel,
       modelUsage,
+      rawSdkResponse,
     };
   }
 
