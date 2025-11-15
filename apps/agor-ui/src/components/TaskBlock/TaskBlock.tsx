@@ -375,7 +375,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       return ([...dbOnlyMessages, ...streamingForTask] as Message[]).sort(
         (a, b) => a.index - b.index
       );
-    }, [taskMessages, streamingForTask, streamingMessages, task.task_id]);
+    }, [taskMessages, streamingForTask, streamingMessages]);
 
     // Group messages into blocks
     const blocks = useMemo(() => groupMessagesIntoBlocks(messages), [messages]);
