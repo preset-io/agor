@@ -1853,7 +1853,9 @@ async function main() {
       console.log(
         `🔄 [Prompt] Setting session ${id.substring(0, 8)} to RUNNING (was: ${session.status})`
       );
-      await sessionsService.patch(
+      // IMPORTANT: Use app.service() instead of sessionsService to go through
+      // FeathersJS service layer and trigger app.publish() for WebSocket events
+      await app.service('sessions').patch(
         id,
         {
           tasks: [...session.tasks, task.task_id],
