@@ -25,14 +25,12 @@ export function useFaviconStatus(
   useEffect(() => {
     if (!currentBoardId) {
       // No board selected - restore default favicon
-      createFaviconWithDot(baseFaviconUrl, false, false, token.colorSuccessText).then(
-        (dataUrl) => {
-          const link = document.querySelector("link[rel~='icon']") as HTMLLinkElement;
-          if (link) {
-            link.href = dataUrl;
-          }
+      createFaviconWithDot(baseFaviconUrl, false, false, token.colorSuccessText).then((dataUrl) => {
+        const link = document.querySelector("link[rel~='icon']") as HTMLLinkElement;
+        if (link) {
+          link.href = dataUrl;
         }
-      );
+      });
       return;
     }
 
