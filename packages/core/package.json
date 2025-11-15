@@ -120,6 +120,11 @@
       "import": "./dist/utils/context-window.js",
       "require": "./dist/utils/context-window.cjs"
     },
+    "./utils/sdk-normalizer": {
+      "types": "./dist/utils/sdk-normalizer.d.ts",
+      "import": "./dist/utils/sdk-normalizer.js",
+      "require": "./dist/utils/sdk-normalizer.cjs"
+    },
     "./utils/path": {
       "types": "./dist/utils/path.d.ts",
       "import": "./dist/utils/path.js",

@@ -125,16 +125,20 @@ export function createCanUseToolCallback(sessionId, taskId, deps) {
     // If user clicked "Remember", tell SDK to persist the permission
     if (decision.remember && decision.scope) {
       const destination =
-        decision.scope === 'session' ? 'session' :
-        decision.scope === 'project' ? 'projectSettings' :
-        'session';
+        decision.scope === 'session'
+          ? 'session'
+          : decision.scope === 'project'
+            ? 'projectSettings'
+            : 'session';
 
-      response.updatedPermissions = [{
-        kind: 'addRules',
-        rules: [toolName],
-        behavior: 'allow',
-        destination,
-      }];
+      response.updatedPermissions = [
+        {
+          kind: 'addRules',
+          rules: [toolName],
+          behavior: 'allow',
+          destination,
+        },
+      ];
 
       // SDK will automatically write to .claude/settings.json (project)
       // or session memory (session) - Agor doesn't need to do anything!
@@ -178,7 +182,7 @@ const handlePermissionDecision = async (sessionId, requestId, taskId, allow, sco
     taskId,
     allow,
     decidedBy: user.user_id,
-    scope,        // 'once' | 'session' | 'project'
+    scope, // 'once' | 'session' | 'project'
     remember: scope !== 'once',
   });
 };
@@ -277,16 +281,19 @@ The `PermissionRequestBlock` component renders three states:
 return {
   behavior: 'allow',
   updatedInput: toolInput,
-  updatedPermissions: [{
-    kind: 'addRules',
-    rules: [toolName],
-    behavior: 'allow',
-    destination: 'session' | 'projectSettings', // SDK handles writing
-  }],
+  updatedPermissions: [
+    {
+      kind: 'addRules',
+      rules: [toolName],
+      behavior: 'allow',
+      destination: 'session' | 'projectSettings', // SDK handles writing
+    },
+  ],
 };
 ```
 
 **Result:** SDK automatically persists permissions to:
+
 - Session memory (`destination: 'session'`)
 - `.claude/settings.json` (`destination: 'projectSettings'`)
 
@@ -357,10 +364,11 @@ Agor respects Claude CLI's standard settings.json format:
 ```
 
 **Wildcards supported:**
+
 ```json
 {
   "permissions": {
-    "allow": ["*"],  // Allow all tools (like Claude CLI)
+    "allow": ["*"], // Allow all tools (like Claude CLI)
     "deny": ["Bash"] // Except Bash
   }
 }
@@ -386,6 +394,7 @@ Allow fine-grained control over tool parameters:
 ### Permission Mode UI
 
 Allow changing permission mode from UI:
+
 - `ask` - Ask for permission (current default)
 - `allow-all` - Auto-approve all tools
 - `deny-all` - Deny all tools

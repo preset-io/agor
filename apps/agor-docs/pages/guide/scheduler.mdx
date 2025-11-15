@@ -52,8 +52,10 @@ You can edit the schedule whenever you like; changes apply to the next run. Disa
 Prompt templates render with a full, typed context:
 
 ```handlebars
-Check {{worktree.pull_request_url}} for new reviews since {{schedule.scheduled_time}}.
-If it merged, stop the Docker environment and archive the worktree.
+Check
+{{worktree.pull_request_url}}
+for new reviews since
+{{schedule.scheduled_time}}. If it merged, stop the Docker environment and archive the worktree.
 ```
 
 Available fields:

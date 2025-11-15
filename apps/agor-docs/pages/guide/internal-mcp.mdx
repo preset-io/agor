@@ -6,7 +6,11 @@ description: How Agor’s built-in Model Context Protocol server unlocks self-aw
 # Agor MCP Server
 
 <div style={{ marginTop: '20px', marginBottom: '30px', display: 'flex', justifyContent: 'center' }}>
-  <img src="/mcp_self_aware.png" alt="Claude Code discovering Agor MCP capabilities" style={{ width: '500px', maxWidth: '100%', borderRadius: '8px' }} />
+  <img
+    src="/mcp_self_aware.png"
+    alt="Claude Code discovering Agor MCP capabilities"
+    style={{ width: '500px', maxWidth: '100%', borderRadius: '8px' }}
+  />
 </div>
 
 Agor ships with an **internal Model Context Protocol (MCP) server**. The same daemon that serves REST and WebSocket APIs also exposes MCP, giving agents and external tools full parity with what a user can do in the UI or CLI—without shelling out or scraping text.
@@ -21,13 +25,13 @@ Agor ships with an **internal Model Context Protocol (MCP) server**. The same da
 
 ## Capabilities At a Glance
 
-| Domain | What agents can do |
-| --- | --- |
-| **Sessions** | Introspect the current session, list siblings, spawn child sessions with prompts, archive/complete work |
-| **Worktrees & Boards** | List or fetch worktrees, create new ones, assign them to boards, update metadata, move cards spatially |
-| **Tasks & Reports** | Fetch task history, create follow-up tasks, log progress, generate reports |
-| **Users & Teams** | Create users, update profiles or avatars, assign roles, invite collaborators |
-| **Context Resources** | Enumerate context files, load concept docs, ingest repo metadata |
+| Domain                 | What agents can do                                                                                      |
+| ---------------------- | ------------------------------------------------------------------------------------------------------- |
+| **Sessions**           | Introspect the current session, list siblings, spawn child sessions with prompts, archive/complete work |
+| **Worktrees & Boards** | List or fetch worktrees, create new ones, assign them to boards, update metadata, move cards spatially  |
+| **Tasks & Reports**    | Fetch task history, create follow-up tasks, log progress, generate reports                              |
+| **Users & Teams**      | Create users, update profiles or avatars, assign roles, invite collaborators                            |
+| **Context Resources**  | Enumerate context files, load concept docs, ingest repo metadata                                        |
 
 Because tools route through FeathersJS services, every action emits the same events the UI listens to—real-time updates appear instantly for everyone watching the board.
 

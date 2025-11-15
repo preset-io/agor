@@ -103,11 +103,7 @@ export type ProcessedEvent =
     }
   | {
       type: 'result';
-      subtype: string;
-      duration_ms?: number;
-      cost?: number;
-      token_usage?: unknown;
-      model_usage?: unknown; // Per-model breakdown with context window info
+      raw_sdk_message: SDKResultMessage; // Pass the entire SDK message unchanged
       agentSessionId?: string;
     }
   | {
@@ -527,11 +523,7 @@ export class SDKMessageProcessor {
     return [
       {
         type: 'result',
-        subtype,
-        duration_ms: duration,
-        cost,
-        token_usage: 'usage' in msg ? msg.usage : undefined,
-        model_usage: 'modelUsage' in msg ? msg.modelUsage : undefined,
+        raw_sdk_message: msg, // Pass the entire SDK message unchanged
         agentSessionId: this.state.capturedAgentSessionId,
       },
       {

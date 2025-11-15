@@ -540,37 +540,12 @@ export class CodexTool implements ITool {
   /**
    * Normalize Codex SDK response to common format
    *
-   * Codex doesn't support caching, so cache tokens are always 0.
+   * @deprecated This method is deprecated - use normalizeRawSdkResponse() from utils/sdk-normalizer instead
+   * This stub remains for API compatibility but should not be used.
    */
-  normalizedSdkResponse(rawResponse: RawSdkResponse): NormalizedSdkResponse {
-    if (rawResponse.tool !== 'codex') {
-      throw new Error(`Expected codex response, got ${rawResponse.tool}`);
-    }
-
-    const codexResponse = rawResponse as CodexSdkResponse;
-
-    // Extract token usage with defaults
-    const tokenUsage = codexResponse.tokenUsage || {
-      input_tokens: 0,
-      output_tokens: 0,
-      total_tokens: 0,
-    };
-
-    return {
-      userMessageId: codexResponse.userMessageId,
-      assistantMessageIds: codexResponse.assistantMessageIds,
-      tokenUsage: {
-        inputTokens: tokenUsage.input_tokens || 0,
-        outputTokens: tokenUsage.output_tokens || 0,
-        totalTokens:
-          tokenUsage.total_tokens || tokenUsage.input_tokens! + tokenUsage.output_tokens! || 0,
-        cacheReadTokens: 0, // Codex doesn't support caching
-        cacheCreationTokens: 0, // Codex doesn't support caching
-      },
-      contextWindow: codexResponse.contextWindow,
-      contextWindowLimit: codexResponse.contextWindowLimit,
-      model: codexResponse.model,
-      durationMs: codexResponse.durationMs,
-    };
+  normalizedSdkResponse(_rawResponse: RawSdkResponse): NormalizedSdkResponse {
+    throw new Error(
+      'normalizedSdkResponse() is deprecated - use normalizeRawSdkResponse() from utils/sdk-normalizer instead'
+    );
   }
 }

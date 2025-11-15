@@ -37,6 +37,7 @@ gh auth login
 ```
 
 The agents work exceptionally well with the `gh` CLI, using it for:
+
 - Repository creation
 - Issue management
 - Pull request operations
@@ -50,6 +51,7 @@ For deeper GitHub integration capabilities, consider installing and using the Gi
 **Troubleshooting:**
 
 If you're seeing authentication errors when cloning private repos:
+
 1. Verify your authentication: `gh auth status`
 2. Test cloning manually: `git clone <your-private-repo-url>`
 3. Ensure the authenticated user has access to the repository

@@ -20,12 +20,14 @@ Agor uses **UUIDv7** as the universal identifier format across all entities (Ses
 ### The Evolution of UUIDs
 
 **UUIDv4 (Random):**
+
 - ✅ Globally unique, cryptographically random
 - ❌ No temporal ordering (bad for indexes)
 - ❌ Random distribution causes B-tree fragmentation
 - ❌ Poor cache locality for range queries
 
 **UUIDv7 (Time-Ordered):**
+
 - ✅ Globally unique with temporal ordering
 - ✅ First 48 bits = Unix timestamp (ms precision)
 - ✅ Sequential IDs improve B-tree performance
@@ -35,7 +37,7 @@ Agor uses **UUIDv7** as the universal identifier format across all entities (Ses
 **Comparison with Alternatives:**
 
 | Format | Length | Sortable | Random | Human-Friendly | DB Performance |
-|--------|--------|----------|--------|----------------|----------------|
+| ------ | ------ | -------- | ------ | -------------- | -------------- |
 | UUIDv4 | 36     | ❌       | ✅     | ❌             | Poor           |
 | UUIDv7 | 36     | ✅       | ✅     | ❌             | Excellent      |
 | ULID   | 26     | ✅       | ✅     | ✅ (base32)    | Excellent      |
@@ -43,6 +45,7 @@ Agor uses **UUIDv7** as the universal identifier format across all entities (Ses
 | KSUID  | 27     | ✅       | ✅     | ❌             | Excellent      |
 
 **Why not ULID/CUID2/KSUID?**
+
 - UUIDv7 is an **IETF standard** (RFC 9562), ensuring long-term support
 - Ecosystem compatibility (PostgreSQL, MySQL have native UUID types)
 - Migration path to cloud databases easier with standards
@@ -57,16 +60,19 @@ Agor uses **UUIDv7** as the universal identifier format across all entities (Ses
 Inspired by git's abbreviated commit SHAs:
 
 **Full UUID (stored):**
+
 ```
 01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f
 ```
 
 **Short ID (displayed):**
+
 ```
 01933e4a  (first 8 characters)
 ```
 
 **Usage:**
+
 ```bash
 # CLI accepts short IDs
 agor session resume 01933e4a
@@ -82,14 +88,15 @@ agor session show 01933e4a --verbose
 
 **8 hexadecimal characters = 4.3 billion possibilities (16^8)**
 
-| Total IDs | Collision Probability |
-|-----------|----------------------|
-| 1,000     | 0.01%                |
-| 10,000    | 1.16%                |
-| 65,536    | 50% (birthday paradox)|
-| 100,000   | 77%                  |
+| Total IDs | Collision Probability  |
+| --------- | ---------------------- |
+| 1,000     | 0.01%                  |
+| 10,000    | 1.16%                  |
+| 65,536    | 50% (birthday paradox) |
+| 100,000   | 77%                    |
 
 **Practical Reality:**
+
 - Most Agor instances will have < 10,000 total entities
 - Collisions are rare in practice
 - When collisions occur, use git-style resolution (expand to 12/16 chars)
@@ -122,6 +129,7 @@ function resolveShortId(prefix: string, entities: Entity[]): Entity | Error {
 ```
 
 **CLI Error Example:**
+
 ```bash
 $ agor session resume 0193
 
@@ -145,8 +153,8 @@ All entities use TEXT primary keys with UUIDv7 values:
 
 ```typescript
 // Drizzle ORM schema example
-import { text, sqliteTable } from "drizzle-orm/sqlite-core";
-import { generateId } from "../lib/ids";
+import { text, sqliteTable } from 'drizzle-orm/sqlite-core';
+import { generateId } from '../lib/ids';
 
 export const sessions = sqliteTable('sessions', {
   session_id: text('session_id', { length: 36 })
@@ -162,6 +170,7 @@ export const sessions = sqliteTable('sessions', {
 ### Indexing Strategy
 
 **Primary Key Index (Automatic):**
+
 ```sql
 CREATE TABLE sessions (
   session_id TEXT PRIMARY KEY,  -- Automatically indexed
@@ -185,6 +194,7 @@ WHERE session_id >= '01933e4a'
 ```
 
 **Performance Characteristics:**
+
 - Prefix match on indexed TEXT: O(log n) seek + O(m) scan (m = matches)
 - 8-char prefix reduces search space to ~1-10 candidates typically
 - No additional indexes needed for short ID resolution
@@ -201,13 +211,14 @@ export const tasks = sqliteTable('tasks', {
 
   session_id: text('session_id', { length: 36 })
     .notNull()
-    .references(() => sessions.session_id),  // Full UUID
+    .references(() => sessions.session_id), // Full UUID
 
   // ...
 });
 ```
 
 **Why not integer auto-increment?**
+
 - UUIDs enable distributed ID generation (no central counter)
 - Easier migration to cloud/sync (no ID conflicts)
 - Public IDs don't leak information (unlike sequential IDs)
@@ -222,8 +233,8 @@ export const tasks = sqliteTable('tasks', {
 ```typescript
 // Base types
 export type UUID = string & { readonly brand: unique symbol };
-export type ShortID = string;  // 8-16 characters
-export type IDPrefix = string;  // Any length prefix
+export type ShortID = string; // 8-16 characters
+export type IDPrefix = string; // Any length prefix
 
 // Entity IDs (aliased for clarity)
 export type SessionID = UUID;
@@ -286,7 +297,7 @@ Use the `uuidv7` npm package (LiosK/uuidv7):
 
 ```typescript
 // src/lib/ids.ts
-import { uuidv7 } from "uuidv7";
+import { uuidv7 } from 'uuidv7';
 
 /**
  * Generate a new UUIDv7 identifier.
@@ -324,13 +335,13 @@ export function expandPrefix(prefix: IDPrefix): string {
 
   if (clean.length >= 32) {
     // Full UUID without hyphens, reformat
-    return `${clean.slice(0,8)}-${clean.slice(8,12)}-${clean.slice(12,16)}-${clean.slice(16,20)}-${clean.slice(20,32)}`;
+    return `${clean.slice(0, 8)}-${clean.slice(8, 12)}-${clean.slice(12, 16)}-${clean.slice(16, 20)}-${clean.slice(20, 32)}`;
   }
 
   // Partial prefix, use LIKE pattern
   let formatted = clean;
-  if (clean.length > 8) formatted = `${clean.slice(0,8)}-${clean.slice(8)}`;
-  if (clean.length > 12) formatted = `${formatted.slice(0,13)}-${clean.slice(12)}`;
+  if (clean.length > 8) formatted = `${clean.slice(0, 8)}-${clean.slice(8)}`;
+  if (clean.length > 12) formatted = `${formatted.slice(0, 13)}-${clean.slice(12)}`;
   // ... continue formatting if longer
 
   return `${formatted}%`;
@@ -340,28 +351,23 @@ export function expandPrefix(prefix: IDPrefix): string {
  * Resolve a short ID to a full entity.
  * Throws error if not found or ambiguous.
  */
-export function resolveShortId<T extends { id: UUID }>(
-  prefix: IDPrefix,
-  entities: T[]
-): T {
+export function resolveShortId<T extends { id: UUID }>(prefix: IDPrefix, entities: T[]): T {
   const pattern = expandPrefix(prefix);
-  const matches = entities.filter(e =>
-    e.id.startsWith(pattern.replace('%', ''))
-  );
+  const matches = entities.filter(e => e.id.startsWith(pattern.replace('%', '')));
 
   if (matches.length === 0) {
     throw new Error(`No entity found with ID prefix: ${prefix}`);
   }
 
   if (matches.length > 1) {
-    const suggestions = matches.map(m =>
-      `  - ${shortId(m.id, 12)}: ${(m as any).description || '(no description)'}`
-    ).join('\n');
+    const suggestions = matches
+      .map(m => `  - ${shortId(m.id, 12)}: ${(m as any).description || '(no description)'}`)
+      .join('\n');
 
     throw new Error(
       `Ambiguous ID prefix: ${prefix}\n\n` +
-      `Multiple matches found:\n${suggestions}\n\n` +
-      `Use a longer prefix to disambiguate.`
+        `Multiple matches found:\n${suggestions}\n\n` +
+        `Use a longer prefix to disambiguate.`
     );
   }
 
@@ -386,7 +392,7 @@ console.log(`Session ${shortId(session.session_id)}: ${session.description}`);
 // Output: Session 01933e4a: Add authentication middleware
 
 // CLI resolution
-const userInput = "01933e4a";
+const userInput = '01933e4a';
 const session = resolveShortId(userInput, allSessions);
 console.log(`Resuming session: ${session.description}`);
 ```
@@ -398,6 +404,7 @@ console.log(`Resuming session: ${session.description}`);
 ### CLI Tables
 
 **Session List:**
+
 ```
 ┌──────────┬─────────────────────────────────┬──────────────┬───────────┐
 │ ID       │ Description                     │ Agent        │ Status    │
@@ -409,6 +416,7 @@ console.log(`Resuming session: ${session.description}`);
 ```
 
 **Task Timeline:**
+
 ```
 ┌────┬──────────┬────────────────────────────────┬───────────┐
 │ #  │ Task ID  │ Prompt                         │ Status    │
@@ -422,6 +430,7 @@ console.log(`Resuming session: ${session.description}`);
 ### UI Components
 
 **React Component Example:**
+
 ```typescript
 import { shortId } from '@/lib/ids';
 
@@ -437,6 +446,7 @@ function SessionCard({ session }: { session: Session }) {
 ```
 
 **Tooltips (show full UUID on hover):**
+
 ```tsx
 <Tooltip title={session.session_id}>
   <Text copyable>{shortId(session.session_id)}</Text>
@@ -476,6 +486,7 @@ function SessionCard({ session }: { session: Session }) {
 ## Best Practices
 
 ### DO:
+
 ✅ Store full UUIDs (36 chars) in database
 ✅ Display short IDs (8 chars) in UI/CLI by default
 ✅ Accept both short and full IDs in CLI commands
@@ -484,6 +495,7 @@ function SessionCard({ session }: { session: Session }) {
 ✅ Handle collisions gracefully (show all matches)
 
 ### DON'T:
+
 ❌ Store short IDs in database (defeats uniqueness)
 ❌ Use auto-increment integers for public IDs
 ❌ Generate UUIDs client-side without monotonic guarantees
@@ -498,18 +510,21 @@ function SessionCard({ session }: { session: Session }) {
 ### Database Query Performance
 
 **Primary Key Lookup (exact match):**
+
 ```sql
 SELECT * FROM sessions WHERE session_id = '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f';
 -- O(log n) - B-tree lookup
 ```
 
 **Short ID Resolution (prefix match):**
+
 ```sql
 SELECT * FROM sessions WHERE session_id LIKE '01933e4a%';
 -- O(log n) seek + O(m) scan where m = matches (typically 1-10)
 ```
 
 **Range Query (chronological order):**
+
 ```sql
 SELECT * FROM sessions
 WHERE created_at > '2025-01-01'
@@ -520,10 +535,12 @@ ORDER BY session_id ASC;
 ### Storage Overhead
 
 **UUIDv7 vs Integer:**
+
 - UUIDv7: 36 bytes (TEXT) or 16 bytes (BLOB)
 - Integer: 4-8 bytes
 
 **Trade-offs:**
+
 - 2-4x storage overhead
 - But: No need for separate `public_id` column
 - But: Global uniqueness enables distributed systems
@@ -532,13 +549,16 @@ ORDER BY session_id ASC;
 ### Indexing Recommendations
 
 **Always indexed:**
+
 - Primary keys (`session_id`, `task_id`, etc.)
 
 **Should be indexed:**
+
 - Foreign keys (`session_id` in tasks table)
 - Frequently filtered columns (`status`, `agent`, `board_id`)
 
 **No need to index:**
+
 - Short ID prefixes (use primary key index with `LIKE`)
 
 ---
@@ -577,8 +597,7 @@ describe('ID utilities', () => {
       { id: '01933e4a-7b89-7c35-a8f3-222222222222', name: 'B' },
     ];
 
-    expect(() => resolveShortId('01933e4a', entities))
-      .toThrow('Ambiguous ID prefix');
+    expect(() => resolveShortId('01933e4a', entities)).toThrow('Ambiguous ID prefix');
   });
 });
 ```
@@ -588,14 +607,18 @@ describe('ID utilities', () => {
 ```typescript
 describe('Database ID queries', () => {
   test('prefix match finds session', async () => {
-    const session = await db.insert(sessions).values({
-      session_id: generateId(),
-      agent: 'claude-code',
-      status: 'idle',
-    }).returning();
+    const session = await db
+      .insert(sessions)
+      .values({
+        session_id: generateId(),
+        agent: 'claude-code',
+        status: 'idle',
+      })
+      .returning();
 
     const prefix = shortId(session.session_id);
-    const found = await db.select()
+    const found = await db
+      .select()
       .from(sessions)
       .where(sql`session_id LIKE ${prefix}%`)
       .get();
@@ -611,14 +634,17 @@ describe('Database ID queries', () => {
 ## References
 
 **Standards:**
+
 - RFC 9562: Universally Unique IDentifiers (UUIDs) - https://www.rfc-editor.org/rfc/rfc9562.html
 - UUIDv7 Specification: https://www.ietf.org/archive/id/draft-peabody-dispatch-new-uuid-format-04.html
 
 **Libraries:**
+
 - `uuidv7` npm package: https://www.npmjs.com/package/uuidv7
 - Drizzle ORM UUID docs: https://orm.drizzle.team/docs/column-types/sqlite
 
 **Related Agor Docs:**
+
 - `context/concepts/models.md` - Entity data models
 - `context/concepts/architecture.md` - System architecture
 - `context/explorations/state-management.md` - Database layer with Drizzle

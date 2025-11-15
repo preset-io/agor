@@ -99,6 +99,7 @@ export type CodexStreamEvent =
       threadId: string;
       resolvedModel?: string;
       usage?: TokenUsage;
+      rawSdkEvent?: import('../../types/sdk-response').CodexSdkResponse; // The actual turn.completed event from Codex SDK
     };
 
 export class CodexPromptService {
@@ -665,6 +666,7 @@ ${networkAccessToml}${mcpServersToml}`;
               threadId,
               resolvedModel: resolvedModel || DEFAULT_CODEX_MODEL,
               usage: mappedUsage,
+              rawSdkEvent: event, // Pass through the actual SDK event (UNMUTATED)
             };
 
             // Reset for next message

@@ -12,6 +12,7 @@ Agor introduces a few core primitives that make multiplayer AI development spati
 **A worktree is where your agentic coding sessions take place.** It's an isolated working directory for a git repository - think of it as a checkout of your repo at a specific branch or commit.
 
 Agor uses **git worktrees** under the hood (same concept as `git worktree` command), but manages them for you automatically. When you create a worktree in Agor, it:
+
 - Creates a git worktree in `~/.agor/worktrees/<repo>/<name>`
 - Optionally creates a new branch or checks out an existing one
 - Tracks metadata (issue URL, PR URL, notes)
@@ -44,6 +45,7 @@ Each worktree is completely isolated - changes in one don't affect the other. Th
 **Boards are spatial canvases for organizing worktrees and sessions** - like Trello for AI coding work.
 
 Instead of linear lists, boards use a **2D spatial layout** where:
+
 - Each worktree appears as a card on the canvas
 - You can drag worktrees to arrange them spatially
 - Sessions within a worktree appear as a genealogy tree on the card
@@ -51,11 +53,12 @@ Instead of linear lists, boards use a **2D spatial layout** where:
 
 ![Agor Board with Zones](/screenshots/agor_for_agor.png)
 
-*An Agor board showing multiple worktrees organized across three zones (Analyze/plan, Code!, Done!). Each worktree card shows its session tree and metadata.*
+_An Agor board showing multiple worktrees organized across three zones (Analyze/plan, Code!, Done!). Each worktree card shows its session tree and metadata._
 
 ### Why spatial?
 
 **Your brain thinks spatially.** You remember:
+
 - "The auth worktree is in the top-left corner"
 - "Testing sessions are clustered on the right"
 - "That failed experiment is way down there"
@@ -65,6 +68,7 @@ This is **location-based memory** - the same reason you remember where you parke
 ### Multiplayer collaboration
 
 Like Figma revolutionized design collaboration with spatial canvases, Agor does the same for AI coding:
+
 - Everyone sees the same board
 - Real-time cursors show where teammates are working
 - Drag a worktree, teammates see it move instantly
@@ -90,6 +94,7 @@ When you drop a worktree into a zone:
 #### Handlebars templates
 
 Zone prompts use **Handlebars templates** to inject context from:
+
 - **Worktree**: `{{ worktree.name }}`, `{{ worktree.issue_url }}`, `{{ worktree.pull_request_url }}`
 - **Board**: `{{ board.name }}`, `{{ board.description }}`
 - **Session**: `{{ session.title }}`, `{{ session.description }}`
@@ -124,12 +129,14 @@ Just as Figma transformed design from a solo activity into real-time collaborati
 **Annotate sessions, worktrees, zones, and boards with threaded conversations.**
 
 Leave **scoped/spatial comments** on:
+
 - **Board-level** - Team discussions about workflow or priorities
 - **Zones** - "All sessions in this zone need API keys configured"
 - **Worktrees** - "Ready for review" or "Blocked on API access"
 - **Sessions** - "This approach didn't work, try the forked version"
 
 Comments create a **persistent conversation layer** on top of your AI work:
+
 - Thread replies for focused discussions
 - Mention teammates with `@username`
 - Link directly to specific sessions or worktrees in comments
@@ -141,6 +148,7 @@ Comments create a **persistent conversation layer** on top of your AI work:
 ### Live Cursors
 
 **See where your teammates are working in real-time.** Every user on a board has a cursor that shows:
+
 - Their current position on the canvas
 - Their name and avatar
 - What they're hovering over or dragging
@@ -152,6 +160,7 @@ Cursors update at 100ms intervals, making collaboration feel fluid and natural. 
 ### Facepile
 
 **Know who's online at a glance.** The facepile shows:
+
 - All active users on the current board
 - Their avatar and name
 - Real-time presence status
@@ -179,6 +188,7 @@ Session: "Build authentication system"
 **Traditional AI coding tools**: Linear conversation. Want to try something different? Start over or lose your context.
 
 **Agor**: Branch your conversation like git branches code. Every fork/spawn is:
+
 - **Introspectable** - full conversation history kept
 - **Composable** - fork from forks, spawn from spawns
 - **Multiplayer-friendly** - teammates see the tree, understand the exploration
@@ -217,6 +227,7 @@ Parent orchestrates, children execute focused subsessions with clean context.
 Configuring them is optional—worktrees run fine without it—but adding a template gives you shared start/stop controls, automatic health checks, and collision-free URLs.
 
 Each repo can have an **environment configuration template** that defines:
+
 - How to start/stop the environment (commands)
 - Health check configuration
 - App URL template
@@ -224,6 +235,7 @@ Each repo can have an **environment configuration template** that defines:
 Looking for step-by-step setup guidance? See the [Environment Configuration](./environment-configuration) guide.
 
 Each worktree gets its **own environment instance** with:
+
 - Unique ports (auto-assigned using worktree unique ID)
 - Process status (running, stopped, error)
 - Access URLs (resolved from templates)
@@ -232,12 +244,13 @@ Each worktree gets its **own environment instance** with:
 **Example environment config:**
 
 ```yaml
-up_command: "UI_PORT={{add 9000 worktree.unique_id}} pnpm dev"
+up_command: 'UI_PORT={{add 9000 worktree.unique_id}} pnpm dev'
 down_command: "pkill -f 'vite.*{{add 9000 worktree.unique_id}}'"
-app_url_template: "http://localhost:{{add 9000 worktree.unique_id}}"
+app_url_template: 'http://localhost:{{add 9000 worktree.unique_id}}'
 ```
 
 **Result:**
+
 - Worktree #1 runs on port 9001
 - Worktree #2 runs on port 9002
 - Worktree #3 runs on port 9003

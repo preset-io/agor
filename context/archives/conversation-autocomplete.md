@@ -295,24 +295,24 @@ Shows categorized results:
 **Basic usage:**
 
 ```tsx
-import ReactTextareaAutocomplete from "@webscopeio/react-textarea-autocomplete";
-import "@webscopeio/react-textarea-autocomplete/style.css";
+import ReactTextareaAutocomplete from '@webscopeio/react-textarea-autocomplete';
+import '@webscopeio/react-textarea-autocomplete/style.css';
 
 <ReactTextareaAutocomplete
   trigger={{
-    "@": {
-      dataProvider: async (token) => {
+    '@': {
+      dataProvider: async token => {
         // Combine files + users
         const [files, users] = await Promise.all([
           fetchFiles(sessionId, token),
-          filterUsers(token)
+          filterUsers(token),
         ]);
 
         return [
-          { heading: "FILES" },
+          { heading: 'FILES' },
           ...files.map(f => ({ type: 'file', path: f.path, label: f.path })),
-          { heading: "USERS" },
-          ...users.map(u => ({ type: 'user', name: u.name, label: `${u.name} (${u.email})` }))
+          { heading: 'USERS' },
+          ...users.map(u => ({ type: 'user', name: u.name, label: `${u.name} (${u.email})` })),
         ];
       },
       component: ({ entity }) => (
@@ -321,10 +321,10 @@ import "@webscopeio/react-textarea-autocomplete/style.css";
           {!entity.heading && entity.label}
         </div>
       ),
-      output: (item) => item.path || `@${item.name}`
-    }
+      output: item => item.path || `@${item.name}`,
+    },
   }}
-/>
+/>;
 ```
 
 **Pros:**

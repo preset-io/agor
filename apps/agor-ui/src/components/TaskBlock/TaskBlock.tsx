@@ -11,8 +11,8 @@
 
 import type { AgorClient } from '@agor/core/api';
 import {
+  type AgenticToolName,
   type Message,
-  type MessageID,
   MessageRole,
   type PermissionRequestContent,
   type PermissionScope,
@@ -22,6 +22,7 @@ import {
   TaskStatus,
   type User,
 } from '@agor/core/types';
+import { normalizeRawSdkResponse } from '@agor/core/utils/sdk-normalizer';
 import {
   DownOutlined,
   FileTextOutlined,
@@ -32,7 +33,7 @@ import {
 import { Bubble } from '@ant-design/x';
 import { Collapse, Flex, Spin, Tag, Typography, theme } from 'antd';
 import React, { useMemo } from 'react';
-import type { StreamingMessage } from '../../hooks/useStreamingMessages';
+import { useStreamingMessages } from '../../hooks/useStreamingMessages';
 import { useTaskEvents } from '../../hooks/useTaskEvents';
 import { useTaskMessages } from '../../hooks/useTaskMessages';
 import { getContextWindowGradient } from '../../utils/contextWindow';
@@ -76,7 +77,6 @@ interface TaskBlockProps {
   isExpanded: boolean;
   onExpandChange: (expanded: boolean) => void;
   sessionId?: SessionID | null;
-  streamingMessagesForTask?: Map<MessageID, StreamingMessage>;
   onPermissionDecision?: (
     sessionId: string,
     requestId: string,
@@ -339,7 +339,6 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     isExpanded,
     onExpandChange,
     sessionId,
-    streamingMessagesForTask = new Map(),
     onPermissionDecision,
     worktreeName,
     scheduledFromWorktree,
@@ -357,22 +356,24 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       isExpanded
     );
 
+    // Track real-time streaming messages (for running tasks)
+    const streamingMessages = useStreamingMessages(client, sessionId ?? undefined);
+
     // Merge task messages with streaming messages (for running tasks)
-    // Note: streamingMessagesForTask is passed from parent and already filtered for this task
     const messages = useMemo(() => {
-      // Convert streaming messages to array
-      const streamingForTask = Array.from(streamingMessagesForTask.values());
+      // Filter streaming messages for this task
+      const streamingForTask = Array.from(streamingMessages.values()).filter(
+        (msg) => msg.task_id === task.task_id
+      );
 
       // Filter out DB messages that are already in streaming (avoid duplicates)
-      const dbOnlyMessages = taskMessages.filter(
-        (msg) => !streamingMessagesForTask.has(msg.message_id)
-      );
+      const dbOnlyMessages = taskMessages.filter((msg) => !streamingMessages.has(msg.message_id));
 
       // Combine and sort by index
       return ([...dbOnlyMessages, ...streamingForTask] as Message[]).sort(
         (a, b) => a.index - b.index
       );
-    }, [taskMessages, streamingMessagesForTask]);
+    }, [taskMessages, streamingMessages, task.task_id]);
 
     // Group messages into blocks
     const blocks = useMemo(() => groupMessagesIntoBlocks(messages), [messages]);
@@ -388,15 +389,15 @@ export const TaskBlock = React.memo<TaskBlockProps>(
         ? task.tool_use_count
         : messages.reduce((sum, msg) => sum + (msg.tool_uses?.length || 0), 0);
 
-    // Get context window directly from raw SDK response
-    // Only Claude, Codex, and Gemini provide contextWindow (OpenCode doesn't)
+    // Normalize raw SDK response to get computed values
     const sdkResponse = task.raw_sdk_response;
-    const contextWindowUsed =
-      sdkResponse && 'contextWindow' in sdkResponse ? (sdkResponse.contextWindow ?? 0) : 0;
-    const contextWindowLimit =
-      sdkResponse && 'contextWindowLimit' in sdkResponse
-        ? (sdkResponse.contextWindowLimit ?? 200000)
-        : 200000;
+    const normalized =
+      sdkResponse && agentic_tool
+        ? normalizeRawSdkResponse(sdkResponse, agentic_tool as AgenticToolName)
+        : null;
+
+    const contextWindowUsed = normalized?.contextWindow ?? 0;
+    const contextWindowLimit = normalized?.contextWindowLimit ?? 200000;
     const taskHeaderGradient = getContextWindowGradient(contextWindowUsed, contextWindowLimit);
 
     // Task header shows when collapsed
@@ -454,30 +455,27 @@ export const TaskBlock = React.memo<TaskBlockProps>(
             )}
             <MessageCountPill count={messageCount} />
             <ToolCountPill count={toolCount} />
-            {task.raw_sdk_response?.tokenUsage && (
+            {normalized && (
               <TokenCountPill
-                count={task.raw_sdk_response.tokenUsage.total_tokens ?? 0}
-                inputTokens={task.raw_sdk_response.tokenUsage.input_tokens}
-                outputTokens={task.raw_sdk_response.tokenUsage.output_tokens}
-                cacheReadTokens={task.raw_sdk_response.tokenUsage.cache_read_tokens}
-                cacheCreationTokens={task.raw_sdk_response.tokenUsage.cache_creation_tokens}
+                count={normalized.tokenUsage.totalTokens}
+                inputTokens={normalized.tokenUsage.inputTokens}
+                outputTokens={normalized.tokenUsage.outputTokens}
+                cacheReadTokens={normalized.tokenUsage.cacheReadTokens}
+                cacheCreationTokens={normalized.tokenUsage.cacheCreationTokens}
               />
             )}
-            {sdkResponse &&
-              'contextWindow' in sdkResponse &&
-              sdkResponse.contextWindow !== undefined &&
-              'contextWindowLimit' in sdkResponse &&
-              sdkResponse.contextWindowLimit && (
-                <ContextWindowPill
-                  used={sdkResponse.contextWindow}
-                  limit={sdkResponse.contextWindowLimit}
-                  taskMetadata={{
-                    model: task.model,
-                    duration_ms: task.duration_ms,
-                    raw_sdk_response: task.raw_sdk_response,
-                  }}
-                />
-              )}
+            {normalized && contextWindowLimit > 0 && (
+              <ContextWindowPill
+                used={contextWindowUsed}
+                limit={contextWindowLimit}
+                taskMetadata={{
+                  model: task.model,
+                  duration_ms: task.duration_ms,
+                  agentic_tool,
+                  raw_sdk_response: task.raw_sdk_response,
+                }}
+              />
+            )}
             {task.model && task.model !== sessionModel && <ModelPill model={task.model} />}
             {task.git_state.sha_at_start && task.git_state.sha_at_start !== 'unknown' && (
               <Flex gap={token.sizeUnit / 2} align="center">
@@ -621,8 +619,8 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                   </div>
                 )}
 
-                {/* Show sticky TODO (latest) - persists after task completion for reference */}
-                <StickyTodoRenderer messages={messages} />
+                {/* Show sticky TODO (latest) above typing indicator when task is running */}
+                {task.status === TaskStatus.RUNNING && <StickyTodoRenderer messages={messages} />}
 
                 {/* Show typing indicator whenever task is actively running */}
                 {task.status === TaskStatus.RUNNING && (

@@ -76,6 +76,7 @@ Terminal for Alice → runs as 'max'
 ```
 
 **Issues:**
+
 - ❌ No credential isolation (everyone shares the same `~/.ssh/`)
 - ❌ File ownership doesn't reflect Agor user identity
 - ❌ Terminals have wrong `$USER` and `$HOME`
@@ -151,6 +152,7 @@ agor ALL=(agor_*) NOPASSWD: /usr/local/bin/agor-exec
 ```
 
 **Why this is safe:**
+
 - Daemon user `agor` is dedicated (not a real user account)
 - Can only impersonate users with `agor_*` prefix (namespaced)
 - Can only run specific binary (not arbitrary commands)
@@ -171,11 +173,11 @@ export interface User {
   role: 'owner' | 'admin' | 'member' | 'viewer';
 
   // Unix integration (optional)
-  unix_username?: string;  // e.g., 'agor_alice' (null if not linked)
-  unix_uid?: number;       // e.g., 1001
-  unix_gid?: number;       // e.g., 1001
-  unix_home?: string;      // e.g., '/home/agor_alice'
-  unix_shell?: string;     // e.g., '/bin/bash'
+  unix_username?: string; // e.g., 'agor_alice' (null if not linked)
+  unix_uid?: number; // e.g., 1001
+  unix_gid?: number; // e.g., 1001
+  unix_home?: string; // e.g., '/home/agor_alice'
+  unix_shell?: string; // e.g., '/bin/bash'
 }
 ```
 
@@ -263,14 +265,19 @@ export class ImpersonationService {
   private async spawnAsUser(username: string, cwd: string): Promise<PTY> {
     if (this.mode === 'sudo') {
       // Spawn terminal via sudo
-      return pty.spawn('sudo', [
-        '-u', username,
-        '-i',  // Login shell (loads ~/.bashrc, etc.)
-      ], {
-        env: {
-          AGOR_INITIAL_CWD: cwd,  // Shell can cd here
-        },
-      });
+      return pty.spawn(
+        'sudo',
+        [
+          '-u',
+          username,
+          '-i', // Login shell (loads ~/.bashrc, etc.)
+        ],
+        {
+          env: {
+            AGOR_INITIAL_CWD: cwd, // Shell can cd here
+          },
+        }
+      );
     } else if (this.mode === 'capabilities') {
       // Direct spawn with setuid (Linux only)
       const userInfo = await this.getUserInfo(username);
@@ -314,21 +321,18 @@ export class ClaudePromptService {
     const user = await this.usersService.get(session.created_by);
 
     // Execute agent via impersonation service
-    return await this.impersonationService.executeAsUser(
-      user.user_id,
-      async () => {
-        // Agent SDK runs as target user
-        const result = await query({
-          prompt,
-          options: {
-            cwd: session.worktree.path,
-            allowedTools: ['Read', 'Write', 'Bash'],
-          },
-        });
+    return await this.impersonationService.executeAsUser(user.user_id, async () => {
+      // Agent SDK runs as target user
+      const result = await query({
+        prompt,
+        options: {
+          cwd: session.worktree.path,
+          allowedTools: ['Read', 'Write', 'Bash'],
+        },
+      });
 
-        return this.processResult(result);
-      }
-    );
+      return this.processResult(result);
+    });
   }
 }
 ```
@@ -472,13 +476,13 @@ sudo: a password is required
 
 ### Threat Model
 
-| Threat | Impact | Mitigation |
-|--------|--------|------------|
-| **Malicious user prompts** | ⚠️ Can damage own files | ✓ Permission system, audit logs |
-| **Daemon compromise** | ⚠️ Can access daemon user files | ✓ Daemon unprivileged, limited blast radius |
-| **User escalation** | ❌ Cannot access other users | ✓ Unix permissions, no NOPASSWD for users |
-| **Credential theft** | ❌ Cannot read other users' keys | ✓ File permissions (600 on private keys) |
-| **Sudoers misconfiguration** | ⚠️ Risk if overly permissive | ✓ Scoped rule (only agor_* users, specific binary) |
+| Threat                       | Impact                           | Mitigation                                           |
+| ---------------------------- | -------------------------------- | ---------------------------------------------------- |
+| **Malicious user prompts**   | ⚠️ Can damage own files          | ✓ Permission system, audit logs                      |
+| **Daemon compromise**        | ⚠️ Can access daemon user files  | ✓ Daemon unprivileged, limited blast radius          |
+| **User escalation**          | ❌ Cannot access other users     | ✓ Unix permissions, no NOPASSWD for users            |
+| **Credential theft**         | ❌ Cannot read other users' keys | ✓ File permissions (600 on private keys)             |
+| **Sudoers misconfiguration** | ⚠️ Risk if overly permissive     | ✓ Scoped rule (only agor\_\* users, specific binary) |
 
 ### Audit Trail
 
@@ -499,6 +503,7 @@ Jan 01 10:05:00 sudo: agor : TTY=pts/0 ; PWD=/opt/agor ; USER=agor_bob ; COMMAND
 **Approach:** Grant daemon `CAP_SETUID` and `CAP_SETGID` capabilities
 
 **Why rejected:**
+
 - ❌ **Linux-only** (capabilities don't exist on macOS)
 - ⚠️ Still requires sudo to set capabilities
 - Would be the best choice if Linux-only
@@ -508,6 +513,7 @@ Jan 01 10:05:00 sudo: agor : TTY=pts/0 ; PWD=/opt/agor ; USER=agor_bob ; COMMAND
 **Approach:** Small setuid-root binary that validates requests and switches UID
 
 **Why rejected:**
+
 - ⚠️ Setuid binaries are security-sensitive (must be perfect)
 - ⚠️ More complex than sudo approach
 - ⚠️ Need to compile C code for each platform
@@ -518,6 +524,7 @@ Jan 01 10:05:00 sudo: agor : TTY=pts/0 ; PWD=/opt/agor ; USER=agor_bob ; COMMAND
 **Approach:** Each user gets a long-running container with isolated filesystem
 
 **Why rejected:**
+
 - ❌ Heavy for local development tool (memory, startup time)
 - ❌ Complex container lifecycle management
 - ⚠️ Sharing worktrees between containers is tricky
@@ -528,6 +535,7 @@ Jan 01 10:05:00 sudo: agor : TTY=pts/0 ; PWD=/opt/agor ; USER=agor_bob ; COMMAND
 **Approach:** All processes run as `agor`, but with separate home directories
 
 **Why rejected:**
+
 - ❌ **No security isolation** (all processes can read each other's files)
 - ❌ Doesn't meet core requirement (credential isolation)
 
@@ -536,6 +544,7 @@ Jan 01 10:05:00 sudo: agor : TTY=pts/0 ; PWD=/opt/agor ; USER=agor_bob ; COMMAND
 **Approach:** Store credentials in encrypted database, proxy SSH/GitHub access
 
 **Why rejected:**
+
 - ⚠️ Very complex implementation (SSH agent proxy, etc.)
 - ⚠️ Single point of failure (daemon compromise = all keys exposed)
 - ⚠️ Doesn't solve file ownership problem
@@ -550,22 +559,28 @@ Jan 01 10:05:00 sudo: agor : TTY=pts/0 ; PWD=/opt/agor ; USER=agor_bob ; COMMAND
 **Options:**
 
 A. **Archive home directory**
+
 ```bash
 sudo tar -czf /var/backups/agor/agor_alice.tar.gz /home/agor_alice
 sudo userdel -r agor_alice  # Delete user and home
 ```
+
 ✅ **Recommended** - preserves work, clean filesystem, can restore if needed
 
 B. **Lock user, keep files**
+
 ```bash
 sudo usermod -L agor_alice  # Lock account (can't login)
 ```
+
 ✅ Good for temporary deactivation
 
 C. **Delete immediately**
+
 ```bash
 sudo userdel -r agor_alice  # Delete everything
 ```
+
 ⚠️ Destructive, no recovery
 
 ### Q2: How to handle UID conflicts?
@@ -584,11 +599,13 @@ Agor tracks next available UID in config.
 ### Q3: Should Agor auto-create Unix users?
 
 **Option A: Admin creates manually**
+
 - ✅ Admin has full control
 - ✅ More secure (explicit approval)
 - ⚠️ More steps for setup
 
 **Option B: Agor creates automatically on first session**
+
 - ✅ Seamless user experience
 - ⚠️ Requires daemon to have user creation privileges
 - ⚠️ Less admin oversight
@@ -600,6 +617,7 @@ Agor tracks next available UID in config.
 **Options:**
 
 A. **User copies manually**
+
 ```bash
 cp ~/.ssh/id_ed25519 /home/agor_alice/.ssh/
 chown agor_alice:agor_alice /home/agor_alice/.ssh/id_ed25519
@@ -607,6 +625,7 @@ chmod 600 /home/agor_alice/.ssh/id_ed25519
 ```
 
 B. **Agor import command**
+
 ```bash
 agor user import-ssh-key alice@example.com --from ~/.ssh/id_ed25519
 ```
@@ -666,6 +685,7 @@ C. **Generate new key** (separate identity for Agor)
 **Recommended approach:** Sudo-based impersonation with progressive enhancement
 
 **Key benefits:**
+
 - ✅ Cross-platform (Linux + macOS)
 - ✅ Real credential isolation via Unix permissions
 - ✅ Minimal setup (one-time sudo for configuration)
@@ -674,6 +694,7 @@ C. **Generate new key** (separate identity for Agor)
 - ✅ Standard security model (sudo)
 
 **Trade-offs:**
+
 - ⚠️ Requires one-time sudo setup
 - ⚠️ Admin must create Unix users (or grant Agor permission to)
 - ⚠️ Small overhead (sudo process spawn)
@@ -685,15 +706,18 @@ C. **Generate new key** (separate identity for Agor)
 ## References
 
 **Unix User Management:**
+
 - `man useradd` - Create Unix users
 - `man sudo` - Sudo configuration
 - `man sudoers` - Sudoers file syntax
 
 **Security:**
+
 - Principle of Least Privilege: https://en.wikipedia.org/wiki/Principle_of_least_privilege
 - Linux Capabilities: https://man7.org/linux/man-pages/man7/capabilities.7.html
 
 **Related Agor Docs:**
+
 - [[auth]] - Current authentication system
 - [[worktrees]] - Worktree architecture
 - [[permissions]] - Permission system for tools

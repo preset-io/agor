@@ -11,6 +11,7 @@
 Enable semantic search and relationship discovery across Agor's sessions, tasks, and messages using a hybrid knowledge graph + vector embedding system.
 
 **Key capabilities:**
+
 - "Find sessions about authentication strategies" (semantic search)
 - "Show me what files this session touched" (graph traversal)
 - "What concepts appear together often?" (pattern discovery)
@@ -23,25 +24,30 @@ Enable semantic search and relationship discovery across Agor's sessions, tasks,
 ## User Value
 
 ### Discovery & Navigation
+
 - "I remember an agent worked on authentication... but which session was that?"
 - "Where did we discuss rate limiting strategies?"
 - "Find all places where we talked about WebSocket performance"
 
 ### Context Retrieval for New Work
+
 - Starting a new session: "Search all previous work in this worktree for relevant context about the payment system"
 - Agent onboarding: "Before I start, let me see what's already been tried/discussed"
 
 ### Cross-Session Learning
+
 - "Show me all sessions where agents struggled with TypeScript type errors"
 - "What solutions have other agents found for database migration issues?"
 - "Has anyone in any worktree dealt with CORS problems?"
 
 ### Institutional Knowledge (with archiving)
+
 - Deleted sessions still valuable: "That experimental branch is gone, but what did we learn?"
 - Failed approaches: "What didn't work and why?"
 - Prevents reinventing wheels across teams/worktrees
 
 ### Agent Collaboration
+
 - Agent A: "Search for any session that mentions Redis caching strategies"
 - Agents can learn from each other's work without explicit handoff
 - "Show me reports from sessions that worked on similar features"
@@ -83,11 +89,13 @@ Enable semantic search and relationship discovery across Agor's sessions, tasks,
 ### Technology Stack
 
 **Postgres Extensions:**
+
 - **Apache AGE** - OpenCypher graph queries in Postgres
 - **pgvector** - Vector similarity search (HNSW indexes)
 - **pg_trgm** - Fuzzy full-text search
 
 **Why Postgres-only?**
+
 - LibSQL/Turso: Stay lightweight, no extensions needed
 - Postgres: Premium features for teams wanting advanced search
 - Single DB for relational + graph + vectors (no separate services)
@@ -111,6 +119,7 @@ SELECT create_graph('agor_knowledge');
 ```
 
 **Node Types:**
+
 - `Session` - AI agent sessions
 - `Task` - User prompts/tasks within sessions
 - `Worktree` - Git worktrees
@@ -119,6 +128,7 @@ SELECT create_graph('agor_knowledge');
 - `Problem` - Issues encountered/solved
 
 **Relationship Types:**
+
 - `[:WORKS_ON]` - Session → Worktree
 - `[:SPAWNED]` - Session → Session (parent/child)
 - `[:FORKED_FROM]` - Session → Session (fork relationship)
@@ -388,9 +398,7 @@ export class KnowledgeGraphIndexer extends EventEmitter {
       case 'task':
         return data.full_prompt || data.description;
       case 'message':
-        return typeof data.content === 'string'
-          ? data.content
-          : JSON.stringify(data.content);
+        return typeof data.content === 'string' ? data.content : JSON.stringify(data.content);
       case 'report':
         return data.content;
       default:
@@ -453,17 +461,21 @@ async function updateSessionGraph(db: Database, sessionId: string, data: any) {
       MATCH (w:Worktree {id: $worktree_id})
       MERGE (s)-[:WORKS_ON]->(w)
 
-      ${data.parent_session_id ? `
+      ${
+        data.parent_session_id
+          ? `
         WITH s
         MATCH (parent:Session {id: $parent_id})
         MERGE (s)-[:SPAWNED_FROM]->(parent)
-      ` : ''}
+      `
+          : ''
+      }
     $$, ${JSON.stringify({
       id: sessionId,
       title: data.title,
       worktree_id: data.worktree_id,
       status: data.status,
-      parent_id: data.parent_session_id
+      parent_id: data.parent_session_id,
     })})
   `);
 
@@ -520,7 +532,7 @@ export class SessionService extends Service<Session> {
     const indexer = app.get('knowledgeGraphIndexer');
 
     // Hook into lifecycle events
-    this.on('created', async (session) => {
+    this.on('created', async session => {
       // Queue for indexing (non-blocking)
       await indexer.enqueue({
         entity_type: 'session',
@@ -531,7 +543,7 @@ export class SessionService extends Service<Session> {
       });
     });
 
-    this.on('patched', async (session) => {
+    this.on('patched', async session => {
       await indexer.enqueue({
         entity_type: 'session',
         entity_id: session.id,
@@ -541,7 +553,7 @@ export class SessionService extends Service<Session> {
       });
     });
 
-    this.on('removed', async (session) => {
+    this.on('removed', async session => {
       await indexer.enqueue({
         entity_type: 'session',
         entity_id: session.id,
@@ -578,34 +590,34 @@ Agents interact with the knowledge graph via MCP tools.
 ```
 
 **Example:**
+
 ```typescript
 agor_knowledge_search({
-  query: "authentication token refresh strategies",
-  worktree_id: "019a3af2",
-  entity_types: ["session", "task"],
-  limit: 10
-})
-
-// Returns:
-[
-  {
-    entity_type: "session",
-    entity_id: "abc123",
-    title: "Implement JWT refresh tokens",
+  query: 'authentication token refresh strategies',
+  worktree_id: '019a3af2',
+  entity_types: ['session', 'task'],
+  limit: 10,
+})[
+  // Returns:
+  ({
+    entity_type: 'session',
+    entity_id: 'abc123',
+    title: 'Implement JWT refresh tokens',
     similarity: 0.92,
-    preview: "Added refresh token rotation with Redis..."
+    preview: 'Added refresh token rotation with Redis...',
   },
   {
-    entity_type: "task",
-    entity_id: "def456",
-    description: "Fix token expiration handling",
+    entity_type: 'task',
+    entity_id: 'def456',
+    description: 'Fix token expiration handling',
     similarity: 0.87,
-    preview: "Updated auth middleware to check expiry..."
-  }
-]
+    preview: 'Updated auth middleware to check expiry...',
+  })
+];
 ```
 
 **Implementation:**
+
 ```typescript
 async find(params) {
   const { query, worktree_id, entity_types = ['session', 'task'] } = params;
@@ -649,46 +661,48 @@ async find(params) {
 **Examples:**
 
 **Find files edited by a session:**
+
 ```typescript
 agor_knowledge_traverse({
-  from_id: "session:abc123",
-  relationship: "EDITED",
-  direction: "outbound",
-  depth: 1
-})
-
-// Returns:
-[
-  { type: "File", id: "src/auth.ts", path: "src/auth.ts" },
-  { type: "File", id: "src/middleware/jwt.ts", path: "src/middleware/jwt.ts" }
-]
+  from_id: 'session:abc123',
+  relationship: 'EDITED',
+  direction: 'outbound',
+  depth: 1,
+})[
+  // Returns:
+  ({ type: 'File', id: 'src/auth.ts', path: 'src/auth.ts' },
+  { type: 'File', id: 'src/middleware/jwt.ts', path: 'src/middleware/jwt.ts' })
+];
 ```
 
 **Find sessions that edited a file:**
+
 ```typescript
 agor_knowledge_traverse({
-  from_id: "file:src/auth.ts",
-  relationship: "EDITED",
-  direction: "inbound",
-  depth: 1
-})
+  from_id: 'file:src/auth.ts',
+  relationship: 'EDITED',
+  direction: 'inbound',
+  depth: 1,
+});
 
 // Returns sessions that touched src/auth.ts
 ```
 
 **Find session ancestry:**
+
 ```typescript
 agor_knowledge_traverse({
-  from_id: "session:abc123",
-  relationship: "SPAWNED_FROM",
-  direction: "outbound",
-  depth: 5
-})
+  from_id: 'session:abc123',
+  relationship: 'SPAWNED_FROM',
+  direction: 'outbound',
+  depth: 5,
+});
 
 // Returns parent/grandparent/etc sessions
 ```
 
 **Implementation:**
+
 ```typescript
 async traverse(params) {
   const { from_id, relationship, direction = 'outbound', depth = 2 } = params;
@@ -727,6 +741,7 @@ async traverse(params) {
 ```
 
 **Example: Find sessions with successful spawned children:**
+
 ```typescript
 agor_knowledge_graph_query({
   cypher: `
@@ -738,8 +753,8 @@ agor_knowledge_graph_query({
     RETURN parent, successful_children
     ORDER BY successful_children DESC
   `,
-  params: { worktree_id: "019a3af2" }
-})
+  params: { worktree_id: '019a3af2' },
+});
 ```
 
 ---
@@ -769,18 +784,19 @@ agor_knowledge_graph_query({
 ```
 
 **Example: Find completed sessions about TypeScript errors:**
+
 ```typescript
 agor_knowledge_hybrid_search({
-  query: "fixing TypeScript type errors",
-  worktree_id: "019a3af2",
+  query: 'fixing TypeScript type errors',
+  worktree_id: '019a3af2',
   graph_filters: {
-    concepts: ["TypeScript"],
-    file_patterns: ["*.ts"]
+    concepts: ['TypeScript'],
+    file_patterns: ['*.ts'],
   },
   metadata_filters: {
-    status: "completed"
-  }
-})
+    status: 'completed',
+  },
+});
 
 // Returns sessions that:
 // 1. Are semantically similar to "fixing TypeScript type errors"
@@ -790,6 +806,7 @@ agor_knowledge_hybrid_search({
 ```
 
 **Implementation:**
+
 ```typescript
 async hybridSearch(params) {
   const { query, worktree_id, graph_filters, metadata_filters } = params;
@@ -876,6 +893,7 @@ async hybridSearch(params) {
 ```
 
 **Example: Explore concepts related to "authentication":**
+
 ```typescript
 agor_knowledge_concept_map({
   concept: "authentication",
@@ -901,6 +919,7 @@ agor_knowledge_concept_map({
 ```
 
 **Implementation:**
+
 ```typescript
 async conceptMap(params) {
   const { concept, worktree_id, depth = 2, min_mentions = 2 } = params;
@@ -940,12 +959,13 @@ async conceptMap(params) {
 ```
 
 **Example:**
+
 ```typescript
 agor_knowledge_find_similar_sessions({
-  session_id: "abc123",
-  similarity_aspects: ["files_edited", "concepts"],
-  limit: 5
-})
+  session_id: 'abc123',
+  similarity_aspects: ['files_edited', 'concepts'],
+  limit: 5,
+});
 
 // Returns sessions that:
 // 1. Edited overlapping files
@@ -964,27 +984,28 @@ Agent starts with semantic search, then explores relationships:
 ```typescript
 // Step 1: Find relevant sessions
 const sessions = await agor_knowledge_search({
-  query: "vector databases",
-  worktree_id: "019a3af2",
-  limit: 10
+  query: 'vector databases',
+  worktree_id: '019a3af2',
+  limit: 10,
 });
 
 // Step 2: Explore what files they touched
 const files = await agor_knowledge_traverse({
   from_id: sessions[0].id,
-  relationship: "EDITED",
-  direction: "outbound"
+  relationship: 'EDITED',
+  direction: 'outbound',
 });
 
 // Step 3: Find other sessions that touched same files
 const relatedSessions = await agor_knowledge_traverse({
   from_id: files[0].id,
-  relationship: "EDITED",
-  direction: "inbound"
+  relationship: 'EDITED',
+  direction: 'inbound',
 });
 ```
 
 **Agent reasoning:**
+
 - "Let me search for sessions about vector databases"
 - "Found 3 sessions. Let me see what files they touched"
 - "Interesting, they edited db/schema.ts. Who else touched that file?"
@@ -999,17 +1020,17 @@ Agent uses graph structure, then filters by semantic relevance:
 ```typescript
 // Step 1: Find all descendants
 const descendants = await agor_knowledge_traverse({
-  from_id: "parent-session",
-  relationship: "SPAWNED",
-  direction: "outbound",
-  depth: 3
+  from_id: 'parent-session',
+  relationship: 'SPAWNED',
+  direction: 'outbound',
+  depth: 3,
 });
 
 // Step 2: Filter to only those about authentication
 const filtered = await agor_knowledge_search({
-  query: "authentication JWT tokens",
+  query: 'authentication JWT tokens',
   entity_ids: descendants.map(d => d.id), // Pre-filtered set
-  min_similarity: 0.7
+  min_similarity: 0.7,
 });
 ```
 
@@ -1022,19 +1043,19 @@ Agent discovers implicit relationships through concepts:
 ```typescript
 // Step 1: Find concepts related to WebSocket
 const conceptMap = await agor_knowledge_concept_map({
-  concept: "WebSocket",
-  worktree_id: "019a3af2",
-  min_mentions: 2
+  concept: 'WebSocket',
+  worktree_id: '019a3af2',
+  min_mentions: 2,
 });
 
 // Returns: WebSocket often mentioned with Redis (6 sessions)
 
 // Step 2: Find those sessions
 const sessions = await agor_knowledge_hybrid_search({
-  query: "WebSocket Redis real-time",
+  query: 'WebSocket Redis real-time',
   graph_filters: {
-    concepts: ["WebSocket", "Redis"]
-  }
+    concepts: ['WebSocket', 'Redis'],
+  },
 });
 ```
 
@@ -1046,15 +1067,15 @@ Vector search with graph filters:
 
 ```typescript
 const results = await agor_knowledge_hybrid_search({
-  query: "database migration schema changes",
-  worktree_id: "019a3af2",
+  query: 'database migration schema changes',
+  worktree_id: '019a3af2',
   graph_filters: {
-    relationships: ["SOLVED"], // Only sessions that solved problems
-    file_patterns: ["*.sql", "migrations/*"]
+    relationships: ['SOLVED'], // Only sessions that solved problems
+    file_patterns: ['*.sql', 'migrations/*'],
   },
   metadata_filters: {
-    status: "completed"
-  }
+    status: 'completed',
+  },
 });
 
 // Returns: Completed sessions about migrations that solved problems
@@ -1139,34 +1160,40 @@ Want me to open those files?"
 ## Implementation Phases
 
 ### Phase 1: Foundation (Postgres + Schema)
+
 - [ ] Add Postgres support to Agor (alongside SQLite)
 - [ ] Create migrations for AGE + pgvector extensions
 - [ ] Create `embeddings` and `index_queue` tables
 - [ ] Build basic embedding service (OpenAI API)
 
 ### Phase 2: Background Indexer
+
 - [ ] Implement `KnowledgeGraphIndexer` class
 - [ ] Hook into Feathers service events (created/patched/removed)
 - [ ] Build job queue processor (polling + batch processing)
 - [ ] Add concept extraction (regex-based, simple)
 
 ### Phase 3: MCP Tools (Core)
+
 - [ ] `agor_knowledge_search` - Vector similarity search
 - [ ] `agor_knowledge_traverse` - Graph navigation
 - [ ] Test with agents using both tools
 
 ### Phase 4: MCP Tools (Advanced)
+
 - [ ] `agor_knowledge_hybrid_search` - Combined queries
 - [ ] `agor_knowledge_concept_map` - Concept discovery
 - [ ] `agor_knowledge_graph_query` - Raw Cypher access
 
 ### Phase 5: UI & Polish
+
 - [ ] Search UI in Agor (global search bar)
 - [ ] Visualize knowledge graph (React Flow?)
 - [ ] Index status dashboard (queue depth, indexing rate)
 - [ ] Backfill tool for existing data
 
 ### Phase 6: Optimization
+
 - [ ] Batch embedding API calls (OpenAI batch API)
 - [ ] Local embeddings (sentence-transformers, no API cost)
 - [ ] Smart chunking for long content
@@ -1177,6 +1204,7 @@ Want me to open those files?"
 ## Open Questions
 
 ### 1. Embedding Model Choice
+
 - **OpenAI ada-002:** Simple API, proven, costs ~$0.10/1M tokens
 - **Local (sentence-transformers):** Free, privacy, slower, less accurate
 - **Hybrid:** Use local for dev, OpenAI for prod?
@@ -1184,6 +1212,7 @@ Want me to open those files?"
 **Recommendation:** Start with OpenAI, add local option later.
 
 ### 2. Concept Extraction Strategy
+
 - **Regex patterns:** Fast, deterministic, limited
 - **NLP (spaCy):** Better, requires Python bridge
 - **LLM (GPT-4o-mini):** Best quality, costs money, slower
@@ -1192,6 +1221,7 @@ Want me to open those files?"
 **Recommendation:** Start with regex, upgrade to LLM later.
 
 ### 3. Archive vs Delete
+
 - Currently: Delete session → gone forever
 - With KG: Soft delete → remove from board, keep in graph?
 - Privacy concerns: How long to keep embeddings?
@@ -1199,6 +1229,7 @@ Want me to open those files?"
 **Recommendation:** Add `archived` flag to sessions, keep in graph but hide from UI.
 
 ### 4. Search Scope Permissions
+
 - Can agents search other users' sessions?
 - Team-scoped vs user-scoped knowledge graphs?
 - Privacy modes: "Share my learnings" vs "Private work"?
@@ -1206,6 +1237,7 @@ Want me to open those files?"
 **Recommendation:** Start with worktree-scoped (all sessions in worktree searchable), add privacy later.
 
 ### 5. Performance at Scale
+
 - How many sessions before graph queries slow down?
 - Index maintenance costs?
 - When to prune old embeddings?
@@ -1217,17 +1249,20 @@ Want me to open those files?"
 ## Success Metrics
 
 **Indexing Performance:**
+
 - Queue processing rate: >50 jobs/sec
 - Embedding latency: <500ms per entity
 - Index lag: <5 minutes from entity creation to searchable
 
 **Search Quality:**
+
 - Relevance: Top-3 results useful >80% of time
 - Graph traversal: <100ms for 2-hop queries
 - Hybrid search: Improves precision by >30% vs vector-only
 
 **Agent Adoption:**
-- >50% of spawned sessions use knowledge search
+
+- > 50% of spawned sessions use knowledge search
 - Agents discover related work before starting (reduces duplication)
 - Session quality improves (measured by success rate)
 
@@ -1236,11 +1271,13 @@ Want me to open those files?"
 ## Related Work
 
 **Similar systems:**
+
 - **Anthropic's Workbench:** Context management, but no graph
 - **Cursor/Copilot:** Code search, but no session history
 - **LangChain/LlamaIndex:** RAG frameworks, but not integrated into dev tools
 
 **Novel aspects:**
+
 - Session-centric knowledge graph (not just code)
 - Background indexing (doesn't block user)
 - Hybrid vector + graph (best of both worlds)

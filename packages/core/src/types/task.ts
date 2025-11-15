@@ -60,7 +60,8 @@ export interface Task {
   model?: string;
 
   // Raw SDK response - single source of truth for token accounting
-  // Access token usage, context window, costs, etc. directly from this field
+  // Stores the unmutated SDK event (turn.completed for Codex, Finished for Gemini, etc.)
+  // Access token usage, context window, costs, etc. via normalizers
   // Optional to support legacy tasks that don't have this field
   raw_sdk_response?: RawSdkResponse;
 

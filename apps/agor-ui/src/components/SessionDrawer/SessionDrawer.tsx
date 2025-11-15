@@ -12,6 +12,7 @@ import type {
   Worktree,
 } from '@agor/core/types';
 import { SessionStatus, TaskStatus } from '@agor/core/types';
+import { normalizeRawSdkResponse } from '@agor/core/utils/sdk-normalizer';
 import {
   ApiOutlined,
   BranchesOutlined,
@@ -252,65 +253,59 @@ const SessionDrawer = ({
   }, [client, session]); // Re-run when client or session changes
 
   // Calculate token totals and breakdown across all tasks (from raw SDK responses)
-  // IMPORTANT: Normalize tokens based on agentic_tool since different tools report differently:
-  // - Codex: input_tokens INCLUDES cached tokens (cache_read_tokens is a subset)
-  // - Claude/Gemini: input_tokens EXCLUDES cached tokens
+  // Use normalizer to handle different SDK formats consistently
   const tokenBreakdown = React.useMemo(() => {
+    if (!session?.agentic_tool) {
+      return { total: 0, input: 0, output: 0, cacheRead: 0, cacheCreation: 0, cost: 0 };
+    }
+
     return tasks.reduce(
       (acc, task) => {
-        const tokenUsage = task.raw_sdk_response?.tokenUsage;
-        if (!tokenUsage) return acc;
+        if (!task.raw_sdk_response) return acc;
 
-        const rawInput = tokenUsage.input_tokens || 0;
-        const rawOutput = tokenUsage.output_tokens || 0;
-        const cacheRead = tokenUsage.cache_read_tokens || 0;
-
-        // Normalize input tokens based on agentic tool
-        const normalizedInput =
-          session?.agentic_tool === 'codex'
-            ? rawInput - cacheRead // For Codex: subtract cached portion
-            : rawInput; // For Claude/Gemini: already fresh
+        // Normalize SDK response to get consistent token counts
+        const normalized = normalizeRawSdkResponse(task.raw_sdk_response, session.agentic_tool);
 
         return {
-          total: acc.total + normalizedInput + rawOutput,
-          input: acc.input + normalizedInput,
-          output: acc.output + rawOutput,
-          cacheRead: acc.cacheRead + cacheRead,
-          cacheCreation: acc.cacheCreation + (tokenUsage.cache_creation_tokens || 0),
-          cost: acc.cost, // Cost calculation removed - can be computed on the fly if needed
+          total: acc.total + normalized.tokenUsage.totalTokens,
+          input: acc.input + normalized.tokenUsage.inputTokens,
+          output: acc.output + normalized.tokenUsage.outputTokens,
+          cacheRead: acc.cacheRead + normalized.tokenUsage.cacheReadTokens,
+          cacheCreation: acc.cacheCreation + normalized.tokenUsage.cacheCreationTokens,
+          cost: acc.cost + (normalized.estimatedCostUsd || 0),
         };
       },
       { total: 0, input: 0, output: 0, cacheRead: 0, cacheCreation: 0, cost: 0 }
     );
   }, [tasks, session?.agentic_tool]);
 
-  // Get latest context window from most recent task (directly from SDK response)
+  // Get latest context window from most recent task (normalized from SDK response)
   const latestContextWindow = React.useMemo(() => {
+    if (!session?.agentic_tool) return null;
+
     // Find most recent task with raw SDK response
     for (let i = tasks.length - 1; i >= 0; i--) {
       const task = tasks[i];
-      const sdkResponse = task.raw_sdk_response;
-      // Only Claude, Codex, and Gemini provide contextWindow (OpenCode doesn't)
-      if (
-        sdkResponse &&
-        'contextWindow' in sdkResponse &&
-        sdkResponse.contextWindow !== undefined &&
-        'contextWindowLimit' in sdkResponse &&
-        sdkResponse.contextWindowLimit
-      ) {
-        return {
-          used: sdkResponse.contextWindow,
-          limit: sdkResponse.contextWindowLimit,
-          taskMetadata: {
-            model: task.model,
-            duration_ms: task.duration_ms,
-            raw_sdk_response: task.raw_sdk_response,
-          },
-        };
+      if (task.raw_sdk_response) {
+        // Normalize to get context window values
+        const normalized = normalizeRawSdkResponse(task.raw_sdk_response, session.agentic_tool);
+
+        if (normalized.contextWindow > 0 && normalized.contextWindowLimit > 0) {
+          return {
+            used: normalized.contextWindow,
+            limit: normalized.contextWindowLimit,
+            taskMetadata: {
+              model: task.model,
+              duration_ms: task.duration_ms,
+              agentic_tool: session.agentic_tool,
+              raw_sdk_response: task.raw_sdk_response,
+            },
+          };
+        }
       }
     }
     return null;
-  }, [tasks]);
+  }, [tasks, session?.agentic_tool]);
 
   // Calculate gradient for footer background
   const footerGradient = React.useMemo(() => {

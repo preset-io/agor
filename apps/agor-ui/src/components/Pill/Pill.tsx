@@ -1,4 +1,5 @@
-import type { SessionStatus, TaskStatus } from '@agor/core/types';
+import type { AgenticToolName, SessionStatus, TaskStatus } from '@agor/core/types';
+import { normalizeRawSdkResponse } from '@agor/core/utils/sdk-normalizer';
 import {
   ApartmentOutlined,
   BranchesOutlined,
@@ -172,8 +173,10 @@ interface ContextWindowPillProps extends BasePillProps {
   taskMetadata?: {
     model?: string;
     duration_ms?: number;
+    // Agentic tool name (needed to normalize SDK response)
+    agentic_tool?: string;
     // Raw SDK response - single source of truth for token accounting
-    raw_sdk_response?: import('@agor/core/types').RawSdkResponse;
+    raw_sdk_response?: unknown;
   };
 }
 
@@ -192,16 +195,17 @@ const ContextWindowPopoverContent: React.FC<{
   // Build collapsible items for advanced sections
   const advancedItems = [];
 
-  // Extract token usage from raw SDK response
+  // Extract and normalize SDK response
   const sdkResponse = taskMetadata?.raw_sdk_response;
-  const tokenUsage = sdkResponse?.tokenUsage;
+  const agenticTool = taskMetadata?.agentic_tool as AgenticToolName | undefined;
+
+  // Normalize SDK response to get standardized token breakdown
+  const normalized =
+    sdkResponse && agenticTool ? normalizeRawSdkResponse(sdkResponse, agenticTool) : null;
 
   // Add per-model usage if available (Claude Code multi-model)
-  if (
-    sdkResponse?.tool === 'claude-code' &&
-    sdkResponse.modelUsage &&
-    Object.keys(sdkResponse.modelUsage).length > 0
-  ) {
+  // Check for modelUsage field (only Claude SDK has this)
+  if (sdkResponse && 'modelUsage' in sdkResponse && sdkResponse.modelUsage) {
     advancedItems.push({
       key: 'per-model',
       label: 'Per-Model Usage',
@@ -278,22 +282,23 @@ const ContextWindowPopoverContent: React.FC<{
         </div>
       </div>
 
-      {/* Token breakdown - from raw SDK response */}
-      {tokenUsage && (
+      {/* Token breakdown - normalized from SDK response */}
+      {normalized && (
         <div style={{ marginBottom: 16 }}>
           <div style={{ fontWeight: 500, marginBottom: 6 }}>Token Breakdown</div>
           <div style={{ fontSize: '0.9em', marginLeft: 12, color: token.colorTextSecondary }}>
-            <div>Input: {tokenUsage.input_tokens?.toLocaleString() || 0}</div>
-            <div>Output: {tokenUsage.output_tokens?.toLocaleString() || 0}</div>
-            {tokenUsage.cache_creation_tokens !== undefined &&
-              tokenUsage.cache_creation_tokens > 0 && (
-                <div>Cache creation: {tokenUsage.cache_creation_tokens.toLocaleString()}</div>
-              )}
-            {tokenUsage.cache_read_tokens !== undefined && tokenUsage.cache_read_tokens > 0 && (
-              <div>Cache read: {tokenUsage.cache_read_tokens.toLocaleString()}</div>
+            <div>Input: {normalized.tokenUsage.inputTokens.toLocaleString()}</div>
+            <div>Output: {normalized.tokenUsage.outputTokens.toLocaleString()}</div>
+            {normalized.tokenUsage.cacheCreationTokens > 0 && (
+              <div>
+                Cache creation: {normalized.tokenUsage.cacheCreationTokens.toLocaleString()}
+              </div>
+            )}
+            {normalized.tokenUsage.cacheReadTokens > 0 && (
+              <div>Cache read: {normalized.tokenUsage.cacheReadTokens.toLocaleString()}</div>
             )}
             <div style={{ marginTop: 4, fontWeight: 500, color: token.colorText }}>
-              Total: {tokenUsage.total_tokens?.toLocaleString() || 0}
+              Total: {normalized.tokenUsage.totalTokens.toLocaleString()}
             </div>
           </div>
         </div>

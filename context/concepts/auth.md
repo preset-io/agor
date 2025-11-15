@@ -20,11 +20,13 @@
 4. **Admin capabilities** - Users with admin role can execute arbitrary code via terminal access and environment controls under the daemon's system user account.
 
 **Treat every invited user as having:**
+
 - Full read/write access to all Agor data
 - Access to all configured API keys
 - Ability to execute code as the daemon's Unix user (if admin)
 
 **Deployment recommendations:**
+
 - Keep daemon behind firewall, VPN, or private network
 - Only invite trusted team members
 - Rotate API credentials frequently

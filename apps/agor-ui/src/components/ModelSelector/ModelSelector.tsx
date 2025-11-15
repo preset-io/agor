@@ -61,22 +61,6 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   // Determine which model list to use based on agentic_tool (with backwards compat for agent prop)
   const effectiveTool = agentic_tool || agent || 'claude-code';
 
-  const modelList =
-    effectiveTool === 'codex'
-      ? CODEX_MODEL_OPTIONS
-      : effectiveTool === 'gemini'
-        ? GEMINI_MODEL_OPTIONS
-        : effectiveTool === 'opencode'
-          ? [] // Not used for OpenCode
-          : AVAILABLE_CLAUDE_MODEL_ALIASES;
-
-  // Determine initial mode based on whether the value is in the aliases list
-  // If no value provided, default to 'alias' mode (recommended)
-  const isValueInAliases = value?.model ? modelList.some((m) => m.id === value.model) : true; // Default to true when no value (will use alias mode)
-
-  const initialMode = value?.mode || (isValueInAliases ? 'alias' : 'exact');
-  const [mode, setMode] = useState<'alias' | 'exact'>(initialMode);
-
   // OpenCode uses a different UI (2 dropdowns: provider + model)
   if (effectiveTool === 'opencode') {
     return (
@@ -101,6 +85,20 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       />
     );
   }
+
+  const modelList =
+    effectiveTool === 'codex'
+      ? CODEX_MODEL_OPTIONS
+      : effectiveTool === 'gemini'
+        ? GEMINI_MODEL_OPTIONS
+        : AVAILABLE_CLAUDE_MODEL_ALIASES;
+
+  // Determine initial mode based on whether the value is in the aliases list
+  // If no value provided, default to 'alias' mode (recommended)
+  const isValueInAliases = value?.model ? modelList.some((m) => m.id === value.model) : true; // Default to true when no value (will use alias mode)
+
+  const initialMode = value?.mode || (isValueInAliases ? 'alias' : 'exact');
+  const [mode, setMode] = useState<'alias' | 'exact'>(initialMode);
 
   const handleModeChange = (newMode: 'alias' | 'exact') => {
     setMode(newMode);

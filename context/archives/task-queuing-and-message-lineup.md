@@ -15,6 +15,7 @@ This document analyzes the feasibility of implementing **task queuing** (line-up
 **Key Discovery:** The Claude Agent SDK provides interrupt capabilities but **no native message queuing**. Claude Code CLI implements this via a custom **h2A dual-buffer async queue** that sits outside the SDK.
 
 **Recommendation:** Implement a **hybrid approach** with three tiers of sophistication:
+
 1. **Simple Sequential Queuing** (MVP) - Queue tasks at application layer, execute sequentially
 2. **Smart Injection** (Phase 2) - Interrupt running task to inject high-priority messages
 3. **Parallel Execution** (Future) - Multiple concurrent sessions per worktree
@@ -40,6 +41,7 @@ Task B completes
 ```
 
 **Pain Points:**
+
 - User must wait for each task to complete before queuing next thought
 - Context switching - user thinks of Task B while waiting for Task A
 - Inefficient workflow - prevents "fire and forget" batch execution
@@ -61,6 +63,7 @@ User returns to find all tasks completed
 ```
 
 **Benefits:**
+
 - Non-blocking submission - queue thoughts as they arise
 - Batch execution - set up work pipeline and context switch away
 - Better UX - matches mental model of delegating to assistant
@@ -85,6 +88,7 @@ User returns to find all tasks completed
 #### How Claude Code CLI Does It
 
 **Architecture:**
+
 ```
 ┌──────────────────────────────────────┐
 │  Main Agent Loop (nO)                │
@@ -102,12 +106,14 @@ User returns to find all tasks completed
 ```
 
 **Key Features:**
+
 1. **Dual-buffer design** - Separate queues for active and pending messages
 2. **Pause/resume** - Can pause ongoing operation and resume later
 3. **Mid-task injection** - Users can inject new instructions while agent is working
 4. **Seamless plan adjustment** - Agent adapts plan based on queued messages
 
 **Implementation Status:**
+
 - Feature request filed March 2025 ([Issue #535](https://github.com/anthropics/claude-code/issues/535))
 - Team confirmed "Working on it!" and "this is in!" by April 2025
 - Two submission modes proposed:
@@ -115,6 +121,7 @@ User returns to find all tasks completed
   - **Enter** - Inject directly into ongoing task (current behavior)
 
 **Technical Details:**
+
 - Queue is **outside the SDK** - custom application-layer implementation
 - Works in tandem with main agent loop
 - Provides "real-time steering capabilities" via async message handling
@@ -133,6 +140,7 @@ User returns to find all tasks completed
 ❌ **No SDK** - GitHub-hosted service, not embeddable
 
 **Execution Model:**
+
 - Tasks assigned via issues or PR comments
 - Background execution in GitHub Actions sandbox
 - Single pull request output per task
@@ -155,6 +163,7 @@ User returns to find all tasks completed
 ❌ **Limited public SDK docs** - Release notes don't detail queue architecture
 
 **Execution Model:**
+
 - Present plan for review before executing
 - User can approve/deny/edit suggested changes
 - Integrated diff views for code review
@@ -185,6 +194,7 @@ User returns to find all tasks completed
 **Description:** Application-layer task queue, execute one at a time
 
 **Architecture:**
+
 ```typescript
 // Session-level task queue
 Session {
@@ -203,6 +213,7 @@ Task {
 ```
 
 **Execution Flow:**
+
 ```
 1. User submits prompt → Create Task with status='queued'
 2. Add task_id to session.task_queue
@@ -218,6 +229,7 @@ Task {
 ```
 
 **Implementation:**
+
 ```typescript
 // apps/agor-daemon/src/services/sessions.ts
 export class SessionsService {
@@ -255,7 +267,7 @@ export class SessionsService {
       // Mark session and task as running
       await this.sessionsRepo.update(sessionId, {
         status: 'running',
-        current_task_id: taskId
+        current_task_id: taskId,
       });
       await this.tasksRepo.update(taskId, { status: 'running' });
 
@@ -285,6 +297,7 @@ export class SessionsService {
 ```
 
 **Pros:**
+
 - ✅ Simple to implement (~50 LOC)
 - ✅ Works with all agents (SDK-agnostic)
 - ✅ Solves core use case (queue and forget)
@@ -292,6 +305,7 @@ export class SessionsService {
 - ✅ Persists across daemon restarts (queue stored in DB)
 
 **Cons:**
+
 - ❌ Cannot interrupt running task to inject urgent message
 - ❌ No priority queue (FIFO only)
 - ❌ No parallel execution (one task at a time per session)
@@ -305,6 +319,7 @@ export class SessionsService {
 **Description:** Allow injecting high-priority messages into running task
 
 **Architecture:**
+
 ```typescript
 Task {
   status: 'queued' | 'running' | 'interrupting' | 'completed' | 'failed'
@@ -322,6 +337,7 @@ Session {
 ```
 
 **Execution Flow:**
+
 ```
 1. User submits urgent prompt → Create Task with priority='urgent'
 2. If session.status === 'running':
@@ -335,6 +351,7 @@ Session {
 ```
 
 **SDK Integration:**
+
 ```typescript
 // packages/core/src/tools/claude/claude-tool.ts
 export class ClaudeTool implements ITool {
@@ -346,7 +363,12 @@ export class ClaudeTool implements ITool {
     taskId?: TaskID,
     streamingCallbacks?: StreamingCallbacks
   ): Promise<TaskResult> {
-    const result = query({ prompt, options: { /* ... */ } });
+    const result = query({
+      prompt,
+      options: {
+        /* ... */
+      },
+    });
 
     // Store Query for interrupt support
     this.activeQueries.set(sessionId, result);
@@ -375,12 +397,14 @@ export class ClaudeTool implements ITool {
 ```
 
 **Pros:**
+
 - ✅ Allows urgent message injection (user can steer mid-task)
 - ✅ Better UX - don't wait for long task to complete
 - ✅ Graceful interruption - save partial state
 - ✅ Mirrors Claude Code CLI "inject via Enter" behavior
 
 **Cons:**
+
 - ⚠️ **Interrupt is buggy** - Known SDK issue where interrupt doesn't actually stop execution
 - ❌ Requires SDK support (Claude only for now)
 - ❌ More complex state management (interrupted tasks, resume logic)
@@ -389,6 +413,7 @@ export class ClaudeTool implements ITool {
 **When to Use:** Phase 2 after MVP, once SDK interrupt is reliable
 
 **Mitigation for Interrupt Bug:**
+
 - Poll task status after calling `interrupt()`
 - Timeout after 5s if task doesn't stop
 - Fallback: Let task complete, then prioritize urgent task
@@ -401,6 +426,7 @@ export class ClaudeTool implements ITool {
 **Description:** Run multiple agent sessions concurrently for same worktree
 
 **Architecture:**
+
 ```typescript
 Worktree {
   worktree_id: WorktreeID
@@ -429,6 +455,7 @@ async function canExecuteTaskSafely(
 ```
 
 **Execution Flow:**
+
 ```
 1. User creates Session A, submits Task 1 (modifies auth.ts)
 2. Task 1 starts executing in Session A
@@ -441,6 +468,7 @@ async function canExecuteTaskSafely(
 **Conflict Resolution Strategies:**
 
 **Strategy 1: File-level Locking**
+
 ```typescript
 const fileLocks = new Map<string, TaskID>(); // filepath → taskId
 
@@ -463,6 +491,7 @@ async function acquireFileLocks(task: Task): Promise<boolean> {
 ```
 
 **Strategy 2: Optimistic Concurrency**
+
 ```typescript
 async function executeAndMerge(task: Task) {
   const startSHA = await getCurrentSHA(task.worktree_id);
@@ -486,6 +515,7 @@ async function executeAndMerge(task: Task) {
 ```
 
 **Strategy 3: Sequential Commit Queue**
+
 ```typescript
 // Tasks execute in parallel, but commits are sequential
 async function executeTask(task: Task) {
@@ -501,11 +531,13 @@ async function executeTask(task: Task) {
 ```
 
 **Pros:**
+
 - ✅ True parallelism - multiple tasks execute simultaneously
 - ✅ Maximum throughput - don't wait for independent tasks
 - ✅ User can organize work by session (e.g., Session A = feature, Session B = docs)
 
 **Cons:**
+
 - ❌ **High complexity** - git conflict resolution, file locking, race conditions
 - ❌ **Unclear file scope** - Can't predict which files agent will modify before execution
 - ❌ **Merge conflicts** - User must resolve if agents touch same code
@@ -520,17 +552,17 @@ async function executeTask(task: Task) {
 
 ## Comparison Matrix
 
-| Feature | Option 1: Sequential Queue | Option 2: Smart Injection | Option 3: Parallel Execution |
-|---------|---------------------------|---------------------------|------------------------------|
-| **Complexity** | 🟢 Low (~50 LOC) | 🟡 Medium (~200 LOC) | 🔴 High (~500+ LOC) |
-| **SDK Support** | ✅ All agents | ⚠️ Claude only (requires interrupt) | ✅ All agents |
-| **Prevents blocking UX** | ✅ Yes | ✅ Yes | ✅ Yes |
-| **Urgent message injection** | ❌ No | ✅ Yes | ✅ Yes (via separate session) |
-| **Risk of conflicts** | 🟢 None | 🟡 Low (partial state) | 🔴 High (git merges) |
-| **Reliability** | ✅ Stable | ⚠️ Depends on SDK interrupt | 🟡 Requires conflict resolution |
-| **Cost efficiency** | ✅ One LLM call at a time | ✅ One LLM call at a time | ❌ Multiple concurrent calls |
-| **User mental model** | 🟢 Simple queue | 🟡 Medium (interrupts) | 🔴 Complex (sessions + tasks) |
-| **Time to implement** | 1-2 days | 3-5 days | 2-3 weeks |
+| Feature                      | Option 1: Sequential Queue | Option 2: Smart Injection           | Option 3: Parallel Execution    |
+| ---------------------------- | -------------------------- | ----------------------------------- | ------------------------------- |
+| **Complexity**               | 🟢 Low (~50 LOC)           | 🟡 Medium (~200 LOC)                | 🔴 High (~500+ LOC)             |
+| **SDK Support**              | ✅ All agents              | ⚠️ Claude only (requires interrupt) | ✅ All agents                   |
+| **Prevents blocking UX**     | ✅ Yes                     | ✅ Yes                              | ✅ Yes                          |
+| **Urgent message injection** | ❌ No                      | ✅ Yes                              | ✅ Yes (via separate session)   |
+| **Risk of conflicts**        | 🟢 None                    | 🟡 Low (partial state)              | 🔴 High (git merges)            |
+| **Reliability**              | ✅ Stable                  | ⚠️ Depends on SDK interrupt         | 🟡 Requires conflict resolution |
+| **Cost efficiency**          | ✅ One LLM call at a time  | ✅ One LLM call at a time           | ❌ Multiple concurrent calls    |
+| **User mental model**        | 🟢 Simple queue            | 🟡 Medium (interrupts)              | 🔴 Complex (sessions + tasks)   |
+| **Time to implement**        | 1-2 days                   | 3-5 days                            | 2-3 weeks                       |
 
 ---
 
@@ -539,12 +571,14 @@ async function executeTask(task: Task) {
 ### Phase 1: Simple Sequential Queue (MVP)
 
 **Ship This First:**
+
 - Application-layer task queue per session
 - FIFO execution (no priorities)
 - Status tracking: `queued → running → completed`
 - UI shows queue position and progress
 
 **User Experience:**
+
 ```
 User flow:
 1. Type prompt → Hit Enter → "Task added to queue (position 3)"
@@ -559,6 +593,7 @@ UI elements:
 ```
 
 **Implementation Checklist:**
+
 - [ ] Add `task_queue: TaskID[]` to Session model
 - [ ] Add `status: 'queued' | 'running' | ...` to Task model
 - [ ] Implement `SessionsService.enqueueTask()`
@@ -568,6 +603,7 @@ UI elements:
 - [ ] Test with multiple queued tasks
 
 **Success Criteria:**
+
 - ✅ User can queue 5+ tasks without waiting
 - ✅ Tasks execute sequentially without errors
 - ✅ Queue persists across daemon restart
@@ -576,11 +612,13 @@ UI elements:
 ### Phase 2: Priority Queue (Optional Enhancement)
 
 **Add Later if Users Request:**
+
 - Task priorities: `normal` | `urgent`
 - Urgent tasks jump to front of queue
 - UI option: "Submit as urgent" (keyboard shortcut)
 
 **Implementation:**
+
 ```typescript
 Session {
   task_queue: Array<{
@@ -603,11 +641,13 @@ function dequeueNextTask(queue): TaskID {
 ### Phase 3: Smart Injection (Wait for SDK Maturity)
 
 **Prerequisites:**
+
 - ✅ Claude SDK interrupt bug fixed
 - ✅ Users actively request mid-task injection feature
 - ✅ Phase 1 proven stable in production
 
 **Implementation:**
+
 - Store active `Query` objects for interrupt support
 - Add `stopTask()` to `ITool` interface (already done!)
 - Handle interrupted task state (resume or discard)
@@ -616,6 +656,7 @@ function dequeueNextTask(queue): TaskID {
 ### Phase 4: Parallel Execution (Future Research)
 
 **Only If:**
+
 - Users demand parallel execution for independent tasks
 - We solve git conflict resolution UX
 - We have clear file-level locking strategy
@@ -633,17 +674,28 @@ function dequeueNextTask(queue): TaskID {
 export const sessions = sqliteTable('sessions', {
   // ... existing fields
   status: text('status', {
-    enum: ['idle', 'running', 'completed', 'failed']
-  }).notNull().default('idle'),
+    enum: ['idle', 'running', 'completed', 'failed'],
+  })
+    .notNull()
+    .default('idle'),
   current_task_id: text('current_task_id'),
 });
 
 export const tasks = sqliteTable('tasks', {
   // ... existing fields
   status: text('status', {
-    enum: ['queued', 'running', 'stopping', 'awaiting_permission',
-           'completed', 'failed', 'stopped']
-  }).notNull().default('queued'),
+    enum: [
+      'queued',
+      'running',
+      'stopping',
+      'awaiting_permission',
+      'completed',
+      'failed',
+      'stopped',
+    ],
+  })
+    .notNull()
+    .default('queued'),
   queued_at: integer('queued_at', { mode: 'timestamp' }),
 });
 
@@ -660,14 +712,17 @@ export const task_queue = sqliteTable('task_queue', {
 **Design Choice:** Task queue in separate table vs JSON array?
 
 **Option A: JSON array in sessions.task_queue**
+
 ```typescript
 sessions.task_queue: TaskID[] = ['task-1', 'task-2', 'task-3']
 ```
+
 - ✅ Simple queries - single row update
 - ❌ Can't query/filter queue items with SQL
 - ❌ Awkward to remove item from middle of array
 
 **Option B: Separate task_queue table**
+
 ```typescript
 task_queue:
   | session_id | task_id | queue_position | priority |
@@ -676,6 +731,7 @@ task_queue:
   | session-1  | task-2  | 1              | urgent   |
   | session-1  | task-3  | 2              | normal   |
 ```
+
 - ✅ Rich queries - filter by priority, sort, pagination
 - ✅ Easy to reorder queue (update positions)
 - ✅ Can add metadata (queued_at, estimated_duration, etc.)
@@ -740,7 +796,7 @@ export class SessionsService extends FeathersService {
 
       // Update task and session status
       await this.app.service('tasks').patch(taskId, {
-        status: TaskStatus.RUNNING
+        status: TaskStatus.RUNNING,
       });
       await this.patch(sessionId, { current_task_id: taskId });
 
@@ -760,7 +816,6 @@ export class SessionsService extends FeathersService {
           status: TaskStatus.COMPLETED,
           completed_at: new Date().toISOString(),
         });
-
       } catch (error) {
         logger.error(`Task ${taskId} failed:`, error);
         await this.app.service('tasks').patch(taskId, {
@@ -779,7 +834,7 @@ export class SessionsService extends FeathersService {
       // Broadcast queue update
       this.emit('queue:updated', {
         session_id: sessionId,
-        queue: newQueue
+        queue: newQueue,
       });
 
       // Refresh session for next iteration
@@ -821,10 +876,7 @@ export class SessionsService extends FeathersService {
     return this.toolsRegistry.getTool(toolType);
   }
 
-  private createStreamingCallbacks(
-    sessionId: SessionID,
-    taskId: TaskID
-  ): StreamingCallbacks {
+  private createStreamingCallbacks(sessionId: SessionID, taskId: TaskID): StreamingCallbacks {
     // Return callbacks that emit FeathersJS events
     // (Implementation same as current streaming support)
     return {
@@ -832,24 +884,24 @@ export class SessionsService extends FeathersService {
         this.app.service('messages').emit('streaming:start', {
           message_id: msgId,
           task_id: taskId,
-          ...metadata
+          ...metadata,
         });
       },
       onStreamChunk: (msgId, chunk) => {
         this.app.service('messages').emit('streaming:chunk', {
           message_id: msgId,
-          chunk
+          chunk,
         });
       },
-      onStreamEnd: (msgId) => {
+      onStreamEnd: msgId => {
         this.app.service('messages').emit('streaming:end', {
-          message_id: msgId
+          message_id: msgId,
         });
       },
       onStreamError: (msgId, error) => {
         this.app.service('messages').emit('streaming:error', {
           message_id: msgId,
-          error: error.message
+          error: error.message,
         });
       },
     };
@@ -860,6 +912,7 @@ export class SessionsService extends FeathersService {
 ### UI Integration
 
 **Session Header Component:**
+
 ```tsx
 // apps/agor-ui/src/components/Session/SessionHeader.tsx
 export function SessionHeader({ session }: { session: Session }) {
@@ -888,15 +941,14 @@ export function SessionHeader({ session }: { session: Session }) {
         </Badge>
       )}
 
-      {session.status === 'idle' && queueLength === 0 && (
-        <Tag color="success">Idle</Tag>
-      )}
+      {session.status === 'idle' && queueLength === 0 && <Tag color="success">Idle</Tag>}
     </div>
   );
 }
 ```
 
 **Task Queue Panel:**
+
 ```tsx
 // apps/agor-ui/src/components/Session/TaskQueue.tsx
 export function TaskQueue({ session }: { session: Session }) {
@@ -910,11 +962,7 @@ export function TaskQueue({ session }: { session: Session }) {
           <List.Item
             actions={[
               task.status === 'queued' && (
-                <Button
-                  type="link"
-                  danger
-                  onClick={() => cancelTask(task.task_id)}
-                >
+                <Button type="link" danger onClick={() => cancelTask(task.task_id)}>
                   Cancel
                 </Button>
               ),
@@ -957,6 +1005,7 @@ function TaskStatusIcon({ status }: { status: TaskStatus }) {
 ```
 
 **WebSocket Hook:**
+
 ```tsx
 // apps/agor-ui/src/hooks/useTaskQueue.ts
 export function useTaskQueue(sessionId: SessionID) {
@@ -965,24 +1014,30 @@ export function useTaskQueue(sessionId: SessionID) {
 
   useEffect(() => {
     // Fetch initial queue
-    feathers.service('tasks').find({
-      query: {
-        session_id: sessionId,
-        status: { $in: ['queued', 'running'] },
-        $sort: { queued_at: 1 }, // FIFO order
-      },
-    }).then(result => setTasks(result.data));
+    feathers
+      .service('tasks')
+      .find({
+        query: {
+          session_id: sessionId,
+          status: { $in: ['queued', 'running'] },
+          $sort: { queued_at: 1 }, // FIFO order
+        },
+      })
+      .then(result => setTasks(result.data));
 
     // Listen for queue updates
     const onQueueUpdated = ({ session_id, queue }: any) => {
       if (session_id === sessionId) {
         // Refetch tasks
-        feathers.service('tasks').find({
-          query: {
-            task_id: { $in: queue },
-            $sort: { queued_at: 1 },
-          },
-        }).then(result => setTasks(result.data));
+        feathers
+          .service('tasks')
+          .find({
+            query: {
+              task_id: { $in: queue },
+              $sort: { queued_at: 1 },
+            },
+          })
+          .then(result => setTasks(result.data));
       }
     };
 
@@ -1006,6 +1061,7 @@ export function useTaskQueue(sessionId: SessionID) {
 **Problem:** Daemon crashes while processing task queue
 
 **Solution:**
+
 ```typescript
 // On daemon startup, resume any incomplete queues
 async function resumeIncompleteQueues() {
@@ -1017,7 +1073,7 @@ async function resumeIncompleteQueues() {
     // Reset current task to 'queued' if it was running
     if (session.current_task_id) {
       await db.tasks.update(session.current_task_id, {
-        status: 'queued'
+        status: 'queued',
       });
     }
 
@@ -1032,6 +1088,7 @@ async function resumeIncompleteQueues() {
 **Problem:** Agent throws error mid-task
 
 **Solution:**
+
 ```typescript
 // In processTaskQueue
 try {
@@ -1053,6 +1110,7 @@ try {
 ```
 
 **User Experience:**
+
 - Failed task shows red X in UI
 - Queue continues processing subsequent tasks
 - User can retry failed task manually
@@ -1062,6 +1120,7 @@ try {
 **Problem:** User wants to clear entire queue
 
 **Solution:**
+
 ```typescript
 async function clearTaskQueue(sessionId: SessionID) {
   const session = await sessionsRepo.findById(sessionId);
@@ -1092,6 +1151,7 @@ async function clearTaskQueue(sessionId: SessionID) {
 **Problem:** Agent asks for tool approval while executing queued task
 
 **Solution:**
+
 ```typescript
 // In tool.executeTask()
 if (requiresPermission(toolUse)) {
@@ -1123,6 +1183,7 @@ if (requiresPermission(toolUse)) {
 ```
 
 **User Experience:**
+
 - Queue pauses when permission requested
 - User sees notification: "Task 2 is requesting permission to run Bash command"
 - User approves/denies
@@ -1137,11 +1198,11 @@ if (requiresPermission(toolUse)) {
 ```typescript
 // Track queue performance
 metrics: {
-  queue_depth: number        // Current # of queued tasks
-  avg_queue_time_ms: number  // Time from queued → running
-  avg_task_duration_ms: number
-  tasks_completed_per_hour: number
-  task_failure_rate: number  // % of tasks that fail
+  queue_depth: number; // Current # of queued tasks
+  avg_queue_time_ms: number; // Time from queued → running
+  avg_task_duration_ms: number;
+  tasks_completed_per_hour: number;
+  task_failure_rate: number; // % of tasks that fail
 }
 ```
 
@@ -1152,20 +1213,20 @@ logger.info('Task queued', {
   session_id,
   task_id,
   queue_position,
-  queue_depth
+  queue_depth,
 });
 
 logger.info('Task execution started', {
   session_id,
   task_id,
-  wait_time_ms: Date.now() - task.queued_at
+  wait_time_ms: Date.now() - task.queued_at,
 });
 
 logger.info('Task execution completed', {
   session_id,
   task_id,
   duration_ms,
-  tokens_used
+  tokens_used,
 });
 ```
 
@@ -1194,10 +1255,12 @@ logger.info('Task execution completed', {
 **Scenario:** User queues 5 tasks, closes browser, reopens later
 
 **Option A:** Queue persists (stored in DB)
+
 - ✅ User can queue work and disconnect
 - ❌ User might forget about queued tasks
 
 **Option B:** Queue clears on session idle timeout
+
 - ✅ Prevents stale tasks piling up
 - ❌ User loses queued work if disconnect
 
@@ -1208,6 +1271,7 @@ logger.info('Task execution completed', {
 **Scenario:** Two users in same session, both queuing tasks
 
 **Option A:** Shared queue (FIFO across all users)
+
 ```
 Alice queues Task A
 Bob queues Task B
@@ -1216,6 +1280,7 @@ Alice queues Task C
 ```
 
 **Option B:** Per-user sub-queues
+
 ```
 Alice queues Task A, Task C
 Bob queues Task B
@@ -1229,11 +1294,13 @@ Bob queues Task B
 **Scenario:** Queued task spawns child session (subsession)
 
 **Option A:** Block queue until subsession completes
+
 ```
 Task 1 spawns subsession → Wait for subsession → Continue queue
 ```
 
 **Option B:** Let subsession run async, continue queue
+
 ```
 Task 1 spawns subsession → Don't wait → Process Task 2
 Subsession completes later
@@ -1250,11 +1317,13 @@ Subsession completes later
 **Approach:** Guide users to create separate session per task instead of queuing
 
 **Pros:**
+
 - ✅ No implementation needed
 - ✅ Users already understand multiple sessions
 - ✅ Natural parallelism if tasks are independent
 
 **Cons:**
+
 - ❌ Cognitive overhead - user must decide: "New session or new task?"
 - ❌ Doesn't match mental model of delegating sequential work
 - ❌ Session proliferation - dozens of sessions per worktree
@@ -1266,10 +1335,12 @@ Subsession completes later
 **Approach:** Wait for Claude Agent SDK to add native message queue
 
 **Pros:**
+
 - ✅ SDK handles complexity
 - ✅ Potentially more robust (pause/resume, mid-task injection)
 
 **Cons:**
+
 - ❌ No timeline for SDK feature
 - ❌ Locks us into Claude-only (other agents won't have this)
 - ❌ Users need queuing today
@@ -1289,10 +1360,12 @@ stream.append(userMsg2); // SDK combines into single conversation
 ```
 
 **Pros:**
+
 - ✅ True "inject while running" behavior
 - ✅ LLM can consider queued message in context
 
 **Cons:**
+
 - ❌ No SDK supports this pattern
 - ❌ Unclear how billing would work (restart stream?)
 - ❌ May confuse LLM if injected mid-thought
@@ -1306,6 +1379,7 @@ stream.append(userMsg2); // SDK combines into single conversation
 ### MVP (Phase 1) Success
 
 **User can:**
+
 - ✅ Queue 5+ tasks without waiting for each to complete
 - ✅ See queue status in real-time (position, running/queued)
 - ✅ Cancel queued tasks before they execute
@@ -1313,12 +1387,14 @@ stream.append(userMsg2); // SDK combines into single conversation
 - ✅ See clear feedback when task starts/completes
 
 **System can:**
+
 - ✅ Execute tasks sequentially without errors
 - ✅ Persist queue across daemon restart
 - ✅ Handle task failures gracefully (continue queue)
 - ✅ Broadcast queue updates to all connected clients
 
 **Metrics:**
+
 - ✅ 95%+ of queued tasks complete successfully
 - ✅ <1s latency from task completion → next task start
 - ✅ Queue state syncs across clients within 100ms
@@ -1351,6 +1427,7 @@ stream.append(userMsg2); // SDK combines into single conversation
 **Source:** [PromptLayer Blog Post](https://blog.promptlayer.com/claude-code-behind-the-scenes-of-the-master-agent-loop/)
 
 **Key Insights:**
+
 - Queue is separate from SDK (nO = agent loop, h2A = message queue)
 - Dual-buffer design enables pause/resume
 - Supports mid-task user interjection
@@ -1358,6 +1435,7 @@ stream.append(userMsg2); // SDK combines into single conversation
 - Agent "seamlessly adjusts plan on the fly"
 
 **Missing Details:**
+
 - Exact queue data structure (array, linked list?)
 - How pause/resume works technically
 - How injected messages are merged into context
@@ -1370,11 +1448,13 @@ stream.append(userMsg2); // SDK combines into single conversation
 **Source:** [GitHub Issue #3455](https://github.com/anthropics/claude-code/issues/3455)
 
 **Known Bug:**
+
 - `interrupt()` shows feedback but doesn't actually stop execution
 - Agent continues to completion despite interrupt signal
 - Affects both CLI and SDK
 
 **Workaround:**
+
 - Poll task status after calling interrupt
 - Timeout after 5s if no change
 - Fallback to letting task complete
@@ -1392,6 +1472,7 @@ stream.append(userMsg2); // SDK combines into single conversation
 **April 25, 2025:** Team confirms "this is in!"
 
 **Proposed UX:**
+
 - `CMD+Enter` = Queue message (execute after current tasks)
 - `Enter` = Inject message (interrupt and run now)
 

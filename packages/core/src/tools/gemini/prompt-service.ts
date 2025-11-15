@@ -69,6 +69,7 @@ export type GeminiStreamEvent =
       resolvedModel?: string;
       sessionId?: string;
       usage?: TokenUsage;
+      rawSdkResponse?: import('../../types/sdk-response').GeminiSdkResponse; // The actual response from Gemini SDK
     }
   | {
       type: 'tool_start';
@@ -265,10 +266,11 @@ export class GeminiPromptService {
                 `[Gemini Turn Finished] Text: ${fullTextContent.length} chars, Tools: ${toolUses.length}`
               );
 
+              // Type-assert event as ServerGeminiFinishedEvent since we're in Finished case
+              const finishedEvent = event as import('../../types/sdk-response').GeminiSdkResponse;
+
               // Extract token usage from SDK response
-              const mappedUsage = extractGeminiTokenUsage(
-                (event as { value?: { usageMetadata?: unknown } }).value?.usageMetadata
-              );
+              const mappedUsage = extractGeminiTokenUsage(finishedEvent.value?.usageMetadata);
 
               const content: Array<{
                 type: string;
@@ -305,6 +307,7 @@ export class GeminiPromptService {
                   resolvedModel: model,
                   sessionId,
                   usage: mappedUsage,
+                  rawSdkResponse: finishedEvent, // Pass through the actual SDK response (UNMUTATED)
                 };
               }
 

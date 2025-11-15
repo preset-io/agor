@@ -25,6 +25,7 @@ Related: [[agent-integration]], [[agentic-coding-tool-integrations]], [[architec
 ✅ **IMPLEMENT OpenCode integration using server mode**
 
 **Architecture:**
+
 - User runs `opencode serve` separately (managed dependency)
 - Agor connects via SDK client (`createOpencodeClient()`)
 - Ephemeral HTTP connections, persistent sessions
@@ -42,12 +43,14 @@ Related: [[agent-integration]], [[agentic-coding-tool-integrations]], [[architec
 **Platform Type:** Open-source terminal-based AI coding assistant
 
 **Architecture:**
+
 - **Language:** Go (compiled binary)
 - **UI Framework:** Bubble Tea (terminal UI library)
 - **Storage:** SQLite in `.opencode` directory for session persistence
 - **Configuration:** JSON/JSONC config files
 
 **Key Features:**
+
 - Support for **75+ LLM providers** (via AI SDK + Models.dev)
 - **Privacy-first**: no cloud storage of code, fully local
 - **MCP** (Model Context Protocol) server support
@@ -59,6 +62,7 @@ Related: [[agent-integration]], [[agentic-coding-tool-integrations]], [[architec
 - **Headless server mode** (`opencode serve`)
 
 **Community Traction:**
+
 - 30,000+ GitHub stars
 - 250+ contributors
 - ~300,000 monthly developers
@@ -75,10 +79,11 @@ OpenCode provides a JavaScript/TypeScript SDK designed for building **plugins an
 ### SDK Modes
 
 **1. Bundled Mode** - Spawn server and client together:
+
 ```typescript
 const { client, server } = await createOpencode({
   hostname: 'localhost',
-  port: 4096
+  port: 4096,
 });
 
 // Use client...
@@ -88,9 +93,10 @@ await server.close();
 ```
 
 **2. Client-Only Mode** - Connect to existing server (RECOMMENDED for Agor):
+
 ```typescript
 const client = createOpencodeClient({
-  baseUrl: 'http://localhost:4096'
+  baseUrl: 'http://localhost:4096',
 });
 
 // Ephemeral connection - no process management needed
@@ -98,25 +104,26 @@ const client = createOpencodeClient({
 
 ### Core SDK Modules
 
-| Module | Purpose | Key Methods |
-|--------|---------|-------------|
-| `app` | Logging and agent enumeration | `getAgents()`, `log()` |
-| `project` | Project management | `list()`, `getCurrent()` |
-| `config` | Configuration access | `get()`, `getProviders()` |
-| `sessions` | Session lifecycle | `create()`, `delete()`, `prompt()`, `getMessages()` |
-| `files` | File operations | `search()`, `findSymbol()`, `read()` |
-| `tui` | Terminal UI control | `setPrompt()`, `openDialog()`, `notify()` |
-| `auth` | Provider credentials | `set()` for API key management |
-| `events` | Real-time streaming | `subscribe()` for SSE events |
+| Module     | Purpose                       | Key Methods                                         |
+| ---------- | ----------------------------- | --------------------------------------------------- |
+| `app`      | Logging and agent enumeration | `getAgents()`, `log()`                              |
+| `project`  | Project management            | `list()`, `getCurrent()`                            |
+| `config`   | Configuration access          | `get()`, `getProviders()`                           |
+| `sessions` | Session lifecycle             | `create()`, `delete()`, `prompt()`, `getMessages()` |
+| `files`    | File operations               | `search()`, `findSymbol()`, `read()`                |
+| `tui`      | Terminal UI control           | `setPrompt()`, `openDialog()`, `notify()`           |
+| `auth`     | Provider credentials          | `set()` for API key management                      |
+| `events`   | Real-time streaming           | `subscribe()` for SSE events                        |
 
 ### Unique Features
 
 1. **Context Injection** (`noReply: true`):
+
    ```typescript
    await client.sessions.injectContext({
      sessionId,
      content: fileContents,
-     noReply: true  // Don't trigger AI response
+     noReply: true, // Don't trigger AI response
    });
    ```
 
@@ -131,17 +138,20 @@ const client = createOpencodeClient({
 ## OpenCode Server Modes
 
 ### Interactive Mode (Default)
+
 ```bash
 opencode
 # Launches TUI + backend server
 ```
 
 ### Headless Server Mode (✅ Perfect for Integration)
+
 ```bash
 opencode serve --port 4096 --hostname localhost
 ```
 
 **Key Benefits:**
+
 - No TUI overhead
 - Exposed OpenAPI endpoints
 - Multiple clients can connect
@@ -149,12 +159,14 @@ opencode serve --port 4096 --hostname localhost
 - Runs in background
 
 ### CLI One-Shot Mode
+
 ```bash
 opencode -p "implement auth" -f json -q
 # Auto-approves permissions, outputs JSON, exits
 ```
 
 **Session handling:**
+
 ```bash
 # Continue last session
 opencode run -c
@@ -173,6 +185,7 @@ opencode run --attach http://localhost:4096 "your prompt"
 ### Approach 1: Server Mode with User-Managed Process ✅ RECOMMENDED
 
 **Architecture:**
+
 ```
 ┌─────────────────────────────┐
 │   Agor Daemon (Node.js)     │
@@ -202,6 +215,7 @@ opencode run --attach http://localhost:4096 "your prompt"
 ```
 
 **User Setup:**
+
 ```bash
 # Terminal 1: Start OpenCode server (leave running)
 opencode serve --port 4096
@@ -214,6 +228,7 @@ cd apps/agor-ui && pnpm dev
 ```
 
 **Implementation:**
+
 ```typescript
 // packages/core/src/tools/opencode/client.ts
 
@@ -240,14 +255,11 @@ export class OpenCodeClient {
   }
 
   // Create OpenCode session, return session ID
-  async createSession(params: {
-    title: string;
-    project: string;
-  }): Promise<string> {
+  async createSession(params: { title: string; project: string }): Promise<string> {
     const client = this.getClient();
     const session = await client.sessions.create({
       title: params.title,
-      project: params.project
+      project: params.project,
     });
     return session.id;
   }
@@ -265,7 +277,7 @@ export class OpenCodeClient {
   }
 
   // Subscribe to real-time events
-  async* streamEvents() {
+  async *streamEvents() {
     const client = this.getClient();
     for await (const event of client.events.subscribe()) {
       yield event;
@@ -281,23 +293,24 @@ export class OpenCodeClient {
 ```
 
 **Session Mapping:**
+
 ```typescript
 // When Agor session created with opencode agent:
 const opencodeClient = new OpenCodeClient({
-  baseUrl: config.opencode.serverUrl
+  baseUrl: config.opencode.serverUrl,
 });
 
 // Create OpenCode session
 const ocSessionId = await opencodeClient.createSession({
   title: `Agor: ${agorSession.title}`,
-  project: worktree.repo.name
+  project: worktree.repo.name,
 });
 
 // Store mapping in Agor DB
 await db.sessions.update(agorSessionId, {
   metadata: {
-    opencode_session_id: ocSessionId
-  }
+    opencode_session_id: ocSessionId,
+  },
 });
 
 // Later: send prompts
@@ -305,6 +318,7 @@ await opencodeClient.sendPrompt(ocSessionId, userPrompt);
 ```
 
 **Pros:**
+
 - ✅ **Simple for Agor**: Just HTTP client, no process management
 - ✅ **Fast**: No cold boot, persistent server
 - ✅ **Flexible**: Works with local, Docker, or remote OpenCode instances
@@ -314,27 +328,29 @@ await opencodeClient.sendPrompt(ocSessionId, userPrompt);
 - ✅ **Production-ready**: No subprocess complexity
 
 **Cons:**
+
 - ⚠️ **User Setup**: Requires `opencode serve` in separate terminal
 - ⚠️ **External Dependency**: Error if server not running
 - ⚠️ **Documentation**: Must guide users through setup
 
 **Mitigation:**
+
 ```typescript
 // Clear error messages
-if (!await opencodeClient.isAvailable()) {
+if (!(await opencodeClient.isAvailable())) {
   throw new UserFacingError({
     title: 'OpenCode Server Not Running',
     message: 'Cannot connect to OpenCode server',
     actions: [
       {
         label: 'Setup Guide',
-        url: 'https://agor.live/guide/opencode-setup'
+        url: 'https://agor.live/guide/opencode-setup',
       },
       {
         label: 'Quick Start',
-        command: 'opencode serve --port 4096'
-      }
-    ]
+        command: 'opencode serve --port 4096',
+      },
+    ],
   });
 }
 ```
@@ -346,6 +362,7 @@ if (!await opencodeClient.isAvailable()) {
 ### Approach 2: CLI Ephemeral Mode (Subprocess Per Request)
 
 **Architecture:**
+
 ```typescript
 // Spawn CLI for each prompt
 async function executeOpenCodeTask(sessionId: string | null, prompt: string) {
@@ -357,18 +374,20 @@ async function executeOpenCodeTask(sessionId: string | null, prompt: string) {
   const response = JSON.parse(stdout);
 
   return {
-    sessionId: response.sessionId,  // Store for next prompt
-    output: response.output
+    sessionId: response.sessionId, // Store for next prompt
+    output: response.output,
   };
 }
 ```
 
 **Pros:**
+
 - ✅ No persistent server needed
 - ✅ Similar to Claude Code/Codex pattern
 - ✅ Auto-approves permissions
 
 **Cons:**
+
 - ❌ **Cold boot overhead** per request (slower UX)
 - ❌ **No streaming** - batch responses only
 - ❌ **Subprocess management** complexity
@@ -382,10 +401,11 @@ async function executeOpenCodeTask(sessionId: string | null, prompt: string) {
 ### Approach 3: SDK Bundled Ephemeral (Spawn Server Per Request)
 
 **Architecture:**
+
 ```typescript
 async function executeTask(prompt: string) {
   const opencode = await createOpencode({
-    port: await allocatePort()
+    port: await allocatePort(),
   });
 
   try {
@@ -398,10 +418,12 @@ async function executeTask(prompt: string) {
 ```
 
 **Pros:**
+
 - ✅ Full SDK capabilities
 - ✅ No user-managed server
 
 **Cons:**
+
 - ❌ Spawns Go process per request
 - ❌ Port allocation complexity
 - ❌ Slow (cold boot overhead)
@@ -413,18 +435,18 @@ async function executeTask(prompt: string) {
 
 ## Comparison Matrix
 
-| Dimension | Server Mode | CLI Ephemeral | SDK Bundled |
-|-----------|-------------|---------------|-------------|
-| **Complexity** | Low | Medium | High |
-| **Performance** | Fast (persistent) | Slow (cold boot) | Slow (cold boot) |
-| **User Setup** | Medium (run server) | Low (auto) | Low (auto) |
-| **Process Management** | None (user manages) | Subprocess per request | Spawn per request |
-| **Streaming** | ✅ Full SSE | ❌ Batch only | ✅ Full SSE |
-| **Resource Usage** | Low (1 process) | Medium (many spawns) | High (many processes) |
-| **Error Handling** | Clean (HTTP errors) | Complex (parse output) | Clean (SDK) |
-| **Debugging** | Easy (separate logs) | Hard (mixed output) | Medium |
-| **Scalability** | High | Medium | Low |
-| **Recommendation** | ✅ **Primary** | ⚠️ **Fallback** | ❌ **Avoid** |
+| Dimension              | Server Mode          | CLI Ephemeral          | SDK Bundled           |
+| ---------------------- | -------------------- | ---------------------- | --------------------- |
+| **Complexity**         | Low                  | Medium                 | High                  |
+| **Performance**        | Fast (persistent)    | Slow (cold boot)       | Slow (cold boot)      |
+| **User Setup**         | Medium (run server)  | Low (auto)             | Low (auto)            |
+| **Process Management** | None (user manages)  | Subprocess per request | Spawn per request     |
+| **Streaming**          | ✅ Full SSE          | ❌ Batch only          | ✅ Full SSE           |
+| **Resource Usage**     | Low (1 process)      | Medium (many spawns)   | High (many processes) |
+| **Error Handling**     | Clean (HTTP errors)  | Complex (parse output) | Clean (SDK)           |
+| **Debugging**          | Easy (separate logs) | Hard (mixed output)    | Medium                |
+| **Scalability**        | High                 | Medium                 | Low                   |
+| **Recommendation**     | ✅ **Primary**       | ⚠️ **Fallback**        | ❌ **Avoid**          |
 
 ---
 
@@ -433,12 +455,14 @@ async function executeTask(prompt: string) {
 ### Phase 1: Core Integration (Week 1)
 
 **1. OpenCode Client Implementation**
+
 - [ ] Create `packages/core/src/tools/opencode/client.ts`
 - [ ] Implement `OpenCodeClient` class with SDK wrapper
 - [ ] Add health check and connection validation
 - [ ] Error handling with user-friendly messages
 
 **2. Configuration**
+
 - [ ] Add OpenCode config to `packages/core/src/config/index.ts`
 - [ ] Support `~/.agor/config.yaml`:
   ```yaml
@@ -448,6 +472,7 @@ async function executeTask(prompt: string) {
   ```
 
 **3. Session Lifecycle**
+
 - [ ] Create OpenCode session when Agor session created
 - [ ] Store `opencode_session_id` in session metadata
 - [ ] Map Agor tasks → OpenCode prompts
@@ -456,16 +481,19 @@ async function executeTask(prompt: string) {
 ### Phase 2: Message Processing (Week 2)
 
 **4. Stream Handling**
+
 - [ ] Subscribe to OpenCode SSE events
 - [ ] Translate OpenCode events → Agor WebSocket broadcasts
 - [ ] Handle thinking/text/tool streaming
 
 **5. Tool Execution**
+
 - [ ] Map OpenCode tool calls to Agor format
 - [ ] Store tool results in Agor messages
 - [ ] Handle errors and failures
 
 **6. Message Storage**
+
 - [ ] Fetch OpenCode messages periodically
 - [ ] Store in Agor database for persistence
 - [ ] Display in conversation UI
@@ -473,6 +501,7 @@ async function executeTask(prompt: string) {
 ### Phase 3: UI Integration (Week 2-3)
 
 **7. Settings Tab**
+
 - [ ] Create `OpenCodeTab.tsx` component
 - [ ] Server URL configuration
 - [ ] Connection test button
@@ -480,11 +509,13 @@ async function executeTask(prompt: string) {
 - [ ] Setup instructions
 
 **8. Session Creation**
+
 - [ ] Add "OpenCode" to agentic tool dropdown
 - [ ] Check availability before session creation
 - [ ] Show helpful error if server not running
 
 **9. Conversation Display**
+
 - [ ] Display OpenCode sessions in canvas
 - [ ] Show provider badge (e.g., "OpenCode - GPT-4o")
 - [ ] Handle message formatting
@@ -492,18 +523,21 @@ async function executeTask(prompt: string) {
 ### Phase 4: Testing & Documentation (Week 3)
 
 **10. Testing**
+
 - [ ] Unit tests for `OpenCodeClient`
 - [ ] Integration tests (requires OpenCode server)
 - [ ] Error handling tests
 - [ ] Cross-platform testing
 
 **11. Documentation**
+
 - [ ] Setup guide: Installing OpenCode
 - [ ] Configuration guide
 - [ ] Provider selection guide
 - [ ] Troubleshooting section
 
 **12. Polish**
+
 - [ ] Error messages UX review
 - [ ] Loading states
 - [ ] Connection retry logic
@@ -616,6 +650,7 @@ export const OpenCodeTab: React.FC = () => {
 ```
 
 **Configuration Saved:**
+
 ```yaml
 # ~/.agor/config.yaml
 opencode:
@@ -624,6 +659,7 @@ opencode:
 ```
 
 **Minimal Fields (v1):**
+
 1. Enable/disable toggle
 2. Server URL input
 3. Test connection button
@@ -631,6 +667,7 @@ opencode:
 5. Setup instructions
 
 **Future Enhancements (v2):**
+
 - Default provider selection
 - Timeout settings
 - Auto-retry toggle
@@ -645,12 +682,13 @@ opencode:
 **Key Technologies:**
 
 1. **Vercel AI SDK** - Unified interface across providers
+
    ```typescript
    import { streamText } from 'ai';
 
    const response = await streamText({
      model: 'anthropic/claude-sonnet-4',
-     prompt: 'implement auth'
+     prompt: 'implement auth',
    });
    ```
 
@@ -661,6 +699,7 @@ opencode:
    - Provider endpoints
 
 **Pattern:**
+
 ```json
 {
   "model": "anthropic/claude-sonnet-4-20250514",
@@ -672,6 +711,7 @@ opencode:
 ```
 
 **Value for Agor:**
+
 - Could adopt similar pattern for multi-provider support
 - Abstract provider interface
 - Support custom OpenAI-compatible endpoints
@@ -684,10 +724,12 @@ opencode:
 ### 1. Multi-Provider Abstraction
 
 **Current Agor State:**
+
 - Hardcoded Claude/OpenAI/Gemini integrations
 - Each has custom implementation
 
 **OpenCode Pattern:**
+
 ```typescript
 interface LLMProvider {
   createSession(config: SessionConfig): Promise<Session>;
@@ -704,11 +746,13 @@ class AISDKProvider implements LLMProvider {
 ### 2. Enhanced Configuration System
 
 **OpenCode Pattern:**
+
 - Glob patterns: `"instructions": ["context/**/*.md"]`
 - Variable substitution: `{env:VAR}`, `{file:path}`
 - Hierarchical (global → project → custom)
 
 **Agor Application:**
+
 ```typescript
 {
   "instructions": [
@@ -722,21 +766,23 @@ class AISDKProvider implements LLMProvider {
 ### 3. Context Injection Pattern
 
 **OpenCode Pattern:**
+
 ```typescript
 await session.injectContext({
   content: fileContents,
-  noReply: true  // Don't trigger AI
+  noReply: true, // Don't trigger AI
 });
 ```
 
 **Agor Application:**
+
 ```typescript
 // Add files to context without prompting AI
 await session.addContext({
   type: 'file',
   path: 'src/components/Button.tsx',
   content,
-  triggerResponse: false
+  triggerResponse: false,
 });
 ```
 
@@ -753,12 +799,14 @@ await session.addContext({
 ### Server Mode Integration
 
 **Costs:**
+
 - **Development:** 2-3 weeks (1 engineer)
 - **Maintenance:** Low (stable HTTP interface)
 - **Deployment:** Medium (user must run server)
 - **Risk:** Low (optional feature)
 
 **Benefits:**
+
 - **75+ LLM providers** - Major competitive advantage
 - **Privacy-first** - Appeals to enterprise/sensitive users
 - **Local models** - Ollama, LM Studio support
@@ -767,6 +815,7 @@ await session.addContext({
 - **Community** - 30K stars, active development
 
 **ROI:** ✅ **Strongly Positive**
+
 - High value for power users
 - Differentiator vs. competitors
 - Low maintenance burden
@@ -791,6 +840,7 @@ await session.addContext({
 ### 1. Should Agor auto-start OpenCode server?
 
 **Options:**
+
 - **User-managed** (recommended): User runs `opencode serve`
 - **Auto-start**: Agor spawns server on first use
 - **Hybrid**: Offer both, default to user-managed
@@ -798,6 +848,7 @@ await session.addContext({
 **Decision:** Start with user-managed. Add auto-start if users request it.
 
 **Rationale:**
+
 - Simpler implementation
 - Clear separation of concerns
 - Aligns with developer tool philosophy
@@ -805,6 +856,7 @@ await session.addContext({
 ### 2. How to handle server disconnections?
 
 **Strategy:**
+
 - Health check before each operation
 - Clear error messages with recovery steps
 - Optional: Auto-retry with exponential backoff
@@ -815,6 +867,7 @@ await session.addContext({
 **OpenCode Default:** `~/.opencode/` directory
 
 **Options:**
+
 - **Shared global** (default): All Agor sessions use `~/.opencode`
 - **Per-worktree**: Custom `.opencode` per worktree (complex)
 
@@ -823,11 +876,13 @@ await session.addContext({
 ### 4. Session cleanup strategy?
 
 **When to delete OpenCode sessions:**
+
 - When Agor session deleted
 - When worktree deleted
 - Manual cleanup command
 
 **Implementation:**
+
 ```typescript
 // On Agor session delete
 await opencodeClient.deleteSession(ocSessionId);
@@ -842,6 +897,7 @@ await opencodeClient.deleteSession(ocSessionId);
 **Title:** Integrating OpenCode with Agor
 
 **Sections:**
+
 1. What is OpenCode?
 2. Why use OpenCode with Agor?
 3. Installation
@@ -880,18 +936,21 @@ opencode serve --port 4096
 ## Related Work
 
 **Agor Documentation:**
+
 - [[agent-integration]] - Claude/Codex/Gemini SDK integration
 - [[agentic-coding-tool-integrations]] - SDK comparison matrix
 - [[architecture]] - Agor system architecture
 - [[frontend-guidelines]] - UI component patterns
 
 **OpenCode Resources:**
+
 - [OpenCode.ai](https://opencode.ai/) - Official website
 - [OpenCode Docs](https://opencode.ai/docs) - Documentation
 - [OpenCode GitHub](https://github.com/OpenCode-ai/opencode) - Source code
 - [OpenCode SDK](https://opencode.ai/docs/sdk/) - SDK documentation
 
 **Related Technologies:**
+
 - [Vercel AI SDK](https://sdk.vercel.ai/) - Multi-provider abstraction
 - [Models.dev](https://models.dev/) - Model registry
 - [MCP](https://modelcontextprotocol.io/) - Tool protocol

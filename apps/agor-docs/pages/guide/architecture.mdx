@@ -51,21 +51,25 @@ graph TB
 ## Technology Stack
 
 ### Backend
+
 - **[FeathersJS](https://feathersjs.com/)** - Unified REST + WebSocket API framework
 - **[Drizzle ORM](https://orm.drizzle.team/)** - Type-safe database layer with LibSQL support
 - **[LibSQL](https://github.com/tursodatabase/libsql)** - Local SQLite-compatible database (future: cloud sync via Turso)
 - **[simple-git](https://github.com/steveukx/simple-git)** - Git operations for worktree management
 
 ### Frontend
+
 - **[React 18](https://react.dev/)** + **[Vite](https://vitejs.dev/)** - Fast development with HMR
 - **[Ant Design](https://ant.design/)** - Enterprise UI component library
 - **[React Flow](https://reactflow.dev/)** - Interactive session canvas with drag-and-drop
 - **[Socket.IO Client](https://socket.io/)** - Real-time WebSocket connection
 
 ### CLI
+
 - **[oclif](https://oclif.io/)** - Enterprise-grade CLI framework
 
 ### Agent Integration
+
 - **[@anthropic-ai/claude-agent-sdk](https://github.com/anthropics/claude-agent-sdk)** - Claude Code capabilities with CLAUDE.md auto-loading
 - **[OpenAI SDK](https://github.com/openai/openai-node)** - Codex integration with custom permission system
 - **[Google Generative AI SDK](https://ai.google.dev/)** - Gemini integration (beta)
@@ -98,6 +102,7 @@ sequenceDiagram
 ```
 
 **Key Features:**
+
 - **Automatic broadcasting** - FeathersJS emits events to all connected clients
 - **Service-level events** - `created`, `patched`, `removed`, `updated`
 - **Custom events** - Cursor position, presence updates (100ms throttle)
@@ -107,20 +112,20 @@ sequenceDiagram
 
 The daemon exposes 12 FeathersJS services via REST and WebSocket:
 
-| Service | Purpose | Key Operations |
-|---------|---------|----------------|
-| **sessions** | Agent sessions with genealogy | CRUD, fork, spawn, prompt execution |
-| **tasks** | Work units within sessions | CRUD, completion tracking |
-| **messages** | Conversation history | CRUD, bulk insert, streaming |
-| **boards** | Spatial session organization | CRUD, session positioning |
-| **worktrees** | Git worktree isolation | Create, list, delete worktrees |
-| **repos** | Git repository management | Clone, list, worktree operations |
-| **users** | User accounts & auth | CRUD, JWT authentication |
-| **mcp-servers** | MCP server configs | CRUD, capability queries |
-| **session-mcp-servers** | Session MCP links | Associate MCP servers with sessions |
-| **context** | Context file browser | Read-only access to context/ files |
-| **terminals** | WebSocket terminal proxy | PTY sessions for live terminals |
-| **health-monitor** | Real-time diagnostics | System health, connection status |
+| Service                 | Purpose                       | Key Operations                      |
+| ----------------------- | ----------------------------- | ----------------------------------- |
+| **sessions**            | Agent sessions with genealogy | CRUD, fork, spawn, prompt execution |
+| **tasks**               | Work units within sessions    | CRUD, completion tracking           |
+| **messages**            | Conversation history          | CRUD, bulk insert, streaming        |
+| **boards**              | Spatial session organization  | CRUD, session positioning           |
+| **worktrees**           | Git worktree isolation        | Create, list, delete worktrees      |
+| **repos**               | Git repository management     | Clone, list, worktree operations    |
+| **users**               | User accounts & auth          | CRUD, JWT authentication            |
+| **mcp-servers**         | MCP server configs            | CRUD, capability queries            |
+| **session-mcp-servers** | Session MCP links             | Associate MCP servers with sessions |
+| **context**             | Context file browser          | Read-only access to context/ files  |
+| **terminals**           | WebSocket terminal proxy      | PTY sessions for live terminals     |
+| **health-monitor**      | Real-time diagnostics         | System health, connection status    |
 
 ## Agor as an MCP Server
 
@@ -145,6 +150,7 @@ Every Agor session automatically gets MCP configured with **zero user configurat
 3. **Immediate Availability** - The agent can use MCP tools without any setup
 
 **Benefits:**
+
 - No manual MCP server installation or configuration
 - Session-scoped security (agents can't access other sessions' private data)
 - Consistent experience across all agentic tools (Claude Code, Codex, Gemini)
@@ -154,6 +160,7 @@ Every Agor session automatically gets MCP configured with **zero user configurat
 Agents running in Agor sessions can **introspect their own execution context**:
 
 **Understand Their Identity:**
+
 ```typescript
 → agor_sessions_get_current()
 ← {
@@ -166,12 +173,14 @@ Agents running in Agor sessions can **introspect their own execution context**:
 ```
 
 **Query Sibling Sessions:**
+
 ```typescript
 → agor_sessions_list({ boardId: "019a3...", status: "running" })
 ← { total: 3, data: [...other sessions on same board...] }
 ```
 
 **Spawn Child Sessions (Multi-Agent Delegation):**
+
 ```typescript
 → agor_sessions_spawn({
     prompt: "Write integration tests for the auth module",
@@ -181,6 +190,7 @@ Agents running in Agor sessions can **introspect their own execution context**:
 ```
 
 **Manage User Profile:**
+
 ```typescript
 → agor_users_update_current({ name: "AI Assistant", emoji: "🤖" })
 ← { user_id: "019a5...", name: "AI Assistant", emoji: "🤖" }
@@ -191,12 +201,14 @@ This enables **autonomous multi-agent workflows** where a parent agent can deleg
 ### Usage Modes
 
 **Internal (Session-Scoped Tokens)**
+
 - **Authentication:** Session-specific tokens (64-char hex, 24h expiration)
 - **Scope:** Full access to own session + read access to other sessions/boards/worktrees
 - **Use Case:** Agents running within Agor sessions (primary mode)
 - **Security:** Token is scoped to the user who created the session
 
 **External (Future: API Tokens)**
+
 - **Authentication:** Admin API tokens (not yet implemented)
 - **Scope:** Full CRUD access across all resources
 - **Use Cases:**
@@ -218,6 +230,7 @@ https://localhost:3030/
 ```
 
 **Why this design?**
+
 - ✅ Single process to manage (no separate MCP server)
 - ✅ MCP tools call FeathersJS services directly (no HTTP overhead)
 - ✅ Proper WebSocket event broadcasting when MCP tools create/update resources
@@ -297,6 +310,7 @@ Agent: "There are 2 other sessions running on this board:
 ### Service Layer Integration
 
 MCP tools route through **FeathersJS services** (not direct ORM) for:
+
 - ✅ Consistent business logic
 - ✅ Hook execution (validation, auth)
 - ✅ Future RBAC support
@@ -305,6 +319,7 @@ MCP tools route through **FeathersJS services** (not direct ORM) for:
 ### Future: Additional Write Operations
 
 Planned tools for expanded orchestration capabilities:
+
 - `agor_sessions_fork` - Fork session at decision point (preserve history)
 - `agor_boards_create` - Create new board for organizing sessions
 - `agor_worktrees_clone` - Clone an existing worktree configuration (branch, metadata) for rapid duplication
@@ -318,15 +333,18 @@ Planned tools for expanded orchestration capabilities:
 Agor uses a **hybrid materialization approach** for cross-database compatibility (LibSQL → PostgreSQL):
 
 **Materialized Columns** (indexed):
+
 - Primary keys, foreign keys, status, timestamps
 - Used for filtering, joins, sorting
 
 **JSON Blobs** (flexible):
+
 - Nested objects (git_state, genealogy, config)
 - Arrays (tasks, contextFiles, children)
 - Rarely queried metadata
 
 **Benefits:**
+
 - Migration-free schema evolution
 - Fast indexed queries
 - Cross-database compatibility (LibSQL ↔ PostgreSQL)
@@ -347,6 +365,7 @@ Every session requires a worktree (foreign key constraint):
 ```
 
 **Why worktrees?**
+
 - Parallel development without branch switching
 - Session isolation (no shared working directory)
 - Natural mapping for fork/spawn operations

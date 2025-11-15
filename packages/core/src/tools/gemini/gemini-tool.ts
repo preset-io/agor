@@ -457,37 +457,12 @@ export class GeminiTool implements ITool {
   /**
    * Normalize Gemini SDK response to common format
    *
-   * Gemini may support caching in the future, for now cache tokens are 0.
+   * @deprecated This method is deprecated - use normalizeRawSdkResponse() from utils/sdk-normalizer instead
+   * This stub remains for API compatibility but should not be used.
    */
-  normalizedSdkResponse(rawResponse: RawSdkResponse): NormalizedSdkResponse {
-    if (rawResponse.tool !== 'gemini') {
-      throw new Error(`Expected gemini response, got ${rawResponse.tool}`);
-    }
-
-    const geminiResponse = rawResponse as GeminiSdkResponse;
-
-    // Extract token usage with defaults
-    const tokenUsage = geminiResponse.tokenUsage || {
-      input_tokens: 0,
-      output_tokens: 0,
-      total_tokens: 0,
-      cache_read_tokens: 0, // Gemini may support caching in future
-    };
-
-    return {
-      userMessageId: geminiResponse.userMessageId,
-      assistantMessageIds: geminiResponse.assistantMessageIds,
-      tokenUsage: {
-        inputTokens: tokenUsage.input_tokens || 0,
-        outputTokens: tokenUsage.output_tokens || 0,
-        totalTokens:
-          tokenUsage.total_tokens || tokenUsage.input_tokens! + tokenUsage.output_tokens! || 0,
-        cacheReadTokens: tokenUsage.cache_read_tokens || 0,
-        cacheCreationTokens: 0, // Not exposed in Gemini response yet
-      },
-      contextWindow: geminiResponse.contextWindow,
-      contextWindowLimit: geminiResponse.contextWindowLimit,
-      model: geminiResponse.model,
-    };
+  normalizedSdkResponse(_rawResponse: RawSdkResponse): NormalizedSdkResponse {
+    throw new Error(
+      'normalizedSdkResponse() is deprecated - use normalizeRawSdkResponse() from utils/sdk-normalizer instead'
+    );
   }
 }

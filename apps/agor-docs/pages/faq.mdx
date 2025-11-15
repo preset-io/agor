@@ -10,6 +10,7 @@ description: Frequently asked questions about session forking, spawning, and Ago
 **A worktree is an isolated working directory for a git repository** - think of it as a checkout of your repo at a specific branch or commit.
 
 Agor uses **git worktrees** under the hood (same concept as `git worktree` command), but manages them for you automatically. When you create a worktree in Agor, it:
+
 - Creates a git worktree in `~/.agor/worktrees/<repo>/<name>`
 - Optionally creates a new branch or checks out an existing one
 - Tracks metadata (issue URL, PR URL, notes)
@@ -52,6 +53,7 @@ Session: "Build authentication system"
 **Traditional AI coding tools**: Linear conversation. Want to try something different? Start over or lose your context.
 
 **Agor**: Branch your conversation like git branches code. Every fork/spawn is:
+
 - **Introspectable** - full conversation history kept
 - **Composable** - fork from forks, spawn from spawns
 - **Multiplayer-friendly** - teammates see the tree, understand the exploration
@@ -60,11 +62,13 @@ Session: "Build authentication system"
 ### The groundbreaking part:
 
 Most people don't know you can do this! Context engineering is usually about:
+
 - Crafting the perfect prompt
 - Managing context window size
 - Knowing what to include/exclude
 
 **Agor adds**: Session-level branching and composition. You can:
+
 1. **Fork** to parallelize work with shared context ([details below](#what-happens-when-i-fork-a-session))
 2. **Spawn** to delegate with curated context ([details below](#what-happens-when-i-spawn-a-subsession))
 3. Combine both to orchestrate complex multi-agent workflows
@@ -83,6 +87,7 @@ Agor uses a **2D spatial canvas** instead. Here's why that matters:
 ### Cognitive psychology: Spatial memory is powerful
 
 Your brain is wired for spatial reasoning. You remember:
+
 - "The auth worktree is in the top-left corner"
 - "Testing sessions are clustered on the right"
 - "That failed experiment is way down there"
@@ -94,12 +99,14 @@ This is **location-based memory** - the same reason you remember where you parke
 ### Organic organization of complex workflows
 
 Real work doesn't fit into rigid lists. It evolves:
+
 - Start with one worktree for a feature
 - Fork sessions to explore approaches
 - Spawn subsessions for research
 - Some succeed, some fail, some branch further
 
 **A spatial canvas lets this emerge naturally:**
+
 - Drag active work to the top
 - Group related worktrees together
 - Push failed experiments to the side (but keep them visible)
@@ -110,6 +117,7 @@ It's like **arranging sticky notes on a wall** - fluid, visual, intuitive.
 ### Zones: Visual workflow stages
 
 Zones are spatial regions that trigger actions:
+
 - **"Ready for Review"** zone auto-prompts sessions for self-review
 - **"Needs Tests"** zone triggers test generation
 - **"Deploy to Staging"** zone kicks off deployment
@@ -121,12 +129,14 @@ This is **Kanban for AI sessions** - drag a worktree to a zone, workflow happens
 ### Multiplayer: Figma for AI coding
 
 Figma revolutionized design collaboration with:
+
 - Infinite spatial canvas
 - Real-time cursors showing who's working where
 - Comments anchored to specific locations
 - No "email me the file" chaos
 
 **Agor does the same for AI coding:**
+
 - Everyone sees the same board
 - Cursors show teammates' focus in real-time
 - Scoped/spatial comments on boards, zones, and worktrees
@@ -139,12 +149,14 @@ Figma revolutionized design collaboration with:
 ### Why it works
 
 **Linear tools** (CLI, chat interfaces):
+
 - One thing at a time
 - Context switches lose your place
 - Hard to see the big picture
 - Collaboration = screen sharing (painful)
 
 **Spatial tools** (Agor boards):
+
 - See everything at once
 - Visual proximity shows relationships
 - Zoom out for overview, zoom in for details
@@ -183,6 +195,7 @@ Zone prompts need **dynamism and complexity**. You don't just want "write tests"
 ```
 
 **Handlebars templates** let you inject context from:
+
 - **Worktree**: `{{ worktree.name }}`, `{{ worktree.issue_url }}`, `{{ worktree.pull_request_url }}`
 - **Board**: `{{ board.name }}`, `{{ board.description }}`
 - **Session**: `{{ session.title }}`, `{{ session.description }}`
@@ -194,6 +207,7 @@ Zone prompts need **dynamism and complexity**. You don't just want "write tests"
 **1. Issue-driven code review**
 
 Zone: "Ready for Review"
+
 ```
 Review the implementation of {{ worktree.issue_url }}.
 
@@ -210,6 +224,7 @@ Drop a worktree → auto-prompts with issue/PR links pre-filled.
 **2. PR-aware test generation**
 
 Zone: "Needs Tests"
+
 ```
 Generate comprehensive tests for {{ worktree.name }}.
 
@@ -225,6 +240,7 @@ Write tests to tests/ directory.
 **3. Environment-specific deployment**
 
 Zone: "Deploy to Staging"
+
 ```
 Deploy {{ worktree.name }} to {{ environment.url }}.
 
@@ -240,6 +256,7 @@ Environment: {{ environment.status }}
 **4. Board-level context**
 
 Zone: "Sprint Review Demo"
+
 ```
 Prepare demo for {{ board.name }}.
 
@@ -256,6 +273,7 @@ Create a demo script highlighting {{ board.custom_context.sprint_goals }}.
 Each object (board, worktree, session, repo) can have a **`custom_context` JSON blob** for your own metadata:
 
 **Board custom context:**
+
 ```json
 {
   "sprint_goals": "Improve auth UX",
@@ -265,6 +283,7 @@ Each object (board, worktree, session, repo) can have a **`custom_context` JSON 
 ```
 
 **Worktree custom context:**
+
 ```json
 {
   "priority": "P0",
@@ -274,6 +293,7 @@ Each object (board, worktree, session, repo) can have a **`custom_context` JSON 
 ```
 
 **Use in templates:**
+
 ```
 Priority: {{ worktree.custom_context.priority }}
 Estimated effort: {{ worktree.custom_context.estimated_hours }}h
@@ -288,12 +308,14 @@ Demo stakeholders: {{ board.custom_context.stakeholders }}
 Instead of copy-pasting issue URLs and PR links into prompts manually:
 
 **Without zones:**
+
 ```
 You: "Review this code. Here's the issue: https://github.com/..."
      (repeat for every review)
 ```
 
 **With zones:**
+
 ```
 You: *drag worktree to "Ready for Review" zone*
 AI: "Reviewing implementation of https://github.com/myorg/repo/issues/123..."
@@ -331,6 +353,7 @@ Session: "Built user authentication feature" <- snapshot taken here
 Each fork starts with the full context of how auth works, then builds its own conversation. They work on different files so no conflicts.
 
 **Other examples:**
+
 - Generate reports/summaries without interrupting work
 - Review or validate completed work with full context
 - Get second opinions from different models
@@ -353,6 +376,7 @@ You're not exploring alternative implementations (they'd conflict on disk!) - yo
 **Spawn**: Parent agent curates what's relevant, starts fresh context
 
 Your parent session might have:
+
 - Useful context for the subsession (implementation details, design decisions)
 - Lots of noise (debugging, unrelated topics, log reading, tool uses from other work)
 
@@ -363,11 +387,13 @@ When you spawn, the calling agent packages just what the subsession needs. The s
 ### How Agor differs from Claude Code's Task tool
 
 In Claude Code CLI, when you use the [Task tool](https://docs.claude.com/en/docs/agent/tools/task) or spawn a subagent:
+
 - Parent agent **waits** for subsession to complete
 - Subsession **reports back** to parent with results
 - Subsession history is **not** kept after completion
 
 In Agor (currently):
+
 - Parent agent **does NOT wait** (fire-and-forget, may change in future)
 - Subsession **does NOT report back** automatically (may add callback option in future)
 - Subsession history **IS kept** - you can:
@@ -413,17 +439,17 @@ Parent orchestrates, children execute focused subsessions with clean context.
 
 ## Fork vs Spawn: Quick Reference
 
-| | **Fork** | **Spawn** |
-|---|---|---|
-| **Context window** | Full copy of parent's conversation history | Fresh context with curated subset from parent |
-| **Who decides context** | Automatic (SDK copies everything) | Parent agent packages what's relevant |
-| **Context size** | Large (entire parent history) | Small (only what's needed) |
-| **After creation** | Independent conversations that diverge | Independent conversations that diverge |
-| **Worktree** | **SHARED** (same filesystem) | **SHARED** (same filesystem) |
-| **Relationship** | Sibling (parallel work) | Child (delegated work) |
-| **Use case** | Parallel tasks with same starting context | Delegate focused subsession with clean context |
-| **Parent waits?** | No | No (currently, may change) |
-| **Reports back?** | No | No (currently, may add callback) |
+|                         | **Fork**                                   | **Spawn**                                      |
+| ----------------------- | ------------------------------------------ | ---------------------------------------------- |
+| **Context window**      | Full copy of parent's conversation history | Fresh context with curated subset from parent  |
+| **Who decides context** | Automatic (SDK copies everything)          | Parent agent packages what's relevant          |
+| **Context size**        | Large (entire parent history)              | Small (only what's needed)                     |
+| **After creation**      | Independent conversations that diverge     | Independent conversations that diverge         |
+| **Worktree**            | **SHARED** (same filesystem)               | **SHARED** (same filesystem)                   |
+| **Relationship**        | Sibling (parallel work)                    | Child (delegated work)                         |
+| **Use case**            | Parallel tasks with same starting context  | Delegate focused subsession with clean context |
+| **Parent waits?**       | No                                         | No (currently, may change)                     |
+| **Reports back?**       | No                                         | No (currently, may add callback)               |
 
 ---
 
@@ -494,6 +520,7 @@ Worktree "payment-feature" (issue #124, PR #457)  <- Different feature = differe
 Both work on the **same worktree**, both start from a **copied context snapshot**, both build **independent conversations** going forward.
 
 Example: Build Feature 1 once. Fork 3 times:
+
 - Tests being written (with context snapshot of implementation)
 - Feature 2 being built (with context snapshot of how Feature 1 works)
 - Documentation being generated (with context snapshot of design decisions)

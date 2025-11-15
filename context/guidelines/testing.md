@@ -177,6 +177,7 @@ export function assertValidTimestamp(ts: string) {
 ## Anti-Patterns (Avoid Zealous Testing)
 
 **❌ Don't test each field separately:**
+
 ```typescript
 // BAD - Testing Drizzle ORM's JSON serialization
 dbTest('should handle permission_config', ...)
@@ -185,6 +186,7 @@ dbTest('should handle contextFiles array', ...)
 ```
 
 **✅ Test all fields comprehensively:**
+
 ```typescript
 // GOOD - Test behavior once, with all fields
 dbTest('should store all optional JSON fields correctly', async ({ db }) => {
@@ -200,6 +202,7 @@ dbTest('should store all optional JSON fields correctly', async ({ db }) => {
 ```
 
 **❌ Don't test third-party library behavior:**
+
 ```typescript
 // BAD - Testing SQLite, not our code
 dbTest('should handle empty strings', ...)
@@ -208,6 +211,7 @@ dbTest('should handle negative numbers', ...)
 ```
 
 **✅ Test your repository logic:**
+
 ```typescript
 // GOOD - Tests our business logic
 dbTest('should order messages by index', ...)
@@ -216,6 +220,7 @@ dbTest('should resolve short IDs with collision handling', ...)
 ```
 
 **Test-to-Source Ratio Guidelines:**
+
 - Simple CRUD: 1-2x
 - Complex logic: 2-3x
 - **>4x is a code smell** - refactor tests
@@ -229,6 +234,7 @@ dbTest('should resolve short IDs with collision handling', ...)
 Run `pnpm typecheck` before committing. Your tests must pass TypeScript checking - they are code too.
 
 **❌ Don't use loose mocks:**
+
 ```typescript
 // BAD - Loose typing defeats the purpose of branded types
 const mockRepo = {
@@ -241,6 +247,7 @@ someFunction(mockRepo); // Could be completely wrong type
 ```
 
 **✅ Use proper mock typing:**
+
 ```typescript
 // GOOD - Typed mocks with vi.fn<T>()
 const mockRepo = {
@@ -259,6 +266,7 @@ function createMockRepository(): Repository {
 ```
 
 **Branded types in test data:**
+
 ```typescript
 // BAD - String won't work for UUID branded type
 const task = { id: 'abc123', ...rest }; // ❌ Type error
@@ -272,6 +280,7 @@ const task = { id: 'abc123' as UUID, ...rest }; // ✅ Explicit
 ```
 
 **Date vs ISO string:**
+
 ```typescript
 // BAD - Type mismatch
 const data = { created_at: new Date() }; // ❌ Type expects ISO string
@@ -281,6 +290,7 @@ const data = { created_at: new Date().toISOString() }; // ✅ Correct type
 ```
 
 **Checklist after writing tests:**
+
 - [ ] Run `pnpm test` - all tests pass
 - [ ] Run `pnpm typecheck` - no type errors
 - [ ] Mocks use proper types (not `as any`)

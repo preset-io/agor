@@ -4,7 +4,11 @@ description: Complete guide to agor - next-gen agent orchestration for AI coding
 ---
 
 <div style={{ textAlign: 'center', marginTop: '2rem', marginBottom: '2rem' }}>
-  <img src="/logo.png" alt="agor logo - AI agent orchestration platform" style={{ width: '135px', height: '135px', borderRadius: '50%', opacity: 0.9 }} />
+  <img
+    src="/logo.png"
+    alt="agor logo - AI agent orchestration platform"
+    style={{ width: '135px', height: '135px', borderRadius: '50%', opacity: 0.9 }}
+  />
 </div>
 
 # agor
@@ -18,7 +22,7 @@ description: Complete guide to agor - next-gen agent orchestration for AI coding
 Visualize, coordinate, and automate your AI workflows across tools solo or with your team.
 Agor offers a place where you can coordinate entire swarms of AI agents.
 
-import { GifGallery } from '../../components'
+import { GifGallery } from '../../components';
 
 ## In Action
 
@@ -79,6 +83,7 @@ See the [Getting Started Guide](/guide/getting-started) for detailed instruction
 **The Problem:** Working on 3 PRs simultaneously? Each needs different ports, dependencies, database states.
 
 **Agor's Solution:**
+
 - Each worktree gets its own **isolated environment** with auto-managed unique ports
 - Configure start/stop commands once with templates: `PORT={{ add 9000 worktree.unique_id }} docker compose up -d`
 - Everyone on your team can **one-click start/stop** any worktree's environment
@@ -120,40 +125,96 @@ Your team has 3 bug fixes and 2 features in flight. With Agor:
 
 ![Agor multiplayer spatial canvas showing AI agent sessions organized on a board with real-time cursors, zones, and worktree cards](/hero.png)
 
-*Multiplayer spatial canvas with zones, real-time cursors, and session organization*
+_Multiplayer spatial canvas with zones, real-time cursors, and session organization_
 
-<div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginTop: '24px', marginBottom: '24px' }}>
+<div
+  style={{
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr',
+    gap: '16px',
+    marginTop: '24px',
+    marginBottom: '24px',
+  }}
+>
   <div>
-    <img src="/screenshots/conversation_full_page.png" alt="Agor task-centric conversation UI showing AI agent messages, tool calls, and file changes in a structured timeline" style={{ width: '100%', borderRadius: '8px' }} />
-    <p style={{ textAlign: 'center', marginTop: '8px', opacity: 0.5 }}><em>Task-centric conversation UI</em></p>
+    <img
+      src="/screenshots/conversation_full_page.png"
+      alt="Agor task-centric conversation UI showing AI agent messages, tool calls, and file changes in a structured timeline"
+      style={{ width: '100%', borderRadius: '8px' }}
+    />
+    <p style={{ textAlign: 'center', marginTop: '8px', opacity: 0.5 }}>
+      <em>Task-centric conversation UI</em>
+    </p>
   </div>
   <div>
-    <img src="/screenshots/settings_modal.png" alt="Agor settings modal for configuring MCP servers, managing worktrees, and agent preferences" style={{ width: '100%', borderRadius: '8px' }} />
-    <p style={{ textAlign: 'center', marginTop: '8px', opacity: 0.5 }}><em>MCP server and worktree management</em></p>
+    <img
+      src="/screenshots/settings_modal.png"
+      alt="Agor settings modal for configuring MCP servers, managing worktrees, and agent preferences"
+      style={{ width: '100%', borderRadius: '8px' }}
+    />
+    <p style={{ textAlign: 'center', marginTop: '8px', opacity: 0.5 }}>
+      <em>MCP server and worktree management</em>
+    </p>
   </div>
   <div>
-    <img src="/screenshots/zone_trigger_modal.png" alt="Agor zone trigger modal displaying automated workflow prompts when dragging sessions into board zones" style={{ width: '100%', borderRadius: '8px' }} />
-    <p style={{ textAlign: 'center', marginTop: '8px', opacity: 0.5 }}><em>Zone trigger on session drop</em></p>
+    <img
+      src="/screenshots/zone_trigger_modal.png"
+      alt="Agor zone trigger modal displaying automated workflow prompts when dragging sessions into board zones"
+      style={{ width: '100%', borderRadius: '8px' }}
+    />
+    <p style={{ textAlign: 'center', marginTop: '8px', opacity: 0.5 }}>
+      <em>Zone trigger on session drop</em>
+    </p>
   </div>
   <div>
-    <img src="/screenshots/zone_trigger_config.png" alt="Agor zone trigger configuration interface for setting up kanban-style workflows and automated prompts" style={{ width: '100%', borderRadius: '8px' }} />
-    <p style={{ textAlign: 'center', marginTop: '8px', opacity: 0.5 }}><em>Zone trigger configuration</em></p>
+    <img
+      src="/screenshots/zone_trigger_config.png"
+      alt="Agor zone trigger configuration interface for setting up kanban-style workflows and automated prompts"
+      style={{ width: '100%', borderRadius: '8px' }}
+    />
+    <p style={{ textAlign: 'center', marginTop: '8px', opacity: 0.5 }}>
+      <em>Zone trigger configuration</em>
+    </p>
   </div>
   <div>
-    <img src="/screenshots/env_configuration.png" alt="Agor worktree environment configuration showing Docker compose commands and port management templates" style={{ width: '100%', borderRadius: '8px' }} />
-    <p style={{ textAlign: 'center', marginTop: '8px', opacity: 0.5 }}><em>Worktree environment setup</em></p>
+    <img
+      src="/screenshots/env_configuration.png"
+      alt="Agor worktree environment configuration showing Docker compose commands and port management templates"
+      style={{ width: '100%', borderRadius: '8px' }}
+    />
+    <p style={{ textAlign: 'center', marginTop: '8px', opacity: 0.5 }}>
+      <em>Worktree environment setup</em>
+    </p>
   </div>
   <div>
-    <img src="/screenshots/create_session_modal.png" alt="Agor create session modal with agent selection options for Claude Code, Codex, and Gemini" style={{ width: '100%', borderRadius: '8px' }} />
-    <p style={{ textAlign: 'center', marginTop: '8px', opacity: 0.5 }}><em>Session creation with agent selection</em></p>
+    <img
+      src="/screenshots/create_session_modal.png"
+      alt="Agor create session modal with agent selection options for Claude Code, Codex, and Gemini"
+      style={{ width: '100%', borderRadius: '8px' }}
+    />
+    <p style={{ textAlign: 'center', marginTop: '8px', opacity: 0.5 }}>
+      <em>Session creation with agent selection</em>
+    </p>
   </div>
   <div>
-    <img src="/screenshots/baked_in_terminal.png" alt="Agor built-in terminal with automatic worktree context and environment variable injection" style={{ width: '100%', borderRadius: '8px' }} />
-    <p style={{ textAlign: 'center', marginTop: '8px', opacity: 0.5 }}><em>Built-in terminal with worktree context</em></p>
+    <img
+      src="/screenshots/baked_in_terminal.png"
+      alt="Agor built-in terminal with automatic worktree context and environment variable injection"
+      style={{ width: '100%', borderRadius: '8px' }}
+    />
+    <p style={{ textAlign: 'center', marginTop: '8px', opacity: 0.5 }}>
+      <em>Built-in terminal with worktree context</em>
+    </p>
   </div>
   <div>
-    <img src="/screenshots/onboarding.png" alt="Agor onboarding welcome screen showing team status, recent activity, and quick start guide" style={{ width: '100%', borderRadius: '8px' }} />
-    <p style={{ textAlign: 'center', marginTop: '8px', opacity: 0.5 }}><em>Welcome screen showing team status</em></p>
+    <img
+      src="/screenshots/onboarding.png"
+      alt="Agor onboarding welcome screen showing team status, recent activity, and quick start guide"
+      style={{ width: '100%', borderRadius: '8px' }}
+    />
+    <p style={{ textAlign: 'center', marginTop: '8px', opacity: 0.5 }}>
+      <em>Welcome screen showing team status</em>
+    </p>
   </div>
 </div>
 

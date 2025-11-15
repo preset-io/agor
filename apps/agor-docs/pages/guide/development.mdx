@@ -21,11 +21,13 @@ docker compose up
 ```
 
 **Pros:**
+
 - ✅ No Node.js/pnpm installation required
 - ✅ Consistent environment across team
 - ✅ Easy to run multiple instances on different branches
 
 **Cons:**
+
 - ❌ Docker-in-docker complexity if your worktree environments use Docker (e.g., `docker compose up` in environment configs)
 
 **Git Commits in Docker:**
@@ -35,10 +37,12 @@ When using Docker, `pnpm install` installs Linux binaries (e.g., `turbo-linux-ar
 **Two solutions:**
 
 1. **Commit inside the container (Recommended)**
+
    ```bash
    docker compose exec agor-dev git add .
    docker compose exec agor-dev git commit -m "your message"
    ```
+
    Hooks run inside the container with correct Linux binaries.
 
 2. **Reinstall node_modules on host**
@@ -71,6 +75,7 @@ The `-p` flag ensures isolated volumes and no container naming conflicts.
 ### Local Development with pnpm (For Environment Testing)
 
 **Use this if you're working on:**
+
 - **Environment management** (process spawning, health checks, port allocation)
 - Testing environments that use Docker (avoids docker-in-docker complexity)
 - Faster iteration with instant HMR/hot-reload
@@ -139,6 +144,7 @@ packages:
 ```
 
 **Workspace protocol:**
+
 - Packages reference each other via `workspace:*`
 - Example: `@agor/cli` depends on `@agor/core@workspace:*`
 - pnpm symlinks workspace packages (no need to rebuild on every change)
@@ -159,6 +165,7 @@ pnpm dev
 ```
 
 **How it works:**
+
 - Reads `turbo.json` for task definitions
 - Understands package dependencies
 - Runs tasks in parallel when possible
@@ -167,6 +174,7 @@ pnpm dev
 ### Git Hooks (Husky + lint-staged)
 
 **Pre-commit checks:**
+
 - Runs automatically before `git commit`
 - Only checks staged files (fast!)
 - Runs: biome (linting), prettier (formatting), typecheck
@@ -180,11 +188,13 @@ pnpm prepare  # Installs git hooks
 ### Code Quality
 
 **Linting:**
+
 - [biome](https://biomejs.dev/) - Fast linter and formatter
 - Config: `biome.json`
 - Run: `pnpm lint` or `pnpm lint:fix`
 
 **Formatting:**
+
 - [prettier](https://prettier.io/) - Code formatter
 - Config: `.prettierrc`
 - Run: `pnpm format`
@@ -232,21 +242,25 @@ See the **[Architecture Guide](/guide/architecture#technology-stack)** for the c
 ### Important Rules
 
 **Git Library:**
+
 - ✅ Use `simple-git` for ALL git operations
 - ❌ NEVER use `execSync`, `spawn`, or bash for git commands
 - Location: `packages/core/src/git/index.ts`
 
 **Watch Mode:**
+
 - User runs `pnpm dev` in daemon (watches core + daemon)
 - **DO NOT** run builds unless explicitly asked or you see compilation errors
 - **DO NOT** start background processes
 
 **Type Reuse:**
+
 - Import types from `packages/core/src/types/`
 - Sessions, Tasks, Worktrees, Messages, Repos, Boards, Users, etc.
 - Never redefine canonical types
 
 **Worktree-Centric Architecture:**
+
 - Boards display **Worktrees** as primary cards (NOT Sessions)
 - Sessions reference worktrees via required FK
 - Read `context/concepts/worktrees.md` before touching boards

@@ -11,6 +11,7 @@ Improved the Bash tool rendering in the Agor UI to provide a better visual exper
 **File:** `apps/agor-ui/src/components/ToolUseRenderer/renderers/BashRenderer.tsx`
 
 **Features:**
+
 - **Header with command**: Shows `<strong>Bash</strong> (command)` at the top
 - **Proper code block rendering**: Multi-line code blocks with monospace font and `pre-wrap` whitespace
 - **Collapsible output**: Uses existing `CollapsibleText`/`CollapsibleAnsiText` components (default 10 lines)
@@ -30,6 +31,7 @@ Added `BashRenderer` to the `TOOL_RENDERERS` map so all Bash tool blocks automat
 **File:** `apps/agor-ui/src/components/ToolUseRenderer/renderers/BashRenderer.stories.tsx`
 
 **Stories:**
+
 - `SimpleCommand` - Basic ls output
 - `LongOutput` - npm test with multiple lines (tests truncation)
 - `WithAnsiColors` - Build output with ANSI colors
@@ -43,11 +45,13 @@ Added `BashRenderer` to the `TOOL_RENDERERS` map so all Bash tool blocks automat
 ## Visual Improvements
 
 ### Before
+
 ```
 <code>output in single line with poor formatting</code>
 ```
 
 ### After
+
 ```
 Bash (ls -la)
 ┌─────────────────────────────────────────┐
@@ -93,13 +97,16 @@ The new implementation uses proper multi-line code blocks (like triple-backtick 
 ## Testing
 
 ### Manual Testing
+
 1. Start UI dev server: `cd apps/agor-ui && pnpm dev`
 2. Open Storybook: `pnpm storybook`
 3. Navigate to "Components/ToolRenderers/BashRenderer"
 4. Test different scenarios (errors, ANSI colors, long output, etc.)
 
 ### In-App Testing
+
 View any conversation with Bash tool uses to see the improved rendering:
+
 - Headers show command
 - Output is properly formatted as code blocks
 - Long output is truncated with "show more" button
@@ -108,6 +115,7 @@ View any conversation with Bash tool uses to see the improved rendering:
 ## Future Improvements
 
 Potential enhancements for other tools:
+
 - **Read**: Custom renderer showing file path header
 - **Edit**: Visual diff of changes
 - **Grep**: Syntax-highlighted search results

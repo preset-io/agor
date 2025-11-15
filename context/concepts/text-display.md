@@ -28,7 +28,7 @@ import { CollapsibleText } from '../CollapsibleText';
 
 <CollapsibleText maxLines={12} preserveWhitespace code>
   {stdout}
-</CollapsibleText>
+</CollapsibleText>;
 ```
 
 Use `CollapsibleMarkdown` when you already have parsed markdown blocks.

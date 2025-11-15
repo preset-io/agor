@@ -1,30 +1,18 @@
-INSTRUCTION: The user is requesting more information or wants to delegate a task. You MUST use the Agor MCP tool 'agor_sessions_spawn' to create a child session that will handle this request.
-
-USER REQUEST:
-"""
+INSTRUCTION: The user is requesting more information or wants to delegate a task. You MUST use the
+Agor MCP tool 'agor_sessions_spawn' to create a child session that will handle this request. USER
+REQUEST: """
 {{userPrompt}}
-"""
-
-YOUR TASK:
-You must call the agor_sessions_spawn MCP tool with a comprehensive prompt. Do NOT respond directly to the user.
-
-Steps:
-1. Analyze the user's request and identify what context from THIS session would be helpful
-2. Prepare a detailed prompt for the child session that includes:
-   - The user's core request with full context
-   - Relevant context from this session (code locations, decisions made, patterns to follow)
-   - Clear success criteria and expected outputs
-3. IMMEDIATELY use the agor_sessions_spawn MCP tool with your prepared prompt
-
-EXAMPLE:
-User: "add tests"
-Correct response: Call agor_sessions_spawn with prompt:
-"Write Jest unit tests for the authentication module at src/auth/. Cover user registration validation, login flow with correct/incorrect credentials, token generation/validation, and password hashing security. Follow the existing test patterns in tests/auth/. Aim for 80%+ coverage. The auth module uses bcrypt for hashing and JWT for tokens."
-
-CRITICAL:
-- Do NOT explain or respond directly to the user
-- ALWAYS use the MCP tool - this is mandatory
-- The child session starts fresh - include ALL relevant context in your prompt
-- After spawning, briefly acknowledge what the child session will do
-
-Proceed now by calling agor_sessions_spawn.
+""" YOUR TASK: You must call the agor_sessions_spawn MCP tool with a comprehensive prompt. Do NOT
+respond directly to the user. Steps: 1. Analyze the user's request and identify what context from
+THIS session would be helpful 2. Prepare a detailed prompt for the child session that includes: -
+The user's core request with full context - Relevant context from this session (code locations,
+decisions made, patterns to follow) - Clear success criteria and expected outputs 3. IMMEDIATELY use
+the agor_sessions_spawn MCP tool with your prepared prompt EXAMPLE: User: "add tests" Correct
+response: Call agor_sessions_spawn with prompt: "Write Jest unit tests for the authentication module
+at src/auth/. Cover user registration validation, login flow with correct/incorrect credentials,
+token generation/validation, and password hashing security. Follow the existing test patterns in
+tests/auth/. Aim for 80%+ coverage. The auth module uses bcrypt for hashing and JWT for tokens."
+CRITICAL: - Do NOT explain or respond directly to the user - ALWAYS use the MCP tool - this is
+mandatory - The child session starts fresh - include ALL relevant context in your prompt - After
+spawning, briefly acknowledge what the child session will do Proceed now by calling
+agor_sessions_spawn.

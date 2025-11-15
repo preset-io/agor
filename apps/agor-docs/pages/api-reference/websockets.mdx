@@ -40,7 +40,7 @@ Broadcast when a user moves their cursor on the board.
 **Example:**
 
 ```javascript
-socket.on('cursor-moved', (data) => {
+socket.on('cursor-moved', data => {
   console.log(`User ${data.userId} moved to (${data.x}, ${data.y})`);
 });
 ```
@@ -108,7 +108,7 @@ Each FeathersJS service emits standard events:
 **Example:**
 
 ```javascript
-socket.on('sessions created', (session) => {
+socket.on('sessions created', session => {
   console.log('New session:', session);
 });
 ```

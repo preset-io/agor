@@ -31,6 +31,7 @@ Successfully integrated OpenCode.ai as Agor's fourth agentic coding tool (alongs
 ### What Needs Investigation 🔍
 
 **OpenCode Server Model Selection Behavior**:
+
 - Agor correctly passes `{providerID: "openai", modelID: "gpt-4o"}`
 - OpenCode returns 200 OK with response metadata showing correct model
 - But actual response content says "I'm using the Claude model"
@@ -45,12 +46,14 @@ Successfully integrated OpenCode.ai as Agor's fourth agentic coding tool (alongs
 ### Type Safety Improvements
 
 **Problem**: Code used unsafe type casting throughout:
+
 ```typescript
 // Before (unsafe)
 const provider = (session.model_config as { provider?: string } | undefined)?.provider;
 ```
 
 **Solution**: Added official `provider` field to `Session.model_config` type:
+
 ```typescript
 // After (type-safe)
 const provider = session.model_config?.provider;
@@ -65,6 +68,7 @@ model_config?: {
 ```
 
 **Impact**:
+
 - Eliminated all unsafe type casts (2 locations in daemon)
 - Enabled IntelliSense for `provider` field
 - Follows TypeScript best practices
@@ -72,6 +76,7 @@ model_config?: {
 ### Code Organization Improvements
 
 **Problem**: Session state managed with 3 separate Maps:
+
 ```typescript
 // Before (scattered state)
 private sessionMap: Map<string, string> = new Map();           // agorSessionId → opencodeSessionId
@@ -80,6 +85,7 @@ private sessionProviders: Map<string, string | undefined> = new Map(); // agorSe
 ```
 
 **Solution**: Consolidated into 1 structured Map:
+
 ```typescript
 // After (unified state)
 interface SessionContext {
@@ -92,6 +98,7 @@ private sessionContexts: Map<string, SessionContext> = new Map();
 ```
 
 **Impact**:
+
 - Single source of truth for session context
 - Atomic updates (set all fields together)
 - Better encapsulation with `getSessionContext()` helper
@@ -100,15 +107,18 @@ private sessionContexts: Map<string, SessionContext> = new Map();
 ### Dead Code Removal
 
 **Removed**:
+
 - `OPENCODE_PROVIDER_OPTIONS` constant (9 lines) - unused hardcoded provider list
 - `mapSession()` method - redundant, replaced by type-safe field access
 
 ### Files Changed
 
 **Type Definitions**:
+
 - `packages/core/src/types/session.ts` - Added `provider?: string` field
 
 **Core Implementation**:
+
 - `packages/core/src/tools/opencode/opencode-tool.ts`:
   - Added `SessionContext` interface
   - Consolidated 3 Maps → 1 Map
@@ -116,17 +126,20 @@ private sessionContexts: Map<string, SessionContext> = new Map();
   - Added `getSessionContext()` helper
 
 **Daemon Integration**:
+
 - `apps/agor-daemon/src/index.ts`:
   - Removed type casts (2 locations: lines 988-989, 1763-1772)
   - Uses `session.model_config?.provider` directly
 
 **UI Cleanup**:
+
 - `apps/agor-ui/src/components/ModelSelector/ModelSelector.tsx`:
   - Removed unused `OPENCODE_PROVIDER_OPTIONS`
 
 ### Out of Scope
 
 **Docker Persistence Issue**: Documented in `.github-issue-docker-persistence.md` for separate PR
+
 - **Problem**: Database created in `/root/.agor/` instead of `/home/agor/.agor/`
 - **Root Cause**: Entrypoint runs as root despite `USER agor` in Dockerfile
 - **Solution**: Use `su - agor -c` for all agor commands in entrypoint
@@ -161,6 +174,7 @@ apps/agor-ui/src/components/
 ### Data Flow
 
 1. **Session Creation** (daemon hook):
+
    ```typescript
    User creates Agor session with agentic_tool='opencode'
    → OpenCodeTool.createSession()
@@ -168,6 +182,7 @@ apps/agor-ui/src/components/
    ```
 
 2. **Task Execution**:
+
    ```typescript
    Task arrives with prompt
    → Extract model from session.model_config.model
@@ -196,32 +211,38 @@ apps/agor-ui/src/components/
 ### Files Changed (30 files, +2148/-20 lines)
 
 **Core Integration**:
+
 - `packages/core/src/tools/opencode/client.ts` (331 lines) - REST API client
 - `packages/core/src/tools/opencode/opencode-tool.ts` (297 lines) - ITool implementation
 - `packages/core/src/config/types.ts` - OpenCode config type definitions
 - `packages/core/src/types/agentic-tool.ts` - Added 'opencode' to enum
 
 **Daemon**:
+
 - `apps/agor-daemon/src/index.ts` (+117 lines):
   - `after.create` hook: Creates OpenCode session on Agor session creation
   - Task routing: Passes model + OpenCode session ID to tool
   - Enhanced logging for model debugging
 
 **UI**:
+
 - `apps/agor-ui/src/components/SettingsModal/OpenCodeTab.tsx` (286 lines) - Full settings UI
 - `apps/agor-ui/src/components/AgentSelectionGrid/availableAgents.ts` - OpenCode agent card
 - `apps/agor-ui/src/components/ModelSelector/ModelSelector.tsx` - Model selection support
 - `apps/agor-ui/src/assets/tools/opencode.png` - OpenCode logo
 
 **Documentation**:
+
 - `context/explorations/opencode-integration.md` (932 lines) - Research & architecture docs
 
 **Docker**:
+
 - `docker-entrypoint.sh` - OpenCode config with `host.docker.internal:4096`
 
 ### TypeScript Type Safety
 
 All code uses proper types (no `any`):
+
 - Branded UUIDs: `SessionID`, `TaskID`, `MessageID`
 - MessageRole enum: `MessageRole.ASSISTANT`
 - Explicit interfaces: `MessagesService`, `TasksService`
@@ -234,6 +255,7 @@ All code uses proper types (no `any`):
 ### What We Tested
 
 ✅ **Session Creation**:
+
 ```bash
 curl -X POST http://localhost:4096/session \
   -H 'Content-Type: application/json' \
@@ -242,6 +264,7 @@ curl -X POST http://localhost:4096/session \
 ```
 
 ✅ **Message Sending** (no model):
+
 ```bash
 curl -X POST http://localhost:4096/session/{id}/message \
   -d '{"parts":[{"type":"text","text":"hello"}]}'
@@ -249,6 +272,7 @@ curl -X POST http://localhost:4096/session/{id}/message \
 ```
 
 ✅ **Message Sending** (with model):
+
 ```bash
 curl -X POST http://localhost:4096/session/{id}/message \
   -d '{"parts":[{"type":"text","text":"test"}],"model":{"providerID":"openai","modelID":"gpt-4o"}}'
@@ -258,6 +282,7 @@ curl -X POST http://localhost:4096/session/{id}/message \
 ```
 
 ✅ **Agor Integration**:
+
 - Created OpenCode sessions via Agor UI
 - Sent prompts successfully
 - Messages stored in database
@@ -266,6 +291,7 @@ curl -X POST http://localhost:4096/session/{id}/message \
 ### API Key Configuration
 
 OpenCode requires API keys configured via CLI:
+
 ```bash
 opencode auth login
 # Select provider (OpenAI, Anthropic, etc.)
@@ -286,6 +312,7 @@ When we pass a model parameter to OpenCode, it acknowledges the request (200 OK)
 ### Evidence
 
 1. **Agor Logs** (daemon console):
+
    ```
    [OpenCode] Using model: gpt-4o
    [OpenCode] Mapped to OpenCode format: {"providerID":"openai","modelID":"gpt-4o"}
@@ -294,6 +321,7 @@ When we pass a model parameter to OpenCode, it acknowledges the request (200 OK)
    ```
 
 2. **Response Content**:
+
    ```
    "I'm using the Claude model to assist you with your coding tasks."
    ```
@@ -307,6 +335,7 @@ When we pass a model parameter to OpenCode, it acknowledges the request (200 OK)
 ### Hypotheses
 
 **H1: API Key Configuration Issue**
+
 - OpenCode might need provider-specific API keys to be configured
 - Without OpenAI key, falls back to default (Claude)
 - **Status**: Tested - OpenAI key IS configured via `opencode auth login`
@@ -314,26 +343,31 @@ When we pass a model parameter to OpenCode, it acknowledges the request (200 OK)
 - Still returns Claude
 
 **H2: Model Parameter Format**
+
 - Perhaps OpenCode expects different format
 - **Status**: Verified against OpenAPI spec - format is correct
 - OpenAPI spec confirms: `{providerID: string, modelID: string}`
 
 **H3: Session-Level vs Message-Level Config**
+
 - Maybe model needs to be set during session creation, not per-message
 - **Status**: Not tested yet
 - OpenCode API spec shows model is optional on both session creation AND messages
 
 **H4: OpenCode Default Model Override**
+
 - OpenCode might have a global default that overrides message-level model
 - Check: `~/.config/opencode/opencode.json` or project-level `opencode.json`
 - **Status**: No config files found - using OpenCode defaults
 
 **H5: Provider Authentication Per-Model**
+
 - OpenCode might require explicit per-provider auth beyond `opencode auth login`
 - API keys might need additional scoping or environment vars
 - **Status**: Needs investigation
 
 **H6: OpenCode Version/Feature Support**
+
 - Model selection might be a newer feature not fully implemented
 - Or requires specific OpenCode version
 - **Status**: Using OpenCode v1.0.33 (from session metadata)
@@ -341,22 +375,28 @@ When we pass a model parameter to OpenCode, it acknowledges the request (200 OK)
 ### Next Debugging Steps
 
 1. **Check OpenCode Server Logs**:
+
    ```bash
    tail -f ~/.local/share/opencode/log/*.log | grep -i "model\|provider"
    ```
+
    Look for model selection attempts, auth failures, provider resolution
 
 2. **Test Session Creation with Model**:
+
    ```bash
    curl -X POST http://localhost:4096/session \
      -d '{"title":"Test","directory":"/path","model":{"providerID":"openai","modelID":"gpt-4o"}}'
    ```
+
    Does setting model at session creation change behavior?
 
 3. **Verify API Key Format**:
+
    ```bash
    cat ~/.local/share/opencode/auth.json | jq .
    ```
+
    Check structure - does it match expected format?
 
 4. **Test Different Providers**:
@@ -380,6 +420,7 @@ When we pass a model parameter to OpenCode, it acknowledges the request (200 OK)
 ### Model Selection Implementation
 
 **Client (where model is sent)**:
+
 ```typescript
 // packages/core/src/tools/opencode/client.ts:128-145
 async sendPrompt(sessionId: string, prompt: string, model?: string): Promise<string> {
@@ -404,6 +445,7 @@ async sendPrompt(sessionId: string, prompt: string, model?: string): Promise<str
 ```
 
 **Model Mapping**:
+
 ```typescript
 // packages/core/src/tools/opencode/client.ts:104-122
 private mapModelToOpenCodeFormat(model: string): { providerID: string; modelID: string } | null {
@@ -426,6 +468,7 @@ private mapModelToOpenCodeFormat(model: string): { providerID: string; modelID: 
 ```
 
 **Tool Context Management**:
+
 ```typescript
 // packages/core/src/tools/opencode/opencode-tool.ts:76-79
 setSessionContext(agorSessionId: string, opencodeSessionId: string, model?: string): void {
@@ -439,12 +482,20 @@ const model = this.sessionModels.get(sessionId);
 ```
 
 **Daemon Routing**:
+
 ```typescript
 // apps/agor-daemon/src/index.ts:1763-1772
 const model = session.model_config?.model;
 const opencodeSessionId = (session as { sdk_session_id?: string }).sdk_session_id;
 
-console.log('[Daemon] Using Agor session ID:', id, 'with model:', model, 'OpenCode session:', opencodeSessionId);
+console.log(
+  '[Daemon] Using Agor session ID:',
+  id,
+  'with model:',
+  model,
+  'OpenCode session:',
+  opencodeSessionId
+);
 
 if (opencodeSessionId) {
   opencodeTool.setSessionContext(id as SessionID, opencodeSessionId, model);
@@ -458,20 +509,23 @@ if (opencodeSessionId) {
 ### OpenCode Server
 
 **User must run separately**:
+
 ```bash
 opencode serve --port 4096
 ```
 
 **Default Config** (in `~/.agor/config.yaml` or Agor settings):
+
 ```yaml
 opencode:
   enabled: true
-  serverUrl: http://localhost:4096  # or host.docker.internal:4096 in Docker
+  serverUrl: http://localhost:4096 # or host.docker.internal:4096 in Docker
 ```
 
 ### API Keys
 
 **Setup via CLI**:
+
 ```bash
 opencode auth login
 # Interactive prompts:
@@ -481,6 +535,7 @@ opencode auth login
 ```
 
 **Supported Providers** (75+ total):
+
 - OpenAI (gpt-4o, gpt-3.5-turbo, o1-preview, etc.)
 - Anthropic (claude-3.5-sonnet, claude-3-opus, etc.)
 - Google Vertex AI (gemini-pro, gemini-ultra)
@@ -508,12 +563,14 @@ opencode auth login
 ### Immediate Priority: Debug Model Selection
 
 1. **Start OpenCode Server with Verbose Logging**:
+
    ```bash
    opencode serve --port 4096 --verbose
    # Or check if there's a debug flag
    ```
 
 2. **Monitor Logs While Testing**:
+
    ```bash
    # Terminal 1: OpenCode logs
    tail -f ~/.local/share/opencode/log/*.log
@@ -600,11 +657,13 @@ Once model selection works:
 ## Resources
 
 ### OpenCode Documentation
+
 - Main docs: https://opencode.ai/docs
 - Providers: https://opencode.ai/docs/providers
 - API: Check OpenAPI spec at `http://localhost:4096/doc`
 
 ### OpenCode Installation
+
 ```bash
 npm install -g opencode-ai
 opencode auth login
@@ -612,12 +671,14 @@ opencode serve --port 4096
 ```
 
 ### Key Files to Review
+
 - `context/explorations/opencode-integration.md` - Full research doc (932 lines)
 - `packages/core/src/tools/opencode/client.ts` - API client implementation
 - `packages/core/src/tools/opencode/opencode-tool.ts` - ITool implementation
 - `apps/agor-daemon/src/index.ts` - Session lifecycle hooks (search for "opencode")
 
 ### Debugging Commands
+
 ```bash
 # Check OpenCode sessions
 ls ~/.local/share/opencode/storage/session/*/
@@ -666,6 +727,7 @@ curl http://localhost:4096/config
 **PR**: https://github.com/preset-io/agor/pull/100
 
 **User Setup**:
+
 - OpenCode v1.0.33 installed
 - Running on macOS (Darwin 25.0.0)
 - OpenAI API key configured via `opencode auth login`

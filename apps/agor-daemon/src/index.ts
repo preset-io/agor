@@ -99,7 +99,6 @@ import type {
   User,
 } from '@agor/core/types';
 import { SessionStatus, TaskStatus } from '@agor/core/types';
-import { getContextWindowLimit, getSessionContextUsage } from '@agor/core/utils/context-window';
 import { NotFoundError } from '@agor/core/utils/errors';
 // Import Claude SDK's PermissionMode type for ClaudeTool method signatures
 // (Agor's PermissionMode is a superset of all tool permission modes)
@@ -1871,6 +1870,7 @@ async function main() {
         let executeMethod: Promise<{
           userMessageId: import('@agor/core/types').MessageID;
           assistantMessageIds: import('@agor/core/types').MessageID[];
+          rawSdkResponse?: unknown; // Raw SDK event (unmutated)
         }>;
 
         if (session.agentic_tool === 'codex') {
@@ -1943,6 +1943,7 @@ async function main() {
             return {
               userMessageId: `user-${task.task_id}` as import('@agor/core/types').MessageID,
               assistantMessageIds: [],
+              rawSdkResponse: undefined,
             };
           });
         } else {
@@ -2009,12 +2010,8 @@ async function main() {
                 // Safe to mark as completed
 
                 // Store raw SDK response - single source of truth for token accounting
-                const rawSdkResponse: import('@agor/core/types').RawSdkResponse | undefined = result
-                  ? ({
-                      tool: session.agentic_tool,
-                      ...result,
-                    } as import('@agor/core/types').RawSdkResponse)
-                  : undefined;
+                // No 'tool' discriminator - use session.agentic_tool to determine SDK type
+                const rawSdkResponse: unknown = result?.rawSdkResponse;
 
                 // Calculate tool_use_count from all messages in this task
                 let toolUseCount = 0;
@@ -2091,25 +2088,7 @@ async function main() {
                 }
               }
 
-              // Calculate session-level context window usage from all tasks
-              // Algorithm from https://codelynx.dev/posts/calculate-claude-code-context
-              const allTasks = await tasksService.find({
-                query: { session_id: id },
-                paginate: false,
-              });
-              const tasksArray = Array.isArray(allTasks) ? allTasks : [];
-
-              const currentContextUsage = getSessionContextUsage(tasksArray as Task[]);
-              const contextWindowLimit = getContextWindowLimit(tasksArray as Task[]);
-
-              if (currentContextUsage !== undefined) {
-                const percentage = contextWindowLimit
-                  ? ((currentContextUsage / contextWindowLimit) * 100).toFixed(1)
-                  : 'N/A';
-                console.log(
-                  `📊 Session context: ${currentContextUsage.toLocaleString()}/${contextWindowLimit?.toLocaleString() || '?'} (${percentage}%)`
-                );
-              }
+              // Token accounting is handled via raw_sdk_response and normalizers
 
               await safePatch(
                 sessionsService,
@@ -2117,10 +2096,7 @@ async function main() {
                 {
                   message_count: session.message_count + totalMessages,
                   status: SessionStatus.IDLE,
-                  current_context_usage: currentContextUsage,
-                  context_window_limit: contextWindowLimit,
-                  last_context_update_at:
-                    currentContextUsage !== undefined ? new Date().toISOString() : undefined,
+                  // Token accounting handled via normalizeRawSdkResponse() - no session-level storage needed
                 },
                 'Session'
               );

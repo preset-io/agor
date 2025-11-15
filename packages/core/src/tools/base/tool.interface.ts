@@ -196,4 +196,21 @@ export interface ITool {
    * @returns Normalized response with common structure
    */
   normalizedSdkResponse(rawResponse: RawSdkResponse): NormalizedSdkResponse;
+
+  /**
+   * Compute cumulative context window usage for a session
+   *
+   * Each agentic tool implements its own strategy for tracking context:
+   * - **Claude Code**: Sums input/output tokens across tasks, resets on compaction events
+   * - **Codex**: May use SDK's cumulative reporting (if available)
+   * - **Gemini**: May use different tracking approach
+   * - **Others**: Can return current context from latest task's SDK response
+   *
+   * The computed value is stored in `Task.computed_context_window` for efficient access.
+   *
+   * @param sessionId - Session ID to compute context for
+   * @param currentTaskId - Current task ID (to exclude from computation, as it's not complete yet)
+   * @returns Promise resolving to computed context window usage in tokens
+   */
+  computeContextWindow?(sessionId: string, currentTaskId?: string): Promise<number>;
 }

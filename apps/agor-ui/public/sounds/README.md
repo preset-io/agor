@@ -51,6 +51,7 @@ All sounds are safe to use in Agor without legal concerns.
 ## Testing
 
 Test the sounds in the Agor UI:
+
 1. Open Settings → Audio tab
 2. Enable task completion chimes
 3. Select a chime from the dropdown

@@ -14,7 +14,7 @@ import {
 import type { MenuProps } from 'antd';
 import { Badge, Button, Card, Collapse, Space, Spin, Tag, Tree, Typography, theme } from 'antd';
 import { AggregationColor } from 'antd/es/color-picker/color';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { ArchiveDeleteWorktreeModal } from '../ArchiveDeleteWorktreeModal';
 import { EnvironmentPill } from '../EnvironmentPill';
@@ -80,7 +80,7 @@ interface WorktreeCardProps {
   defaultExpanded?: boolean;
 }
 
-const WorktreeCardComponent = ({
+const WorktreeCard = ({
   worktree,
   repo,
   sessions,
@@ -184,122 +184,118 @@ const WorktreeCardComponent = ({
   }, [sessionTreeData]);
 
   // Render function for tree nodes (our rich session cards)
-  // Memoized to avoid recreating on every render
-  const renderSessionNode = useCallback(
-    (node: SessionTreeNode) => {
-      const session = node.session;
+  const renderSessionNode = (node: SessionTreeNode) => {
+    const session = node.session;
 
-      // Get relationship icon based on type
-      const getRelationshipIcon = () => {
-        if (node.relationshipType === 'fork') {
-          return <ForkOutlined style={{ fontSize: 10, color: token.colorWarning }} />;
-        }
-        if (node.relationshipType === 'spawn') {
-          return <SubnodeOutlined style={{ fontSize: 10, color: token.colorInfo }} />;
-        }
-        return null;
-      };
+    // Get relationship icon based on type
+    const getRelationshipIcon = () => {
+      if (node.relationshipType === 'fork') {
+        return <ForkOutlined style={{ fontSize: 10, color: token.colorWarning }} />;
+      }
+      if (node.relationshipType === 'spawn') {
+        return <SubnodeOutlined style={{ fontSize: 10, color: token.colorInfo }} />;
+      }
+      return null;
+    };
 
-      // Dropdown menu items for session actions
-      const _sessionMenuItems: MenuProps['items'] = [
-        {
-          key: 'fork',
-          icon: <ForkOutlined />,
-          label: 'Fork Session',
-          disabled: connectionDisabled,
-          onClick: () => {
-            setForkSpawnModal({
-              open: true,
-              action: 'fork',
-              session,
-            });
-          },
+    // Dropdown menu items for session actions
+    const _sessionMenuItems: MenuProps['items'] = [
+      {
+        key: 'fork',
+        icon: <ForkOutlined />,
+        label: 'Fork Session',
+        disabled: connectionDisabled,
+        onClick: () => {
+          setForkSpawnModal({
+            open: true,
+            action: 'fork',
+            session,
+          });
         },
-        {
-          key: 'spawn',
-          icon: <SubnodeOutlined />,
-          label: 'Spawn Subsession',
-          disabled: connectionDisabled,
-          onClick: () => {
-            setForkSpawnModal({
-              open: true,
-              action: 'spawn',
-              session,
-            });
-          },
+      },
+      {
+        key: 'spawn',
+        icon: <SubnodeOutlined />,
+        label: 'Spawn Subsession',
+        disabled: connectionDisabled,
+        onClick: () => {
+          setForkSpawnModal({
+            open: true,
+            action: 'spawn',
+            session,
+          });
         },
-      ];
+      },
+    ];
 
-      return (
-        <div
-          style={{
-            border: session.ready_for_prompt
-              ? `2px solid ${token.colorPrimary}`
-              : `1px solid rgba(255, 255, 255, 0.1)`,
-            borderRadius: 4,
-            padding: 8,
-            background: session.ready_for_prompt ? `${token.colorPrimary}15` : 'rgba(0, 0, 0, 0.2)',
-            display: 'flex',
-            alignItems: 'center',
-            cursor: 'pointer',
-            marginBottom: 4,
-            boxShadow: session.ready_for_prompt ? `0 0 12px ${token.colorPrimary}30` : undefined,
-          }}
-          onClick={() => onSessionClick?.(session.session_id)}
-          onContextMenu={(e) => {
-            // Show fork/spawn menu on right-click if handlers exist
-            if (onForkSession || onSpawnSession) {
-              e.preventDefault();
-            }
-          }}
-        >
-          <Space size={4} align="center" style={{ flex: 1, minWidth: 0 }}>
-            <ToolIcon tool={session.agentic_tool} size={20} />
-            {getRelationshipIcon()}
-            <Typography.Text
-              strong
-              style={{
-                fontSize: 12,
-                flex: 1,
-                display: '-webkit-box',
-                WebkitLineClamp: SESSION_TITLE_MAX_LINES,
-                WebkitBoxOrient: 'vertical',
-                overflow: 'hidden',
-                wordBreak: 'break-word',
-              }}
-            >
-              {(() => {
-                const displayText = session.title || session.description || session.agentic_tool;
-                // Fallback truncation for browsers that don't support line-clamp
-                if (
-                  !session.title &&
-                  session.description &&
-                  session.description.length > SESSION_TITLE_FALLBACK_CHARS
-                ) {
-                  return `${session.description.substring(0, SESSION_TITLE_FALLBACK_CHARS)}...`;
-                }
-                return displayText;
-              })()}
-            </Typography.Text>
-          </Space>
-
-          {/* Status indicator - fixed width to prevent layout shift */}
-          <div
+    return (
+      <div
+        style={{
+          border: session.ready_for_prompt
+            ? `2px solid ${token.colorPrimary}`
+            : `1px solid rgba(255, 255, 255, 0.1)`,
+          borderRadius: 4,
+          padding: 8,
+          background: session.ready_for_prompt ? `${token.colorPrimary}15` : 'rgba(0, 0, 0, 0.2)',
+          display: 'flex',
+          alignItems: 'center',
+          cursor: 'pointer',
+          marginBottom: 4,
+          boxShadow: session.ready_for_prompt ? `0 0 12px ${token.colorPrimary}30` : undefined,
+        }}
+        onClick={() => onSessionClick?.(session.session_id)}
+        onContextMenu={(e) => {
+          // Show fork/spawn menu on right-click if handlers exist
+          if (onForkSession || onSpawnSession) {
+            e.preventDefault();
+          }
+        }}
+      >
+        <Space size={4} align="center" style={{ flex: 1, minWidth: 0 }}>
+          <ToolIcon tool={session.agentic_tool} size={20} />
+          {getRelationshipIcon()}
+          <Typography.Text
+            strong
             style={{
-              marginLeft: 8,
-              width: 24,
-              display: 'flex',
-              justifyContent: 'center',
-              alignItems: 'center',
+              fontSize: 12,
+              flex: 1,
+              display: '-webkit-box',
+              WebkitLineClamp: SESSION_TITLE_MAX_LINES,
+              WebkitBoxOrient: 'vertical',
+              overflow: 'hidden',
+              wordBreak: 'break-word',
             }}
           >
-            <TaskStatusIcon status={session.status} size={16} />
-          </div>
+            {(() => {
+              const displayText = session.title || session.description || session.agentic_tool;
+              // Fallback truncation for browsers that don't support line-clamp
+              if (
+                !session.title &&
+                session.description &&
+                session.description.length > SESSION_TITLE_FALLBACK_CHARS
+              ) {
+                return `${session.description.substring(0, SESSION_TITLE_FALLBACK_CHARS)}...`;
+              }
+              return displayText;
+            })()}
+          </Typography.Text>
+        </Space>
+
+        {/* Status indicator - fixed width to prevent layout shift */}
+        <div
+          style={{
+            marginLeft: 8,
+            width: 24,
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+          }}
+        >
+          <TaskStatusIcon status={session.status} size={16} />
         </div>
-      );
-    },
-    [token, connectionDisabled, onSessionClick, onForkSession, onSpawnSession]
-  );
+      </div>
+    );
+  };
 
   // Session list content (collapsible) - only used when sessions exist
   const sessionListContent = (
@@ -428,33 +424,30 @@ const WorktreeCardComponent = ({
     </div>
   );
 
-  // Memoize expensive color calculations for attention glow
-  const attentionGlowShadow = useMemo(() => {
-    // Use colorTextBase for glow - hex color that adapts to light/dark mode
-    // Fallback to detecting dark mode if colorTextBase is not available
-    const isDarkMode =
-      token.colorBgLayout?.startsWith?.('#0') || token.colorBgLayout?.startsWith?.('rgb(0');
-    const rawGlowColor = token.colorTextBase || (isDarkMode ? '#ffffff' : '#000000');
+  // Use colorTextBase for glow - hex color that adapts to light/dark mode
+  // Fallback to detecting dark mode if colorTextBase is not available
+  const isDarkMode =
+    token.colorBgLayout?.startsWith?.('#0') || token.colorBgLayout?.startsWith?.('rgb(0');
+  const rawGlowColor = token.colorTextBase || (isDarkMode ? '#ffffff' : '#000000');
 
-    // Use Ant Design's Color class to normalize and convert to full hex format
-    // This handles shorthand hex (#fff -> #ffffff) and ensures we can append alpha values
-    let glowColor: string;
-    try {
-      const color = new AggregationColor(rawGlowColor);
-      // toHexString() always returns full 6 or 8 digit hex
-      glowColor = color.toHexString();
-    } catch {
-      // Fallback if color parsing fails
-      glowColor = isDarkMode ? '#ffffff' : '#000000';
-    }
+  // Use Ant Design's Color class to normalize and convert to full hex format
+  // This handles shorthand hex (#fff -> #ffffff) and ensures we can append alpha values
+  let glowColor: string;
+  try {
+    const color = new AggregationColor(rawGlowColor);
+    // toHexString() always returns full 6 or 8 digit hex
+    glowColor = color.toHexString();
+  } catch {
+    // Fallback if color parsing fails
+    glowColor = isDarkMode ? '#ffffff' : '#000000';
+  }
 
-    return `
-      0 0 0 3px ${glowColor},
-      0 0 20px 4px ${glowColor}dd,
-      0 0 40px 8px ${glowColor}88,
-      0 0 60px 12px ${glowColor}44
-    `;
-  }, [token.colorBgLayout, token.colorTextBase]);
+  const attentionGlowShadow = `
+    0 0 0 3px ${glowColor},
+    0 0 20px 4px ${glowColor}dd,
+    0 0 40px 8px ${glowColor}88,
+    0 0 60px 12px ${glowColor}44
+  `;
 
   return (
     <Card
@@ -713,10 +706,5 @@ const WorktreeCardComponent = ({
     </Card>
   );
 };
-
-// Memoize the component to prevent unnecessary re-renders
-const WorktreeCard = React.memo(WorktreeCardComponent);
-
-WorktreeCard.displayName = 'WorktreeCard';
 
 export default WorktreeCard;

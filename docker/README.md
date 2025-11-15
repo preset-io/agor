@@ -14,6 +14,7 @@ docker/
 ```
 
 Both Dockerfiles use multi-stage builds with a shared base stage:
+
 - **Base stage**: System deps, Node 20, pnpm, AI CLIs, user setup (~500MB)
 - **Dev stage**: Copies monorepo source, installs dev dependencies (~1.5GB)
 - **Prod stage**: Installs `agor-live` from npm globally (~600MB)
@@ -270,6 +271,7 @@ Expected image sizes:
 ### Why Shared Base Image?
 
 **Benefits:**
+
 - DRY: System dependencies defined once
 - Faster builds: Base layer cached and reused
 - Consistency: Dev and prod use same base environment
@@ -278,12 +280,14 @@ Expected image sizes:
 ### Why Separate Entrypoints?
 
 **Development** (`docker-entrypoint.sh`):
+
 - Installs dependencies from monorepo
 - Builds `@agor/core`
 - Runs `pnpm dev` for daemon + UI (hot-reload)
 - Seeds test data (optional)
 
 **Production** (`docker-entrypoint-prod.sh`):
+
 - Installs `agor-live` from npm (global)
 - Runs `agor init --skip-if-exists`
 - Creates admin user
