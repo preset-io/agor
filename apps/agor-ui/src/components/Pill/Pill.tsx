@@ -205,7 +205,13 @@ const ContextWindowPopoverContent: React.FC<{
 
   // Add per-model usage if available (Claude Code multi-model)
   // Check for modelUsage field (only Claude SDK has this)
-  if (sdkResponse && 'modelUsage' in sdkResponse && sdkResponse.modelUsage) {
+  if (
+    sdkResponse &&
+    typeof sdkResponse === 'object' &&
+    sdkResponse !== null &&
+    'modelUsage' in sdkResponse &&
+    sdkResponse.modelUsage
+  ) {
     advancedItems.push({
       key: 'per-model',
       label: 'Per-Model Usage',
