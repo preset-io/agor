@@ -1843,10 +1843,14 @@ async function main() {
       );
 
       // Update session with new task immediately and set status to running
+      console.log(
+        `🔄 [Prompt] Setting session ${id.substring(0, 8)} to RUNNING (was: ${session.status})`
+      );
       await sessionsService.patch(id, {
         tasks: [...session.tasks, task.task_id],
         status: SessionStatus.RUNNING,
       });
+      console.log(`✅ [Prompt] Session ${id.substring(0, 8)} patched to RUNNING`);
 
       // Create streaming callbacks for real-time UI updates
       // Custom events are registered via app.use('/messages', service, { events: [...] })
