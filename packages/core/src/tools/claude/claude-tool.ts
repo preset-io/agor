@@ -33,7 +33,7 @@ import type {
   NormalizedSdkResponse,
   RawSdkResponse,
 } from '../../types/sdk-response';
-import { calculateModelContextWindowUsage } from '../../utils/context-window';
+// Removed import of calculateModelContextWindowUsage - inlined instead
 import type { TokenUsage } from '../../utils/pricing';
 import type { ImportOptions, ITool, SessionData, ToolCapabilities } from '../base';
 import { loadClaudeSession } from './import/load-session';
@@ -405,55 +405,8 @@ export class ClaudeTool implements ITool {
       }
       if ('model_usage' in event && event.model_usage) {
         // Save full model usage for later (per-model breakdown)
+        // Token accounting now handled by ClaudeCodeNormalizer.normalizeMultiModel()
         modelUsage = event.model_usage;
-
-        // Extract context window data from model usage
-        const modelUsageTyped = event.model_usage as Record<
-          string,
-          {
-            inputTokens: number;
-            outputTokens: number;
-            cacheReadInputTokens?: number;
-            cacheCreationInputTokens?: number;
-            contextWindow: number;
-          }
-        >;
-        // Sum ALL token fields across ALL models
-        // When multiple models are used (e.g., Sonnet + Haiku for tools/thinking),
-        // all their tokens contribute to the total
-        let totalInput = 0;
-        let totalOutput = 0;
-        let totalCacheRead = 0;
-        let totalCacheCreation = 0;
-        let totalUsage = 0;
-        let maxLimit = 0;
-        for (const modelData of Object.values(modelUsageTyped)) {
-          totalInput += modelData.inputTokens || 0;
-          totalOutput += modelData.outputTokens || 0;
-          totalCacheRead += modelData.cacheReadInputTokens || 0;
-          totalCacheCreation += modelData.cacheCreationInputTokens || 0;
-
-          const usage = calculateModelContextWindowUsage(modelData);
-          const limit = modelData.contextWindow || 0;
-          totalUsage += usage; // Sum across all models
-          maxLimit = Math.max(maxLimit, limit); // Track largest context window limit
-        }
-
-        // Override tokenUsage with summed values across all models
-        // (SDK's top-level token_usage only reflects primary model)
-        tokenUsage = {
-          input_tokens: totalInput,
-          output_tokens: totalOutput,
-          cache_read_tokens: totalCacheRead,
-          cache_creation_tokens: totalCacheCreation,
-          total_tokens: totalInput + totalOutput,
-        };
-
-        contextWindow = totalUsage;
-        contextWindowLimit = maxLimit;
-        console.log(
-          `🔍 [ClaudeTool] Context window: ${contextWindow}/${contextWindowLimit} (${((contextWindow / contextWindowLimit) * 100).toFixed(1)}%)`
-        );
       }
 
       // Handle partial streaming events (token-level chunks)
@@ -718,55 +671,8 @@ export class ClaudeTool implements ITool {
       }
       if ('model_usage' in event && event.model_usage) {
         // Save full model usage for later (per-model breakdown)
+        // Token accounting now handled by ClaudeCodeNormalizer.normalizeMultiModel()
         modelUsage = event.model_usage;
-
-        // Extract context window data from model usage
-        const modelUsageTyped = event.model_usage as Record<
-          string,
-          {
-            inputTokens: number;
-            outputTokens: number;
-            cacheReadInputTokens?: number;
-            cacheCreationInputTokens?: number;
-            contextWindow: number;
-          }
-        >;
-        // Sum ALL token fields across ALL models
-        // When multiple models are used (e.g., Sonnet + Haiku for tools/thinking),
-        // all their tokens contribute to the total
-        let totalInput = 0;
-        let totalOutput = 0;
-        let totalCacheRead = 0;
-        let totalCacheCreation = 0;
-        let totalUsage = 0;
-        let maxLimit = 0;
-        for (const modelData of Object.values(modelUsageTyped)) {
-          totalInput += modelData.inputTokens || 0;
-          totalOutput += modelData.outputTokens || 0;
-          totalCacheRead += modelData.cacheReadInputTokens || 0;
-          totalCacheCreation += modelData.cacheCreationInputTokens || 0;
-
-          const usage = calculateModelContextWindowUsage(modelData);
-          const limit = modelData.contextWindow || 0;
-          totalUsage += usage; // Sum across all models
-          maxLimit = Math.max(maxLimit, limit); // Track largest context window limit
-        }
-
-        // Override tokenUsage with summed values across all models
-        // (SDK's top-level token_usage only reflects primary model)
-        tokenUsage = {
-          input_tokens: totalInput,
-          output_tokens: totalOutput,
-          cache_read_tokens: totalCacheRead,
-          cache_creation_tokens: totalCacheCreation,
-          total_tokens: totalInput + totalOutput,
-        };
-
-        contextWindow = totalUsage;
-        contextWindowLimit = maxLimit;
-        console.log(
-          `🔍 [ClaudeTool] Context window: ${contextWindow}/${contextWindowLimit} (${((contextWindow / contextWindowLimit) * 100).toFixed(1)}%)`
-        );
       }
 
       // Skip partial events in non-streaming mode

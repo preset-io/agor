@@ -46,44 +46,8 @@ interface TokenUsage {
   estimated_cost_usd?: number;
 }
 
-/**
- * Normalize token usage from different agentic tools into a consistent format
- *
- * Different tools report tokens differently:
- * - **Codex/OpenAI**: input_tokens INCLUDES cached tokens (cache_read_tokens is a subset)
- * - **Claude**: input_tokens EXCLUDES cached tokens (cache_read_tokens is additional)
- * - **Gemini**: No caching, just input/output
- *
- * This function normalizes to a consistent model where:
- * - input_tokens = fresh (non-cached) input tokens only
- * - cache_read_tokens = cached tokens (if any)
- * - output_tokens = output tokens
- *
- * @param usage - Raw token usage from the SDK
- * @param agenticTool - The tool that generated this usage ('codex', 'claude-code', 'gemini', etc.)
- * @returns Normalized token usage where input_tokens always means fresh tokens
- */
-export function normalizeTokenUsage(
-  usage: TokenUsage | undefined,
-  agenticTool?: string
-): TokenUsage | undefined {
-  if (!usage) return undefined;
-
-  // For Codex/OpenAI: input_tokens includes cached tokens, so we need to subtract
-  if (agenticTool === 'codex') {
-    return {
-      ...usage,
-      // Fresh input = total input - cached portion
-      input_tokens: (usage.input_tokens || 0) - (usage.cache_read_tokens || 0),
-      // Keep cache_read_tokens as-is for reference
-      cache_read_tokens: usage.cache_read_tokens,
-      output_tokens: usage.output_tokens,
-    };
-  }
-
-  // For Claude, Gemini, and others: input_tokens already represents fresh tokens
-  return usage;
-}
+// DEAD CODE REMOVED: normalizeTokenUsage
+// Use normalizeRawSdkResponse() from utils/sdk-normalizer instead
 
 /**
  * Model usage interface from SDK (per-model breakdown)
@@ -99,42 +63,11 @@ interface ModelUsage {
   contextWindow?: number; // The model's LIMIT (e.g., 200K), NOT current usage
 }
 
-/**
- * Calculate context window usage from a single task's token counts
- *
- * CORRECT FORMULA: input_tokens + cache_read_tokens
- *
- * Context window includes:
- * - input_tokens: Fresh input tokens (after cache breakpoints)
- * - cache_read_tokens: Cached content being read (FREE for billing, but IN the context!)
- *
- * EXCLUDES:
- * - cache_creation_tokens: Do NOT add these! They represent content being written to cache
- *   on THIS turn, which will appear as cache_read_tokens on FUTURE turns. Adding both would
- *   double-count the same content.
- * - output_tokens: Generated tokens, not part of input context
- *
- * @param usage - Token usage from a single task
- * @returns Context window usage in tokens, or undefined if no usage data
- */
-export function calculateContextWindowUsage(usage: TokenUsage | undefined): number | undefined {
-  if (!usage) return undefined;
+// DEAD CODE REMOVED: calculateContextWindowUsage
+// Use normalizeRawSdkResponse() from utils/sdk-normalizer instead
 
-  return (usage.input_tokens || 0) + (usage.cache_read_tokens || 0);
-}
-
-/**
- * Calculate context window usage from SDK model usage
- *
- * Same calculation as above, but for SDK's ModelUsage format.
- * Formula: inputTokens + cacheReadInputTokens (excludes cacheCreationInputTokens)
- *
- * @param modelUsage - Per-model usage from Agent SDK
- * @returns Context window usage in tokens
- */
-export function calculateModelContextWindowUsage(modelUsage: ModelUsage): number {
-  return (modelUsage.inputTokens || 0) + (modelUsage.cacheReadInputTokens || 0);
-}
+// DEAD CODE REMOVED: calculateModelContextWindowUsage
+// Use ClaudeCodeNormalizer.normalizeMultiModel() instead - it handles the entire aggregation
 
 // Dead code removed - token accounting now handled via normalizeRawSdkResponse()
 // in utils/sdk-normalizer.ts. UI components call normalizeRawSdkResponse() directly.
