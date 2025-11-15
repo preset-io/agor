@@ -45,27 +45,15 @@ export function useFaviconStatus(
     );
 
     // Determine status: check for running and ready independently
-    let hasRunning = false;
-    let hasReady = false;
-
-    for (const session of sessionsOnBoard) {
-      // Check if session has running tasks
+    // Use .some() for efficient short-circuiting
+    const hasRunning = sessionsOnBoard.some((session) => {
       const sessionTasks = tasks[session.session_id] || [];
-      const isRunning =
-        sessionTasks.some((t) => t.status === 'running') ||
-        session.status === SessionStatus.RUNNING;
+      return (
+        sessionTasks.some((t) => t.status === 'running') || session.status === SessionStatus.RUNNING
+      );
+    });
 
-      if (isRunning) {
-        hasRunning = true;
-      }
-
-      // Check if session is ready for prompt
-      if (session.ready_for_prompt) {
-        hasReady = true;
-      }
-
-      // Both states can be true simultaneously, so don't break early
-    }
+    const hasReady = sessionsOnBoard.some((session) => session.ready_for_prompt);
 
     // Update favicon with appropriate dots
     // White dot (lower-left) for running, green dot (lower-right) for ready
