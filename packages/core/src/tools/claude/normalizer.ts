@@ -90,9 +90,9 @@ export class ClaudeCodeNormalizer implements INormalizer<SDKResultMessage> {
         cacheReadTokens: totalCacheRead,
         cacheCreationTokens: totalCacheCreation,
       },
-      // Context window = input + cache_read (NOT cache_creation)
-      // cache_creation tokens will appear as cache_read in future turns
-      contextWindow: totalInput + totalCacheRead,
+      // Context window = input + output (simple and reliable)
+      // Cache tokens are unreliable and ignored for context window calculation
+      contextWindow: totalInput + totalOutput,
       contextWindowLimit: maxLimit,
       primaryModel,
       durationMs,
@@ -123,8 +123,9 @@ export class ClaudeCodeNormalizer implements INormalizer<SDKResultMessage> {
         cacheReadTokens,
         cacheCreationTokens,
       },
-      // Context window = input + cache_read (NOT cache_creation)
-      contextWindow: inputTokens + cacheReadTokens,
+      // Context window = input + output (simple and reliable)
+      // Cache tokens are unreliable and ignored for context window calculation
+      contextWindow: inputTokens + outputTokens,
       // Default to 200K for Claude models (standard context window)
       contextWindowLimit: 200000,
       durationMs,
