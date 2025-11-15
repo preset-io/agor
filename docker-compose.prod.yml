@@ -3,7 +3,8 @@ services:
     image: agor-prod
     build:
       context: .
-      dockerfile: docker/Dockerfile.prod
+      dockerfile: docker/Dockerfile
+      target: production
     # No container_name - allows multiple instances
     ports:
       # Expose daemon port (daemon serves both API and UI)

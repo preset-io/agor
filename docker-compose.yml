@@ -3,7 +3,8 @@ services:
     image: agor-dev
     build:
       context: .
-      dockerfile: docker/Dockerfile.dev
+      dockerfile: docker/Dockerfile
+      target: development
     # No container_name - allows multiple instances via docker compose -p flag
     ports:
       # Expose daemon port (so browser can connect) - configurable via DAEMON_PORT
