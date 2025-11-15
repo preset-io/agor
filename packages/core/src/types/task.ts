@@ -65,6 +65,12 @@ export interface Task {
   // Optional to support legacy tasks that don't have this field
   raw_sdk_response?: RawSdkResponse;
 
+  // Computed context window - cumulative token usage for this session
+  // Calculated by tool.computeContextWindow() and stored for efficient access
+  // For Claude Code: sum of input+output tokens from all tasks since last compaction
+  // For Codex/Gemini: may use latest task's SDK-reported cumulative value
+  computed_context_window?: number;
+
   // Report (auto-generated after task completion)
   report?: {
     /**

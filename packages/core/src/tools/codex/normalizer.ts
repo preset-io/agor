@@ -25,9 +25,27 @@ export class CodexNormalizer implements INormalizer<CodexSdkResponse> {
   normalize(event: CodexSdkResponse): NormalizedSdkData {
     // Extract usage from TurnCompletedEvent
     const usage = event.usage;
-    const inputTokens = usage.input_tokens;
-    const outputTokens = usage.output_tokens;
-    const cacheReadTokens = usage.cached_input_tokens;
+
+    // Handle missing usage gracefully (legacy tasks or malformed responses)
+    if (!usage) {
+      return {
+        tokenUsage: {
+          inputTokens: 0,
+          outputTokens: 0,
+          totalTokens: 0,
+          cacheReadTokens: 0,
+          cacheCreationTokens: 0,
+        },
+        contextWindow: 0,
+        contextWindowLimit: getCodexContextWindowLimit(DEFAULT_CODEX_MODEL),
+        primaryModel: DEFAULT_CODEX_MODEL,
+        durationMs: undefined,
+      };
+    }
+
+    const inputTokens = usage.input_tokens || 0;
+    const outputTokens = usage.output_tokens || 0;
+    const cacheReadTokens = usage.cached_input_tokens || 0;
 
     // Context window = input_tokens + output_tokens
     // NOTE: input_tokens is CUMULATIVE (total context sent to model in THIS turn)

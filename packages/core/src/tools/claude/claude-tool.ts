@@ -16,6 +16,7 @@ import type { MessagesRepository } from '../../db/repositories/messages';
 import type { RepoRepository } from '../../db/repositories/repos';
 import type { SessionMCPServerRepository } from '../../db/repositories/session-mcp-servers';
 import type { SessionRepository } from '../../db/repositories/sessions';
+import type { TaskRepository } from '../../db/repositories/tasks';
 import type { WorktreeRepository } from '../../db/repositories/worktrees';
 import { withSessionGuard } from '../../db/session-guard';
 import { generateId } from '../../lib/ids';
@@ -25,6 +26,7 @@ import {
   type MessageID,
   MessageRole,
   type SessionID,
+  type Task,
   type TaskID,
   TaskStatus,
 } from '../../types';
@@ -42,6 +44,7 @@ import {
   extractTokenUsage,
 } from './message-builder';
 import type { ProcessedEvent } from './message-processor';
+import { ClaudeCodeNormalizer } from './normalizer';
 import { ClaudePromptService } from './prompt-service';
 
 /**
@@ -92,7 +95,8 @@ export class ClaudeTool implements ITool {
     sessionsService?: SessionsService,
     worktreesRepo?: WorktreeRepository,
     reposRepo?: RepoRepository,
-    mcpEnabled?: boolean
+    mcpEnabled?: boolean,
+    private tasksRepo?: TaskRepository
   ) {
     if (messagesRepo && sessionsRepo) {
       this.promptService = new ClaudePromptService(
@@ -813,5 +817,92 @@ export class ClaudeTool implements ITool {
     throw new Error(
       'normalizedSdkResponse() is deprecated - use normalizeRawSdkResponse() from utils/sdk-normalizer instead'
     );
+  }
+
+  /**
+   * Compute cumulative context window usage for a Claude Code session
+   *
+   * Algorithm:
+   * 1. Start from the most recent task (iterate backwards)
+   * 2. Sum input + output tokens from each task's raw_sdk_response
+   * 3. Stop when we encounter a compaction event (system message with systemType='compaction')
+   * 4. Exclude the current task (if provided) since it's not complete yet
+   *
+   * This ensures we only count tokens since the last compaction event,
+   * as compaction resets the context window.
+   *
+   * @param sessionId - Session ID to compute context for
+   * @param currentTaskId - Current task ID (to exclude from computation)
+   * @returns Promise resolving to computed context window usage in tokens
+   */
+  async computeContextWindow(
+    sessionId: string,
+    currentTaskId?: string,
+    _currentRawSdkResponse?: unknown
+  ): Promise<number> {
+    if (!this.tasksRepo || !this.messagesRepo) {
+      console.warn('computeContextWindow: repos not available, returning 0');
+      return 0;
+    }
+
+    // Get all tasks for this session, sorted by created_at DESC (most recent first)
+    const tasks = await this.tasksRepo.findBySession(sessionId as SessionID);
+
+    // Sort tasks by created_at descending (most recent first)
+    tasks.sort((a: Task, b: Task) => {
+      const dateA = new Date(a.created_at).getTime();
+      const dateB = new Date(b.created_at).getTime();
+      return dateB - dateA;
+    });
+
+    let cumulativeTokens = 0;
+    const normalizer = new ClaudeCodeNormalizer();
+
+    // Iterate backwards through tasks (from most recent to oldest)
+    for (const task of tasks) {
+      // Skip the current task if specified (it's not complete yet)
+      if (currentTaskId && task.task_id === currentTaskId) {
+        continue;
+      }
+
+      // Check if this task has a compaction event in its messages
+      // If so, we stop here (context was reset)
+      const taskMessages = await this.messagesRepo.findByTaskId(task.task_id);
+      const hasCompaction = taskMessages.some(msg => {
+        if (msg.role !== MessageRole.SYSTEM) return false;
+
+        // Check if message content contains compaction event
+        const content = msg.content;
+        if (Array.isArray(content)) {
+          return content.some(
+            (block: { type?: string; systemType?: string }) =>
+              block.type === 'system_complete' && block.systemType === 'compaction'
+          );
+        }
+        return false;
+      });
+
+      if (hasCompaction) {
+        // Found a compaction event - stop accumulating tokens
+        console.log(
+          `🗜️  Compaction event found in task ${task.task_id}, stopping token accumulation`
+        );
+        break;
+      }
+
+      // Accumulate tokens from this task's SDK response
+      if (task.raw_sdk_response) {
+        // biome-ignore lint/suspicious/noExplicitAny: raw_sdk_response is unknown, cast to normalizer's expected type
+        const normalized = normalizer.normalize(task.raw_sdk_response as any);
+        const taskTokens = normalized.tokenUsage.inputTokens + normalized.tokenUsage.outputTokens;
+        cumulativeTokens += taskTokens;
+        console.log(
+          `📊 Task ${task.task_id}: +${taskTokens} tokens (cumulative: ${cumulativeTokens})`
+        );
+      }
+    }
+
+    console.log(`✅ Computed context window for session ${sessionId}: ${cumulativeTokens} tokens`);
+    return cumulativeTokens;
   }
 }

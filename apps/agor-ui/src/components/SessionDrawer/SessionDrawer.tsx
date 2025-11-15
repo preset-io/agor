@@ -279,21 +279,22 @@ const SessionDrawer = ({
     );
   }, [tasks, session?.agentic_tool]);
 
-  // Get latest context window from most recent task (normalized from SDK response)
+  // Get latest context window from most recent task (uses computed_context_window)
   const latestContextWindow = React.useMemo(() => {
     if (!session?.agentic_tool) return null;
 
-    // Find most recent task with raw SDK response
+    // Find most recent task with computed context window
     for (let i = tasks.length - 1; i >= 0; i--) {
       const task = tasks[i];
-      if (task.raw_sdk_response) {
-        // Normalize to get context window values
+      if (task.computed_context_window !== undefined && task.raw_sdk_response) {
+        // Get context window limit from normalizer
         const normalized = normalizeRawSdkResponse(task.raw_sdk_response, session.agentic_tool);
 
-        if (normalized.contextWindow > 0 && normalized.contextWindowLimit > 0) {
+        // Show pill even without limit (will display as "?")
+        if (task.computed_context_window > 0) {
           return {
-            used: normalized.contextWindow,
-            limit: normalized.contextWindowLimit,
+            used: task.computed_context_window, // Use stored computed value
+            limit: normalized.contextWindowLimit || 0, // Allow 0 limit
             taskMetadata: {
               model: task.model,
               duration_ms: task.duration_ms,

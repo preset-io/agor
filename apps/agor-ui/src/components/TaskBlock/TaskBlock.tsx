@@ -97,7 +97,7 @@ function isAgentChainMessage(message: Message): boolean {
   // EXCEPTION: User messages with ONLY tool_result blocks are part of agent execution
   // (tool results are technically "user" role per Anthropic API, but they're automated responses)
   if (message.role === MessageRole.USER && Array.isArray(message.content)) {
-    const hasOnlyToolResults = message.content.every((block) => block.type === 'tool_result');
+    const hasOnlyToolResults = message.content.every(block => block.type === 'tool_result');
     if (hasOnlyToolResults) return true; // Part of agent chain, don't break it
   }
 
@@ -114,9 +114,9 @@ function isAgentChainMessage(message: Message): boolean {
 
   // Array content - check what types of blocks we have
   if (Array.isArray(message.content)) {
-    const hasTools = message.content.some((block) => block.type === 'tool_use');
-    const hasThinking = message.content.some((block) => block.type === 'thinking');
-    const hasText = message.content.some((block) => block.type === 'text');
+    const hasTools = message.content.some(block => block.type === 'tool_use');
+    const hasThinking = message.content.some(block => block.type === 'thinking');
+    const hasText = message.content.some(block => block.type === 'text');
 
     // SPECIAL: Task tools should display as regular agent messages, not in chain
     const hasOnlyTaskTool =
@@ -154,8 +154,8 @@ function isAgentChainMessage(message: Message): boolean {
  */
 function groupMessagesIntoBlocks(messages: Message[]): Block[] {
   // Separate top-level messages from nested (parent_tool_use_id)
-  const topLevel = messages.filter((m) => !m.parent_tool_use_id);
-  const nested = messages.filter((m) => m.parent_tool_use_id);
+  const topLevel = messages.filter(m => !m.parent_tool_use_id);
+  const nested = messages.filter(m => m.parent_tool_use_id);
 
   // Build compaction event map: task_id -> [start_message, complete_message?]
   // We aggregate compaction events that share the same task_id
@@ -163,7 +163,7 @@ function groupMessagesIntoBlocks(messages: Message[]): Block[] {
   for (const msg of topLevel) {
     if (msg.role === MessageRole.SYSTEM && Array.isArray(msg.content)) {
       const hasCompactionStatus = msg.content.some(
-        (b) =>
+        b =>
           (b.type === 'system_status' && 'status' in b && b.status === 'compacting') ||
           (b.type === 'system_complete' && 'systemType' in b && b.systemType === 'compaction')
       );
@@ -235,7 +235,7 @@ function groupMessagesIntoBlocks(messages: Message[]): Block[] {
       msg.role === MessageRole.USER &&
       Array.isArray(msg.content) &&
       msg.content.some(
-        (block) =>
+        block =>
           block.type === 'tool_result' &&
           taskToolIds.has((block as { tool_use_id?: string }).tool_use_id || '')
       );
@@ -262,7 +262,7 @@ function groupMessagesIntoBlocks(messages: Message[]): Block[] {
 
     // After processing the message, check if it has Task tool uses
     // If so, add nested operations + result as a regular agent-chain
-    const taskTools = msg.tool_uses?.filter((t) => t.name === 'Task') || [];
+    const taskTools = msg.tool_uses?.filter(t => t.name === 'Task') || [];
     for (const taskTool of taskTools) {
       const children = nestedByParent.get(taskTool.id) || [];
       const resultMsg = taskResultsByToolId.get(taskTool.id);
@@ -363,11 +363,11 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     const messages = useMemo(() => {
       // Filter streaming messages for this task
       const streamingForTask = Array.from(streamingMessages.values()).filter(
-        (msg) => msg.task_id === task.task_id
+        msg => msg.task_id === task.task_id
       );
 
       // Filter out DB messages that are already in streaming (avoid duplicates)
-      const dbOnlyMessages = taskMessages.filter((msg) => !streamingMessages.has(msg.message_id));
+      const dbOnlyMessages = taskMessages.filter(msg => !streamingMessages.has(msg.message_id));
 
       // Combine and sort by index
       return ([...dbOnlyMessages, ...streamingForTask] as Message[]).sort(
@@ -396,7 +396,8 @@ export const TaskBlock = React.memo<TaskBlockProps>(
         ? normalizeRawSdkResponse(sdkResponse, agentic_tool as AgenticToolName)
         : null;
 
-    const contextWindowUsed = normalized?.contextWindow ?? 0;
+    // Use computed context window from database (already summed across tasks since last compaction)
+    const contextWindowUsed = task.computed_context_window ?? normalized?.contextWindow ?? 0;
     const contextWindowLimit = normalized?.contextWindowLimit ?? 200000;
     const taskHeaderGradient = getContextWindowGradient(contextWindowUsed, contextWindowLimit);
 
@@ -464,10 +465,10 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                 cacheCreationTokens={normalized.tokenUsage.cacheCreationTokens}
               />
             )}
-            {normalized && contextWindowLimit > 0 && (
+            {(task.computed_context_window || normalized) && (
               <ContextWindowPill
                 used={contextWindowUsed}
-                limit={contextWindowLimit}
+                limit={contextWindowLimit || 0}
                 taskMetadata={{
                   model: task.model,
                   duration_ms: task.duration_ms,
@@ -515,7 +516,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     return (
       <Collapse
         activeKey={isExpanded ? ['task-content'] : []}
-        onChange={(keys) => onExpandChange(keys.length > 0)}
+        onChange={keys => onExpandChange(keys.length > 0)}
         expandIcon={() => null}
         style={{ background: 'transparent', margin: `${token.sizeUnit * 3}px 0` }}
         items={[
@@ -561,7 +562,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                         const content = block.message.content as PermissionRequestContent;
                         if (content.status === PermissionStatus.PENDING) {
                           // Check if this is the first pending permission request
-                          isFirstPending = !blocks.slice(0, blockIndex).some((b) => {
+                          isFirstPending = !blocks.slice(0, blockIndex).some(b => {
                             if (b.type === 'message' && b.message.type === 'permission_request') {
                               const c = b.message.content as PermissionRequestContent;
                               return c.status === PermissionStatus.PENDING;

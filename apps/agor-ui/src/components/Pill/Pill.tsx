@@ -274,11 +274,14 @@ const ContextWindowPopoverContent: React.FC<{
           Context Window Usage
         </div>
         <div style={{ fontSize: '1.1em', fontFamily: token.fontFamilyCode }}>
-          {used.toLocaleString()} / {limit.toLocaleString()}{' '}
-          <span style={{ color: token.colorTextSecondary }}>({percentage}%)</span>
+          {used.toLocaleString()}
+          {limit > 0 ? ` / ${limit.toLocaleString()}` : ''}{' '}
+          {limit > 0 && <span style={{ color: token.colorTextSecondary }}>({percentage}%)</span>}
         </div>
         <div style={{ fontSize: '0.85em', color: token.colorTextTertiary, marginTop: 6 }}>
-          Cumulative conversation tokens (directly from SDK)
+          {limit > 0
+            ? 'Cumulative conversation tokens'
+            : 'Cumulative conversation tokens (limit unknown)'}
         </div>
       </div>
 
@@ -347,10 +350,13 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
   taskMetadata,
   style,
 }) => {
-  const percentage = Math.round((used / limit) * 100);
+  // Handle division by zero - if no limit, show as unknown percentage
+  const percentage = limit > 0 ? Math.round((used / limit) * 100) : 0;
+  const hasLimit = limit > 0;
 
   // Color-code based on usage: green (<50%), yellow (50-80%), red (>80%)
   const getColor = () => {
+    if (!hasLimit) return 'blue'; // Blue for unknown limit
     if (percentage < 50) return 'green';
     if (percentage < 80) return 'orange';
     return 'red';
@@ -358,7 +364,7 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
 
   const pill = (
     <Tag icon={<PercentageOutlined />} color={getColor()} style={style}>
-      {percentage}
+      {hasLimit ? `${percentage}%` : '?'}
     </Tag>
   );
 

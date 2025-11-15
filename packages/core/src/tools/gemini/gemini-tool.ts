@@ -16,6 +16,7 @@ import type { MCPServerRepository } from '../../db/repositories/mcp-servers';
 import type { MessagesRepository } from '../../db/repositories/messages';
 import type { SessionMCPServerRepository } from '../../db/repositories/session-mcp-servers';
 import type { SessionRepository } from '../../db/repositories/sessions';
+import type { TaskRepository } from '../../db/repositories/tasks';
 import type { WorktreeRepository } from '../../db/repositories/worktrees';
 import { generateId } from '../../lib/ids';
 import {
@@ -31,6 +32,7 @@ import type { TokenUsage } from '../../types/token-usage';
 import type { ITool, StreamingCallbacks, ToolCapabilities } from '../base';
 import type { MessagesService, TasksService } from '../claude/claude-tool';
 import { DEFAULT_GEMINI_MODEL } from './models';
+import { GeminiNormalizer } from './normalizer';
 import { GeminiPromptService } from './prompt-service';
 
 interface GeminiExecutionResult {
@@ -40,6 +42,7 @@ interface GeminiExecutionResult {
   contextWindow?: number;
   contextWindowLimit?: number;
   model?: string;
+  rawSdkResponse?: unknown; // Raw SDK event from Gemini
 }
 
 export class GeminiTool implements ITool {
@@ -47,6 +50,7 @@ export class GeminiTool implements ITool {
   readonly name = 'Google Gemini';
 
   private promptService?: GeminiPromptService;
+  private tasksRepo?: TaskRepository;
 
   constructor(
     private messagesRepo?: MessagesRepository,
@@ -58,8 +62,10 @@ export class GeminiTool implements ITool {
     mcpServerRepo?: MCPServerRepository,
     sessionMCPRepo?: SessionMCPServerRepository,
     mcpEnabled?: boolean,
-    db?: Database
+    db?: Database,
+    tasksRepo?: TaskRepository
   ) {
+    this.tasksRepo = tasksRepo;
     if (messagesRepo && sessionsRepo) {
       this.promptService = new GeminiPromptService(
         messagesRepo,
@@ -138,6 +144,7 @@ export class GeminiTool implements ITool {
     let tokenUsage: TokenUsage | undefined;
     let streamStartTime = Date.now();
     let firstTokenTime: number | null = null;
+    let rawSdkResponse: unknown;
 
     for await (const event of this.promptService.promptSessionStreaming(
       sessionId,
@@ -157,6 +164,11 @@ export class GeminiTool implements ITool {
       // Capture token usage from complete event
       if (event.type === 'complete' && event.usage) {
         tokenUsage = event.usage;
+      }
+
+      // Capture raw SDK response for token accounting
+      if (event.type === 'complete' && event.rawSdkResponse) {
+        rawSdkResponse = event.rawSdkResponse;
       }
 
       // Handle partial streaming events (token-level chunks)
@@ -227,6 +239,7 @@ export class GeminiTool implements ITool {
       contextWindow: undefined,
       contextWindowLimit: undefined,
       model: resolvedModel,
+      rawSdkResponse,
     };
   }
 
@@ -349,6 +362,7 @@ export class GeminiTool implements ITool {
     let tokenUsage: TokenUsage | undefined;
     let _contextWindow: number | undefined;
     let _contextWindowLimit: number | undefined;
+    let rawSdkResponse: unknown;
 
     for await (const event of this.promptService.promptSessionStreaming(
       sessionId,
@@ -404,6 +418,7 @@ export class GeminiTool implements ITool {
       contextWindow: undefined,
       contextWindowLimit: undefined,
       model: resolvedModel,
+      rawSdkResponse,
     };
   }
 
@@ -460,5 +475,61 @@ export class GeminiTool implements ITool {
     throw new Error(
       'normalizedSdkResponse() is deprecated - use normalizeRawSdkResponse() from utils/sdk-normalizer instead'
     );
+  }
+
+  /**
+   * Compute cumulative context window usage for a Gemini session
+   *
+   * For Gemini, the SDK already provides cumulative token counts in each task's response.
+   * The promptTokenCount field includes the full conversation history up to that point.
+   * We just need to extract and return the contextWindow from the current task's SDK response.
+   *
+   * @param sessionId - Session ID to compute context for
+   * @param currentTaskId - Optional current task ID (not used for Gemini, kept for interface consistency)
+   * @param currentRawSdkResponse - Optional raw SDK response from current task (if available in memory)
+   * @returns Promise resolving to computed context window usage in tokens
+   */
+  async computeContextWindow(
+    sessionId: string,
+    _currentTaskId?: string,
+    currentRawSdkResponse?: unknown
+  ): Promise<number> {
+    // If we have the current task's raw response in memory, use it directly
+    if (currentRawSdkResponse) {
+      const normalizer = new GeminiNormalizer();
+      // biome-ignore lint/suspicious/noExplicitAny: raw_sdk_response is unknown, cast to normalizer's expected type
+      const normalized = normalizer.normalize(currentRawSdkResponse as any);
+      const cumulativeTokens = normalized.contextWindow;
+      console.log(
+        `✅ Computed context window for Gemini session ${sessionId}: ${cumulativeTokens} tokens (from current task)`
+      );
+      return cumulativeTokens;
+    }
+
+    // Fallback: look up from database (used when computing for already-saved tasks)
+    if (!this.tasksRepo) {
+      console.warn('computeContextWindow: tasksRepo not available, returning 0');
+      return 0;
+    }
+
+    const tasks = await this.tasksRepo.findBySession(sessionId as SessionID);
+
+    // Find the most recent task with raw_sdk_response
+    for (let i = tasks.length - 1; i >= 0; i--) {
+      const task = tasks[i];
+      if (task.raw_sdk_response) {
+        const normalizer = new GeminiNormalizer();
+        // biome-ignore lint/suspicious/noExplicitAny: raw_sdk_response is unknown, cast to normalizer's expected type
+        const normalized = normalizer.normalize(task.raw_sdk_response as any);
+        const cumulativeTokens = normalized.contextWindow;
+        console.log(
+          `✅ Computed context window for Gemini session ${sessionId}: ${cumulativeTokens} tokens (from DB)`
+        );
+        return cumulativeTokens;
+      }
+    }
+
+    console.log(`⚠️  No tasks with SDK response found for session ${sessionId}`);
+    return 0;
   }
 }
