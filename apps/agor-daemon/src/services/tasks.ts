@@ -115,15 +115,9 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
         if (task.session_id && this.app) {
           try {
-            // 1. Set ready_for_prompt flag (existing logic from main)
-            await this.app.service('sessions').patch(task.session_id, {
-              ready_for_prompt: true,
-            });
-            console.log(
-              `✅ [TasksService] Set ready_for_prompt=true for session ${task.session_id}`
-            );
-
-            // 2. Check if session has parent and queue callback (NEW)
+            // Check if session has parent and queue callback
+            // NOTE: Don't patch ready_for_prompt here - it's set atomically with status=IDLE in index.ts
+            // to avoid race condition between partial patches
             const session = await this.app.service('sessions').get(task.session_id);
             if (session.genealogy?.parent_session_id) {
               await this.queueParentCallback(task, session, params);
