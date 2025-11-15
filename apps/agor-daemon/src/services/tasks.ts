@@ -115,7 +115,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
         if (task.session_id && this.app) {
           try {
-            // 1. Set ready_for_prompt flag (existing logic)
+            // 1. Set ready_for_prompt flag (existing logic from main)
             await this.app.service('sessions').patch(task.session_id, {
               ready_for_prompt: true,
             });
