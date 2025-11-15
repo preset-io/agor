@@ -1853,10 +1853,14 @@ async function main() {
       console.log(
         `🔄 [Prompt] Setting session ${id.substring(0, 8)} to RUNNING (was: ${session.status})`
       );
-      await sessionsService.patch(id, {
-        tasks: [...session.tasks, task.task_id],
-        status: SessionStatus.RUNNING,
-      });
+      await sessionsService.patch(
+        id,
+        {
+          tasks: [...session.tasks, task.task_id],
+          status: SessionStatus.RUNNING,
+        },
+        params
+      );
       console.log(`✅ [Prompt] Session ${id.substring(0, 8)} patched to RUNNING`);
 
       // Create streaming callbacks for real-time UI updates
