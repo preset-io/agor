@@ -20,8 +20,14 @@ RUN curl -fsSL "$(curl -s https://api.github.com/repos/cli/cli/releases/latest |
   mv /tmp/gh_*/bin/gh /usr/local/bin/ && \
   rm -rf /tmp/gh_*
 
-# Install pnpm and AI coding agent CLIs (always get latest versions)
-RUN npm install -g pnpm@latest @anthropic-ai/claude-code@latest @google/gemini-cli@latest @openai/codex@latest
+# Install pnpm and AI coding agent CLIs
+# Pinned versions for reproducibility across dev and prod
+# NOTE: Update these versions when upgrading Agor SDKs (see packages/core/package.json)
+RUN npm install -g \
+  pnpm@9.15.1 \
+  @anthropic-ai/claude-code@2.0.42 \
+  @google/gemini-cli@0.15.1 \
+  @openai/codex@0.58.0
 
 # Create non-root 'agor' user
 RUN useradd -m -s /bin/bash agor && \

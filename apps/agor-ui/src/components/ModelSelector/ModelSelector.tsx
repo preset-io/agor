@@ -26,12 +26,34 @@ export interface ModelSelectorProps {
 
 // Codex model options
 const CODEX_MODEL_OPTIONS = [
+  // GPT-5 models (current default)
   {
     id: 'gpt-5-codex',
     label: 'GPT-5 Codex (Default)',
     description: 'Optimized for software engineering',
   },
-  { id: 'codex-mini-latest', label: 'Codex Mini', description: 'Faster, lighter model' },
+  {
+    id: 'gpt-5-codex-mini',
+    label: 'GPT-5 Codex Mini',
+    description: 'Faster, lighter model',
+  },
+  // GPT-5.1 models (latest - requires updated Codex CLI)
+  {
+    id: 'gpt-5.1-codex',
+    label: 'GPT-5.1 Codex',
+    description: 'Latest model optimized for agentic coding tasks',
+  },
+  {
+    id: 'gpt-5.1-codex-mini',
+    label: 'GPT-5.1 Codex Mini',
+    description: 'Cost-effective variant with 4x more usage',
+  },
+  {
+    id: 'gpt-5.1',
+    label: 'GPT-5.1',
+    description: 'General-purpose model great for coding',
+  },
+  // GPT-4o models
   { id: 'gpt-4o', label: 'GPT-4o', description: 'General purpose model' },
   { id: 'gpt-4o-mini', label: 'GPT-4o Mini', description: 'Smaller, faster model' },
 ];
