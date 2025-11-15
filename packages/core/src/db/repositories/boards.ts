@@ -100,7 +100,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
       throw new AmbiguousIdError(
         'Board',
         id,
-        results.map(r => formatShortId(r.board_id as UUID))
+        results.map((r) => formatShortId(r.board_id as UUID))
       );
     }
 
@@ -176,7 +176,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
   async findAll(): Promise<Board[]> {
     try {
       const rows = await this.db.select().from(boards).all();
-      return rows.map(row => this.rowToBoard(row));
+      return rows.map((row) => this.rowToBoard(row));
     } catch (error) {
       throw new RepositoryError(
         `Failed to find all boards: ${error instanceof Error ? error.message : String(error)}`,

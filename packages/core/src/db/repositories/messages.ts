@@ -73,9 +73,9 @@ export class MessagesRepository {
    * Bulk insert messages (optimized for session loading)
    */
   async createMany(messageList: Message[]): Promise<Message[]> {
-    const rows = messageList.map(m => this.messageToRow(m));
+    const rows = messageList.map((m) => this.messageToRow(m));
     const inserted = await this.db.insert(messages).values(rows).returning();
-    return inserted.map(r => this.rowToMessage(r));
+    return inserted.map((r) => this.rowToMessage(r));
   }
 
   /**
@@ -96,7 +96,7 @@ export class MessagesRepository {
    */
   async findAll(): Promise<Message[]> {
     const rows = await this.db.select().from(messages).orderBy(messages.index);
-    return rows.map(r => this.rowToMessage(r));
+    return rows.map((r) => this.rowToMessage(r));
   }
 
   /**
@@ -109,7 +109,7 @@ export class MessagesRepository {
       .where(eq(messages.session_id, sessionId))
       .orderBy(messages.index);
 
-    return rows.map(r => this.rowToMessage(r));
+    return rows.map((r) => this.rowToMessage(r));
   }
 
   /**
@@ -122,7 +122,7 @@ export class MessagesRepository {
       .where(eq(messages.task_id, taskId))
       .orderBy(messages.index);
 
-    return rows.map(r => this.rowToMessage(r));
+    return rows.map((r) => this.rowToMessage(r));
   }
 
   /**
@@ -142,8 +142,8 @@ export class MessagesRepository {
 
     // Filter by range in memory (simpler than complex SQL)
     return rows
-      .filter(r => r.index >= startIndex && r.index <= endIndex)
-      .map(r => this.rowToMessage(r));
+      .filter((r) => r.index >= startIndex && r.index <= endIndex)
+      .map((r) => this.rowToMessage(r));
   }
 
   /**
@@ -246,7 +246,7 @@ export class MessagesRepository {
       .where(and(eq(messages.session_id, sessionId), eq(messages.status, 'queued')))
       .orderBy(asc(messages.queue_position));
 
-    return rows.map(r => this.rowToMessage(r));
+    return rows.map((r) => this.rowToMessage(r));
   }
 
   /**

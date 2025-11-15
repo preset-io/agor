@@ -77,9 +77,9 @@ export const TaskNestedBlock: React.FC<TaskNestedBlockProps> = ({
         return msg.content;
       }
       if (Array.isArray(msg.content)) {
-        const textBlocks = msg.content.filter(b => b.type === 'text');
+        const textBlocks = msg.content.filter((b) => b.type === 'text');
         if (textBlocks.length > 0) {
-          return textBlocks.map(b => (b as unknown as { text: string }).text).join('\n');
+          return textBlocks.map((b) => (b as unknown as { text: string }).text).join('\n');
         }
       }
     }

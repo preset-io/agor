@@ -96,9 +96,9 @@ function isTaskToolPrompt(message: Message): boolean {
   if (!Array.isArray(message.content)) return false;
 
   // Must have at least one text block (not tool_result)
-  const hasTextBlock = message.content.some(block => block.type === 'text');
+  const hasTextBlock = message.content.some((block) => block.type === 'text');
   const hasOnlyTextBlocks = message.content.every(
-    block => block.type === 'text' || block.type === 'thinking'
+    (block) => block.type === 'text' || block.type === 'thinking'
   );
 
   // If it has text blocks and NO tool_result blocks, it's likely a Task prompt
@@ -115,7 +115,7 @@ function isTaskToolResult(message: Message): boolean {
   // Check if contains tool_result block
   // Note: We can't easily determine if it's specifically a Task result here,
   // but groupMessagesIntoBlocks ensures only Task results reach this as non-chain messages
-  const hasToolResult = message.content.some(block => block.type === 'tool_result');
+  const hasToolResult = message.content.some((block) => block.type === 'tool_result');
 
   // User messages with tool_results that aren't in agent chains are likely Task results
   return hasToolResult;
@@ -160,7 +160,7 @@ export const MessageBlock = React.memo<MessageBlockProps>(
             }
             onDeny={
               canInteract && onPermissionDecision && sessionId && taskId
-                ? messageId => {
+                ? (messageId) => {
                     onPermissionDecision(
                       sessionId,
                       content.request_id,
@@ -200,7 +200,7 @@ export const MessageBlock = React.memo<MessageBlockProps>(
     const shouldUseTyping = isStreaming && hasContent;
 
     // Get current user's emoji
-    const currentUser = users.find(u => u.user_id === currentUserId);
+    const currentUser = users.find((u) => u.user_id === currentUserId);
     const userEmoji = currentUser?.emoji || '👤';
 
     // Skip rendering if message has no content
@@ -297,8 +297,8 @@ export const MessageBlock = React.memo<MessageBlockProps>(
                 resultText = toolResult.content;
               } else if (Array.isArray(toolResult.content)) {
                 resultText = toolResult.content
-                  .filter(b => b.type === 'text')
-                  .map(b => (b as unknown as { text: string }).text)
+                  .filter((b) => b.type === 'text')
+                  .map((b) => (b as unknown as { text: string }).text)
                   .join('\n');
               }
 
@@ -341,8 +341,8 @@ export const MessageBlock = React.memo<MessageBlockProps>(
     // Skip rendering if message has no meaningful content
     const hasThinking =
       thinkingBlocks.length > 0 || (streamingThinking && streamingThinking.length > 0);
-    const hasTextBefore = textBeforeTools.some(text => text.trim().length > 0);
-    const hasTextAfter = textAfterTools.some(text => text.trim().length > 0);
+    const hasTextBefore = textBeforeTools.some((text) => text.trim().length > 0);
+    const hasTextAfter = textAfterTools.some((text) => text.trim().length > 0);
     const hasTools = toolBlocks.length > 0;
 
     if (!hasThinking && !hasTextBefore && !hasTextAfter && !hasTools) {

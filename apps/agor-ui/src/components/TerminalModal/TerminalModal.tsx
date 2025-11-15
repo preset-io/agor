@@ -124,7 +124,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
 
         // Handle user input - send to backend
         // FeathersJS automatically uses WebSocket when available, REST as fallback
-        terminal.onData(data => {
+        terminal.onData((data) => {
           if (result.terminalId && client) {
             client.service('terminals').patch(result.terminalId, { input: data });
           }

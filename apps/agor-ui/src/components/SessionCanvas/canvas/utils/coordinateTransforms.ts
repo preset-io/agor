@@ -135,7 +135,7 @@ export function getDragAbsolutePosition(node: Node, allNodes: Node[]): Position 
 
   // If node has parent, position is relative - must convert
   if (node.parentId) {
-    const parent = allNodes.find(n => n.id === node.parentId);
+    const parent = allNodes.find((n) => n.id === node.parentId);
     if (parent) {
       const parentAbsPos = getNodeAbsolutePosition(parent, allNodes);
       return relativeToAbsolute(node.position, parentAbsPos);

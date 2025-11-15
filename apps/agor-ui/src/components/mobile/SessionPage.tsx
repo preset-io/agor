@@ -34,8 +34,8 @@ export const SessionPage: React.FC<SessionPageProps> = ({
 }) => {
   const { sessionId } = useParams<{ sessionId: string }>();
 
-  const session = sessions.find(s => s.session_id === sessionId);
-  const worktree = session ? worktrees.find(w => w.worktree_id === session.worktree_id) : null;
+  const session = sessions.find((s) => s.session_id === sessionId);
+  const worktree = session ? worktrees.find((w) => w.worktree_id === session.worktree_id) : null;
 
   if (!sessionId) {
     return (

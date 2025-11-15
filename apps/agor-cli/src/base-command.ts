@@ -138,6 +138,6 @@ export abstract class BaseCommand extends Command {
     client.io.close();
 
     // Give a brief moment for cleanup, then force exit
-    await new Promise<void>(resolve => setTimeout(resolve, 100));
+    await new Promise<void>((resolve) => setTimeout(resolve, 100));
   }
 }

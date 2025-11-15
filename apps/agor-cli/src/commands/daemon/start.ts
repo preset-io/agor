@@ -144,7 +144,7 @@ export default class DaemonStart extends Command {
 
         // Wait for child to exit
         await new Promise<void>((resolve, reject) => {
-          child.on('exit', code => {
+          child.on('exit', (code) => {
             if (code === 0) {
               resolve();
             } else {
@@ -173,7 +173,7 @@ export default class DaemonStart extends Command {
         const maxAttempts = 5;
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
           const waitTime = 1000 * (attempt + 1); // 1s, 2s, 3s, 4s, 5s
-          await new Promise(resolve => setTimeout(resolve, waitTime));
+          await new Promise((resolve) => setTimeout(resolve, waitTime));
 
           isRunning = await isDaemonRunning(daemonUrl);
           if (isRunning) break;

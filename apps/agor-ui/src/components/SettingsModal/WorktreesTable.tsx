@@ -88,7 +88,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
   const [selectedWorktree, setSelectedWorktree] = useState<Worktree | null>(null);
   const [hoveredArchiveButton, setHoveredArchiveButton] = useState<string | null>(null);
 
-  const reposById = useMemo(() => new Map(repos.map(repo => [repo.repo_id, repo])), [repos]);
+  const reposById = useMemo(() => new Map(repos.map((repo) => [repo.repo_id, repo])), [repos]);
 
   // Validate form fields to enable/disable Create button
   const validateForm = useCallback(() => {
@@ -109,10 +109,10 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
       const lastBoardId = localStorage.getItem('agor:lastUsedBoardId');
 
       const defaultRepoId =
-        lastRepoId && repos.find(r => r.repo_id === lastRepoId) ? lastRepoId : repos[0].repo_id;
+        lastRepoId && repos.find((r) => r.repo_id === lastRepoId) ? lastRepoId : repos[0].repo_id;
 
       const defaultBoardId =
-        lastBoardId && boards.find(b => b.board_id === lastBoardId)
+        lastBoardId && boards.find((b) => b.board_id === lastBoardId)
           ? lastBoardId
           : boards.length > 0
             ? boards[0].board_id
@@ -122,7 +122,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
       form.setFieldsValue({
         repoId: defaultRepoId,
         boardId: defaultBoardId,
-        sourceBranch: repos.find(r => r.repo_id === defaultRepoId)?.default_branch || 'main',
+        sourceBranch: repos.find((r) => r.repo_id === defaultRepoId)?.default_branch || 'main',
       });
 
       setSelectedRepoId(defaultRepoId);
@@ -199,14 +199,14 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
   // Get selected repo's default branch
   const getDefaultBranch = (): string => {
     if (!selectedRepoId) return 'main';
-    const repo = repos.find(r => r.repo_id === selectedRepoId);
+    const repo = repos.find((r) => r.repo_id === selectedRepoId);
     return repo?.default_branch || 'main';
   };
 
   // Update source branch when repo changes
   const handleRepoChange = (repoId: string) => {
     setSelectedRepoId(repoId);
-    const repo = repos.find(r => r.repo_id === repoId);
+    const repo = repos.find((r) => r.repo_id === repoId);
     const defaultBranch = repo?.default_branch || 'main';
     form.setFieldValue('sourceBranch', defaultBranch);
   };
@@ -277,7 +277,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
       render: (_: unknown, record: Worktree) => {
         const status = record.environment_instance?.status;
         const healthStatus = record.environment_instance?.last_health_check?.status;
-        const repo = repos.find(r => r.repo_id === record.repo_id);
+        const repo = repos.find((r) => r.repo_id === record.repo_id);
         const hasEnvConfig = !!repo?.environment_config;
 
         const isRunningOrHealthy =
@@ -293,7 +293,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
                   size="small"
                   icon={<PlayCircleOutlined />}
                   disabled={isRunningOrHealthy}
-                  onClick={e => {
+                  onClick={(e) => {
                     e.stopPropagation();
                     onStartEnvironment?.(record.worktree_id);
                   }}
@@ -303,7 +303,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
                   type="text"
                   size="small"
                   icon={<PoweroffOutlined />}
-                  onClick={e => {
+                  onClick={(e) => {
                     e.stopPropagation();
                     onStopEnvironment?.(record.worktree_id);
                   }}
@@ -314,7 +314,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
                     type="text"
                     size="small"
                     icon={<GlobalOutlined />}
-                    onClick={e => {
+                    onClick={(e) => {
                       e.stopPropagation();
                       // Render the URL template with worktree context
                       const templateContext = {
@@ -366,7 +366,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
       key: 'sessions',
       width: 100,
       render: (_: unknown, record: Worktree) => {
-        const sessionCount = sessions.filter(s => s.worktree_id === record.worktree_id).length;
+        const sessionCount = sessions.filter((s) => s.worktree_id === record.worktree_id).length;
         return (
           <Typography.Text type="secondary">
             {sessionCount} {sessionCount === 1 ? 'session' : 'sessions'}
@@ -415,7 +415,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
               }
               onMouseEnter={() => setHoveredArchiveButton(record.worktree_id)}
               onMouseLeave={() => setHoveredArchiveButton(null)}
-              onClick={e => {
+              onClick={(e) => {
                 e.stopPropagation();
                 if (record.archived) {
                   onUnarchive?.(record.worktree_id);
@@ -430,7 +430,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
             type="text"
             size="small"
             icon={<EditOutlined />}
-            onClick={e => {
+            onClick={(e) => {
               e.stopPropagation();
               onRowClick?.(record);
             }}
@@ -440,7 +440,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
             size="small"
             icon={<DeleteOutlined />}
             danger
-            onClick={e => {
+            onClick={(e) => {
               e.stopPropagation();
               setSelectedWorktree(record);
               setArchiveDeleteModalOpen(true);
@@ -460,9 +460,9 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
     // Filter by archive status
     let filtered = sorted;
     if (archiveFilter === 'active') {
-      filtered = sorted.filter(w => !w.archived);
+      filtered = sorted.filter((w) => !w.archived);
     } else if (archiveFilter === 'archived') {
-      filtered = sorted.filter(w => w.archived);
+      filtered = sorted.filter((w) => w.archived);
     }
 
     // Filter by search term
@@ -470,7 +470,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
       return filtered;
     }
 
-    return filtered.filter(worktree => {
+    return filtered.filter((worktree) => {
       const repo = reposById.get(worktree.repo_id);
       const haystacks = [
         worktree.name,
@@ -481,7 +481,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
         repo?.slug,
       ];
 
-      return haystacks.some(value => {
+      return haystacks.some((value) => {
         if (value === undefined || value === null) {
           return false;
         }
@@ -506,12 +506,12 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
               allowClear
               placeholder="Search by name, repo, slug, path, or ID"
               value={searchTerm}
-              onChange={event => setSearchTerm(event.target.value)}
+              onChange={(event) => setSearchTerm(event.target.value)}
               style={{ maxWidth: token.sizeUnit * 40 }}
             />
             <Select
               value={archiveFilter}
-              onChange={value => setArchiveFilter(value)}
+              onChange={(value) => setArchiveFilter(value)}
               style={{ width: 120 }}
               options={[
                 { value: 'active', label: 'Active' },
@@ -585,7 +585,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
           rowKey="worktree_id"
           pagination={{ pageSize: 10 }}
           size="small"
-          onRow={record => ({
+          onRow={(record) => ({
             onClick: () => onRowClick?.(record),
             style: { cursor: onRowClick ? 'pointer' : 'default' },
           })}
@@ -621,9 +621,11 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
         <ArchiveDeleteWorktreeModal
           open={archiveDeleteModalOpen}
           worktree={selectedWorktree}
-          sessionCount={sessions.filter(s => s.worktree_id === selectedWorktree.worktree_id).length}
+          sessionCount={
+            sessions.filter((s) => s.worktree_id === selectedWorktree.worktree_id).length
+          }
           environmentRunning={selectedWorktree.environment_instance?.status === 'running'}
-          onConfirm={options => {
+          onConfirm={(options) => {
             handleArchiveOrDelete(selectedWorktree.worktree_id, options);
             setArchiveDeleteModalOpen(false);
             setSelectedWorktree(null);

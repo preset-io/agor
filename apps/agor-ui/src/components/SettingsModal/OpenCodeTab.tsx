@@ -166,7 +166,7 @@ export const OpenCodeTab: React.FC<OpenCodeTabProps> = ({ client }) => {
               <Input
                 placeholder="http://localhost:4096"
                 value={serverUrl}
-                onChange={e => setServerUrl(e.target.value)}
+                onChange={(e) => setServerUrl(e.target.value)}
                 addonAfter={
                   <Tooltip title="Test connection to OpenCode server">
                     <Button

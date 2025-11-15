@@ -64,7 +64,7 @@ export const AgentSelectionGrid: React.FC<AgentSelectionGridProps> = ({
           marginTop: 8,
         }}
       >
-        {agents.map(agent => (
+        {agents.map((agent) => (
           <AgentSelectionCard
             key={agent.id}
             agent={agent}

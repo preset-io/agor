@@ -186,7 +186,7 @@ const SessionDrawer = ({
   const [queuedMessages, setQueuedMessages] = React.useState<Message[]>([]);
 
   // Fetch tasks for this session to calculate token totals
-  const currentUser = users?.find(u => u.user_id === currentUserId) || null;
+  const currentUser = users?.find((u) => u.user_id === currentUserId) || null;
   const { tasks } = useTasks(client, session?.session_id || null, currentUser);
 
   // Fetch queued messages for this session
@@ -215,7 +215,7 @@ const SessionDrawer = ({
 
     const handleQueued = (message: Message) => {
       if (message.session_id === session.session_id) {
-        setQueuedMessages(prev => {
+        setQueuedMessages((prev) => {
           const updated = [...prev, message].sort(
             (a, b) => (a.queue_position ?? 0) - (b.queue_position ?? 0)
           );
@@ -230,8 +230,8 @@ const SessionDrawer = ({
       // Only process if it's a queued message for this session
       if (message.status === 'queued' && message.session_id === session.session_id) {
         console.log('[SessionDrawer] Removing queued message from UI:', message.message_id);
-        setQueuedMessages(prev => {
-          const filtered = prev.filter(m => m.message_id !== message.message_id);
+        setQueuedMessages((prev) => {
+          const filtered = prev.filter((m) => m.message_id !== message.message_id);
           console.log('[SessionDrawer] Queue after removal:', filtered);
           return filtered;
         });
@@ -412,7 +412,7 @@ const SessionDrawer = ({
 
         // Optimistically update the UI immediately (don't wait for WebSocket event)
         if (response.message) {
-          setQueuedMessages(prev => {
+          setQueuedMessages((prev) => {
             const updated = [...prev, response.message].sort(
               (a, b) => (a.queue_position ?? 0) - (b.queue_position ?? 0)
             );
@@ -561,7 +561,7 @@ const SessionDrawer = ({
   const isRunning = session.status === SessionStatus.RUNNING;
 
   // Get repo from worktree (worktree is passed from parent)
-  const repo = worktree ? repos.find(r => r.repo_id === worktree.repo_id) : null;
+  const repo = worktree ? repos.find((r) => r.repo_id === worktree.repo_id) : null;
 
   return (
     <Drawer
@@ -701,9 +701,9 @@ const SessionDrawer = ({
             {worktree?.pull_request_url && <PullRequestPill prUrl={worktree.pull_request_url} />}
             {/* MCP Servers */}
             {sessionMcpServerIds
-              .map(serverId => mcpServers.find(s => s.mcp_server_id === serverId))
+              .map((serverId) => mcpServers.find((s) => s.mcp_server_id === serverId))
               .filter(Boolean)
-              .map(server => (
+              .map((server) => (
                 <Tag key={server?.mcp_server_id} color="purple" icon={<ApiOutlined />}>
                   {server?.display_name || server?.name}
                 </Tag>
@@ -818,8 +818,8 @@ const SessionDrawer = ({
                         });
 
                         // Optimistically remove from UI
-                        setQueuedMessages(prev =>
-                          prev.filter(m => m.message_id !== msg.message_id)
+                        setQueuedMessages((prev) =>
+                          prev.filter((m) => m.message_id !== msg.message_id)
                         );
 
                         // Delete via messages service directly
@@ -891,7 +891,7 @@ const SessionDrawer = ({
             onChange={setInputValue}
             placeholder="Send a prompt, fork, or create a subsession... (type @ for autocomplete)"
             autoSize={{ minRows: 1, maxRows: 10 }}
-            onKeyPress={e => {
+            onKeyPress={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 // Allow sending/queueing when there's input (queues if running, sends if idle)

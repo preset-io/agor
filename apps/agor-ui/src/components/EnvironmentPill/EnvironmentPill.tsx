@@ -45,7 +45,7 @@ export function EnvironmentPill({
         <Tag
           color="default"
           style={{ cursor: 'pointer', userSelect: 'none', opacity: 0.6 }}
-          onClick={e => {
+          onClick={(e) => {
             e.stopPropagation();
             onEdit?.();
           }}
@@ -180,7 +180,7 @@ export function EnvironmentPill({
               href={environmentUrl}
               target="_blank"
               rel="noopener noreferrer"
-              onClick={e => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -232,7 +232,7 @@ export function EnvironmentPill({
                   type="text"
                   size="small"
                   icon={<PlayCircleOutlined />}
-                  onClick={event => {
+                  onClick={(event) => {
                     event.stopPropagation();
                     if (!startDisabled) {
                       onStartEnvironment(worktree.worktree_id);
@@ -264,7 +264,7 @@ export function EnvironmentPill({
                   type="text"
                   size="small"
                   icon={<StopOutlined />}
-                  onClick={event => {
+                  onClick={(event) => {
                     event.stopPropagation();
                     if (!stopDisabled) {
                       onStopEnvironment(worktree.worktree_id);
@@ -292,7 +292,7 @@ export function EnvironmentPill({
                   type="text"
                   size="small"
                   icon={<FileTextOutlined />}
-                  onClick={event => {
+                  onClick={(event) => {
                     event.stopPropagation();
                     if (repo.environment_config?.logs_command) {
                       onViewLogs(worktree.worktree_id);

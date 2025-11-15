@@ -155,7 +155,7 @@ export async function checkMigrationStatus(
       // No migrations table = fresh database, all migrations pending
       return {
         hasPending: true,
-        pending: expectedMigrations.map(m => m.tag),
+        pending: expectedMigrations.map((m) => m.tag),
         applied: [],
       };
     }
@@ -179,19 +179,19 @@ export async function checkMigrationStatus(
       return {
         hasPending: false,
         pending: [],
-        applied: expectedMigrations.map(m => m.tag),
+        applied: expectedMigrations.map((m) => m.tag),
       };
     }
 
     // Find pending migrations (hash not in database, after normalization)
     const pending = expectedMigrations
-      .filter(m => !normalizedAppliedHashes.includes(m.hash))
-      .map(m => m.tag);
+      .filter((m) => !normalizedAppliedHashes.includes(m.hash))
+      .map((m) => m.tag);
 
     // Find applied migration tags (hash exists in database, after normalization)
     const appliedTags = expectedMigrations
-      .filter(m => normalizedAppliedHashes.includes(m.hash))
-      .map(m => m.tag);
+      .filter((m) => normalizedAppliedHashes.includes(m.hash))
+      .map((m) => m.tag);
 
     return {
       hasPending: pending.length > 0,

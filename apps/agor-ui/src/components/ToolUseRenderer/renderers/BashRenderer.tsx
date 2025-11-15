@@ -33,7 +33,7 @@ export const BashRenderer: React.FC<ToolRendererProps> = ({ input, result }) => 
           const b = block as { type: string; text?: string };
           return b.type === 'text';
         })
-        .map(block => block.text)
+        .map((block) => block.text)
         .join('\n\n');
     }
 

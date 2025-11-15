@@ -44,7 +44,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
   const { token } = theme.useToken();
 
   // Handle array of strings: filter empty, join with double newlines
-  const text = Array.isArray(content) ? content.filter(t => t.trim()).join('\n\n') : content;
+  const text = Array.isArray(content) ? content.filter((t) => t.trim()).join('\n\n') : content;
 
   // Detect dark mode from Ant Design token system
   const isDarkMode =

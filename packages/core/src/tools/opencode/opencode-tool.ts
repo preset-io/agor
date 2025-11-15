@@ -328,7 +328,7 @@ export class OpenCodeTool implements ITool {
     try {
       const sessions = await client.listSessions();
 
-      return sessions.map(session => ({
+      return sessions.map((session) => ({
         sessionId: session.id,
         toolType: 'opencode' as const,
         status: 'active' as const,

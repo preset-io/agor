@@ -94,7 +94,7 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
   ]);
 
   const handleOk = () => {
-    form.validateFields().then(values => {
+    form.validateFields().then((values) => {
       // Collect all updates
       const updates: Partial<Session> = {};
 

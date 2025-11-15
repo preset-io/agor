@@ -107,7 +107,7 @@ export default class Init extends Command {
   private async listDirs(path: string): Promise<string[]> {
     try {
       const entries = await readdir(path, { withFileTypes: true });
-      return entries.filter(e => e.isDirectory()).map(e => e.name);
+      return entries.filter((e) => e.isDirectory()).map((e) => e.name);
     } catch {
       return [];
     }

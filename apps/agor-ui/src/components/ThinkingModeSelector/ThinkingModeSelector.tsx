@@ -54,7 +54,7 @@ export const ThinkingModeSelector: React.FC<ThinkingModeSelectorProps> = ({
         onChange={onChange}
         size={size}
         style={{ width: compact ? 90 : 200 }}
-        options={options.map(opt => ({
+        options={options.map((opt) => ({
           value: opt.value,
           label: (
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>

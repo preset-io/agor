@@ -104,7 +104,7 @@ export class LeaderboardService {
     } = query;
 
     // Parse groupBy dimensions
-    const dimensions = groupBy.split(',').map(d => d.trim());
+    const dimensions = groupBy.split(',').map((d) => d.trim());
     const includeUser = dimensions.includes('user');
     const includeWorktree = dimensions.includes('worktree');
     const includeRepo = dimensions.includes('repo');
@@ -220,7 +220,7 @@ export class LeaderboardService {
     const total = countResult[0]?.count || 0;
 
     // Transform results to match our interface
-    const data: LeaderboardEntry[] = results.map(row => ({
+    const data: LeaderboardEntry[] = results.map((row) => ({
       ...(includeUser && { userId: row.userId as string }),
       ...(includeWorktree && {
         worktreeId: row.worktreeId as string,

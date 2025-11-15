@@ -96,7 +96,7 @@ export function useStreamingMessages(
 
       console.debug(`📡 Streaming start: ${data.message_id.substring(0, 8)}`);
 
-      setStreamingMessages(prev => {
+      setStreamingMessages((prev) => {
         const newMap = new Map(prev);
         newMap.set(data.message_id, {
           message_id: data.message_id,
@@ -118,7 +118,7 @@ export function useStreamingMessages(
         return;
       }
 
-      setStreamingMessages(prev => {
+      setStreamingMessages((prev) => {
         const message = prev.get(data.message_id);
         if (!message) {
           return prev;
@@ -144,7 +144,7 @@ export function useStreamingMessages(
 
       // Mark as ended but DON'T remove yet - wait for DB 'created' event
       // This prevents jitter where streaming message disappears before DB message appears
-      setStreamingMessages(prev => {
+      setStreamingMessages((prev) => {
         const message = prev.get(data.message_id);
         if (!message) return prev;
 
@@ -159,7 +159,7 @@ export function useStreamingMessages(
       // Safety: Remove after 1 second if DB event doesn't arrive
       // This handles edge cases where 'created' event might be missed
       setTimeout(() => {
-        setStreamingMessages(prev => {
+        setStreamingMessages((prev) => {
           const newMap = new Map(prev);
           newMap.delete(data.message_id);
           return newMap;
@@ -175,7 +175,7 @@ export function useStreamingMessages(
       }
 
       // Mark as error but keep content
-      setStreamingMessages(prev => {
+      setStreamingMessages((prev) => {
         const message = prev.get(data.message_id);
         if (!message) {
           return prev;
@@ -202,7 +202,7 @@ export function useStreamingMessages(
       );
 
       // Remove from streaming map now that it's in the DB
-      setStreamingMessages(prev => {
+      setStreamingMessages((prev) => {
         const newMap = new Map(prev);
         newMap.delete(message.message_id);
         return newMap;
@@ -218,7 +218,7 @@ export function useStreamingMessages(
 
       console.debug(`🧠 Thinking start: ${data.message_id.substring(0, 8)}`);
 
-      setStreamingMessages(prev => {
+      setStreamingMessages((prev) => {
         const newMap = new Map(prev);
         newMap.set(data.message_id, {
           message_id: data.message_id,
@@ -242,7 +242,7 @@ export function useStreamingMessages(
         return;
       }
 
-      setStreamingMessages(prev => {
+      setStreamingMessages((prev) => {
         const message = prev.get(data.message_id);
         if (!message) {
           return prev;
@@ -267,7 +267,7 @@ export function useStreamingMessages(
 
       console.debug(`🧠 Thinking end: ${data.message_id.substring(0, 8)}`);
 
-      setStreamingMessages(prev => {
+      setStreamingMessages((prev) => {
         const message = prev.get(data.message_id);
         if (!message) return prev;
 

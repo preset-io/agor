@@ -169,7 +169,7 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
     if (!client) return;
 
     try {
-      setSavingKeys(prev => ({ ...prev, [field]: true }));
+      setSavingKeys((prev) => ({ ...prev, [field]: true }));
       setKeysError(null);
 
       await client.service('config').patch(null, {
@@ -178,13 +178,13 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
         },
       });
 
-      setKeyStatus(prev => ({ ...prev, [field]: true }));
+      setKeyStatus((prev) => ({ ...prev, [field]: true }));
     } catch (err) {
       console.error(`Failed to save ${field}:`, err);
       setKeysError(err instanceof Error ? err.message : `Failed to save ${field}`);
       throw err;
     } finally {
-      setSavingKeys(prev => ({ ...prev, [field]: false }));
+      setSavingKeys((prev) => ({ ...prev, [field]: false }));
     }
   };
 
@@ -193,7 +193,7 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
     if (!client) return;
 
     try {
-      setSavingKeys(prev => ({ ...prev, [field]: true }));
+      setSavingKeys((prev) => ({ ...prev, [field]: true }));
       setKeysError(null);
 
       await client.service('config').patch(null, {
@@ -202,13 +202,13 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
         },
       });
 
-      setKeyStatus(prev => ({ ...prev, [field]: false }));
+      setKeyStatus((prev) => ({ ...prev, [field]: false }));
     } catch (err) {
       console.error(`Failed to clear ${field}:`, err);
       setKeysError(err instanceof Error ? err.message : `Failed to clear ${field}`);
       throw err;
     } finally {
-      setSavingKeys(prev => ({ ...prev, [field]: false }));
+      setSavingKeys((prev) => ({ ...prev, [field]: false }));
     }
   };
 
@@ -370,7 +370,7 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
                         <Input
                           placeholder="http://localhost:4096"
                           value={opencodeServerUrl}
-                          onChange={e => setOpencodeServerUrl(e.target.value)}
+                          onChange={(e) => setOpencodeServerUrl(e.target.value)}
                           addonAfter={
                             <Tooltip title="Test connection to OpenCode server">
                               <Button

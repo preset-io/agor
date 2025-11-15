@@ -105,7 +105,7 @@ export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({ user, form }
                       1: '100%',
                     }}
                     disabled={!form.getFieldValue('enabled')}
-                    tooltip={{ formatter: value => `${Math.round((value || 0) * 100)}%` }}
+                    tooltip={{ formatter: (value) => `${Math.round((value || 0) * 100)}%` }}
                   />
                 </Form.Item>
               )}
@@ -126,7 +126,7 @@ export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({ user, form }
                         <Select
                           style={{ flex: 1 }}
                           disabled={!enabled}
-                          options={getAvailableChimes().map(chime => ({
+                          options={getAvailableChimes().map((chime) => ({
                             label: getChimeDisplayName(chime),
                             value: chime,
                           }))}

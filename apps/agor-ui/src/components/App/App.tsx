@@ -198,7 +198,7 @@ export const App: React.FC<AppProps> = ({
   // Initialize current board from localStorage or fallback to first board or initialBoardId
   const [currentBoardId, setCurrentBoardId] = useState(() => {
     const stored = localStorage.getItem('agor:currentBoardId');
-    if (stored && boards.some(b => b.board_id === stored)) {
+    if (stored && boards.some((b) => b.board_id === stored)) {
       return stored;
     }
     return initialBoardId || boards[0]?.board_id || '';
@@ -218,7 +218,7 @@ export const App: React.FC<AppProps> = ({
 
   // If the stored board no longer exists (e.g., deleted), fallback to first board
   useEffect(() => {
-    if (currentBoardId && !boards.some(b => b.board_id === currentBoardId)) {
+    if (currentBoardId && !boards.some((b) => b.board_id === currentBoardId)) {
       const fallback = boards[0]?.board_id || '';
       setCurrentBoardId(fallback);
     }
@@ -272,13 +272,13 @@ export const App: React.FC<AppProps> = ({
     setSelectedSessionId(sessionId);
 
     // Clear the ready_for_prompt flag when opening the conversation
-    const session = sessions.find(s => s.session_id === sessionId);
+    const session = sessions.find((s) => s.session_id === sessionId);
     if (session?.ready_for_prompt) {
       onUpdateSession?.(sessionId, { ready_for_prompt: false });
     }
 
     // Clear the worktree's needs_attention flag when user interacts with it
-    const worktree = worktrees.find(w => w.worktree_id === session?.worktree_id);
+    const worktree = worktrees.find((w) => w.worktree_id === session?.worktree_id);
     if (worktree?.needs_attention) {
       onUpdateWorktree?.(worktree.worktree_id, { needs_attention: false });
     }
@@ -286,7 +286,7 @@ export const App: React.FC<AppProps> = ({
 
   const handleSendPrompt = async (prompt: string, permissionMode?: PermissionMode) => {
     if (selectedSessionId) {
-      const session = sessions.find(s => s.session_id === selectedSessionId);
+      const session = sessions.find((s) => s.session_id === selectedSessionId);
       const agentName = session?.agentic_tool || 'agentic_tool';
 
       // Show loading state
@@ -348,41 +348,43 @@ export const App: React.FC<AppProps> = ({
     [client, user?.user_id]
   );
 
-  const selectedSession = sessions.find(s => s.session_id === selectedSessionId) || null;
+  const selectedSession = sessions.find((s) => s.session_id === selectedSessionId) || null;
   const selectedSessionWorktree = selectedSession
-    ? worktrees.find(w => w.worktree_id === selectedSession.worktree_id)
+    ? worktrees.find((w) => w.worktree_id === selectedSession.worktree_id)
     : null;
   const sessionSettingsSession = sessionSettingsId
-    ? sessions.find(s => s.session_id === sessionSettingsId)
+    ? sessions.find((s) => s.session_id === sessionSettingsId)
     : null;
   const _selectedSessionTasks = selectedSessionId ? tasks[selectedSessionId] || [] : [];
-  const currentBoard = boards.find(b => b.board_id === currentBoardId);
+  const currentBoard = boards.find((b) => b.board_id === currentBoardId);
 
   // Find worktree and repo for WorktreeModal
   const selectedWorktree = worktreeModalWorktreeId
-    ? worktrees.find(w => w.worktree_id === worktreeModalWorktreeId)
+    ? worktrees.find((w) => w.worktree_id === worktreeModalWorktreeId)
     : null;
   const selectedWorktreeRepo = selectedWorktree
-    ? repos.find(r => r.repo_id === selectedWorktree.repo_id)
+    ? repos.find((r) => r.repo_id === selectedWorktree.repo_id)
     : null;
   const worktreeSessions = selectedWorktree
-    ? sessions.filter(s => s.worktree_id === selectedWorktree.worktree_id)
+    ? sessions.filter((s) => s.worktree_id === selectedWorktree.worktree_id)
     : [];
 
   // Find worktree for NewSessionModal
   const newSessionWorktree = newSessionWorktreeId
-    ? worktrees.find(w => w.worktree_id === newSessionWorktreeId)
+    ? worktrees.find((w) => w.worktree_id === newSessionWorktreeId)
     : null;
 
   // Filter worktrees by current board (via board_objects)
   const boardWorktreeIds = boardObjects
-    .filter(bo => bo.board_id === currentBoard?.board_id)
-    .map(bo => bo.worktree_id);
+    .filter((bo) => bo.board_id === currentBoard?.board_id)
+    .map((bo) => bo.worktree_id);
 
-  const boardWorktrees = worktrees.filter(wt => boardWorktreeIds.includes(wt.worktree_id));
+  const boardWorktrees = worktrees.filter((wt) => boardWorktreeIds.includes(wt.worktree_id));
 
   // Filter sessions by current board's worktrees
-  const boardSessions = sessions.filter(session => boardWorktreeIds.includes(session.worktree_id));
+  const boardSessions = sessions.filter((session) =>
+    boardWorktreeIds.includes(session.worktree_id)
+  );
 
   // Track active users via cursor presence
   const { activeUsers } = usePresence({
@@ -401,7 +403,7 @@ export const App: React.FC<AppProps> = ({
           lastSeen: Date.now(),
           cursor: undefined, // Current user doesn't have a remote cursor
         },
-        ...activeUsers.filter(activeUser => activeUser.user.user_id !== user.user_id),
+        ...activeUsers.filter((activeUser) => activeUser.user.user_id !== user.user_id),
       ]
     : activeUsers;
 
@@ -427,22 +429,23 @@ export const App: React.FC<AppProps> = ({
         currentBoardName={currentBoard?.name}
         currentBoardIcon={currentBoard?.icon}
         unreadCommentsCount={
-          comments.filter(c => c.board_id === currentBoardId && !c.resolved && !c.parent_comment_id)
-            .length
+          comments.filter(
+            (c) => c.board_id === currentBoardId && !c.resolved && !c.parent_comment_id
+          ).length
         }
       />
       <Content style={{ position: 'relative', overflow: 'hidden', display: 'flex' }}>
         <CommentsPanel
           client={client}
           boardId={currentBoardId || ''}
-          comments={comments.filter(c => c.board_id === currentBoardId)}
+          comments={comments.filter((c) => c.board_id === currentBoardId)}
           users={users}
           currentUserId={user?.user_id || 'anonymous'}
           boardObjects={currentBoard?.objects}
           worktrees={boardWorktrees}
           collapsed={commentsPanelCollapsed}
           onToggleCollapse={() => setCommentsPanelCollapsed(!commentsPanelCollapsed)}
-          onSendComment={content => onSendComment?.(currentBoardId || '', content)}
+          onSendComment={(content) => onSendComment?.(currentBoardId || '', content)}
           onReplyComment={onReplyComment}
           onResolveComment={onResolveComment}
           onToggleReaction={onToggleReaction}
@@ -472,13 +475,13 @@ export const App: React.FC<AppProps> = ({
             onForkSession={onForkSession}
             onSpawnSession={onSpawnSession}
             onUpdateSessionMcpServers={onUpdateSessionMcpServers}
-            onOpenSettings={sessionId => {
+            onOpenSettings={(sessionId) => {
               setSessionSettingsId(sessionId);
             }}
-            onCreateSessionForWorktree={worktreeId => {
+            onCreateSessionForWorktree={(worktreeId) => {
               setNewSessionWorktreeId(worktreeId);
             }}
-            onOpenWorktree={worktreeId => {
+            onOpenWorktree={(worktreeId) => {
               setWorktreeModalWorktreeId(worktreeId);
             }}
             onArchiveOrDeleteWorktree={onArchiveOrDeleteWorktree}
@@ -488,9 +491,9 @@ export const App: React.FC<AppProps> = ({
             onViewLogs={setLogsModalWorktreeId}
             onOpenCommentsPanel={() => setCommentsPanelCollapsed(false)}
             onCommentHover={setHoveredCommentId}
-            onCommentSelect={commentId => {
+            onCommentSelect={(commentId) => {
               // Toggle selection: if clicking same comment, deselect
-              setSelectedCommentId(prev => (prev === commentId ? null : commentId));
+              setSelectedCommentId((prev) => (prev === commentId ? null : commentId));
             }}
           />
           <NewSessionButton
@@ -536,10 +539,10 @@ export const App: React.FC<AppProps> = ({
         onFork={handleFork}
         onSubsession={handleSubsession}
         onPermissionDecision={handlePermissionDecision}
-        onOpenSettings={sessionId => {
+        onOpenSettings={(sessionId) => {
           setSessionSettingsId(sessionId);
         }}
-        onOpenWorktree={worktreeId => {
+        onOpenWorktree={(worktreeId) => {
           setWorktreeModalWorktreeId(worktreeId);
         }}
         onOpenTerminal={handleOpenTerminal}
@@ -567,7 +570,7 @@ export const App: React.FC<AppProps> = ({
         mcpServers={mcpServers}
         activeTab={effectiveSettingsTab}
         editUserId={settingsEditUserId}
-        onTabChange={newTab => {
+        onTabChange={(newTab) => {
           setSettingsActiveTab(newTab);
           setSettingsEditUserId(undefined); // Clear editUserId when switching tabs
           // Clear openSettingsTab when user manually changes tabs
@@ -654,7 +657,7 @@ export const App: React.FC<AppProps> = ({
         <EnvironmentLogsModal
           open={!!logsModalWorktreeId}
           onClose={() => setLogsModalWorktreeId(null)}
-          worktree={worktrees.find(w => w.worktree_id === logsModalWorktreeId)!}
+          worktree={worktrees.find((w) => w.worktree_id === logsModalWorktreeId)!}
           client={client}
         />
       )}

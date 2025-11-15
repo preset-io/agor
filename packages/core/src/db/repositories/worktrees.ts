@@ -139,7 +139,7 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
       throw new AmbiguousIdError(
         'Worktree',
         prefix,
-        matches.map(m => formatShortId(m.worktree_id as UUID))
+        matches.map((m) => formatShortId(m.worktree_id as UUID))
       );
     }
 
@@ -170,7 +170,7 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
       .from(worktrees)
       .where(conditions.length > 0 ? and(...conditions) : undefined);
 
-    return rows.map(row => this.rowToWorktree(row));
+    return rows.map((row) => this.rowToWorktree(row));
   }
 
   /**
@@ -187,7 +187,7 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
     }
 
     // Use transaction to make read-merge-write atomic
-    return await this.db.transaction(async tx => {
+    return await this.db.transaction(async (tx) => {
       // STEP 2: Re-read within transaction to ensure we have latest data
       const currentRow = await tx
         .select()

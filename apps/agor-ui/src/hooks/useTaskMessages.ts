@@ -85,9 +85,9 @@ export function useTaskMessages(
       if (message.task_id === taskId) {
         // Use flushSync to force immediate render (bypass React 18 automatic batching)
         flushSync(() => {
-          setMessages(prev => {
+          setMessages((prev) => {
             // Check if message already exists (avoid duplicates)
-            if (prev.some(m => m.message_id === message.message_id)) {
+            if (prev.some((m) => m.message_id === message.message_id)) {
               return prev;
             }
             // Insert in correct position based on index
@@ -102,13 +102,13 @@ export function useTaskMessages(
 
     const handleMessagePatched = (message: Message) => {
       if (message.task_id === taskId) {
-        setMessages(prev => prev.map(m => (m.message_id === message.message_id ? message : m)));
+        setMessages((prev) => prev.map((m) => (m.message_id === message.message_id ? message : m)));
       }
     };
 
     const handleMessageRemoved = (message: Message) => {
       if (message.task_id === taskId) {
-        setMessages(prev => prev.filter(m => m.message_id !== message.message_id));
+        setMessages((prev) => prev.filter((m) => m.message_id !== message.message_id));
       }
     };
 

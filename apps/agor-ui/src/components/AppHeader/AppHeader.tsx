@@ -122,10 +122,10 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
                 borderRadius: token.borderRadius,
                 transition: 'background 0.2s',
               }}
-              onMouseEnter={e => {
+              onMouseEnter={(e) => {
                 e.currentTarget.style.background = token.colorBgTextHover;
               }}
-              onMouseLeave={e => {
+              onMouseLeave={(e) => {
                 e.currentTarget.style.background = 'transparent';
               }}
               onClick={onMenuClick}

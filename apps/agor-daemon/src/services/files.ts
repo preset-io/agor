@@ -72,10 +72,10 @@ export class FilesService {
       // Parse null-separated file list
       const files = result
         .split('\0')
-        .filter(f => f.length > 0)
-        .filter(f => f.toLowerCase().includes(search.toLowerCase()))
+        .filter((f) => f.length > 0)
+        .filter((f) => f.toLowerCase().includes(search.toLowerCase()))
         .slice(0, MAX_FILE_RESULTS)
-        .map(path => ({ path, type: 'file' as const }));
+        .map((path) => ({ path, type: 'file' as const }));
 
       return files;
     } catch (error) {

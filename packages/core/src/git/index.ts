@@ -280,7 +280,7 @@ export async function isClean(repoPath: string): Promise<boolean> {
 export async function getRemoteUrl(repoPath: string, remote: string = 'origin'): Promise<string> {
   const git = createGit(repoPath);
   const remotes = await git.getRemotes(true);
-  const remoteObj = remotes.find(r => r.name === remote);
+  const remoteObj = remotes.find((r) => r.name === remote);
   return remoteObj?.refs.fetch || '';
 }
 
@@ -490,7 +490,9 @@ export async function getRemoteBranches(
 ): Promise<string[]> {
   const git = createGit(repoPath);
   const branches = await git.branch(['-r']);
-  return branches.all.filter(b => b.startsWith(`${remote}/`)).map(b => b.replace(`${remote}/`, ''));
+  return branches.all
+    .filter((b) => b.startsWith(`${remote}/`))
+    .map((b) => b.replace(`${remote}/`, ''));
 }
 
 /**

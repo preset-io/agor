@@ -222,7 +222,7 @@ export class TerminalsService {
     });
 
     // Handle PTY output - broadcast to WebSocket clients
-    ptyProcess.onData(data => {
+    ptyProcess.onData((data) => {
       this.app.service('terminals').emit('data', {
         terminalId,
         data,
@@ -262,7 +262,7 @@ export class TerminalsService {
    * List all terminal sessions
    */
   async find(): Promise<Array<{ terminalId: string; cwd: string; createdAt: Date }>> {
-    return Array.from(this.sessions.values()).map(session => ({
+    return Array.from(this.sessions.values()).map((session) => ({
       terminalId: session.terminalId,
       cwd: session.cwd,
       createdAt: session.createdAt,

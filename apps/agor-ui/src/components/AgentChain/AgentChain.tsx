@@ -164,7 +164,7 @@ export const AgentChain = React.memo<AgentChainProps>(({ messages }) => {
       // Special handling: Tool result messages (user role with tool_result blocks)
       // Extract text content and show as thoughts
       if (message.role === 'user') {
-        const toolResults = message.content.filter(b => b.type === 'tool_result');
+        const toolResults = message.content.filter((b) => b.type === 'tool_result');
         if (toolResults.length > 0) {
           for (const block of toolResults) {
             const toolResult = block as unknown as ToolResultBlock;
@@ -174,8 +174,8 @@ export const AgentChain = React.memo<AgentChainProps>(({ messages }) => {
               resultText = toolResult.content;
             } else if (Array.isArray(toolResult.content)) {
               resultText = toolResult.content
-                .filter(b => b.type === 'text')
-                .map(b => (b as unknown as { text: string }).text)
+                .filter((b) => b.type === 'text')
+                .map((b) => (b as unknown as { text: string }).text)
                 .join('\n');
             }
 
@@ -490,7 +490,7 @@ export const AgentChain = React.memo<AgentChainProps>(({ messages }) => {
                   gap: 4,
                 }}
               >
-                {stats.filesAffected.map(file => (
+                {stats.filesAffected.map((file) => (
                   <div
                     key={file}
                     style={{
@@ -556,10 +556,10 @@ export const AgentChain = React.memo<AgentChainProps>(({ messages }) => {
           cursor: 'pointer',
           transition: 'all 0.2s',
         }}
-        onMouseEnter={e => {
+        onMouseEnter={(e) => {
           e.currentTarget.style.borderColor = token.colorPrimaryBorder;
         }}
-        onMouseLeave={e => {
+        onMouseLeave={(e) => {
           e.currentTarget.style.borderColor = token.colorBorder;
         }}
       >

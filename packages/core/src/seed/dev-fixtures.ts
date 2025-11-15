@@ -59,7 +59,7 @@ export async function seedDevFixtures(options: SeedOptions = {}): Promise<SeedRe
 
     // Find the test-worktree
     const worktrees = await worktreeRepo.findAll({ repo_id: existing.repo_id });
-    const testWorktree = worktrees.find(w => w.name === 'test-worktree');
+    const testWorktree = worktrees.find((w) => w.name === 'test-worktree');
 
     return {
       repo_id: existing.repo_id,

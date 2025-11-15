@@ -416,7 +416,7 @@ describe('SessionRepository.findAll', () => {
     const sessions = await repo.findAll();
 
     expect(sessions).toHaveLength(3);
-    expect(sessions.map(s => s.title).sort()).toEqual(['Session 1', 'Session 2', 'Session 3']);
+    expect(sessions.map((s) => s.title).sort()).toEqual(['Session 1', 'Session 2', 'Session 3']);
   });
 
   dbTest('should return fully populated session objects', async ({ db }) => {
@@ -464,7 +464,7 @@ describe('SessionRepository.findByStatus', () => {
     const idleSessions = await repo.findByStatus(SessionStatus.IDLE);
 
     expect(idleSessions).toHaveLength(2);
-    idleSessions.forEach(session => {
+    idleSessions.forEach((session) => {
       expect(session.status).toBe(SessionStatus.IDLE);
     });
   });
@@ -585,7 +585,7 @@ describe('SessionRepository.findChildren', () => {
     const children = await repo.findChildren(parent.session_id);
 
     expect(children).toHaveLength(2);
-    expect(children.map(c => c.session_id).sort()).toEqual(
+    expect(children.map((c) => c.session_id).sort()).toEqual(
       [child1.session_id, child2.session_id].sort()
     );
   });
@@ -869,7 +869,7 @@ describe('SessionRepository.update', () => {
     const data = createSessionData({ worktree_id: worktree.worktree_id });
     const created = await repo.create(data);
 
-    await new Promise(resolve => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, 10));
 
     const updated = await repo.update(data.session_id!, { title: 'Updated' });
 
@@ -979,7 +979,7 @@ describe('SessionRepository.findRunning', () => {
     const running = await repo.findRunning();
 
     expect(running).toHaveLength(2);
-    running.forEach(session => {
+    running.forEach((session) => {
       expect(session.status).toBe(SessionStatus.RUNNING);
     });
   });
@@ -1091,7 +1091,7 @@ describe('SessionRepository edge cases', () => {
 
     const children = await repo.findChildren(root.session_id);
     expect(children).toHaveLength(2);
-    expect(children.map(c => c.session_id).sort()).toEqual(
+    expect(children.map((c) => c.session_id).sort()).toEqual(
       [child1.session_id, child2.session_id].sort()
     );
   });

@@ -79,12 +79,12 @@ export default class WorktreeCd extends BaseCommand {
           AGOR_WORKTREE_ID: worktree.worktree_id,
           AGOR_WORKTREE_NAME: worktree.name,
         },
-        onExit: code => {
+        onExit: (code) => {
           this.log('');
           this.log(`${chalk.dim('← Exited worktree shell')}`);
           process.exit(code || 0);
         },
-        onError: error => {
+        onError: (error) => {
           this.error(`Failed to spawn shell: ${error.message}`);
         },
       });

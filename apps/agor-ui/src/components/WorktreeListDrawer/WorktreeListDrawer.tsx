@@ -33,23 +33,23 @@ export const WorktreeListDrawer: React.FC<WorktreeListDrawerProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
 
   // Get current board
-  const currentBoard = boards.find(b => b.board_id === currentBoardId);
+  const currentBoard = boards.find((b) => b.board_id === currentBoardId);
 
   // Filter sessions by current board (worktree-centric model)
   const boardSessions = useMemo(() => {
     // Get worktrees for this board
-    const boardWorktrees = worktrees.filter(wt => wt.board_id === currentBoardId);
-    const boardWorktreeIds = new Set(boardWorktrees.map(wt => wt.worktree_id));
+    const boardWorktrees = worktrees.filter((wt) => wt.board_id === currentBoardId);
+    const boardWorktreeIds = new Set(boardWorktrees.map((wt) => wt.worktree_id));
 
     // Get sessions for these worktrees, sorted by last_updated desc
     return sessions
-      .filter(session => session.worktree_id && boardWorktreeIds.has(session.worktree_id))
+      .filter((session) => session.worktree_id && boardWorktreeIds.has(session.worktree_id))
       .sort((a, b) => new Date(b.last_updated).getTime() - new Date(a.last_updated).getTime());
   }, [sessions, worktrees, currentBoardId]);
 
   // Filter sessions by search query
   const filteredSessions = boardSessions.filter(
-    session =>
+    (session) =>
       session.title?.toLowerCase().includes(searchQuery.toLowerCase()) ||
       session.description?.toLowerCase().includes(searchQuery.toLowerCase()) ||
       session.agentic_tool.toLowerCase().includes(searchQuery.toLowerCase())
@@ -70,7 +70,7 @@ export const WorktreeListDrawer: React.FC<WorktreeListDrawerProps> = ({
 
   // Get worktree name for session
   const getWorktreeName = (worktreeId: string) => {
-    return worktrees.find(wt => wt.worktree_id === worktreeId)?.name || 'Unknown';
+    return worktrees.find((wt) => wt.worktree_id === worktreeId)?.name || 'Unknown';
   };
 
   return (
@@ -98,7 +98,7 @@ export const WorktreeListDrawer: React.FC<WorktreeListDrawerProps> = ({
           style={{ width: '100%' }}
           value={currentBoardId}
           onChange={onBoardChange}
-          options={boards.map(board => ({
+          options={boards.map((board) => ({
             label: `${board.icon || '📋'} ${board.name}`,
             value: board.board_id,
           }))}
@@ -116,7 +116,7 @@ export const WorktreeListDrawer: React.FC<WorktreeListDrawerProps> = ({
           placeholder="Search sessions..."
           prefix={<SearchOutlined />}
           value={searchQuery}
-          onChange={e => setSearchQuery(e.target.value)}
+          onChange={(e) => setSearchQuery(e.target.value)}
           allowClear
         />
       </div>
@@ -126,17 +126,17 @@ export const WorktreeListDrawer: React.FC<WorktreeListDrawerProps> = ({
         <List
           dataSource={filteredSessions}
           locale={{ emptyText: 'No sessions in this board' }}
-          renderItem={session => (
+          renderItem={(session) => (
             <List.Item
               style={{
                 cursor: 'pointer',
                 padding: '12px 24px',
                 transition: 'background 0.2s',
               }}
-              onMouseEnter={e => {
+              onMouseEnter={(e) => {
                 e.currentTarget.style.background = token.colorBgTextHover;
               }}
-              onMouseLeave={e => {
+              onMouseLeave={(e) => {
                 e.currentTarget.style.background = 'transparent';
               }}
               onClick={() => {

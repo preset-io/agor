@@ -180,7 +180,7 @@ export class HealthMonitor {
 
       // Start monitoring running or starting worktrees
       const activeWorktrees = worktrees.filter(
-        w =>
+        (w) =>
           w.environment_instance?.status === 'running' ||
           w.environment_instance?.status === 'starting'
       );

@@ -39,7 +39,7 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
 
   // Count active comments per board (unresolved)
   const getActiveCommentCount = (boardId: string): number => {
-    return comments.filter(c => c.board_id === boardId && !c.resolved && !c.parent_comment_id)
+    return comments.filter((c) => c.board_id === boardId && !c.resolved && !c.parent_comment_id)
       .length;
   };
 
@@ -95,7 +95,7 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
       }}
     >
       <BoardCollapse
-        items={boards.map(board => {
+        items={boards.map((board) => {
           const boardWorktrees = worktreesByBoard[board.board_id] || [];
           const activeComments = getActiveCommentCount(board.board_id);
 
@@ -122,7 +122,7 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
                   <Button
                     type="text"
                     icon={<CommentOutlined style={{ fontSize: 18 }} />}
-                    onClick={e => handleCommentsClick(board.board_id, e)}
+                    onClick={(e) => handleCommentsClick(board.board_id, e)}
                     style={{
                       padding: '6px 10px',
                       height: 'auto',
@@ -140,7 +140,7 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
                   defaultActiveKey={[]}
                   ghost
                   expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
-                  items={boardWorktrees.map(worktree => {
+                  items={boardWorktrees.map((worktree) => {
                     const worktreeSessions = sessionsByWorktree[worktree.worktree_id] || [];
 
                     return {
@@ -174,7 +174,7 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
                         ) : (
                           <List
                             dataSource={worktreeSessions}
-                            renderItem={session => (
+                            renderItem={(session) => (
                               <List.Item
                                 onClick={() => handleSessionClick(session.session_id)}
                                 style={{
@@ -182,11 +182,11 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
                                   padding: '6px 8px 6px 28px',
                                   borderRadius: 4,
                                 }}
-                                onMouseEnter={e => {
+                                onMouseEnter={(e) => {
                                   (e.currentTarget as HTMLElement).style.background =
                                     'rgba(255, 255, 255, 0.04)';
                                 }}
-                                onMouseLeave={e => {
+                                onMouseLeave={(e) => {
                                   (e.currentTarget as HTMLElement).style.background = 'transparent';
                                 }}
                               >

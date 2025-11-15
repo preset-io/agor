@@ -164,7 +164,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
                 onChange={setBoardId}
                 placeholder="Select board (optional)..."
                 allowClear
-                options={boards.map(board => ({
+                options={boards.map((board) => ({
                   value: board.board_id,
                   label: `${board.icon || '📋'} ${board.name}`,
                 }))}
@@ -174,7 +174,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
             <Form.Item label="Issue" labelCol={{ span: 6 }} wrapperCol={{ span: 18 }}>
               <Input
                 value={issueUrl}
-                onChange={e => setIssueUrl(e.target.value)}
+                onChange={(e) => setIssueUrl(e.target.value)}
                 placeholder="https://github.com/user/repo/issues/42"
                 prefix={<LinkOutlined />}
               />
@@ -183,7 +183,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
             <Form.Item label="Pull Request" labelCol={{ span: 6 }} wrapperCol={{ span: 18 }}>
               <Input
                 value={prUrl}
-                onChange={e => setPrUrl(e.target.value)}
+                onChange={(e) => setPrUrl(e.target.value)}
                 placeholder="https://github.com/user/repo/pull/43"
                 prefix={<LinkOutlined />}
               />
@@ -192,7 +192,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
             <Form.Item label="Notes" labelCol={{ span: 6 }} wrapperCol={{ span: 18 }}>
               <TextArea
                 value={notes}
-                onChange={e => setNotes(e.target.value)}
+                onChange={(e) => setNotes(e.target.value)}
                 placeholder="Freeform notes about this worktree..."
                 rows={4}
               />
@@ -228,7 +228,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
           worktree={worktree}
           sessionCount={sessions.length}
           environmentRunning={worktree.environment_instance?.status === 'running'}
-          onConfirm={options => {
+          onConfirm={(options) => {
             handleArchiveOrDelete(options);
             setArchiveDeleteModalOpen(false);
           }}

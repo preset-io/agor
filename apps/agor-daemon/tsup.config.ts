@@ -6,7 +6,7 @@ const srcFiles = glob.sync('src/**/*.ts', { ignore: ['**/*.test.ts', '**/*.spec.
 
 // Create entry points
 const entries = Object.fromEntries(
-  srcFiles.map(file => [file.replace(/^src\//, '').replace(/\.ts$/, ''), file])
+  srcFiles.map((file) => [file.replace(/^src\//, '').replace(/\.ts$/, ''), file])
 );
 
 export default defineConfig({

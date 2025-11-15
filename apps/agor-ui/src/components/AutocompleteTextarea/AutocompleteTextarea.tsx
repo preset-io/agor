@@ -177,12 +177,12 @@ export const AutocompleteTextarea = React.forwardRef<
         const lowercaseQuery = searchQuery.toLowerCase();
         return users
           .filter(
-            u =>
+            (u) =>
               u.name?.toLowerCase().includes(lowercaseQuery) ||
               u.email.toLowerCase().includes(lowercaseQuery)
           )
           .slice(0, MAX_USER_RESULTS)
-          .map(u => ({
+          .map((u) => ({
             name: u.name || u.email,
             email: u.email,
             type: 'user' as const,
@@ -295,7 +295,7 @@ export const AutocompleteTextarea = React.forwardRef<
             if (isPopoverOpen) {
               e.preventDefault();
               e.stopPropagation();
-              setHighlightedIndex(prev =>
+              setHighlightedIndex((prev) =>
                 prev < autocompleteOptions.length - 1 ? prev + 1 : prev
               );
             }
@@ -305,7 +305,7 @@ export const AutocompleteTextarea = React.forwardRef<
             if (isPopoverOpen) {
               e.preventDefault();
               e.stopPropagation();
-              setHighlightedIndex(prev => (prev > 0 ? prev - 1 : -1));
+              setHighlightedIndex((prev) => (prev > 0 ? prev - 1 : -1));
             }
             break;
 
@@ -321,7 +321,7 @@ export const AutocompleteTextarea = React.forwardRef<
                 }
               } else if (autocompleteOptions.length > 0) {
                 // If nothing highlighted, highlight first non-heading item
-                const firstItem = autocompleteOptions.find(item => !('heading' in item));
+                const firstItem = autocompleteOptions.find((item) => !('heading' in item));
                 if (firstItem) {
                   const idx = autocompleteOptions.indexOf(firstItem);
                   setHighlightedIndex(idx);
@@ -440,11 +440,11 @@ export const AutocompleteTextarea = React.forwardRef<
                   backgroundColor: isHighlighted ? token.colorPrimaryBg : 'transparent',
                   color: isHighlighted ? token.colorPrimary : token.colorText,
                 }}
-                onMouseEnter={e => {
+                onMouseEnter={(e) => {
                   setHighlightedIndex(idx);
                   e.currentTarget.style.backgroundColor = token.colorBgTextHover;
                 }}
-                onMouseLeave={e => {
+                onMouseLeave={(e) => {
                   setHighlightedIndex(-1);
                   e.currentTarget.style.backgroundColor = 'transparent';
                 }}
@@ -465,7 +465,7 @@ export const AutocompleteTextarea = React.forwardRef<
         overlayStyle={{ paddingTop: 4 }}
       >
         <TextArea
-          ref={node => {
+          ref={(node) => {
             let textarea: HTMLTextAreaElement | null = null;
             if (
               node &&
