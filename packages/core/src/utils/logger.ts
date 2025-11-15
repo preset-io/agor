@@ -5,6 +5,16 @@
 
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
+interface ConsoleWithOriginals extends Console {
+  __originalMethods?: {
+    debug: typeof console.debug;
+    log: typeof console.log;
+    info: typeof console.info;
+    warn: typeof console.warn;
+    error: typeof console.error;
+  };
+}
+
 const LOG_LEVELS: Record<LogLevel, number> = {
   debug: 0,
   info: 1,
@@ -61,7 +71,7 @@ export function patchConsole() {
     if (shouldLog('error')) originalError(...args);
   };
 
-  (console as any).__originalMethods = {
+  (console as ConsoleWithOriginals).__originalMethods = {
     debug: originalDebug,
     log: originalLog,
     info: originalInfo,
@@ -71,13 +81,13 @@ export function patchConsole() {
 }
 
 export function unpatchConsole() {
-  const originals = (console as any).__originalMethods;
+  const originals = (console as ConsoleWithOriginals).__originalMethods;
   if (originals) {
     console.debug = originals.debug;
     console.log = originals.log;
     console.info = originals.info;
     console.warn = originals.warn;
     console.error = originals.error;
-    delete (console as any).__originalMethods;
+    delete (console as ConsoleWithOriginals).__originalMethods;
   }
 }

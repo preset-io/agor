@@ -21,7 +21,6 @@ import type { AgenticToolOption } from '../../types';
 import { AppHeader } from '../AppHeader';
 import { CommentsPanel } from '../CommentsPanel';
 import { EnvironmentLogsModal } from '../EnvironmentLogsModal';
-import type { ModelConfig } from '../ModelSelector';
 import { NewSessionButton } from '../NewSessionButton';
 import { type NewSessionConfig, NewSessionModal } from '../NewSessionModal';
 import { type NewWorktreeConfig, NewWorktreeModal } from '../NewWorktreeModal';

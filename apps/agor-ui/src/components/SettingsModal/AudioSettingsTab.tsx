@@ -2,7 +2,7 @@
  * AudioSettingsTab - Configure task completion chime settings
  */
 
-import type { ChimeSound, UpdateUserInput, User } from '@agor/core/types';
+import type { User } from '@agor/core/types';
 import { PlayCircleOutlined, SoundOutlined } from '@ant-design/icons';
 import {
   Button,
@@ -46,7 +46,7 @@ export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({ user, form }
     setIsPlaying(true);
     try {
       await previewChimeSound(chime, volume);
-    } catch (error) {
+    } catch (_error) {
       message.error('Failed to play preview. Check browser permissions.');
     } finally {
       // Reset after a short delay (chimes are ~1-2 seconds)

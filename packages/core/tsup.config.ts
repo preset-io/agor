@@ -1,5 +1,4 @@
-import { copyFileSync, cpSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { cpSync } from 'node:fs';
 import { defineConfig } from 'tsup';
 
 export default defineConfig({

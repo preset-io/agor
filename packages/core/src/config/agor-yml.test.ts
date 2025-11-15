@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { RepoEnvironmentConfig } from '../types/worktree';
-import { type AgorYmlSchema, parseAgorYml, writeAgorYml } from './agor-yml';
+import { parseAgorYml, writeAgorYml } from './agor-yml';
 
 describe('parseAgorYml', () => {
   it('should parse valid .agor.yml with all fields', () => {

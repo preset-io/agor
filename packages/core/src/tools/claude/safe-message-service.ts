@@ -6,7 +6,7 @@
  */
 
 import { isForeignKeyConstraintError } from '../../db/session-guard';
-import type { Message, SessionID } from '../../types';
+import type { Message } from '../../types';
 import type { MessagesService } from './claude-tool';
 
 /**

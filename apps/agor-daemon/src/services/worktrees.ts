@@ -13,16 +13,7 @@ import { ENVIRONMENT } from '@agor/core/config';
 import { type Database, WorktreeRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import { cleanWorktree, removeWorktree } from '@agor/core/git';
-import { renderTemplate } from '@agor/core/templates/handlebars-helpers';
-import type {
-  BoardEntityObject,
-  BoardID,
-  QueryParams,
-  Repo,
-  UUID,
-  Worktree,
-  WorktreeID,
-} from '@agor/core/types';
+import type { BoardID, QueryParams, Repo, UUID, Worktree, WorktreeID } from '@agor/core/types';
 import { getNextRunTime, validateCron } from '@agor/core/utils/cron';
 import { DrizzleService } from '../adapters/drizzle';
 
@@ -747,7 +738,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
    */
   async checkHealth(id: WorktreeID, params?: WorktreeParams): Promise<Worktree> {
     const worktree = await this.get(id, params);
-    const repo = (await this.app.service('repos').get(worktree.repo_id)) as Repo;
+    const _repo = (await this.app.service('repos').get(worktree.repo_id)) as Repo;
 
     // Only check health for 'running' or 'starting' status
     const currentStatus = worktree.environment_instance?.status;
@@ -983,30 +974,6 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
         error: error instanceof Error ? error.message : 'Unknown error',
       };
     }
-  }
-
-  /**
-   * Build template context for Handlebars rendering
-   */
-  private buildTemplateContext(worktree: Worktree, repo: Repo) {
-    let customContext = {};
-    try {
-      customContext = worktree.custom_context || {};
-    } catch {
-      // Invalid custom context, use empty object
-    }
-
-    return {
-      worktree: {
-        unique_id: worktree.worktree_unique_id,
-        name: worktree.name,
-        path: worktree.path,
-      },
-      repo: {
-        slug: repo.slug,
-      },
-      custom: customContext,
-    };
   }
 }
 

@@ -85,7 +85,9 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
           name="codexSandboxMode"
           label="Sandbox Mode"
           help={
-            showHelpText ? 'Controls where Codex can write files (workspace vs. full access)' : undefined
+            showHelpText
+              ? 'Controls where Codex can write files (workspace vs. full access)'
+              : undefined
           }
         >
           <Select
@@ -103,9 +105,7 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
           name="codexApprovalPolicy"
           label="Approval Policy"
           help={
-            showHelpText
-              ? 'Controls whether Codex must ask before executing commands'
-              : undefined
+            showHelpText ? 'Controls whether Codex must ask before executing commands' : undefined
           }
         >
           <Select

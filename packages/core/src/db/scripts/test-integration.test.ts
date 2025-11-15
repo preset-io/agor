@@ -275,11 +275,7 @@ describe('Session Repository Integration', () => {
 
     const repo = new SessionRepository(db);
 
-    const tools: Array<'claude-code' | 'codex' | 'gemini'> = [
-      'claude-code',
-      'codex',
-      'gemini',
-    ];
+    const tools: Array<'claude-code' | 'codex' | 'gemini'> = ['claude-code', 'codex', 'gemini'];
 
     for (const tool of tools) {
       const session = await repo.create({

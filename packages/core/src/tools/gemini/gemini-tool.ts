@@ -23,20 +23,18 @@ import {
   type MessageID,
   MessageRole,
   type PermissionMode,
-  type Session,
   type SessionID,
   type TaskID,
 } from '../../types';
-import type { ITool, StreamingCallbacks, ToolCapabilities } from '../base';
-import type { MessagesService, TasksService } from '../claude/claude-tool';
-import type { TokenUsage } from '../../utils/pricing';
-import { calculateTokenCost } from '../../utils/pricing';
 import type {
   GeminiSdkResponse,
   NormalizedSdkResponse,
   RawSdkResponse,
 } from '../../types/sdk-response';
-import { DEFAULT_GEMINI_MODEL, getGeminiContextWindowLimit } from './models';
+import type { TokenUsage } from '../../utils/pricing';
+import type { ITool, StreamingCallbacks, ToolCapabilities } from '../base';
+import type { MessagesService, TasksService } from '../claude/claude-tool';
+import { DEFAULT_GEMINI_MODEL } from './models';
 import { GeminiPromptService } from './prompt-service';
 
 interface GeminiExecutionResult {
@@ -64,7 +62,7 @@ export class GeminiTool implements ITool {
     mcpServerRepo?: MCPServerRepository,
     sessionMCPRepo?: SessionMCPServerRepository,
     mcpEnabled?: boolean,
-    private db?: Database
+    db?: Database
   ) {
     if (messagesRepo && sessionsRepo) {
       this.promptService = new GeminiPromptService(
@@ -283,7 +281,7 @@ export class GeminiTool implements ITool {
     tokenUsage?: TokenUsage
   ): Promise<Message> {
     // Extract text content for preview
-    const textBlocks = content.filter((b) => b.type === 'text').map((b) => b.text || '');
+    const textBlocks = content.filter(b => b.type === 'text').map(b => b.text || '');
     const fullTextContent = textBlocks.join('');
     const contentPreview = fullTextContent.substring(0, 200);
 
@@ -353,8 +351,8 @@ export class GeminiTool implements ITool {
     const assistantMessageIds: MessageID[] = [];
     let resolvedModel: string | undefined;
     let tokenUsage: TokenUsage | undefined;
-    let contextWindow: number | undefined;
-    let contextWindowLimit: number | undefined;
+    let _contextWindow: number | undefined;
+    let _contextWindowLimit: number | undefined;
 
     for await (const event of this.promptService.promptSessionStreaming(
       sessionId,
@@ -482,7 +480,8 @@ export class GeminiTool implements ITool {
       tokenUsage: {
         inputTokens: tokenUsage.input_tokens || 0,
         outputTokens: tokenUsage.output_tokens || 0,
-        totalTokens: tokenUsage.total_tokens || tokenUsage.input_tokens! + tokenUsage.output_tokens! || 0,
+        totalTokens:
+          tokenUsage.total_tokens || tokenUsage.input_tokens! + tokenUsage.output_tokens! || 0,
         cacheReadTokens: tokenUsage.cache_read_tokens || 0,
         cacheCreationTokens: 0, // Not exposed in Gemini response yet
       },
@@ -491,5 +490,4 @@ export class GeminiTool implements ITool {
       model: geminiResponse.model,
     };
   }
-
 }

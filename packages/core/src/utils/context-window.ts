@@ -156,11 +156,7 @@ export function getSessionContextUsage(
     const task = tasks[i];
     const sdkResponse = task.raw_sdk_response;
     // Only Claude, Codex, and Gemini provide contextWindow (OpenCode doesn't)
-    if (
-      sdkResponse &&
-      'contextWindow' in sdkResponse &&
-      sdkResponse.contextWindow !== undefined
-    ) {
+    if (sdkResponse && 'contextWindow' in sdkResponse && sdkResponse.contextWindow !== undefined) {
       return sdkResponse.contextWindow;
     }
   }

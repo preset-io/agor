@@ -26,19 +26,17 @@ export const AdvancedSettingsForm: React.FC<AdvancedSettingsFormProps> = ({
   showHelpText = true,
 }) => {
   return (
-    <>
-      <Form.Item
-        name="custom_context"
-        label="Custom Context (JSON)"
-        help={
-          showHelpText
-            ? 'Add custom fields for use in zone trigger templates (e.g., {{ session.context.yourField }})'
-            : undefined
-        }
-        rules={[{ validator: validateJSON }]}
-      >
-        <JSONEditor placeholder='{"teamName": "Backend", "sprintNumber": 42}' rows={4} />
-      </Form.Item>
-    </>
+    <Form.Item
+      name="custom_context"
+      label="Custom Context (JSON)"
+      help={
+        showHelpText
+          ? 'Add custom fields for use in zone trigger templates (e.g., {{ session.context.yourField }})'
+          : undefined
+      }
+      rules={[{ validator: validateJSON }]}
+    >
+      <JSONEditor placeholder='{"teamName": "Backend", "sprintNumber": 42}' rows={4} />
+    </Form.Item>
   );
 };

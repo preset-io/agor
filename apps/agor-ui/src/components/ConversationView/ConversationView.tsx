@@ -13,7 +13,7 @@
  */
 
 import type { AgorClient } from '@agor/core/api';
-import type { Message, MessageID, PermissionScope, SessionID, User } from '@agor/core/types';
+import type { MessageID, PermissionScope, SessionID, User } from '@agor/core/types';
 import { Alert, Spin, Typography, theme } from 'antd';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useStreamingMessages, useTasks } from '../../hooks';

@@ -1,7 +1,6 @@
 import type { BoardObject } from '@agor/core/types';
 import { EditOutlined } from '@ant-design/icons';
 import { Button, Card, Typography, theme } from 'antd';
-import { useState } from 'react';
 import { MarkdownRenderer } from '../../MarkdownRenderer/MarkdownRenderer';
 
 interface MarkdownNodeData {

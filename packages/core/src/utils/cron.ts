@@ -21,7 +21,7 @@ export function isValidCron(cronExpression: string): boolean {
       tz: 'UTC',
     });
     return true;
-  } catch (error) {
+  } catch (_error) {
     return false;
   }
 }

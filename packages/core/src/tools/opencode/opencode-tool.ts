@@ -13,7 +13,7 @@
  */
 
 import { generateId } from '../../lib/ids';
-import type { Message, Session, SessionID, TaskID } from '../../types';
+import type { Message, SessionID, TaskID } from '../../types';
 import { MessageRole } from '../../types';
 import type {
   NormalizedSdkResponse,
@@ -246,14 +246,16 @@ export class OpenCodeTool implements ITool {
           },
         ],
         // Store OpenCode metadata
-        metadata: response.metadata ? {
-          opencode: {
-            messageId: response.metadata.messageId,
-            parentMessageId: response.metadata.parentMessageId,
-            cost: response.metadata.cost,
-            tokens: response.metadata.tokens,
-          },
-        } : undefined,
+        metadata: response.metadata
+          ? {
+              opencode: {
+                messageId: response.metadata.messageId,
+                parentMessageId: response.metadata.parentMessageId,
+                cost: response.metadata.cost,
+                tokens: response.metadata.tokens,
+              },
+            }
+          : undefined,
       });
 
       console.log('[OpenCodeTool] Message created:', message);
@@ -369,12 +371,12 @@ export class OpenCodeTool implements ITool {
       tokenUsage: {
         inputTokens: tokenUsage.input_tokens || 0,
         outputTokens: tokenUsage.output_tokens || 0,
-        totalTokens: tokenUsage.total_tokens || tokenUsage.input_tokens! + tokenUsage.output_tokens! || 0,
+        totalTokens:
+          tokenUsage.total_tokens || tokenUsage.input_tokens! + tokenUsage.output_tokens! || 0,
         cacheReadTokens: 0, // OpenCode caching TBD
         cacheCreationTokens: 0, // OpenCode caching TBD
       },
       model: opencodeResponse.model,
     };
   }
-
 }

@@ -141,7 +141,9 @@ export class HealthMonitor {
         this.stopMonitoring(worktreeId);
         // Only log at debug level - this is normal cleanup, not an error
         if (process.env.DEBUG) {
-          console.log(`   Health monitoring stopped for deleted worktree ${worktreeId.substring(0, 8)}`);
+          console.log(
+            `   Health monitoring stopped for deleted worktree ${worktreeId.substring(0, 8)}`
+          );
         }
         return;
       }

@@ -162,7 +162,9 @@ export const VeryLongOutput: Story = {
       command: 'find . -type f',
     },
     result: {
-      content: Array.from({ length: 50 }, (_, i) => `./src/components/Component${i}.tsx`).join('\n'),
+      content: Array.from({ length: 50 }, (_, i) => `./src/components/Component${i}.tsx`).join(
+        '\n'
+      ),
       is_error: false,
     },
   },

@@ -80,7 +80,7 @@ describe('convertConversationToHistory', () => {
       expect(history).toHaveLength(1);
       const firstMessage = history[0];
       expect(firstMessage).toBeDefined();
-      if (firstMessage && firstMessage.parts) {
+      if (firstMessage?.parts) {
         expect(firstMessage.parts).toHaveLength(2);
         expect(firstMessage.parts[0]).toEqual({ text: 'Text part' });
         expect(firstMessage.parts[1]).toHaveProperty('inlineData');
@@ -179,7 +179,7 @@ describe('convertConversationToHistory', () => {
 
       expect(history).toHaveLength(1);
       const msg = history[0];
-      if (msg && msg.parts) {
+      if (msg?.parts) {
         expect(msg.parts[0]).toEqual({ text: 'Valid message' });
       }
     });
@@ -224,7 +224,7 @@ describe('convertConversationToHistory', () => {
       // Should still include it since it has a 'text' property
       expect(history).toHaveLength(1);
       const msg = history[0];
-      if (msg && msg.parts) {
+      if (msg?.parts) {
         expect(msg.parts[0]).toEqual({ text: 123 });
       }
     });
@@ -244,7 +244,7 @@ describe('convertConversationToHistory', () => {
 
       expect(history).toHaveLength(1);
       const msg = history[0];
-      if (msg && msg.parts) {
+      if (msg?.parts) {
         expect(msg.parts[0]).toHaveProperty('text', 'Hello');
       }
     });
@@ -343,7 +343,7 @@ describe('convertConversationToHistory', () => {
 
       expect(history).toHaveLength(1);
       const msg = history[0];
-      if (msg && msg.parts) {
+      if (msg?.parts) {
         expect(msg.parts[0]).toHaveProperty('functionCall');
       }
     });
@@ -368,7 +368,7 @@ describe('convertConversationToHistory', () => {
 
       expect(history).toHaveLength(1);
       const msg = history[0];
-      if (msg && msg.parts) {
+      if (msg?.parts) {
         expect(msg.parts[0]).toHaveProperty('functionResponse');
       }
     });
@@ -390,7 +390,7 @@ describe('convertConversationToHistory', () => {
 
       expect(history).toHaveLength(1);
       const msg = history[0];
-      if (msg && msg.parts) {
+      if (msg?.parts) {
         expect(msg.parts).toHaveLength(3);
         expect(msg.parts[0]).toHaveProperty('text');
         expect(msg.parts[1]).toHaveProperty('inlineData');

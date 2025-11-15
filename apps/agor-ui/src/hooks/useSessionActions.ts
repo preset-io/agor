@@ -26,9 +26,7 @@ interface UseSessionActionsResult {
  * @param client - Agor client instance
  * @returns Session action functions and state
  */
-export function useSessionActions(
-  client: AgorClient | null
-): UseSessionActionsResult {
+export function useSessionActions(client: AgorClient | null): UseSessionActionsResult {
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 

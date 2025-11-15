@@ -274,7 +274,10 @@ export class OpenCodeClient {
       try {
         data = await response.json();
         // Log summary instead of full response to avoid log truncation
-        console.log('[OpenCode] Response received (keys):', data && typeof data === 'object' ? Object.keys(data) : typeof data);
+        console.log(
+          '[OpenCode] Response received (keys):',
+          data && typeof data === 'object' ? Object.keys(data) : typeof data
+        );
       } catch (parseError) {
         // If response body is empty or not JSON, return success message
         const text = await response.text();

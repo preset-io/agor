@@ -24,19 +24,17 @@ import {
   type Message,
   type MessageID,
   MessageRole,
-  type Session,
   type SessionID,
   type TaskID,
   TaskStatus,
 } from '../../types';
-import { calculateModelContextWindowUsage } from '../../utils/context-window';
-import type { TokenUsage } from '../../utils/pricing';
-import { calculateTokenCost } from '../../utils/pricing';
 import type {
   ClaudeCodeSdkResponse,
   NormalizedSdkResponse,
   RawSdkResponse,
 } from '../../types/sdk-response';
+import { calculateModelContextWindowUsage } from '../../utils/context-window';
+import type { TokenUsage } from '../../utils/pricing';
 import type { ImportOptions, ITool, SessionData, ToolCapabilities } from '../base';
 import { loadClaudeSession } from './import/load-session';
 import { transcriptsToMessages } from './import/message-converter';
@@ -49,7 +47,6 @@ import {
 } from './message-builder';
 import type { ProcessedEvent } from './message-processor';
 import { ClaudePromptService } from './prompt-service';
-import { safeCreateMessage } from './safe-message-service';
 
 /**
  * Service interface for creating messages via FeathersJS
@@ -315,7 +312,7 @@ export class ClaudeTool implements ITool {
 
         // Emit to streaming callbacks for message-level UI updates
         // Thinking blocks are part of assistant messages, but tracked separately
-        if (streamingCallbacks && streamingCallbacks.onThinkingChunk) {
+        if (streamingCallbacks?.onThinkingChunk) {
           // Start thinking stream if needed (separate from text stream)
           if (!currentThinkingMessageId) {
             currentThinkingMessageId = generateId() as MessageID;
@@ -339,7 +336,7 @@ export class ClaudeTool implements ITool {
 
       // Handle thinking complete
       if (event.type === 'thinking_complete') {
-        if (streamingCallbacks && streamingCallbacks.onThinkingEnd && currentThinkingMessageId) {
+        if (streamingCallbacks?.onThinkingEnd && currentThinkingMessageId) {
           streamingCallbacks.onThinkingEnd(currentThinkingMessageId);
           // Keep ID around for potential merging with text message later
           // Don't reset to null - we may need it for the complete message
@@ -930,7 +927,8 @@ export class ClaudeTool implements ITool {
       tokenUsage: {
         inputTokens: tokenUsage.input_tokens || 0,
         outputTokens: tokenUsage.output_tokens || 0,
-        totalTokens: tokenUsage.total_tokens || tokenUsage.input_tokens! + tokenUsage.output_tokens! || 0,
+        totalTokens:
+          tokenUsage.total_tokens || tokenUsage.input_tokens! + tokenUsage.output_tokens! || 0,
         cacheReadTokens: tokenUsage.cache_read_tokens || 0,
         cacheCreationTokens: tokenUsage.cache_creation_tokens || 0,
       },

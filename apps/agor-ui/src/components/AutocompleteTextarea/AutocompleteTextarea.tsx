@@ -15,7 +15,7 @@ const { TextArea } = Input;
 const { Text } = Typography;
 
 // Constants
-const MAX_FILE_RESULTS = 10;
+const _MAX_FILE_RESULTS = 10;
 const MAX_USER_RESULTS = 5;
 const DEBOUNCE_MS = 300;
 
@@ -178,7 +178,7 @@ export const AutocompleteTextarea = React.forwardRef<
         return users
           .filter(
             u =>
-              (u.name && u.name.toLowerCase().includes(lowercaseQuery)) ||
+              u.name?.toLowerCase().includes(lowercaseQuery) ||
               u.email.toLowerCase().includes(lowercaseQuery)
           )
           .slice(0, MAX_USER_RESULTS)

@@ -14,7 +14,6 @@ import {
   Table,
   Typography,
 } from 'antd';
-import type { Color } from 'antd/es/color-picker';
 import { useMemo, useState } from 'react';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { JSONEditor, validateJSON } from '../JSONEditor';

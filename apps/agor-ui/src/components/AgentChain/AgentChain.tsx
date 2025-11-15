@@ -41,7 +41,6 @@ import { Popover, Space, Spin, Tag, Tooltip, Typography, theme } from 'antd';
 import React, { useMemo, useState } from 'react';
 import { copyToClipboard } from '../../utils/clipboard';
 import { CollapsibleText } from '../CollapsibleText';
-import { MarkdownRenderer } from '../MarkdownRenderer';
 import { ToolUseRenderer } from '../ToolUseRenderer';
 
 interface ToolUseBlock {
@@ -124,13 +123,13 @@ export const AgentChain = React.memo<AgentChainProps>(({ messages }) => {
   const { token } = theme.useToken();
   const [expanded, setExpanded] = useState(false);
 
-  // Early return if no messages
-  if (!messages || messages.length === 0) {
-    return null;
-  }
-
   // Extract chain items (thoughts and tools) from messages
   const chainItems = useMemo(() => {
+    // Return early if no messages
+    if (!messages || messages.length === 0) {
+      return [];
+    }
+
     const items: ChainItem[] = [];
 
     // First pass: collect ALL tool results from ALL messages (including user messages)
@@ -250,11 +249,6 @@ export const AgentChain = React.memo<AgentChainProps>(({ messages }) => {
 
     return items;
   }, [messages]);
-
-  // Early return if no items (prevents empty bordered boxes)
-  if (chainItems.length === 0) {
-    return null;
-  }
 
   // Calculate stats
   const stats = useMemo(() => {
@@ -543,6 +537,11 @@ export const AgentChain = React.memo<AgentChainProps>(({ messages }) => {
 
   const _totalCount = stats.thoughtCount + stats.toolCount;
   const hasErrors = stats.errorCount > 0;
+
+  // Early return if no items (prevents empty bordered boxes)
+  if (chainItems.length === 0) {
+    return null;
+  }
 
   return (
     <div style={{ margin: `${token.sizeUnit * 1.5}px 0` }}>

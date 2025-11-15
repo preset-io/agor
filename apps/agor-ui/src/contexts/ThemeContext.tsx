@@ -103,7 +103,7 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Update document background color and theme class when theme changes
   useEffect(() => {
-    const config = getCurrentThemeConfig();
+    const _config = getCurrentThemeConfig();
     const isDark =
       themeMode === 'dark' || (themeMode === 'custom' && customTheme?.algorithm === darkAlgorithm);
 

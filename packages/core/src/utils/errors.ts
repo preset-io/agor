@@ -13,7 +13,10 @@
  * Base class for all Agor errors
  */
 export class AgorError extends Error {
-  constructor(message: string, public readonly code?: string) {
+  constructor(
+    message: string,
+    public readonly code?: string
+  ) {
     super(message);
     this.name = this.constructor.name;
     // Maintains proper stack trace for where our error was thrown (only available on V8)
@@ -50,7 +53,10 @@ export class AlreadyExistsError extends AgorError {
  * Thrown when validation fails
  */
 export class ValidationError extends AgorError {
-  constructor(message: string, public readonly field?: string) {
+  constructor(
+    message: string,
+    public readonly field?: string
+  ) {
     super(message, 'VALIDATION_ERROR');
   }
 }
@@ -103,7 +109,7 @@ export function formatUserError(error: unknown): string {
 
   // Remove sensitive details from error messages
   return message
-    .replace(/\/[\w\/]+\.ts:\d+/g, '[source]') // Remove file paths
+    .replace(/\/[\w/]+\.ts:\d+/g, '[source]') // Remove file paths
     .replace(/^Error: /, '') // Remove redundant "Error:" prefix
     .trim();
 }

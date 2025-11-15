@@ -29,7 +29,7 @@ export async function copyToClipboard(
 
   try {
     // Try modern Clipboard API first (requires HTTPS)
-    if (navigator.clipboard && navigator.clipboard.writeText) {
+    if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(text);
       if (showSuccess) {
         message.success(successMessage);

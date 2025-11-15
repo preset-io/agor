@@ -208,7 +208,7 @@ const ContextWindowPopoverContent: React.FC<{
       children: (
         <div style={{ fontSize: '0.9em' }}>
           {Object.entries(sdkResponse.modelUsage).map(([modelId, usage]) => {
-            const modelContextUsage = (usage.inputTokens || 0) + (usage.outputTokens || 0);
+            const _modelContextUsage = (usage.inputTokens || 0) + (usage.outputTokens || 0);
 
             return (
               <div key={modelId} style={{ marginBottom: 12 }}>

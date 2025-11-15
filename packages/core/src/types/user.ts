@@ -1,10 +1,5 @@
+import type { CodexApprovalPolicy, CodexNetworkAccess, CodexSandboxMode } from './agentic-tool';
 import type { UserID } from './id';
-import type {
-  AgenticToolName,
-  CodexApprovalPolicy,
-  CodexNetworkAccess,
-  CodexSandboxMode,
-} from './agentic-tool';
 import type { PermissionMode } from './session';
 
 /**

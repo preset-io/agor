@@ -17,9 +17,9 @@ import {
   PermissionStatus,
   type User,
 } from '@agor/core/types';
-import { CheckCircleFilled, RobotOutlined } from '@ant-design/icons';
+import { RobotOutlined } from '@ant-design/icons';
 import { Bubble } from '@ant-design/x';
-import { Space, Spin, Tooltip, Typography, theme } from 'antd';
+import { Tooltip, Typography, theme } from 'antd';
 import React from 'react';
 
 const { Text } = Typography;

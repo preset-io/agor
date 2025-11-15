@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
+import { execSync } from 'node:child_process';
 import chalk from 'chalk';
-import { execSync } from 'child_process';
 
 const tests = [
   { name: 'whoami', cmd: 'pnpm -w agor whoami' },
@@ -47,7 +47,7 @@ for (const test of tests) {
     });
     console.log(chalk.green('✓ PASS'));
     passed++;
-  } catch (error) {
+  } catch (_error) {
     console.log(chalk.red('✗ FAIL'));
     failed++;
   }
@@ -64,7 +64,7 @@ await new Promise(r => setTimeout(r, 500));
 let hangingCount = 0;
 try {
   const result = execSync("pgrep -f 'tsx.*agor' | wc -l", { encoding: 'utf8' });
-  hangingCount = parseInt(result.trim());
+  hangingCount = parseInt(result.trim(), 10);
 } catch {
   hangingCount = 0;
 }

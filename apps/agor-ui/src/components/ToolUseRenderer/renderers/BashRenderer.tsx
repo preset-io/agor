@@ -10,13 +10,13 @@
 import { theme } from 'antd';
 import type React from 'react';
 import { shouldUseAnsiRendering } from '../../../utils/ansi';
-import { CollapsibleAnsiText } from '../../CollapsibleText/CollapsibleAnsiText';
 import { CollapsibleText } from '../../CollapsibleText';
+import { CollapsibleAnsiText } from '../../CollapsibleText/CollapsibleAnsiText';
 import type { ToolRendererProps } from './index';
 
 export const BashRenderer: React.FC<ToolRendererProps> = ({ input, result }) => {
   const { token } = theme.useToken();
-  const command = input.command as string | undefined;
+  const _command = input.command as string | undefined;
   const isError = result?.is_error;
 
   // Extract text content from result
@@ -47,45 +47,42 @@ export const BashRenderer: React.FC<ToolRendererProps> = ({ input, result }) => 
   return (
     <div>
       {/* Output with collapsible code block */}
-      {result && (
-        <>
-          {useAnsi ? (
-            <CollapsibleAnsiText
-              style={{
-                fontSize: token.fontSizeSM,
-                margin: 0,
-                ...((!hasContent && {
-                  fontStyle: 'italic',
-                  color: token.colorTextTertiary,
-                }) as React.CSSProperties),
-                ...(isError && {
-                  color: token.colorError,
-                }),
-              }}
-            >
-              {hasContent ? resultText : '(no output)'}
-            </CollapsibleAnsiText>
-          ) : (
-            <CollapsibleText
-              code
-              preserveWhitespace
-              style={{
-                fontSize: token.fontSizeSM,
-                margin: 0,
-                ...((!hasContent && {
-                  fontStyle: 'italic',
-                  color: token.colorTextTertiary,
-                }) as React.CSSProperties),
-                ...(isError && {
-                  color: token.colorError,
-                }),
-              }}
-            >
-              {hasContent ? resultText : '(no output)'}
-            </CollapsibleText>
-          )}
-        </>
-      )}
+      {result &&
+        (useAnsi ? (
+          <CollapsibleAnsiText
+            style={{
+              fontSize: token.fontSizeSM,
+              margin: 0,
+              ...((!hasContent && {
+                fontStyle: 'italic',
+                color: token.colorTextTertiary,
+              }) as React.CSSProperties),
+              ...(isError && {
+                color: token.colorError,
+              }),
+            }}
+          >
+            {hasContent ? resultText : '(no output)'}
+          </CollapsibleAnsiText>
+        ) : (
+          <CollapsibleText
+            code
+            preserveWhitespace
+            style={{
+              fontSize: token.fontSizeSM,
+              margin: 0,
+              ...((!hasContent && {
+                fontStyle: 'italic',
+                color: token.colorTextTertiary,
+              }) as React.CSSProperties),
+              ...(isError && {
+                color: token.colorError,
+              }),
+            }}
+          >
+            {hasContent ? resultText : '(no output)'}
+          </CollapsibleText>
+        ))}
 
       {/* Tool input parameters (collapsible below result) */}
       {result && (

@@ -18,7 +18,11 @@ export interface ConnectionStatusProps {
  *
  * Auto-hides after 3 seconds when connected to reduce visual clutter
  */
-export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({ connected, connecting, onRetry }) => {
+export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
+  connected,
+  connecting,
+  onRetry,
+}) => {
   const { token } = theme.useToken();
   const [showConnected, setShowConnected] = useState(false);
   const [justReconnected, setJustReconnected] = useState(false);

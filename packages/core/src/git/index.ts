@@ -129,11 +129,17 @@ export async function cloneRepo(options: CloneOptions): Promise<CloneResult> {
   // Inject token into URL for reliability (credential helper is also configured as backup)
   if (options.env?.GITHUB_TOKEN && cloneUrl.startsWith('https://github.com/')) {
     const token = options.env.GITHUB_TOKEN;
-    cloneUrl = cloneUrl.replace('https://github.com/', `https://x-access-token:${token}@github.com/`);
+    cloneUrl = cloneUrl.replace(
+      'https://github.com/',
+      `https://x-access-token:${token}@github.com/`
+    );
     console.debug('🔑 Injected GITHUB_TOKEN into URL');
   } else if (options.env?.GH_TOKEN && cloneUrl.startsWith('https://github.com/')) {
     const token = options.env.GH_TOKEN;
-    cloneUrl = cloneUrl.replace('https://github.com/', `https://x-access-token:${token}@github.com/`);
+    cloneUrl = cloneUrl.replace(
+      'https://github.com/',
+      `https://x-access-token:${token}@github.com/`
+    );
     console.debug('🔑 Injected GH_TOKEN into URL');
   }
 

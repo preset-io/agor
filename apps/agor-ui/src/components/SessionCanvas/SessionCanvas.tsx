@@ -52,22 +52,15 @@ import { CommentNode, ZoneNode } from './canvas/BoardObjectNodes';
 import { CursorNode } from './canvas/CursorNode';
 import { MarkdownNode } from './canvas/MarkdownNode';
 import { useBoardObjects } from './canvas/useBoardObjects';
-import {
-  findIntersectingObjects,
-  findZoneAtPosition,
-  findZoneForNode,
-  type ZoneCollision,
-} from './canvas/utils/collisionDetection';
+import { findIntersectingObjects, findZoneAtPosition } from './canvas/utils/collisionDetection';
 import { getWorktreeParentInfo, getZoneParentInfo } from './canvas/utils/commentUtils';
 import {
   absoluteToRelative,
   calculateStoragePosition,
-  getDragAbsolutePosition,
   getNodeAbsolutePosition,
   type ParentInfo,
   relativeToAbsolute,
 } from './canvas/utils/coordinateTransforms';
-import { getAbsoluteNodePosition } from './canvas/utils/nodePositionUtils';
 import { ZoneTriggerModal } from './canvas/ZoneTriggerModal';
 
 const { Paragraph } = Typography;
@@ -324,7 +317,7 @@ const SessionCanvas = ({
   const isDraggingRef = useRef(false);
 
   // Helper: Check if a node intersects with a zone
-  const findIntersectingZone = useCallback(
+  const _findIntersectingZone = useCallback(
     (nodePosition: { x: number; y: number }, nodeWidth = 400, nodeHeight = 200) => {
       if (!board?.objects) return null;
 

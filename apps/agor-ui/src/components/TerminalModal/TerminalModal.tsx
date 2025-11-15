@@ -124,7 +124,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
 
         // Handle user input - send to backend
         // FeathersJS automatically uses WebSocket when available, REST as fallback
-        terminal.onData((data) => {
+        terminal.onData(data => {
           if (result.terminalId && client) {
             client.service('terminals').patch(result.terminalId, { input: data });
           }
@@ -207,9 +207,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
         <div>
           Terminal{sessionInfo.worktreeName ? ` - ${sessionInfo.worktreeName}` : ''}{' '}
           <span style={{ fontSize: '12px', fontWeight: 'normal', opacity: 0.6 }}>
-            {sessionInfo.tmuxSession
-              ? `(tmux: ${sessionInfo.tmuxSession})`
-              : '(ephemeral session)'}
+            {sessionInfo.tmuxSession ? `(tmux: ${sessionInfo.tmuxSession})` : '(ephemeral session)'}
           </span>
         </div>
       }

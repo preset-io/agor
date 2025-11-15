@@ -12,7 +12,7 @@ import {
   InfoCircleOutlined,
   LoadingOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, Form, Input, Space, Spin, Switch, message, theme, Tooltip } from 'antd';
+import { Alert, Button, Form, Input, message, Space, Spin, Switch, Tooltip, theme } from 'antd';
 import { useEffect, useState } from 'react';
 
 export interface OpenCodeTabProps {
@@ -39,7 +39,10 @@ export const OpenCodeTab: React.FC<OpenCodeTabProps> = ({ client }) => {
         setLoading(true);
 
         // Get OpenCode config from daemon
-        const config = (await client.service('config').get('opencode')) as any;
+        const config = (await client.service('config').get('opencode')) as {
+          enabled?: boolean;
+          serverUrl?: string;
+        };
 
         if (config) {
           setEnabled(config.enabled || false);
@@ -63,7 +66,9 @@ export const OpenCodeTab: React.FC<OpenCodeTabProps> = ({ client }) => {
 
     try {
       // Use daemon endpoint to proxy the health check
-      const result = (await client.service('opencode/health').find()) as any;
+      const result = (await client.service('opencode/health').find()) as {
+        connected?: boolean;
+      };
       setIsConnected(result.connected === true);
     } catch (error) {
       console.error('[OpenCodeTab] Health check error:', error);
@@ -161,7 +166,7 @@ export const OpenCodeTab: React.FC<OpenCodeTabProps> = ({ client }) => {
               <Input
                 placeholder="http://localhost:4096"
                 value={serverUrl}
-                onChange={(e) => setServerUrl(e.target.value)}
+                onChange={e => setServerUrl(e.target.value)}
                 addonAfter={
                   <Tooltip title="Test connection to OpenCode server">
                     <Button
@@ -262,7 +267,8 @@ export const OpenCodeTab: React.FC<OpenCodeTabProps> = ({ client }) => {
         <h4>About OpenCode</h4>
         <ul style={{ fontSize: 12, lineHeight: 1.8, color: token.colorTextSecondary }}>
           <li>
-            <strong>Multi-Provider Support:</strong> Access Claude, GPT-4, Gemini, and 70+ other models
+            <strong>Multi-Provider Support:</strong> Access Claude, GPT-4, Gemini, and 70+ other
+            models
           </li>
           <li>
             <strong>Privacy-First:</strong> All code and context stays local - no cloud storage

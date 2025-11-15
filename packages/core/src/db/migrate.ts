@@ -21,11 +21,10 @@
 
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import bcryptjs from 'bcryptjs';
 import { eq, sql } from 'drizzle-orm';
 import { migrate } from 'drizzle-orm/libsql/migrator';
 import type { Database } from './client';
-import { boards, users } from './schema';
+import { boards } from './schema';
 
 /**
  * Error thrown when migration fails
@@ -68,7 +67,7 @@ async function hasMigrationsTable(db: Database): Promise<boolean> {
  *
  * Safe to run multiple times (idempotent).
  */
-async function bootstrapMigrations(db: Database): Promise<void> {
+async function _bootstrapMigrations(db: Database): Promise<void> {
   try {
     console.log('🔧 Bootstrapping migration tracking...');
 

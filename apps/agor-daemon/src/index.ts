@@ -99,12 +99,8 @@ import type {
   User,
 } from '@agor/core/types';
 import { SessionStatus, TaskStatus } from '@agor/core/types';
-import {
-  getContextWindowLimit,
-  getSessionContextUsage,
-} from '@agor/core/utils/context-window';
+import { getContextWindowLimit, getSessionContextUsage } from '@agor/core/utils/context-window';
 import { NotFoundError } from '@agor/core/utils/errors';
-import type { TokenUsage } from '@agor/core/utils/pricing';
 // Import Claude SDK's PermissionMode type for ClaudeTool method signatures
 // (Agor's PermissionMode is a superset of all tool permission modes)
 import type { PermissionMode as ClaudePermissionMode } from '@anthropic-ai/claude-agent-sdk';
@@ -2013,13 +2009,12 @@ async function main() {
                 // Safe to mark as completed
 
                 // Store raw SDK response - single source of truth for token accounting
-                const rawSdkResponse: import('@agor/core/types').RawSdkResponse | undefined =
-                  result
-                    ? {
-                        tool: session.agentic_tool,
-                        ...result,
-                      } as import('@agor/core/types').RawSdkResponse
-                    : undefined;
+                const rawSdkResponse: import('@agor/core/types').RawSdkResponse | undefined = result
+                  ? ({
+                      tool: session.agentic_tool,
+                      ...result,
+                    } as import('@agor/core/types').RawSdkResponse)
+                  : undefined;
 
                 // Calculate tool_use_count from all messages in this task
                 let toolUseCount = 0;
@@ -2381,7 +2376,7 @@ async function main() {
       if (!sessionId) throw new Error('Session ID required');
       if (!data.prompt) throw new Error('Prompt required');
 
-      const session = await sessionsService.get(sessionId, params);
+      const _session = await sessionsService.get(sessionId, params);
 
       // Create queued message
       const messageRepo = new MessagesRepository(db);
@@ -2462,7 +2457,7 @@ async function main() {
         );
         return;
       }
-    } catch (error) {
+    } catch (_error) {
       console.log(
         `⚠️  Queued message ${nextMessage.message_id.substring(0, 8)} no longer exists, skipping`
       );

@@ -156,7 +156,11 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       </Space>
 
       <Space>
-        <ConnectionStatus connected={connected} connecting={connecting} onRetry={onRetryConnection} />
+        <ConnectionStatus
+          connected={connected}
+          connecting={connecting}
+          onRetry={onRetryConnection}
+        />
         {activeUsers.length > 0 && (
           <>
             <Facepile

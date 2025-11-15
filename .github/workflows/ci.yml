@@ -32,9 +32,8 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: Lint (informational)
-        run: pnpm lint || true
-        continue-on-error: true
+      - name: Lint
+        run: pnpm lint
 
       - name: Build
         run: pnpm build

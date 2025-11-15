@@ -522,14 +522,14 @@ export default class Init extends Command {
     // Create admin user directly in database (no daemon required)
     const db = createDatabase({ url: `file:${dbPath}` });
 
-    const user = await createUser(db, {
+    const _user = await createUser(db, {
       email,
       password,
       name: username,
       role: 'admin',
     });
 
-    this.log(chalk.green('   ✓') + ` Admin user created (${chalk.gray(email)})`);
+    this.log(`${chalk.green('   ✓')} Admin user created (${chalk.gray(email)})`);
   }
 
   /**

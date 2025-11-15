@@ -11,9 +11,7 @@ describe('expandPath', () => {
 
   it('expands file:~/ to file: + home directory', () => {
     expect(expandPath('file:~/foo')).toBe(`file:${join(homedir(), 'foo')}`);
-    expect(expandPath('file:~/.agor/agor.db')).toBe(
-      `file:${join(homedir(), '.agor', 'agor.db')}`
-    );
+    expect(expandPath('file:~/.agor/agor.db')).toBe(`file:${join(homedir(), '.agor', 'agor.db')}`);
   });
 
   it('returns absolute paths unchanged', () => {
@@ -44,9 +42,7 @@ describe('expandPath', () => {
 
 describe('extractDbFilePath', () => {
   it('extracts and expands file:~/ URLs', () => {
-    expect(extractDbFilePath('file:~/.agor/agor.db')).toBe(
-      join(homedir(), '.agor', 'agor.db')
-    );
+    expect(extractDbFilePath('file:~/.agor/agor.db')).toBe(join(homedir(), '.agor', 'agor.db'));
     expect(extractDbFilePath('file:~/foo/bar.db')).toBe(join(homedir(), 'foo', 'bar.db'));
   });
 

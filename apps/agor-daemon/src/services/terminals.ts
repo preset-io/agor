@@ -15,7 +15,7 @@
 import { execSync } from 'node:child_process';
 import os from 'node:os';
 import { resolveUserEnvironment } from '@agor/core/config';
-import { formatShortId, WorktreeRepository, type Database } from '@agor/core/db';
+import { type Database, WorktreeRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { UserID, WorktreeID } from '@agor/core/types';
 import type { IPty } from '@homebridge/node-pty-prebuilt-multiarch';
@@ -170,7 +170,7 @@ export class TerminalsService {
             'attach-session',
             '-t',
             tmuxSession,
-            '\;',
+            ';',
             'new-window',
             '-n',
             windowName,

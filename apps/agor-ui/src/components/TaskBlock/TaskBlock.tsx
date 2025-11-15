@@ -30,7 +30,7 @@ import {
   UpOutlined,
 } from '@ant-design/icons';
 import { Bubble } from '@ant-design/x';
-import { Collapse, Flex, Space, Spin, Tag, Typography, theme } from 'antd';
+import { Collapse, Flex, Spin, Tag, Typography, theme } from 'antd';
 import React, { useMemo } from 'react';
 import type { StreamingMessage } from '../../hooks/useStreamingMessages';
 import { useTaskEvents } from '../../hooks/useTaskEvents';

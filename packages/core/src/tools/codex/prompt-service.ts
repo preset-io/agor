@@ -13,7 +13,7 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { Codex, type Thread, type ThreadItem } from '@openai/codex-sdk';
-import { getCredential, resolveApiKey, resolveUserEnvironment } from '../../config';
+import { resolveApiKey, resolveUserEnvironment } from '../../config';
 import type { Database } from '../../db/client';
 import type { MessagesRepository } from '../../db/repositories/messages';
 import type { SessionMCPServerRepository } from '../../db/repositories/session-mcp-servers';

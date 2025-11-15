@@ -91,7 +91,7 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
     try {
       const description = cronstrue.toString(cronExpression, { verbose: true });
       setHumanReadable(description);
-    } catch (error) {
+    } catch (_error) {
       setHumanReadable('Invalid cron expression');
     }
   }, [cronExpression]);

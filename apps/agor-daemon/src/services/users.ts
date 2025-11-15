@@ -162,7 +162,13 @@ export class UsersService {
       updates.onboarding_completed = data.onboarding_completed;
 
     // Update data blob
-    if (data.avatar || data.preferences || data.api_keys || data.env_vars || data.default_agentic_config) {
+    if (
+      data.avatar ||
+      data.preferences ||
+      data.api_keys ||
+      data.env_vars ||
+      data.default_agentic_config
+    ) {
       const current = await this.get(id);
       const currentRow = await this.db.select().from(users).where(eq(users.user_id, id)).get();
       const currentData = currentRow?.data as {

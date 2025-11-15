@@ -25,9 +25,9 @@
 
 import type { Database } from '@agor/core/db';
 import { SessionRepository, WorktreeRepository } from '@agor/core/db';
-import type { PermissionMode, Session, Worktree, WorktreeScheduleConfig } from '@agor/core/types';
+import type { PermissionMode, Session, Worktree } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
-import { getNextRunTime, getPrevRunTime, roundToMinute } from '@agor/core/utils/cron';
+import { getNextRunTime, getPrevRunTime } from '@agor/core/utils/cron';
 import Handlebars from 'handlebars';
 import type { Application } from '../declarations';
 

@@ -11,7 +11,7 @@
  * - Don't split into Client/Session unless runtime separation is clear
  */
 
-import type { Message, Session } from '../../types';
+import type { Message } from '../../types';
 import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response';
 import type {
   CreateSessionConfig,

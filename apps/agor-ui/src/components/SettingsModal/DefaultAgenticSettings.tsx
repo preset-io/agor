@@ -7,7 +7,7 @@
 
 import type { AgenticToolName, DefaultAgenticConfig, MCPServer } from '@agor/core/types';
 import { getDefaultPermissionMode } from '@agor/core/types';
-import { Button, Form, Space, Tabs, Typography, message } from 'antd';
+import { Button, Form, message, Space, Tabs, Typography } from 'antd';
 import { useState } from 'react';
 import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
 
@@ -166,8 +166,17 @@ export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
           key,
           label,
           children: (
-            <Form form={form} layout="vertical" initialValues={getInitialValues(tool)} style={{ paddingTop: 16 }}>
-              <AgenticToolConfigForm agenticTool={tool} mcpServers={mcpServers} showHelpText={false} />
+            <Form
+              form={form}
+              layout="vertical"
+              initialValues={getInitialValues(tool)}
+              style={{ paddingTop: 16 }}
+            >
+              <AgenticToolConfigForm
+                agenticTool={tool}
+                mcpServers={mcpServers}
+                showHelpText={false}
+              />
 
               <Space style={{ marginTop: 16 }}>
                 <Button onClick={() => handleClear(tool)}>Clear Defaults</Button>

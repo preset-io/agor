@@ -19,20 +19,18 @@ import {
   type MessageID,
   MessageRole,
   type PermissionMode,
-  type Session,
   type SessionID,
   type TaskID,
 } from '../../types';
-import type { TokenUsage } from '../../utils/pricing';
-import { calculateTokenCost } from '../../utils/pricing';
 import type {
   CodexSdkResponse,
   NormalizedSdkResponse,
   RawSdkResponse,
 } from '../../types/sdk-response';
+import type { TokenUsage } from '../../utils/pricing';
 import type { ITool, StreamingCallbacks, ToolCapabilities } from '../base';
 import type { MessagesService, TasksService } from '../claude/claude-tool';
-import { DEFAULT_CODEX_MODEL, getCodexContextWindowLimit } from './models';
+import { DEFAULT_CODEX_MODEL } from './models';
 import { CodexPromptService } from './prompt-service';
 
 interface CodexExecutionResult {
@@ -62,7 +60,7 @@ export class CodexTool implements ITool {
     apiKey?: string,
     messagesService?: MessagesService,
     tasksService?: TasksService,
-    private db?: Database
+    db?: Database
   ) {
     this.messagesRepo = messagesRepo;
     this.sessionsRepo = sessionsRepo;
@@ -430,8 +428,8 @@ export class CodexTool implements ITool {
     let capturedThreadId: string | undefined;
     let resolvedModel: string | undefined;
     let tokenUsage: TokenUsage | undefined;
-    let contextWindow: number | undefined;
-    let contextWindowLimit: number | undefined;
+    let _contextWindow: number | undefined;
+    let _contextWindowLimit: number | undefined;
 
     for await (const event of this.promptService.promptSessionStreaming(
       sessionId,
@@ -564,7 +562,8 @@ export class CodexTool implements ITool {
       tokenUsage: {
         inputTokens: tokenUsage.input_tokens || 0,
         outputTokens: tokenUsage.output_tokens || 0,
-        totalTokens: tokenUsage.total_tokens || tokenUsage.input_tokens! + tokenUsage.output_tokens! || 0,
+        totalTokens:
+          tokenUsage.total_tokens || tokenUsage.input_tokens! + tokenUsage.output_tokens! || 0,
         cacheReadTokens: 0, // Codex doesn't support caching
         cacheCreationTokens: 0, // Codex doesn't support caching
       },
@@ -574,5 +573,4 @@ export class CodexTool implements ITool {
       durationMs: codexResponse.durationMs,
     };
   }
-
 }

@@ -34,17 +34,15 @@ export const SessionMetadataForm: React.FC<SessionMetadataFormProps> = ({
   titleLabel = 'Session Title',
 }) => {
   return (
-    <>
-      <Form.Item
-        name="title"
-        label={titleLabel}
-        rules={[{ required: titleRequired, message: 'Please enter a session title' }]}
-        help={
-          showHelpText && !titleRequired ? 'A short descriptive name for this session' : undefined
-        }
-      >
-        <Input placeholder="e.g., Auth System Implementation" />
-      </Form.Item>
-    </>
+    <Form.Item
+      name="title"
+      label={titleLabel}
+      rules={[{ required: titleRequired, message: 'Please enter a session title' }]}
+      help={
+        showHelpText && !titleRequired ? 'A short descriptive name for this session' : undefined
+      }
+    >
+      <Input placeholder="e.g., Auth System Implementation" />
+    </Form.Item>
   );
 };

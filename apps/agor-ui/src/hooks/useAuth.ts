@@ -10,11 +10,9 @@ import type { User } from '@agor/core/types';
 import { useCallback, useEffect, useState } from 'react';
 import { getDaemonUrl } from '../config/daemon';
 import {
-  ACCESS_TOKEN_KEY,
   clearTokens,
   getStoredAccessToken,
   getStoredRefreshToken,
-  REFRESH_TOKEN_KEY,
   refreshAndStoreTokens,
   storeTokens,
 } from '../utils/tokenRefresh';

@@ -1,4 +1,3 @@
-import { ApprovalMode, AuthType } from '@google/gemini-cli-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Database } from '../../db/client';
 import type { MCPServerRepository } from '../../db/repositories/mcp-servers';
@@ -6,7 +5,7 @@ import type { MessagesRepository } from '../../db/repositories/messages';
 import type { SessionMCPServerRepository } from '../../db/repositories/session-mcp-servers';
 import type { SessionRepository } from '../../db/repositories/sessions';
 import type { WorktreeRepository } from '../../db/repositories/worktrees';
-import type { PermissionMode, SessionID, TaskID } from '../../types';
+import type { SessionID } from '../../types';
 import { GeminiPromptService } from './prompt-service';
 
 describe('GeminiPromptService', () => {

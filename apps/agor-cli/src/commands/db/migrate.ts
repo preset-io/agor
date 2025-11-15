@@ -25,7 +25,7 @@ export default class DbMigrate extends Command {
       const status = await checkMigrationStatus(db);
 
       if (!status.hasPending) {
-        this.log(chalk.green('✓') + ' Database is already up to date!');
+        this.log(`${chalk.green('✓')} Database is already up to date!`);
         this.log('');
         this.log(`Applied migrations (${status.applied.length}):`);
         status.applied.forEach(tag => {
@@ -104,7 +104,7 @@ export default class DbMigrate extends Command {
       }
 
       this.log('');
-      this.log(chalk.green('✓') + ' All migrations completed successfully!');
+      this.log(`${chalk.green('✓')} All migrations completed successfully!`);
       this.log('');
       this.log('You can now start the daemon with:');
       this.log(chalk.cyan('  agor daemon start'));

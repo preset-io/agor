@@ -5,8 +5,8 @@
  * They are stored in tasks.raw_sdk_response for debugging and auditing.
  */
 
-import type { MessageID } from './id';
 import type { TokenUsage } from '../utils/pricing';
+import type { MessageID } from './id';
 
 // ============================================================================
 // Claude Code SDK Response (from Anthropic Claude Agent SDK)

@@ -3,7 +3,7 @@
 /* Import Inter font from Bunny Fonts CDN (privacy-friendly, GDPR compliant) */
 /* Weights: 400 (regular), 500 (medium), 600 (semibold) */
 /* Total size: ~75KB for Latin subset, cached across sites */
-@import url('https://fonts.bunny.net/css?family=inter:400,500,600&display=swap');
+@import url("https://fonts.bunny.net/css?family=inter:400,500,600&display=swap");
 
 /* Blinking cursor animation for streaming messages */
 @keyframes blink {
@@ -50,7 +50,7 @@
   background-color: rgba(0, 0, 0, 0.06);
   padding: 0.2em 0.4em;
   border-radius: 3px;
-  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-family: "Consolas", "Monaco", "Courier New", monospace;
 }
 
 /* Dark mode adjustments for inline code */
@@ -98,7 +98,7 @@
 [data-streamdown="table-wrapper"] button,
 [data-streamdown="image-wrapper"] button {
   /* Override Tailwind text-muted-foreground */
-  color: var(--ant-color-text-secondary) !important;
+  color: var(--ant-color-text-secondary);
   background-color: transparent;
   border: 1px solid transparent;
   border-radius: 4px;
@@ -112,7 +112,7 @@
 [data-streamdown="table-wrapper"] button:hover:not(:disabled),
 [data-streamdown="image-wrapper"] button:hover:not(:disabled) {
   /* Override Tailwind hover:text-foreground */
-  color: var(--ant-color-text) !important;
+  color: var(--ant-color-text);
   background-color: var(--ant-color-fill-quaternary);
   border-color: var(--ant-color-border);
 }
