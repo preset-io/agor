@@ -238,6 +238,17 @@ export const ConversationView = React.memo<ConversationViewProps>(
       });
     }, []);
 
+    // Memoize expand handlers per task to keep stable references
+    const expandHandlers = useMemo(() => {
+      const handlerMap = new Map<string, (expanded: boolean) => void>();
+      for (const task of tasks) {
+        handlerMap.set(task.task_id, (expanded: boolean) =>
+          handleTaskExpandChange(task.task_id, expanded)
+        );
+      }
+      return handlerMap;
+    }, [tasks, handleTaskExpandChange]);
+
     // Auto-scroll to bottom when streaming messages arrive (only if user is already at bottom)
     // biome-ignore lint/correctness/useExhaustiveDependencies: We want to scroll on streaming change
     useEffect(() => {
@@ -309,12 +320,13 @@ export const ConversationView = React.memo<ConversationViewProps>(
             users={users}
             currentUserId={currentUserId}
             isExpanded={expandedTaskIds.has(task.task_id)}
-            onExpandChange={(expanded) => handleTaskExpandChange(task.task_id, expanded)}
+            onExpandChange={expandHandlers.get(task.task_id)!}
             sessionId={sessionId}
             onPermissionDecision={onPermissionDecision}
             worktreeName={worktreeName}
             scheduledFromWorktree={scheduledFromWorktree}
             scheduledRunAt={scheduledRunAt}
+            streamingMessages={streamingMessagesByTask.get(task.task_id)}
           />
         ))}
       </div>
