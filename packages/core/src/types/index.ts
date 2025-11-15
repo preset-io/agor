@@ -16,6 +16,7 @@ export * from './sdk-response';
 export type { ClaudeCodePermissionMode, CodexPermissionMode, PermissionMode } from './session';
 export * from './session';
 export * from './task';
+export * from './token-usage';
 export * from './ui';
 export * from './user';
 export * from './utils';

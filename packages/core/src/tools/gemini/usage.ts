@@ -1,4 +1,4 @@
-import type { TokenUsage } from '../../utils/pricing';
+import type { TokenUsage } from '../../types/token-usage';
 
 function normalizeNumber(value: unknown): number | undefined {
   return typeof value === 'number' ? value : undefined;

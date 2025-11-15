@@ -95,11 +95,6 @@
       "import": "./dist/utils/errors.js",
       "require": "./dist/utils/errors.cjs"
     },
-    "./utils/pricing": {
-      "types": "./dist/utils/pricing.d.ts",
-      "import": "./dist/utils/pricing.js",
-      "require": "./dist/utils/pricing.cjs"
-    },
     "./utils/url": {
       "types": "./dist/utils/url.d.ts",
       "import": "./dist/utils/url.js",

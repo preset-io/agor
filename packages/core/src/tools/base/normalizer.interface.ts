@@ -35,9 +35,10 @@ export interface NormalizedSdkData {
   contextWindowLimit: number;
 
   /**
-   * Estimated cost in USD (if available from SDK)
+   * Cost in USD (if available from SDK)
+   * This is the actual cost reported by the SDK, not an estimate.
    */
-  estimatedCostUsd?: number;
+  costUsd?: number;
 
   /**
    * Primary model used (e.g., "claude-sonnet-4-5-20250929")

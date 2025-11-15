@@ -8,7 +8,7 @@
 import { generateId } from '../../lib/ids';
 import type { Message, MessageID, SessionID, TaskID } from '../../types';
 import { MessageRole } from '../../types';
-import type { TokenUsage } from '../../utils/pricing';
+import type { TokenUsage } from '../../types/token-usage';
 import type { MessagesService, TasksService } from './claude-tool';
 import { DEFAULT_CLAUDE_MODEL } from './models';
 
@@ -135,7 +135,7 @@ export async function createAssistantMessage(
   tokenUsage?: TokenUsage
 ): Promise<Message> {
   // Extract text content for preview
-  const textBlocks = content.filter((b) => b.type === 'text').map((b) => b.text || '');
+  const textBlocks = content.filter(b => b.type === 'text').map(b => b.text || '');
   const fullTextContent = textBlocks.join('');
   const contentPreview = fullTextContent.substring(0, 200);
 
@@ -181,13 +181,13 @@ function extractContentPreview(
   }>
 ): string {
   // For system_status blocks, return status-specific preview
-  const statusBlock = content.find((b) => b.type === 'system_status');
+  const statusBlock = content.find(b => b.type === 'system_status');
   if (statusBlock?.status === 'compacting') {
     return 'Compacting conversation context...';
   }
 
   // For text blocks, return text preview
-  const textBlocks = content.filter((b) => b.type === 'text').map((b) => b.text || '');
+  const textBlocks = content.filter(b => b.type === 'text').map(b => b.text || '');
   const fullTextContent = textBlocks.join('');
   return fullTextContent.substring(0, 200);
 }

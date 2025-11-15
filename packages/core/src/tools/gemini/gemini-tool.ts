@@ -27,7 +27,7 @@ import {
   type TaskID,
 } from '../../types';
 import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response';
-import type { TokenUsage } from '../../utils/pricing';
+import type { TokenUsage } from '../../types/token-usage';
 import type { ITool, StreamingCallbacks, ToolCapabilities } from '../base';
 import type { MessagesService, TasksService } from '../claude/claude-tool';
 import { DEFAULT_GEMINI_MODEL } from './models';

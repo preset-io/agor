@@ -31,7 +31,7 @@ import type { SessionMCPServerRepository } from '../../db/repositories/session-m
 import type { SessionRepository } from '../../db/repositories/sessions';
 import type { WorktreeRepository } from '../../db/repositories/worktrees';
 import type { PermissionMode, SessionID, TaskID } from '../../types';
-import type { TokenUsage } from '../../utils/pricing';
+import type { TokenUsage } from '../../types/token-usage';
 import { convertConversationToHistory } from './conversation-converter';
 import { DEFAULT_GEMINI_MODEL, type GeminiModel } from './models';
 import { mapPermissionMode } from './permission-mapper';
@@ -474,7 +474,7 @@ export class GeminiPromptService {
       // Find session file matching pattern: session-*-{sessionId-first8}.json
       const sessionIdShort = sessionId.slice(0, 8);
       const files = await fs.readdir(chatsDir);
-      const sessionFile = files.find((f) => f.includes(sessionIdShort) && f.endsWith('.json'));
+      const sessionFile = files.find(f => f.includes(sessionIdShort) && f.endsWith('.json'));
 
       if (!sessionFile) {
         console.debug(`No session file found for ${sessionId} (looking for *${sessionIdShort}*)`);

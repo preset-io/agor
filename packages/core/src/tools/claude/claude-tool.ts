@@ -30,7 +30,7 @@ import {
 } from '../../types';
 import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response';
 // Removed import of calculateModelContextWindowUsage - inlined instead
-import type { TokenUsage } from '../../utils/pricing';
+import type { TokenUsage } from '../../types/token-usage';
 import type { ImportOptions, ITool, SessionData, ToolCapabilities } from '../base';
 import { loadClaudeSession } from './import/load-session';
 import { transcriptsToMessages } from './import/message-converter';

@@ -16,16 +16,16 @@ export class ClaudeCodeNormalizer implements INormalizer<SDKResultMessage> {
   normalize(msg: SDKResultMessage): NormalizedSdkData {
     // Extract basic metadata
     const durationMs = msg.duration_ms;
-    const estimatedCostUsd = msg.total_cost_usd;
+    const costUsd = msg.total_cost_usd;
 
     // If modelUsage exists, aggregate across all models
     if (msg.modelUsage && typeof msg.modelUsage === 'object') {
-      return this.normalizeMultiModel(msg.modelUsage, durationMs, estimatedCostUsd);
+      return this.normalizeMultiModel(msg.modelUsage, durationMs, costUsd);
     }
 
     // Fallback to top-level usage (older SDK versions or single-model)
     if (msg.usage) {
-      return this.normalizeSingleModel(msg.usage, durationMs, estimatedCostUsd);
+      return this.normalizeSingleModel(msg.usage, durationMs, costUsd);
     }
 
     // No usage data available - return zeros
@@ -40,7 +40,7 @@ export class ClaudeCodeNormalizer implements INormalizer<SDKResultMessage> {
       contextWindow: 0,
       contextWindowLimit: 0,
       durationMs,
-      estimatedCostUsd,
+      costUsd,
     };
   }
 
@@ -49,9 +49,9 @@ export class ClaudeCodeNormalizer implements INormalizer<SDKResultMessage> {
    * Sums tokens across all models
    */
   private normalizeMultiModel(
-    modelUsage: Record<string, any>,
+    modelUsage: Record<string, unknown>,
     durationMs?: number,
-    estimatedCostUsd?: number
+    costUsd?: number
   ): NormalizedSdkData {
     let totalInput = 0;
     let totalOutput = 0;
@@ -62,11 +62,13 @@ export class ClaudeCodeNormalizer implements INormalizer<SDKResultMessage> {
 
     // Iterate through all models and sum tokens
     for (const [modelId, usage] of Object.entries(modelUsage)) {
-      const inputTokens = usage.inputTokens || 0;
-      const outputTokens = usage.outputTokens || 0;
-      const cacheReadTokens = usage.cacheReadInputTokens || 0;
-      const cacheCreationTokens = usage.cacheCreationInputTokens || 0;
-      const contextWindowLimit = usage.contextWindow || 0;
+      // biome-ignore lint/suspicious/noExplicitAny: SDK modelUsage has dynamic structure
+      const usageData = usage as any;
+      const inputTokens = usageData.inputTokens || 0;
+      const outputTokens = usageData.outputTokens || 0;
+      const cacheReadTokens = usageData.cacheReadInputTokens || 0;
+      const cacheCreationTokens = usageData.cacheCreationInputTokens || 0;
+      const contextWindowLimit = usageData.contextWindow || 0;
 
       totalInput += inputTokens;
       totalOutput += outputTokens;
@@ -94,7 +96,7 @@ export class ClaudeCodeNormalizer implements INormalizer<SDKResultMessage> {
       contextWindowLimit: maxLimit,
       primaryModel,
       durationMs,
-      estimatedCostUsd,
+      costUsd,
     };
   }
 
@@ -102,14 +104,16 @@ export class ClaudeCodeNormalizer implements INormalizer<SDKResultMessage> {
    * Normalize single-model usage (fallback for older SDK versions)
    */
   private normalizeSingleModel(
-    usage: any,
+    usage: unknown,
     durationMs?: number,
-    estimatedCostUsd?: number
+    costUsd?: number
   ): NormalizedSdkData {
-    const inputTokens = usage.input_tokens || 0;
-    const outputTokens = usage.output_tokens || 0;
-    const cacheReadTokens = usage.cache_read_input_tokens || 0;
-    const cacheCreationTokens = usage.cache_creation_input_tokens || 0;
+    // biome-ignore lint/suspicious/noExplicitAny: SDK usage object has dynamic structure
+    const usageData = usage as any;
+    const inputTokens = usageData.input_tokens || 0;
+    const outputTokens = usageData.output_tokens || 0;
+    const cacheReadTokens = usageData.cache_read_input_tokens || 0;
+    const cacheCreationTokens = usageData.cache_creation_input_tokens || 0;
 
     return {
       tokenUsage: {
@@ -124,7 +128,7 @@ export class ClaudeCodeNormalizer implements INormalizer<SDKResultMessage> {
       // Default to 200K for Claude models (standard context window)
       contextWindowLimit: 200000,
       durationMs,
-      estimatedCostUsd,
+      costUsd,
     };
   }
 }
