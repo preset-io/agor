@@ -42,7 +42,7 @@ export const ExampleCustomRenderer: React.FC<ToolRendererProps> = ({
           (block: unknown): block is { type: 'text'; text: string } =>
             typeof block === 'object' && block !== null && 'type' in block && block.type === 'text'
         )
-        .map(block => block.text)
+        .map((block) => block.text)
         .join('\n\n');
     }
 

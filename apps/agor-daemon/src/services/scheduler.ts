@@ -41,7 +41,6 @@ export interface SchedulerConfig {
 }
 
 export class SchedulerService {
-  private db: Database;
   private app: Application;
   private config: Required<SchedulerConfig>;
   private intervalHandle?: NodeJS.Timeout;

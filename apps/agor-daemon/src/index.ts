@@ -317,7 +317,7 @@ async function main() {
         /^https?:\/\/localhost(:\d+)?$/,
       ];
 
-      const isAllowed = allowedPatterns.some(pattern => pattern.test(origin));
+      const isAllowed = allowedPatterns.some((pattern) => pattern.test(origin));
 
       if (isAllowed) {
         callback(null, true);
@@ -436,7 +436,7 @@ async function main() {
         maxHttpBufferSize: 1e6, // 1MB max message size
         transports: ['websocket', 'polling'], // Prefer WebSocket
       },
-      io => {
+      (io) => {
         // Store Socket.io server instance for shutdown
         socketServer = io;
 
@@ -500,7 +500,7 @@ async function main() {
         });
 
         // Configure Socket.io for cursor presence events
-        io.on('connection', socket => {
+        io.on('connection', (socket) => {
           activeConnections++;
           const user = (socket as FeathersSocket).feathers?.user;
           console.log(
@@ -551,7 +551,7 @@ async function main() {
           });
 
           // Track disconnections
-          socket.on('disconnect', reason => {
+          socket.on('disconnect', (reason) => {
             activeConnections--;
             console.log(
               `🔌 Socket.io disconnected: ${socket.id} (reason: ${reason}, remaining: ${activeConnections})`
@@ -559,7 +559,7 @@ async function main() {
           });
 
           // Handle socket errors
-          socket.on('error', error => {
+          socket.on('error', (error) => {
             console.error(`❌ Socket.io error on ${socket.id}:`, error);
           });
         });
@@ -669,7 +669,7 @@ async function main() {
     console.error('❌ Database migrations required!');
     console.error('');
     console.error(`   Found ${migrationStatus.pending.length} pending migration(s):`);
-    migrationStatus.pending.forEach(tag => {
+    migrationStatus.pending.forEach((tag) => {
       console.error(`     - ${tag}`);
     });
     console.error('');
@@ -776,7 +776,7 @@ async function main() {
       // Return all session-MCP relationships
       // This allows the UI to fetch all relationships in one call
       const rows = await db.select().from(sessionMcpServers).all();
-      return rows.map(row => ({
+      return rows.map((row) => ({
         session_id: row.session_id,
         mcp_server_id: row.mcp_server_id,
         enabled: Boolean(row.enabled),
@@ -901,7 +901,7 @@ async function main() {
         (validateQuery as any)(userQueryValidator),
       ],
       find: [
-        context => {
+        (context) => {
           const params = context.params as AuthenticatedParams;
 
           if (!params.provider) {
@@ -924,13 +924,13 @@ async function main() {
         },
       ],
       get: [
-        context => {
+        (context) => {
           ensureMinimumRole(context.params as AuthenticatedParams, 'member', 'view users');
           return context;
         },
       ],
       create: [
-        async context => {
+        async (context) => {
           const params = context.params as AuthenticatedParams;
 
           if (!params.provider) {
@@ -946,7 +946,7 @@ async function main() {
         },
       ],
       patch: [
-        context => {
+        (context) => {
           const params = context.params as AuthenticatedParams;
           const userId = context.id as string;
 
@@ -986,7 +986,7 @@ async function main() {
       ],
       create: [
         requireMinimumRole('member', 'create sessions'),
-        async context => {
+        async (context) => {
           // Inject user_id if authenticated, otherwise use 'anonymous'
           const user = (context.params as { user?: { user_id: string; email: string } }).user;
           const userId = user?.user_id || 'anonymous';
@@ -1000,7 +1000,7 @@ async function main() {
           );
 
           if (Array.isArray(context.data)) {
-            context.data.forEach(item => {
+            context.data.forEach((item) => {
               if (!item.created_by) (item as Record<string, unknown>).created_by = userId;
             });
           } else if (context.data && !context.data.created_by) {
@@ -1037,7 +1037,7 @@ async function main() {
     },
     after: {
       create: [
-        async context => {
+        async (context) => {
           // Skip MCP setup if MCP server is disabled
           if (config.daemon?.mcpEnabled === false) {
             return context;
@@ -1095,7 +1095,7 @@ async function main() {
           return context;
         },
         // Create OpenCode session if agentic_tool is 'opencode'
-        async context => {
+        async (context) => {
           const session = context.result as Session;
 
           if (session.agentic_tool === 'opencode') {
@@ -1164,7 +1164,7 @@ async function main() {
       ],
       create: [
         requireMinimumRole('member', 'create tasks'),
-        async context => {
+        async (context) => {
           // Inject user_id if authenticated, otherwise use 'anonymous'
           const user = (context.params as { user?: { user_id: string; email: string } }).user;
           const userId = user?.user_id || 'anonymous';
@@ -1178,7 +1178,7 @@ async function main() {
           );
 
           if (Array.isArray(context.data)) {
-            context.data.forEach(item => {
+            context.data.forEach((item) => {
               if (!item.created_by) (item as Record<string, unknown>).created_by = userId;
             });
           } else if (context.data && !context.data.created_by) {
@@ -1201,14 +1201,14 @@ async function main() {
       ],
       create: [
         requireMinimumRole('member', 'create boards'),
-        async context => {
+        async (context) => {
           // Inject user_id if authenticated, otherwise use 'anonymous'
           const userId =
             (context.params as { user?: { user_id: string; email: string } }).user?.user_id ||
             'anonymous';
 
           if (Array.isArray(context.data)) {
-            context.data.forEach(item => {
+            context.data.forEach((item) => {
               if (!item.created_by) (item as Record<string, unknown>).created_by = userId;
             });
           } else if (context.data && !context.data.created_by) {
@@ -1219,7 +1219,7 @@ async function main() {
       ],
       patch: [
         requireMinimumRole('member', 'update boards'),
-        async context => {
+        async (context) => {
           // Handle atomic board object operations via _action parameter
           const contextData = context.data || {};
           const { _action, objectId, objectData, objects, deleteAssociatedSessions } =
@@ -1621,7 +1621,7 @@ async function main() {
 
   if (config.opencode?.enabled !== false) {
     // Check OpenCode server availability on startup (non-blocking)
-    opencodeTool.checkInstalled().then(isAvailable => {
+    opencodeTool.checkInstalled().then((isAvailable) => {
       if (!isAvailable) {
         console.warn('⚠️  OpenCode server not available at', openCodeServerUrl);
         console.warn('   Start OpenCode with: opencode serve --port 4096');
@@ -1822,7 +1822,7 @@ async function main() {
             chunk,
           });
         },
-        onStreamEnd: messageId => {
+        onStreamEnd: (messageId) => {
           console.debug(
             `📡 [${new Date().toISOString()}] Streaming end: ${messageId.substring(0, 8)}`
           );
@@ -1855,7 +1855,7 @@ async function main() {
             chunk,
           });
         },
-        onThinkingEnd: messageId => {
+        onThinkingEnd: (messageId) => {
           console.debug(
             `📡 [${new Date().toISOString()}] Thinking end: ${messageId.substring(0, 8)}`
           );
@@ -1943,7 +1943,7 @@ async function main() {
               task.task_id,
               useStreaming ? streamingCallbacks : undefined
             ) || Promise.reject(new Error('OpenCode executeTask not available'))
-          ).then(result => {
+          ).then((result) => {
             console.log('[Daemon] OpenCodeTool.executeTask completed:', result);
             return {
               userMessageId: `user-${task.task_id}` as import('@agor/core/types').MessageID,
@@ -1970,7 +1970,7 @@ async function main() {
         }
 
         executeMethod
-          .then(async result => {
+          .then(async (result) => {
             try {
               // PHASE 3: Mark task as completed and update message count
               // (Messages already created with task_id, no need to patch)
@@ -2203,7 +2203,7 @@ async function main() {
               await safePatch(tasksService, task.task_id, { status: TaskStatus.FAILED }, 'Task');
             }
           })
-          .catch(async error => {
+          .catch(async (error) => {
             console.error(`❌ Error executing prompt for task ${task.task_id}:`, error);
 
             // Check if error might be due to stale/invalid Agent SDK resume session
@@ -3194,9 +3194,9 @@ async function main() {
         // Disconnect all active clients first
         socketServer.disconnectSockets();
         // Give sockets a moment to disconnect
-        await new Promise<void>(resolve => setTimeout(resolve, 100));
+        await new Promise<void>((resolve) => setTimeout(resolve, 100));
         // Now close the server with a timeout
-        await new Promise<void>(resolve => {
+        await new Promise<void>((resolve) => {
           const timeout = setTimeout(() => {
             console.warn('⚠️  Server close timeout, forcing exit');
             resolve();
@@ -3211,7 +3211,7 @@ async function main() {
       } else {
         // Fallback: close HTTP server directly if Socket.io wasn't initialized
         await new Promise<void>((resolve, reject) => {
-          server.close(err => {
+          server.close((err) => {
             if (err) {
               console.error('❌ Error closing server:', err);
               reject(err);
@@ -3235,7 +3235,7 @@ async function main() {
 }
 
 // Start the daemon
-main().catch(error => {
+main().catch((error) => {
   console.error('Failed to start daemon:', error);
   process.exit(1);
 });

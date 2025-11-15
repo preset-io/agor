@@ -868,7 +868,7 @@ export class ClaudeTool implements ITool {
       // Check if this task has a compaction event in its messages
       // If so, we stop here (context was reset)
       const taskMessages = await this.messagesRepo.findByTaskId(task.task_id);
-      const hasCompaction = taskMessages.some(msg => {
+      const hasCompaction = taskMessages.some((msg) => {
         if (msg.role !== MessageRole.SYSTEM) return false;
 
         // Check if message content contains compaction event
