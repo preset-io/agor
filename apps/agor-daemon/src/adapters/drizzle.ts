@@ -259,7 +259,7 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
     if (Array.isArray(data)) {
       // Bulk create
       const results = await Promise.all(
-        data.map((item) => this.repository.create(item as Partial<T>))
+        data.map(item => this.repository.create(item as Partial<T>))
       );
       // Emit created event for each item
       for (const result of results) {
@@ -302,7 +302,7 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
       records = this.filterData(records, query);
 
       const results = await Promise.all(
-        records.map((record) =>
+        records.map(record =>
           this.repository.update(
             (record as Record<string, unknown>)[this.id] as string,
             data as Partial<T>
@@ -323,6 +323,35 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
     await this.get(id, params);
 
     const result = await this.repository.update(String(id), data as Partial<T>);
+
+    // Log session/task status changes for debugging
+    // biome-ignore lint/suspicious/noExplicitAny: Need to check if result has status field
+    if (this.resourceType === 'Session' && (result as any).status) {
+      console.log(`📡 [DrizzleService] SESSION PATCH:`, {
+        // biome-ignore lint/suspicious/noExplicitAny: Session ID access
+        session_id: (result as any).session_id?.substring(0, 8),
+        // biome-ignore lint/suspicious/noExplicitAny: Status access
+        status: (result as any).status,
+        // biome-ignore lint/suspicious/noExplicitAny: Ready for prompt access
+        ready_for_prompt: (result as any).ready_for_prompt,
+        patch_data: data,
+        timestamp: new Date().toISOString(),
+      });
+    }
+    // biome-ignore lint/suspicious/noExplicitAny: Need to check if result has status field
+    if (this.resourceType === 'Task' && (result as any).status) {
+      console.log(`📡 [DrizzleService] TASK PATCH:`, {
+        // biome-ignore lint/suspicious/noExplicitAny: Task ID access
+        task_id: (result as any).task_id?.substring(0, 8),
+        // biome-ignore lint/suspicious/noExplicitAny: Session ID access
+        session_id: (result as any).session_id?.substring(0, 8),
+        // biome-ignore lint/suspicious/noExplicitAny: Status access
+        status: (result as any).status,
+        patch_data: data,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
     this.emit?.('patched', result, params);
     return result;
   }
@@ -343,7 +372,7 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
       records = this.filterData(records, query);
 
       // biome-ignore lint/suspicious/noExplicitAny: Need to access ID field dynamically
-      await Promise.all(records.map((record) => this.repository.delete((record as any)[this.id])));
+      await Promise.all(records.map(record => this.repository.delete((record as any)[this.id])));
 
       // Emit removed event for each record
       for (const record of records) {
