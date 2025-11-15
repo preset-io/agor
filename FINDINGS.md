@@ -180,3 +180,92 @@ Run the same test workflow (spawn subsession with callback) and look for:
 1. Does `📤 [PUBLISH]` appear after `📡 [DrizzleService]`?
 2. How many connections are in 'everybody' channel?
 3. Does Network tab show WebSocket frame with session b62a1b7e?
+
+## ROOT CAUSE FOUND (2025-11-15 18:39)
+
+### The Smoking Gun
+
+**Backend logs from test run:**
+
+```
+📡 [DrizzleService] SESSION PATCH: {
+  session_id: 'b62a1b7e',
+  status: 'idle',
+  ready_for_prompt: true,
+  timestamp: '2025-11-15T18:34:25.727Z'
+}
+🔌 Socket.io disconnected: VjVwuVJpyDlHK9ItAAAB (reason: transport close, remaining: 0)
+🔌 WebSocket connection without auth (for login flow): UkwkXbKwLOFkSWwOAAAD
+🔌 New connection joined everybody channel (total: 1)
+```
+
+**Notice:** NO `📤 [PUBLISH] SESSION EVENT` log!
+
+**Compare to task event (which DOES work):**
+
+```
+📡 [DrizzleService] TASK PATCH: { task_id: '0909568d', session_id: 'b62a1b7e', status: 'completed' }
+📤 [PUBLISH] TASK EVENT: { task_id: '0909568d', session_id: 'b62a1b7e', status: 'completed' }
+```
+
+### Why `📤 [PUBLISH]` Doesn't Appear
+
+**FeathersJS only calls `app.publish()` callback when there are clients to publish to.**
+
+If `app.channel('everybody').length === 0`, the publish callback is **never invoked**.
+
+### The Timing Issue
+
+**Sequence of events:**
+
+1. `📡 [DrizzleService] SESSION PATCH` - Event emitted at 18:34:25.727Z
+2. `🔌 Socket.io disconnected` - Client disconnected (remaining: 0)
+3. Event tries to publish → everybody channel has 0 connections → publish callback skipped
+4. `🔌 New connection joined` - Client reconnects (missed the event)
+
+**The WebSocket disconnected BEFORE the session patch could be broadcast.**
+
+### Why Task Events Work But Session Events Don't
+
+**Task completion happens BEFORE the session goes idle:**
+
+```
+1. Task completes (WebSocket still connected) ✅
+   📡 [DrizzleService] TASK PATCH
+   📤 [PUBLISH] TASK EVENT (1 client in channel)
+   🔔 Frontend receives event
+
+2. Session goes idle (WebSocket disconnected) ❌
+   📡 [DrizzleService] SESSION PATCH
+   📤 [PUBLISH] NOT CALLED (0 clients in channel)
+   ❌ Frontend never receives event
+```
+
+### Why This Happens
+
+The task completion and session idle patches happen in quick succession (~1ms apart):
+
+- Task: `18:34:25.725Z` → Published successfully
+- Session: `18:34:25.727Z` → Client disconnected between these two events
+
+**This is a race condition between:**
+
+1. Background session patch (from `setImmediate()`)
+2. WebSocket disconnection (browser/network timing)
+
+### Evidence from Frontend Logs
+
+Frontend shows task completed but session never went idle:
+
+```
+🔔 [useAgorData] TASK PATCHED EVENT: {task_id: '0909568d', session_id: 'b62a1b7e', status: 'completed'}
+// ← Missing: SESSION PATCHED EVENT for b62a1b7e going to 'idle'
+```
+
+After page refresh, state is correct (reads from database).
+
+### The Fix
+
+**The session IS being updated in the database correctly.** The issue is purely WebSocket event delivery timing.
+
+**Why does the WebSocket disconnect?** Need to investigate if the connection is being closed prematurely or if there's a bug in connection handling during background operations.
