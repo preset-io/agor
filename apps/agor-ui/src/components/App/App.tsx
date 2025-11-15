@@ -16,6 +16,7 @@ import type {
 import { PermissionScope } from '@agor/core/types';
 import { Layout, message } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
+import { useFaviconStatus } from '../../hooks/useFaviconStatus';
 import { usePresence } from '../../hooks/usePresence';
 import type { AgenticToolOption } from '../../types';
 import { AppHeader } from '../AppHeader';
@@ -223,6 +224,9 @@ export const App: React.FC<AppProps> = ({
       setCurrentBoardId(fallback);
     }
   }, [boards, currentBoardId]);
+
+  // Update favicon based on session activity on current board
+  useFaviconStatus(currentBoardId, sessions, tasks, boardObjects);
 
   const handleOpenTerminal = (commands: string[] = [], worktreeId?: string) => {
     setTerminalCommands(commands);

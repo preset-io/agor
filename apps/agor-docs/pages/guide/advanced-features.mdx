@@ -21,6 +21,33 @@ Power-user features to enhance your AI coding workflow. An image is worth a thou
 
 ---
 
+## 🔴 Favicon Status Indicator
+
+**See session activity at a glance, even in background tabs.** Your browser tab's favicon updates with colored dots to show real-time status:
+
+<div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
+  <div style={{ textAlign: 'center' }}>
+    <img
+      src="/screenshots/favicon-running.png"
+      alt="Orange dot: agent working"
+      style={{ width: '48px', height: '48px' }}
+    />
+    <p style={{ fontSize: '12px', marginTop: '8px' }}>🟠 Agent working</p>
+  </div>
+  <div style={{ textAlign: 'center' }}>
+    <img
+      src="/screenshots/favicon-outstanding-items.png"
+      alt="Green dot: ready for prompt"
+      style={{ width: '48px', height: '48px' }}
+    />
+    <p style={{ fontSize: '12px', marginTop: '8px' }}>🟢 Ready for prompt</p>
+  </div>
+</div>
+
+Works across all boards—automatically tracks sessions on your current board and updates in real-time via WebSocket.
+
+---
+
 ## 🔔 Task Completion Chimes
 
 **Hear when your agents finish working.** Set up audio notifications for long-running tasks so you can multitask.
