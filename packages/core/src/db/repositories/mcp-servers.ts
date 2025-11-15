@@ -283,6 +283,7 @@ export class MCPServerRepository
         .update(mcpServers)
         .set({
           enabled: insert.enabled,
+          scope: insert.scope,
           updated_at: new Date(),
           data: insert.data,
         })
