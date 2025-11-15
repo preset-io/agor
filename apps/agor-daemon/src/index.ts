@@ -2346,6 +2346,18 @@ async function main() {
           });
           console.log(`✅ Task ${latestTask.task_id.substring(0, 8)} stopped`);
         }
+
+        // PHASE 4: Process next queued message if any
+        // This ensures queued messages aren't stuck when stopping
+        try {
+          await processNextQueuedMessage(id as SessionID, params);
+        } catch (error) {
+          console.error(
+            `⚠️  Failed to process queued message after stop for session ${id.substring(0, 8)}:`,
+            error
+          );
+          // Don't fail the stop request if queue processing fails
+        }
       } else {
         // Stop failed, revert to running
         if (runningTasksArray.length > 0) {
