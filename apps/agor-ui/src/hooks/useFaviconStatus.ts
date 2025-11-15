@@ -7,7 +7,7 @@
  * - No dots: Nothing active on current board
  */
 
-import type { BoardEntityObject, Session, Task } from '@agor/core/types';
+import type { BoardEntityObject, Session } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
 import { theme } from 'antd';
 import { useEffect, useState } from 'react';
@@ -16,7 +16,6 @@ import { createFaviconWithDot } from '../utils/faviconDot';
 export function useFaviconStatus(
   currentBoardId: string | null,
   sessions: Session[],
-  tasks: Record<string, Task[]>,
   boardObjects: BoardEntityObject[]
 ) {
   const [baseFaviconUrl] = useState('/favicon.png');
@@ -46,12 +45,7 @@ export function useFaviconStatus(
 
     // Determine status: check for running and ready independently
     // Use .some() for efficient short-circuiting
-    const hasRunning = sessionsOnBoard.some((session) => {
-      const sessionTasks = tasks[session.session_id] || [];
-      return (
-        sessionTasks.some((t) => t.status === 'running') || session.status === SessionStatus.RUNNING
-      );
-    });
+    const hasRunning = sessionsOnBoard.some((session) => session.status === SessionStatus.RUNNING);
 
     const hasReady = sessionsOnBoard.some((session) => session.ready_for_prompt);
 
@@ -65,5 +59,5 @@ export function useFaviconStatus(
         }
       }
     );
-  }, [currentBoardId, sessions, tasks, boardObjects, baseFaviconUrl, token.colorSuccessText]);
+  }, [currentBoardId, sessions, boardObjects, baseFaviconUrl, token.colorSuccessText]);
 }

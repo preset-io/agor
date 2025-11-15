@@ -226,7 +226,7 @@ export const App: React.FC<AppProps> = ({
   }, [boards, currentBoardId]);
 
   // Update favicon based on session activity on current board
-  useFaviconStatus(currentBoardId, sessions, tasks, boardObjects);
+  useFaviconStatus(currentBoardId, sessions, boardObjects);
 
   const handleOpenTerminal = (commands: string[] = [], worktreeId?: string) => {
     setTerminalCommands(commands);
