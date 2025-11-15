@@ -1,13 +1,17 @@
 /**
- * Create a favicon with a colored status dot overlay
+ * Create a favicon with status dot overlays
  *
  * @param baseFaviconUrl - Path to base favicon image
- * @param dotColor - Color of status dot ('green', 'orange', or null for no dot)
+ * @param runningDot - If true, show white dot on lower-left (agent working)
+ * @param readyDot - If true, show green dot on lower-right (ready for prompt)
+ * @param greenColor - Hex color for the green dot (from theme)
  * @returns Promise resolving to data URL for the modified favicon
  */
 export function createFaviconWithDot(
   baseFaviconUrl: string,
-  dotColor: 'green' | 'orange' | null
+  runningDot: boolean,
+  readyDot: boolean,
+  greenColor: string
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const canvas = document.createElement('canvas');
@@ -20,30 +24,41 @@ export function createFaviconWithDot(
       // Draw base favicon
       ctx.drawImage(img, 0, 0, 32, 32);
 
-      // Draw status dot if specified
-      if (dotColor) {
-        const dotSize = 10;
-        const dotX = 32 - dotSize / 2 - 2; // Bottom-right corner
+      const dotSize = 10;
+
+      // Draw white dot on lower-left if running
+      if (runningDot) {
+        const dotX = dotSize / 2 + 2; // Lower-left corner
         const dotY = 32 - dotSize / 2 - 2;
 
-        // Outer white border for contrast
+        // Dark border for contrast against light backgrounds
         ctx.beginPath();
         ctx.arc(dotX, dotY, dotSize / 2 + 1, 0, 2 * Math.PI);
-        ctx.fillStyle = '#ffffff';
+        ctx.fillStyle = '#000000';
         ctx.fill();
 
-        // Colored dot
+        // White dot
         ctx.beginPath();
         ctx.arc(dotX, dotY, dotSize / 2, 0, 2 * Math.PI);
+        ctx.fillStyle = '#ffffff';
+        ctx.fill();
+      }
 
-        switch (dotColor) {
-          case 'green':
-            ctx.fillStyle = '#52c41a'; // Ant Design success green
-            break;
-          case 'orange':
-            ctx.fillStyle = '#faad14'; // Ant Design warning orange
-            break;
-        }
+      // Draw green dot on lower-right if ready
+      if (readyDot) {
+        const dotX = 32 - dotSize / 2 - 2; // Lower-right corner
+        const dotY = 32 - dotSize / 2 - 2;
+
+        // Dark border for contrast
+        ctx.beginPath();
+        ctx.arc(dotX, dotY, dotSize / 2 + 1, 0, 2 * Math.PI);
+        ctx.fillStyle = '#000000';
+        ctx.fill();
+
+        // Green dot (theme color)
+        ctx.beginPath();
+        ctx.arc(dotX, dotY, dotSize / 2, 0, 2 * Math.PI);
+        ctx.fillStyle = greenColor;
         ctx.fill();
       }
 

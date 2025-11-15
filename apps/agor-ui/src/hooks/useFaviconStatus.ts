@@ -1,14 +1,15 @@
 /**
  * React hook for updating favicon based on session activity
  *
- * Updates favicon with colored dot overlays to indicate status:
- * - Green dot: Sessions ready for prompt (completed work, needs attention)
- * - Orange dot: Sessions actively running
- * - No dot: No active sessions
+ * Updates favicon with dot overlays to indicate status:
+ * - White dot (lower-left): Agent actively working
+ * - Green dot (lower-right): Ready for prompt (completed work, needs attention)
+ * - No dots: Nothing active on current board
  */
 
 import type { BoardEntityObject, Session, Task } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
+import { theme } from 'antd';
 import { useEffect, useState } from 'react';
 import { createFaviconWithDot } from '../utils/faviconDot';
 
@@ -19,16 +20,19 @@ export function useFaviconStatus(
   boardObjects: BoardEntityObject[]
 ) {
   const [baseFaviconUrl] = useState('/favicon.png');
+  const { token } = theme.useToken();
 
   useEffect(() => {
     if (!currentBoardId) {
       // No board selected - restore default favicon
-      createFaviconWithDot(baseFaviconUrl, null).then((dataUrl) => {
-        const link = document.querySelector("link[rel~='icon']") as HTMLLinkElement;
-        if (link) {
-          link.href = dataUrl;
+      createFaviconWithDot(baseFaviconUrl, false, false, token.colorSuccessText).then(
+        (dataUrl) => {
+          const link = document.querySelector("link[rel~='icon']") as HTMLLinkElement;
+          if (link) {
+            link.href = dataUrl;
+          }
         }
-      });
+      );
       return;
     }
 
@@ -42,7 +46,7 @@ export function useFaviconStatus(
       (s) => worktreesOnBoard.has(s.worktree_id) && !s.archived
     );
 
-    // Determine status priority: running > ready > idle
+    // Determine status: check for running and ready independently
     let hasRunning = false;
     let hasReady = false;
 
@@ -55,24 +59,25 @@ export function useFaviconStatus(
 
       if (isRunning) {
         hasRunning = true;
-        break; // Running takes priority
       }
 
       // Check if session is ready for prompt
       if (session.ready_for_prompt) {
         hasReady = true;
       }
+
+      // Both states can be true simultaneously, so don't break early
     }
 
-    // Update favicon with appropriate dot
-    // Orange for running, green for ready, no dot for idle
-    const dotColor = hasRunning ? 'orange' : hasReady ? 'green' : null;
-
-    createFaviconWithDot(baseFaviconUrl, dotColor).then((dataUrl) => {
-      const link = document.querySelector("link[rel~='icon']") as HTMLLinkElement;
-      if (link) {
-        link.href = dataUrl;
+    // Update favicon with appropriate dots
+    // White dot (lower-left) for running, green dot (lower-right) for ready
+    createFaviconWithDot(baseFaviconUrl, hasRunning, hasReady, token.colorSuccessText).then(
+      (dataUrl) => {
+        const link = document.querySelector("link[rel~='icon']") as HTMLLinkElement;
+        if (link) {
+          link.href = dataUrl;
+        }
       }
-    });
-  }, [currentBoardId, sessions, tasks, boardObjects, baseFaviconUrl]);
+    );
+  }, [currentBoardId, sessions, tasks, boardObjects, baseFaviconUrl, token.colorSuccessText]);
 }
