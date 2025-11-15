@@ -55,6 +55,14 @@ export interface SessionsServiceImpl extends Service<Session, Partial<Session>, 
     params?: FeathersParams
   ): Promise<Session>;
   getGenealogy(id: string, params?: FeathersParams): Promise<unknown>; // GenealogyTree type would go here
+  // Callback queue processing
+  setQueueProcessor(
+    processor: (
+      sessionId: import('@agor/core/types').SessionID,
+      params?: FeathersParams
+    ) => Promise<void>
+  ): void;
+  triggerQueueProcessing(id: string, params?: FeathersParams): Promise<void>;
   // Event emitter methods (FeathersJS EventEmitter interface - any[] for event args flexibility)
   // biome-ignore lint/suspicious/noExplicitAny: FeathersJS event handlers accept variable arguments
   on(event: string, handler: (...args: any[]) => void): this;

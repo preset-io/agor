@@ -134,6 +134,11 @@
       "types": "./dist/seed/index.d.ts",
       "import": "./dist/seed/index.js",
       "require": "./dist/seed/index.cjs"
+    },
+    "./callbacks/child-completion-template": {
+      "types": "./dist/callbacks/child-completion-template.d.ts",
+      "import": "./dist/callbacks/child-completion-template.js",
+      "require": "./dist/callbacks/child-completion-template.cjs"
     }
   },
   "scripts": {

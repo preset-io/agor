@@ -187,6 +187,12 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
         message_count: 0,
         permission_config: permissionConfig,
         model_config: modelConfig,
+        // Inherit callback config from parent (or use defaults)
+        callback_config: parent.callback_config || {
+          enabled: true, // Callbacks enabled by default
+          // template: undefined, // Use default template
+          // include_last_message: true, // Include child's final result by default
+        },
         // Don't copy sdk_session_id - spawn will get its own via forkSession:true
       },
       params
@@ -209,6 +215,34 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     );
 
     return session;
+  }
+
+  /**
+   * Custom method: Trigger queue processing
+   *
+   * Processes the next queued message for an idle session.
+   * Used by callback system to trigger immediate queue processing.
+   *
+   * NOTE: The actual implementation is provided by index.ts via setQueueProcessor
+   */
+  private queueProcessor?: (sessionId: string, params?: SessionParams) => Promise<void>;
+
+  setQueueProcessor(processor: (sessionId: string, params?: SessionParams) => Promise<void>): void {
+    this.queueProcessor = processor;
+  }
+
+  async triggerQueueProcessing(id: string, params?: SessionParams): Promise<void> {
+    console.log(
+      `🔄 [SessionsService] Triggering queue processing for session ${id.substring(0, 8)}`
+    );
+
+    if (this.queueProcessor) {
+      await this.queueProcessor(id, params);
+    } else {
+      console.warn(
+        '⚠️  [SessionsService] Queue processor not set, cannot trigger queue processing'
+      );
+    }
   }
 
   /**

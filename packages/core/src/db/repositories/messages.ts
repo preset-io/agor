@@ -199,8 +199,16 @@ export class MessagesRepository {
    * Create a queued message
    * NOTE: Queued messages always store prompt as string content
    * This ensures compatibility with prompt execution endpoint
+   *
+   * @param sessionId - Session to queue message for
+   * @param prompt - Message content (string)
+   * @param metadata - Optional metadata (e.g., is_agor_callback, source, child_session_id)
    */
-  async createQueued(sessionId: SessionID, prompt: string): Promise<Message> {
+  async createQueued(
+    sessionId: SessionID,
+    prompt: string,
+    metadata?: Record<string, unknown>
+  ): Promise<Message> {
     if (!prompt || typeof prompt !== 'string') {
       throw new Error('Prompt must be a non-empty string');
     }
@@ -216,12 +224,15 @@ export class MessagesRepository {
 
     const nextPosition = (result[0]?.max || 0) + 1;
 
+    // Determine message type based on metadata
+    const messageType = metadata?.is_agor_callback ? 'system' : 'user';
+
     // Create queued message
     const message: Message = {
       message_id: generateId() as MessageID,
       session_id: sessionId,
-      type: 'user',
-      role: 'user' as Message['role'],
+      type: messageType,
+      role: 'user' as Message['role'], // Always 'user' for right-side positioning
       index: -1, // Not in conversation yet
       timestamp: new Date().toISOString(),
       content_preview: prompt.substring(0, 200),
@@ -229,6 +240,7 @@ export class MessagesRepository {
       status: 'queued',
       queue_position: nextPosition,
       task_id: undefined,
+      metadata, // Include metadata (is_agor_callback, source, child_session_id, etc.)
     };
 
     return this.create(message);

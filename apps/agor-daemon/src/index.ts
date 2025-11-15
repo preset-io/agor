@@ -694,7 +694,8 @@ async function main() {
 
   // Register core services
   // NOTE: Pass app instance for user preferences access (needed for cross-tool spawning and ready_for_prompt updates)
-  app.use('/sessions', createSessionsService(db, app));
+  const sessionsService = createSessionsService(db, app) as unknown as SessionsServiceImpl;
+  app.use('/sessions', sessionsService);
   app.use('/tasks', createTasksService(db, app));
   app.use('/leaderboard', createLeaderboardService(db));
   const messagesService = createMessagesService(db) as unknown as MessagesServiceImpl;
@@ -1640,8 +1641,7 @@ async function main() {
     },
   });
 
-  // Configure custom methods for sessions service
-  const sessionsService = app.service('sessions') as unknown as SessionsServiceImpl;
+  // Configure custom methods for sessions service (using sessionsService from line 700)
   app.use('/sessions/:id/fork', {
     async create(data: { prompt: string; task_id?: string }, params: RouteParams) {
       ensureMinimumRole(params, 'member', 'fork sessions');
@@ -2532,6 +2532,17 @@ async function main() {
 
     console.log(`✅ Queued message triggered for session ${sessionId.substring(0, 8)}`);
   }
+
+  // Inject queue processor into sessions service
+  // Used by callback system to immediately process queued callbacks
+  sessionsService.setQueueProcessor(async (sessionId: SessionID, params?: RouteParams) => {
+    console.log(`🎯 [Sessions] Processing queue for session ${sessionId.substring(0, 8)}`);
+    try {
+      await processNextQueuedMessage(sessionId, params || {});
+    } catch (error) {
+      console.error(`❌ [Sessions] Failed to process queued message:`, error);
+    }
+  });
 
   // Permission decision endpoint
   app.use('/sessions/:id/permission-decision', {

@@ -28,6 +28,7 @@ export default defineConfig({
     'utils/path': 'src/utils/path.ts', // Path expansion utilities (tilde to home directory)
     'utils/logger': 'src/utils/logger.ts', // Console monkey-patch for log level filtering
     'seed/index': 'src/seed/index.ts', // Development database seeding
+    'callbacks/child-completion-template': 'src/callbacks/child-completion-template.ts', // Parent session callback templates
   },
   format: ['cjs', 'esm'],
   dts: true,

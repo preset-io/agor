@@ -120,6 +120,9 @@ export const sessions = sqliteTable(
             };
           };
         };
+
+        // Callback configuration for child session completion notifications
+        callback_config?: Session['callback_config'];
       }>()
       .notNull(),
   },

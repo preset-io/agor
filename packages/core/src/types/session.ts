@@ -258,6 +258,25 @@ export interface Session {
    */
   ready_for_prompt: boolean;
 
+  // ===== Callback Configuration =====
+
+  /**
+   * Callback configuration for child session completion notifications
+   *
+   * When a child session (spawned via subsession) completes its task,
+   * Agor can automatically notify the parent session with relevant context.
+   *
+   * Default behavior: Callbacks enabled with default template.
+   */
+  callback_config?: {
+    /** Enable/disable child completion callbacks (default: true) */
+    enabled?: boolean;
+    /** Custom Handlebars template for callback messages */
+    template?: string;
+    /** Whether to include last assistant message content inline (default: true) */
+    include_last_message?: boolean;
+  };
+
   // ===== Archive State =====
 
   /**
