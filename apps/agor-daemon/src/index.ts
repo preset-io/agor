@@ -993,8 +993,20 @@ async function main() {
         timestamp: new Date().toISOString(),
       });
     }
+    if (servicePath === 'tasks' && method === 'create') {
+      console.log('📤 [PUBLISH] TASK CREATED EVENT:', {
+        // biome-ignore lint/suspicious/noExplicitAny: Task ID access
+        task_id: (data as any).task_id?.substring(0, 8),
+        // biome-ignore lint/suspicious/noExplicitAny: Session ID access
+        session_id: (data as any).session_id?.substring(0, 8),
+        // biome-ignore lint/suspicious/noExplicitAny: Status access
+        status: (data as any).status,
+        channel: 'everybody',
+        timestamp: new Date().toISOString(),
+      });
+    }
     if (servicePath === 'tasks' && method === 'patch') {
-      console.log('📤 [PUBLISH] TASK EVENT:', {
+      console.log('📤 [PUBLISH] TASK PATCHED EVENT:', {
         // biome-ignore lint/suspicious/noExplicitAny: Task ID access
         task_id: (data as any).task_id?.substring(0, 8),
         // biome-ignore lint/suspicious/noExplicitAny: Session ID access

@@ -189,6 +189,12 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
     // Subscribe to task events
     const tasksService = client.service('tasks');
     const handleTaskCreated = (task: Task) => {
+      console.log('🔔 [useAgorData] TASK CREATED EVENT:', {
+        task_id: task.task_id.substring(0, 8),
+        session_id: task.session_id.substring(0, 8),
+        status: task.status,
+        timestamp: new Date().toISOString(),
+      });
       setTasks(prev => ({
         ...prev,
         [task.session_id]: [...(prev[task.session_id] || []), task],
