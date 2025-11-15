@@ -583,7 +583,8 @@ async function main() {
   // Join all new connections to 'everybody' channel initially
   app.on('connection', (connection: unknown) => {
     app.channel('everybody').join(connection as never);
-    console.log('🔌 New connection joined everybody channel');
+    const channelSize = app.channel('everybody').length;
+    console.log(`🔌 New connection joined everybody channel (total: ${channelSize})`);
   });
 
   // Note: The 'login' event is fired by FeathersJS authentication service
@@ -972,7 +973,39 @@ async function main() {
   // Publish service events to all connected clients
   // All services have requireAuth hooks, so only authenticated users can access them
   // This means any connection that successfully calls a service is authenticated
-  app.publish(() => {
+  app.publish((data, context) => {
+    // Log all published events for debugging
+    // biome-ignore lint/suspicious/noExplicitAny: Context path access
+    const servicePath = (context as any).path;
+    // biome-ignore lint/suspicious/noExplicitAny: Context method access
+    const method = (context as any).method;
+
+    // Log session and task events specifically
+    if (servicePath === 'sessions' && method === 'patch') {
+      console.log('📤 [PUBLISH] SESSION EVENT:', {
+        // biome-ignore lint/suspicious/noExplicitAny: Session ID access
+        session_id: (data as any).session_id?.substring(0, 8),
+        // biome-ignore lint/suspicious/noExplicitAny: Status access
+        status: (data as any).status,
+        // biome-ignore lint/suspicious/noExplicitAny: Ready for prompt access
+        ready_for_prompt: (data as any).ready_for_prompt,
+        channel: 'everybody',
+        timestamp: new Date().toISOString(),
+      });
+    }
+    if (servicePath === 'tasks' && method === 'patch') {
+      console.log('📤 [PUBLISH] TASK EVENT:', {
+        // biome-ignore lint/suspicious/noExplicitAny: Task ID access
+        task_id: (data as any).task_id?.substring(0, 8),
+        // biome-ignore lint/suspicious/noExplicitAny: Session ID access
+        session_id: (data as any).session_id?.substring(0, 8),
+        // biome-ignore lint/suspicious/noExplicitAny: Status access
+        status: (data as any).status,
+        channel: 'everybody',
+        timestamp: new Date().toISOString(),
+      });
+    }
+
     // Broadcast to all connected clients (they're all authenticated due to requireAuth)
     return app.channel('everybody');
   });
