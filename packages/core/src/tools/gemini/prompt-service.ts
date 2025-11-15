@@ -404,10 +404,14 @@ export class GeminiPromptService {
             // In SDK 0.15.1, the response structure changed
             // ToolCallResponseInfo has { callId, output } instead of { status, result }
             // Create function response part from the tool call output
+            const responseOutput =
+              typeof response === 'object' && response && 'output' in response
+                ? response.output
+                : response;
             functionResponseParts.push({
               functionResponse: {
                 name: toolCall.name,
-                response: (response as any).output ?? response,
+                response: responseOutput,
               },
             } as Part);
           } catch (error) {
