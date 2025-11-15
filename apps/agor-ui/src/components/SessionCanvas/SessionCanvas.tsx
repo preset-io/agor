@@ -37,6 +37,7 @@ import type {
   Board,
   BoardComment,
   BoardCommentCreate,
+  BoardEntityObject,
   Repo,
   Session,
   Task,
@@ -73,7 +74,7 @@ interface SessionCanvasProps {
   users: User[];
   repos: Repo[];
   worktrees: import('@agor/core/types').Worktree[];
-  boardObjects: import('@agor/core/types').BoardEntityObject[];
+  boardObjects: BoardEntityObject[];
   comments: import('@agor/core/types').BoardComment[];
   currentUserId?: string;
   selectedSessionId?: string | null;
@@ -258,6 +259,56 @@ const SessionCanvas = ({
 }: SessionCanvasProps) => {
   const { token } = theme.useToken();
 
+  // Lookup maps to avoid repeated O(n) scans during render cycles
+  const sessionsByWorktree = useMemo(() => {
+    const map = new Map<string, Session[]>();
+    for (const session of sessions) {
+      if (!session.worktree_id) continue;
+      const list = map.get(session.worktree_id);
+      if (list) {
+        list.push(session);
+      } else {
+        map.set(session.worktree_id, [session]);
+      }
+    }
+    return map;
+  }, [sessions]);
+
+  const boardObjectByWorktree = useMemo(() => {
+    if (!board) return new Map<string, BoardEntityObject>();
+    const map = new Map<string, BoardEntityObject>();
+    for (const boardObject of boardObjects) {
+      if (boardObject.board_id === board.board_id) {
+        map.set(boardObject.worktree_id, boardObject);
+      }
+    }
+    return map;
+  }, [board, boardObjects]);
+
+  const repoById = useMemo(() => {
+    const map = new Map<string, Repo>();
+    for (const repo of repos) {
+      map.set(repo.repo_id, repo);
+    }
+    return map;
+  }, [repos]);
+
+  const userById = useMemo(() => {
+    const map = new Map<string, User>();
+    for (const user of users) {
+      map.set(user.user_id, user);
+    }
+    return map;
+  }, [users]);
+
+  const worktreeById = useMemo(() => {
+    const map = new Map<string, Worktree>();
+    for (const worktree of worktrees) {
+      map.set(worktree.worktree_id, worktree);
+    }
+    return map;
+  }, [worktrees]);
+
   // Tool state for canvas annotations
   const [activeTool, setActiveTool] = useState<
     'select' | 'zone' | 'comment' | 'eraser' | 'markdown'
@@ -391,9 +442,7 @@ const SessionCanvas = ({
       if (!board || !client) return;
 
       // Find the board_object for this worktree
-      const boardObject = boardObjects.find(
-        (bo) => bo.worktree_id === worktreeId && bo.board_id === board.board_id
-      );
+      const boardObject = boardObjectByWorktree.get(worktreeId);
 
       if (!boardObject || !boardObject.zone_id) {
         console.warn('Worktree not pinned or board object not found');
@@ -427,7 +476,7 @@ const SessionCanvas = ({
 
       console.log(`✓ Unpinned worktree ${worktreeId.substring(0, 8)}`);
     },
-    [board, client, boardObjects]
+    [board, client, boardObjectByWorktree]
   );
 
   // Convert worktrees to React Flow nodes (worktree-centric approach)
@@ -439,13 +488,9 @@ const SessionCanvas = ({
     // Create nodes for worktrees on this board
     const nodes: Node[] = [];
 
-    for (let index = 0; index < worktrees.length; index++) {
-      const worktree = worktrees[index];
-
+    worktrees.forEach((worktree, index) => {
       // Find board object for this worktree (if positioned on this board)
-      const boardObject = boardObjects.find(
-        (bo) => bo.worktree_id === worktree.worktree_id && bo.board_id === board?.board_id
-      );
+      const boardObject = boardObjectByWorktree.get(worktree.worktree_id);
 
       // Use stored position from boardObject if available, otherwise auto-layout
       const position = boardObject
@@ -465,13 +510,13 @@ const SessionCanvas = ({
           : undefined;
 
       // Get sessions for this worktree
-      const worktreeSessions = sessions.filter((s) => s.worktree_id === worktree.worktree_id);
+      const worktreeSessions = sessionsByWorktree.get(worktree.worktree_id) || [];
 
       // Get repo for this worktree
-      const repo = repos.find((r) => r.repo_id === worktree.repo_id);
+      const repo = repoById.get(worktree.repo_id);
       if (!repo) {
         console.error(`Repo not found for worktree ${worktree.worktree_id}`);
-        continue;
+        return;
       }
 
       nodes.push({
@@ -512,15 +557,15 @@ const SessionCanvas = ({
           zoneColor,
         },
       });
-    }
+    });
 
     return nodes;
   }, [
     board,
-    boardObjects,
-    repos,
     worktrees,
-    sessions,
+    boardObjectByWorktree,
+    repoById,
+    sessionsByWorktree,
     tasks,
     users,
     currentUserId,
@@ -615,7 +660,7 @@ const SessionCanvas = ({
 
     for (const comment of spatialComments) {
       // Find user who created the comment
-      const user = users.find((u) => u.user_id === comment.created_by);
+      const user = comment.created_by ? userById.get(comment.created_by) : undefined;
 
       // Determine position, parentId, parentLabel, and parentColor based on comment attachment
       let position: { x: number; y: number };
@@ -644,7 +689,7 @@ const SessionCanvas = ({
           }
         } else if (rel.parent_type === 'worktree') {
           // Parent is a worktree - validate worktree exists
-          const worktree = worktrees.find((w) => w.worktree_id === rel.parent_id);
+          const worktree = worktreeById.get(rel.parent_id);
           if (worktree) {
             const info = getWorktreeParentInfo(rel.parent_id, worktrees);
             parentId = info.parentId;
@@ -698,7 +743,16 @@ const SessionCanvas = ({
     }
 
     return nodes;
-  }, [comments, users, board, worktrees, onOpenCommentsPanel, onCommentHover, onCommentSelect]);
+  }, [
+    comments,
+    board,
+    worktrees,
+    userById,
+    worktreeById,
+    onOpenCommentsPanel,
+    onCommentHover,
+    onCommentSelect,
+  ]);
 
   // Sync SESSION nodes only (don't trigger on zone changes)
   useEffect(() => {
