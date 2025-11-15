@@ -28,11 +28,7 @@ import {
   type TaskID,
   TaskStatus,
 } from '../../types';
-import type {
-  ClaudeCodeSdkResponse,
-  NormalizedSdkResponse,
-  RawSdkResponse,
-} from '../../types/sdk-response';
+import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response';
 // Removed import of calculateModelContextWindowUsage - inlined instead
 import type { TokenUsage } from '../../utils/pricing';
 import type { ImportOptions, ITool, SessionData, ToolCapabilities } from '../base';

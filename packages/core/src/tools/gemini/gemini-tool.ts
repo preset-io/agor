@@ -26,11 +26,7 @@ import {
   type SessionID,
   type TaskID,
 } from '../../types';
-import type {
-  GeminiSdkResponse,
-  NormalizedSdkResponse,
-  RawSdkResponse,
-} from '../../types/sdk-response';
+import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response';
 import type { TokenUsage } from '../../utils/pricing';
 import type { ITool, StreamingCallbacks, ToolCapabilities } from '../base';
 import type { MessagesService, TasksService } from '../claude/claude-tool';
@@ -281,7 +277,7 @@ export class GeminiTool implements ITool {
     tokenUsage?: TokenUsage
   ): Promise<Message> {
     // Extract text content for preview
-    const textBlocks = content.filter((b) => b.type === 'text').map((b) => b.text || '');
+    const textBlocks = content.filter(b => b.type === 'text').map(b => b.text || '');
     const fullTextContent = textBlocks.join('');
     const contentPreview = fullTextContent.substring(0, 200);
 

@@ -15,11 +15,7 @@
 import { generateId } from '../../lib/ids';
 import type { Message, SessionID, TaskID } from '../../types';
 import { MessageRole } from '../../types';
-import type {
-  NormalizedSdkResponse,
-  OpenCodeSdkResponse,
-  RawSdkResponse,
-} from '../../types/sdk-response';
+import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response';
 import type {
   CreateSessionConfig,
   SessionHandle,
@@ -328,7 +324,7 @@ export class OpenCodeTool implements ITool {
     try {
       const sessions = await client.listSessions();
 
-      return sessions.map((session) => ({
+      return sessions.map(session => ({
         sessionId: session.id,
         toolType: 'opencode' as const,
         status: 'active' as const,

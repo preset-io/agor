@@ -9,8 +9,8 @@
  */
 
 import type { SDKResultMessage } from '@anthropic-ai/claude-agent-sdk/sdk';
-import type { TurnCompletedEvent } from '@openai/codex-sdk';
 import type { ServerGeminiFinishedEvent } from '@google/gemini-cli-core';
+import type { TurnCompletedEvent } from '@openai/codex-sdk';
 import type { MessageID } from './id';
 
 // ============================================================================
