@@ -351,20 +351,6 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
         timestamp: new Date().toISOString(),
       });
     }
-
-    // Debug: Log before emitting patched event
-    // biome-ignore lint/suspicious/noExplicitAny: Status check for debugging
-    if (this.resourceType === 'Session' && (result as any).status === 'running') {
-      // biome-ignore lint/suspicious/noExplicitAny: Session ID access for debugging
-      console.log(
-        `🔍 [DrizzleService] About to emit 'patched' event for session ${(result as any).session_id?.substring(0, 8)}, params:`,
-        {
-          hasParams: !!params,
-          paramsKeys: params ? Object.keys(params) : [],
-        }
-      );
-    }
-
     this.emit?.('patched', result, params);
     return result;
   }

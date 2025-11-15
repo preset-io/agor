@@ -980,13 +980,6 @@ async function main() {
     // biome-ignore lint/suspicious/noExplicitAny: Context method access
     const method = (context as any).method;
 
-    // Debug: Log ALL publish calls to see if callback is invoked
-    if (servicePath === 'sessions' && method === 'patch') {
-      // biome-ignore lint/suspicious/noExplicitAny: Session ID access for debugging
-      const sessionId = (data as any).session_id?.substring(0, 8);
-      console.log(`🔍 [PUBLISH CALLBACK] Invoked for session ${sessionId}, method=${method}`);
-    }
-
     // Log session and task events specifically
     if (servicePath === 'sessions' && method === 'patch') {
       console.log('📤 [PUBLISH] SESSION EVENT:', {
@@ -1734,18 +1727,19 @@ async function main() {
 
   /**
    * Helper: Safely patch an entity, returning false if it was deleted mid-execution
+   * IMPORTANT: Uses app.service() to trigger WebSocket event broadcasting
    */
   async function safePatch<T>(
-    service: {
-      get: (id: string) => Promise<T>;
-      patch: (id: string, data: Partial<T>) => Promise<T>;
-    },
+    serviceName: string,
     id: string,
     data: Partial<T>,
-    entityType: string
+    entityType: string,
+    params?: RouteParams
   ): Promise<boolean> {
     try {
-      await service.patch(id, data);
+      // IMPORTANT: Use app.service() instead of service instance to go through
+      // FeathersJS service layer and trigger app.publish() for WebSocket events
+      await app.service(serviceName).patch(id, data, params || {});
       return true;
     } catch (error) {
       // Handle entity deletion mid-execution (NotFoundError from DrizzleService)
@@ -2061,7 +2055,7 @@ async function main() {
 
                 // Still update message range for completeness
                 await safePatch(
-                  tasksService,
+                  'tasks',
                   task.task_id,
                   {
                     message_range: {
@@ -2071,7 +2065,8 @@ async function main() {
                       end_timestamp: endTimestamp,
                     },
                   },
-                  'Task'
+                  'Task',
+                  params
                 );
               } else {
                 // Safe to mark as completed
@@ -2116,7 +2111,7 @@ async function main() {
                 }
 
                 const updated = await safePatch(
-                  tasksService,
+                  'tasks',
                   task.task_id,
                   {
                     status: TaskStatus.COMPLETED,
@@ -2199,7 +2194,8 @@ async function main() {
                       sha_at_end: gitStateAtEnd,
                     },
                   },
-                  'Task'
+                  'Task',
+                  params
                 );
 
                 if (updated) {
@@ -2210,7 +2206,7 @@ async function main() {
               // Token accounting is handled via raw_sdk_response and normalizers
 
               await safePatch(
-                sessionsService,
+                'sessions',
                 id,
                 {
                   message_count: session.message_count + totalMessages,
@@ -2218,7 +2214,8 @@ async function main() {
                   ready_for_prompt: true, // Set atomically with status to avoid race condition
                   // Token accounting handled via normalizeRawSdkResponse() - no session-level storage needed
                 },
-                'Session'
+                'Session',
+                params
               );
 
               // Check for queued messages and auto-process next one
@@ -2253,7 +2250,7 @@ async function main() {
             } catch (error) {
               console.error(`❌ Error completing task ${task.task_id}:`, error);
               // Try to mark task as failed (may also fail if deleted)
-              await safePatch(tasksService, task.task_id, { status: TaskStatus.FAILED }, 'Task');
+              await safePatch('tasks', task.task_id, { status: TaskStatus.FAILED }, 'Task', params);
             }
           })
           .catch(async error => {
@@ -2291,7 +2288,7 @@ async function main() {
               );
               console.warn(`   Clearing session ID - next prompt will start fresh`);
 
-              await safePatch(sessionsService, id, { sdk_session_id: undefined }, 'Session');
+              await safePatch('sessions', id, { sdk_session_id: undefined }, 'Session', params);
             } else if (isExitCode1 && hasResumeSession && !isLikelyConfigIssue) {
               // Generic exit code 1 with resume session (not explicitly stale)
               console.warn(
@@ -2301,7 +2298,7 @@ async function main() {
                 `   Session should have been validated before SDK call - clearing as safety measure`
               );
 
-              await safePatch(sessionsService, id, { sdk_session_id: undefined }, 'Session');
+              await safePatch('sessions', id, { sdk_session_id: undefined }, 'Session', params);
             } else if (isExitCode1 && hasResumeSession && isLikelyConfigIssue) {
               console.error(`❌ Exit code 1 due to configuration issue:`);
               console.error(`   ${errorMessage.substring(0, 200)}`);
@@ -2314,23 +2311,25 @@ async function main() {
 
             // Mark task as failed with error message and set session back to idle
             await safePatch(
-              tasksService,
+              'tasks',
               task.task_id,
               {
                 status: TaskStatus.FAILED,
                 report: errorMessage, // Save error message so UI can display it
               },
-              'Task'
+              'Task',
+              params
             );
 
             await safePatch(
-              sessionsService,
+              'sessions',
               id,
               {
                 status: SessionStatus.IDLE,
                 ready_for_prompt: true, // Set atomically with status to avoid race condition
               },
-              'Session'
+              'Session',
+              params
             );
           });
       });
@@ -2434,10 +2433,16 @@ async function main() {
       // PHASE 3: Update final status based on stop result
       if (result.success) {
         // Update session status back to idle
-        await sessionsService.patch(id, {
-          status: SessionStatus.IDLE,
-          ready_for_prompt: true, // Set atomically with status
-        });
+        // IMPORTANT: Use app.service() instead of sessionsService to go through
+        // FeathersJS service layer and trigger app.publish() for WebSocket events
+        await app.service('sessions').patch(
+          id,
+          {
+            status: SessionStatus.IDLE,
+            ready_for_prompt: true, // Set atomically with status
+          },
+          params
+        );
 
         // Update task status to 'stopped'
         if (runningTasksArray.length > 0) {
@@ -3152,10 +3157,17 @@ async function main() {
   if (orphanedSessions.length > 0) {
     console.log(`   Found ${orphanedSessions.length} orphaned session(s) with RUNNING status`);
     for (const session of orphanedSessions) {
-      await sessionsService.patch(session.session_id, {
-        status: SessionStatus.IDLE,
-        ready_for_prompt: true, // Set atomically with status
-      });
+      // IMPORTANT: Use app.service() instead of sessionsService to go through
+      // FeathersJS service layer and trigger app.publish() for WebSocket events
+      // For internal/system operations, pass empty params object
+      await app.service('sessions').patch(
+        session.session_id,
+        {
+          status: SessionStatus.IDLE,
+          ready_for_prompt: true, // Set atomically with status
+        },
+        {}
+      );
       console.log(
         `   ✓ Marked session ${session.session_id.substring(0, 8)} as idle (was: ${session.status})`
       );
@@ -3175,10 +3187,17 @@ async function main() {
       const session = await sessionsService.get(sessionId as Id);
       // If session is still marked as RUNNING after orphaned task cleanup, set to IDLE
       if (session.status === SessionStatus.RUNNING) {
-        await sessionsService.patch(sessionId as Id, {
-          status: SessionStatus.IDLE,
-          ready_for_prompt: true, // Set atomically with status
-        });
+        // IMPORTANT: Use app.service() instead of sessionsService to go through
+        // FeathersJS service layer and trigger app.publish() for WebSocket events
+        // For internal/system operations, pass empty params object
+        await app.service('sessions').patch(
+          sessionId as Id,
+          {
+            status: SessionStatus.IDLE,
+            ready_for_prompt: true, // Set atomically with status
+          },
+          {}
+        );
         console.log(
           `   ✓ Marked session ${sessionId.substring(0, 8)} as idle (had orphaned tasks)`
         );

@@ -164,24 +164,9 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
     // Subscribe to session events
     const sessionsService = client.service('sessions');
     const handleSessionCreated = (session: Session) => {
-      console.log('🔔 [useAgorData] SESSION CREATED EVENT:', {
-        session_id: session.session_id.substring(0, 8),
-        status: session.status,
-        ready_for_prompt: session.ready_for_prompt,
-        parent_id: session.genealogy?.parent_session_id?.substring(0, 8),
-        timestamp: new Date().toISOString(),
-      });
       setSessions(prev => [...prev, session]);
     };
     const handleSessionPatched = (session: Session) => {
-      console.log('🔔 [useAgorData] SESSION PATCHED EVENT:', {
-        session_id: session.session_id.substring(0, 8),
-        status: session.status,
-        ready_for_prompt: session.ready_for_prompt,
-        message_count: session.message_count,
-        parent_id: session.genealogy?.parent_session_id?.substring(0, 8),
-        timestamp: new Date().toISOString(),
-      });
       setSessions(prev => prev.map(s => (s.session_id === session.session_id ? session : s)));
     };
     const handleSessionRemoved = (session: Session) => {
@@ -196,24 +181,12 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
     // Subscribe to task events
     const tasksService = client.service('tasks');
     const handleTaskCreated = (task: Task) => {
-      console.log('🔔 [useAgorData] TASK CREATED EVENT:', {
-        task_id: task.task_id.substring(0, 8),
-        session_id: task.session_id.substring(0, 8),
-        status: task.status,
-        timestamp: new Date().toISOString(),
-      });
       setTasks(prev => ({
         ...prev,
         [task.session_id]: [...(prev[task.session_id] || []), task],
       }));
     };
     const handleTaskPatched = (task: Task) => {
-      console.log('🔔 [useAgorData] TASK PATCHED EVENT:', {
-        task_id: task.task_id.substring(0, 8),
-        session_id: task.session_id.substring(0, 8),
-        status: task.status,
-        timestamp: new Date().toISOString(),
-      });
       setTasks(prev => ({
         ...prev,
         [task.session_id]: (prev[task.session_id] || []).map(t =>
