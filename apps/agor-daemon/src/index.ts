@@ -980,6 +980,13 @@ async function main() {
     // biome-ignore lint/suspicious/noExplicitAny: Context method access
     const method = (context as any).method;
 
+    // Debug: Log ALL publish calls to see if callback is invoked
+    if (servicePath === 'sessions' && method === 'patch') {
+      // biome-ignore lint/suspicious/noExplicitAny: Session ID access for debugging
+      const sessionId = (data as any).session_id?.substring(0, 8);
+      console.log(`🔍 [PUBLISH CALLBACK] Invoked for session ${sessionId}, method=${method}`);
+    }
+
     // Log session and task events specifically
     if (servicePath === 'sessions' && method === 'patch') {
       console.log('📤 [PUBLISH] SESSION EVENT:', {
