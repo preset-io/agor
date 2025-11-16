@@ -46,7 +46,7 @@ export const MobilePromptInput: React.FC<MobilePromptInputProps> = ({
     >
       <Input.Search
         value={prompt}
-        onChange={e => setPrompt(e.target.value)}
+        onChange={(e) => setPrompt(e.target.value)}
         placeholder={placeholder}
         disabled={disabled}
         enterButton={<SendOutlined />}

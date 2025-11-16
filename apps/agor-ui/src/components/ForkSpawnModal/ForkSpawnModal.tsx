@@ -105,7 +105,7 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
               prompt: initialPrompt,
               agent: agentTool,
               permissionMode: userDefaults?.permissionMode || getDefaultPermissionMode(agentTool),
-              modelConfig: userDefaults?.modelConfig,
+              modelConfig: userDefaults?.modelConfig as ModelConfig | undefined,
               codexSandboxMode: userDefaults?.codexSandboxMode,
               codexApprovalPolicy: userDefaults?.codexApprovalPolicy,
               codexNetworkAccess: userDefaults?.codexNetworkAccess,
@@ -117,7 +117,7 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
 
       form.setFieldsValue(initialValues);
       setSelectedAgent(agentTool);
-      setFormValues(initialValues);
+      setFormValues(initialValues as Partial<SpawnConfig>);
     }
   }, [open, session, configPreset, form, initialPrompt, currentUser]);
 
@@ -135,7 +135,7 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
         formValues.codexSandboxMode ||
         formValues.codexApprovalPolicy ||
         formValues.codexNetworkAccess ||
-        formValues.mcpServerIds?.length > 0 ||
+        (formValues.mcpServerIds?.length ?? 0) > 0 ||
         formValues.enableCallback ||
         formValues.includeLastMessage ||
         formValues.includeOriginalPrompt ||
@@ -272,7 +272,7 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
             <Form.Item label="Configuration Preset">
               <Radio.Group
                 value={configPreset}
-                onChange={e => setConfigPreset(e.target.value)}
+                onChange={(e) => setConfigPreset(e.target.value)}
                 buttonStyle="solid"
               >
                 <Radio.Button value="parent">Same as Parent</Radio.Button>
@@ -285,11 +285,11 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
               <AgentSelectionGrid
                 agents={AVAILABLE_AGENTS}
                 selectedAgentId={selectedAgent}
-                onSelect={agentId => {
+                onSelect={(agentId) => {
                   setSelectedAgent(agentId as AgenticToolName);
                   form.setFieldValue('agent', agentId);
                   // Manually update formValues to trigger template re-render
-                  setFormValues(prev => ({ ...prev, agent: agentId }));
+                  setFormValues((prev) => ({ ...prev, agent: agentId as AgenticToolName }));
                 }}
                 columns={2}
               />

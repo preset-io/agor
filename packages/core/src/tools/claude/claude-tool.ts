@@ -44,7 +44,6 @@ import {
   extractTokenUsage,
 } from './message-builder';
 import type { ProcessedEvent } from './message-processor';
-import { ClaudeCodeNormalizer } from './normalizer';
 import { ClaudePromptService } from './prompt-service';
 
 /**

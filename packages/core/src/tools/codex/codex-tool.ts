@@ -28,7 +28,6 @@ import type { TokenUsage } from '../../types/token-usage';
 import type { ITool, StreamingCallbacks, ToolCapabilities } from '../base';
 import type { MessagesService, TasksService } from '../claude/claude-tool';
 import { DEFAULT_CODEX_MODEL } from './models';
-import { CodexNormalizer } from './normalizer';
 import { CodexPromptService } from './prompt-service';
 
 interface CodexExecutionResult {

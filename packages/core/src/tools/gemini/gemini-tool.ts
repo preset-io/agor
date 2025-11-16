@@ -32,7 +32,6 @@ import type { TokenUsage } from '../../types/token-usage';
 import type { ITool, StreamingCallbacks, ToolCapabilities } from '../base';
 import type { MessagesService, TasksService } from '../claude/claude-tool';
 import { DEFAULT_GEMINI_MODEL } from './models';
-import { GeminiNormalizer } from './normalizer';
 import { GeminiPromptService } from './prompt-service';
 
 interface GeminiExecutionResult {

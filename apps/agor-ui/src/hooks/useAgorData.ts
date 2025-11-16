@@ -82,11 +82,17 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
         mcpServersResult,
         sessionMcpResult,
       ] = await Promise.all([
-        client.service('sessions').find({ query: { $limit: 1000, $sort: { updated_at: -1 } } }), // Fetch up to 1000 sessions, sorted by most recent
-        client.service('tasks').find({ query: { $limit: 500 } }), // Fetch up to 500 tasks
+        client
+          .service('sessions')
+          .find({ query: { $limit: 1000, $sort: { updated_at: -1 } } }), // Fetch up to 1000 sessions, sorted by most recent
+        client
+          .service('tasks')
+          .find({ query: { $limit: 500 } }), // Fetch up to 500 tasks
         client.service('boards').find(),
         client.service('board-objects').find(),
-        client.service('board-comments').find({ query: { $limit: 500 } }), // Fetch up to 500 comments
+        client
+          .service('board-comments')
+          .find({ query: { $limit: 500 } }), // Fetch up to 500 comments
         client.service('repos').find(),
         client.service('worktrees').find(),
         client.service('users').find(),
@@ -164,13 +170,13 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
     // Subscribe to session events
     const sessionsService = client.service('sessions');
     const handleSessionCreated = (session: Session) => {
-      setSessions(prev => [...prev, session]);
+      setSessions((prev) => [...prev, session]);
     };
     const handleSessionPatched = (session: Session) => {
-      setSessions(prev => prev.map(s => (s.session_id === session.session_id ? session : s)));
+      setSessions((prev) => prev.map((s) => (s.session_id === session.session_id ? session : s)));
     };
     const handleSessionRemoved = (session: Session) => {
-      setSessions(prev => prev.filter(s => s.session_id !== session.session_id));
+      setSessions((prev) => prev.filter((s) => s.session_id !== session.session_id));
     };
 
     sessionsService.on('created', handleSessionCreated);
@@ -181,23 +187,23 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
     // Subscribe to task events
     const tasksService = client.service('tasks');
     const handleTaskCreated = (task: Task) => {
-      setTasks(prev => ({
+      setTasks((prev) => ({
         ...prev,
         [task.session_id]: [...(prev[task.session_id] || []), task],
       }));
     };
     const handleTaskPatched = (task: Task) => {
-      setTasks(prev => ({
+      setTasks((prev) => ({
         ...prev,
-        [task.session_id]: (prev[task.session_id] || []).map(t =>
+        [task.session_id]: (prev[task.session_id] || []).map((t) =>
           t.task_id === task.task_id ? task : t
         ),
       }));
     };
     const handleTaskRemoved = (task: Task) => {
-      setTasks(prev => ({
+      setTasks((prev) => ({
         ...prev,
-        [task.session_id]: (prev[task.session_id] || []).filter(t => t.task_id !== task.task_id),
+        [task.session_id]: (prev[task.session_id] || []).filter((t) => t.task_id !== task.task_id),
       }));
     };
 
@@ -209,13 +215,13 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
     // Subscribe to board events
     const boardsService = client.service('boards');
     const handleBoardCreated = (board: Board) => {
-      setBoards(prev => [...prev, board]);
+      setBoards((prev) => [...prev, board]);
     };
     const handleBoardPatched = (board: Board) => {
-      setBoards(prev => prev.map(b => (b.board_id === board.board_id ? board : b)));
+      setBoards((prev) => prev.map((b) => (b.board_id === board.board_id ? board : b)));
     };
     const handleBoardRemoved = (board: Board) => {
-      setBoards(prev => prev.filter(b => b.board_id !== board.board_id));
+      setBoards((prev) => prev.filter((b) => b.board_id !== board.board_id));
     };
 
     boardsService.on('created', handleBoardCreated);
@@ -226,15 +232,15 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
     // Subscribe to board object events
     const boardObjectsService = client.service('board-objects');
     const handleBoardObjectCreated = (boardObject: BoardEntityObject) => {
-      setBoardObjects(prev => [...prev, boardObject]);
+      setBoardObjects((prev) => [...prev, boardObject]);
     };
     const handleBoardObjectPatched = (boardObject: BoardEntityObject) => {
-      setBoardObjects(prev =>
-        prev.map(bo => (bo.object_id === boardObject.object_id ? boardObject : bo))
+      setBoardObjects((prev) =>
+        prev.map((bo) => (bo.object_id === boardObject.object_id ? boardObject : bo))
       );
     };
     const handleBoardObjectRemoved = (boardObject: BoardEntityObject) => {
-      setBoardObjects(prev => prev.filter(bo => bo.object_id !== boardObject.object_id));
+      setBoardObjects((prev) => prev.filter((bo) => bo.object_id !== boardObject.object_id));
     };
 
     boardObjectsService.on('created', handleBoardObjectCreated);
@@ -245,13 +251,13 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
     // Subscribe to repo events
     const reposService = client.service('repos');
     const handleRepoCreated = (repo: Repo) => {
-      setRepos(prev => [...prev, repo]);
+      setRepos((prev) => [...prev, repo]);
     };
     const handleRepoPatched = (repo: Repo) => {
-      setRepos(prev => prev.map(r => (r.repo_id === repo.repo_id ? repo : r)));
+      setRepos((prev) => prev.map((r) => (r.repo_id === repo.repo_id ? repo : r)));
     };
     const handleRepoRemoved = (repo: Repo) => {
-      setRepos(prev => prev.filter(r => r.repo_id !== repo.repo_id));
+      setRepos((prev) => prev.filter((r) => r.repo_id !== repo.repo_id));
     };
 
     reposService.on('created', handleRepoCreated);
@@ -262,13 +268,15 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
     // Subscribe to worktree events
     const worktreesService = client.service('worktrees');
     const handleWorktreeCreated = (worktree: Worktree) => {
-      setWorktrees(prev => [...prev, worktree]);
+      setWorktrees((prev) => [...prev, worktree]);
     };
     const handleWorktreePatched = (worktree: Worktree) => {
-      setWorktrees(prev => prev.map(w => (w.worktree_id === worktree.worktree_id ? worktree : w)));
+      setWorktrees((prev) =>
+        prev.map((w) => (w.worktree_id === worktree.worktree_id ? worktree : w))
+      );
     };
     const handleWorktreeRemoved = (worktree: Worktree) => {
-      setWorktrees(prev => prev.filter(w => w.worktree_id !== worktree.worktree_id));
+      setWorktrees((prev) => prev.filter((w) => w.worktree_id !== worktree.worktree_id));
     };
 
     worktreesService.on('created', handleWorktreeCreated);
@@ -279,13 +287,13 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
     // Subscribe to user events
     const usersService = client.service('users');
     const handleUserCreated = (user: User) => {
-      setUsers(prev => [...prev, user]);
+      setUsers((prev) => [...prev, user]);
     };
     const handleUserPatched = (user: User) => {
-      setUsers(prev => prev.map(u => (u.user_id === user.user_id ? user : u)));
+      setUsers((prev) => prev.map((u) => (u.user_id === user.user_id ? user : u)));
     };
     const handleUserRemoved = (user: User) => {
-      setUsers(prev => prev.filter(u => u.user_id !== user.user_id));
+      setUsers((prev) => prev.filter((u) => u.user_id !== user.user_id));
     };
 
     usersService.on('created', handleUserCreated);
@@ -296,13 +304,15 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
     // Subscribe to MCP server events
     const mcpServersService = client.service('mcp-servers');
     const handleMCPServerCreated = (server: MCPServer) => {
-      setMcpServers(prev => [...prev, server]);
+      setMcpServers((prev) => [...prev, server]);
     };
     const handleMCPServerPatched = (server: MCPServer) => {
-      setMcpServers(prev => prev.map(s => (s.mcp_server_id === server.mcp_server_id ? server : s)));
+      setMcpServers((prev) =>
+        prev.map((s) => (s.mcp_server_id === server.mcp_server_id ? server : s))
+      );
     };
     const handleMCPServerRemoved = (server: MCPServer) => {
-      setMcpServers(prev => prev.filter(s => s.mcp_server_id !== server.mcp_server_id));
+      setMcpServers((prev) => prev.filter((s) => s.mcp_server_id !== server.mcp_server_id));
     };
 
     mcpServersService.on('created', handleMCPServerCreated);
@@ -316,7 +326,7 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       session_id: string;
       mcp_server_id: string;
     }) => {
-      setSessionMcpServerIds(prev => ({
+      setSessionMcpServerIds((prev) => ({
         ...prev,
         [relationship.session_id]: [
           ...(prev[relationship.session_id] || []),
@@ -328,10 +338,10 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       session_id: string;
       mcp_server_id: string;
     }) => {
-      setSessionMcpServerIds(prev => ({
+      setSessionMcpServerIds((prev) => ({
         ...prev,
         [relationship.session_id]: (prev[relationship.session_id] || []).filter(
-          id => id !== relationship.mcp_server_id
+          (id) => id !== relationship.mcp_server_id
         ),
       }));
     };
@@ -342,13 +352,13 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
     // Subscribe to board comment events
     const commentsService = client.service('board-comments');
     const handleCommentCreated = (comment: BoardComment) => {
-      setComments(prev => [...prev, comment]);
+      setComments((prev) => [...prev, comment]);
     };
     const handleCommentPatched = (comment: BoardComment) => {
-      setComments(prev => prev.map(c => (c.comment_id === comment.comment_id ? comment : c)));
+      setComments((prev) => prev.map((c) => (c.comment_id === comment.comment_id ? comment : c)));
     };
     const handleCommentRemoved = (comment: BoardComment) => {
-      setComments(prev => prev.filter(c => c.comment_id !== comment.comment_id));
+      setComments((prev) => prev.filter((c) => c.comment_id !== comment.comment_id));
     };
 
     commentsService.on('created', handleCommentCreated);
