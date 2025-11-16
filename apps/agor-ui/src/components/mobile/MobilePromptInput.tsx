@@ -1,8 +1,6 @@
 import { SendOutlined } from '@ant-design/icons';
 import { Input, theme } from 'antd';
 
-const { TextArea } = Input;
-
 interface MobilePromptInputProps {
   onSend: (prompt: string) => void;
   disabled?: boolean;
@@ -48,7 +46,7 @@ export const MobilePromptInput: React.FC<MobilePromptInputProps> = ({
     >
       <Input.Search
         value={prompt}
-        onChange={(e) => setPrompt(e.target.value)}
+        onChange={e => setPrompt(e.target.value)}
         placeholder={placeholder}
         disabled={disabled}
         enterButton={<SendOutlined />}

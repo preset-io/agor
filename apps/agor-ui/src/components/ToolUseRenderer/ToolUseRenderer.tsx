@@ -35,8 +35,6 @@ interface ToolResultBlock {
   is_error?: boolean;
 }
 
-type ContentBlock = { type: 'text'; text: string } | ToolUseBlock | ToolResultBlock;
-
 interface ToolUseRendererProps {
   /**
    * Tool use block with invocation details
@@ -87,7 +85,7 @@ export const ToolUseRenderer: React.FC<ToolUseRendererProps> = ({ toolUse, toolR
     if (Array.isArray(toolResult.content)) {
       return toolResult.content
         .filter((block): block is { type: 'text'; text: string } => block.type === 'text')
-        .map((block) => block.text)
+        .map(block => block.text)
         .join('\n\n');
     }
 

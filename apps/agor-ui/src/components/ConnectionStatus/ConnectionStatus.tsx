@@ -1,5 +1,5 @@
 import { CheckCircleOutlined, LoadingOutlined, WarningOutlined } from '@ant-design/icons';
-import { Space, Tag, Tooltip, theme } from 'antd';
+import { Space, Tag, Tooltip } from 'antd';
 import { useEffect, useState } from 'react';
 
 export interface ConnectionStatusProps {
@@ -23,7 +23,6 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
   connecting,
   onRetry,
 }) => {
-  const { token } = theme.useToken();
   const [showConnected, setShowConnected] = useState(false);
   const [justReconnected, setJustReconnected] = useState(false);
 

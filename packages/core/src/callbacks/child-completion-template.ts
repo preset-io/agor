@@ -47,7 +47,6 @@ export interface ChildCompletionContext {
  * Note: Check if 'eq' helper already exists in packages/core/src/templates/handlebars-helpers.ts
  */
 // biome-ignore lint/suspicious/noExplicitAny: Handlebars helper accepts any comparable value
-// biome-ignore lint/suspicious/noExplicitAny: Handlebars helper accepts any comparable value
 Handlebars.registerHelper('eq', (a: any, b: any) => a === b);
 
 /**

@@ -22,9 +22,16 @@
         "noExplicitAny": "error"
       },
       "correctness": {
-        "noUnusedImports": "warn",
+        "noUnusedImports": "error",
+        "noUnusedVariables": {
+          "level": "error",
+          "options": {
+            "ignoreRestSiblings": true
+          }
+        },
+        "noUnusedPrivateClassMembers": "error",
         "noUnusedFunctionParameters": "off",
-        "useHookAtTopLevel": "warn"
+        "useHookAtTopLevel": "error"
       },
       "style": {
         "noNonNullAssertion": "off"

@@ -1,6 +1,6 @@
 import type { AgorClient } from '@agor/core/api';
 import type { Board, BoardComment, Repo, Session, Task, User, Worktree } from '@agor/core/types';
-import { Drawer, Layout, Typography, theme } from 'antd';
+import { Drawer, Layout, Typography } from 'antd';
 import { useState } from 'react';
 import { Route, Routes } from 'react-router-dom';
 import { MobileCommentsPage } from './MobileCommentsPage';
@@ -53,7 +53,6 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   onUpdateDraft,
 }) => {
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const { token } = theme.useToken();
 
   return (
     <Layout style={{ height: '100vh' }}>

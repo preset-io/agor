@@ -176,7 +176,6 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
           // MessagesService.find() ignores role/sort/limit when task_id is present
           // So we need to filter and sort manually
           const allMessages = messages.data || messages;
-          // biome-ignore lint/suspicious/noExplicitAny: Message type varies based on service response format
           const assistantMessages = (Array.isArray(allMessages) ? allMessages : [])
             // biome-ignore lint/suspicious/noExplicitAny: Message type varies based on service response format
             .filter((msg: any) => msg.role === 'assistant')
@@ -193,7 +192,6 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
               lastAssistantMessage = lastMsg.content;
             } else if (Array.isArray(lastMsg.content)) {
               // Find text blocks and concatenate
-              // biome-ignore lint/suspicious/noExplicitAny: Content block types vary by SDK
               const textBlocks = lastMsg.content
                 // biome-ignore lint/suspicious/noExplicitAny: Content block types vary by SDK
                 .filter((block: any) => block.type === 'text')
@@ -244,7 +242,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       const messageRepo = new MessagesRepository(this.db);
 
       // Create queued message with Agor callback metadata
-      const queuedMessage = await messageRepo.createQueued(parentSessionId, callbackMessage, {
+      await messageRepo.createQueued(parentSessionId, callbackMessage, {
         is_agor_callback: true,
         source: 'agor',
         child_session_id: childSession.session_id,
