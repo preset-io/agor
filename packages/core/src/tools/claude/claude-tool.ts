@@ -885,22 +885,23 @@ export class ClaudeTool implements ITool {
    * Compute cumulative context window usage for a Claude Code session
    *
    * Algorithm:
-   * 1. Include current task tokens (if provided via currentRawSdkResponse)
-   * 2. Loop through previous tasks from DB (most recent to oldest)
-   * 3. Stop when we encounter a compaction event (context was reset)
-   * 4. Sum tokens across ALL models for each task
+   * 1. Check if CURRENT task has compaction (if so, return only current task tokens)
+   * 2. Include current task tokens (if provided via currentRawSdkResponse)
+   * 3. Loop through previous tasks from DB (most recent to oldest)
+   * 4. Stop when we encounter a compaction event (context was reset)
+   * 5. Sum tokens across ALL models for each task
    *
    * Note: The current task is not yet in the DB when this is called, so we receive
    * its raw response separately via currentRawSdkResponse parameter.
    *
    * @param sessionId - Session ID to compute context for
-   * @param currentTaskId - Current task ID (unused, kept for interface compatibility)
+   * @param currentTaskId - Current task ID (used to check if it has compaction)
    * @param currentRawSdkResponse - Raw SDK response for the current task (not yet in DB)
    * @returns Promise resolving to computed context window usage in tokens
    */
   async computeContextWindow(
     sessionId: string,
-    _currentTaskId?: string,
+    currentTaskId?: string,
     currentRawSdkResponse?: unknown
   ): Promise<number> {
     if (!this.tasksRepo || !this.messagesRepo) {
@@ -909,6 +910,21 @@ export class ClaudeTool implements ITool {
     }
 
     let cumulativeTokens = 0;
+
+    // Check if CURRENT task has compaction
+    // If so, context was reset - only return current task tokens
+    if (currentTaskId && (await this.hasCompaction(currentTaskId as TaskID))) {
+      console.log(`🗜️  Compaction event found in CURRENT task ${currentTaskId}`);
+      if (currentRawSdkResponse) {
+        const currentTaskTokens = this.computeContextTokensFromRawResponse(currentRawSdkResponse);
+        console.log(
+          `📊 Current task (post-compaction): ${currentTaskTokens} tokens (context was reset)`
+        );
+        return currentTaskTokens;
+      }
+      console.log(`📊 Current task has compaction but no token data, returning 0`);
+      return 0;
+    }
 
     // Include current task tokens if provided
     if (currentRawSdkResponse) {
