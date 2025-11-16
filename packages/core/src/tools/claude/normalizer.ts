@@ -37,7 +37,6 @@ export class ClaudeCodeNormalizer implements INormalizer<SDKResultMessage> {
         cacheReadTokens: 0,
         cacheCreationTokens: 0,
       },
-      contextWindow: 0,
       contextWindowLimit: 0,
       durationMs,
       costUsd,
@@ -49,7 +48,7 @@ export class ClaudeCodeNormalizer implements INormalizer<SDKResultMessage> {
    * Sums tokens across all models
    */
   private normalizeMultiModel(
-    modelUsage: Record<string, unknown>,
+    modelUsage: Record<string, import('../../types/sdk-response').ClaudeModelUsage>,
     durationMs?: number,
     costUsd?: number
   ): NormalizedSdkData {
@@ -61,9 +60,7 @@ export class ClaudeCodeNormalizer implements INormalizer<SDKResultMessage> {
     let primaryModel: string | undefined;
 
     // Iterate through all models and sum tokens
-    for (const [modelId, usage] of Object.entries(modelUsage)) {
-      // biome-ignore lint/suspicious/noExplicitAny: SDK modelUsage has dynamic structure
-      const usageData = usage as any;
+    for (const [modelId, usageData] of Object.entries(modelUsage)) {
       const inputTokens = usageData.inputTokens || 0;
       const outputTokens = usageData.outputTokens || 0;
       const cacheReadTokens = usageData.cacheReadInputTokens || 0;
@@ -90,9 +87,6 @@ export class ClaudeCodeNormalizer implements INormalizer<SDKResultMessage> {
         cacheReadTokens: totalCacheRead,
         cacheCreationTokens: totalCacheCreation,
       },
-      // Context window = input + output (simple and reliable)
-      // Cache tokens are unreliable and ignored for context window calculation
-      contextWindow: totalInput + totalOutput,
       contextWindowLimit: maxLimit,
       primaryModel,
       durationMs,
@@ -104,16 +98,14 @@ export class ClaudeCodeNormalizer implements INormalizer<SDKResultMessage> {
    * Normalize single-model usage (fallback for older SDK versions)
    */
   private normalizeSingleModel(
-    usage: unknown,
+    usage: import('../../types/sdk-response').ClaudeTopLevelUsage,
     durationMs?: number,
     costUsd?: number
   ): NormalizedSdkData {
-    // biome-ignore lint/suspicious/noExplicitAny: SDK usage object has dynamic structure
-    const usageData = usage as any;
-    const inputTokens = usageData.input_tokens || 0;
-    const outputTokens = usageData.output_tokens || 0;
-    const cacheReadTokens = usageData.cache_read_input_tokens || 0;
-    const cacheCreationTokens = usageData.cache_creation_input_tokens || 0;
+    const inputTokens = usage.input_tokens || 0;
+    const outputTokens = usage.output_tokens || 0;
+    const cacheReadTokens = usage.cache_read_input_tokens || 0;
+    const cacheCreationTokens = usage.cache_creation_input_tokens || 0;
 
     return {
       tokenUsage: {
@@ -123,9 +115,6 @@ export class ClaudeCodeNormalizer implements INormalizer<SDKResultMessage> {
         cacheReadTokens,
         cacheCreationTokens,
       },
-      // Context window = input + output (simple and reliable)
-      // Cache tokens are unreliable and ignored for context window calculation
-      contextWindow: inputTokens + outputTokens,
       // Default to 200K for Claude models (standard context window)
       contextWindowLimit: 200000,
       durationMs,

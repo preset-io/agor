@@ -37,9 +37,6 @@ export class GeminiNormalizer implements INormalizer<GeminiSdkResponse> {
     // Context window = input_tokens + output_tokens
     // NOTE: promptTokenCount = context sent to model in THIS turn (includes conversation history)
     // candidatesTokenCount = response generated in THIS turn (will be context for NEXT turn)
-    // Together they represent the full conversation state after this turn completes
-    const contextWindow = inputTokens + outputTokens;
-
     // Get context window limit based on model (Gemini doesn't include model in event)
     const contextWindowLimit = getGeminiContextWindowLimit(DEFAULT_GEMINI_MODEL);
 
@@ -51,7 +48,6 @@ export class GeminiNormalizer implements INormalizer<GeminiSdkResponse> {
         cacheReadTokens,
         cacheCreationTokens: 0, // Gemini doesn't provide this
       },
-      contextWindow,
       contextWindowLimit,
       primaryModel: DEFAULT_GEMINI_MODEL,
       durationMs: undefined, // Not available in raw SDK event

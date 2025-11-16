@@ -290,7 +290,7 @@ export class GeminiTool implements ITool {
     tokenUsage?: TokenUsage
   ): Promise<Message> {
     // Extract text content for preview
-    const textBlocks = content.filter((b) => b.type === 'text').map((b) => b.text || '');
+    const textBlocks = content.filter(b => b.type === 'text').map(b => b.text || '');
     const fullTextContent = textBlocks.join('');
     const contentPreview = fullTextContent.substring(0, 200);
 
@@ -494,12 +494,14 @@ export class GeminiTool implements ITool {
     _currentTaskId?: string,
     currentRawSdkResponse?: unknown
   ): Promise<number> {
-    // If we have the current task's raw response in memory, use it directly
+    // Gemini SDK provides cumulative tokens in usageMetadata
+    // Simply extract promptTokenCount + candidatesTokenCount from the raw response
     if (currentRawSdkResponse) {
-      const normalizer = new GeminiNormalizer();
-      // biome-ignore lint/suspicious/noExplicitAny: raw_sdk_response is unknown, cast to normalizer's expected type
-      const normalized = normalizer.normalize(currentRawSdkResponse as any);
-      const cumulativeTokens = normalized.contextWindow;
+      const response =
+        currentRawSdkResponse as import('../../types/sdk-response').GeminiSdkResponse;
+      const inputTokens = response.value?.usageMetadata?.promptTokenCount || 0;
+      const outputTokens = response.value?.usageMetadata?.candidatesTokenCount || 0;
+      const cumulativeTokens = inputTokens + outputTokens;
       console.log(
         `✅ Computed context window for Gemini session ${sessionId}: ${cumulativeTokens} tokens (from current task)`
       );
@@ -518,10 +520,11 @@ export class GeminiTool implements ITool {
     for (let i = tasks.length - 1; i >= 0; i--) {
       const task = tasks[i];
       if (task.raw_sdk_response) {
-        const normalizer = new GeminiNormalizer();
-        // biome-ignore lint/suspicious/noExplicitAny: raw_sdk_response is unknown, cast to normalizer's expected type
-        const normalized = normalizer.normalize(task.raw_sdk_response as any);
-        const cumulativeTokens = normalized.contextWindow;
+        const response =
+          task.raw_sdk_response as import('../../types/sdk-response').GeminiSdkResponse;
+        const inputTokens = response.value?.usageMetadata?.promptTokenCount || 0;
+        const outputTokens = response.value?.usageMetadata?.candidatesTokenCount || 0;
+        const cumulativeTokens = inputTokens + outputTokens;
         console.log(
           `✅ Computed context window for Gemini session ${sessionId}: ${cumulativeTokens} tokens (from DB)`
         );

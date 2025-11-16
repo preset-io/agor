@@ -77,6 +77,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         duration_ms: task.duration_ms, // Task execution duration
         agent_session_id: task.agent_session_id, // SDK session ID
         raw_sdk_response: task.raw_sdk_response, // Raw SDK response - single source of truth for token accounting
+        computed_context_window: task.computed_context_window, // Cumulative context window (computed by tool.computeContextWindow())
         report: task.report,
         permission_request: task.permission_request, // Permission state for UI approval flow
       },
@@ -110,7 +111,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       throw new AmbiguousIdError(
         'Task',
         id,
-        results.map((r) => formatShortId(r.task_id as UUID))
+        results.map(r => formatShortId(r.task_id as UUID))
       );
     }
 
@@ -151,21 +152,19 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         return [];
       }
 
-      const inserts = taskList.map((task) => this.taskToInsert(task));
+      const inserts = taskList.map(task => this.taskToInsert(task));
 
       // Bulk insert all tasks
       await this.db.insert(tasks).values(inserts);
 
       // Retrieve all inserted tasks
-      const taskIds = inserts.map((t) => t.task_id);
+      const taskIds = inserts.map(t => t.task_id);
       const rows = await this.db
         .select()
         .from(tasks)
-        .where(
-          sql`${tasks.task_id} IN ${sql.raw(`(${taskIds.map((id) => `'${id}'`).join(',')})`)}`
-        );
+        .where(sql`${tasks.task_id} IN ${sql.raw(`(${taskIds.map(id => `'${id}'`).join(',')})`)}`);
 
-      return rows.map((row) => this.rowToTask(row));
+      return rows.map(row => this.rowToTask(row));
     } catch (error) {
       throw new RepositoryError(
         `Failed to bulk create tasks: ${error instanceof Error ? error.message : String(error)}`,
@@ -199,7 +198,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
   async findAll(): Promise<Task[]> {
     try {
       const rows = await this.db.select().from(tasks).all();
-      return rows.map((row) => this.rowToTask(row));
+      return rows.map(row => this.rowToTask(row));
     } catch (error) {
       throw new RepositoryError(
         `Failed to find all tasks: ${error instanceof Error ? error.message : String(error)}`,
@@ -220,7 +219,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         .orderBy(tasks.created_at)
         .all();
 
-      return rows.map((row) => this.rowToTask(row));
+      return rows.map(row => this.rowToTask(row));
     } catch (error) {
       throw new RepositoryError(
         `Failed to find tasks by session: ${error instanceof Error ? error.message : String(error)}`,
@@ -240,7 +239,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         .where(eq(tasks.status, TaskStatus.RUNNING))
         .all();
 
-      return rows.map((row) => this.rowToTask(row));
+      return rows.map(row => this.rowToTask(row));
     } catch (error) {
       throw new RepositoryError(
         `Failed to find running tasks: ${error instanceof Error ? error.message : String(error)}`,
@@ -261,7 +260,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         .where(sql`${tasks.status} IN ('running', 'stopping', 'awaiting_permission')`)
         .all();
 
-      return rows.map((row) => this.rowToTask(row));
+      return rows.map(row => this.rowToTask(row));
     } catch (error) {
       throw new RepositoryError(
         `Failed to find orphaned tasks: ${error instanceof Error ? error.message : String(error)}`,
@@ -277,7 +276,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     try {
       const rows = await this.db.select().from(tasks).where(eq(tasks.status, status)).all();
 
-      return rows.map((row) => this.rowToTask(row));
+      return rows.map(row => this.rowToTask(row));
     } catch (error) {
       throw new RepositoryError(
         `Failed to find tasks by status: ${error instanceof Error ? error.message : String(error)}`,
@@ -297,7 +296,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       const fullId = await this.resolveId(id);
 
       // Use transaction to make read-merge-write atomic
-      return await this.db.transaction(async (tx) => {
+      return await this.db.transaction(async tx => {
         // STEP 1: Read current task (within transaction)
         const currentRow = await tx.select().from(tasks).where(eq(tasks.task_id, fullId)).get();
 

@@ -23,14 +23,12 @@ export interface NormalizedSdkData {
   tokenUsage: NormalizedTokenUsage;
 
   /**
-   * Context window usage (tokens currently in conversation context)
-   * For multi-model: sum of input + cache_read across all models
-   */
-  contextWindow: number;
-
-  /**
    * Context window limit (model's maximum capacity)
    * For multi-model: maximum limit across all models
+   *
+   * Note: Context window USAGE is tracked separately via Task.computed_context_window
+   * which is populated by tool.computeContextWindow(). This avoids confusion between
+   * per-task tokens (in tokenUsage) vs cumulative session tokens (in computed_context_window).
    */
   contextWindowLimit: number;
 

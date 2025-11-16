@@ -23,6 +23,39 @@ import type { MessageID } from './id';
  */
 export type ClaudeCodeSdkResponse = SDKResultMessage;
 
+/**
+ * Internal structure of modelUsage from Claude Agent SDK
+ * Maps model ID to usage statistics
+ */
+export interface ClaudeModelUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadInputTokens?: number;
+  cacheCreationInputTokens?: number;
+  contextWindow?: number;
+}
+
+/**
+ * Internal structure of top-level usage from Claude Agent SDK (legacy/fallback)
+ */
+export interface ClaudeTopLevelUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+}
+
+/**
+ * Type-safe representation of ClaudeCodeSdkResponse with known fields
+ * Intersects the SDK type with explicit structure for our usage
+ */
+export type ClaudeCodeSdkResponseTyped = SDKResultMessage & {
+  modelUsage?: Record<string, ClaudeModelUsage>;
+  usage?: ClaudeTopLevelUsage;
+  duration_ms?: number;
+  total_cost_usd?: number;
+};
+
 // ============================================================================
 // Codex SDK Response (from OpenAI Codex SDK)
 // ============================================================================

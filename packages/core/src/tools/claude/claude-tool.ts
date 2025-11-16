@@ -820,32 +820,106 @@ export class ClaudeTool implements ITool {
   }
 
   /**
+   * Check if a task contains a compaction event
+   *
+   * Compaction events reset the context window, so we need to stop accumulating
+   * tokens when we encounter one.
+   *
+   * TODO: Consider denormalizing this to session level for better performance
+   * (e.g., Session.last_compaction_task_id) to avoid scanning all messages.
+   *
+   * @param taskId - Task ID to check for compaction
+   * @returns Promise resolving to true if task has compaction, false otherwise
+   */
+  private async hasCompaction(taskId: TaskID): Promise<boolean> {
+    if (!this.messagesRepo) {
+      return false;
+    }
+
+    const taskMessages = await this.messagesRepo.findByTaskId(taskId);
+    return taskMessages.some(msg => {
+      if (msg.role !== MessageRole.SYSTEM) return false;
+
+      // Check if message content contains compaction event
+      const content = msg.content;
+      if (Array.isArray(content)) {
+        return content.some(
+          (block: { type?: string; systemType?: string }) =>
+            block.type === 'system_complete' && block.systemType === 'compaction'
+        );
+      }
+      return false;
+    });
+  }
+
+  /**
+   * Compute token count from a Claude SDK raw response
+   *
+   * Sums across ALL models (Haiku for tools, Sonnet for responses, etc.)
+   * since they all contribute to the context window.
+   *
+   * @param rawResponse - Raw SDK response from Claude Agent SDK
+   * @returns Total tokens (input + output) across all models
+   */
+  private computeContextTokensFromRawResponse(rawResponse: unknown): number {
+    const response = rawResponse as import('../../types/sdk-response').ClaudeCodeSdkResponseTyped;
+
+    // If modelUsage exists, sum across all models
+    if (response.modelUsage && typeof response.modelUsage === 'object') {
+      let total = 0;
+      for (const modelData of Object.values(response.modelUsage)) {
+        const input = modelData.inputTokens || 0;
+        const output = modelData.outputTokens || 0;
+        total += input + output;
+      }
+      return total;
+    }
+
+    // Fallback to top-level usage (older SDK or single model)
+    const inputTokens = response.usage?.input_tokens || 0;
+    const outputTokens = response.usage?.output_tokens || 0;
+    return inputTokens + outputTokens;
+  }
+
+  /**
    * Compute cumulative context window usage for a Claude Code session
    *
    * Algorithm:
-   * 1. Start from the most recent task (iterate backwards)
-   * 2. Sum input + output tokens from each task's raw_sdk_response
-   * 3. Stop when we encounter a compaction event (system message with systemType='compaction')
-   * 4. Exclude the current task (if provided) since it's not complete yet
+   * 1. Include current task tokens (if provided via currentRawSdkResponse)
+   * 2. Loop through previous tasks from DB (most recent to oldest)
+   * 3. Stop when we encounter a compaction event (context was reset)
+   * 4. Sum tokens across ALL models for each task
    *
-   * This ensures we only count tokens since the last compaction event,
-   * as compaction resets the context window.
+   * Note: The current task is not yet in the DB when this is called, so we receive
+   * its raw response separately via currentRawSdkResponse parameter.
    *
    * @param sessionId - Session ID to compute context for
-   * @param currentTaskId - Current task ID (to exclude from computation)
+   * @param currentTaskId - Current task ID (unused, kept for interface compatibility)
+   * @param currentRawSdkResponse - Raw SDK response for the current task (not yet in DB)
    * @returns Promise resolving to computed context window usage in tokens
    */
   async computeContextWindow(
     sessionId: string,
-    currentTaskId?: string,
-    _currentRawSdkResponse?: unknown
+    _currentTaskId?: string,
+    currentRawSdkResponse?: unknown
   ): Promise<number> {
     if (!this.tasksRepo || !this.messagesRepo) {
       console.warn('computeContextWindow: repos not available, returning 0');
       return 0;
     }
 
-    // Get all tasks for this session, sorted by created_at DESC (most recent first)
+    let cumulativeTokens = 0;
+
+    // Include current task tokens if provided
+    if (currentRawSdkResponse) {
+      const currentTaskTokens = this.computeContextTokensFromRawResponse(currentRawSdkResponse);
+      cumulativeTokens += currentTaskTokens;
+      console.log(
+        `📊 Current task: +${currentTaskTokens} tokens (cumulative: ${cumulativeTokens})`
+      );
+    }
+
+    // Get all tasks for this session (won't include current task since it's not saved yet)
     const tasks = await this.tasksRepo.findBySession(sessionId as SessionID);
 
     // Sort tasks by created_at descending (most recent first)
@@ -855,35 +929,11 @@ export class ClaudeTool implements ITool {
       return dateB - dateA;
     });
 
-    let cumulativeTokens = 0;
-    const normalizer = new ClaudeCodeNormalizer();
-
     // Iterate backwards through tasks (from most recent to oldest)
     for (const task of tasks) {
-      // Skip the current task if specified (it's not complete yet)
-      if (currentTaskId && task.task_id === currentTaskId) {
-        continue;
-      }
-
-      // Check if this task has a compaction event in its messages
+      // Check if this task has a compaction event
       // If so, we stop here (context was reset)
-      const taskMessages = await this.messagesRepo.findByTaskId(task.task_id);
-      const hasCompaction = taskMessages.some((msg) => {
-        if (msg.role !== MessageRole.SYSTEM) return false;
-
-        // Check if message content contains compaction event
-        const content = msg.content;
-        if (Array.isArray(content)) {
-          return content.some(
-            (block: { type?: string; systemType?: string }) =>
-              block.type === 'system_complete' && block.systemType === 'compaction'
-          );
-        }
-        return false;
-      });
-
-      if (hasCompaction) {
-        // Found a compaction event - stop accumulating tokens
+      if (await this.hasCompaction(task.task_id)) {
         console.log(
           `🗜️  Compaction event found in task ${task.task_id}, stopping token accumulation`
         );
@@ -892,9 +942,7 @@ export class ClaudeTool implements ITool {
 
       // Accumulate tokens from this task's SDK response
       if (task.raw_sdk_response) {
-        // biome-ignore lint/suspicious/noExplicitAny: raw_sdk_response is unknown, cast to normalizer's expected type
-        const normalized = normalizer.normalize(task.raw_sdk_response as any);
-        const taskTokens = normalized.tokenUsage.inputTokens + normalized.tokenUsage.outputTokens;
+        const taskTokens = this.computeContextTokensFromRawResponse(task.raw_sdk_response);
         cumulativeTokens += taskTokens;
         console.log(
           `📊 Task ${task.task_id}: +${taskTokens} tokens (cumulative: ${cumulativeTokens})`

@@ -28,8 +28,9 @@ import type { AgenticToolName } from '../types/agentic-tool';
  *     task.raw_sdk_response,
  *     session.agentic_tool
  *   );
- *   console.log('Context window:', normalized.contextWindow);
+ *   console.log('Context window limit:', normalized.contextWindowLimit);
  *   console.log('Tokens:', normalized.tokenUsage);
+ *   console.log('Cumulative context:', task.computed_context_window);
  * }
  * ```
  */
@@ -39,16 +40,19 @@ export function normalizeRawSdkResponse(
 ): NormalizedSdkData {
   switch (agenticTool) {
     case 'claude-code':
-      // biome-ignore lint/suspicious/noExplicitAny: Normalizer accepts unknown, casts internally
-      return new ClaudeCodeNormalizer().normalize(rawResponse as any);
+      return new ClaudeCodeNormalizer().normalize(
+        rawResponse as import('../types/sdk-response').ClaudeCodeSdkResponse
+      );
 
     case 'codex':
-      // biome-ignore lint/suspicious/noExplicitAny: Normalizer expects typed CodexSdkResponse, casts safely
-      return new CodexNormalizer().normalize(rawResponse as any);
+      return new CodexNormalizer().normalize(
+        rawResponse as import('../types/sdk-response').CodexSdkResponse
+      );
 
     case 'gemini':
-      // biome-ignore lint/suspicious/noExplicitAny: Normalizer expects typed GeminiSdkResponse, casts safely
-      return new GeminiNormalizer().normalize(rawResponse as any);
+      return new GeminiNormalizer().normalize(
+        rawResponse as import('../types/sdk-response').GeminiSdkResponse
+      );
 
     case 'opencode':
       // TODO: Implement OpenCodeNormalizer
@@ -61,7 +65,6 @@ export function normalizeRawSdkResponse(
           cacheReadTokens: 0,
           cacheCreationTokens: 0,
         },
-        contextWindow: 0,
         contextWindowLimit: 0,
       };
 

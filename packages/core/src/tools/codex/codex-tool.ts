@@ -255,14 +255,14 @@ export class CodexTool implements ITool {
         // Filter out tool_use and tool_result blocks (already saved via tool_complete events)
         // But KEEP text blocks - these contain the response
         const textOnlyContent = event.content.filter(
-          (block) => block.type === 'text' // Only keep text blocks
+          block => block.type === 'text' // Only keep text blocks
         );
 
         // Only create message if there's text content (not just tools)
         if (textOnlyContent.length > 0) {
           // Extract full text for client-side streaming
           const _fullText = textOnlyContent
-            .map((block) => (block as { text?: string }).text || '')
+            .map(block => (block as { text?: string }).text || '')
             .join('');
 
           // Use existing message ID from streaming (if any) or generate new
@@ -366,7 +366,7 @@ export class CodexTool implements ITool {
     tokenUsage?: TokenUsage
   ): Promise<Message> {
     // Extract text content for preview
-    const textBlocks = content.filter((b) => b.type === 'text').map((b) => b.text || '');
+    const textBlocks = content.filter(b => b.type === 'text').map(b => b.text || '');
     const fullTextContent = textBlocks.join('');
     const contentPreview = fullTextContent.substring(0, 200);
 
@@ -582,12 +582,13 @@ export class CodexTool implements ITool {
     _currentTaskId?: string,
     currentRawSdkResponse?: unknown
   ): Promise<number> {
-    // If we have the current task's raw response in memory, use it directly
+    // Codex SDK provides cumulative tokens in each turn.completed event
+    // Simply extract input_tokens + output_tokens from the raw response
     if (currentRawSdkResponse) {
-      const normalizer = new CodexNormalizer();
-      // biome-ignore lint/suspicious/noExplicitAny: raw_sdk_response is unknown, cast to normalizer's expected type
-      const normalized = normalizer.normalize(currentRawSdkResponse as any);
-      const cumulativeTokens = normalized.contextWindow;
+      const response = currentRawSdkResponse as import('../../types/sdk-response').CodexSdkResponse;
+      const inputTokens = response.usage?.input_tokens || 0;
+      const outputTokens = response.usage?.output_tokens || 0;
+      const cumulativeTokens = inputTokens + outputTokens;
       console.log(
         `✅ Computed context window for Codex session ${sessionId}: ${cumulativeTokens} tokens (from current task)`
       );
@@ -606,10 +607,11 @@ export class CodexTool implements ITool {
     for (let i = tasks.length - 1; i >= 0; i--) {
       const task = tasks[i];
       if (task.raw_sdk_response) {
-        const normalizer = new CodexNormalizer();
-        // biome-ignore lint/suspicious/noExplicitAny: raw_sdk_response is unknown, cast to normalizer's expected type
-        const normalized = normalizer.normalize(task.raw_sdk_response as any);
-        const cumulativeTokens = normalized.contextWindow;
+        const response =
+          task.raw_sdk_response as import('../../types/sdk-response').CodexSdkResponse;
+        const inputTokens = response.usage?.input_tokens || 0;
+        const outputTokens = response.usage?.output_tokens || 0;
+        const cumulativeTokens = inputTokens + outputTokens;
         console.log(
           `✅ Computed context window for Codex session ${sessionId}: ${cumulativeTokens} tokens (from DB)`
         );

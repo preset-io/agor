@@ -36,7 +36,6 @@ export class CodexNormalizer implements INormalizer<CodexSdkResponse> {
           cacheReadTokens: 0,
           cacheCreationTokens: 0,
         },
-        contextWindow: 0,
         contextWindowLimit: getCodexContextWindowLimit(DEFAULT_CODEX_MODEL),
         primaryModel: DEFAULT_CODEX_MODEL,
         durationMs: undefined,
@@ -46,12 +45,6 @@ export class CodexNormalizer implements INormalizer<CodexSdkResponse> {
     const inputTokens = usage.input_tokens || 0;
     const outputTokens = usage.output_tokens || 0;
     const cacheReadTokens = usage.cached_input_tokens || 0;
-
-    // Context window = input_tokens + output_tokens
-    // NOTE: input_tokens is CUMULATIVE (total context sent to model in THIS turn)
-    // output_tokens is the response from THIS turn (will be input for NEXT turn)
-    // Together they represent the full conversation state after this turn completes
-    const contextWindow = inputTokens + outputTokens;
 
     // Get context window limit based on model (Codex doesn't include model in event)
     const contextWindowLimit = getCodexContextWindowLimit(DEFAULT_CODEX_MODEL);
@@ -64,7 +57,6 @@ export class CodexNormalizer implements INormalizer<CodexSdkResponse> {
         cacheReadTokens,
         cacheCreationTokens: 0, // Codex doesn't provide this
       },
-      contextWindow,
       contextWindowLimit,
       primaryModel: DEFAULT_CODEX_MODEL,
       durationMs: undefined, // Not available in raw SDK event
