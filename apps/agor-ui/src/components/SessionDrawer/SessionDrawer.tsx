@@ -524,6 +524,10 @@ const SessionDrawer = ({
         codexApprovalPolicy: config.codexApprovalPolicy,
         codexNetworkAccess: config.codexNetworkAccess,
         mcpServerIds: config.mcpServerIds,
+        hasCallbackConfig:
+          config.enableCallback !== undefined ||
+          config.includeLastMessage !== undefined ||
+          config.includeOriginalPrompt !== undefined,
         callbackConfig: {
           enableCallback: config.enableCallback,
           includeLastMessage: config.includeLastMessage,

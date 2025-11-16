@@ -155,7 +155,7 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
           }
           onDeny={
             canInteract && onPermissionDecision && sessionId && taskId
-              ? messageId => {
+              ? _messageId => {
                   onPermissionDecision(
                     sessionId,
                     content.request_id,

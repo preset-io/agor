@@ -139,6 +139,10 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
         codexApprovalPolicy: formValues.codexApprovalPolicy,
         codexNetworkAccess: formValues.codexNetworkAccess,
         mcpServerIds: formValues.mcpServerIds,
+        hasCallbackConfig:
+          formValues.enableCallback !== undefined ||
+          formValues.includeLastMessage !== undefined ||
+          formValues.includeOriginalPrompt !== undefined,
         callbackConfig: {
           enableCallback: formValues.enableCallback,
           includeLastMessage: formValues.includeLastMessage,

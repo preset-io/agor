@@ -27,17 +27,10 @@ USER CONFIGURATION:
 {{#if mcpServerIds}}
 - MCP Servers: {{mcpServerIds}}
 {{/if}}
-{{#if callbackConfig}}
-- Callback Configuration:
-  {{#if callbackConfig.enableCallback}}
-  - Enable callback on completion: {{callbackConfig.enableCallback}}
-  {{/if}}
-  {{#if callbackConfig.includeLastMessage}}
-  - Include last message in callback: {{callbackConfig.includeLastMessage}}
-  {{/if}}
-  {{#if callbackConfig.includeOriginalPrompt}}
-  - Include original prompt in callback: {{callbackConfig.includeOriginalPrompt}}
-  {{/if}}
+{{#if hasCallbackConfig}}
+- Callback Configuration: {{#if callbackConfig.enableCallback}}ENABLED
+  - Include last message: {{callbackConfig.includeLastMessage}}
+  - Include original prompt: {{callbackConfig.includeOriginalPrompt}}{{else}}NO CALLBACK{{/if}}
 {{/if}}
 {{#if extraInstructions}}
 - Extra Instructions: """
