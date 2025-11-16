@@ -22,6 +22,7 @@ import spawnSubsessionTemplate from '../../templates/spawn_subsession.hbs?raw';
 import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
 import { AgentSelectionGrid } from '../AgentSelectionGrid/AgentSelectionGrid';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
+import { MarkdownRenderer } from '../MarkdownRenderer';
 import type { ModelConfig } from '../ModelSelector';
 
 const { TextArea } = Input;
@@ -368,20 +369,9 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
                           context-aware prompt for the spawned subsession using its current session
                           context.
                         </Typography.Paragraph>
-                        <Typography.Paragraph
-                          code
-                          style={{
-                            padding: 12,
-                            maxHeight: 400,
-                            overflow: 'auto',
-                            fontSize: 12,
-                            whiteSpace: 'pre-wrap',
-                            wordBreak: 'break-word',
-                            margin: 0,
-                          }}
-                        >
-                          {renderedTemplate}
-                        </Typography.Paragraph>
+                        <div style={{ maxHeight: 400, overflow: 'auto' }}>
+                          <MarkdownRenderer content={`\`\`\`\n${renderedTemplate}\n\`\`\``} />
+                        </div>
                       </div>
                     ),
                   },
