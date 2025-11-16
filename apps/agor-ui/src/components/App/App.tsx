@@ -1,6 +1,7 @@
 import type { AgorClient } from '@agor/core/api';
 import type {
   Board,
+  BoardComment,
   BoardEntityObject,
   BoardID,
   CreateUserInput,
@@ -49,7 +50,7 @@ export interface AppProps {
   availableAgents: AgenticToolOption[];
   boards: Board[];
   boardObjects: BoardEntityObject[]; // Positioned worktrees on boards
-  comments: import('@agor/core/types').BoardComment[]; // Board comments for collaboration
+  comments: BoardComment[]; // Board comments for collaboration
   repos: Repo[];
   worktrees: Worktree[];
   users: User[]; // All users for multiplayer metadata
@@ -268,7 +269,7 @@ export const App: React.FC<AppProps> = ({
     // If board_id is provided and worktree was created, assign it to the board
     if (worktree && config.board_id) {
       await onUpdateWorktree?.(worktree.worktree_id, {
-        board_id: config.board_id as import('@agor/core/types').BoardID,
+        board_id: config.board_id as BoardID,
       });
     }
 

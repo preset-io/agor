@@ -1,5 +1,5 @@
 import { renderTemplate } from '@agor/core/templates/handlebars-helpers';
-import type { Repo, Session, Worktree } from '@agor/core/types';
+import type { Board, Repo, Session, Worktree } from '@agor/core/types';
 import {
   BranchesOutlined,
   CheckCircleOutlined,
@@ -38,7 +38,7 @@ import { WorktreeFormFields } from '../WorktreeFormFields';
 interface WorktreesTableProps {
   worktrees: Worktree[];
   repos: Repo[];
-  boards: import('@agor/core/types').Board[];
+  boards: Board[];
   sessions: Session[];
   onArchiveOrDelete?: (
     worktreeId: string,

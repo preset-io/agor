@@ -1,10 +1,20 @@
 import type { AgorClient } from '@agor/core/api';
 import type {
+  AgenticToolName,
+  Board,
+  BoardComment,
+  BoardCommentCreate,
+  BoardEntityObject,
   BoardID,
   BoardObject,
   MCPServer,
+  Repo,
+  Session,
+  SpawnConfig,
+  Task,
   User,
   UserID,
+  Worktree,
   WorktreeID,
   ZoneTrigger,
 } from '@agor/core/types';
@@ -33,16 +43,6 @@ import {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import './SessionCanvas.css';
-import type {
-  Board,
-  BoardComment,
-  BoardCommentCreate,
-  BoardEntityObject,
-  Repo,
-  Session,
-  Task,
-  Worktree,
-} from '@agor/core/types';
 import { useCursorTracking } from '../../hooks/useCursorTracking';
 import { usePresence } from '../../hooks/usePresence';
 import type { AgenticToolOption } from '../../types';
@@ -73,9 +73,9 @@ interface SessionCanvasProps {
   tasks: Record<string, Task[]>;
   users: User[];
   repos: Repo[];
-  worktrees: import('@agor/core/types').Worktree[];
+  worktrees: Worktree[];
   boardObjects: BoardEntityObject[];
-  comments: import('@agor/core/types').BoardComment[];
+  comments: BoardComment[];
   currentUserId?: string;
   selectedSessionId?: string | null;
   availableAgents?: AgenticToolOption[];
@@ -86,10 +86,7 @@ interface SessionCanvasProps {
   onSessionUpdate?: (sessionId: string, updates: Partial<Session>) => void;
   onSessionDelete?: (sessionId: string) => void;
   onForkSession?: (sessionId: string, prompt: string) => Promise<void>;
-  onSpawnSession?: (
-    sessionId: string,
-    config: string | Partial<import('@agor/core/types').SpawnConfig>
-  ) => Promise<void>;
+  onSpawnSession?: (sessionId: string, config: string | Partial<SpawnConfig>) => Promise<void>;
   onUpdateSessionMcpServers?: (sessionId: string, mcpServerIds: string[]) => void;
   onOpenSettings?: (sessionId: string) => void;
   onCreateSessionForWorktree?: (worktreeId: string) => void;
@@ -161,10 +158,7 @@ interface WorktreeNodeData {
   onSessionClick?: (sessionId: string) => void;
   onCreateSession?: (worktreeId: string) => void;
   onForkSession?: (sessionId: string, prompt: string) => Promise<void>;
-  onSpawnSession?: (
-    sessionId: string,
-    config: string | Partial<import('@agor/core/types').SpawnConfig>
-  ) => Promise<void>;
+  onSpawnSession?: (sessionId: string, config: string | Partial<SpawnConfig>) => Promise<void>;
   onArchiveOrDelete?: (
     worktreeId: string,
     options: {
@@ -2324,8 +2318,7 @@ const SessionCanvas = ({
               if (sessionId === 'new') {
                 const newSession = await client.service('sessions').create({
                   worktree_id: worktreeTriggerModal.worktreeId,
-                  agentic_tool: (agent ||
-                    'claude-code') as import('@agor/core/types').AgenticToolName,
+                  agentic_tool: (agent || 'claude-code') as AgenticToolName,
                   description: `Session from zone "${worktreeTriggerModal.zoneName}"`,
                   status: 'idle',
                   model_config: modelConfig

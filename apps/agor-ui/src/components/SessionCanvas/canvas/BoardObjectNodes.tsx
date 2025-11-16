@@ -2,7 +2,7 @@
  * Custom React Flow node components for board objects (text labels, zones, etc.)
  */
 
-import type { BoardComment, BoardObject } from '@agor/core/types';
+import type { BoardComment, BoardObject, User } from '@agor/core/types';
 import { DeleteOutlined, LockOutlined, SettingOutlined, UnlockOutlined } from '@ant-design/icons';
 import { ColorPicker, theme } from 'antd';
 import type { Color } from 'antd/es/color-picker';
@@ -655,7 +655,7 @@ export const ZoneNode = React.memo(ZoneNodeComponent);
 interface CommentNodeData {
   comment: BoardComment;
   replyCount: number;
-  user?: import('@agor/core/types').User;
+  user?: User;
   parentLabel?: string; // Label of parent zone/worktree if pinned
   parentColor?: string; // Color of parent zone if pinned
   onClick?: (commentId: string) => void;

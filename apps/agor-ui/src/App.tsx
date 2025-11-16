@@ -1,5 +1,19 @@
 import { getRepoReferenceOptions } from '@agor/core/config/browser';
-import type { Worktree } from '@agor/core/types';
+import type {
+  Board,
+  CreateMCPServerInput,
+  CreateUserInput,
+  PermissionMode,
+  Repo,
+  Session,
+  SessionID,
+  SpawnConfig,
+  UpdateMCPServerInput,
+  UpdateUserInput,
+  User,
+  UUID,
+  Worktree,
+} from '@agor/core/types';
 import { Alert, App as AntApp, ConfigProvider, Spin, theme } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { BrowserRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
@@ -461,7 +475,7 @@ function AppContent() {
 
   // Handle fork session
   const handleForkSession = async (sessionId: string, prompt: string) => {
-    const session = await forkSession(sessionId as import('@agor/core/types').SessionID, prompt);
+    const session = await forkSession(sessionId as SessionID, prompt);
     if (session) {
       showSuccess('Session forked successfully!');
       // Clear the draft after forking
@@ -472,16 +486,10 @@ function AppContent() {
   };
 
   // Handle spawn session
-  const handleSpawnSession = async (
-    sessionId: string,
-    config: string | Partial<import('@agor/core/types').SpawnConfig>
-  ) => {
+  const handleSpawnSession = async (sessionId: string, config: string | Partial<SpawnConfig>) => {
     // Handle both string prompt and full SpawnConfig
     const spawnConfig = typeof config === 'string' ? { prompt: config } : config;
-    const session = await spawnSession(
-      sessionId as import('@agor/core/types').SessionID,
-      spawnConfig
-    );
+    const session = await spawnSession(sessionId as SessionID, spawnConfig);
     if (session) {
       showSuccess('Subsession session spawned successfully!');
       // Clear the draft after spawning subsession
@@ -495,7 +503,7 @@ function AppContent() {
   const handleSendPrompt = async (
     sessionId: string,
     prompt: string,
-    permissionMode?: import('@agor/core/types').PermissionMode
+    permissionMode?: PermissionMode
   ) => {
     if (!client) return;
 
@@ -521,11 +529,8 @@ function AppContent() {
   };
 
   // Handle update session
-  const handleUpdateSession = async (
-    sessionId: string,
-    updates: Partial<import('@agor/core/types').Session>
-  ) => {
-    const session = await updateSession(sessionId as import('@agor/core/types').SessionID, updates);
+  const handleUpdateSession = async (sessionId: string, updates: Partial<Session>) => {
+    const session = await updateSession(sessionId as SessionID, updates);
     if (session) {
       showSuccess('Session updated successfully!');
     } else {
@@ -535,7 +540,7 @@ function AppContent() {
 
   // Handle delete session
   const handleDeleteSession = async (sessionId: string) => {
-    const success = await deleteSession(sessionId as import('@agor/core/types').SessionID);
+    const success = await deleteSession(sessionId as SessionID);
     if (success) {
       showSuccess('Session deleted successfully!');
     } else {
@@ -544,7 +549,7 @@ function AppContent() {
   };
 
   // Handle create user
-  const handleCreateUser = async (data: import('@agor/core/types').CreateUserInput) => {
+  const handleCreateUser = async (data: CreateUserInput) => {
     if (!client) return;
     try {
       await client.service('users').create(data);
@@ -555,16 +560,11 @@ function AppContent() {
   };
 
   // Handle update user
-  const handleUpdateUser = async (
-    userId: string,
-    updates: import('@agor/core/types').UpdateUserInput
-  ) => {
+  const handleUpdateUser = async (userId: string, updates: UpdateUserInput) => {
     if (!client) return;
     try {
       // Cast UpdateUserInput to Partial<User> - backend handles encryption/conversion
-      await client
-        .service('users')
-        .patch(userId, updates as Partial<import('@agor/core/types').User>);
+      await client.service('users').patch(userId, updates as Partial<User>);
       showSuccess('User updated successfully!');
     } catch (error) {
       showError(`Failed to update user: ${error instanceof Error ? error.message : String(error)}`);
@@ -583,25 +583,22 @@ function AppContent() {
   };
 
   // Handle board CRUD
-  const handleCreateBoard = async (board: Partial<import('@agor/core/types').Board>) => {
+  const handleCreateBoard = async (board: Partial<Board>) => {
     const created = await createBoard(board);
     if (created) {
       showSuccess('Board created successfully!');
     }
   };
 
-  const handleUpdateBoard = async (
-    boardId: string,
-    updates: Partial<import('@agor/core/types').Board>
-  ) => {
-    const updated = await updateBoard(boardId as import('@agor/core/types').UUID, updates);
+  const handleUpdateBoard = async (boardId: string, updates: Partial<Board>) => {
+    const updated = await updateBoard(boardId as UUID, updates);
     if (updated) {
       showSuccess('Board updated successfully!');
     }
   };
 
   const handleDeleteBoard = async (boardId: string) => {
-    const success = await deleteBoard(boardId as import('@agor/core/types').UUID);
+    const success = await deleteBoard(boardId as UUID);
     if (success) {
       showSuccess('Board deleted successfully!');
     }
@@ -629,10 +626,7 @@ function AppContent() {
     }
   };
 
-  const handleUpdateRepo = async (
-    repoId: string,
-    updates: Partial<import('@agor/core/types').Repo>
-  ) => {
+  const handleUpdateRepo = async (repoId: string, updates: Partial<Repo>) => {
     if (!client) return;
     try {
       await client.service('repos').patch(repoId, updates);
@@ -720,7 +714,7 @@ function AppContent() {
       pull_request_url?: string;
       boardId?: string;
     }
-  ): Promise<import('@agor/core/types').Worktree | null> => {
+  ): Promise<Worktree | null> => {
     if (!client) return null;
     try {
       showLoading('Creating worktree...', { key: 'create-worktree' });
@@ -734,7 +728,7 @@ function AppContent() {
         issue_url: data.issue_url,
         pull_request_url: data.pull_request_url,
         boardId: data.boardId, // Optional: add to board
-      })) as import('@agor/core/types').Worktree;
+      })) as Worktree;
 
       // Dismiss loading message - worktree will appear on board via WebSocket broadcast
       destroy('create-worktree');
@@ -778,7 +772,7 @@ function AppContent() {
   };
 
   // Handle MCP server CRUD
-  const handleCreateMCPServer = async (data: import('@agor/core/types').CreateMCPServerInput) => {
+  const handleCreateMCPServer = async (data: CreateMCPServerInput) => {
     if (!client) return;
     try {
       await client.service('mcp-servers').create(data);
@@ -790,10 +784,7 @@ function AppContent() {
     }
   };
 
-  const handleUpdateMCPServer = async (
-    serverId: string,
-    updates: import('@agor/core/types').UpdateMCPServerInput
-  ) => {
+  const handleUpdateMCPServer = async (serverId: string, updates: UpdateMCPServerInput) => {
     if (!client) return;
     try {
       await client.service('mcp-servers').patch(serverId, updates);
