@@ -1083,6 +1083,7 @@ const SessionDrawer = ({
         open={spawnModalOpen}
         action="spawn"
         session={session}
+        currentUser={users.find(u => u.user_id === currentUserId)}
         mcpServers={mcpServers}
         initialPrompt={inputValue}
         onConfirm={handleSpawnModalConfirm}

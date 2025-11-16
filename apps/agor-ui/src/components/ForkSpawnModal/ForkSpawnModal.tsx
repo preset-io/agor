@@ -12,6 +12,7 @@ import type {
   MCPServer,
   PermissionMode,
   Session,
+  User,
 } from '@agor/core/types';
 import { getDefaultPermissionMode } from '@agor/core/types';
 import { DownOutlined } from '@ant-design/icons';
@@ -51,6 +52,7 @@ export interface ForkSpawnModalProps {
   open: boolean;
   action: ForkSpawnAction;
   session: Session | null;
+  currentUser?: User | null;
   mcpServers?: MCPServer[];
   initialPrompt?: string;
   onConfirm: (config: string | Partial<SpawnConfig>) => Promise<void>;
@@ -61,6 +63,7 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
   open,
   action,
   session,
+  currentUser = null,
   mcpServers = [],
   initialPrompt = '',
   onConfirm,
@@ -77,6 +80,10 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
   // Reset form when modal opens
   useEffect(() => {
     if (open && session) {
+      // Get user's default config for the session's agent
+      const agentTool = session.agentic_tool || 'claude-code';
+      const userDefaults = currentUser?.default_agentic_config?.[agentTool];
+
       // Set initial values based on preset
       const initialValues =
         configPreset === 'parent'
@@ -96,18 +103,23 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
             }
           : {
               prompt: initialPrompt,
-              agent: session.agentic_tool,
-              permissionMode: getDefaultPermissionMode(session.agentic_tool),
+              agent: agentTool,
+              permissionMode: userDefaults?.permissionMode || getDefaultPermissionMode(agentTool),
+              modelConfig: userDefaults?.modelConfig,
+              codexSandboxMode: userDefaults?.codexSandboxMode,
+              codexApprovalPolicy: userDefaults?.codexApprovalPolicy,
+              codexNetworkAccess: userDefaults?.codexNetworkAccess,
+              mcpServerIds: userDefaults?.mcpServerIds || [],
               enableCallback: true,
               includeLastMessage: true,
               includeOriginalPrompt: false, // Default off since parent knows the prompt
             };
 
       form.setFieldsValue(initialValues);
-      setSelectedAgent(session.agentic_tool || 'claude-code');
+      setSelectedAgent(agentTool);
       setFormValues(initialValues);
     }
-  }, [open, session, configPreset, form, initialPrompt]);
+  }, [open, session, configPreset, form, initialPrompt, currentUser]);
 
   // Render template preview based on current form values
   const renderedTemplate = useMemo(() => {

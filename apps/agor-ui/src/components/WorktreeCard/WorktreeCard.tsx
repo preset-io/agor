@@ -689,6 +689,7 @@ const WorktreeCard = ({
         open={forkSpawnModal.open}
         action={forkSpawnModal.action}
         session={forkSpawnModal.session}
+        currentUser={users.find(u => u.user_id === currentUserId)}
         onConfirm={handleForkSpawnConfirm}
         onCancel={() =>
           setForkSpawnModal({
