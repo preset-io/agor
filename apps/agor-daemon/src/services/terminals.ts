@@ -109,7 +109,7 @@ export class TerminalsService {
     this.hasTmux = isTmuxAvailable();
 
     if (this.hasTmux) {
-      console.log('✅ tmux detected - persistent terminal sessions enabled');
+      console.log('\x1b[36m✅ tmux detected\x1b[0m - persistent terminal sessions enabled');
     } else {
       console.log('ℹ️  tmux not found - using ephemeral terminal sessions');
     }
@@ -163,7 +163,9 @@ export class TerminalsService {
           // Window exists - attach and select it
           shellArgs = ['attach-session', '-t', `${tmuxSession}:${windowIndex}`];
           tmuxReused = true;
-          console.log(`🔗 Reusing tmux window: ${tmuxSession}:${windowIndex} (${windowName})`);
+          console.log(
+            `\x1b[36m🔗 Reusing tmux window:\x1b[0m ${tmuxSession}:${windowIndex} (${windowName})`
+          );
         } else {
           // Window doesn't exist - attach and create new window
           shellArgs = [
@@ -178,13 +180,32 @@ export class TerminalsService {
             cwd,
           ];
           tmuxReused = false;
-          console.log(`🪟 Creating new window in tmux session: ${tmuxSession} (${windowName})`);
+          console.log(
+            `\x1b[36m🪟 Creating new window in tmux session:\x1b[0m ${tmuxSession} (${windowName})`
+          );
         }
       } else {
-        // Session doesn't exist - create it with first window
-        shellArgs = ['new-session', '-s', tmuxSession, '-n', windowName, '-c', cwd];
+        // Session doesn't exist - create it with first window and set theme inline
+        // Use semicolon to chain commands: create session THEN set theme
+        shellArgs = [
+          'new-session',
+          '-s',
+          tmuxSession,
+          '-n',
+          windowName,
+          '-c',
+          cwd,
+          ';',
+          'set-option',
+          '-t',
+          tmuxSession,
+          'status-style',
+          'bg=#2e9a92,fg=#000000',
+        ];
         tmuxReused = false;
-        console.log(`🚀 Creating tmux session: ${tmuxSession} with window (${windowName})`);
+        console.log(
+          `\x1b[36m🚀 Creating tmux session:\x1b[0m ${tmuxSession} with window (${windowName}) + teal theme`
+        );
       }
     } else {
       // Fallback to regular shell

@@ -48,6 +48,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
     // Create terminal instance and connect to backend
     const setupTerminal = async () => {
       // Create xterm instance with larger size to fit modal
+      // Custom theme with Agor teal (#2e9a92) for cyan
       const terminal = new Terminal({
         fontSize: 14,
         fontFamily: 'Menlo, Monaco, "Courier New", monospace',
@@ -55,6 +56,13 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
         scrollback: 1000,
         rows: 40,
         cols: 160,
+        theme: {
+          background: '#000000',
+          foreground: '#ffffff',
+          cursor: '#ffffff',
+          cyan: '#2e9a92', // Agor teal - used for ANSI color code 36
+          brightCyan: '#3db5ab', // Lighter teal for bright cyan - used for ANSI code 96
+        },
       });
 
       terminal.open(terminalDivRef.current!);
@@ -91,28 +99,6 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
           worktreeName: result.worktreeName,
         });
         terminal.clear();
-
-        // Display welcome message with context
-        if (result.tmuxSession) {
-          if (result.tmuxReused) {
-            terminal.writeln(
-              `🔗 Reconnected to tmux window for ${result.worktreeName || 'worktree'}`
-            );
-            terminal.writeln(`📂 Current directory preserved from last session`);
-          } else {
-            terminal.writeln(`🪟 Created new tmux window for ${result.worktreeName || 'worktree'}`);
-            terminal.writeln(`📂 Working directory: ${result.cwd}`);
-          }
-          terminal.writeln(
-            `💡 Tip: Switch worktrees with Ctrl+B w | Session: "${result.tmuxSession}"`
-          );
-        } else {
-          terminal.writeln(`✅ Connected! Working directory: ${result.cwd}`);
-          if (worktreeId) {
-            terminal.writeln('ℹ️  Install tmux for persistent sessions');
-          }
-        }
-        terminal.writeln('');
 
         // Execute initial commands if provided
         if (initialCommands.length > 0) {
