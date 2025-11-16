@@ -109,10 +109,6 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       const tasks = Array.isArray(result) ? result : [result];
 
       for (const task of tasks) {
-        console.log(
-          `[TasksService] Task ${task.task_id} marked as ${data.status} via patch, processing callbacks`
-        );
-
         if (task.session_id && this.app) {
           try {
             // Check if session has parent and queue callback
@@ -184,9 +180,6 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
           if (assistantMessages.length > 0) {
             const lastMsg = assistantMessages[0];
-            console.log(
-              `[TasksService] Fetched last message for callback - role: ${lastMsg.role}, content type: ${typeof lastMsg.content}, index: ${lastMsg.index}`
-            );
             // Extract text content from content blocks or string
             if (typeof lastMsg.content === 'string') {
               lastAssistantMessage = lastMsg.content;
@@ -199,12 +192,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
                 .map((block: any) => block.text || '')
                 .join('\n\n');
               lastAssistantMessage = textBlocks || undefined;
-              console.log(`[TasksService] Extracted ${textBlocks.length} chars from text blocks`);
             }
-          } else {
-            console.log(
-              `[TasksService] No assistant messages found in task ${task.task_id.substring(0, 8)}`
-            );
           }
         } catch (error) {
           console.warn(
@@ -250,14 +238,11 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       });
 
       console.log(
-        `🔔 [TasksService] Queued callback to parent ${parentSessionId.substring(0, 8)} for child ${childSession.session_id.substring(0, 8)} (status: ${task.status})`
+        `🔔 Queued callback to parent ${parentSessionId.substring(0, 8)} from child ${childSession.session_id.substring(0, 8)}`
       );
 
       // If parent is idle, trigger queue processing immediately
       if (parentSession.status === 'idle') {
-        console.log(
-          `🔄 [TasksService] Parent session ${parentSessionId.substring(0, 8)} is idle, triggering queue processing`
-        );
         // Trigger queue processing via custom method
         // biome-ignore lint/suspicious/noExplicitAny: Service type casting required for custom method access
         const sessionsService = this.app.service('sessions') as any;
@@ -312,23 +297,17 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     )) as Task;
 
     // Set the session's ready_for_prompt flag to true when task completes successfully
-    console.log(
-      `[TasksService] Task ${id} completed, setting ready_for_prompt for session ${completedTask.session_id}`
-    );
     if (completedTask.session_id && this.app) {
       try {
         await this.app.service('sessions').patch(completedTask.session_id, {
           ready_for_prompt: true,
         });
-        console.log(
-          `✅ [TasksService] Set ready_for_prompt=true for session ${completedTask.session_id}`
-        );
       } catch (error) {
-        console.error('❌ [TasksService] Failed to set ready_for_prompt flag:', error);
+        console.error('❌ Failed to set ready_for_prompt flag:', error);
       }
     } else {
       console.warn(
-        `⚠️ [TasksService] Cannot set ready_for_prompt: session_id=${completedTask.session_id}, app=${!!this.app}`
+        `⚠️ Cannot set ready_for_prompt: session_id=${completedTask.session_id}, app=${!!this.app}`
       );
     }
 

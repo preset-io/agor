@@ -323,34 +323,6 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
     await this.get(id, params);
 
     const result = await this.repository.update(String(id), data as Partial<T>);
-
-    // Log session/task status changes for debugging
-    // biome-ignore lint/suspicious/noExplicitAny: Need to check if result has status field
-    if (this.resourceType === 'Session' && (result as any).status) {
-      console.log(`📡 [DrizzleService] SESSION PATCH:`, {
-        // biome-ignore lint/suspicious/noExplicitAny: Session ID access
-        session_id: (result as any).session_id?.substring(0, 8),
-        // biome-ignore lint/suspicious/noExplicitAny: Status access
-        status: (result as any).status,
-        // biome-ignore lint/suspicious/noExplicitAny: Ready for prompt access
-        ready_for_prompt: (result as any).ready_for_prompt,
-        patch_data: data,
-        timestamp: new Date().toISOString(),
-      });
-    }
-    // biome-ignore lint/suspicious/noExplicitAny: Need to check if result has status field
-    if (this.resourceType === 'Task' && (result as any).status) {
-      console.log(`📡 [DrizzleService] TASK PATCH:`, {
-        // biome-ignore lint/suspicious/noExplicitAny: Task ID access
-        task_id: (result as any).task_id?.substring(0, 8),
-        // biome-ignore lint/suspicious/noExplicitAny: Session ID access
-        session_id: (result as any).session_id?.substring(0, 8),
-        // biome-ignore lint/suspicious/noExplicitAny: Status access
-        status: (result as any).status,
-        patch_data: data,
-        timestamp: new Date().toISOString(),
-      });
-    }
     this.emit?.('patched', result, params);
     return result;
   }

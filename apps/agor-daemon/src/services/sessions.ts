@@ -277,10 +277,6 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
   }
 
   async triggerQueueProcessing(id: string, params?: SessionParams): Promise<void> {
-    console.log(
-      `🔄 [SessionsService] Triggering queue processing for session ${id.substring(0, 8)}`
-    );
-
     if (this.queueProcessor) {
       await this.queueProcessor(id, params);
     } else {

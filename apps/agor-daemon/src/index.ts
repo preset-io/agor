@@ -582,8 +582,6 @@ async function main() {
   // Join all new connections to 'everybody' channel initially
   app.on('connection', (connection: unknown) => {
     app.channel('everybody').join(connection as never);
-    const channelSize = app.channel('everybody').length;
-    console.log(`🔌 New connection joined everybody channel (total: ${channelSize})`);
   });
 
   // Note: The 'login' event is fired by FeathersJS authentication service
@@ -973,50 +971,6 @@ async function main() {
   // All services have requireAuth hooks, so only authenticated users can access them
   // This means any connection that successfully calls a service is authenticated
   app.publish((data, context) => {
-    // Log all published events for debugging
-    // biome-ignore lint/suspicious/noExplicitAny: Context path access
-    const servicePath = (context as any).path;
-    // biome-ignore lint/suspicious/noExplicitAny: Context method access
-    const method = (context as any).method;
-
-    // Log session and task events specifically
-    if (servicePath === 'sessions' && method === 'patch') {
-      console.log('📤 [PUBLISH] SESSION EVENT:', {
-        // biome-ignore lint/suspicious/noExplicitAny: Session ID access
-        session_id: (data as any).session_id?.substring(0, 8),
-        // biome-ignore lint/suspicious/noExplicitAny: Status access
-        status: (data as any).status,
-        // biome-ignore lint/suspicious/noExplicitAny: Ready for prompt access
-        ready_for_prompt: (data as any).ready_for_prompt,
-        channel: 'everybody',
-        timestamp: new Date().toISOString(),
-      });
-    }
-    if (servicePath === 'tasks' && method === 'create') {
-      console.log('📤 [PUBLISH] TASK CREATED EVENT:', {
-        // biome-ignore lint/suspicious/noExplicitAny: Task ID access
-        task_id: (data as any).task_id?.substring(0, 8),
-        // biome-ignore lint/suspicious/noExplicitAny: Session ID access
-        session_id: (data as any).session_id?.substring(0, 8),
-        // biome-ignore lint/suspicious/noExplicitAny: Status access
-        status: (data as any).status,
-        channel: 'everybody',
-        timestamp: new Date().toISOString(),
-      });
-    }
-    if (servicePath === 'tasks' && method === 'patch') {
-      console.log('📤 [PUBLISH] TASK PATCHED EVENT:', {
-        // biome-ignore lint/suspicious/noExplicitAny: Task ID access
-        task_id: (data as any).task_id?.substring(0, 8),
-        // biome-ignore lint/suspicious/noExplicitAny: Session ID access
-        session_id: (data as any).session_id?.substring(0, 8),
-        // biome-ignore lint/suspicious/noExplicitAny: Status access
-        status: (data as any).status,
-        channel: 'everybody',
-        timestamp: new Date().toISOString(),
-      });
-    }
-
     // Broadcast to all connected clients (they're all authenticated due to requireAuth)
     return app.channel('everybody');
   });
@@ -1853,7 +1807,6 @@ async function main() {
         },
         params
       );
-      console.log(`✅ [Prompt] Session ${id.substring(0, 8)} patched to RUNNING`);
 
       // Create streaming callbacks for real-time UI updates
       // Custom events are registered via app.use('/messages', service, { events: [...] })
@@ -2609,7 +2562,6 @@ async function main() {
   // Inject queue processor into sessions service
   // Used by callback system to immediately process queued callbacks
   sessionsService.setQueueProcessor(async (sessionId: SessionID, params?: RouteParams) => {
-    console.log(`🎯 [Sessions] Processing queue for session ${sessionId.substring(0, 8)}`);
     try {
       await processNextQueuedMessage(sessionId, params || {});
     } catch (error) {
