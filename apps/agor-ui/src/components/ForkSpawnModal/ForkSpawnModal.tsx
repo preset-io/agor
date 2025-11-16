@@ -368,22 +368,20 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
                           context-aware prompt for the spawned subsession using its current session
                           context.
                         </Typography.Paragraph>
-                        <div
+                        <Typography.Paragraph
+                          code
                           style={{
-                            backgroundColor: '#f5f5f5',
-                            border: '1px solid #d9d9d9',
-                            borderRadius: 4,
                             padding: 12,
                             maxHeight: 400,
                             overflow: 'auto',
-                            fontFamily: 'monospace',
                             fontSize: 12,
                             whiteSpace: 'pre-wrap',
                             wordBreak: 'break-word',
+                            margin: 0,
                           }}
                         >
                           {renderedTemplate}
-                        </div>
+                        </Typography.Paragraph>
                       </div>
                     ),
                   },
