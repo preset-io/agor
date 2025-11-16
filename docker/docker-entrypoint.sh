@@ -3,6 +3,11 @@ set -e
 
 echo "🚀 Starting Agor development environment..."
 
+# Fix permissions on bind-mounted source directory
+# (host-mounted files may have different ownership than container user)
+echo "🔧 Fixing source directory permissions..."
+sudo chown -R agor:agor /app
+
 # Dependencies are installed during Docker build and node_modules are excluded from volume mount
 # Just verify they exist, don't reinstall unless something is actually missing
 if [ ! -d "/app/node_modules" ]; then

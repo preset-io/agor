@@ -182,7 +182,33 @@ volumes:
   - ~/.ssh:/home/agor/.ssh:ro
 ```
 
-This is already configured in `docker-compose.yml` (commented out by default).
+This is already configured in `docker-compose.yml`.
+
+### Host UID/GID Mapping (Linux)
+
+On Linux, you can run the container as your host user to avoid permission issues entirely:
+
+```bash
+# Create .env file with your UID/GID
+printf "UID=%s\nGID=%s\n" "$(id -u)" "$(id -g)" > .env
+
+# Create docker-compose.override.yml
+cat > docker-compose.override.yml <<'EOF'
+services:
+  agor-dev:
+    user: "${UID:-1000}:${GID:-1000}"
+EOF
+
+# Start normally
+docker compose up
+```
+
+**When to use this:**
+
+- You're on Linux and want to avoid the automatic `chown` on startup
+- You want container-created files to match your host user ownership
+
+**Note:** On macOS/Windows, Docker Desktop handles UID mapping automatically - this override is unnecessary.
 
 ### Custom agor-live Version (Prod)
 
@@ -210,12 +236,19 @@ DAEMON_PORT=3031 docker compose up
 
 ### Volume Permission Issues
 
-If you see permission errors:
+The entrypoint script automatically fixes permissions on bind-mounted directories during startup. This resolves issues where host-mounted files have different ownership than the container user.
+
+**If you still see `EACCES: permission denied` errors:**
 
 ```bash
-# Fix permissions (runs automatically in entrypoint)
-docker compose exec agor-dev sudo chown -R agor:agor /home/agor/.agor
+# Manually fix permissions (already runs automatically in entrypoint)
+docker compose exec agor-dev sudo chown -R agor:agor /app
+
+# Or restart container (permissions are fixed on startup)
+docker compose restart agor-dev
 ```
+
+**Note for Linux users:** On Linux, bind mounts preserve exact host UID/GID. If you prefer to avoid the automatic permission fix and match your host user, use the UID/GID override (see Advanced Usage below).
 
 ### Rebuild from Scratch
 

@@ -31,7 +31,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
     volumes:
-      # Mount entire repo for hot-reload (but exclude node_modules)
+      # Mount entire repo for hot-reload (but exclude node_modules and build outputs)
       - .:/app
       # Exclude all node_modules directories (use container's versions)
       - /app/node_modules
@@ -39,6 +39,9 @@ services:
       - /app/apps/agor-cli/node_modules
       - /app/apps/agor-ui/node_modules
       - /app/packages/core/node_modules
+      # Exclude @agor/core build output (built fresh in container during entrypoint)
+      # This prevents empty/stale host dist from overwriting container's fresh build
+      - /app/packages/core/dist
       # Persist entire home directory (database, config, agent auth tokens, etc.)
       - agor-home:/home/agor
       # Mount SSH keys for git authentication (dev only)
