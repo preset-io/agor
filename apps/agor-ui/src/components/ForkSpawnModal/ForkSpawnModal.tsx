@@ -276,6 +276,8 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
                 onSelect={agentId => {
                   setSelectedAgent(agentId as AgenticToolName);
                   form.setFieldValue('agent', agentId);
+                  // Manually update formValues to trigger template re-render
+                  setFormValues(prev => ({ ...prev, agent: agentId }));
                 }}
                 columns={2}
               />
