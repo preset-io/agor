@@ -14,20 +14,9 @@ import {
   LoadingOutlined,
   WarningOutlined,
 } from '@ant-design/icons';
-import {
-  Alert,
-  Button,
-  Form,
-  Input,
-  message,
-  Space,
-  Spin,
-  Switch,
-  Tabs,
-  Tooltip,
-  theme,
-} from 'antd';
+import { Alert, Button, Form, Input, Space, Spin, Switch, Tabs, Tooltip, theme } from 'antd';
 import { useEffect, useState } from 'react';
+import { useThemedMessage } from '../../utils/message';
 import { ApiKeyFields, type ApiKeyStatus } from '../ApiKeyFields';
 
 export interface AgenticToolsSectionProps {
@@ -91,6 +80,7 @@ const ApiKeyTabContent: React.FC<{
 
 export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client }) => {
   const { token } = theme.useToken();
+  const { showSuccess, showError } = useThemedMessage();
 
   // Shared API keys state
   const [loadingKeys, setLoadingKeys] = useState(true);
@@ -242,10 +232,10 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
         },
       });
 
-      message.success('OpenCode settings saved successfully');
+      showSuccess('OpenCode settings saved successfully');
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Failed to save OpenCode settings';
-      message.error(errorMsg);
+      showError(errorMsg);
       console.error('Failed to save OpenCode settings:', err);
     }
   };

@@ -14,11 +14,12 @@ import type {
   Worktree,
 } from '@agor/core/types';
 import { PermissionScope } from '@agor/core/types';
-import { Layout, message } from 'antd';
+import { Layout } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import { useFaviconStatus } from '../../hooks/useFaviconStatus';
 import { usePresence } from '../../hooks/usePresence';
 import type { AgenticToolOption } from '../../types';
+import { useThemedMessage } from '../../utils/message';
 import { AppHeader } from '../AppHeader';
 import { CommentsPanel } from '../CommentsPanel';
 import { EnvironmentLogsModal } from '../EnvironmentLogsModal';
@@ -163,6 +164,7 @@ export const App: React.FC<AppProps> = ({
   onLogout,
   onRetryConnection,
 }) => {
+  const { showWarning } = useThemedMessage();
   const [newSessionWorktreeId, setNewSessionWorktreeId] = useState<string | null>(null);
   const [newWorktreeModalOpen, setNewWorktreeModalOpen] = useState(false);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
@@ -503,7 +505,7 @@ export const App: React.FC<AppProps> = ({
           <NewSessionButton
             onClick={() => {
               if (repos.length === 0) {
-                message.warning('Please create a repository first in Settings');
+                showWarning('Please create a repository first in Settings');
               } else {
                 setNewWorktreeModalOpen(true);
               }

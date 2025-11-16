@@ -4,8 +4,8 @@
 
 import type { AgorClient } from '@agor/core/api';
 import type { Board, UUID } from '@agor/core/types';
-import { message } from 'antd';
 import { useState } from 'react';
+import { useThemedMessage } from '../utils/message';
 
 interface UseBoardActionsResult {
   createBoard: (board: Partial<Board>) => Promise<Board | null>;
@@ -16,6 +16,7 @@ interface UseBoardActionsResult {
 
 export function useBoardActions(client: AgorClient | null): UseBoardActionsResult {
   const [loading, setLoading] = useState(false);
+  const { showError } = useThemedMessage();
 
   const createBoard = async (board: Partial<Board>): Promise<Board | null> => {
     if (!client) return null;
@@ -25,7 +26,7 @@ export function useBoardActions(client: AgorClient | null): UseBoardActionsResul
       const created = await client.service('boards').create(board);
       return created as Board;
     } catch (error) {
-      message.error(
+      showError(
         `Failed to create board: ${error instanceof Error ? error.message : String(error)}`
       );
       return null;
@@ -42,7 +43,7 @@ export function useBoardActions(client: AgorClient | null): UseBoardActionsResul
       const updated = await client.service('boards').patch(boardId, updates);
       return updated as Board;
     } catch (error) {
-      message.error(
+      showError(
         `Failed to update board: ${error instanceof Error ? error.message : String(error)}`
       );
       return null;
@@ -59,7 +60,7 @@ export function useBoardActions(client: AgorClient | null): UseBoardActionsResul
       await client.service('boards').remove(boardId);
       return true;
     } catch (error) {
-      message.error(
+      showError(
         `Failed to delete board: ${error instanceof Error ? error.message : String(error)}`
       );
       return false;

@@ -22,6 +22,7 @@ import {
 } from './hooks';
 import { StreamdownDemoPage } from './pages/StreamdownDemoPage';
 import { isMobileDevice } from './utils/deviceDetection';
+import { useThemedMessage } from './utils/message';
 
 /**
  * DeviceRouter - Redirects users to mobile or desktop site based on device detection
@@ -69,9 +70,9 @@ function DeviceRouter() {
 }
 
 function AppContent() {
-  const { message } = AntApp.useApp();
   const { token } = theme.useToken();
   const { getCurrentThemeConfig } = useTheme();
+  const { showSuccess, showError, showWarning, showLoading, destroy } = useThemedMessage();
 
   // Fetch daemon auth configuration
   const {
@@ -415,7 +416,7 @@ function AppContent() {
           }
         }
 
-        message.success('Session created!');
+        showSuccess('Session created!');
 
         // If there's an initial prompt, send it to the agent
         if (config.initialPrompt?.trim()) {
@@ -425,11 +426,11 @@ function AppContent() {
         // Return the session ID so AgorApp can open the drawer
         return session.session_id;
       } else {
-        message.error('Failed to create session');
+        showError('Failed to create session');
         return null;
       }
     } catch (error) {
-      message.error(
+      showError(
         `Failed to create session: ${error instanceof Error ? error.message : String(error)}`
       );
       return null;
@@ -462,11 +463,11 @@ function AppContent() {
   const handleForkSession = async (sessionId: string, prompt: string) => {
     const session = await forkSession(sessionId as import('@agor/core/types').SessionID, prompt);
     if (session) {
-      message.success('Session forked successfully!');
+      showSuccess('Session forked successfully!');
       // Clear the draft after forking
       handleClearDraft(sessionId);
     } else {
-      message.error('Failed to fork session');
+      showError('Failed to fork session');
     }
   };
 
@@ -474,11 +475,11 @@ function AppContent() {
   const handleSpawnSession = async (sessionId: string, prompt: string) => {
     const session = await spawnSession(sessionId as import('@agor/core/types').SessionID, prompt);
     if (session) {
-      message.success('Subsession session spawned successfully!');
+      showSuccess('Subsession session spawned successfully!');
       // Clear the draft after spawning subsession
       handleClearDraft(sessionId);
     } else {
-      message.error('Failed to spawn session');
+      showError('Failed to spawn session');
     }
   };
 
@@ -491,22 +492,22 @@ function AppContent() {
     if (!client) return;
 
     try {
-      message.loading({ content: 'Sending prompt...', key: 'prompt', duration: 0 });
+      showLoading('Sending prompt...', { key: 'prompt' });
 
       await client.service(`sessions/${sessionId}/prompt`).create({
         prompt,
         permissionMode,
       });
 
-      message.success({ content: 'Response received!', key: 'prompt' });
+      showSuccess('Response received!', { key: 'prompt' });
 
       // Clear the draft after sending
       handleClearDraft(sessionId);
     } catch (error) {
-      message.error({
-        content: `Failed to send prompt: ${error instanceof Error ? error.message : String(error)}`,
-        key: 'prompt',
-      });
+      showError(
+        `Failed to send prompt: ${error instanceof Error ? error.message : String(error)}`,
+        { key: 'prompt' }
+      );
       console.error('Prompt error:', error);
     }
   };
@@ -518,9 +519,9 @@ function AppContent() {
   ) => {
     const session = await updateSession(sessionId as import('@agor/core/types').SessionID, updates);
     if (session) {
-      message.success('Session updated successfully!');
+      showSuccess('Session updated successfully!');
     } else {
-      message.error('Failed to update session');
+      showError('Failed to update session');
     }
   };
 
@@ -528,9 +529,9 @@ function AppContent() {
   const handleDeleteSession = async (sessionId: string) => {
     const success = await deleteSession(sessionId as import('@agor/core/types').SessionID);
     if (success) {
-      message.success('Session deleted successfully!');
+      showSuccess('Session deleted successfully!');
     } else {
-      message.error('Failed to delete session');
+      showError('Failed to delete session');
     }
   };
 
@@ -539,11 +540,9 @@ function AppContent() {
     if (!client) return;
     try {
       await client.service('users').create(data);
-      message.success('User created successfully!');
+      showSuccess('User created successfully!');
     } catch (error) {
-      message.error(
-        `Failed to create user: ${error instanceof Error ? error.message : String(error)}`
-      );
+      showError(`Failed to create user: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
@@ -558,11 +557,9 @@ function AppContent() {
       await client
         .service('users')
         .patch(userId, updates as Partial<import('@agor/core/types').User>);
-      message.success('User updated successfully!');
+      showSuccess('User updated successfully!');
     } catch (error) {
-      message.error(
-        `Failed to update user: ${error instanceof Error ? error.message : String(error)}`
-      );
+      showError(`Failed to update user: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
@@ -571,11 +568,9 @@ function AppContent() {
     if (!client) return;
     try {
       await client.service('users').remove(userId);
-      message.success('User deleted successfully!');
+      showSuccess('User deleted successfully!');
     } catch (error) {
-      message.error(
-        `Failed to delete user: ${error instanceof Error ? error.message : String(error)}`
-      );
+      showError(`Failed to delete user: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
@@ -583,7 +578,7 @@ function AppContent() {
   const handleCreateBoard = async (board: Partial<import('@agor/core/types').Board>) => {
     const created = await createBoard(board);
     if (created) {
-      message.success('Board created successfully!');
+      showSuccess('Board created successfully!');
     }
   };
 
@@ -593,14 +588,14 @@ function AppContent() {
   ) => {
     const updated = await updateBoard(boardId as import('@agor/core/types').UUID, updates);
     if (updated) {
-      message.success('Board updated successfully!');
+      showSuccess('Board updated successfully!');
     }
   };
 
   const handleDeleteBoard = async (boardId: string) => {
     const success = await deleteBoard(boardId as import('@agor/core/types').UUID);
     if (success) {
-      message.success('Board deleted successfully!');
+      showSuccess('Board deleted successfully!');
     }
   };
 
@@ -608,7 +603,7 @@ function AppContent() {
   const handleCreateRepo = async (data: { url: string; slug: string; default_branch: string }) => {
     if (!client) return;
     try {
-      message.loading({ content: 'Cloning repository...', key: 'clone-repo', duration: 0 });
+      showLoading('Cloning repository...', { key: 'clone-repo' });
 
       // Use the custom clone endpoint: POST /repos/clone
       await client.service('repos/clone').create({
@@ -617,12 +612,12 @@ function AppContent() {
         default_branch: data.default_branch,
       });
 
-      message.success({ content: 'Repository cloned successfully!', key: 'clone-repo' });
+      showSuccess('Repository cloned successfully!', { key: 'clone-repo' });
     } catch (error) {
-      message.error({
-        content: `Failed to clone repository: ${error instanceof Error ? error.message : String(error)}`,
-        key: 'clone-repo',
-      });
+      showError(
+        `Failed to clone repository: ${error instanceof Error ? error.message : String(error)}`,
+        { key: 'clone-repo' }
+      );
     }
   };
 
@@ -633,9 +628,9 @@ function AppContent() {
     if (!client) return;
     try {
       await client.service('repos').patch(repoId, updates);
-      message.success('Repository updated successfully!');
+      showSuccess('Repository updated successfully!');
     } catch (error) {
-      message.error(
+      showError(
         `Failed to update repository: ${error instanceof Error ? error.message : String(error)}`
       );
     }
@@ -645,9 +640,9 @@ function AppContent() {
     if (!client) return;
     try {
       await client.service('repos').remove(repoId);
-      message.success('Repository deleted successfully!');
+      showSuccess('Repository deleted successfully!');
     } catch (error) {
-      message.error(
+      showError(
         `Failed to delete repository: ${error instanceof Error ? error.message : String(error)}`
       );
     }
@@ -663,32 +658,31 @@ function AppContent() {
     if (!client) return;
     try {
       const action = options.metadataAction === 'archive' ? 'archived' : 'deleted';
-      message.loading({
-        content: `${options.metadataAction === 'archive' ? 'Archiving' : 'Deleting'} worktree...`,
-        key: 'archive-delete',
-        duration: 0,
-      });
+      showLoading(
+        `${options.metadataAction === 'archive' ? 'Archiving' : 'Deleting'} worktree...`,
+        { key: 'archive-delete' }
+      );
       await client.service(`worktrees/${worktreeId}/archive-or-delete`).create(options);
-      message.success({ content: `Worktree ${action} successfully!`, key: 'archive-delete' });
+      showSuccess(`Worktree ${action} successfully!`, { key: 'archive-delete' });
     } catch (error) {
-      message.error({
-        content: `Failed to ${options.metadataAction} worktree: ${error instanceof Error ? error.message : String(error)}`,
-        key: 'archive-delete',
-      });
+      showError(
+        `Failed to ${options.metadataAction} worktree: ${error instanceof Error ? error.message : String(error)}`,
+        { key: 'archive-delete' }
+      );
     }
   };
 
   const handleUnarchiveWorktree = async (worktreeId: string, options?: { boardId?: string }) => {
     if (!client) return;
     try {
-      message.loading({ content: 'Unarchiving worktree...', key: 'unarchive', duration: 0 });
+      showLoading('Unarchiving worktree...', { key: 'unarchive' });
       await client.service(`worktrees/${worktreeId}/unarchive`).create(options || {});
-      message.success({ content: 'Worktree unarchived successfully!', key: 'unarchive' });
+      showSuccess('Worktree unarchived successfully!', { key: 'unarchive' });
     } catch (error) {
-      message.error({
-        content: `Failed to unarchive worktree: ${error instanceof Error ? error.message : String(error)}`,
-        key: 'unarchive',
-      });
+      showError(
+        `Failed to unarchive worktree: ${error instanceof Error ? error.message : String(error)}`,
+        { key: 'unarchive' }
+      );
     }
   };
 
@@ -698,9 +692,9 @@ function AppContent() {
       // Cast to Partial<Worktree> to satisfy Feathers type checking
       // The backend MCP handler properly handles null values for clearing fields
       await client.service('worktrees').patch(worktreeId, updates as Partial<Worktree>);
-      message.success('Worktree updated successfully!');
+      showSuccess('Worktree updated successfully!');
     } catch (error) {
-      message.error(
+      showError(
         `Failed to update worktree: ${error instanceof Error ? error.message : String(error)}`
       );
     }
@@ -721,7 +715,7 @@ function AppContent() {
   ): Promise<import('@agor/core/types').Worktree | null> => {
     if (!client) return null;
     try {
-      message.loading({ content: 'Creating worktree...', key: 'create-worktree', duration: 0 });
+      showLoading('Creating worktree...', { key: 'create-worktree' });
 
       const worktree = (await client.service(`repos/${repoId}/worktrees`).create({
         name: data.name,
@@ -735,13 +729,13 @@ function AppContent() {
       })) as import('@agor/core/types').Worktree;
 
       // Dismiss loading message - worktree will appear on board via WebSocket broadcast
-      message.destroy('create-worktree');
+      destroy('create-worktree');
       return worktree;
     } catch (error) {
-      message.error({
-        content: `Failed to create worktree: ${error instanceof Error ? error.message : String(error)}`,
-        key: 'create-worktree',
-      });
+      showError(
+        `Failed to create worktree: ${error instanceof Error ? error.message : String(error)}`,
+        { key: 'create-worktree' }
+      );
       return null;
     }
   };
@@ -750,28 +744,28 @@ function AppContent() {
   const handleStartEnvironment = async (worktreeId: string) => {
     if (!client) return;
     try {
-      message.loading({ content: 'Starting environment...', key: 'start-env', duration: 0 });
+      showLoading('Starting environment...', { key: 'start-env' });
       await client.service(`worktrees/${worktreeId}/start`).create({});
-      message.success({ content: 'Environment started successfully!', key: 'start-env' });
+      showSuccess('Environment started successfully!', { key: 'start-env' });
     } catch (error) {
-      message.error({
-        content: `Failed to start environment: ${error instanceof Error ? error.message : String(error)}`,
-        key: 'start-env',
-      });
+      showError(
+        `Failed to start environment: ${error instanceof Error ? error.message : String(error)}`,
+        { key: 'start-env' }
+      );
     }
   };
 
   const handleStopEnvironment = async (worktreeId: string) => {
     if (!client) return;
     try {
-      message.loading({ content: 'Stopping environment...', key: 'stop-env', duration: 0 });
+      showLoading('Stopping environment...', { key: 'stop-env' });
       await client.service(`worktrees/${worktreeId}/stop`).create({});
-      message.success({ content: 'Environment stopped successfully!', key: 'stop-env' });
+      showSuccess('Environment stopped successfully!', { key: 'stop-env' });
     } catch (error) {
-      message.error({
-        content: `Failed to stop environment: ${error instanceof Error ? error.message : String(error)}`,
-        key: 'stop-env',
-      });
+      showError(
+        `Failed to stop environment: ${error instanceof Error ? error.message : String(error)}`,
+        { key: 'stop-env' }
+      );
     }
   };
 
@@ -780,9 +774,9 @@ function AppContent() {
     if (!client) return;
     try {
       await client.service('mcp-servers').create(data);
-      message.success('MCP server added successfully!');
+      showSuccess('MCP server added successfully!');
     } catch (error) {
-      message.error(
+      showError(
         `Failed to add MCP server: ${error instanceof Error ? error.message : String(error)}`
       );
     }
@@ -795,9 +789,9 @@ function AppContent() {
     if (!client) return;
     try {
       await client.service('mcp-servers').patch(serverId, updates);
-      message.success('MCP server updated successfully!');
+      showSuccess('MCP server updated successfully!');
     } catch (error) {
-      message.error(
+      showError(
         `Failed to update MCP server: ${error instanceof Error ? error.message : String(error)}`
       );
     }
@@ -807,9 +801,9 @@ function AppContent() {
     if (!client) return;
     try {
       await client.service('mcp-servers').remove(serverId);
-      message.success('MCP server deleted successfully!');
+      showSuccess('MCP server deleted successfully!');
     } catch (error) {
-      message.error(
+      showError(
         `Failed to delete MCP server: ${error instanceof Error ? error.message : String(error)}`
       );
     }
@@ -844,7 +838,7 @@ function AppContent() {
       // Note: Don't show success message here - it's part of the session settings save
       // The main "Session updated" message will appear from handleUpdateSession
     } catch (error) {
-      message.error(
+      showError(
         `Failed to update MCP servers: ${error instanceof Error ? error.message : String(error)}`
       );
     }
@@ -861,7 +855,7 @@ function AppContent() {
         content_preview: content.slice(0, 200),
       });
     } catch (error) {
-      message.error(
+      showError(
         `Failed to send comment: ${error instanceof Error ? error.message : String(error)}`
       );
     }
@@ -875,7 +869,7 @@ function AppContent() {
         resolved: !comment?.resolved,
       });
     } catch (error) {
-      message.error(
+      showError(
         `Failed to resolve comment: ${error instanceof Error ? error.message : String(error)}`
       );
     }
@@ -885,9 +879,9 @@ function AppContent() {
     if (!client) return;
     try {
       await client.service('board-comments').remove(commentId);
-      message.success('Comment deleted');
+      showSuccess('Comment deleted');
     } catch (error) {
-      message.error(
+      showError(
         `Failed to delete comment: ${error instanceof Error ? error.message : String(error)}`
       );
     }
@@ -902,9 +896,7 @@ function AppContent() {
         created_by: user?.user_id || 'anonymous',
       });
     } catch (error) {
-      message.error(
-        `Failed to send reply: ${error instanceof Error ? error.message : String(error)}`
-      );
+      showError(`Failed to send reply: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
@@ -917,7 +909,7 @@ function AppContent() {
         emoji,
       });
     } catch (error) {
-      message.error(
+      showError(
         `Failed to toggle reaction: ${error instanceof Error ? error.message : String(error)}`
       );
     }
@@ -937,7 +929,7 @@ function AppContent() {
         onboarding_completed: true,
       });
     } catch (error) {
-      message.error(
+      showError(
         `Failed to update onboarding status: ${error instanceof Error ? error.message : String(error)}`
       );
     }

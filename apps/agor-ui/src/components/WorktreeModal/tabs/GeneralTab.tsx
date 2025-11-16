@@ -1,7 +1,8 @@
 import type { Board, Repo, Session, Worktree } from '@agor/core/types';
 import { DeleteOutlined, FolderOutlined, LinkOutlined } from '@ant-design/icons';
-import { Button, Descriptions, Form, Input, message, Select, Space, Tag, Typography } from 'antd';
+import { Button, Descriptions, Form, Input, Select, Space, Tag, Typography } from 'antd';
 import { useEffect, useState } from 'react';
+import { useThemedMessage } from '../../../utils/message';
 import { ArchiveDeleteWorktreeModal } from '../../ArchiveDeleteWorktreeModal';
 
 const { TextArea } = Input;
@@ -41,6 +42,8 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
   onArchiveOrDelete,
   onClose,
 }) => {
+  const { showSuccess } = useThemedMessage();
+
   // Track if this is the initial mount to prevent overwriting user input
   const [isInitialized, setIsInitialized] = useState(false);
   const [boardId, setBoardId] = useState(worktree.board_id || undefined);
@@ -80,7 +83,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
       notes: (notes.trim() === '' ? null : notes) as string | null | undefined,
     };
     onUpdate?.(worktree.worktree_id, updates);
-    message.success('Worktree updated');
+    showSuccess('Worktree updated');
     onClose?.();
   };
 

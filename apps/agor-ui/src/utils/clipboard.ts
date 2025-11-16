@@ -1,7 +1,9 @@
-import { message } from 'antd';
-
 /**
  * Copy text to clipboard with error handling
+ *
+ * NOTE: This utility is now deprecated in favor of the built-in copy functionality
+ * in the themed message utility (utils/message.tsx). All messages now have
+ * copy-to-clipboard built-in.
  *
  * @param text - Text to copy to clipboard
  * @param options - Optional configuration
@@ -32,7 +34,8 @@ export async function copyToClipboard(
     if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(text);
       if (showSuccess) {
-        message.success(successMessage);
+        // Note: For new code, use the themed message utility instead
+        console.log(successMessage);
       }
       return true;
     }
@@ -52,7 +55,7 @@ export async function copyToClipboard(
 
     if (successful) {
       if (showSuccess) {
-        message.success(successMessage);
+        console.log(successMessage);
       }
       return true;
     } else {
@@ -61,7 +64,7 @@ export async function copyToClipboard(
   } catch (error) {
     console.error('Failed to copy to clipboard:', error);
     if (showError) {
-      message.error(errorMessage);
+      console.error(errorMessage);
     }
     return false;
   }
