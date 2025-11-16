@@ -218,7 +218,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
         .then(() => {
           console.log(`✅ Worktree removed from filesystem successfully`);
         })
-        .catch((error) => {
+        .catch(error => {
           console.error(
             `⚠️  Failed to remove worktree from filesystem:`,
             error instanceof Error ? error.message : String(error)
@@ -253,7 +253,9 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
 
     // Stop environment if running
     if (worktree.environment_instance?.status === 'running') {
-      console.log(`⚠️  Stopping environment for worktree ${worktree.name} before ${metadataAction}`);
+      console.log(
+        `⚠️  Stopping environment for worktree ${worktree.name} before ${metadataAction}`
+      );
       try {
         await this.stopEnvironment(id, params);
       } catch (error) {
@@ -492,12 +494,10 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
 
     // Remove timestamps for comparison - create new objects without timestamp
     if (oldState?.last_health_check) {
-      // biome-ignore lint/correctness/noUnusedVariables: extracting to remove from object
       const { timestamp, ...healthCheck } = oldState.last_health_check;
       oldState.last_health_check = healthCheck as typeof oldState.last_health_check;
     }
     if (newState?.last_health_check) {
-      // biome-ignore lint/correctness/noUnusedVariables: extracting to remove from object
       const { timestamp, ...healthCheck } = newState.last_health_check;
       newState.last_health_check = healthCheck as typeof newState.last_health_check;
     }
@@ -573,7 +573,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
           stdio: 'inherit', // Show output directly in daemon logs
         });
 
-        childProcess.on('exit', (code) => {
+        childProcess.on('exit', code => {
           if (code === 0) {
             console.log(`✅ Start command completed successfully for ${worktree.name}`);
             resolve();
@@ -652,7 +652,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
             stdio: 'inherit',
           });
 
-          stopProcess.on('exit', (code) => {
+          stopProcess.on('exit', code => {
             if (code === 0) {
               resolve();
             } else {
@@ -724,7 +724,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       await this.stopEnvironment(id, params);
 
       // Wait a bit for processes to clean up
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await new Promise(resolve => setTimeout(resolve, 1000));
     }
 
     // Start
@@ -923,7 +923,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
           stderr += data.toString();
         });
 
-        childProcess.on('exit', (code) => {
+        childProcess.on('exit', code => {
           clearTimeout(timeout);
           if (code === 0 || stdout.length > 0) {
             resolve({ stdout, stderr, truncated });
@@ -932,7 +932,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
           }
         });
 
-        childProcess.on('error', (error) => {
+        childProcess.on('error', error => {
           clearTimeout(timeout);
           reject(error);
         });
