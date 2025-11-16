@@ -488,9 +488,55 @@ const SessionDrawer = ({
   };
 
   const handleSpawnModalConfirm = async (config: string | Partial<SpawnConfig>) => {
-    // Pass the full SpawnConfig to onSubsession
-    await onSubsession?.(config);
+    // Render the template with the SpawnConfig and send it as a prompt to the parent agent
+    // The parent agent will then use its context to create a rich prompt and spawn via MCP
+    if (typeof config === 'string') {
+      // Simple string prompt (shouldn't happen from modal, but handle it)
+      const metaPrompt = compiledSpawnSubsessionTemplate({ userPrompt: config });
+      await onSendPrompt?.(metaPrompt, permissionMode);
+    } else {
+      // Full SpawnConfig from advanced modal - render template with all config
+      const hasConfig =
+        config.agent ||
+        config.permissionMode ||
+        config.modelConfig ||
+        config.codexSandboxMode ||
+        config.codexApprovalPolicy ||
+        config.codexNetworkAccess ||
+        config.mcpServerIds?.length ||
+        config.enableCallback ||
+        config.includeLastMessage ||
+        config.includeOriginalPrompt ||
+        config.extraInstructions;
+
+      // Import the full template compiler from ForkSpawnModal
+      // (We'll use the same Handlebars instance)
+      const Handlebars = await import('handlebars');
+      const compiledTemplate = Handlebars.compile(spawnSubsessionTemplate);
+
+      const metaPrompt = compiledTemplate({
+        userPrompt: config.prompt || '',
+        hasConfig,
+        agenticTool: config.agent,
+        permissionMode: config.permissionMode,
+        modelConfig: config.modelConfig,
+        codexSandboxMode: config.codexSandboxMode,
+        codexApprovalPolicy: config.codexApprovalPolicy,
+        codexNetworkAccess: config.codexNetworkAccess,
+        mcpServerIds: config.mcpServerIds,
+        callbackConfig: {
+          enableCallback: config.enableCallback,
+          includeLastMessage: config.includeLastMessage,
+          includeOriginalPrompt: config.includeOriginalPrompt,
+        },
+        extraInstructions: config.extraInstructions,
+      });
+
+      await onSendPrompt?.(metaPrompt, permissionMode);
+    }
+
     setSpawnModalOpen(false);
+    setInputValue(''); // Clear input after spawning
   };
 
   const handlePermissionModeChange = (newMode: PermissionMode) => {

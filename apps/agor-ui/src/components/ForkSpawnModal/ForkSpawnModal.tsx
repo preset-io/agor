@@ -16,13 +16,18 @@ import type {
 import { getDefaultPermissionMode } from '@agor/core/types';
 import { DownOutlined } from '@ant-design/icons';
 import { Checkbox, Collapse, Form, Input, Modal, Radio, Typography } from 'antd';
-import { useEffect, useState } from 'react';
+import Handlebars from 'handlebars';
+import { useEffect, useMemo, useState } from 'react';
+import spawnSubsessionTemplate from '../../templates/spawn_subsession.hbs?raw';
 import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
 import { AgentSelectionGrid } from '../AgentSelectionGrid/AgentSelectionGrid';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
 import type { ModelConfig } from '../ModelSelector';
 
 const { TextArea } = Input;
+
+// Compile template once at module load
+const compiledSpawnTemplate = Handlebars.compile(spawnSubsessionTemplate);
 
 export type ForkSpawnAction = 'fork' | 'spawn';
 
@@ -66,6 +71,7 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
   const [selectedAgent, setSelectedAgent] = useState<AgenticToolName>(
     session?.agentic_tool || 'claude-code'
   );
+  const [formValues, setFormValues] = useState<Partial<SpawnConfig>>({});
 
   // Reset form when modal opens
   useEffect(() => {
@@ -98,8 +104,52 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
 
       form.setFieldsValue(initialValues);
       setSelectedAgent(session.agentic_tool || 'claude-code');
+      setFormValues(initialValues);
     }
   }, [open, session, configPreset, form, initialPrompt]);
+
+  // Render template preview based on current form values
+  const renderedTemplate = useMemo(() => {
+    if (action === 'fork' || !formValues.prompt) {
+      return '';
+    }
+
+    try {
+      const hasConfig =
+        formValues.agent ||
+        formValues.permissionMode ||
+        formValues.modelConfig ||
+        formValues.codexSandboxMode ||
+        formValues.codexApprovalPolicy ||
+        formValues.codexNetworkAccess ||
+        formValues.mcpServerIds?.length > 0 ||
+        formValues.enableCallback ||
+        formValues.includeLastMessage ||
+        formValues.includeOriginalPrompt ||
+        formValues.extraInstructions;
+
+      return compiledSpawnTemplate({
+        userPrompt: formValues.prompt || '',
+        hasConfig,
+        agenticTool: formValues.agent || selectedAgent,
+        permissionMode: formValues.permissionMode,
+        modelConfig: formValues.modelConfig,
+        codexSandboxMode: formValues.codexSandboxMode,
+        codexApprovalPolicy: formValues.codexApprovalPolicy,
+        codexNetworkAccess: formValues.codexNetworkAccess,
+        mcpServerIds: formValues.mcpServerIds,
+        callbackConfig: {
+          enableCallback: formValues.enableCallback,
+          includeLastMessage: formValues.includeLastMessage,
+          includeOriginalPrompt: formValues.includeOriginalPrompt,
+        },
+        extraInstructions: formValues.extraInstructions,
+      });
+    } catch (error) {
+      console.error('Template rendering error:', error);
+      return '⚠️ Template rendering error';
+    }
+  }, [action, formValues, selectedAgent]);
 
   const handleOk = async () => {
     try {
@@ -181,6 +231,7 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
         form={form}
         layout="vertical"
         initialValues={{ enableCallback: true, includeLastMessage: true }}
+        onValuesChange={(_, allValues) => setFormValues(allValues)}
       >
         {/* Prompt */}
         <Form.Item
@@ -290,6 +341,55 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
                 autoSize={{ minRows: 2, maxRows: 4 }}
               />
             </Form.Item>
+
+            {/* Template Preview */}
+            {renderedTemplate && (
+              <Collapse
+                ghost
+                style={{ marginTop: 24 }}
+                expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
+                items={[
+                  {
+                    key: 'template-preview',
+                    label: (
+                      <Typography.Text strong>
+                        🔍 Parent Agent Instruction Preview (Live)
+                      </Typography.Text>
+                    ),
+                    extra: (
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        This is what will be sent to the parent agent
+                      </Typography.Text>
+                    ),
+                    children: (
+                      <div>
+                        <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+                          The parent agent will receive these instructions to prepare a rich,
+                          context-aware prompt for the spawned subsession using its current session
+                          context.
+                        </Typography.Paragraph>
+                        <div
+                          style={{
+                            backgroundColor: '#f5f5f5',
+                            border: '1px solid #d9d9d9',
+                            borderRadius: 4,
+                            padding: 12,
+                            maxHeight: 400,
+                            overflow: 'auto',
+                            fontFamily: 'monospace',
+                            fontSize: 12,
+                            whiteSpace: 'pre-wrap',
+                            wordBreak: 'break-word',
+                          }}
+                        >
+                          {renderedTemplate}
+                        </div>
+                      </div>
+                    ),
+                  },
+                ]}
+              />
+            )}
           </>
         )}
       </Form>
