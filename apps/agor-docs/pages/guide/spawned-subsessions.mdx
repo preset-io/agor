@@ -1,0 +1,276 @@
+# 🤖 Spawned Subsessions with Callbacks
+
+**Delegate work to specialized subagents, then get automatic reports when they finish.** Spawn subsessions from any agent to parallelize work, isolate context, and orchestrate complex multi-step workflows.
+
+---
+
+## Overview
+
+Think of subsessions as **delegated subagents** - you can spawn them from any running session to handle specific subtasks:
+
+- **Fresh context window** - Each subsession starts with only the context it needs, not your entire conversation history
+- **Inherits parent config by default** - Same agentic tool, model, permissions, and MCP servers
+- **Fully configurable** - Override any setting: use Claude for planning but Codex for implementation
+- **Automatic callbacks** - When done, the subsession reports back to the parent with a summary and status
+- **Persists for introspection** - Subsessions remain available after completion for review and follow-up prompts
+
+<img
+  src="/screenshots/spawn-advanced-modal.png"
+  alt="Advanced spawn modal showing configuration options"
+  style={{ maxWidth: '400px' }}
+/>
+
+---
+
+## Why Subsessions?
+
+### Comparison with Claude Code's Subagents
+
+If you're familiar with [Claude Code's subagent feature](https://docs.claudecode.com/subagents), Agor's subsessions take the concept further:
+
+| Feature | Claude Code Subagents | Agor Subsessions |
+|---------|----------------------|------------------|
+| **Parent Blocking** | Parent locks while subagent runs | ✅ Parent remains responsive |
+| **Callback Queuing** | N/A | ✅ Callbacks queue if parent is busy |
+| **Introspection** | Limited | ✅ Full conversation & git history |
+| **Post-Completion Prompting** | No | ✅ Can prompt child after it's done |
+| **Hierarchical Spawning** | No | ✅ Children can spawn their own children |
+| **Multi-Tool Support** | Claude Code only | ✅ Works with any agent (Claude, Codex, Gemini, OpenCode) |
+
+**Key Advantages:**
+
+- **Non-blocking architecture** - The parent agent can continue working while subsessions run. If a callback arrives while the parent is processing, it gets queued and delivered when ready.
+- **Main thread always available** - You can keep prompting the parent, spawn additional subsessions, or perform other work without waiting.
+- **Fully introspectable** - Every subsession persists as a first-class session with complete conversation history, tool usage, and git changes.
+- **Post-completion flexibility** - After a subsession finishes, you can still prompt it directly: "Can you fix the tests you broke?" or use it to spawn new children if needed.
+
+### Unlocking Subsessions for Codex, Gemini, and OpenCode
+
+**As of this writing**, neither Codex, Gemini, nor OpenCode SDKs natively support spawning subsessions or subagents. **Agor unlocks this powerful capability for all supported agents**, not just Claude Code.
+
+This means you can:
+- Spawn a Codex subsession from a Claude parent
+- Have Gemini generate tests as a subsession
+- Build multi-agent orchestration across any combination of tools
+- Use the best tool for each subtask without being locked into a single SDK
+
+> **Note:** Codex does not yet support MCP in Agor, which means you cannot attach MCP servers to Codex subsessions until we complete the MCP integration for Codex. This is on the roadmap.
+
+---
+
+## Use Cases
+
+### Parallel Workflows
+
+Distribute independent work across multiple subsessions:
+
+```
+Parent: "Let's refactor the auth system"
+  ├─ Subsession 1: "Update backend auth logic"
+  ├─ Subsession 2: "Update frontend login flow"
+  └─ Subsession 3: "Write migration for user table"
+```
+
+All three subsessions can run in parallel, reporting back when complete. The parent aggregates results and proceeds with next steps.
+
+### Multi-Agent Orchestration
+
+Chain different tools together for specialized tasks:
+
+```
+Claude (planning): "Here's the architecture plan"
+  └─ Codex (implementation): "I'll implement the API endpoints"
+      └─ Claude (review): "Let me review Codex's code"
+```
+
+Each agent does what it's best at:
+- **Claude** for high-level planning and code review
+- **Codex** for fast, raw implementation
+- **Gemini** for comprehensive testing
+- **OpenCode** for open-source model experimentation
+
+### Specialized Tasks
+
+Delegate specific subtasks with customized configurations:
+
+```
+Main session: "Build a payment feature"
+  ├─ Spawn with Gemini: "Generate comprehensive test cases"
+  └─ Spawn with Codex: "Implement the Stripe integration"
+```
+
+---
+
+## Callback Reports
+
+When a subsession completes a task, it automatically sends a callback message to the parent session.
+
+### Callback Includes:
+
+- **Task status** (success/error)
+- **Summary of work completed**
+- **Tool usage count** (Read, Edit, Bash, etc.)
+- **Final assistant message** (optional)
+- **Link back to subsession** for full details
+
+### Parent Can Then:
+
+- **Continue with next steps** based on results
+- **Prompt the subsession again**: "Can you fix the unit tests you broke?"
+- **Review subsession conversation** for debugging
+- **Spawn additional subsessions** based on results
+- **Aggregate results** from multiple parallel subsessions
+
+---
+
+## Configuration Options
+
+When spawning a subsession, you can customize:
+
+### Agentic Tool
+
+Switch between Claude Code, Codex, Gemini, or OpenCode
+
+### Model Override
+
+Use a different model for the subsession (e.g., use GPT-5 for heavy lifting while parent uses GPT-4)
+
+### Permissions
+
+Set stricter or looser permission requirements than the parent
+
+### MCP Servers
+
+Attach different tool sets (note: Codex MCP support pending)
+
+### Callback Behavior
+
+- **Include last message in callback** (default: on) - Sends the final assistant message for quick context
+- **Include original prompt in callback** (default: off) - Useful when context might be lost
+- **Extra instructions** - Provide formatting guidance for the callback report
+
+<img
+  src="/screenshots/spawn-callback-config.png"
+  alt="Callback configuration options in spawn modal"
+  style={{ maxWidth: '400px' }}
+/>
+
+---
+
+## Advanced Patterns
+
+### Hierarchical Delegation
+
+Build deep agent hierarchies where each level delegates to specialized agents:
+
+```
+Session A (architect)
+  └─ Session B (backend dev)
+      ├─ Session C (API implementation)
+      └─ Session D (database schema)
+  └─ Session E (frontend dev)
+      └─ Session F (UI components)
+```
+
+Each session can spawn its own subsessions, creating complex delegation trees.
+
+### Async Task Queue
+
+- Spawn multiple subsessions in parallel for independent tasks
+- Each reports back when done (callbacks queue if parent is busy)
+- Parent aggregates results and proceeds
+- All subsessions remain available for follow-up prompts
+
+### Cross-Tool Workflows
+
+Leverage the strengths of each agent in a single workflow:
+
+1. **Claude** for planning and architecture design
+2. **Codex** for raw implementation speed
+3. **Gemini** for comprehensive test generation
+4. **Claude** again for code review and refinement
+
+---
+
+## Best Practices
+
+### Keep Prompts Focused
+
+Subsessions work best with specific, isolated tasks. Instead of "Fix the entire auth system", try "Update the JWT token validation logic".
+
+### Use Callbacks Wisely
+
+- **Include last message** when you need quick status updates
+- **Include original prompt** only when context might be lost (it adds tokens to the callback)
+- **Add extra instructions** to format callbacks for specific use cases (e.g., "Provide line numbers for all changes")
+
+### Review Subsessions
+
+Click through to inspect full conversation and git changes. Subsessions are first-class citizens - you can:
+- View complete conversation history
+- See all tool calls and file changes
+- Open in terminal to inspect git diff
+- Prompt them again after completion
+
+### Post-Prompt Anytime
+
+Subsessions don't disappear after completion. Send follow-ups whenever needed:
+- "Can you add error handling to the code you wrote?"
+- "Run the tests you generated"
+- "Spawn a new subsession to fix the lint errors"
+
+### Parallelize Smartly
+
+Spawn multiple subsessions for independent tasks, but be mindful of:
+- **Git conflicts** - Avoid having multiple subsessions edit the same files
+- **Resource limits** - Each subsession consumes API tokens
+- **Callback ordering** - Callbacks may arrive in any order
+
+---
+
+## Example: Multi-Agent Refactoring
+
+Here's a real-world example of using subsessions to refactor a feature:
+
+**Parent Session (Claude Code):**
+```
+"I need to refactor our authentication system to use OAuth2.
+Let me break this down into parallel tasks."
+
+[Spawns 3 subsessions]
+```
+
+**Subsession 1 (Codex):**
+```
+Prompt: "Implement OAuth2 server endpoints in backend/auth/"
+Status: ✅ Complete
+Callback: "Implemented 4 endpoints, created migration, updated docs"
+```
+
+**Subsession 2 (Claude Code):**
+```
+Prompt: "Update frontend login flow to use OAuth2"
+Status: ✅ Complete
+Callback: "Updated React components, added OAuth2 redirect flow"
+```
+
+**Subsession 3 (Gemini):**
+```
+Prompt: "Generate comprehensive tests for OAuth2 flow"
+Status: ✅ Complete
+Callback: "Created 12 test cases covering happy path and edge cases"
+```
+
+**Parent receives all callbacks, then:**
+```
+"Great! Let me review the changes across all subsessions.
+[Spawns Subsession 4] Review and integrate the OAuth2 implementation."
+```
+
+---
+
+## Related Docs
+
+- [Concepts](/guide/concepts) - Understanding worktrees, sessions, and boards
+- [Environments](/guide/environment-configuration) - Dev environment setup
+- [Advanced Features](/guide/advanced-features) - Other power user features

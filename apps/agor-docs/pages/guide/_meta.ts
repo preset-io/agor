@@ -10,6 +10,7 @@ export default {
   scheduler: 'Scheduler',
   'environment-configuration': 'Environments',
   'advanced-features': 'Advanced Features',
+  'spawned-subsessions': 'Spawned Subsessions',
   architecture: 'Architecture',
   'sdk-comparison': 'SDK Comparison',
   '--- Development': {
