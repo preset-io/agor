@@ -167,9 +167,80 @@ export function setupMCPRoutes(app: Application): void {
                   },
                   agenticTool: {
                     type: 'string',
-                    enum: ['claude-code', 'codex', 'gemini'],
+                    enum: ['claude-code', 'codex', 'gemini', 'opencode'],
                     description:
                       'Which agent to use for the subsession (defaults to same as parent)',
+                  },
+                  permissionMode: {
+                    type: 'string',
+                    enum: [
+                      'default',
+                      'acceptEdits',
+                      'bypassPermissions',
+                      'plan',
+                      'ask',
+                      'auto',
+                      'on-failure',
+                      'allow-all',
+                    ],
+                    description: 'Permission mode override (defaults based on config preset)',
+                  },
+                  modelConfig: {
+                    type: 'object',
+                    properties: {
+                      mode: {
+                        type: 'string',
+                        enum: ['alias', 'specific'],
+                      },
+                      model: {
+                        type: 'string',
+                      },
+                      thinkingMode: {
+                        type: 'string',
+                        enum: ['auto', 'manual', 'off'],
+                      },
+                      manualThinkingTokens: {
+                        type: 'number',
+                      },
+                    },
+                    description: 'Model configuration override',
+                  },
+                  codexSandboxMode: {
+                    type: 'string',
+                    enum: ['workspace-write', 'full-access'],
+                    description: 'Codex sandbox mode (codex only)',
+                  },
+                  codexApprovalPolicy: {
+                    type: 'string',
+                    enum: ['auto-approve-read-only', 'auto-approve-safe', 'ask-all'],
+                    description: 'Codex approval policy (codex only)',
+                  },
+                  codexNetworkAccess: {
+                    type: 'boolean',
+                    description: 'Codex network access (codex only)',
+                  },
+                  mcpServerIds: {
+                    type: 'array',
+                    items: {
+                      type: 'string',
+                    },
+                    description: 'MCP server IDs to attach to spawned session',
+                  },
+                  enableCallback: {
+                    type: 'boolean',
+                    description: 'Enable callback to parent on completion (default: true)',
+                  },
+                  includeLastMessage: {
+                    type: 'boolean',
+                    description: "Include child's final result in callback (default: true)",
+                  },
+                  includeOriginalPrompt: {
+                    type: 'boolean',
+                    description: 'Include original spawn prompt in callback (default: false)',
+                  },
+                  extraInstructions: {
+                    type: 'string',
+                    description: 'Extra instructions appended to spawn prompt',
                   },
                   taskId: {
                     type: 'string',
@@ -847,26 +918,22 @@ export function setupMCPRoutes(app: Application): void {
             });
           }
 
-          const spawnData: {
-            prompt: string;
-            title?: string;
-            agentic_tool?: AgenticToolName;
-            task_id?: string;
-          } = {
+          const spawnData: Partial<import('@agor/core/types').SpawnConfig> = {
             prompt: args.prompt,
+            title: args.title,
+            agent: args.agenticTool as AgenticToolName | undefined,
+            permissionMode: args.permissionMode,
+            modelConfig: args.modelConfig,
+            codexSandboxMode: args.codexSandboxMode,
+            codexApprovalPolicy: args.codexApprovalPolicy,
+            codexNetworkAccess: args.codexNetworkAccess,
+            mcpServerIds: args.mcpServerIds,
+            enableCallback: args.enableCallback,
+            includeLastMessage: args.includeLastMessage,
+            includeOriginalPrompt: args.includeOriginalPrompt,
+            extraInstructions: args.extraInstructions,
+            task_id: args.taskId,
           };
-
-          if (args.title) {
-            spawnData.title = args.title;
-          }
-
-          if (args.agenticTool) {
-            spawnData.agentic_tool = args.agenticTool as AgenticToolName;
-          }
-
-          if (args.taskId) {
-            spawnData.task_id = args.taskId;
-          }
 
           // Call spawn method on sessions service
           console.log(`🌱 MCP spawning subsession from ${context.sessionId.substring(0, 8)}`);

@@ -5,7 +5,13 @@
  */
 
 import type { AgorClient } from '@agor/core/api';
-import type { AgenticToolName, PermissionMode, Session, SessionID } from '@agor/core/types';
+import type {
+  AgenticToolName,
+  PermissionMode,
+  Session,
+  SessionID,
+  SpawnConfig,
+} from '@agor/core/types';
 import { getDefaultPermissionMode, SessionStatus } from '@agor/core/types';
 import { useState } from 'react';
 import type { NewSessionConfig } from '../components/NewSessionModal';
@@ -15,7 +21,7 @@ interface UseSessionActionsResult {
   updateSession: (sessionId: SessionID, updates: Partial<Session>) => Promise<Session | null>;
   deleteSession: (sessionId: SessionID) => Promise<boolean>;
   forkSession: (sessionId: SessionID, prompt: string) => Promise<Session | null>;
-  spawnSession: (sessionId: SessionID, prompt: string) => Promise<Session | null>;
+  spawnSession: (sessionId: SessionID, config: Partial<SpawnConfig>) => Promise<Session | null>;
   creating: boolean;
   error: string | null;
 }
@@ -121,7 +127,10 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
     }
   };
 
-  const spawnSession = async (sessionId: SessionID, prompt: string): Promise<Session | null> => {
+  const spawnSession = async (
+    sessionId: SessionID,
+    config: Partial<SpawnConfig>
+  ): Promise<Session | null> => {
     if (!client) {
       setError('Client not connected');
       return null;
@@ -131,14 +140,14 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
       setCreating(true);
       setError(null);
 
-      // Call custom spawn endpoint via FeathersJS client
-      const spawnedSession = (await client.service(`sessions/${sessionId}/spawn`).create({
-        prompt,
-      })) as Session;
+      // Call custom spawn endpoint via FeathersJS client with full SpawnConfig
+      const spawnedSession = (await client
+        .service(`sessions/${sessionId}/spawn`)
+        .create(config)) as Session;
 
       // Send the prompt to the spawned session to actually execute it
       await client.service(`sessions/${spawnedSession.session_id}/prompt`).create({
-        prompt,
+        prompt: config.prompt,
       });
 
       return spawnedSession;

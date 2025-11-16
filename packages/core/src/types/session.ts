@@ -333,3 +333,58 @@ export interface ScheduledRunMetadata {
     retention: number;
   };
 }
+
+/**
+ * Configuration for spawning a child session
+ *
+ * Provides fine-grained control over spawned session settings,
+ * overriding defaults from parent session or user preferences.
+ */
+export interface SpawnConfig {
+  /** Prompt for the spawned session (required) */
+  prompt: string;
+
+  /** Optional title for the spawned session */
+  title?: string;
+
+  /** Agentic tool to use (defaults to parent's tool) */
+  agent?: AgenticToolName;
+
+  /** Permission mode override (defaults based on config preset) */
+  permissionMode?: PermissionMode;
+
+  /** Model configuration override */
+  modelConfig?: {
+    mode?: 'alias' | 'exact';
+    model?: string;
+    thinkingMode?: 'auto' | 'manual' | 'off';
+    manualThinkingTokens?: number;
+  };
+
+  /** Codex sandbox mode (codex only) */
+  codexSandboxMode?: CodexSandboxMode;
+
+  /** Codex approval policy (codex only) */
+  codexApprovalPolicy?: CodexApprovalPolicy;
+
+  /** Codex network access (codex only) */
+  codexNetworkAccess?: boolean;
+
+  /** MCP server IDs to attach to spawned session */
+  mcpServerIds?: string[];
+
+  /** Enable callback to parent on completion (default: true) */
+  enableCallback?: boolean;
+
+  /** Include child's final result in callback (default: true) */
+  includeLastMessage?: boolean;
+
+  /** Include original spawn prompt in callback (default: false) */
+  includeOriginalPrompt?: boolean;
+
+  /** Extra instructions appended to spawn prompt */
+  extraInstructions?: string;
+
+  /** Task ID to link as spawn point */
+  task_id?: string;
+}

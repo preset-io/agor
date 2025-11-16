@@ -1700,10 +1700,7 @@ async function main() {
   });
 
   app.use('/sessions/:id/spawn', {
-    async create(
-      data: { prompt: string; title?: string; agent?: string; task_id?: string },
-      params: RouteParams
-    ) {
+    async create(data: Partial<import('@agor/core/types').SpawnConfig>, params: RouteParams) {
       ensureMinimumRole(params, 'member', 'spawn sessions');
       const id = params.route?.id;
       if (!id) throw new Error('Session ID required');

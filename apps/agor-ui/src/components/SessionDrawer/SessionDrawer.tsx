@@ -8,6 +8,7 @@ import type {
   PermissionScope,
   Repo,
   Session,
+  SpawnConfig,
   User,
   Worktree,
 } from '@agor/core/types';
@@ -46,6 +47,7 @@ import { compileTemplate } from '../../utils/templates';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { ConversationView } from '../ConversationView';
 import { EnvironmentPill } from '../EnvironmentPill';
+import { ForkSpawnModal } from '../ForkSpawnModal';
 import { CreatedByTag } from '../metadata';
 import { PermissionModeSelector } from '../PermissionModeSelector';
 import {
@@ -89,7 +91,7 @@ interface SessionDrawerProps {
   onClose: () => void;
   onSendPrompt?: (prompt: string, permissionMode?: PermissionMode) => void;
   onFork?: (prompt: string) => void;
-  onSubsession?: (prompt: string) => void;
+  onSubsession?: (config: string | Partial<SpawnConfig>) => void;
   onPermissionDecision?: (
     sessionId: string,
     requestId: string,
@@ -185,9 +187,10 @@ const SessionDrawer = ({
   const [scrollToBottom, setScrollToBottom] = React.useState<(() => void) | null>(null);
   const [isStopping, setIsStopping] = React.useState(false);
   const [queuedMessages, setQueuedMessages] = React.useState<Message[]>([]);
+  const [spawnModalOpen, setSpawnModalOpen] = React.useState(false);
 
   // Fetch tasks for this session to calculate token totals
-  const currentUser = users?.find((u) => u.user_id === currentUserId) || null;
+  const currentUser = users?.find(u => u.user_id === currentUserId) || null;
   const { tasks } = useTasks(client, session?.session_id || null, currentUser);
 
   // Fetch queued messages for this session
@@ -216,7 +219,7 @@ const SessionDrawer = ({
 
     const handleQueued = (message: Message) => {
       if (message.session_id === session.session_id) {
-        setQueuedMessages((prev) => {
+        setQueuedMessages(prev => {
           const updated = [...prev, message].sort(
             (a, b) => (a.queue_position ?? 0) - (b.queue_position ?? 0)
           );
@@ -231,8 +234,8 @@ const SessionDrawer = ({
       // Only process if it's a queued message for this session
       if (message.status === 'queued' && message.session_id === session.session_id) {
         console.log('[SessionDrawer] Removing queued message from UI:', message.message_id);
-        setQueuedMessages((prev) => {
-          const filtered = prev.filter((m) => m.message_id !== message.message_id);
+        setQueuedMessages(prev => {
+          const filtered = prev.filter(m => m.message_id !== message.message_id);
           console.log('[SessionDrawer] Queue after removal:', filtered);
           return filtered;
         });
@@ -408,7 +411,7 @@ const SessionDrawer = ({
 
         // Optimistically update the UI immediately (don't wait for WebSocket event)
         if (response.message) {
-          setQueuedMessages((prev) => {
+          setQueuedMessages(prev => {
             const updated = [...prev, response.message].sort(
               (a, b) => (a.queue_position ?? 0) - (b.queue_position ?? 0)
             );
@@ -484,6 +487,12 @@ const SessionDrawer = ({
     }
   };
 
+  const handleSpawnModalConfirm = async (config: string | Partial<SpawnConfig>) => {
+    // Pass the full SpawnConfig to onSubsession
+    await onSubsession?.(config);
+    setSpawnModalOpen(false);
+  };
+
   const handlePermissionModeChange = (newMode: PermissionMode) => {
     setPermissionMode(newMode);
 
@@ -557,7 +566,7 @@ const SessionDrawer = ({
   const isRunning = session.status === SessionStatus.RUNNING;
 
   // Get repo from worktree (worktree is passed from parent)
-  const repo = worktree ? repos.find((r) => r.repo_id === worktree.repo_id) : null;
+  const repo = worktree ? repos.find(r => r.repo_id === worktree.repo_id) : null;
 
   return (
     <Drawer
@@ -697,9 +706,9 @@ const SessionDrawer = ({
             {worktree?.pull_request_url && <PullRequestPill prUrl={worktree.pull_request_url} />}
             {/* MCP Servers */}
             {sessionMcpServerIds
-              .map((serverId) => mcpServers.find((s) => s.mcp_server_id === serverId))
+              .map(serverId => mcpServers.find(s => s.mcp_server_id === serverId))
               .filter(Boolean)
-              .map((server) => (
+              .map(server => (
                 <Tag key={server?.mcp_server_id} color="purple" icon={<ApiOutlined />}>
                   {server?.display_name || server?.name}
                 </Tag>
@@ -814,8 +823,8 @@ const SessionDrawer = ({
                         });
 
                         // Optimistically remove from UI
-                        setQueuedMessages((prev) =>
-                          prev.filter((m) => m.message_id !== msg.message_id)
+                        setQueuedMessages(prev =>
+                          prev.filter(m => m.message_id !== msg.message_id)
                         );
 
                         // Delete via messages service directly
@@ -887,7 +896,7 @@ const SessionDrawer = ({
             onChange={setInputValue}
             placeholder="Send a prompt, fork, or create a subsession... (type @ for autocomplete)"
             autoSize={{ minRows: 1, maxRows: 10 }}
-            onKeyPress={(e) => {
+            onKeyPress={e => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 // Allow sending/queueing when there's input (queues if running, sends if idle)
@@ -984,6 +993,13 @@ const SessionDrawer = ({
                     loading={isStopping}
                   />
                 </Tooltip>
+                <Tooltip title="Advanced Spawn Options">
+                  <Button
+                    icon={<SettingOutlined />}
+                    onClick={() => setSpawnModalOpen(true)}
+                    disabled={connectionDisabled || isRunning || !inputValue.trim()}
+                  />
+                </Tooltip>
                 <Tooltip title={isRunning ? 'Session is running...' : 'Fork Session'}>
                   <Button
                     icon={<ForkOutlined />}
@@ -1011,6 +1027,17 @@ const SessionDrawer = ({
           </Space>
         </Space>
       </div>
+
+      {/* Advanced Spawn Modal */}
+      <ForkSpawnModal
+        open={spawnModalOpen}
+        action="spawn"
+        session={session}
+        mcpServers={mcpServers}
+        initialPrompt={inputValue}
+        onConfirm={handleSpawnModalConfirm}
+        onCancel={() => setSpawnModalOpen(false)}
+      />
     </Drawer>
   );
 };
