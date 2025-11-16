@@ -837,7 +837,7 @@ export class ClaudeTool implements ITool {
     }
 
     const taskMessages = await this.messagesRepo.findByTaskId(taskId);
-    return taskMessages.some(msg => {
+    return taskMessages.some((msg) => {
       if (msg.role !== MessageRole.SYSTEM) return false;
 
       // Check if message content contains compaction event
