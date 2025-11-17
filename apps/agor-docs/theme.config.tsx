@@ -1,7 +1,10 @@
+import { useRouter } from 'next/router';
 import type { DocsThemeConfig } from 'nextra-theme-docs';
 import { useConfig } from 'nextra-theme-docs';
 
 const basePath = process.env.NEXT_PUBLIC_BASE_PATH || '';
+const defaultSiteUrl = 'https://agor.live';
+const defaultOgImage = `${defaultSiteUrl}/hero.png`;
 
 const config: DocsThemeConfig = {
   logo: (
@@ -55,14 +58,22 @@ const config: DocsThemeConfig = {
 
   head: () => {
     const { frontMatter, title } = useConfig();
-    const pageTitle = title || frontMatter.title || 'agor';
+    const { asPath } = useRouter();
+
+    const pathname = asPath?.split('#')[0]?.split('?')[0] ?? '/';
+    const siteUrl = frontMatter.canonical ?? `${defaultSiteUrl}${pathname === '/' ? '' : pathname}`;
+
+    const pageTitle = frontMatter.title ?? title ?? 'agor';
     const description =
       frontMatter.description ||
       'Next-gen agent orchestration for AI coding. Multiplayer workspace for Claude Code, Codex, and Gemini.';
     const fullTitle =
       pageTitle === 'agor' ? 'agor – Next-gen agent orchestration' : `${pageTitle} – agor`;
-    const ogImage = 'https://agor.live/hero.png';
-    const siteUrl = 'https://agor.live';
+    const ogImage = frontMatter.ogImage || frontMatter.image || defaultOgImage;
+    const ogType = frontMatter.date ? 'article' : 'website';
+    const publishedTime = frontMatter.date
+      ? new Date(frontMatter.date).toISOString()
+      : undefined;
     const gaId = process.env.NEXT_PUBLIC_GA_ID;
 
     return (
@@ -99,7 +110,7 @@ const config: DocsThemeConfig = {
         <meta name="author" content="Maxime Beauchemin" />
 
         {/* Open Graph */}
-        <meta property="og:type" content="website" />
+        <meta property="og:type" content={ogType} />
         <meta property="og:site_name" content="agor" />
         <meta property="og:title" content={fullTitle} />
         <meta property="og:description" content={description} />
@@ -107,6 +118,7 @@ const config: DocsThemeConfig = {
         <meta property="og:image:width" content="1200" />
         <meta property="og:image:height" content="630" />
         <meta property="og:url" content={siteUrl} />
+        {publishedTime && <meta property="article:published_time" content={publishedTime} />}
 
         {/* Twitter Card */}
         <meta name="twitter:card" content="summary_large_image" />
@@ -137,13 +149,13 @@ const config: DocsThemeConfig = {
                 price: '0',
                 priceCurrency: 'USD',
               },
-              url: 'https://agor.live',
+              url: siteUrl,
               codeRepository: 'https://github.com/mistercrunch/agor',
               author: {
                 '@type': 'Person',
                 name: 'Maxime Beauchemin',
               },
-              screenshot: 'https://agor.live/hero.png',
+              screenshot: ogImage,
             }),
           }}
         />
