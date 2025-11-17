@@ -86,7 +86,7 @@ function DeviceRouter() {
 function AppContent() {
   const { token } = theme.useToken();
   const { getCurrentThemeConfig } = useTheme();
-  const { showSuccess, showError, showWarning, showLoading, destroy } = useThemedMessage();
+  const { showSuccess, showError, showLoading, destroy } = useThemedMessage();
 
   // Fetch daemon auth configuration
   const {
