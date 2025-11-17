@@ -17,11 +17,13 @@ import {
   PermissionStatus,
   type User,
 } from '@agor/core/types';
-import { RobotOutlined } from '@ant-design/icons';
+import { CopyOutlined, RobotOutlined } from '@ant-design/icons';
 import { Bubble } from '@ant-design/x';
 import { Tooltip, theme } from 'antd';
 
 import type React from 'react';
+import { useState } from 'react';
+import { copyToClipboard } from '../../utils/clipboard';
 import { formatTimestampWithRelative } from '../../utils/time';
 import { AgorAvatar } from '../AgorAvatar';
 import { CollapsibleMarkdown } from '../CollapsibleText/CollapsibleMarkdown';
@@ -77,6 +79,68 @@ interface MessageBlockProps {
     scope: PermissionScope
   ) => void;
 }
+
+/**
+ * Content wrapper that adds copy-to-clipboard functionality inside the bubble
+ */
+interface BubbleContentWithCopyProps {
+  textContent: string; // The actual text being displayed in the bubble
+  children: React.ReactNode;
+}
+
+const BubbleContentWithCopy: React.FC<BubbleContentWithCopyProps> = ({ textContent, children }) => {
+  const [isHovered, setIsHovered] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const { token } = theme.useToken();
+
+  const handleCopy = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const success = await copyToClipboard(textContent, { showSuccess: false });
+
+    if (success) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  return (
+    <div
+      style={{ position: 'relative' }}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+    >
+      {children}
+      {isHovered && (
+        <Tooltip title={copied ? 'Copied!' : 'Copy message'}>
+          <CopyOutlined
+            onClick={handleCopy}
+            style={{
+              position: 'absolute',
+              top: -(token.sizeUnit * 2),
+              right: -(token.sizeUnit * 2),
+              cursor: 'pointer',
+              fontSize: token.fontSizeSM,
+              color: copied ? token.colorSuccess : token.colorTextSecondary,
+              padding: token.sizeXXS,
+              transition: 'all 0.2s',
+              zIndex: 1,
+            }}
+            onMouseEnter={(e) => {
+              if (!copied) {
+                e.currentTarget.style.color = token.colorPrimary;
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (!copied) {
+                e.currentTarget.style.color = token.colorTextSecondary;
+              }
+            }}
+          />
+        </Tooltip>
+      )}
+    </div>
+  );
+};
 
 /**
  * Check if this is a Task tool prompt message (agent-generated, appears as user message)
@@ -399,35 +463,37 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
                 loading={isLoading}
                 typing={shouldUseTyping ? { step: 5, interval: 20 } : false}
                 content={
-                  <div
-                    style={{
-                      wordWrap: 'break-word',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: token.sizeUnit,
-                    }}
-                  >
-                    {textBeforeTools.map((text, idx) => {
-                      // Use CollapsibleMarkdown for long text blocks (15+ lines)
-                      const shouldTruncate = text.split('\n').length > 15;
+                  <BubbleContentWithCopy textContent={textBeforeTools.join('\n\n')}>
+                    <div
+                      style={{
+                        wordWrap: 'break-word',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: token.sizeUnit,
+                      }}
+                    >
+                      {textBeforeTools.map((text, idx) => {
+                        // Use CollapsibleMarkdown for long text blocks (15+ lines)
+                        const shouldTruncate = text.split('\n').length > 15;
 
-                      return (
-                        <div key={`text-${idx}-${text.substring(0, 20)}`}>
-                          {shouldTruncate ? (
-                            <CollapsibleMarkdown
-                              maxLines={10}
-                              defaultExpanded={isLatestMessage}
-                              isStreaming={isStreaming}
-                            >
-                              {text}
-                            </CollapsibleMarkdown>
-                          ) : (
-                            <MarkdownRenderer content={text} inline isStreaming={isStreaming} />
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
+                        return (
+                          <div key={`text-${idx}-${text.substring(0, 20)}`}>
+                            {shouldTruncate ? (
+                              <CollapsibleMarkdown
+                                maxLines={10}
+                                defaultExpanded={isLatestMessage}
+                                isStreaming={isStreaming}
+                              >
+                                {text}
+                              </CollapsibleMarkdown>
+                            ) : (
+                              <MarkdownRenderer content={text} inline isStreaming={isStreaming} />
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </BubbleContentWithCopy>
                 }
                 variant={isUser || isCallback ? 'filled' : 'outlined'}
                 styles={{
@@ -492,24 +558,30 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
                 loading={isLoading}
                 typing={shouldUseTyping ? { step: 5, interval: 20 } : false}
                 content={
-                  <div style={{ wordWrap: 'break-word' }}>
-                    {(() => {
-                      const combinedText = textAfterTools.join('\n\n');
-                      const shouldTruncate = combinedText.split('\n').length > 15;
+                  <BubbleContentWithCopy textContent={textAfterTools.join('\n\n')}>
+                    <div style={{ wordWrap: 'break-word' }}>
+                      {(() => {
+                        const combinedText = textAfterTools.join('\n\n');
+                        const shouldTruncate = combinedText.split('\n').length > 15;
 
-                      return shouldTruncate ? (
-                        <CollapsibleMarkdown
-                          maxLines={10}
-                          defaultExpanded={isLatestMessage}
-                          isStreaming={isStreaming}
-                        >
-                          {combinedText}
-                        </CollapsibleMarkdown>
-                      ) : (
-                        <MarkdownRenderer content={combinedText} inline isStreaming={isStreaming} />
-                      );
-                    })()}
-                  </div>
+                        return shouldTruncate ? (
+                          <CollapsibleMarkdown
+                            maxLines={10}
+                            defaultExpanded={isLatestMessage}
+                            isStreaming={isStreaming}
+                          >
+                            {combinedText}
+                          </CollapsibleMarkdown>
+                        ) : (
+                          <MarkdownRenderer
+                            content={combinedText}
+                            inline
+                            isStreaming={isStreaming}
+                          />
+                        );
+                      })()}
+                    </div>
+                  </BubbleContentWithCopy>
                 }
                 variant={isCallback ? 'filled' : 'outlined'}
                 styles={
