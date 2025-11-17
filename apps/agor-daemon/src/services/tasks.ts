@@ -143,22 +143,38 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       // Get parent session to check callback config
       const parentSession = await this.app.service('sessions').get(parentSessionId);
 
-      // Check if callbacks are disabled
-      if (parentSession.callback_config?.enabled === false) {
+      // Check callback config - child overrides take precedence over parent defaults
+      const callbackEnabled =
+        childSession.callback_config?.enabled ?? parentSession.callback_config?.enabled ?? true;
+
+      if (!callbackEnabled) {
         console.log(
-          `⏭️  [TasksService] Callbacks disabled for parent session ${parentSessionId.substring(0, 8)}`
+          `⏭️  [TasksService] Callbacks disabled for child session ${childSession.session_id.substring(0, 8)}`
         );
         return;
       }
 
-      // Get spawn prompt from task description
-      const spawnPrompt = task.description || '(no prompt available)';
+      // Check if we should include original spawn prompt - child overrides take precedence
+      const includeOriginalPrompt =
+        childSession.callback_config?.include_original_prompt ??
+        parentSession.callback_config?.include_original_prompt ??
+        false;
+
+      // Get spawn prompt from task description (only if enabled)
+      const spawnPrompt = includeOriginalPrompt
+        ? task.description || '(no prompt available)'
+        : undefined;
 
       // Fetch last assistant message from child session (if callback config allows)
       let lastAssistantMessage: string | undefined;
 
-      // Default: include last message (unless explicitly disabled)
-      if (parentSession.callback_config?.include_last_message !== false) {
+      // Check if we should include last message - child overrides take precedence
+      const includeLastMessage =
+        childSession.callback_config?.include_last_message ??
+        parentSession.callback_config?.include_last_message ??
+        true;
+
+      if (includeLastMessage) {
         try {
           // Query messages service for last assistant message in this task
           const messagesService = this.app.service('messages');

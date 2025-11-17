@@ -190,7 +190,7 @@ export function setupMCPRoutes(app: Application): void {
                     properties: {
                       mode: {
                         type: 'string',
-                        enum: ['alias', 'specific'],
+                        enum: ['alias', 'exact'],
                       },
                       model: {
                         type: 'string',
@@ -207,12 +207,12 @@ export function setupMCPRoutes(app: Application): void {
                   },
                   codexSandboxMode: {
                     type: 'string',
-                    enum: ['workspace-write', 'full-access'],
+                    enum: ['read-only', 'workspace-write', 'danger-full-access'],
                     description: 'Codex sandbox mode (codex only)',
                   },
                   codexApprovalPolicy: {
                     type: 'string',
-                    enum: ['auto-approve-read-only', 'auto-approve-safe', 'ask-all'],
+                    enum: ['untrusted', 'on-request', 'on-failure', 'never'],
                     description: 'Codex approval policy (codex only)',
                   },
                   codexNetworkAccess: {

@@ -34,7 +34,7 @@ export interface ChildCompletionContext {
   childTaskId: string; // Short ID of completed task
   childTaskFullId: string; // Full UUIDv7 of task
   parentSessionId: string; // Short ID of parent
-  spawnPrompt: string; // Original prompt from spawn (truncated to 120 chars)
+  spawnPrompt?: string; // Original prompt from spawn (truncated to 120 chars, optional based on include_original_prompt)
   status: string; // Task status (COMPLETED, FAILED, etc.)
   completedAt: string; // ISO timestamp
   messageCount: number;

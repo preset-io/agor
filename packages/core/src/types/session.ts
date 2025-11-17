@@ -275,6 +275,8 @@ export interface Session {
     template?: string;
     /** Whether to include last assistant message content inline (default: true) */
     include_last_message?: boolean;
+    /** Whether to include original spawn prompt in callback (default: false) */
+    include_original_prompt?: boolean;
   };
 
   // ===== Archive State =====

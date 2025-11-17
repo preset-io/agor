@@ -497,21 +497,28 @@ const SessionDrawer = ({
     } else {
       // Full SpawnConfig from advanced modal - render template with all config
       const hasConfig =
-        config.agent ||
-        config.permissionMode ||
-        config.modelConfig ||
-        config.codexSandboxMode ||
-        config.codexApprovalPolicy ||
-        config.codexNetworkAccess ||
-        config.mcpServerIds?.length ||
-        config.enableCallback ||
-        config.includeLastMessage ||
-        config.includeOriginalPrompt ||
-        config.extraInstructions;
+        config.agent !== undefined ||
+        config.permissionMode !== undefined ||
+        config.modelConfig !== undefined ||
+        config.codexSandboxMode !== undefined ||
+        config.codexApprovalPolicy !== undefined ||
+        config.codexNetworkAccess !== undefined ||
+        (config.mcpServerIds?.length ?? 0) > 0 ||
+        config.enableCallback !== undefined ||
+        config.includeLastMessage !== undefined ||
+        config.includeOriginalPrompt !== undefined ||
+        config.extraInstructions !== undefined;
 
       // Import the full template compiler from ForkSpawnModal
       // (We'll use the same Handlebars instance)
       const Handlebars = await import('handlebars');
+
+      // Register helper to check if value is defined (not undefined)
+      // This allows us to distinguish between false and undefined
+      Handlebars.registerHelper('isDefined', function (value) {
+        return value !== undefined;
+      });
+
       const compiledTemplate = Handlebars.compile(spawnSubsessionTemplate);
 
       const metaPrompt = compiledTemplate({

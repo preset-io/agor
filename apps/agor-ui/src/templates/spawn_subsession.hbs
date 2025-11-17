@@ -74,13 +74,13 @@ Correct response: Call agor_sessions_spawn with:
 {{#if mcpServerIds}}
 - mcpServerIds: [{{#each mcpServerIds}}"{{this}}"{{#unless @last}}, {{/unless}}{{/each}}]
 {{/if}}
-{{#if callbackConfig.enableCallback}}
+{{#if (isDefined callbackConfig.enableCallback)}}
 - enableCallback: {{callbackConfig.enableCallback}}
 {{/if}}
-{{#if callbackConfig.includeLastMessage}}
+{{#if (isDefined callbackConfig.includeLastMessage)}}
 - includeLastMessage: {{callbackConfig.includeLastMessage}}
 {{/if}}
-{{#if callbackConfig.includeOriginalPrompt}}
+{{#if (isDefined callbackConfig.includeOriginalPrompt)}}
 - includeOriginalPrompt: {{callbackConfig.includeOriginalPrompt}}
 {{/if}}
 {{#if extraInstructions}}
@@ -103,9 +103,9 @@ agor_sessions_spawn({
   "codexSandboxMode": "{{codexSandboxMode}}",{{/if}}{{#if codexApprovalPolicy}}
   "codexApprovalPolicy": "{{codexApprovalPolicy}}",{{/if}}{{#if codexNetworkAccess}}
   "codexNetworkAccess": {{codexNetworkAccess}},{{/if}}{{#if mcpServerIds}}
-  "mcpServerIds": [{{#each mcpServerIds}}"{{this}}"{{#unless @last}}, {{/unless}}{{/each}}],{{/if}}{{#if callbackConfig.enableCallback}}
-  "enableCallback": {{callbackConfig.enableCallback}},{{/if}}{{#if callbackConfig.includeLastMessage}}
-  "includeLastMessage": {{callbackConfig.includeLastMessage}},{{/if}}{{#if callbackConfig.includeOriginalPrompt}}
+  "mcpServerIds": [{{#each mcpServerIds}}"{{this}}"{{#unless @last}}, {{/unless}}{{/each}}],{{/if}}{{#if (isDefined callbackConfig.enableCallback)}}
+  "enableCallback": {{callbackConfig.enableCallback}},{{/if}}{{#if (isDefined callbackConfig.includeLastMessage)}}
+  "includeLastMessage": {{callbackConfig.includeLastMessage}},{{/if}}{{#if (isDefined callbackConfig.includeOriginalPrompt)}}
   "includeOriginalPrompt": {{callbackConfig.includeOriginalPrompt}},{{/if}}{{#if extraInstructions}}
   "extraInstructions": """{{extraInstructions}}"""{{/if}}
 })
