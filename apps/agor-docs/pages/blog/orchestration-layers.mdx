@@ -8,11 +8,13 @@ date: 2025-11-15
 
 Software development used to be bounded by your typing speed and mental working memory. Now it's bounded by how many agents you can coordinate without losing your mind.
 
-That's not hyperbole—it's where we've arrived. The shift happened fast. Too fast for our workflows to keep up. We went from carefully crafting prompts in a chat window to juggling terminal sessions like a sysadmin after his 3rd coffee, hopping between tmux panes, trying to remember which Claude is working on which feature.
+That's not hyperbole—it's where we've arrived. While working on [Apache Superset](https://github.com/apache/superset), I found myself juggling 5-10 parallel Claude sessions across as many tmux tabs and Docker environments. The agents were productive individually, but coordinating them was chaos. That pain led me to build [Agor](https://agor.live)—but more importantly, it showed me developers everywhere were hitting the same wall.
+
+The agentic coding tools got too good to use just one at a time, but we had no structure to orchestrate these agents.
 
 The future of software engineering isn't about writing more code or writing it faster. It's about orchestrating agents that do the writing while you focus on the architecture, the vision, the coordination.
 
-But how did we get here? Let me trace the evolution—seven distinct phases that got us from prompt engineering to full agent orchestration.
+Let me trace how we got here—seven distinct phases that brought us from prompt engineering to full agent orchestration.
 
 ## Phase 1: Prompt Engineering (2023–2024)
 
@@ -85,13 +87,13 @@ But something else was happening too: the quality kept improving. As Armin Ronac
 
 This is where tools like Agor come in. The realization: if you're managing multiple agents, you need multiplayer infrastructure.
 
-The primitives that emerged:
+I built Agor after hitting this wall on Apache Superset—first trying [Claudette](https://github.com/mistercrunch/claudette-cli) (project-specific tooling), then realizing this needed to be generalized. The key insights:
 
-- **Worktree management**: One worktree per feature, each with its own isolated environment
+- **Git worktree management**: One worktree per feature, isolated environments
+- **Spatial boards**: Inspired by Figma/Miro—leverage human spatial memory instead of terminal archaeology
+- **Environment awareness**: Connect projects to Docker, GitHub issues, dev servers with auto-assigned ports
 - **Session trees**: Fork to parallelize, spawn to delegate, maintain genealogy
-- **Spatial boards**: See all your work at once; location-as-memory beats terminal archaeology
-- **Shared environments**: Per-worktree dev servers with auto-assigned ports; no more "it works on my machine"
-- **Real-time visibility**: Presence, cursors, live updates—know what agents (and teammates) are doing
+- **Multiplayer**: Share environments and agent context, collaborate in real-time with presence and cursors
 
 Instead of tmux-hopping, you have a canvas. Drag a session into "Needs Tests" and trigger a test-writing agent. Fork a conversation to parallelize debugging. See the full genealogy of how a feature evolved.
 
@@ -119,7 +121,7 @@ Imagine an agent that:
 
 You prompted once. Four agents collaborated. You reviewed the output.
 
-This isn't science fiction—Agor's MCP integration enables exactly this pattern. The question is whether developers will use it or if it'll feel like over-automation.
+This isn't science fiction—Agor's MCP integration enables exactly this pattern. Early on while building Agor, I realized that exposing an internal MCP service would let agents interact with the environment they're operating in—and with each other. That insight accelerated development dramatically. I was able to start using Agor to build Agor, and that's how it got so good so quick.
 
 The infrastructure is here: MCP (Model Context Protocol) launched in November 2024, and by 2025, the industry standardized around it. OpenAI adopted MCP in March 2025, Google DeepMind confirmed support in April. Thousands of MCP servers exist. The plumbing for agent-to-agent communication is production-ready.
 
