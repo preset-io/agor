@@ -28,7 +28,13 @@ import type { ModelConfig } from '../ModelSelector';
 
 const { TextArea } = Input;
 
-// Compile template once at module load
+// Register helper to check if value is defined (not undefined)
+// This allows us to distinguish between false and undefined in templates
+Handlebars.registerHelper('isDefined', function (value) {
+  return value !== undefined;
+});
+
+// Compile template once at module load (after helper registration)
 const compiledSpawnTemplate = Handlebars.compile(spawnSubsessionTemplate);
 
 export type ForkSpawnAction = 'fork' | 'spawn';

@@ -201,11 +201,13 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
 
     // TODO: Handle MCP server attachment from data.mcpServerIds via session_mcp_servers junction table
 
-    // Build callback configuration
+    // Build callback configuration - only store explicit overrides
+    // Leave fields undefined if not specified so parent's config applies
     const callbackConfig = {
-      enabled: data.enableCallback !== false, // Default to true
-      include_last_message: data.includeLastMessage !== false, // Default to true
-      // Store includeOriginalPrompt as part of the config for the callback handler to use
+      ...(data.enableCallback !== undefined ? { enabled: data.enableCallback } : {}),
+      ...(data.includeLastMessage !== undefined
+        ? { include_last_message: data.includeLastMessage }
+        : {}),
       ...(data.includeOriginalPrompt !== undefined
         ? { include_original_prompt: data.includeOriginalPrompt }
         : {}),
