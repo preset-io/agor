@@ -16,6 +16,7 @@ import { Badge, Button, Card, Collapse, Space, Spin, Tag, Tree, Typography, them
 import { AggregationColor } from 'antd/es/color-picker/color';
 import { useEffect, useMemo, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
+import { isDarkTheme } from '../../utils/theme';
 import { ArchiveDeleteWorktreeModal } from '../ArchiveDeleteWorktreeModal';
 import { EnvironmentPill } from '../EnvironmentPill';
 import { type ForkSpawnAction, ForkSpawnModal } from '../ForkSpawnModal';
@@ -429,8 +430,7 @@ const WorktreeCard = ({
 
   // Use colorTextBase for glow - hex color that adapts to light/dark mode
   // Fallback to detecting dark mode if colorTextBase is not available
-  const isDarkMode =
-    token.colorBgLayout?.startsWith?.('#0') || token.colorBgLayout?.startsWith?.('rgb(0');
+  const isDarkMode = isDarkTheme(token);
   const rawGlowColor = token.colorTextBase || (isDarkMode ? '#ffffff' : '#000000');
 
   // Use Ant Design's Color class to normalize and convert to full hex format

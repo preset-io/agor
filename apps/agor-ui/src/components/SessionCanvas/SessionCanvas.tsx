@@ -43,9 +43,11 @@ import {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import './SessionCanvas.css';
+import { DEFAULT_BACKGROUNDS } from '../../constants/ui';
 import { useCursorTracking } from '../../hooks/useCursorTracking';
 import { usePresence } from '../../hooks/usePresence';
 import type { AgenticToolOption } from '../../types';
+import { isDarkTheme } from '../../utils/theme';
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
 import SessionCard from '../SessionCard';
 import WorktreeCard from '../WorktreeCard';
@@ -258,6 +260,9 @@ const SessionCanvas = ({
   onCommentSelect,
 }: SessionCanvasProps) => {
   const { token } = theme.useToken();
+  const isDarkMode = isDarkTheme(token);
+  const defaultBackground = DEFAULT_BACKGROUNDS[isDarkMode ? 'dark' : 'light'];
+  const canvasBackground = board?.background_color ?? defaultBackground;
 
   // Lookup maps to avoid repeated O(n) scans during render cycles
   const sessionsByWorktree = useMemo(() => {
@@ -1825,7 +1830,7 @@ const SessionCanvas = ({
         style={{
           width: '100%',
           height: '100%',
-          background: board?.background_color || undefined,
+          background: canvasBackground,
         }}
       >
         <ReactFlow
@@ -1864,7 +1869,7 @@ const SessionCanvas = ({
           disableKeyboardA11y={true}
           style={{ background: 'transparent' }}
         >
-          {!board?.background_color && <Background />}
+          {!canvasBackground && <Background />}
           <Controls position="top-left" showInteractive={false}>
             {/* Custom toolbox buttons */}
             <ControlButton

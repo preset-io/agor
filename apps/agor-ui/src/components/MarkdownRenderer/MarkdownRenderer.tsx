@@ -14,6 +14,7 @@
 import { Typography, theme } from 'antd';
 import type React from 'react';
 import { Streamdown } from 'streamdown';
+import { isDarkTheme } from '../../utils/theme';
 
 interface MarkdownRendererProps {
   /**
@@ -47,8 +48,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
   const text = Array.isArray(content) ? content.filter((t) => t.trim()).join('\n\n') : content;
 
   // Detect dark mode from Ant Design token system
-  const isDarkMode =
-    token.colorBgLayout?.startsWith?.('#0') || token.colorBgLayout?.startsWith?.('rgb(0');
+  const isDarkMode = isDarkTheme(token);
 
   // Configure Mermaid theme based on current theme mode
   const mermaidConfig = {
