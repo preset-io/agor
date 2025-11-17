@@ -103,9 +103,10 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
               codexApprovalPolicy: session.permission_config?.codex?.approvalPolicy,
               codexNetworkAccess: session.permission_config?.codex?.networkAccess,
               mcpServerIds: [],
-              enableCallback: true,
-              includeLastMessage: true,
-              includeOriginalPrompt: false, // Default off since parent knows the prompt
+              // Inherit parent's callback config - leave undefined if parent has no explicit config
+              enableCallback: session.callback_config?.enabled,
+              includeLastMessage: session.callback_config?.include_last_message,
+              includeOriginalPrompt: session.callback_config?.include_original_prompt,
             }
           : {
               prompt: initialPrompt,
@@ -116,9 +117,10 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
               codexApprovalPolicy: userDefaults?.codexApprovalPolicy,
               codexNetworkAccess: userDefaults?.codexNetworkAccess,
               mcpServerIds: userDefaults?.mcpServerIds || [],
-              enableCallback: true,
-              includeLastMessage: true,
-              includeOriginalPrompt: false, // Default off since parent knows the prompt
+              // Leave callback config undefined by default - will use parent's settings
+              enableCallback: undefined,
+              includeLastMessage: undefined,
+              includeOriginalPrompt: undefined,
             };
 
       form.setFieldsValue(initialValues);
@@ -135,17 +137,17 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
 
     try {
       const hasConfig =
-        formValues.agent ||
-        formValues.permissionMode ||
-        formValues.modelConfig ||
-        formValues.codexSandboxMode ||
-        formValues.codexApprovalPolicy ||
-        formValues.codexNetworkAccess ||
+        formValues.agent !== undefined ||
+        formValues.permissionMode !== undefined ||
+        formValues.modelConfig !== undefined ||
+        formValues.codexSandboxMode !== undefined ||
+        formValues.codexApprovalPolicy !== undefined ||
+        formValues.codexNetworkAccess !== undefined ||
         (formValues.mcpServerIds?.length ?? 0) > 0 ||
-        formValues.enableCallback ||
-        formValues.includeLastMessage ||
-        formValues.includeOriginalPrompt ||
-        formValues.extraInstructions;
+        formValues.enableCallback !== undefined ||
+        formValues.includeLastMessage !== undefined ||
+        formValues.includeOriginalPrompt !== undefined ||
+        formValues.extraInstructions !== undefined;
 
       return compiledSpawnTemplate({
         userPrompt: formValues.prompt || '',
@@ -190,6 +192,7 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
         await onConfirm(prompt);
       } else {
         // Spawn - full configuration object
+        // Only include callback fields if explicitly defined (not undefined)
         const spawnConfig: SpawnConfig = {
           prompt,
           agent: values.agent || selectedAgent,
@@ -199,9 +202,13 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
           codexApprovalPolicy: values.codexApprovalPolicy,
           codexNetworkAccess: values.codexNetworkAccess,
           mcpServerIds: values.mcpServerIds,
-          enableCallback: values.enableCallback,
-          includeLastMessage: values.includeLastMessage,
-          includeOriginalPrompt: values.includeOriginalPrompt,
+          ...(values.enableCallback !== undefined && { enableCallback: values.enableCallback }),
+          ...(values.includeLastMessage !== undefined && {
+            includeLastMessage: values.includeLastMessage,
+          }),
+          ...(values.includeOriginalPrompt !== undefined && {
+            includeOriginalPrompt: values.includeOriginalPrompt,
+          }),
           extraInstructions: values.extraInstructions,
         };
         await onConfirm(spawnConfig);
@@ -253,7 +260,6 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
       <Form
         form={form}
         layout="vertical"
-        initialValues={{ enableCallback: true, includeLastMessage: true }}
         onValuesChange={(_, allValues) => setFormValues(allValues)}
       >
         {/* Prompt */}
