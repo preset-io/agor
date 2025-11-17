@@ -20,12 +20,14 @@ interface UseTasksResult {
  * @param client - Agor client instance
  * @param sessionId - Session ID to fetch tasks for
  * @param user - Current user (for audio preferences)
+ * @param enabled - When false, skip fetching/subscribing (cached tasks remain)
  * @returns Tasks array, loading state, error, and refetch function
  */
 export function useTasks(
   client: AgorClient | null,
   sessionId: SessionID | null,
-  user: User | null = null
+  user: User | null = null,
+  enabled = true
 ): UseTasksResult {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(false);
@@ -35,6 +37,10 @@ export function useTasks(
   const fetchTasks = useCallback(async () => {
     if (!client || !sessionId) {
       setTasks([]);
+      return;
+    }
+
+    if (!enabled) {
       return;
     }
 
@@ -59,11 +65,11 @@ export function useTasks(
     } finally {
       setLoading(false);
     }
-  }, [client, sessionId]);
+  }, [client, sessionId, enabled]);
 
   // Subscribe to real-time task updates
   useEffect(() => {
-    if (!client || !sessionId) return;
+    if (!client || !sessionId || !enabled) return;
 
     // Initial fetch
     fetchTasks();
@@ -125,7 +131,7 @@ export function useTasks(
       tasksService.removeListener('updated', handleTaskPatched);
       tasksService.removeListener('removed', handleTaskRemoved);
     };
-  }, [client, sessionId, fetchTasks, user]);
+  }, [client, sessionId, fetchTasks, user, enabled]);
 
   return {
     tasks,

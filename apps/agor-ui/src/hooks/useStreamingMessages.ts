@@ -70,18 +70,26 @@ interface ThinkingEndEvent {
  *
  * @param client - Agor client instance from useAgorClient
  * @param sessionId - Session ID to filter streaming messages (optional)
+ * @param enabled - When false, skip socket subscriptions and clear streaming buffer
  * @returns Map of currently streaming messages keyed by message_id
  */
 export function useStreamingMessages(
   client: ReturnType<typeof useAgorClient>['client'],
-  sessionId?: SessionID
+  sessionId?: SessionID,
+  enabled = true
 ): Map<MessageID, StreamingMessage> {
   const [streamingMessages, setStreamingMessages] = useState<Map<MessageID, StreamingMessage>>(
     new Map()
   );
 
   useEffect(() => {
-    if (!client) {
+    if (!enabled) {
+      setStreamingMessages(new Map());
+    }
+  }, [enabled]);
+
+  useEffect(() => {
+    if (!client || !enabled) {
       return;
     }
 
@@ -317,7 +325,7 @@ export function useStreamingMessages(
       // biome-ignore lint/suspicious/noExplicitAny: FeathersJS emit types are not strict
       messagesService.removeListener('created', handleMessageCreated as any);
     };
-  }, [client, sessionId]);
+  }, [client, sessionId, enabled]);
 
   return streamingMessages;
 }

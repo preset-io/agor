@@ -191,7 +191,7 @@ const SessionDrawer = ({
 
   // Fetch tasks for this session to calculate token totals
   const currentUser = users?.find((u) => u.user_id === currentUserId) || null;
-  const { tasks } = useTasks(client, session?.session_id || null, currentUser);
+  const { tasks } = useTasks(client, session?.session_id || null, currentUser, open);
 
   // Fetch queued messages for this session
   React.useEffect(() => {
@@ -801,6 +801,7 @@ const SessionDrawer = ({
         worktreeName={worktree?.name}
         scheduledFromWorktree={session.scheduled_from_worktree}
         scheduledRunAt={session.scheduled_run_at}
+        isActive={open}
       />
 
       {/* Queued Messages Drawer - Above Footer */}

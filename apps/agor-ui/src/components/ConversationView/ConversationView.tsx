@@ -104,6 +104,11 @@ export interface ConversationViewProps {
    * Custom empty state message (for mobile vs desktop contexts)
    */
   emptyStateMessage?: string;
+
+  /**
+   * Whether the view is currently visible/active (pauses sockets when false)
+   */
+  isActive?: boolean;
 }
 
 export const ConversationView = React.memo<ConversationViewProps>(
@@ -120,6 +125,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
     scheduledFromWorktree,
     scheduledRunAt,
     emptyStateMessage = 'No messages yet. Send a prompt to start the conversation.',
+    isActive = true,
   }) => {
     const containerRef = useRef<HTMLDivElement>(null);
 
@@ -150,10 +156,10 @@ export const ConversationView = React.memo<ConversationViewProps>(
       tasks,
       loading: tasksLoading,
       error: tasksError,
-    } = useTasks(client, sessionId, currentUser);
+    } = useTasks(client, sessionId, currentUser, isActive);
 
     // Track real-time streaming messages for the session
-    const allStreamingMessages = useStreamingMessages(client, sessionId || undefined);
+    const allStreamingMessages = useStreamingMessages(client, sessionId || undefined, isActive);
 
     // Store previous task maps to maintain stable references
     const prevTaskMapsRef = useRef<Map<string, Map<MessageID, StreamingMessage>>>(new Map());
