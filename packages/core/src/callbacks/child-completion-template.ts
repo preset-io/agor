@@ -17,8 +17,8 @@ import Handlebars from 'handlebars';
  */
 const DEFAULT_TEMPLATE = `[Agor] Child session {{childSessionId}} has {{#if (eq status "completed")}}completed{{else}}failed{{/if}}.
 
-**Task:** {{spawnPrompt}}
-**Status:** {{status}}
+{{#if spawnPrompt}}**Task:** {{spawnPrompt}}
+{{/if}}**Status:** {{status}}
 **Stats:** {{messageCount}} messages, {{toolUseCount}} tool uses
 
 {{#if lastAssistantMessage}}**Result:**
