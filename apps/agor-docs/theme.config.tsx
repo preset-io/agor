@@ -71,9 +71,7 @@ const config: DocsThemeConfig = {
       pageTitle === 'agor' ? 'agor – Next-gen agent orchestration' : `${pageTitle} – agor`;
     const ogImage = frontMatter.ogImage || frontMatter.image || defaultOgImage;
     const ogType = frontMatter.date ? 'article' : 'website';
-    const publishedTime = frontMatter.date
-      ? new Date(frontMatter.date).toISOString()
-      : undefined;
+    const publishedTime = frontMatter.date ? new Date(frontMatter.date).toISOString() : undefined;
     const gaId = process.env.NEXT_PUBLIC_GA_ID;
 
     return (
