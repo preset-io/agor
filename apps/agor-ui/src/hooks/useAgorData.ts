@@ -39,9 +39,13 @@ interface UseAgorDataResult {
  * Fetch and subscribe to Agor data from daemon
  *
  * @param client - Agor client instance
+ * @param currentBoardId - Optional board ID to filter task/session events (reduces re-renders)
  * @returns Sessions, tasks (grouped by session), boards, loading state, and refetch function
  */
-export function useAgorData(client: AgorClient | null): UseAgorDataResult {
+export function useAgorData(
+  client: AgorClient | null,
+  currentBoardId?: string | null
+): UseAgorDataResult {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [tasks, setTasks] = useState<Record<string, Task[]>>({});
   const [boards, setBoards] = useState<Board[]>([]);
@@ -167,12 +171,39 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       fetchData().then(() => setHasInitiallyFetched(true));
     }
 
+    // Build set of session IDs belonging to current board (for filtering events)
+    // This reduces unnecessary re-renders when events occur on other boards
+    const currentBoardSessionIds = new Set<string>();
+    if (currentBoardId) {
+      // Get worktrees on current board
+      const boardWorktreeIds = new Set(
+        boardObjects.filter((bo) => bo.board_id === currentBoardId).map((bo) => bo.worktree_id)
+      );
+      // Get sessions in those worktrees
+      for (const session of sessions) {
+        if (session.worktree_id && boardWorktreeIds.has(session.worktree_id)) {
+          currentBoardSessionIds.add(session.session_id);
+        }
+      }
+    }
+
     // Subscribe to session events
     const sessionsService = client.service('sessions');
     const handleSessionCreated = (session: Session) => {
+      // Filter: only update if no board filter OR session is on current board
+      if (currentBoardId) {
+        const worktreeOnBoard = boardObjects.some(
+          (bo) => bo.board_id === currentBoardId && bo.worktree_id === session.worktree_id
+        );
+        if (!worktreeOnBoard) return;
+      }
       setSessions((prev) => [...prev, session]);
     };
     const handleSessionPatched = (session: Session) => {
+      // Filter: only update if no board filter OR session is on current board
+      if (currentBoardId && !currentBoardSessionIds.has(session.session_id)) {
+        return;
+      }
       setSessions((prev) => prev.map((s) => (s.session_id === session.session_id ? session : s)));
     };
     const handleSessionRemoved = (session: Session) => {
@@ -187,12 +218,20 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
     // Subscribe to task events
     const tasksService = client.service('tasks');
     const handleTaskCreated = (task: Task) => {
+      // Filter: only update if no board filter OR task belongs to session on current board
+      if (currentBoardId && !currentBoardSessionIds.has(task.session_id)) {
+        return;
+      }
       setTasks((prev) => ({
         ...prev,
         [task.session_id]: [...(prev[task.session_id] || []), task],
       }));
     };
     const handleTaskPatched = (task: Task) => {
+      // Filter: only update if no board filter OR task belongs to session on current board
+      if (currentBoardId && !currentBoardSessionIds.has(task.session_id)) {
+        return;
+      }
       setTasks((prev) => ({
         ...prev,
         [task.session_id]: (prev[task.session_id] || []).map((t) =>
@@ -416,7 +455,16 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       commentsService.removeListener('updated', handleCommentPatched);
       commentsService.removeListener('removed', handleCommentRemoved);
     };
-  }, [client, fetchData, hasInitiallyFetched]);
+  }, [client, fetchData, hasInitiallyFetched, currentBoardId, boardObjects, sessions]);
+
+  // Refetch data when board changes to ensure we have complete state
+  // This handles cases where events were filtered out while on a different board
+  useEffect(() => {
+    if (client && currentBoardId && hasInitiallyFetched) {
+      console.log(`Board changed to ${currentBoardId}, refetching data for sync`);
+      fetchData();
+    }
+  }, [client, currentBoardId, hasInitiallyFetched, fetchData]);
 
   return {
     sessions,
