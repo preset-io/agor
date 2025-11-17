@@ -153,7 +153,6 @@ interface WorktreeNodeData {
   worktree: Worktree;
   repo: Repo;
   sessions: Session[];
-  tasks: Record<string, Task[]>;
   users: User[];
   currentUserId?: string;
   onTaskClick?: (taskId: string) => void;
@@ -190,7 +189,6 @@ const WorktreeNode = ({ data }: { data: WorktreeNodeData }) => {
         worktree={data.worktree}
         repo={data.repo}
         sessions={data.sessions}
-        tasks={data.tasks}
         users={data.users}
         currentUserId={data.currentUserId}
         selectedSessionId={data.selectedSessionId}
@@ -540,7 +538,6 @@ const SessionCanvas = ({
           worktree,
           repo,
           sessions: worktreeSessions,
-          tasks,
           users,
           currentUserId,
           selectedSessionId,
@@ -571,7 +568,6 @@ const SessionCanvas = ({
     boardObjectByWorktree,
     repoById,
     sessionsByWorktree,
-    tasks,
     users,
     currentUserId,
     selectedSessionId,

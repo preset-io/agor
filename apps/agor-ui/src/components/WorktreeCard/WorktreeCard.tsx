@@ -1,4 +1,4 @@
-import type { Repo, Session, SpawnConfig, Task, User, Worktree } from '@agor/core/types';
+import type { Repo, Session, SpawnConfig, User, Worktree } from '@agor/core/types';
 import {
   BranchesOutlined,
   ClockCircleOutlined,
@@ -53,7 +53,6 @@ interface WorktreeCardProps {
   worktree: Worktree;
   repo: Repo;
   sessions: Session[];
-  tasks: Record<string, Task[]>;
   users: User[];
   currentUserId?: string;
   selectedSessionId?: string | null; // Currently open session in drawer
@@ -85,7 +84,6 @@ const WorktreeCard = ({
   worktree,
   repo,
   sessions,
-  tasks,
   users,
   currentUserId,
   selectedSessionId,
