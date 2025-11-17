@@ -178,7 +178,7 @@
     "cron-parser": "^5.4.0",
     "cronstrue": "^3.9.0",
     "drizzle-orm": "^0.44.6",
-    "js-yaml": "^4.1.0",
+    "js-yaml": "^4.1.1",
     "simple-git": "^3.28.0",
     "socket.io-client": "^4.8.1",
     "uuid": "^13.0.0"
