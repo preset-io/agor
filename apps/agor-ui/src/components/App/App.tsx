@@ -26,7 +26,7 @@ import { useThemedMessage } from '../../utils/message';
 import { AppHeader } from '../AppHeader';
 import { CommentsPanel } from '../CommentsPanel';
 import { EnvironmentLogsModal } from '../EnvironmentLogsModal';
-import { EventStreamDrawer } from '../EventStreamDrawer';
+import { EventStreamPanel } from '../EventStreamPanel';
 import { NewSessionButton } from '../NewSessionButton';
 import { type NewSessionConfig, NewSessionModal } from '../NewSessionModal';
 import { type NewWorktreeConfig, NewWorktreeModal } from '../NewWorktreeModal';
@@ -201,7 +201,12 @@ export const App: React.FC<AppProps> = ({
   const [worktreeModalWorktreeId, setWorktreeModalWorktreeId] = useState<string | null>(null);
   const [logsModalWorktreeId, setLogsModalWorktreeId] = useState<string | null>(null);
   const [themeEditorOpen, setThemeEditorOpen] = useState(false);
-  const [eventStreamOpen, setEventStreamOpen] = useState(false);
+
+  // Initialize event stream panel state from localStorage (collapsed by default)
+  const [eventStreamPanelCollapsed, setEventStreamPanelCollapsed] = useState(() => {
+    const stored = localStorage.getItem('agor:eventStreamPanelCollapsed');
+    return stored ? stored === 'true' : true; // Default to collapsed (hidden)
+  });
 
   // Initialize current board from localStorage or fallback to first board or initialBoardId
   const [currentBoardId, setCurrentBoardId] = useState(() => {
@@ -224,6 +229,11 @@ export const App: React.FC<AppProps> = ({
     localStorage.setItem('agor:commentsPanelCollapsed', String(commentsPanelCollapsed));
   }, [commentsPanelCollapsed]);
 
+  // Persist event stream panel collapsed state to localStorage
+  useEffect(() => {
+    localStorage.setItem('agor:eventStreamPanelCollapsed', String(eventStreamPanelCollapsed));
+  }, [eventStreamPanelCollapsed]);
+
   // If the stored board no longer exists (e.g., deleted), fallback to first board
   useEffect(() => {
     if (currentBoardId && !boards.some((b) => b.board_id === currentBoardId)) {
@@ -238,10 +248,10 @@ export const App: React.FC<AppProps> = ({
   // Check if event stream is enabled in user preferences
   const eventStreamEnabled = user?.preferences?.eventStream?.enabled ?? false;
 
-  // Event stream hook - only captures events when drawer is open
+  // Event stream hook - only captures events when panel is open
   const { events, clearEvents } = useEventStream({
     client,
-    enabled: eventStreamOpen,
+    enabled: !eventStreamPanelCollapsed,
   });
 
   const handleOpenTerminal = (commands: string[] = [], worktreeId?: string) => {
@@ -439,7 +449,7 @@ export const App: React.FC<AppProps> = ({
         connecting={connecting}
         onMenuClick={() => setListDrawerOpen(true)}
         onCommentsClick={() => setCommentsPanelCollapsed(!commentsPanelCollapsed)}
-        onEventStreamClick={() => setEventStreamOpen(!eventStreamOpen)}
+        onEventStreamClick={() => setEventStreamPanelCollapsed(!eventStreamPanelCollapsed)}
         onSettingsClick={() => setSettingsOpen(true)}
         onUserSettingsClick={() => {
           setSettingsActiveTab('users');
@@ -531,6 +541,12 @@ export const App: React.FC<AppProps> = ({
             hasRepos={repos.length > 0}
           />
         </div>
+        <EventStreamPanel
+          collapsed={eventStreamPanelCollapsed}
+          onToggleCollapse={() => setEventStreamPanelCollapsed(!eventStreamPanelCollapsed)}
+          events={events}
+          onClear={clearEvents}
+        />
       </Content>
       {newSessionWorktreeId && (
         <NewSessionModal
@@ -686,12 +702,6 @@ export const App: React.FC<AppProps> = ({
         />
       )}
       <ThemeEditorModal open={themeEditorOpen} onClose={() => setThemeEditorOpen(false)} />
-      <EventStreamDrawer
-        open={eventStreamOpen}
-        onClose={() => setEventStreamOpen(false)}
-        events={events}
-        onClear={clearEvents}
-      />
     </Layout>
   );
 };
