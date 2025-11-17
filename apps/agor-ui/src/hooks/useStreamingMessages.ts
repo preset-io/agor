@@ -83,13 +83,9 @@ export function useStreamingMessages(
   );
 
   useEffect(() => {
-    if (!enabled) {
-      setStreamingMessages(new Map());
-    }
-  }, [enabled]);
-
-  useEffect(() => {
     if (!client || !enabled) {
+      // Clear streaming buffer when disabled or no client
+      setStreamingMessages(new Map());
       return;
     }
 
