@@ -91,13 +91,8 @@ export const useBoardObjects = ({
       setNodes((nodes) => nodes.filter((n) => n.id !== objectId));
 
       try {
-        await client.service('boards').patch(board.board_id, {
-          _action: 'deleteZone',
-          objectId,
-          // biome-ignore lint/suspicious/noExplicitAny: Board patch with custom _action field
-        } as any);
-
-        // Unpin any worktrees that were pinned to this zone
+        // IMPORTANT: Unpin worktrees FIRST before deleting the zone
+        // This prevents a race condition where worktrees have parentId pointing to a deleted zone
         for (const worktreeId of affectedWorktreeIds) {
           const boardObj = boardObjects.find(
             (obj: BoardEntityObject) => obj.worktree_id === worktreeId
@@ -108,6 +103,13 @@ export const useBoardObjects = ({
             });
           }
         }
+
+        // Now delete the zone after all worktrees are unpinned
+        await client.service('boards').patch(board.board_id, {
+          _action: 'deleteZone',
+          objectId,
+          // biome-ignore lint/suspicious/noExplicitAny: Board patch with custom _action field
+        } as any);
 
         // After successful deletion, we can remove from the tracking set
         setTimeout(() => {

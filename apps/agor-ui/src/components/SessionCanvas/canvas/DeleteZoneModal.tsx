@@ -62,9 +62,14 @@ export const DeleteZoneModal = ({
                     </div>
                   </div>
                 </Radio>
-                <Radio value={true}>
+                <Radio value={true} disabled>
                   <div>
-                    <div style={{ fontWeight: 500 }}>Delete pinned sessions too</div>
+                    <div style={{ fontWeight: 500 }}>
+                      Delete pinned sessions too{' '}
+                      <span style={{ fontSize: 11, color: token.colorTextTertiary }}>
+                        [coming soon]
+                      </span>
+                    </div>
                     <div style={{ fontSize: 12, color: token.colorTextSecondary }}>
                       Remove sessions from board entirely
                     </div>
