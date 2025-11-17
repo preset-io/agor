@@ -23,7 +23,7 @@ import { Tooltip, theme } from 'antd';
 
 import type React from 'react';
 import { useState } from 'react';
-import { copyToClipboard } from '../../utils/clipboard';
+import { useCopyToClipboard } from '../../utils/clipboard';
 import { formatTimestampWithRelative } from '../../utils/time';
 import { AgorAvatar } from '../AgorAvatar';
 import { CollapsibleMarkdown } from '../CollapsibleText/CollapsibleMarkdown';
@@ -90,17 +90,12 @@ interface BubbleContentWithCopyProps {
 
 const BubbleContentWithCopy: React.FC<BubbleContentWithCopyProps> = ({ textContent, children }) => {
   const [isHovered, setIsHovered] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [copied, copy] = useCopyToClipboard();
   const { token } = theme.useToken();
 
-  const handleCopy = async (e: React.MouseEvent) => {
+  const handleCopy = (e: React.MouseEvent) => {
     e.stopPropagation();
-    const success = await copyToClipboard(textContent, { showSuccess: false });
-
-    if (success) {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
+    copy(textContent);
   };
 
   return (
