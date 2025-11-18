@@ -338,7 +338,19 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       setBoards((prev) => [...prev, board]);
     };
     const handleBoardPatched = (board: Board) => {
-      setBoards((prev) => prev.map((b) => (b.board_id === board.board_id ? board : b)));
+      setBoards((prev) => {
+        // Find existing board and check reference equality
+        const existingIndex = prev.findIndex((b) => b.board_id === board.board_id);
+        if (existingIndex === -1) return prev; // Board not found, shouldn't happen
+
+        const existing = prev[existingIndex];
+        if (existing === board) return prev; // Same reference, no change
+
+        // Create new array with updated board
+        const next = [...prev];
+        next[existingIndex] = board;
+        return next;
+      });
     };
     const handleBoardRemoved = (board: Board) => {
       setBoards((prev) => prev.filter((b) => b.board_id !== board.board_id));
@@ -355,9 +367,19 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       setBoardObjects((prev) => [...prev, boardObject]);
     };
     const handleBoardObjectPatched = (boardObject: BoardEntityObject) => {
-      setBoardObjects((prev) =>
-        prev.map((bo) => (bo.object_id === boardObject.object_id ? boardObject : bo))
-      );
+      setBoardObjects((prev) => {
+        // Find existing board object and check reference equality
+        const existingIndex = prev.findIndex((bo) => bo.object_id === boardObject.object_id);
+        if (existingIndex === -1) return prev; // Board object not found, shouldn't happen
+
+        const existing = prev[existingIndex];
+        if (existing === boardObject) return prev; // Same reference, no change
+
+        // Create new array with updated board object
+        const next = [...prev];
+        next[existingIndex] = boardObject;
+        return next;
+      });
     };
     const handleBoardObjectRemoved = (boardObject: BoardEntityObject) => {
       setBoardObjects((prev) => prev.filter((bo) => bo.object_id !== boardObject.object_id));
@@ -374,7 +396,15 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       setRepos((prev) => [...prev, repo]);
     };
     const handleRepoPatched = (repo: Repo) => {
-      setRepos((prev) => prev.map((r) => (r.repo_id === repo.repo_id ? repo : r)));
+      setRepos((prev) => {
+        const existingIndex = prev.findIndex((r) => r.repo_id === repo.repo_id);
+        if (existingIndex === -1) return prev;
+        const existing = prev[existingIndex];
+        if (existing === repo) return prev;
+        const next = [...prev];
+        next[existingIndex] = repo;
+        return next;
+      });
     };
     const handleRepoRemoved = (repo: Repo) => {
       setRepos((prev) => prev.filter((r) => r.repo_id !== repo.repo_id));
@@ -424,7 +454,15 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       setUsers((prev) => [...prev, user]);
     };
     const handleUserPatched = (user: User) => {
-      setUsers((prev) => prev.map((u) => (u.user_id === user.user_id ? user : u)));
+      setUsers((prev) => {
+        const existingIndex = prev.findIndex((u) => u.user_id === user.user_id);
+        if (existingIndex === -1) return prev;
+        const existing = prev[existingIndex];
+        if (existing === user) return prev;
+        const next = [...prev];
+        next[existingIndex] = user;
+        return next;
+      });
     };
     const handleUserRemoved = (user: User) => {
       setUsers((prev) => prev.filter((u) => u.user_id !== user.user_id));
@@ -441,9 +479,15 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       setMcpServers((prev) => [...prev, server]);
     };
     const handleMCPServerPatched = (server: MCPServer) => {
-      setMcpServers((prev) =>
-        prev.map((s) => (s.mcp_server_id === server.mcp_server_id ? server : s))
-      );
+      setMcpServers((prev) => {
+        const existingIndex = prev.findIndex((s) => s.mcp_server_id === server.mcp_server_id);
+        if (existingIndex === -1) return prev;
+        const existing = prev[existingIndex];
+        if (existing === server) return prev;
+        const next = [...prev];
+        next[existingIndex] = server;
+        return next;
+      });
     };
     const handleMCPServerRemoved = (server: MCPServer) => {
       setMcpServers((prev) => prev.filter((s) => s.mcp_server_id !== server.mcp_server_id));
@@ -489,7 +533,15 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       setComments((prev) => [...prev, comment]);
     };
     const handleCommentPatched = (comment: BoardComment) => {
-      setComments((prev) => prev.map((c) => (c.comment_id === comment.comment_id ? comment : c)));
+      setComments((prev) => {
+        const existingIndex = prev.findIndex((c) => c.comment_id === comment.comment_id);
+        if (existingIndex === -1) return prev;
+        const existing = prev[existingIndex];
+        if (existing === comment) return prev;
+        const next = [...prev];
+        next[existingIndex] = comment;
+        return next;
+      });
     };
     const handleCommentRemoved = (comment: BoardComment) => {
       setComments((prev) => prev.filter((c) => c.comment_id !== comment.comment_id));
