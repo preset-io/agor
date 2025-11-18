@@ -142,7 +142,7 @@ export const EventItem = ({ event }: EventItemProps): React.JSX.Element => {
         {event.eventName}
       </Text>
 
-      {event.data && (
+      {event.data ? (
         <Popover content={detailsContent} title="Event Data" trigger="click" placement="left">
           <Button
             type="text"
@@ -151,7 +151,7 @@ export const EventItem = ({ event }: EventItemProps): React.JSX.Element => {
             style={{ padding: '0 4px' }}
           />
         </Popover>
-      )}
+      ) : null}
     </div>
   );
 };
