@@ -3,7 +3,6 @@ import type { PermissionMode, Repo, Session, User, Worktree } from '@agor/core/t
 import { PermissionScope } from '@agor/core/types';
 import { Alert, Spin } from 'antd';
 import { useParams } from 'react-router-dom';
-import { mapToArray } from '@/utils/mapHelpers';
 import { ConversationView } from '../ConversationView';
 import { MobileHeader } from './MobileHeader';
 import { MobilePromptInput } from './MobilePromptInput';
@@ -37,7 +36,6 @@ export const SessionPage: React.FC<SessionPageProps> = ({
 
   const session = sessionId ? sessionById.get(sessionId) : undefined;
   const worktree = session?.worktree_id ? worktreeById.get(session.worktree_id) || null : null;
-  const users = mapToArray(userById);
 
   if (!sessionId) {
     return (
@@ -110,7 +108,7 @@ export const SessionPage: React.FC<SessionPageProps> = ({
           sessionId={session.session_id}
           agentic_tool={session.agentic_tool}
           sessionModel={session.model_config?.model}
-          users={users}
+          userById={userById}
           currentUserId={currentUser?.user_id}
           onPermissionDecision={handlePermissionDecision}
           scheduledFromWorktree={session.scheduled_from_worktree}

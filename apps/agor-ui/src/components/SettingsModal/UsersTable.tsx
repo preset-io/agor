@@ -133,7 +133,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
   // Auto-open edit modal if editUserId is provided
   useEffect(() => {
     if (editUserId) {
-      const userToEdit = users.find((u) => u.user_id === editUserId);
+      const userToEdit = users.find((u: User) => u.user_id === editUserId);
       if (userToEdit) {
         handleEdit(userToEdit);
         setEditModalOpen(true);

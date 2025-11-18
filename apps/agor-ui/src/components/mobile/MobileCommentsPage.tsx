@@ -38,8 +38,7 @@ export const MobileCommentsPage: React.FC<MobileCommentsPageProps> = ({
   const { boardId } = useParams<{ boardId: string }>();
 
   const board = boardId ? boardById.get(boardId) : undefined;
-  const boardComments = mapToArray(commentById).filter((c) => c.board_id === boardId);
-  const users = mapToArray(userById);
+  const boardComments = mapToArray(commentById).filter((c: BoardComment) => c.board_id === boardId);
 
   if (!boardId) {
     return (
@@ -70,7 +69,7 @@ export const MobileCommentsPage: React.FC<MobileCommentsPageProps> = ({
           client={client}
           boardId={boardId}
           comments={boardComments}
-          users={users}
+          userById={userById}
           currentUserId={currentUser?.user_id || 'anonymous'}
           boardObjects={board?.objects}
           worktreeById={worktreeById}

@@ -249,7 +249,7 @@ export const App: React.FC<AppProps> = ({
   }, [boardById, currentBoardId]);
 
   // Update favicon based on session activity on current board
-  useFaviconStatus(currentBoardId, sessionsByWorktree, boardObjectById);
+  useFaviconStatus(currentBoardId, sessionsByWorktree, mapToArray(boardObjectById));
 
   // Check if event stream is enabled in user preferences
   const eventStreamEnabled = user?.preferences?.eventStream?.enabled ?? false;
@@ -409,15 +409,15 @@ export const App: React.FC<AppProps> = ({
   // Filter worktrees by current board (via board_objects)
   // Optimized: use Map lookups instead of array.filter
   const boardWorktrees = mapToArray(boardObjectById)
-    .filter((bo) => bo.board_id === currentBoard?.board_id)
-    .map((bo) => worktreeById.get(bo.worktree_id))
+    .filter((bo: BoardEntityObject) => bo.board_id === currentBoard?.board_id)
+    .map((bo: BoardEntityObject) => worktreeById.get(bo.worktree_id))
     .filter((wt): wt is Worktree => wt !== undefined);
 
   // Track active users via cursor presence
   const { activeUsers } = usePresence({
     client,
     boardId: currentBoard?.board_id as BoardID | null,
-    users: userById,
+    users: mapToArray(userById),
     enabled: !!currentBoard && !!client,
   });
 
@@ -458,7 +458,8 @@ export const App: React.FC<AppProps> = ({
         currentBoardIcon={currentBoard?.icon}
         unreadCommentsCount={
           mapToArray(commentById).filter(
-            (c) => c.board_id === currentBoardId && !c.resolved && !c.parent_comment_id
+            (c: BoardComment) =>
+              c.board_id === currentBoardId && !c.resolved && !c.parent_comment_id
           ).length
         }
         eventStreamEnabled={eventStreamEnabled}
@@ -467,8 +468,10 @@ export const App: React.FC<AppProps> = ({
         <CommentsPanel
           client={client}
           boardId={currentBoardId || ''}
-          comments={mapToArray(commentById).filter((c) => c.board_id === currentBoardId)}
-          users={mapToArray(userById)}
+          comments={mapToArray(commentById).filter(
+            (c: BoardComment) => c.board_id === currentBoardId
+          )}
+          userById={userById}
           currentUserId={user?.user_id || 'anonymous'}
           boardObjects={currentBoard?.objects}
           worktreeById={worktreeById}
@@ -554,7 +557,7 @@ export const App: React.FC<AppProps> = ({
           availableAgents={availableAgents}
           worktreeId={newSessionWorktreeId}
           worktree={newSessionWorktree || undefined}
-          mcpServers={mapToArray(mcpServerById)}
+          mcpServerById={mcpServerById}
           currentUser={user}
         />
       )}
@@ -562,10 +565,10 @@ export const App: React.FC<AppProps> = ({
         client={client}
         session={selectedSession}
         worktree={selectedSessionWorktree}
-        users={mapToArray(userById)}
+        userById={userById}
         currentUserId={user?.user_id}
-        repos={mapToArray(repoById)}
-        mcpServers={mapToArray(mcpServerById)}
+        repoById={repoById}
+        mcpServerById={mcpServerById}
         sessionMcpServerIds={selectedSessionId ? sessionMcpServerIds[selectedSessionId] || [] : []}
         open={!!selectedSessionId}
         onClose={() => {
@@ -598,14 +601,14 @@ export const App: React.FC<AppProps> = ({
         }}
         client={client}
         currentUser={user}
-        boards={mapToArray(boardById)}
+        boardById={boardById}
         boardObjects={mapToArray(boardObjectById)}
-        repos={mapToArray(repoById)}
+        repoById={repoById}
         worktreeById={worktreeById}
         sessionById={sessionById}
         sessionsByWorktree={sessionsByWorktree}
-        users={mapToArray(userById)}
-        mcpServers={mapToArray(mcpServerById)}
+        userById={userById}
+        mcpServerById={mcpServerById}
         activeTab={effectiveSettingsTab}
         editUserId={settingsEditUserId}
         onClearEditUserId={() => setSettingsEditUserId(undefined)}
@@ -642,7 +645,7 @@ export const App: React.FC<AppProps> = ({
           open={!!sessionSettingsId}
           onClose={() => setSessionSettingsId(null)}
           session={sessionSettingsSession}
-          mcpServers={mapToArray(mcpServerById)}
+          mcpServerById={mcpServerById}
           sessionMcpServerIds={
             sessionSettingsId ? sessionMcpServerIds[sessionSettingsId] || [] : []
           }

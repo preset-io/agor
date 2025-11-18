@@ -115,7 +115,7 @@ interface SessionCanvasProps {
 interface SessionNodeData {
   session: Session;
   tasks: Task[];
-  users: User[];
+  userById: Map<string, User>;
   currentUserId?: string;
   onTaskClick?: (taskId: string) => void;
   onSessionClick?: () => void;
@@ -136,7 +136,7 @@ const SessionNode = ({ data }: { data: SessionNodeData }) => {
       <SessionCard
         session={data.session}
         tasks={data.tasks}
-        users={data.users}
+        userById={data.userById}
         currentUserId={data.currentUserId}
         onTaskClick={data.onTaskClick}
         onSessionClick={data.onSessionClick}
@@ -156,7 +156,7 @@ interface WorktreeNodeData {
   worktree: Worktree;
   repo: Repo;
   sessions: Session[];
-  users: User[];
+  userById: Map<string, User>;
   currentUserId?: string;
   onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
@@ -192,7 +192,7 @@ const WorktreeNode = ({ data }: { data: WorktreeNodeData }) => {
         worktree={data.worktree}
         repo={data.repo}
         sessions={data.sessions}
-        users={data.users}
+        userById={data.userById}
         currentUserId={data.currentUserId}
         selectedSessionId={data.selectedSessionId}
         onTaskClick={data.onTaskClick}
@@ -510,7 +510,7 @@ const SessionCanvas = ({
           worktree,
           repo,
           sessions: worktreeSessions,
-          users: mapToArray(userById),
+          userById,
           currentUserId,
           selectedSessionId,
           onTaskClick,
@@ -577,7 +577,7 @@ const SessionCanvas = ({
   const { remoteCursors } = usePresence({
     client,
     boardId: board?.board_id as BoardID | null,
-    users: userById,
+    users: mapToArray(userById),
     enabled: !!board && !!client,
   });
 
@@ -615,7 +615,7 @@ const SessionCanvas = ({
 
     // Filter to only spatial comments on this board (absolute OR relative positioned) and not resolved
     const spatialComments = commentsArray.filter(
-      (c) =>
+      (c: BoardComment) =>
         (c.position?.absolute || c.position?.relative) &&
         c.board_id === board?.board_id &&
         !c.resolved
@@ -1136,7 +1136,8 @@ const SessionCanvas = ({
 
               // Check if worktree was already pinned to a zone before this drag
               const existingBoardObject = mapToArray(boardObjectById).find(
-                (bo) => bo.worktree_id === nodeId && bo.board_id === board.board_id
+                (bo: BoardEntityObject) =>
+                  bo.worktree_id === nodeId && bo.board_id === board.board_id
               );
               const oldZoneId = existingBoardObject?.zone_id;
 
@@ -1237,7 +1238,8 @@ const SessionCanvas = ({
             for (const { worktree_id, position, zone_id } of worktreeUpdates) {
               // Find existing board_object or create new one
               const existingBoardObject = mapToArray(boardObjectById).find(
-                (bo) => bo.worktree_id === worktree_id && bo.board_id === board.board_id
+                (bo: BoardEntityObject) =>
+                  bo.worktree_id === worktree_id && bo.board_id === board.board_id
               );
 
               if (existingBoardObject) {
@@ -2264,7 +2266,7 @@ const SessionCanvas = ({
           boardDescription={board?.description}
           boardCustomContext={board?.custom_context}
           availableAgents={availableAgents}
-          mcpServers={mapToArray(mcpServerById)}
+          mcpServerById={mcpServerById}
           currentUser={currentUserId ? userById.get(currentUserId) || null : null}
           onExecute={async ({
             sessionId,

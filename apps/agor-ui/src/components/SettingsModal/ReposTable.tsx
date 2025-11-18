@@ -242,7 +242,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({
 
       {repos.length > 0 && (
         <Space direction="vertical" size={16} style={{ width: '100%' }}>
-          {repos.map((repo) => {
+          {repos.map((repo: Repo) => {
             const isLocal = repo.repo_type === 'local';
             const tagColor = isLocal ? 'green' : 'blue';
             const tagLabel = isLocal ? 'Local' : 'Remote';

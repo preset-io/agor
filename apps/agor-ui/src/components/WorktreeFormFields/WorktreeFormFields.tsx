@@ -73,9 +73,11 @@ export const WorktreeFormFields: React.FC<WorktreeFormFieldsProps> = ({
           placeholder="Select repository..."
           showSearch
           filterOption={(input, option) =>
-            (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
+            String(option?.label ?? '')
+              .toLowerCase()
+              .includes(input.toLowerCase())
           }
-          options={mapToArray(repoById).map((repo) => ({
+          options={mapToArray(repoById).map((repo: Repo) => ({
             value: repo.repo_id,
             label: repo.name || repo.slug,
           }))}
@@ -94,9 +96,11 @@ export const WorktreeFormFields: React.FC<WorktreeFormFieldsProps> = ({
             allowClear
             showSearch
             filterOption={(input, option) =>
-              (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
+              String(option?.label ?? '')
+                .toLowerCase()
+                .includes(input.toLowerCase())
             }
-            options={mapToArray(boardById).map((board) => ({
+            options={mapToArray(boardById).map((board: Board) => ({
               value: board.board_id,
               label: `${board.icon || '📋'} ${board.name}`,
             }))}

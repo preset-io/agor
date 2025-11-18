@@ -178,12 +178,12 @@ export const AutocompleteTextarea = React.forwardRef<
         const lowercaseQuery = searchQuery.toLowerCase();
         return mapToArray(userById)
           .filter(
-            (u) =>
+            (u: User) =>
               u.name?.toLowerCase().includes(lowercaseQuery) ||
               u.email.toLowerCase().includes(lowercaseQuery)
           )
           .slice(0, MAX_USER_RESULTS)
-          .map((u) => ({
+          .map((u: User) => ({
             name: u.name || u.email,
             email: u.email,
             type: 'user' as const,

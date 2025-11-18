@@ -112,10 +112,12 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
       const lastBoardId = localStorage.getItem('agor:lastUsedBoardId');
 
       const defaultRepoId =
-        lastRepoId && repos.find((r) => r.repo_id === lastRepoId) ? lastRepoId : repos[0].repo_id;
+        lastRepoId && repos.find((r: Repo) => r.repo_id === lastRepoId)
+          ? lastRepoId
+          : repos[0].repo_id;
 
       const defaultBoardId =
-        lastBoardId && boards.find((b) => b.board_id === lastBoardId)
+        lastBoardId && boards.find((b: Board) => b.board_id === lastBoardId)
           ? lastBoardId
           : boards.length > 0
             ? boards[0].board_id
@@ -125,7 +127,8 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
       form.setFieldsValue({
         repoId: defaultRepoId,
         boardId: defaultBoardId,
-        sourceBranch: repos.find((r) => r.repo_id === defaultRepoId)?.default_branch || 'main',
+        sourceBranch:
+          repos.find((r: Repo) => r.repo_id === defaultRepoId)?.default_branch || 'main',
       });
 
       setSelectedRepoId(defaultRepoId);
@@ -202,14 +205,14 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
   // Get selected repo's default branch
   const getDefaultBranch = (): string => {
     if (!selectedRepoId) return 'main';
-    const repo = repos.find((r) => r.repo_id === selectedRepoId);
+    const repo = repos.find((r: Repo) => r.repo_id === selectedRepoId);
     return repo?.default_branch || 'main';
   };
 
   // Update source branch when repo changes
   const handleRepoChange = (repoId: string) => {
     setSelectedRepoId(repoId);
-    const repo = repos.find((r) => r.repo_id === repoId);
+    const repo = repos.find((r: Repo) => r.repo_id === repoId);
     const defaultBranch = repo?.default_branch || 'main';
     form.setFieldValue('sourceBranch', defaultBranch);
   };
@@ -280,7 +283,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
       render: (_: unknown, record: Worktree) => {
         const status = record.environment_instance?.status;
         const healthStatus = record.environment_instance?.last_health_check?.status;
-        const repo = repos.find((r) => r.repo_id === record.repo_id);
+        const repo = repos.find((r: Repo) => r.repo_id === record.repo_id);
         const hasEnvConfig = !!repo?.environment_config;
 
         const isRunningOrHealthy =

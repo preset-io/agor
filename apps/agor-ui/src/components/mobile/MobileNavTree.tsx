@@ -41,7 +41,7 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
   // Count active comments per board (unresolved)
   const getActiveCommentCount = (boardId: string): number => {
     return mapToArray(commentById).filter(
-      (c) => c.board_id === boardId && !c.resolved && !c.parent_comment_id
+      (c: BoardComment) => c.board_id === boardId && !c.resolved && !c.parent_comment_id
     ).length;
   };
 
@@ -96,7 +96,7 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
       }}
     >
       <BoardCollapse
-        items={boards.map((board) => {
+        items={boards.map((board: Board) => {
           const boardWorktrees = worktreesByBoard[board.board_id] || [];
           const activeComments = getActiveCommentCount(board.board_id);
 

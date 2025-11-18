@@ -37,7 +37,7 @@ interface ZoneTriggerModalProps {
   boardDescription?: string;
   boardCustomContext?: Record<string, unknown>;
   availableAgents: AgenticToolOption[];
-  mcpServers: MCPServer[];
+  mcpServerById: Map<string, MCPServer>;
   currentUser?: User | null; // Optional - current user for default settings
   onExecute: (params: {
     sessionId: string | 'new';
@@ -63,7 +63,7 @@ export const ZoneTriggerModal = ({
   boardDescription,
   boardCustomContext,
   availableAgents,
-  mcpServers,
+  mcpServerById,
   currentUser,
   onExecute,
 }: ZoneTriggerModalProps) => {
@@ -418,7 +418,7 @@ export const ZoneTriggerModal = ({
                           ? (selectedAgent as AgenticToolName)
                           : (selectedSession?.agentic_tool as AgenticToolName)) || 'claude-code'
                       }
-                      mcpServers={mcpServers}
+                      mcpServerById={mcpServerById}
                       showHelpText={true}
                     />
                   </Space>

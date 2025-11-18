@@ -1,3 +1,4 @@
+import path from 'node:path';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 import viteCompression from 'vite-plugin-compression';
@@ -24,6 +25,13 @@ export default defineConfig({
   // Set base path for production builds (served from /ui by daemon)
   // In development, this is ignored (uses default /)
   base: process.env.NODE_ENV === 'production' ? '/ui/' : '/',
+
+  // Path alias resolution
+  resolve: {
+    alias: {
+      '@': path.resolve(__dirname, './src'),
+    },
+  },
 
   // Mark Node.js-only packages as external so they're not bundled
   build: {
