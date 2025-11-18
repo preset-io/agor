@@ -196,24 +196,27 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
     // Subscribe to session events
     const sessionsService = client.service('sessions');
     const handleSessionCreated = (session: Session) => {
-      // Update sessionById
+      // Update sessionById - only create new Map if session doesn't exist
       setSessionById((prev) => {
+        if (prev.has(session.session_id)) return prev; // Already exists, shouldn't happen
         const next = new Map(prev);
         next.set(session.session_id, session);
         return next;
       });
 
-      // Update sessionsByWorktree
+      // Update sessionsByWorktree - only create new Map when adding new session
       setSessionsByWorktree((prev) => {
+        const worktreeSessions = prev.get(session.worktree_id) || [];
         const next = new Map(prev);
-        const worktreeSessions = next.get(session.worktree_id) || [];
         next.set(session.worktree_id, [...worktreeSessions, session]);
         return next;
       });
     };
     const handleSessionPatched = (session: Session) => {
-      // Update sessionById - simple replace
+      // Update sessionById - ONLY create new Map if session changed
       setSessionById((prev) => {
+        const existing = prev.get(session.session_id);
+        if (existing === session) return prev; // Same reference, no change
         const next = new Map(prev);
         next.set(session.session_id, session);
         return next;
@@ -353,6 +356,7 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
     const worktreesService = client.service('worktrees');
     const handleWorktreeCreated = (worktree: Worktree) => {
       setWorktreeById((prev) => {
+        if (prev.has(worktree.worktree_id)) return prev; // Already exists, shouldn't happen
         const next = new Map(prev);
         next.set(worktree.worktree_id, worktree);
         return next;
@@ -360,6 +364,8 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
     };
     const handleWorktreePatched = (worktree: Worktree) => {
       setWorktreeById((prev) => {
+        const existing = prev.get(worktree.worktree_id);
+        if (existing === worktree) return prev; // Same reference, no change
         const next = new Map(prev);
         next.set(worktree.worktree_id, worktree);
         return next;
@@ -367,6 +373,7 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
     };
     const handleWorktreeRemoved = (worktree: Worktree) => {
       setWorktreeById((prev) => {
+        if (!prev.has(worktree.worktree_id)) return prev; // Doesn't exist, nothing to remove
         const next = new Map(prev);
         next.delete(worktree.worktree_id);
         return next;
