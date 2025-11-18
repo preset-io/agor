@@ -1,5 +1,12 @@
 import type { AgorClient } from '@agor/core/api';
-import type { Board, BoardEntityObject, Repo, Session, Worktree } from '@agor/core/types';
+import type {
+  Board,
+  BoardEntityObject,
+  MCPServer,
+  Repo,
+  Session,
+  Worktree,
+} from '@agor/core/types';
 import { Modal, Tabs } from 'antd';
 import { useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
@@ -16,6 +23,7 @@ export interface WorktreeModalProps {
   sessions: Session[]; // Used for GeneralTab session count
   boardById?: Map<string, Board>;
   boardObjects?: BoardEntityObject[];
+  mcpServerById?: Map<string, MCPServer>;
   client: AgorClient | null;
   onUpdateWorktree?: (worktreeId: string, updates: WorktreeUpdate) => void;
   onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
@@ -37,6 +45,7 @@ export const WorktreeModal: React.FC<WorktreeModalProps> = ({
   sessions,
   boardById = new Map(),
   boardObjects = [],
+  mcpServerById = new Map(),
   client,
   onUpdateWorktree,
   onUpdateRepo,
@@ -101,7 +110,13 @@ export const WorktreeModal: React.FC<WorktreeModalProps> = ({
           {
             key: 'schedule',
             label: 'Schedule',
-            children: <ScheduleTab worktree={worktree} onUpdate={onUpdateWorktree} />,
+            children: (
+              <ScheduleTab
+                worktree={worktree}
+                mcpServerById={mcpServerById}
+                onUpdate={onUpdateWorktree}
+              />
+            ),
           },
         ]}
       />

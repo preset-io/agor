@@ -657,6 +657,7 @@ export const App: React.FC<AppProps> = ({
         repo={selectedWorktreeRepo || null}
         sessions={worktreeSessions}
         boardById={boardById}
+        mcpServerById={mcpServerById}
         client={client}
         onUpdateWorktree={onUpdateWorktree}
         onUpdateRepo={onUpdateRepo}

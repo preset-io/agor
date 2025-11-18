@@ -260,6 +260,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         sessions={worktreeSessions}
         boardById={boardById}
         boardObjects={boardObjects}
+        mcpServerById={mcpServerById}
         client={client}
         onUpdateWorktree={onUpdateWorktree}
         onUpdateRepo={onUpdateRepo}

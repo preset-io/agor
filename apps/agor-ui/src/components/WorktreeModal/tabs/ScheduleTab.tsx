@@ -27,13 +27,13 @@ const { Text, Paragraph } = Typography;
 
 interface ScheduleTabProps {
   worktree: Worktree;
-  mcpServers?: MCPServer[];
+  mcpServerById?: Map<string, MCPServer>;
   onUpdate?: (worktreeId: string, updates: Partial<Worktree>) => void;
 }
 
 export const ScheduleTab: React.FC<ScheduleTabProps> = ({
   worktree,
-  mcpServers = [],
+  mcpServerById = new Map(),
   onUpdate,
 }) => {
   const [form] = Form.useForm();
@@ -245,7 +245,7 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
                 <Form form={form} layout="vertical">
                   <AgenticToolConfigForm
                     agenticTool={agenticTool as AgenticToolName}
-                    mcpServers={mcpServers}
+                    mcpServerById={mcpServerById}
                     showHelpText={true}
                   />
                 </Form>

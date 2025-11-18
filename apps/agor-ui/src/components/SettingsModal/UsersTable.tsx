@@ -52,7 +52,6 @@ export const UsersTable: React.FC<UsersTableProps> = ({
   onClearEditUserId,
 }) => {
   const users = mapToArray(userById);
-  const mcpServers = mapToArray(mcpServerById);
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
@@ -761,7 +760,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
                   <Form form={claudeForm} layout="vertical">
                     <AgenticToolConfigForm
                       agenticTool="claude-code"
-                      mcpServers={mcpServers}
+                      mcpServerById={mcpServerById}
                       showHelpText={false}
                     />
                   </Form>
@@ -785,7 +784,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
                   <Form form={codexForm} layout="vertical">
                     <AgenticToolConfigForm
                       agenticTool="codex"
-                      mcpServers={mcpServers}
+                      mcpServerById={mcpServerById}
                       showHelpText={false}
                     />
                   </Form>
@@ -809,7 +808,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
                   <Form form={geminiForm} layout="vertical">
                     <AgenticToolConfigForm
                       agenticTool="gemini"
-                      mcpServers={mcpServers}
+                      mcpServerById={mcpServerById}
                       showHelpText={false}
                     />
                   </Form>

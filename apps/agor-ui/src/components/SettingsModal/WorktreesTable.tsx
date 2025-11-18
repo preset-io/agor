@@ -594,8 +594,8 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
       >
         <Form form={form} layout="vertical" onFieldsChange={validateForm}>
           <WorktreeFormFields
-            repos={repos}
-            boards={boards}
+            repoById={repoById}
+            boardById={boardById}
             selectedRepoId={selectedRepoId}
             onRepoChange={handleRepoChange}
             defaultBranch={getDefaultBranch()}
