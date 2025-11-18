@@ -7,7 +7,7 @@ echo "🚀 Starting Agor development environment..."
 # Just verify they exist, don't reinstall unless something is actually missing
 if [ ! -d "/app/node_modules" ]; then
   echo "📦 Installing dependencies (first run)..."
-  yes | pnpm install --frozen-lockfile --reporter=default
+  yes | pnpm install
 else
   echo "📦 Dependencies already installed (from Docker build)"
 fi

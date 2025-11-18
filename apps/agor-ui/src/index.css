@@ -92,6 +92,17 @@
   border-bottom: 1px solid var(--ant-color-border);
 }
 
+/* Remove padding/margin between code block header and content */
+[data-streamdown="code-block"] {
+  padding-top: 0 !important;
+  margin-top: 0 !important;
+}
+
+[data-streamdown="code-block"] pre {
+  margin-top: 0 !important;
+  padding-top: 0 !important;
+}
+
 /* Copy/Download button styling - override Tailwind classes */
 [data-code-block-header] button,
 [data-streamdown="mermaid-block"] button,
