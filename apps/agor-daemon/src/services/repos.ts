@@ -54,10 +54,27 @@ async function deriveLocalRepoSlug(path: string, explicitSlug?: string): Promise
     return explicitSlug as RepoSlug;
   }
 
+  const toLocalSlug = (base: string): RepoSlug => {
+    const [_, repoNameRaw] = base.split('/');
+    const repoName = repoNameRaw ?? base;
+    const sanitized = repoName
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+
+    if (!sanitized) {
+      throw new Error('Could not derive a valid slug from local repository name');
+    }
+
+    return `local/${sanitized}` as RepoSlug;
+  };
+
   const remoteUrl = await getRemoteUrl(path);
   if (remoteUrl && isValidGitUrl(remoteUrl)) {
     try {
-      return extractSlugFromUrl(remoteUrl);
+      const remoteSlug = extractSlugFromUrl(remoteUrl);
+      return toLocalSlug(remoteSlug);
     } catch {
       // fall through to error below
     }
