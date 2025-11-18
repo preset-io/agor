@@ -72,8 +72,10 @@ export const AboutTab: React.FC<AboutTabProps> = ({
         .find()
         .then((data) => {
           console.log('[AboutTab] Health info:', data);
-          console.log('[AboutTab] Database info:', data.database);
-          setHealthInfo(data);
+          // Health endpoint returns a single object, not paginated
+          const healthData = data as HealthInfo;
+          console.log('[AboutTab] Database info:', healthData.database);
+          setHealthInfo(healthData);
         })
         .catch((err) => console.error('Failed to fetch health info:', err));
     }
