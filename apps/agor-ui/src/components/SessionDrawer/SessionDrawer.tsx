@@ -82,7 +82,6 @@ interface SessionDrawerProps {
   users?: User[];
   currentUserId?: string;
   repos?: Repo[];
-  worktrees?: Worktree[]; // Still needed for other potential uses
   mcpServers?: MCPServer[];
   sessionMcpServerIds?: string[];
   open: boolean;
@@ -114,7 +113,6 @@ const SessionDrawer = ({
   users = [],
   currentUserId,
   repos = [],
-  worktrees = [],
   mcpServers = [],
   sessionMcpServerIds = [],
   open,

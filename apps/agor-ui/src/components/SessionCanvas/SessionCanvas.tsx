@@ -76,6 +76,7 @@ interface SessionCanvasProps {
   users: User[];
   repos: Repo[];
   worktrees: Worktree[];
+  worktreeById: Map<string, Worktree>;
   boardObjects: BoardEntityObject[];
   comments: BoardComment[];
   currentUserId?: string;
@@ -229,6 +230,7 @@ const SessionCanvas = ({
   sessions,
   repos,
   worktrees,
+  worktreeById,
   boardObjects,
   comments,
   tasks,
@@ -304,13 +306,8 @@ const SessionCanvas = ({
     return map;
   }, [users]);
 
-  const worktreeById = useMemo(() => {
-    const map = new Map<string, Worktree>();
-    for (const worktree of worktrees) {
-      map.set(worktree.worktree_id, worktree);
-    }
-    return map;
-  }, [worktrees]);
+  // Note: worktreeById is now passed as prop from parent (no longer computed locally)
+  // This enables efficient O(1) lookups and stable references across re-renders
 
   // Tool state for canvas annotations
   const [activeTool, setActiveTool] = useState<

@@ -9,7 +9,7 @@ interface MobileCommentsPageProps {
   client: AgorClient | null;
   boards: Board[];
   comments: BoardComment[];
-  worktrees: Worktree[];
+  worktreeById: Map<string, Worktree>;
   users: User[];
   currentUser?: User | null;
   onMenuClick?: () => void;
@@ -24,7 +24,7 @@ export const MobileCommentsPage: React.FC<MobileCommentsPageProps> = ({
   client,
   boards,
   comments,
-  worktrees,
+  worktreeById,
   users,
   currentUser,
   onMenuClick,
@@ -71,7 +71,7 @@ export const MobileCommentsPage: React.FC<MobileCommentsPageProps> = ({
           users={users}
           currentUserId={currentUser?.user_id || 'anonymous'}
           boardObjects={board?.objects}
-          worktrees={worktrees}
+          worktreeById={worktreeById}
           onSendComment={(content) => onSendComment(boardId, content)}
           onReplyComment={onReplyComment}
           onResolveComment={onResolveComment}

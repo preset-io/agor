@@ -14,7 +14,7 @@ interface WorktreeListDrawerProps {
   boards: Board[];
   currentBoardId: string;
   onBoardChange: (boardId: string) => void;
-  worktrees: Worktree[];
+  worktreeById: Map<string, Worktree>;
   sessions: Session[];
   onSessionClick: (sessionId: string) => void;
 }
@@ -25,7 +25,7 @@ export const WorktreeListDrawer: React.FC<WorktreeListDrawerProps> = ({
   boards,
   currentBoardId,
   onBoardChange,
-  worktrees,
+  worktreeById,
   sessions,
   onSessionClick,
 }) => {
@@ -37,15 +37,19 @@ export const WorktreeListDrawer: React.FC<WorktreeListDrawerProps> = ({
 
   // Filter sessions by current board (worktree-centric model)
   const boardSessions = useMemo(() => {
-    // Get worktrees for this board
-    const boardWorktrees = worktrees.filter((wt) => wt.board_id === currentBoardId);
-    const boardWorktreeIds = new Set(boardWorktrees.map((wt) => wt.worktree_id));
+    // Get worktree IDs for this board by iterating the Map
+    const boardWorktreeIds = new Set<string>();
+    for (const worktree of worktreeById.values()) {
+      if (worktree.board_id === currentBoardId) {
+        boardWorktreeIds.add(worktree.worktree_id);
+      }
+    }
 
     // Get sessions for these worktrees, sorted by last_updated desc
     return sessions
       .filter((session) => session.worktree_id && boardWorktreeIds.has(session.worktree_id))
       .sort((a, b) => new Date(b.last_updated).getTime() - new Date(a.last_updated).getTime());
-  }, [sessions, worktrees, currentBoardId]);
+  }, [sessions, worktreeById, currentBoardId]);
 
   // Filter sessions by search query
   const filteredSessions = boardSessions.filter(
@@ -70,7 +74,7 @@ export const WorktreeListDrawer: React.FC<WorktreeListDrawerProps> = ({
 
   // Get worktree name for session
   const getWorktreeName = (worktreeId: string) => {
-    return worktrees.find((wt) => wt.worktree_id === worktreeId)?.name || 'Unknown';
+    return worktreeById.get(worktreeId)?.name || 'Unknown';
   };
 
   return (

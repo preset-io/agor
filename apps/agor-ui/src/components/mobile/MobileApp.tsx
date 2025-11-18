@@ -19,7 +19,7 @@ interface MobileAppProps {
   boards: Board[];
   comments: BoardComment[];
   repos: Repo[];
-  worktrees: Worktree[];
+  worktreeById: Map<string, Worktree>;
   users: User[];
   onSendPrompt?: (sessionId: string, prompt: string) => void;
   onSendComment: (boardId: string, content: string) => void;
@@ -40,7 +40,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   boards,
   comments,
   repos,
-  worktrees,
+  worktreeById,
   users,
   onSendPrompt,
   onSendComment,
@@ -69,7 +69,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
       >
         <MobileNavTree
           boards={boards}
-          worktrees={worktrees}
+          worktreeById={worktreeById}
           sessions={sessions}
           tasks={tasks}
           comments={comments}
@@ -124,7 +124,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
             <SessionPage
               client={client}
               sessions={sessions}
-              worktrees={worktrees}
+              worktreeById={worktreeById}
               repos={repos}
               users={users}
               currentUser={user}
@@ -144,7 +144,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
               client={client}
               boards={boards}
               comments={comments}
-              worktrees={worktrees}
+              worktreeById={worktreeById}
               users={users}
               currentUser={user}
               onMenuClick={() => setDrawerOpen(true)}

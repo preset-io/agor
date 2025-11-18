@@ -4,6 +4,7 @@
  * Non-modal right panel that displays real-time socket events with filtering capabilities
  */
 
+import type { Worktree } from '@agor/core/types';
 import {
   ApiOutlined,
   CloseOutlined,
@@ -24,6 +25,7 @@ export interface EventStreamPanelProps {
   events: SocketEvent[];
   onClear: () => void;
   width?: number | string;
+  worktreeById: Map<string, Worktree>;
 }
 
 export const EventStreamPanel: React.FC<EventStreamPanelProps> = ({
@@ -32,6 +34,7 @@ export const EventStreamPanel: React.FC<EventStreamPanelProps> = ({
   events,
   onClear,
   width = 600,
+  worktreeById,
 }) => {
   const { token } = theme.useToken();
   const [includeCursor, setIncludeCursor] = useState(false);
@@ -203,7 +206,7 @@ export const EventStreamPanel: React.FC<EventStreamPanelProps> = ({
             }}
           >
             {filteredEvents.map((event) => (
-              <EventItem key={event.id} event={event} />
+              <EventItem key={event.id} event={event} worktreeById={worktreeById} />
             ))}
           </div>
         )}

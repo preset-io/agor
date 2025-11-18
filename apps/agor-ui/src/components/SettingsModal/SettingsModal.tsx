@@ -32,7 +32,7 @@ export interface SettingsModalProps {
   boards: Board[];
   boardObjects: BoardEntityObject[];
   repos: Repo[];
-  worktrees: Worktree[];
+  worktreeById: Map<string, Worktree>;
   sessions: Session[];
   users: User[];
   mcpServers: MCPServer[];
@@ -85,7 +85,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   boards,
   boardObjects,
   repos,
-  worktrees,
+  worktreeById,
   sessions,
   users,
   mcpServers,
@@ -165,7 +165,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <BoardsTable
                 boards={boards}
                 sessions={sessions}
-                worktrees={worktrees}
+                worktreeById={worktreeById}
                 onCreate={onCreateBoard}
                 onUpdate={onUpdateBoard}
                 onDelete={onDeleteBoard}
@@ -189,7 +189,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             label: 'Worktrees & Environments',
             children: (
               <WorktreesTable
-                worktrees={worktrees}
+                worktreeById={worktreeById}
                 repos={repos}
                 boards={boards}
                 sessions={sessions}

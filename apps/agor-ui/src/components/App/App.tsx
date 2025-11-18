@@ -54,7 +54,7 @@ export interface AppProps {
   boardObjects: BoardEntityObject[]; // Positioned worktrees on boards
   comments: BoardComment[]; // Board comments for collaboration
   repos: Repo[];
-  worktrees: Worktree[];
+  worktreeById: Map<string, Worktree>; // Efficient worktree lookups
   users: User[]; // All users for multiplayer metadata
   mcpServers: MCPServer[];
   sessionMcpServerIds: Record<string, string[]>; // Map: sessionId -> mcpServerIds[]
@@ -126,7 +126,7 @@ export const App: React.FC<AppProps> = ({
   boardObjects,
   comments,
   repos,
-  worktrees,
+  worktreeById,
   users,
   mcpServers,
   sessionMcpServerIds,
@@ -308,7 +308,7 @@ export const App: React.FC<AppProps> = ({
     }
 
     // Clear the worktree's needs_attention flag when user interacts with it
-    const worktree = worktrees.find((w) => w.worktree_id === session?.worktree_id);
+    const worktree = session?.worktree_id ? worktreeById.get(session.worktree_id) : undefined;
     if (worktree?.needs_attention) {
       onUpdateWorktree?.(worktree.worktree_id, { needs_attention: false });
     }
@@ -382,7 +382,7 @@ export const App: React.FC<AppProps> = ({
 
   const selectedSession = sessions.find((s) => s.session_id === selectedSessionId) || null;
   const selectedSessionWorktree = selectedSession
-    ? worktrees.find((w) => w.worktree_id === selectedSession.worktree_id)
+    ? worktreeById.get(selectedSession.worktree_id)
     : null;
   const sessionSettingsSession = sessionSettingsId
     ? sessions.find((s) => s.session_id === sessionSettingsId)
@@ -392,7 +392,7 @@ export const App: React.FC<AppProps> = ({
 
   // Find worktree and repo for WorktreeModal
   const selectedWorktree = worktreeModalWorktreeId
-    ? worktrees.find((w) => w.worktree_id === worktreeModalWorktreeId)
+    ? worktreeById.get(worktreeModalWorktreeId)
     : null;
   const selectedWorktreeRepo = selectedWorktree
     ? repos.find((r) => r.repo_id === selectedWorktree.repo_id)
@@ -402,16 +402,16 @@ export const App: React.FC<AppProps> = ({
     : [];
 
   // Find worktree for NewSessionModal
-  const newSessionWorktree = newSessionWorktreeId
-    ? worktrees.find((w) => w.worktree_id === newSessionWorktreeId)
-    : null;
+  const newSessionWorktree = newSessionWorktreeId ? worktreeById.get(newSessionWorktreeId) : null;
 
   // Filter worktrees by current board (via board_objects)
-  const boardWorktreeIds = boardObjects
+  // Optimized: use Map lookups instead of array.filter
+  const boardWorktrees = boardObjects
     .filter((bo) => bo.board_id === currentBoard?.board_id)
-    .map((bo) => bo.worktree_id);
+    .map((bo) => worktreeById.get(bo.worktree_id))
+    .filter((wt): wt is Worktree => wt !== undefined);
 
-  const boardWorktrees = worktrees.filter((wt) => boardWorktreeIds.includes(wt.worktree_id));
+  const boardWorktreeIds = boardWorktrees.map((wt) => wt.worktree_id);
 
   // Filter sessions by current board's worktrees
   const boardSessions = sessions.filter((session) =>
@@ -476,7 +476,7 @@ export const App: React.FC<AppProps> = ({
           users={users}
           currentUserId={user?.user_id || 'anonymous'}
           boardObjects={currentBoard?.objects}
-          worktrees={boardWorktrees}
+          worktreeById={worktreeById}
           collapsed={commentsPanelCollapsed}
           onToggleCollapse={() => setCommentsPanelCollapsed(!commentsPanelCollapsed)}
           onSendComment={(content) => onSendComment?.(currentBoardId || '', content)}
@@ -496,6 +496,7 @@ export const App: React.FC<AppProps> = ({
             users={users}
             repos={repos}
             worktrees={boardWorktrees}
+            worktreeById={worktreeById}
             boardObjects={boardObjects}
             comments={comments}
             currentUserId={user?.user_id}
@@ -546,6 +547,7 @@ export const App: React.FC<AppProps> = ({
           onToggleCollapse={() => setEventStreamPanelCollapsed(!eventStreamPanelCollapsed)}
           events={events}
           onClear={clearEvents}
+          worktreeById={worktreeById}
         />
       </Content>
       {newSessionWorktreeId && (
@@ -567,7 +569,6 @@ export const App: React.FC<AppProps> = ({
         users={users}
         currentUserId={user?.user_id}
         repos={repos}
-        worktrees={worktrees}
         mcpServers={mcpServers}
         sessionMcpServerIds={selectedSessionId ? sessionMcpServerIds[selectedSessionId] || [] : []}
         open={!!selectedSessionId}
@@ -604,7 +605,7 @@ export const App: React.FC<AppProps> = ({
         boards={boards}
         boardObjects={boardObjects}
         repos={repos}
-        worktrees={worktrees}
+        worktreeById={worktreeById}
         sessions={sessions}
         users={users}
         mcpServers={mcpServers}
@@ -673,7 +674,7 @@ export const App: React.FC<AppProps> = ({
         currentBoardId={currentBoardId}
         onBoardChange={setCurrentBoardId}
         sessions={sessions}
-        worktrees={worktrees}
+        worktreeById={worktreeById}
         onSessionClick={setSelectedSessionId}
       />
       <TerminalModal
@@ -698,7 +699,7 @@ export const App: React.FC<AppProps> = ({
         <EnvironmentLogsModal
           open={!!logsModalWorktreeId}
           onClose={() => setLogsModalWorktreeId(null)}
-          worktree={worktrees.find((w) => w.worktree_id === logsModalWorktreeId)!}
+          worktree={worktreeById.get(logsModalWorktreeId)!}
           client={client}
         />
       )}

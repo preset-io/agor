@@ -128,7 +128,7 @@ function AppContent() {
     boardObjects,
     comments,
     repos,
-    worktrees,
+    worktreeById,
     users,
     mcpServers,
     sessionMcpServerIds,
@@ -172,10 +172,10 @@ function AppContent() {
   const welcomeStats = useMemo(
     () => ({
       repoCount: repos.length,
-      worktreeCount: worktrees.length,
+      worktreeCount: worktreeById.size,
       sessionCount: sessions.length,
     }),
-    [repos.length, worktrees.length, sessions.length]
+    [repos.length, worktreeById.size, sessions.length]
   );
 
   // Show welcome modal if user hasn't completed onboarding
@@ -915,7 +915,7 @@ function AppContent() {
   };
 
   // Generate repo reference options for dropdowns
-  const allOptions = getRepoReferenceOptions(repos, worktrees);
+  const allOptions = getRepoReferenceOptions(repos, Array.from(worktreeById.values()));
   const _worktreeOptions = allOptions.filter((opt) => opt.type === 'managed-worktree');
   const _repoOptions = allOptions.filter((opt) => opt.type === 'managed');
 
@@ -996,7 +996,7 @@ function AppContent() {
               boards={boards}
               comments={comments}
               repos={repos}
-              worktrees={worktrees}
+              worktreeById={worktreeById}
               users={users}
               onSendPrompt={handleSendPrompt}
               onSendComment={handleSendComment}
@@ -1041,7 +1041,7 @@ function AppContent() {
                 boardObjects={boardObjects}
                 comments={comments}
                 repos={repos}
-                worktrees={worktrees}
+                worktreeById={worktreeById}
                 users={users}
                 mcpServers={mcpServers}
                 sessionMcpServerIds={sessionMcpServerIds}

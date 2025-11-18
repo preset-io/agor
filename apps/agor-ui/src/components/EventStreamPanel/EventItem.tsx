@@ -2,6 +2,7 @@
  * EventItem - Display a single socket event with timestamp, type, and data
  */
 
+import type { Worktree } from '@agor/core/types';
 import {
   AimOutlined,
   ApiOutlined,
@@ -12,17 +13,19 @@ import {
   ThunderboltOutlined,
   ToolOutlined,
 } from '@ant-design/icons';
-import { Button, message, Popover, Tag, Typography, theme } from 'antd';
+import { Button, Popover, Tag, Typography, theme } from 'antd';
 import type React from 'react';
 import type { SocketEvent } from '../../hooks/useEventStream';
+import { EventStreamPill } from './EventStreamPill';
 
 const { Text } = Typography;
 
 export interface EventItemProps {
   event: SocketEvent;
+  worktreeById: Map<string, Worktree>;
 }
 
-export const EventItem = ({ event }: EventItemProps): React.JSX.Element => {
+export const EventItem = ({ event, worktreeById }: EventItemProps): React.JSX.Element => {
   const { token } = theme.useToken();
 
   // Get icon based on event type
@@ -82,23 +85,6 @@ export const EventItem = ({ event }: EventItemProps): React.JSX.Element => {
     } catch {
       return String(data);
     }
-  };
-
-  // Extract short ID (first 8 chars without hyphens)
-  const toShortId = (id: string): string => {
-    return id.replace(/-/g, '').slice(0, 8);
-  };
-
-  // Copy to clipboard
-  const copyToClipboard = (text: string, label: string) => {
-    navigator.clipboard.writeText(text).then(
-      () => {
-        message.success(`${label} copied: ${text}`);
-      },
-      () => {
-        message.error('Failed to copy to clipboard');
-      }
-    );
   };
 
   // Extract session_id and worktree_id from event data
@@ -174,36 +160,18 @@ export const EventItem = ({ event }: EventItemProps): React.JSX.Element => {
 
       {/* Session ID pill */}
       {sessionId && (
-        <Tag
-          icon={<CodeOutlined />}
-          color="cyan"
-          style={{
-            margin: 0,
-            fontSize: 10,
-            cursor: 'pointer',
-            fontFamily: 'monospace',
-          }}
-          onClick={() => copyToClipboard(sessionId, 'Session ID')}
-        >
-          {toShortId(sessionId)}
-        </Tag>
+        <EventStreamPill id={sessionId} icon={CodeOutlined} color="cyan" copyLabel="Session ID" />
       )}
 
       {/* Worktree ID pill */}
       {worktreeId && (
-        <Tag
-          icon={<FolderOutlined />}
+        <EventStreamPill
+          id={worktreeId}
+          label={worktreeById.get(worktreeId)?.name}
+          icon={FolderOutlined}
           color="geekblue"
-          style={{
-            margin: 0,
-            fontSize: 10,
-            cursor: 'pointer',
-            fontFamily: 'monospace',
-          }}
-          onClick={() => copyToClipboard(worktreeId, 'Worktree ID')}
-        >
-          {toShortId(worktreeId)}
-        </Tag>
+          copyLabel="Worktree ID"
+        />
       )}
 
       {event.data ? (

@@ -26,7 +26,7 @@ interface UseAgorDataResult {
   boardObjects: BoardEntityObject[]; // Positioned worktrees on boards
   comments: BoardComment[]; // Board comments for collaboration
   repos: Repo[];
-  worktrees: Worktree[];
+  worktreeById: Map<string, Worktree>; // Primary storage - efficient lookups, stable references
   users: User[];
   mcpServers: MCPServer[];
   sessionMcpServerIds: Record<string, string[]>; // Map: sessionId -> mcpServerIds[]
@@ -48,7 +48,7 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
   const [boardObjects, setBoardObjects] = useState<BoardEntityObject[]>([]);
   const [comments, setComments] = useState<BoardComment[]>([]);
   const [repos, setRepos] = useState<Repo[]>([]);
-  const [worktrees, setWorktrees] = useState<Worktree[]>([]);
+  const [worktreeById, setWorktreeById] = useState<Map<string, Worktree>>(new Map());
   const [users, setUsers] = useState<User[]>([]);
   const [mcpServers, setMcpServers] = useState<MCPServer[]>([]);
   const [sessionMcpServerIds, setSessionMcpServerIds] = useState<Record<string, string[]>>({});
@@ -134,7 +134,14 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       setBoardObjects(boardObjectsList);
       setComments(commentsList);
       setRepos(reposList);
-      setWorktrees(worktreesList);
+
+      // Build worktree Map for efficient lookups
+      const worktreesMap = new Map<string, Worktree>();
+      for (const worktree of worktreesList) {
+        worktreesMap.set(worktree.worktree_id, worktree);
+      }
+      setWorktreeById(worktreesMap);
+
       setUsers(usersList);
       setMcpServers(mcpServersList);
 
@@ -268,15 +275,25 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
     // Subscribe to worktree events
     const worktreesService = client.service('worktrees');
     const handleWorktreeCreated = (worktree: Worktree) => {
-      setWorktrees((prev) => [...prev, worktree]);
+      setWorktreeById((prev) => {
+        const next = new Map(prev);
+        next.set(worktree.worktree_id, worktree);
+        return next;
+      });
     };
     const handleWorktreePatched = (worktree: Worktree) => {
-      setWorktrees((prev) =>
-        prev.map((w) => (w.worktree_id === worktree.worktree_id ? worktree : w))
-      );
+      setWorktreeById((prev) => {
+        const next = new Map(prev);
+        next.set(worktree.worktree_id, worktree);
+        return next;
+      });
     };
     const handleWorktreeRemoved = (worktree: Worktree) => {
-      setWorktrees((prev) => prev.filter((w) => w.worktree_id !== worktree.worktree_id));
+      setWorktreeById((prev) => {
+        const next = new Map(prev);
+        next.delete(worktree.worktree_id);
+        return next;
+      });
     };
 
     worktreesService.on('created', handleWorktreeCreated);
@@ -425,7 +442,7 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
     boardObjects,
     comments,
     repos,
-    worktrees,
+    worktreeById,
     users,
     mcpServers,
     sessionMcpServerIds,

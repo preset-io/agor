@@ -47,7 +47,7 @@ export interface CommentsPanelProps {
   users: User[];
   currentUserId: string;
   boardObjects?: Record<string, BoardObject>; // For zone names
-  worktrees?: Worktree[]; // For worktree names
+  worktreeById?: Map<string, Worktree>; // For worktree names
   loading?: boolean;
   collapsed?: boolean;
   onToggleCollapse?: () => void;
@@ -475,7 +475,7 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
   users,
   currentUserId,
   boardObjects = {},
-  worktrees = [],
+  worktreeById,
   loading = false,
   collapsed = false,
   onToggleCollapse,
@@ -555,14 +555,14 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
           groupType = 'zone';
         } else if (parent_type === 'worktree') {
           groupKey = `worktree-${parent_id}`;
-          const worktree = worktrees.find((w) => w.worktree_id === parent_id);
+          const worktree = worktreeById?.get(parent_id);
           groupLabel = worktree ? worktree.name : 'Unknown Worktree';
           groupType = 'worktree';
         }
       } else if (thread.worktree_id) {
         // Check for FK-based worktree attachment
         groupKey = `worktree-${thread.worktree_id}`;
-        const worktree = worktrees.find((w) => w.worktree_id === thread.worktree_id);
+        const worktree = worktreeById?.get(thread.worktree_id);
         groupLabel = worktree ? worktree.name : 'Unknown Worktree';
         groupType = 'worktree';
       }
@@ -580,7 +580,7 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
     }
 
     return groups;
-  }, [filteredThreads, boardObjects, worktrees]);
+  }, [filteredThreads, boardObjects, worktreeById]);
 
   // Sort groups by scope hierarchy: Board → Zones → Worktrees (larger to smaller)
   const sortedGroupEntries = useMemo(() => {

@@ -94,7 +94,7 @@ const BACKGROUND_PRESETS = [
 interface BoardsTableProps {
   boards: Board[];
   sessions: Session[];
-  worktrees: Worktree[];
+  worktreeById: Map<string, Worktree>;
   onCreate?: (board: Partial<Board>) => void;
   onUpdate?: (boardId: string, updates: Partial<Board>) => void;
   onDelete?: (boardId: string) => void;
@@ -103,7 +103,7 @@ interface BoardsTableProps {
 export const BoardsTable: React.FC<BoardsTableProps> = ({
   boards,
   sessions,
-  worktrees,
+  worktreeById,
   onCreate,
   onUpdate,
   onDelete,
@@ -128,9 +128,13 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
     const counts = new Map<string, number>();
 
     boards.forEach((board) => {
-      // Get worktrees for this board
-      const boardWorktrees = worktrees.filter((wt) => wt.board_id === board.board_id);
-      const boardWorktreeIds = new Set(boardWorktrees.map((wt) => wt.worktree_id));
+      // Get worktree IDs for this board by iterating the Map
+      const boardWorktreeIds = new Set<string>();
+      for (const worktree of worktreeById.values()) {
+        if (worktree.board_id === board.board_id) {
+          boardWorktreeIds.add(worktree.worktree_id);
+        }
+      }
 
       // Count sessions for these worktrees
       const sessionCount = sessions.filter(
@@ -141,7 +145,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
     });
 
     return counts;
-  }, [boards, sessions, worktrees]);
+  }, [boards, sessions, worktreeById]);
 
   const handleCreate = () => {
     form.validateFields().then((values) => {

@@ -8,7 +8,7 @@ const { Text } = Typography;
 
 interface MobileNavTreeProps {
   boards: Board[];
-  worktrees: Worktree[];
+  worktreeById: Map<string, Worktree>;
   sessions: Session[];
   tasks: Record<string, Task[]>;
   comments: BoardComment[];
@@ -17,7 +17,7 @@ interface MobileNavTreeProps {
 
 export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
   boards,
-  worktrees,
+  worktreeById,
   sessions,
   tasks,
   comments,
@@ -44,17 +44,14 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
   };
 
   // Group worktrees by board
-  const worktreesByBoard = worktrees.reduce(
-    (acc, worktree) => {
-      const boardId = worktree.board_id || 'unassigned';
-      if (!acc[boardId]) {
-        acc[boardId] = [];
-      }
-      acc[boardId].push(worktree);
-      return acc;
-    },
-    {} as Record<string, Worktree[]>
-  );
+  const worktreesByBoard = {} as Record<string, Worktree[]>;
+  for (const worktree of worktreeById.values()) {
+    const boardId = worktree.board_id || 'unassigned';
+    if (!worktreesByBoard[boardId]) {
+      worktreesByBoard[boardId] = [];
+    }
+    worktreesByBoard[boardId].push(worktree);
+  }
 
   // Group sessions by worktree and sort by last_updated DESC
   const sessionsByWorktree = sessions.reduce(

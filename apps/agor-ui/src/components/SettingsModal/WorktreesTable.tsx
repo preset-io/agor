@@ -36,7 +36,7 @@ import { ArchiveDeleteWorktreeModal } from '../ArchiveDeleteWorktreeModal';
 import { WorktreeFormFields } from '../WorktreeFormFields';
 
 interface WorktreesTableProps {
-  worktrees: Worktree[];
+  worktreeById: Map<string, Worktree>;
   repos: Repo[];
   boards: Board[];
   sessions: Session[];
@@ -65,7 +65,7 @@ interface WorktreesTableProps {
 }
 
 export const WorktreesTable: React.FC<WorktreesTableProps> = ({
-  worktrees,
+  worktreeById,
   repos,
   boards,
   sessions,
@@ -453,7 +453,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
 
   const filteredWorktrees = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
-    const sorted = [...worktrees].sort(
+    const sorted = Array.from(worktreeById.values()).sort(
       (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
     );
 
@@ -488,7 +488,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
         return value.toString().toLowerCase().includes(term);
       });
     });
-  }, [archiveFilter, reposById, searchTerm, worktrees]);
+  }, [archiveFilter, reposById, searchTerm, worktreeById]);
 
   return (
     <div>
@@ -531,20 +531,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
         </Space>
       </Space>
 
-      {!worktrees && (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            minHeight: 400,
-          }}
-        >
-          <Empty description="Loading worktrees..." />
-        </div>
-      )}
-
-      {worktrees && repos.length === 0 && (
+      {repos.length === 0 && (
         <div
           style={{
             display: 'flex',
@@ -561,7 +548,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
         </div>
       )}
 
-      {repos.length > 0 && worktrees.length === 0 && (
+      {repos.length > 0 && worktreeById.size === 0 && (
         <div
           style={{
             display: 'flex',
@@ -578,7 +565,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
         </div>
       )}
 
-      {worktrees.length > 0 && (
+      {worktreeById.size > 0 && (
         <Table
           dataSource={filteredWorktrees}
           columns={columns}

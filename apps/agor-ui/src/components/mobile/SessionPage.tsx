@@ -10,7 +10,7 @@ import { MobilePromptInput } from './MobilePromptInput';
 interface SessionPageProps {
   client: AgorClient | null;
   sessions: Session[];
-  worktrees: Worktree[];
+  worktreeById: Map<string, Worktree>;
   repos: Repo[];
   users: User[];
   currentUser?: User | null;
@@ -23,7 +23,7 @@ interface SessionPageProps {
 export const SessionPage: React.FC<SessionPageProps> = ({
   client,
   sessions,
-  worktrees,
+  worktreeById,
   repos,
   users,
   currentUser,
@@ -35,7 +35,7 @@ export const SessionPage: React.FC<SessionPageProps> = ({
   const { sessionId } = useParams<{ sessionId: string }>();
 
   const session = sessions.find((s) => s.session_id === sessionId);
-  const worktree = session ? worktrees.find((w) => w.worktree_id === session.worktree_id) : null;
+  const worktree = session?.worktree_id ? worktreeById.get(session.worktree_id) || null : null;
 
   if (!sessionId) {
     return (
