@@ -123,6 +123,8 @@ function AppContent() {
   // Fetch data (only when connected and authenticated)
   const {
     sessions,
+    sessionById,
+    sessionsByWorktree,
     tasks,
     boards,
     boardObjects,
@@ -992,6 +994,8 @@ function AppContent() {
               client={client}
               user={user}
               sessions={sessions}
+              sessionById={sessionById}
+              sessionsByWorktree={sessionsByWorktree}
               tasks={tasks}
               boards={boards}
               comments={comments}
@@ -1035,6 +1039,8 @@ function AppContent() {
                 connected={connected}
                 connecting={connecting}
                 sessions={sessions}
+                sessionById={sessionById}
+                sessionsByWorktree={sessionsByWorktree}
                 tasks={tasks}
                 availableAgents={AVAILABLE_AGENTS}
                 boards={boards}

@@ -10,7 +10,8 @@ import type { Node } from 'reactflow';
 interface UseBoardObjectsProps {
   board: Board | null;
   client: AgorClient | null;
-  sessions: Session[];
+  sessions: Session[]; // Kept for backwards compat
+  sessionsByWorktree: Map<string, Session[]>; // O(1) worktree filtering
   worktrees: Worktree[];
   boardObjects: BoardEntityObject[];
   setNodes: React.Dispatch<React.SetStateAction<Node[]>>;
@@ -24,6 +25,7 @@ export const useBoardObjects = ({
   board,
   client,
   sessions,
+  sessionsByWorktree,
   worktrees,
   boardObjects,
   setNodes,
@@ -39,13 +41,15 @@ export const useBoardObjects = ({
   // Get session IDs for this board (worktree-centric model)
   const _boardSessionIds = useMemo(() => {
     if (!board) return [];
-    const boardWorktreeIds = new Set(
-      worktrees.filter((w) => w.board_id === board.board_id).map((w) => w.worktree_id)
-    );
-    return sessions
-      .filter((s) => s.worktree_id && boardWorktreeIds.has(s.worktree_id))
+    const boardWorktreeIds = worktrees
+      .filter((w) => w.board_id === board.board_id)
+      .map((w) => w.worktree_id);
+
+    // Use O(1) Map lookups to get sessions for each worktree
+    return boardWorktreeIds
+      .flatMap((worktreeId) => sessionsByWorktree.get(worktreeId) || [])
       .map((s) => s.session_id);
-  }, [board, worktrees, sessions]);
+  }, [board, worktrees, sessionsByWorktree]);
 
   /**
    * Update an existing board object
@@ -173,10 +177,8 @@ export const useBoardObjects = ({
           // Count worktrees pinned to this zone via board_objects.zone_id
           for (const boardObj of boardObjects) {
             if (boardObj.zone_id === objectId) {
-              // Count sessions in this worktree
-              const worktreeSessions = sessions.filter(
-                (s) => s.worktree_id === boardObj.worktree_id
-              );
+              // Count sessions in this worktree using O(1) Map lookup
+              const worktreeSessions = sessionsByWorktree.get(boardObj.worktree_id) || [];
               sessionCount += worktreeSessions.length;
             }
           }
@@ -220,7 +222,7 @@ export const useBoardObjects = ({
   }, [
     board?.objects,
     boardObjects,
-    sessions,
+    sessionsByWorktree,
     handleUpdateObject,
     deleteZone,
     eraserMode,

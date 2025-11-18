@@ -15,7 +15,7 @@ import { createFaviconWithDot } from '../utils/faviconDot';
 
 export function useFaviconStatus(
   currentBoardId: string | null,
-  sessions: Session[],
+  sessionsByWorktree: Map<string, Session[]>,
   boardObjects: BoardEntityObject[]
 ) {
   const [baseFaviconUrl] = useState('/favicon.png');
@@ -38,10 +38,10 @@ export function useFaviconStatus(
       boardObjects.filter((obj) => obj.board_id === currentBoardId).map((obj) => obj.worktree_id)
     );
 
-    // Find sessions for those worktrees
-    const sessionsOnBoard = sessions.filter(
-      (s) => worktreesOnBoard.has(s.worktree_id) && !s.archived
-    );
+    // Find sessions for those worktrees using O(1) Map lookups
+    const sessionsOnBoard = Array.from(worktreesOnBoard)
+      .flatMap((worktreeId) => sessionsByWorktree.get(worktreeId) || [])
+      .filter((s) => !s.archived);
 
     // Determine status: check for running and ready independently
     // Use .some() for efficient short-circuiting
@@ -59,5 +59,5 @@ export function useFaviconStatus(
         }
       }
     );
-  }, [currentBoardId, sessions, boardObjects, baseFaviconUrl, token.colorSuccessText]);
+  }, [currentBoardId, sessionsByWorktree, boardObjects, baseFaviconUrl, token.colorSuccessText]);
 }

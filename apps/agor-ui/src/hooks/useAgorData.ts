@@ -21,6 +21,8 @@ import { useCallback, useEffect, useState } from 'react';
 
 interface UseAgorDataResult {
   sessions: Session[];
+  sessionById: Map<string, Session>; // O(1) lookups by session_id - efficient, stable references
+  sessionsByWorktree: Map<string, Session[]>; // O(1) worktree-scoped filtering
   tasks: Record<string, Task[]>;
   boards: Board[];
   boardObjects: BoardEntityObject[]; // Positioned worktrees on boards
@@ -43,6 +45,8 @@ interface UseAgorDataResult {
  */
 export function useAgorData(client: AgorClient | null): UseAgorDataResult {
   const [sessions, setSessions] = useState<Session[]>([]);
+  const [sessionById, setSessionById] = useState<Map<string, Session>>(new Map());
+  const [sessionsByWorktree, setSessionsByWorktree] = useState<Map<string, Session[]>>(new Map());
   const [tasks, setTasks] = useState<Record<string, Task[]>>({});
   const [boards, setBoards] = useState<Board[]>([]);
   const [boardObjects, setBoardObjects] = useState<BoardEntityObject[]>([]);
@@ -120,6 +124,25 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
 
       setSessions(sessionsList);
 
+      // Build session Maps for efficient lookups
+      const sessionsById = new Map<string, Session>();
+      const sessionsByWorktreeId = new Map<string, Session[]>();
+
+      for (const session of sessionsList) {
+        // sessionById: O(1) ID lookups
+        sessionsById.set(session.session_id, session);
+
+        // sessionsByWorktree: O(1) worktree-scoped filtering
+        const worktreeId = session.worktree_id;
+        if (!sessionsByWorktreeId.has(worktreeId)) {
+          sessionsByWorktreeId.set(worktreeId, []);
+        }
+        sessionsByWorktreeId.get(worktreeId)!.push(session);
+      }
+
+      setSessionById(sessionsById);
+      setSessionsByWorktree(sessionsByWorktreeId);
+
       // Group tasks by session_id
       const tasksMap: Record<string, Task[]> = {};
       for (const task of tasksList) {
@@ -178,12 +201,66 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
     const sessionsService = client.service('sessions');
     const handleSessionCreated = (session: Session) => {
       setSessions((prev) => [...prev, session]);
+
+      // Update sessionById
+      setSessionById((prev) => {
+        const next = new Map(prev);
+        next.set(session.session_id, session);
+        return next;
+      });
+
+      // Update sessionsByWorktree
+      setSessionsByWorktree((prev) => {
+        const next = new Map(prev);
+        const worktreeSessions = next.get(session.worktree_id) || [];
+        next.set(session.worktree_id, [...worktreeSessions, session]);
+        return next;
+      });
     };
     const handleSessionPatched = (session: Session) => {
       setSessions((prev) => prev.map((s) => (s.session_id === session.session_id ? session : s)));
+
+      // Update sessionById - simple replace
+      setSessionById((prev) => {
+        const next = new Map(prev);
+        next.set(session.session_id, session);
+        return next;
+      });
+
+      // Update sessionsByWorktree - replace in array
+      setSessionsByWorktree((prev) => {
+        const next = new Map(prev);
+        const worktreeSessions = next.get(session.worktree_id) || [];
+        next.set(
+          session.worktree_id,
+          worktreeSessions.map((s) => (s.session_id === session.session_id ? session : s))
+        );
+        return next;
+      });
     };
     const handleSessionRemoved = (session: Session) => {
       setSessions((prev) => prev.filter((s) => s.session_id !== session.session_id));
+
+      // Update sessionById
+      setSessionById((prev) => {
+        const next = new Map(prev);
+        next.delete(session.session_id);
+        return next;
+      });
+
+      // Update sessionsByWorktree
+      setSessionsByWorktree((prev) => {
+        const next = new Map(prev);
+        const worktreeSessions = next.get(session.worktree_id) || [];
+        const filtered = worktreeSessions.filter((s) => s.session_id !== session.session_id);
+        if (filtered.length > 0) {
+          next.set(session.worktree_id, filtered);
+        } else {
+          // Clean up empty arrays
+          next.delete(session.worktree_id);
+        }
+        return next;
+      });
     };
 
     sessionsService.on('created', handleSessionCreated);
@@ -437,6 +514,8 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
 
   return {
     sessions,
+    sessionById,
+    sessionsByWorktree,
     tasks,
     boards,
     boardObjects,

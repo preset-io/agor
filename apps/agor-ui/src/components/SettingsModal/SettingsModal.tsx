@@ -33,7 +33,9 @@ export interface SettingsModalProps {
   boardObjects: BoardEntityObject[];
   repos: Repo[];
   worktreeById: Map<string, Worktree>;
-  sessions: Session[];
+  sessions: Session[]; // Kept for backwards compat
+  sessionById: Map<string, Session>; // O(1) ID lookups - efficient, stable references
+  sessionsByWorktree: Map<string, Session[]>; // O(1) worktree filtering
   users: User[];
   mcpServers: MCPServer[];
   activeTab?: string; // Control which tab is shown when modal opens
@@ -87,6 +89,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   repos,
   worktreeById,
   sessions,
+  sessionsByWorktree,
   users,
   mcpServers,
   activeTab = 'boards',
@@ -121,7 +124,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     // Snapshot the data when opening modal
     setSelectedWorktree(worktree);
     setSelectedRepo(repos.find((r) => r.repo_id === worktree.repo_id) || null);
-    setWorktreeSessions(sessions.filter((s) => s.worktree_id === worktree.worktree_id));
+    setWorktreeSessions(sessionsByWorktree.get(worktree.worktree_id) || []);
     setWorktreeModalOpen(true);
   };
 
@@ -165,6 +168,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <BoardsTable
                 boards={boards}
                 sessions={sessions}
+                sessionsByWorktree={sessionsByWorktree}
                 worktreeById={worktreeById}
                 onCreate={onCreateBoard}
                 onUpdate={onUpdateBoard}
@@ -193,6 +197,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 repos={repos}
                 boards={boards}
                 sessions={sessions}
+                sessionsByWorktree={sessionsByWorktree}
                 onArchiveOrDelete={onArchiveOrDeleteWorktree}
                 onUnarchive={onUnarchiveWorktree}
                 onCreate={onCreateWorktree}

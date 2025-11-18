@@ -93,7 +93,8 @@ const BACKGROUND_PRESETS = [
 
 interface BoardsTableProps {
   boards: Board[];
-  sessions: Session[];
+  sessions: Session[]; // Kept for backwards compat
+  sessionsByWorktree: Map<string, Session[]>; // O(1) worktree filtering
   worktreeById: Map<string, Worktree>;
   onCreate?: (board: Partial<Board>) => void;
   onUpdate?: (boardId: string, updates: Partial<Board>) => void;
@@ -103,6 +104,7 @@ interface BoardsTableProps {
 export const BoardsTable: React.FC<BoardsTableProps> = ({
   boards,
   sessions,
+  sessionsByWorktree,
   worktreeById,
   onCreate,
   onUpdate,
@@ -129,23 +131,23 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
 
     boards.forEach((board) => {
       // Get worktree IDs for this board by iterating the Map
-      const boardWorktreeIds = new Set<string>();
+      const boardWorktreeIds: string[] = [];
       for (const worktree of worktreeById.values()) {
         if (worktree.board_id === board.board_id) {
-          boardWorktreeIds.add(worktree.worktree_id);
+          boardWorktreeIds.push(worktree.worktree_id);
         }
       }
 
-      // Count sessions for these worktrees
-      const sessionCount = sessions.filter(
-        (session) => session.worktree_id && boardWorktreeIds.has(session.worktree_id)
+      // Count sessions for these worktrees using O(1) Map lookups
+      const sessionCount = boardWorktreeIds.flatMap(
+        (worktreeId) => sessionsByWorktree.get(worktreeId) || []
       ).length;
 
       counts.set(board.board_id, sessionCount);
     });
 
     return counts;
-  }, [boards, sessions, worktreeById]);
+  }, [boards, sessionsByWorktree, worktreeById]);
 
   const handleCreate = () => {
     form.validateFields().then((values) => {

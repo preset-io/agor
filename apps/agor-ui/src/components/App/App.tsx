@@ -48,6 +48,8 @@ export interface AppProps {
   connected?: boolean;
   connecting?: boolean;
   sessions: Session[];
+  sessionById: Map<string, Session>; // O(1) lookups by session_id - efficient, stable references
+  sessionsByWorktree: Map<string, Session[]>; // O(1) worktree-scoped filtering
   tasks: Record<string, Task[]>;
   availableAgents: AgenticToolOption[];
   boards: Board[];
@@ -120,6 +122,8 @@ export const App: React.FC<AppProps> = ({
   connected = false,
   connecting = false,
   sessions,
+  sessionById,
+  sessionsByWorktree,
   tasks,
   availableAgents,
   boards,
@@ -243,7 +247,7 @@ export const App: React.FC<AppProps> = ({
   }, [boards, currentBoardId]);
 
   // Update favicon based on session activity on current board
-  useFaviconStatus(currentBoardId, sessions, boardObjects);
+  useFaviconStatus(currentBoardId, sessionsByWorktree, boardObjects);
 
   // Check if event stream is enabled in user preferences
   const eventStreamEnabled = user?.preferences?.eventStream?.enabled ?? false;
@@ -302,7 +306,7 @@ export const App: React.FC<AppProps> = ({
     setSelectedSessionId(sessionId);
 
     // Clear the ready_for_prompt flag when opening the conversation
-    const session = sessions.find((s) => s.session_id === sessionId);
+    const session = sessionById.get(sessionId);
     if (session?.ready_for_prompt) {
       onUpdateSession?.(sessionId, { ready_for_prompt: false });
     }
@@ -316,7 +320,7 @@ export const App: React.FC<AppProps> = ({
 
   const handleSendPrompt = async (prompt: string, permissionMode?: PermissionMode) => {
     if (selectedSessionId) {
-      const session = sessions.find((s) => s.session_id === selectedSessionId);
+      const session = sessionById.get(selectedSessionId);
       const agentName = session?.agentic_tool || 'agentic_tool';
 
       // Show loading state
@@ -380,13 +384,11 @@ export const App: React.FC<AppProps> = ({
     [client, user?.user_id]
   );
 
-  const selectedSession = sessions.find((s) => s.session_id === selectedSessionId) || null;
+  const selectedSession = selectedSessionId ? sessionById.get(selectedSessionId) || null : null;
   const selectedSessionWorktree = selectedSession
     ? worktreeById.get(selectedSession.worktree_id)
     : null;
-  const sessionSettingsSession = sessionSettingsId
-    ? sessions.find((s) => s.session_id === sessionSettingsId)
-    : null;
+  const sessionSettingsSession = sessionSettingsId ? sessionById.get(sessionSettingsId) : null;
   const _selectedSessionTasks = selectedSessionId ? tasks[selectedSessionId] || [] : [];
   const currentBoard = boards.find((b) => b.board_id === currentBoardId);
 
@@ -398,7 +400,7 @@ export const App: React.FC<AppProps> = ({
     ? repos.find((r) => r.repo_id === selectedWorktree.repo_id)
     : null;
   const worktreeSessions = selectedWorktree
-    ? sessions.filter((s) => s.worktree_id === selectedWorktree.worktree_id)
+    ? sessionsByWorktree.get(selectedWorktree.worktree_id) || []
     : [];
 
   // Find worktree for NewSessionModal
@@ -413,10 +415,8 @@ export const App: React.FC<AppProps> = ({
 
   const boardWorktreeIds = boardWorktrees.map((wt) => wt.worktree_id);
 
-  // Filter sessions by current board's worktrees
-  const boardSessions = sessions.filter((session) =>
-    boardWorktreeIds.includes(session.worktree_id)
-  );
+  // Filter sessions by current board's worktrees - use sessionsByWorktree for efficiency
+  const boardSessions = boardWorktreeIds.flatMap((wtId) => sessionsByWorktree.get(wtId) || []);
 
   // Track active users via cursor presence
   const { activeUsers } = usePresence({
@@ -492,6 +492,8 @@ export const App: React.FC<AppProps> = ({
             board={currentBoard || null}
             client={client}
             sessions={boardSessions}
+            sessionById={sessionById}
+            sessionsByWorktree={sessionsByWorktree}
             tasks={tasks}
             users={users}
             repos={repos}
@@ -607,6 +609,8 @@ export const App: React.FC<AppProps> = ({
         repos={repos}
         worktreeById={worktreeById}
         sessions={sessions}
+        sessionById={sessionById}
+        sessionsByWorktree={sessionsByWorktree}
         users={users}
         mcpServers={mcpServers}
         activeTab={effectiveSettingsTab}
@@ -674,6 +678,7 @@ export const App: React.FC<AppProps> = ({
         currentBoardId={currentBoardId}
         onBoardChange={setCurrentBoardId}
         sessions={sessions}
+        sessionsByWorktree={sessionsByWorktree}
         worktreeById={worktreeById}
         onSessionClick={setSelectedSessionId}
       />

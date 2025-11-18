@@ -39,7 +39,8 @@ interface WorktreesTableProps {
   worktreeById: Map<string, Worktree>;
   repos: Repo[];
   boards: Board[];
-  sessions: Session[];
+  sessions: Session[]; // Kept for backwards compat
+  sessionsByWorktree: Map<string, Session[]>; // O(1) worktree filtering
   onArchiveOrDelete?: (
     worktreeId: string,
     options: {
@@ -69,6 +70,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
   repos,
   boards,
   sessions,
+  sessionsByWorktree,
   onArchiveOrDelete,
   onUnarchive,
   onCreate,
@@ -366,7 +368,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
       key: 'sessions',
       width: 100,
       render: (_: unknown, record: Worktree) => {
-        const sessionCount = sessions.filter((s) => s.worktree_id === record.worktree_id).length;
+        const sessionCount = (sessionsByWorktree.get(record.worktree_id) || []).length;
         return (
           <Typography.Text type="secondary">
             {sessionCount} {sessionCount === 1 ? 'session' : 'sessions'}
@@ -608,9 +610,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
         <ArchiveDeleteWorktreeModal
           open={archiveDeleteModalOpen}
           worktree={selectedWorktree}
-          sessionCount={
-            sessions.filter((s) => s.worktree_id === selectedWorktree.worktree_id).length
-          }
+          sessionCount={(sessionsByWorktree.get(selectedWorktree.worktree_id) || []).length}
           environmentRunning={selectedWorktree.environment_instance?.status === 'running'}
           onConfirm={(options) => {
             handleArchiveOrDelete(selectedWorktree.worktree_id, options);

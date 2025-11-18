@@ -16,6 +16,7 @@ interface WorktreeListDrawerProps {
   onBoardChange: (boardId: string) => void;
   worktreeById: Map<string, Worktree>;
   sessions: Session[];
+  sessionsByWorktree: Map<string, Session[]>;
   onSessionClick: (sessionId: string) => void;
 }
 
@@ -27,6 +28,7 @@ export const WorktreeListDrawer: React.FC<WorktreeListDrawerProps> = ({
   onBoardChange,
   worktreeById,
   sessions,
+  sessionsByWorktree,
   onSessionClick,
 }) => {
   const { token } = useToken();
