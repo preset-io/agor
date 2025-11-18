@@ -5,12 +5,14 @@
 import {
   AimOutlined,
   ApiOutlined,
+  CodeOutlined,
+  FolderOutlined,
   InfoCircleOutlined,
   MessageOutlined,
   ThunderboltOutlined,
   ToolOutlined,
 } from '@ant-design/icons';
-import { Button, Popover, Tag, Typography, theme } from 'antd';
+import { Button, message, Popover, Tag, Typography, theme } from 'antd';
 import type React from 'react';
 import type { SocketEvent } from '../../hooks/useEventStream';
 
@@ -82,6 +84,34 @@ export const EventItem = ({ event }: EventItemProps): React.JSX.Element => {
     }
   };
 
+  // Extract short ID (first 8 chars without hyphens)
+  const toShortId = (id: string): string => {
+    return id.replace(/-/g, '').slice(0, 8);
+  };
+
+  // Copy to clipboard
+  const copyToClipboard = (text: string, label: string) => {
+    navigator.clipboard.writeText(text).then(
+      () => {
+        message.success(`${label} copied: ${text}`);
+      },
+      () => {
+        message.error('Failed to copy to clipboard');
+      }
+    );
+  };
+
+  // Extract session_id and worktree_id from event data
+  const sessionId =
+    event.data && typeof event.data === 'object' && 'session_id' in event.data
+      ? (event.data.session_id as string)
+      : undefined;
+
+  const worktreeId =
+    event.data && typeof event.data === 'object' && 'worktree_id' in event.data
+      ? (event.data.worktree_id as string)
+      : undefined;
+
   // JSON details popover content
   const detailsContent: React.JSX.Element = event.data ? (
     <div style={{ maxWidth: 400, maxHeight: 400, overflow: 'auto' }}>
@@ -141,6 +171,40 @@ export const EventItem = ({ event }: EventItemProps): React.JSX.Element => {
       >
         {event.eventName}
       </Text>
+
+      {/* Session ID pill */}
+      {sessionId && (
+        <Tag
+          icon={<CodeOutlined />}
+          color="cyan"
+          style={{
+            margin: 0,
+            fontSize: 10,
+            cursor: 'pointer',
+            fontFamily: 'monospace',
+          }}
+          onClick={() => copyToClipboard(sessionId, 'Session ID')}
+        >
+          {toShortId(sessionId)}
+        </Tag>
+      )}
+
+      {/* Worktree ID pill */}
+      {worktreeId && (
+        <Tag
+          icon={<FolderOutlined />}
+          color="geekblue"
+          style={{
+            margin: 0,
+            fontSize: 10,
+            cursor: 'pointer',
+            fontFamily: 'monospace',
+          }}
+          onClick={() => copyToClipboard(worktreeId, 'Worktree ID')}
+        >
+          {toShortId(worktreeId)}
+        </Tag>
+      )}
 
       {event.data ? (
         <Popover content={detailsContent} title="Event Data" trigger="click" placement="left">
