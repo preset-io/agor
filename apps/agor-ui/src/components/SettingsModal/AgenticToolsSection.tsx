@@ -450,24 +450,25 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
                         label="OpenCode Server URL"
                         help="URL where OpenCode server is running (started with 'opencode serve')"
                       >
-                        <Input
-                          placeholder="http://localhost:4096"
-                          value={opencodeServerUrl}
-                          onChange={(e) => setOpencodeServerUrl(e.target.value)}
-                          addonAfter={
-                            <Tooltip title="Test connection to OpenCode server">
-                              <Button
-                                size="small"
-                                type="text"
-                                loading={opencodeTesting}
-                                icon={opencodeTesting ? <LoadingOutlined /> : undefined}
-                                onClick={handleTestOpenCodeConnection}
-                              >
-                                Test
-                              </Button>
-                            </Tooltip>
-                          }
-                        />
+                        <Space.Compact style={{ width: '100%' }}>
+                          <Input
+                            placeholder="http://localhost:4096"
+                            value={opencodeServerUrl}
+                            onChange={(e) => setOpencodeServerUrl(e.target.value)}
+                            style={{ width: '100%' }}
+                          />
+                          <Tooltip title="Test connection to OpenCode server">
+                            <Button
+                              size="small"
+                              type="text"
+                              loading={opencodeTesting}
+                              icon={opencodeTesting ? <LoadingOutlined /> : undefined}
+                              onClick={handleTestOpenCodeConnection}
+                            >
+                              Test
+                            </Button>
+                          </Tooltip>
+                        </Space.Compact>
                       </Form.Item>
 
                       {/* Connection Status */}

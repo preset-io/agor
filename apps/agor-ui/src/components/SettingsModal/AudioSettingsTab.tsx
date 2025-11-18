@@ -156,14 +156,20 @@ export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({ user, form }
                   label="Minimum Task Duration"
                   tooltip="Only play chime for tasks that take longer than this. Set to 0 to always play."
                 >
-                  <InputNumber
-                    min={0}
-                    max={60}
-                    step={1}
-                    addonAfter="seconds"
-                    style={{ width: '100%' }}
-                    disabled={!form.getFieldValue('enabled')}
-                  />
+                  <Space.Compact style={{ width: '100%' }}>
+                    <InputNumber
+                      min={0}
+                      max={60}
+                      step={1}
+                      style={{ width: '100%' }}
+                      disabled={!form.getFieldValue('enabled')}
+                    />
+                    <Input
+                      value="seconds"
+                      disabled
+                      style={{ width: 80, textAlign: 'center', pointerEvents: 'none' }}
+                    />
+                  </Space.Compact>
                 </Form.Item>
               )}
             </Form.Item>

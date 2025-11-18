@@ -163,24 +163,25 @@ export const OpenCodeTab: React.FC<OpenCodeTabProps> = ({ client }) => {
                 { type: 'url', message: 'Must be a valid URL' },
               ]}
             >
-              <Input
-                placeholder="http://localhost:4096"
-                value={serverUrl}
-                onChange={(e) => setServerUrl(e.target.value)}
-                addonAfter={
-                  <Tooltip title="Test connection to OpenCode server">
-                    <Button
-                      size="small"
-                      type="text"
-                      loading={testing}
-                      icon={testing ? <LoadingOutlined /> : undefined}
-                      onClick={handleTestConnection}
-                    >
-                      Test
-                    </Button>
-                  </Tooltip>
-                }
-              />
+              <Space.Compact style={{ width: '100%' }}>
+                <Input
+                  placeholder="http://localhost:4096"
+                  value={serverUrl}
+                  onChange={(e) => setServerUrl(e.target.value)}
+                  style={{ width: '100%' }}
+                />
+                <Tooltip title="Test connection to OpenCode server">
+                  <Button
+                    size="small"
+                    type="text"
+                    loading={testing}
+                    icon={testing ? <LoadingOutlined /> : undefined}
+                    onClick={handleTestConnection}
+                  >
+                    Test
+                  </Button>
+                </Tooltip>
+              </Space.Compact>
             </Form.Item>
 
             {/* Connection Status */}
