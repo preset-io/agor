@@ -125,13 +125,13 @@ function AppContent() {
     sessionById,
     sessionsByWorktree,
     tasks,
-    boards,
-    boardObjects,
-    comments,
-    repos,
+    boardById,
+    boardObjectById,
+    commentById,
+    repoById,
     worktreeById,
-    users,
-    mcpServers,
+    userById,
+    mcpServerById,
     sessionMcpServerIds,
     loading,
     error: dataError,
@@ -159,24 +159,24 @@ function AppContent() {
 
   // Mark as loaded once we have data
   useEffect(() => {
-    if (!loading && (sessionById.size > 0 || boards.length > 0 || repos.length > 0)) {
+    if (!loading && (sessionById.size > 0 || boardById.size > 0 || repoById.size > 0)) {
       setHasLoadedOnce(true);
     }
-  }, [loading, sessionById.size, boards.length, repos.length]);
+  }, [loading, sessionById.size, boardById.size, repoById.size]);
 
-  // Get current user from users array (real-time updates via WebSocket)
+  // Get current user from users Map (real-time updates via WebSocket)
   // This ensures we get the latest onboarding_completed status
-  // Fall back to user from auth if users array hasn't loaded yet
-  const currentUser = user ? users.find((u) => u.user_id === user.user_id) || user : null;
+  // Fall back to user from auth if users Map hasn't loaded yet
+  const currentUser = user ? userById.get(user.user_id) || user : null;
 
   // Memoize welcome modal stats to prevent unnecessary re-renders
   const welcomeStats = useMemo(
     () => ({
-      repoCount: repos.length,
+      repoCount: repoById.size,
       worktreeCount: worktreeById.size,
       sessionCount: sessionById.size,
     }),
-    [repos.length, worktreeById.size, sessionById.size]
+    [repoById.size, worktreeById.size, sessionById.size]
   );
 
   // Show welcome modal if user hasn't completed onboarding
@@ -883,7 +883,7 @@ function AppContent() {
   const handleResolveComment = async (commentId: string) => {
     if (!client) return;
     try {
-      const comment = comments.find((c) => c.comment_id === commentId);
+      const comment = commentById.get(commentId);
       await client.service('board-comments').patch(commentId, {
         resolved: !comment?.resolved,
       });
@@ -935,7 +935,10 @@ function AppContent() {
   };
 
   // Generate repo reference options for dropdowns
-  const allOptions = getRepoReferenceOptions(repos, Array.from(worktreeById.values()));
+  const allOptions = getRepoReferenceOptions(
+    Array.from(repoById.values()),
+    Array.from(worktreeById.values())
+  );
   const _worktreeOptions = allOptions.filter((opt) => opt.type === 'managed-worktree');
   const _repoOptions = allOptions.filter((opt) => opt.type === 'managed');
 
@@ -1014,11 +1017,11 @@ function AppContent() {
               sessionById={sessionById}
               sessionsByWorktree={sessionsByWorktree}
               tasks={tasks}
-              boards={boards}
-              comments={comments}
-              repos={repos}
+              boardById={boardById}
+              commentById={commentById}
+              repoById={repoById}
               worktreeById={worktreeById}
-              users={users}
+              userById={userById}
               onSendPrompt={handleSendPrompt}
               onSendComment={handleSendComment}
               onReplyComment={handleReplyComment}
@@ -1059,15 +1062,15 @@ function AppContent() {
                 sessionsByWorktree={sessionsByWorktree}
                 tasks={tasks}
                 availableAgents={AVAILABLE_AGENTS}
-                boards={boards}
-                boardObjects={boardObjects}
-                comments={comments}
-                repos={repos}
+                boardById={boardById}
+                boardObjectById={boardObjectById}
+                commentById={commentById}
+                repoById={repoById}
                 worktreeById={worktreeById}
-                users={users}
-                mcpServers={mcpServers}
+                userById={userById}
+                mcpServerById={mcpServerById}
                 sessionMcpServerIds={sessionMcpServerIds}
-                initialBoardId={boards[0]?.board_id}
+                initialBoardId={Array.from(boardById.values())[0]?.board_id}
                 openSettingsTab={settingsTabToOpen}
                 onSettingsClose={handleSettingsClose}
                 openNewWorktreeModal={openNewWorktree}
