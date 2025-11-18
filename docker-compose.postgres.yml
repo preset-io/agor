@@ -1,0 +1,12 @@
+# PostgreSQL-specific overrides
+# Automatically loaded when using --profile postgres
+#
+# Usage: docker compose --profile postgres up
+# This file provides environment variable overrides for PostgreSQL mode
+
+services:
+  agor-dev:
+    environment:
+      # Override database config for PostgreSQL mode
+      - AGOR_DB_DIALECT=postgresql
+      - DATABASE_URL=postgresql://agor:agor_dev_secret@postgres:5432/agor

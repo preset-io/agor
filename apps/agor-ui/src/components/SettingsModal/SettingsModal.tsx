@@ -236,6 +236,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             label: 'About',
             children: (
               <AboutTab
+                client={client}
                 connected={client?.io?.connected ?? false}
                 connectionError={undefined}
                 isAdmin={currentUser?.role === 'admin'}

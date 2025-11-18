@@ -25,10 +25,51 @@ docker compose up
 - ✅ No Node.js/pnpm installation required
 - ✅ Consistent environment across team
 - ✅ Easy to run multiple instances on different branches
+- ✅ Supports both SQLite (default) and PostgreSQL databases
 
 **Cons:**
 
 - ❌ Docker-in-docker complexity if your worktree environments use Docker (e.g., `docker compose up` in environment configs)
+
+#### Database Modes
+
+Agor supports both SQLite (default) and PostgreSQL databases in Docker.
+
+**SQLite mode (default):**
+
+```bash
+docker compose up
+# Uses SQLite database at ~/.agor/agor.db (inside container)
+# Perfect for single-user development
+```
+
+**PostgreSQL mode:**
+
+```bash
+# Single command - auto-starts postgres container
+docker compose --env-file .env.postgres up
+
+# Alternative: Copy env file for simpler workflow
+cp .env.postgres .env
+docker compose up  # Now defaults to PostgreSQL
+
+# Switch back to SQLite
+rm .env
+docker compose up
+```
+
+**What happens in PostgreSQL mode:**
+
+- Postgres container starts automatically (via `COMPOSE_PROFILES=postgres` in `.env.postgres`)
+- Agor connects to `postgresql://agor:agor_dev_secret@postgres:5432/agor`
+- Database runs in a Docker volume (persisted across restarts)
+- Great for testing multi-user scenarios or production-like setups
+
+**Check which database you're using:**
+
+Open Settings → About tab (admin only) to see:
+- 💾 SQLite - Shows database file path
+- 🐘 PostgreSQL - Shows connection URL (password masked)
 
 **Git Commits in Docker:**
 
@@ -276,16 +317,46 @@ Before diving into code, familiarize yourself with the architecture:
 
 ## Testing
 
-```bash
-# Database operations
-sqlite3 ~/.agor/agor.db "SELECT COUNT(*) FROM messages"
+### Database Operations
 
+**SQLite:**
+
+```bash
+# Query database directly
+sqlite3 ~/.agor/agor.db "SELECT COUNT(*) FROM messages"
+sqlite3 ~/.agor/agor.db "SELECT * FROM sessions LIMIT 5"
+```
+
+**PostgreSQL:**
+
+```bash
+# Connect to postgres container
+docker compose exec postgres psql -U agor -d agor
+
+# Example queries
+docker compose exec postgres psql -U agor -d agor -c "SELECT COUNT(*) FROM messages"
+docker compose exec postgres psql -U agor -d agor -c "SELECT * FROM sessions LIMIT 5"
+```
+
+### Health Checks
+
+```bash
 # Daemon health
 curl http://localhost:3030/health
 
-# CLI commands (ensure clean exit, no hanging)
+# Check which database is active (admin auth required)
+curl -H "Authorization: Bearer YOUR_JWT_TOKEN" http://localhost:3030/health
+```
+
+### CLI Commands
+
+```bash
+# Test CLI (ensure clean exit, no hanging)
 pnpm agor session list
 pnpm agor repo list
+
+# CLI auto-detects database from environment
+# Works with both SQLite and PostgreSQL
 ```
 
 ## Troubleshooting

@@ -3004,9 +3004,22 @@ async function main() {
       const isAuthenticated = (params as any)?.user !== undefined;
 
       if (isAuthenticated) {
+        // Prepare database info with dialect and masked credentials
+        const dialect = process.env.AGOR_DB_DIALECT === 'postgresql' ? 'postgresql' : 'sqlite';
+        let databaseInfo: { dialect: string; url?: string; path?: string };
+
+        if (dialect === 'postgresql') {
+          // Mask password in PostgreSQL URL
+          const maskedUrl = DB_PATH.replace(/:([^:@]+)@/, ':****@');
+          databaseInfo = { dialect, url: maskedUrl };
+        } else {
+          // Show file path for SQLite
+          databaseInfo = { dialect, path: DB_PATH };
+        }
+
         return {
           ...publicResponse,
-          database: DB_PATH,
+          database: databaseInfo,
           auth: {
             ...publicResponse.auth,
             // biome-ignore lint/suspicious/noExplicitAny: FeathersJS request params are untyped

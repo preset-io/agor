@@ -142,18 +142,16 @@ export const EventItem = ({ event }: EventItemProps): React.JSX.Element => {
         {event.eventName}
       </Text>
 
-      <>
-        {event.data && (
-          <Popover content={detailsContent} title="Event Data" trigger="click" placement="left">
-            <Button
-              type="text"
-              size="small"
-              icon={<InfoCircleOutlined />}
-              style={{ padding: '0 4px' }}
-            />
-          </Popover>
-        )}
-      </>
+      {event.data && (
+        <Popover content={detailsContent} title="Event Data" trigger="click" placement="left">
+          <Button
+            type="text"
+            size="small"
+            icon={<InfoCircleOutlined />}
+            style={{ padding: '0 4px' }}
+          />
+        </Popover>
+      )}
     </div>
   );
 };

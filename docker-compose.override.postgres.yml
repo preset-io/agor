@@ -1,0 +1,13 @@
+# PostgreSQL mode override
+# Usage:
+#   ln -sf docker-compose.override.postgres.yml docker-compose.override.yml
+#   docker compose --profile postgres up
+#
+# Or directly:
+#   docker compose -f docker-compose.yml -f docker-compose.override.postgres.yml --profile postgres up
+
+services:
+  agor-dev:
+    environment:
+      - AGOR_DB_DIALECT=postgresql
+      - DATABASE_URL=postgresql://agor:agor_dev_secret@postgres:5432/agor

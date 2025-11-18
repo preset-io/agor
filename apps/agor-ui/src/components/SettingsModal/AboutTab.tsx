@@ -2,6 +2,7 @@
  * About Tab - Display version, connection info, and system details
  */
 
+import type { AgorClient } from '@agor/core/api';
 import { Card, Descriptions, Space, Typography } from 'antd';
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { getDaemonUrl } from '../../config/daemon';
@@ -14,6 +15,7 @@ const ParticleBackground = lazy(() =>
 );
 
 export interface AboutTabProps {
+  client: AgorClient | null;
   connected: boolean;
   connectionError?: string;
   isAdmin?: boolean;
@@ -25,7 +27,13 @@ interface WindowWithAgorConfig extends Window {
 
 interface HealthInfo {
   version?: string;
-  database?: string;
+  database?:
+    | string
+    | {
+        dialect: 'sqlite' | 'postgresql';
+        url?: string;
+        path?: string;
+      };
   auth?: {
     requireAuth: boolean;
     allowAnonymous: boolean;
@@ -33,6 +41,7 @@ interface HealthInfo {
 }
 
 export const AboutTab: React.FC<AboutTabProps> = ({
+  client,
   connected,
   connectionError,
   isAdmin = false,
@@ -43,6 +52,7 @@ export const AboutTab: React.FC<AboutTabProps> = ({
 
   useEffect(() => {
     console.log('[AboutTab] isAdmin:', isAdmin);
+    console.log('[AboutTab] connected:', connected);
 
     // Determine which detection method was used
     if ((window as WindowWithAgorConfig).AGOR_DAEMON_URL) {
@@ -55,15 +65,19 @@ export const AboutTab: React.FC<AboutTabProps> = ({
       setDetectionMethod('Dev mode (explicit port)');
     }
 
-    // Fetch health info
-    fetch(`${daemonUrl}/health`)
-      .then((res) => res.json())
-      .then((data) => {
-        console.log('[AboutTab] Health info:', data);
-        setHealthInfo(data);
-      })
-      .catch((err) => console.error('Failed to fetch health info:', err));
-  }, [daemonUrl, isAdmin]);
+    // Fetch health info using FeathersJS client
+    if (client) {
+      client
+        .service('health')
+        .find()
+        .then((data) => {
+          console.log('[AboutTab] Health info:', data);
+          console.log('[AboutTab] Database info:', data.database);
+          setHealthInfo(data);
+        })
+        .catch((err) => console.error('Failed to fetch health info:', err));
+    }
+  }, [client, isAdmin, connected]);
 
   return (
     <div style={{ position: 'relative', minHeight: 500, padding: '24px 0' }}>
@@ -114,11 +128,33 @@ export const AboutTab: React.FC<AboutTabProps> = ({
                     <code>{daemonUrl}</code>
                   </Descriptions.Item>
                   <Descriptions.Item label="Detection Method">{detectionMethod}</Descriptions.Item>
-                  {healthInfo?.database && (
-                    <Descriptions.Item label="Database">
-                      <code>{healthInfo.database}</code>
-                    </Descriptions.Item>
-                  )}
+                  {healthInfo?.database &&
+                    (typeof healthInfo.database === 'string' ? (
+                      <Descriptions.Item label="Database">
+                        <code>{healthInfo.database}</code>
+                      </Descriptions.Item>
+                    ) : (
+                      <>
+                        <Descriptions.Item label="Database Type">
+                          {healthInfo.database.dialect === 'postgresql' ? (
+                            <span>🐘 PostgreSQL</span>
+                          ) : (
+                            <span>💾 SQLite</span>
+                          )}
+                        </Descriptions.Item>
+                        {healthInfo.database.dialect === 'postgresql' &&
+                          healthInfo.database.url && (
+                            <Descriptions.Item label="Database URL">
+                              <code>{healthInfo.database.url}</code>
+                            </Descriptions.Item>
+                          )}
+                        {healthInfo.database.dialect === 'sqlite' && healthInfo.database.path && (
+                          <Descriptions.Item label="Database Path">
+                            <code>{healthInfo.database.path}</code>
+                          </Descriptions.Item>
+                        )}
+                      </>
+                    ))}
                   {healthInfo?.auth && (
                     <>
                       <Descriptions.Item label="Authentication">

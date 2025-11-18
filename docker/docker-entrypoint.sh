@@ -12,7 +12,9 @@ sudo chown -R agor:agor /app
 # This ensures each worktree gets its exact dependencies, even if the Docker image
 # was built from a different worktree with different dependencies
 echo "📦 Syncing dependencies with pnpm-lock.yaml..."
-pnpm install
+# Use --frozen-lockfile to use prebuilt binaries from Docker image (no rebuild)
+CI=true pnpm install --frozen-lockfile < /dev/null
+echo "✅ Dependencies synced"
 
 # Initialize husky git hooks (required for git commit hooks)
 echo "🎣 Initializing git hooks..."

@@ -94,13 +94,13 @@
 
 /* Remove padding/margin between code block header and content */
 [data-streamdown="code-block"] {
-  padding-top: 0 !important;
-  margin-top: 0 !important;
+  padding-top: 0;
+  margin-top: 0;
 }
 
 [data-streamdown="code-block"] pre {
-  margin-top: 0 !important;
-  padding-top: 0 !important;
+  margin-top: 0;
+  padding-top: 0;
 }
 
 /* Copy/Download button styling - override Tailwind classes */

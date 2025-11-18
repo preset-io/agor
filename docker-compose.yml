@@ -84,19 +84,18 @@ services:
       # Daemon configuration
       - NODE_ENV=development
       - DAEMON_PORT=${DAEMON_PORT:-3030}
-      - CORS_ORIGIN=${CORS_ORIGIN:-}
+      - CORS_ORIGIN=${CORS_ORIGIN:-*}
 
       # UI configuration
       - UI_PORT=${UI_PORT:-5173}
       # UI connects to daemon via localhost (inside container)
       - VITE_DAEMON_PORT=${DAEMON_PORT:-3030}
 
-      # Database configuration (SQLite by default, PostgreSQL with --profile postgres)
+      # Database configuration
+      # AUTO-DETECT: If postgres container is running, use PostgreSQL; otherwise SQLite
+      # This allows `docker compose --profile postgres up` to just work!
       - AGOR_DB_DIALECT=${AGOR_DB_DIALECT:-sqlite}
-      # DATABASE_URL for PostgreSQL (only used when AGOR_DB_DIALECT=postgresql)
-      # Auto-connects to postgres container when profile is active
-      # Override in .env for custom connection string
-      - DATABASE_URL=${DATABASE_URL:-postgresql://${POSTGRES_USER:-agor}:${POSTGRES_PASSWORD:-agor_dev_secret}@postgres:5432/${POSTGRES_DB:-agor}}
+      - DATABASE_URL=${DATABASE_URL:-}
 
       # Seed development fixtures (optional, set SEED=true to populate test data)
       # Creates: Agor repo (https://github.com/preset-io/agor.git) + test-worktree
