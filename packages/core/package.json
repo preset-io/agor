@@ -172,6 +172,7 @@
     "@google/gemini-cli-core": "^0.15.1",
     "@google/genai": "^1.26.0",
     "@libsql/client": "^0.15.15",
+    "@iarna/toml": "^2.2.5",
     "@openai/codex-sdk": "^0.58.0",
     "@opencode-ai/sdk": "^1.0.65",
     "bcryptjs": "^2.4.3",

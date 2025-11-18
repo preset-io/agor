@@ -8,6 +8,8 @@ import path from 'node:path';
 import yaml from 'js-yaml';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  ensureCodexHome,
+  expandHomePath,
   getAgorHome,
   getConfigPath,
   getConfigValue,
@@ -15,6 +17,7 @@ import {
   getDefaultConfig,
   initConfig,
   loadConfig,
+  resolveCodexHome,
   saveConfig,
   setConfigValue,
   unsetConfigValue,
@@ -94,6 +97,17 @@ describe('getDefaultConfig', () => {
   });
 });
 
+describe('expandHomePath', () => {
+  it('should return the original path when no tilde prefix is present', () => {
+    expect(expandHomePath('/tmp/example')).toBe('/tmp/example');
+  });
+
+  it('should expand a tilde-prefixed path using the user home directory', () => {
+    const expected = path.join(os.homedir(), 'workspace');
+    expect(expandHomePath('~/workspace')).toBe(expected);
+  });
+});
+
 describe('loadConfig', () => {
   let tempDir: string;
   let _originalHome: string;
@@ -168,6 +182,61 @@ describe('loadConfig', () => {
     expect(loaded.daemon?.port).toBe(4040);
     expect(loaded.defaults).toBeUndefined();
     expect(loaded.display).toBeUndefined();
+  });
+});
+
+describe('resolveCodexHome & ensureCodexHome', () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-config-'));
+    vi.spyOn(os, 'homedir').mockReturnValue(tempDir);
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it('should resolve to default Codex home when not configured', async () => {
+    const home = await resolveCodexHome();
+    expect(home).toBe(path.join(tempDir, '.agor', 'codex'));
+  });
+
+  it('should resolve a configured tilde path', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      path.join(agorDir, 'config.yaml'),
+      yaml.dump({ codex: { home: '~/.custom-codex' } }),
+      'utf-8'
+    );
+
+    const home = await resolveCodexHome();
+    expect(home).toBe(path.join(tempDir, '.custom-codex'));
+  });
+
+  it('should create the default Codex home directory when ensuring', async () => {
+    const codexHome = await ensureCodexHome();
+    expect(codexHome).toBe(path.join(tempDir, '.agor', 'codex'));
+    const stats = await fs.stat(codexHome);
+    expect(stats.isDirectory()).toBe(true);
+  });
+
+  it('should create a configured Codex home directory if missing', async () => {
+    const customHome = path.join(tempDir, 'codex-data');
+    const agorDir = path.join(tempDir, '.agor');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      path.join(agorDir, 'config.yaml'),
+      yaml.dump({ codex: { home: customHome } }),
+      'utf-8'
+    );
+
+    const codexHome = await ensureCodexHome();
+    expect(codexHome).toBe(customHome);
+    const stats = await fs.stat(customHome);
+    expect(stats.isDirectory()).toBe(true);
   });
 });
 

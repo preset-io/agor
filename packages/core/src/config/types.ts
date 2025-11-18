@@ -84,6 +84,14 @@ export interface AgorOpenCodeSettings {
 }
 
 /**
+ * Codex-specific configuration
+ */
+export interface AgorCodexSettings {
+  /** Codex home directory (default: ~/.agor/codex) */
+  home?: string;
+}
+
+/**
  * Supported credential keys (enum for type safety)
  */
 export enum CredentialKey {
@@ -125,6 +133,9 @@ export interface AgorConfig {
   /** OpenCode.ai integration settings */
   opencode?: AgorOpenCodeSettings;
 
+  /** Codex-specific configuration */
+  codex?: AgorCodexSettings;
+
   /** Tool credentials (API keys, tokens) */
   credentials?: AgorCredentials;
 }
@@ -138,4 +149,5 @@ export type ConfigKey =
   | `daemon.${keyof AgorDaemonSettings}`
   | `ui.${keyof AgorUISettings}`
   | `opencode.${keyof AgorOpenCodeSettings}`
+  | `codex.${keyof AgorCodexSettings}`
   | `credentials.${keyof AgorCredentials}`;

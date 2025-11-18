@@ -509,6 +509,9 @@ importers:
       '@libsql/client':
         specifier: ^0.15.15
         version: 0.15.15
+      '@iarna/toml':
+        specifier: ^2.2.5
+        version: 2.2.5
       '@openai/codex-sdk':
         specifier: ^0.58.0
         version: 0.58.0

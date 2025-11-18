@@ -111,6 +111,25 @@ export class ConfigService {
       }
     }
 
+    // Allow updating codex configuration
+    if (data.codex) {
+      if (!config.codex) {
+        config.codex = {};
+      }
+
+      if (data.codex.home !== undefined) {
+        const home = data.codex.home;
+        if (home === null || home === '') {
+          // Treat empty string as unset
+          delete config.codex.home;
+        } else if (typeof home === 'string') {
+          config.codex.home = home;
+        } else {
+          throw new Error('codex.home must be a string');
+        }
+      }
+    }
+
     await saveConfig(config);
     console.log('[Config Service] Config saved successfully');
 

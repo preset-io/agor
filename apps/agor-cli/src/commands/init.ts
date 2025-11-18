@@ -328,6 +328,7 @@ export default class Init extends Command {
       join(baseDir, 'worktrees'),
       join(baseDir, 'concepts'),
       join(baseDir, 'logs'),
+      join(baseDir, 'codex'),
     ];
 
     for (const dir of dirs) {
