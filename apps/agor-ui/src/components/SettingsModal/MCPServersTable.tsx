@@ -16,13 +16,14 @@ import {
   Typography,
 } from 'antd';
 import { useState } from 'react';
+import { mapToArray } from '@/utils/mapHelpers';
 
 const { TextArea } = Input;
 
 // Using Typography.Text directly to avoid DOM Text interface collision
 
 interface MCPServersTableProps {
-  mcpServers: MCPServer[];
+  mcpServerById: Map<string, MCPServer>;
   onCreate?: (data: CreateMCPServerInput) => void;
   onUpdate?: (serverId: string, updates: UpdateMCPServerInput) => void;
   onDelete?: (serverId: string) => void;
@@ -141,7 +142,7 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
 };
 
 export const MCPServersTable: React.FC<MCPServersTableProps> = ({
-  mcpServers,
+  mcpServerById,
   onCreate,
   onUpdate,
   onDelete,
@@ -360,7 +361,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       </div>
 
       <Table
-        dataSource={mcpServers}
+        dataSource={mapToArray(mcpServerById)}
         columns={columns}
         rowKey="mcp_server_id"
         pagination={{ pageSize: 10, showSizeChanger: true }}

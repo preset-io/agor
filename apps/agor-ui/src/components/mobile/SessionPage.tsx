@@ -3,6 +3,7 @@ import type { PermissionMode, Repo, Session, User, Worktree } from '@agor/core/t
 import { PermissionScope } from '@agor/core/types';
 import { Alert, Spin } from 'antd';
 import { useParams } from 'react-router-dom';
+import { mapToArray } from '@/utils/mapHelpers';
 import { ConversationView } from '../ConversationView';
 import { MobileHeader } from './MobileHeader';
 import { MobilePromptInput } from './MobilePromptInput';
@@ -11,8 +12,8 @@ interface SessionPageProps {
   client: AgorClient | null;
   sessionById: Map<string, Session>; // O(1) ID lookups
   worktreeById: Map<string, Worktree>;
-  repos: Repo[];
-  users: User[];
+  repoById: Map<string, Repo>;
+  userById: Map<string, User>;
   currentUser?: User | null;
   onSendPrompt?: (sessionId: string, prompt: string, permissionMode?: PermissionMode) => void;
   onMenuClick?: () => void;
@@ -24,8 +25,8 @@ export const SessionPage: React.FC<SessionPageProps> = ({
   client,
   sessionById,
   worktreeById,
-  repos,
-  users,
+  repoById,
+  userById,
   currentUser,
   onSendPrompt,
   onMenuClick,
@@ -36,6 +37,7 @@ export const SessionPage: React.FC<SessionPageProps> = ({
 
   const session = sessionId ? sessionById.get(sessionId) : undefined;
   const worktree = session?.worktree_id ? worktreeById.get(session.worktree_id) || null : null;
+  const users = mapToArray(userById);
 
   if (!sessionId) {
     return (

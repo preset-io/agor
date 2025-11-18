@@ -42,7 +42,7 @@ export interface NewSessionModalProps {
   availableAgents: AgenticToolOption[];
   worktreeId: string; // Required - the worktree to create the session in
   worktree?: Worktree; // Optional - worktree details for display
-  mcpServers?: MCPServer[];
+  mcpServerById?: Map<string, MCPServer>;
   currentUser?: User | null; // Optional - current user for default settings
 }
 
@@ -53,7 +53,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
   availableAgents,
   worktreeId,
   worktree,
-  mcpServers = [],
+  mcpServerById = new Map(),
   currentUser,
 }) => {
   const [form] = Form.useForm();
@@ -229,7 +229,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
               children: (
                 <AgenticToolConfigForm
                   agenticTool={(selectedAgent as AgenticToolName) || 'claude-code'}
-                  mcpServers={mcpServers}
+                  mcpServerById={mcpServerById}
                   showHelpText={true}
                 />
               ),

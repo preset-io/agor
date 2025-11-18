@@ -2,6 +2,9 @@
  * Facepile - shows active users on a board
  *
  * Displays user avatars with tooltips and optional cursor panning
+ *
+ * Note: activeUsers already contains full User objects with cursor positions,
+ * so no Map lookup is needed for this component.
  */
 
 import type { ActiveUser } from '@agor/core/types';

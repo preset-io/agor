@@ -79,10 +79,10 @@ interface SessionDrawerProps {
   client: AgorClient | null;
   session: Session | null;
   worktree?: Worktree | null; // Pre-selected worktree for this session
-  users?: User[];
+  userById?: Map<string, User>;
   currentUserId?: string;
-  repos?: Repo[];
-  mcpServers?: MCPServer[];
+  repoById?: Map<string, Repo>;
+  mcpServerById?: Map<string, MCPServer>;
   sessionMcpServerIds?: string[];
   open: boolean;
   onClose: () => void;
@@ -110,10 +110,10 @@ const SessionDrawer = ({
   client,
   session,
   worktree = null,
-  users = [],
+  userById = new Map(),
   currentUserId,
-  repos = [],
-  mcpServers = [],
+  repoById = new Map(),
+  mcpServerById = new Map(),
   sessionMcpServerIds = [],
   open,
   onClose,
@@ -186,7 +186,7 @@ const SessionDrawer = ({
   const [spawnModalOpen, setSpawnModalOpen] = React.useState(false);
 
   // Fetch tasks for this session to calculate token totals
-  const currentUser = users?.find((u) => u.user_id === currentUserId) || null;
+  const currentUser = currentUserId ? userById.get(currentUserId) || null : null;
   const { tasks } = useTasks(client, session?.session_id || null, currentUser, open);
 
   // Fetch queued messages for this session
@@ -614,7 +614,7 @@ const SessionDrawer = ({
   const isRunning = session.status === SessionStatus.RUNNING;
 
   // Get repo from worktree (worktree is passed from parent)
-  const repo = worktree ? repos.find((r) => r.repo_id === worktree.repo_id) : null;
+  const repo = worktree ? repoById.get(worktree.repo_id) || null : null;
 
   return (
     <Drawer
@@ -657,7 +657,7 @@ const SessionDrawer = ({
                 <CreatedByTag
                   createdBy={session.created_by}
                   currentUserId={currentUserId}
-                  users={users}
+                  userById={userById}
                   prefix="Created by"
                 />
               </div>
@@ -741,7 +741,7 @@ const SessionDrawer = ({
             {worktree?.pull_request_url && <PullRequestPill prUrl={worktree.pull_request_url} />}
             {/* MCP Servers */}
             {sessionMcpServerIds
-              .map((serverId) => mcpServers.find((s) => s.mcp_server_id === serverId))
+              .map((serverId) => mcpServerById.get(serverId))
               .filter(Boolean)
               .map((server) => (
                 <Tag key={server?.mcp_server_id} color="purple" icon={<ApiOutlined />}>
@@ -772,7 +772,7 @@ const SessionDrawer = ({
         sessionId={session.session_id}
         agentic_tool={session.agentic_tool}
         sessionModel={session.model_config?.model}
-        users={users}
+        userById={userById}
         currentUserId={currentUserId}
         onScrollRef={setScrollToBottom}
         onPermissionDecision={onPermissionDecision}
@@ -944,7 +944,7 @@ const SessionDrawer = ({
             }}
             client={client}
             sessionId={session?.session_id || null}
-            users={users}
+            userById={userById}
           />
           <Space style={{ width: '100%', justifyContent: 'space-between' }}>
             <Space size={0}>
@@ -1070,8 +1070,8 @@ const SessionDrawer = ({
         open={spawnModalOpen}
         action="spawn"
         session={session}
-        currentUser={users.find((u) => u.user_id === currentUserId)}
-        mcpServers={mcpServers}
+        currentUser={currentUserId ? userById.get(currentUserId) || null : null}
+        mcpServerById={mcpServerById}
         initialPrompt={inputValue}
         onConfirm={handleSpawnModalConfirm}
         onCancel={() => setSpawnModalOpen(false)}

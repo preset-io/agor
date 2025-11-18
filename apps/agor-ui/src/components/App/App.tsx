@@ -18,6 +18,7 @@ import type {
 import { PermissionScope } from '@agor/core/types';
 import { Layout } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
+import { mapToArray } from '@/utils/mapHelpers';
 import { useEventStream } from '../../hooks/useEventStream';
 import { useFaviconStatus } from '../../hooks/useFaviconStatus';
 import { usePresence } from '../../hooks/usePresence';
@@ -51,13 +52,13 @@ export interface AppProps {
   sessionsByWorktree: Map<string, Session[]>; // O(1) worktree-scoped filtering
   tasks: Record<string, Task[]>;
   availableAgents: AgenticToolOption[];
-  boards: Board[];
-  boardObjects: BoardEntityObject[]; // Positioned worktrees on boards
-  comments: BoardComment[]; // Board comments for collaboration
-  repos: Repo[];
+  boardById: Map<string, Board>; // Map-based board storage
+  boardObjectById: Map<string, BoardEntityObject>; // Map-based board object storage
+  commentById: Map<string, BoardComment>; // Map-based comment storage
+  repoById: Map<string, Repo>; // Map-based repo storage
   worktreeById: Map<string, Worktree>; // Efficient worktree lookups
-  users: User[]; // All users for multiplayer metadata
-  mcpServers: MCPServer[];
+  userById: Map<string, User>; // Map-based user storage
+  mcpServerById: Map<string, MCPServer>; // Map-based MCP server storage
   sessionMcpServerIds: Record<string, string[]>; // Map: sessionId -> mcpServerIds[]
   initialBoardId?: string;
   openSettingsTab?: string | null; // Open settings modal to a specific tab
@@ -125,13 +126,13 @@ export const App: React.FC<AppProps> = ({
   sessionsByWorktree,
   tasks,
   availableAgents,
-  boards,
-  boardObjects,
-  comments,
-  repos,
+  boardById,
+  boardObjectById,
+  commentById,
+  repoById,
   worktreeById,
-  users,
-  mcpServers,
+  userById,
+  mcpServerById,
   sessionMcpServerIds,
   initialBoardId,
   openSettingsTab,
@@ -215,10 +216,11 @@ export const App: React.FC<AppProps> = ({
   // Initialize current board from localStorage or fallback to first board or initialBoardId
   const [currentBoardId, setCurrentBoardId] = useState(() => {
     const stored = localStorage.getItem('agor:currentBoardId');
-    if (stored && boards.some((b) => b.board_id === stored)) {
+    if (stored && boardById.has(stored)) {
       return stored;
     }
-    return initialBoardId || boards[0]?.board_id || '';
+    const firstBoard = mapToArray(boardById)[0];
+    return initialBoardId || firstBoard?.board_id || '';
   });
 
   // Persist current board to localStorage when it changes
@@ -240,14 +242,14 @@ export const App: React.FC<AppProps> = ({
 
   // If the stored board no longer exists (e.g., deleted), fallback to first board
   useEffect(() => {
-    if (currentBoardId && !boards.some((b) => b.board_id === currentBoardId)) {
-      const fallback = boards[0]?.board_id || '';
+    if (currentBoardId && !boardById.has(currentBoardId)) {
+      const fallback = mapToArray(boardById)[0]?.board_id || '';
       setCurrentBoardId(fallback);
     }
-  }, [boards, currentBoardId]);
+  }, [boardById, currentBoardId]);
 
   // Update favicon based on session activity on current board
-  useFaviconStatus(currentBoardId, sessionsByWorktree, boardObjects);
+  useFaviconStatus(currentBoardId, sessionsByWorktree, boardObjectById);
 
   // Check if event stream is enabled in user preferences
   const eventStreamEnabled = user?.preferences?.eventStream?.enabled ?? false;
@@ -390,15 +392,13 @@ export const App: React.FC<AppProps> = ({
     : null;
   const sessionSettingsSession = sessionSettingsId ? sessionById.get(sessionSettingsId) : null;
   const _selectedSessionTasks = selectedSessionId ? tasks[selectedSessionId] || [] : [];
-  const currentBoard = boards.find((b) => b.board_id === currentBoardId);
+  const currentBoard = boardById.get(currentBoardId);
 
   // Find worktree and repo for WorktreeModal
   const selectedWorktree = worktreeModalWorktreeId
     ? worktreeById.get(worktreeModalWorktreeId)
     : null;
-  const selectedWorktreeRepo = selectedWorktree
-    ? repos.find((r) => r.repo_id === selectedWorktree.repo_id)
-    : null;
+  const selectedWorktreeRepo = selectedWorktree ? repoById.get(selectedWorktree.repo_id) : null;
   const worktreeSessions = selectedWorktree
     ? sessionsByWorktree.get(selectedWorktree.worktree_id) || []
     : [];
@@ -408,7 +408,7 @@ export const App: React.FC<AppProps> = ({
 
   // Filter worktrees by current board (via board_objects)
   // Optimized: use Map lookups instead of array.filter
-  const boardWorktrees = boardObjects
+  const boardWorktrees = mapToArray(boardObjectById)
     .filter((bo) => bo.board_id === currentBoard?.board_id)
     .map((bo) => worktreeById.get(bo.worktree_id))
     .filter((wt): wt is Worktree => wt !== undefined);
@@ -417,7 +417,7 @@ export const App: React.FC<AppProps> = ({
   const { activeUsers } = usePresence({
     client,
     boardId: currentBoard?.board_id as BoardID | null,
-    users,
+    users: userById,
     enabled: !!currentBoard && !!client,
   });
 
@@ -457,7 +457,7 @@ export const App: React.FC<AppProps> = ({
         currentBoardName={currentBoard?.name}
         currentBoardIcon={currentBoard?.icon}
         unreadCommentsCount={
-          comments.filter(
+          mapToArray(commentById).filter(
             (c) => c.board_id === currentBoardId && !c.resolved && !c.parent_comment_id
           ).length
         }
@@ -467,8 +467,8 @@ export const App: React.FC<AppProps> = ({
         <CommentsPanel
           client={client}
           boardId={currentBoardId || ''}
-          comments={comments.filter((c) => c.board_id === currentBoardId)}
-          users={users}
+          comments={mapToArray(commentById).filter((c) => c.board_id === currentBoardId)}
+          users={mapToArray(userById)}
           currentUserId={user?.user_id || 'anonymous'}
           boardObjects={currentBoard?.objects}
           worktreeById={worktreeById}
@@ -489,16 +489,16 @@ export const App: React.FC<AppProps> = ({
             sessionById={sessionById}
             sessionsByWorktree={sessionsByWorktree}
             tasks={tasks}
-            users={users}
-            repos={repos}
+            userById={userById}
+            repoById={repoById}
             worktrees={boardWorktrees}
             worktreeById={worktreeById}
-            boardObjects={boardObjects}
-            comments={comments}
+            boardObjectById={boardObjectById}
+            commentById={commentById}
             currentUserId={user?.user_id}
             selectedSessionId={selectedSessionId}
             availableAgents={availableAgents}
-            mcpServers={mcpServers}
+            mcpServerById={mcpServerById}
             sessionMcpServerIds={sessionMcpServerIds}
             onSessionClick={handleSessionClick}
             onSessionUpdate={onUpdateSession}
@@ -529,13 +529,13 @@ export const App: React.FC<AppProps> = ({
           />
           <NewSessionButton
             onClick={() => {
-              if (repos.length === 0) {
+              if (repoById.size === 0) {
                 showWarning('Please create a repository first in Settings');
               } else {
                 setNewWorktreeModalOpen(true);
               }
             }}
-            hasRepos={repos.length > 0}
+            hasRepos={repoById.size > 0}
           />
         </div>
         <EventStreamPanel
@@ -554,7 +554,7 @@ export const App: React.FC<AppProps> = ({
           availableAgents={availableAgents}
           worktreeId={newSessionWorktreeId}
           worktree={newSessionWorktree || undefined}
-          mcpServers={mcpServers}
+          mcpServers={mapToArray(mcpServerById)}
           currentUser={user}
         />
       )}
@@ -562,10 +562,10 @@ export const App: React.FC<AppProps> = ({
         client={client}
         session={selectedSession}
         worktree={selectedSessionWorktree}
-        users={users}
+        users={mapToArray(userById)}
         currentUserId={user?.user_id}
-        repos={repos}
-        mcpServers={mcpServers}
+        repos={mapToArray(repoById)}
+        mcpServers={mapToArray(mcpServerById)}
         sessionMcpServerIds={selectedSessionId ? sessionMcpServerIds[selectedSessionId] || [] : []}
         open={!!selectedSessionId}
         onClose={() => {
@@ -598,14 +598,14 @@ export const App: React.FC<AppProps> = ({
         }}
         client={client}
         currentUser={user}
-        boards={boards}
-        boardObjects={boardObjects}
-        repos={repos}
+        boards={mapToArray(boardById)}
+        boardObjects={mapToArray(boardObjectById)}
+        repos={mapToArray(repoById)}
         worktreeById={worktreeById}
         sessionById={sessionById}
         sessionsByWorktree={sessionsByWorktree}
-        users={users}
-        mcpServers={mcpServers}
+        users={mapToArray(userById)}
+        mcpServers={mapToArray(mcpServerById)}
         activeTab={effectiveSettingsTab}
         editUserId={settingsEditUserId}
         onClearEditUserId={() => setSettingsEditUserId(undefined)}
@@ -642,7 +642,7 @@ export const App: React.FC<AppProps> = ({
           open={!!sessionSettingsId}
           onClose={() => setSessionSettingsId(null)}
           session={sessionSettingsSession}
-          mcpServers={mcpServers}
+          mcpServers={mapToArray(mcpServerById)}
           sessionMcpServerIds={
             sessionSettingsId ? sessionMcpServerIds[sessionSettingsId] || [] : []
           }
@@ -668,7 +668,7 @@ export const App: React.FC<AppProps> = ({
       <WorktreeListDrawer
         open={listDrawerOpen}
         onClose={() => setListDrawerOpen(false)}
-        boards={boards}
+        boards={mapToArray(boardById)}
         currentBoardId={currentBoardId}
         onBoardChange={setCurrentBoardId}
         sessionsByWorktree={sessionsByWorktree}
@@ -690,7 +690,7 @@ export const App: React.FC<AppProps> = ({
           onNewWorktreeModalClose?.();
         }}
         onCreate={handleCreateWorktree}
-        repos={repos}
+        repos={mapToArray(repoById)}
         currentBoardId={currentBoardId}
       />
       {logsModalWorktreeId && (

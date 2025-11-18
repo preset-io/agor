@@ -15,6 +15,7 @@ import {
   Typography,
 } from 'antd';
 import { useState } from 'react';
+import { mapToArray } from '@/utils/mapHelpers';
 
 // Using Typography.Text directly to avoid DOM Text interface collision
 
@@ -72,7 +73,7 @@ function extractSlugFromPath(path: string): string {
 }
 
 interface ReposTableProps {
-  repos: Repo[];
+  repoById: Map<string, Repo>;
   onCreate?: (data: { url: string; slug: string; default_branch: string }) => void;
   onCreateLocal?: (data: { path: string; slug?: string }) => void;
   onUpdate?: (repoId: string, updates: Partial<Repo>) => void;
@@ -80,12 +81,13 @@ interface ReposTableProps {
 }
 
 export const ReposTable: React.FC<ReposTableProps> = ({
-  repos,
+  repoById,
   onCreate,
   onCreateLocal,
   onUpdate,
   onDelete,
 }) => {
+  const repos = mapToArray(repoById);
   const [repoModalOpen, setRepoModalOpen] = useState(false);
   const [editingRepo, setEditingRepo] = useState<Repo | null>(null);
   const [repoMode, setRepoMode] = useState<'remote' | 'local'>('remote');

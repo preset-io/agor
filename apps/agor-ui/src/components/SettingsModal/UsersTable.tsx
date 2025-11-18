@@ -23,6 +23,7 @@ import {
   Typography,
 } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
+import { mapToArray } from '@/utils/mapHelpers';
 import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
 import { ApiKeyFields, type ApiKeyStatus } from '../ApiKeyFields';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
@@ -32,8 +33,8 @@ import { AudioSettingsTab } from './AudioSettingsTab';
 // Using Typography.Text directly to avoid DOM Text interface collision
 
 interface UsersTableProps {
-  users: User[];
-  mcpServers: MCPServer[];
+  userById: Map<string, User>;
+  mcpServerById: Map<string, MCPServer>;
   onCreate?: (data: CreateUserInput) => void;
   onUpdate?: (userId: string, updates: UpdateUserInput) => void;
   onDelete?: (userId: string) => void;
@@ -42,14 +43,16 @@ interface UsersTableProps {
 }
 
 export const UsersTable: React.FC<UsersTableProps> = ({
-  users,
-  mcpServers,
+  userById,
+  mcpServerById,
   onCreate,
   onUpdate,
   onDelete,
   editUserId,
   onClearEditUserId,
 }) => {
+  const users = mapToArray(userById);
+  const mcpServers = mapToArray(mcpServerById);
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
@@ -530,7 +533,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
       </div>
 
       <Table
-        dataSource={users}
+        dataSource={mapToArray(userById)}
         columns={columns}
         rowKey="user_id"
         pagination={false}

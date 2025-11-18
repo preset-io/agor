@@ -57,7 +57,7 @@ export interface ForkSpawnModalProps {
   action: ForkSpawnAction;
   session: Session | null;
   currentUser?: User | null;
-  mcpServers?: MCPServer[];
+  mcpServerById?: Map<string, MCPServer>;
   initialPrompt?: string;
   onConfirm: (config: string | Partial<SpawnConfig>) => Promise<void>;
   onCancel: () => void;
@@ -68,7 +68,7 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
   action,
   session,
   currentUser = null,
-  mcpServers = [],
+  mcpServerById = new Map(),
   initialPrompt = '',
   onConfirm,
   onCancel,
@@ -316,7 +316,7 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
                   children: (
                     <AgenticToolConfigForm
                       agenticTool={selectedAgent}
-                      mcpServers={mcpServers}
+                      mcpServerById={mcpServerById}
                       showHelpText={false}
                     />
                   ),

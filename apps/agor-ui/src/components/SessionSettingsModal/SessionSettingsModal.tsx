@@ -11,7 +11,7 @@ export interface SessionSettingsModalProps {
   open: boolean;
   onClose: () => void;
   session: Session;
-  mcpServers: MCPServer[];
+  mcpServerById: Map<string, MCPServer>;
   sessionMcpServerIds: string[];
   onUpdate?: (sessionId: string, updates: Partial<Session>) => void;
   onUpdateSessionMcpServers?: (sessionId: string, mcpServerIds: string[]) => void;
@@ -30,7 +30,7 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
   open,
   onClose,
   session,
-  mcpServers,
+  mcpServerById,
   sessionMcpServerIds,
   onUpdate,
   onUpdateSessionMcpServers,
@@ -236,7 +236,7 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
               children: (
                 <AgenticToolConfigForm
                   agenticTool={session.agentic_tool}
-                  mcpServers={mcpServers}
+                  mcpServerById={mcpServerById}
                   showHelpText={true}
                 />
               ),

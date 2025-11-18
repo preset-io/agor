@@ -5,7 +5,7 @@ import { UserAvatar } from './UserAvatar';
 export interface CreatedByTagProps {
   createdBy: string; // user_id
   currentUserId?: string; // logged-in user's ID
-  users: User[]; // all users for lookup
+  userById: Map<string, User>; // all users for lookup
   prefix?: string; // e.g., "Created by" or "Prompted by"
 }
 
@@ -18,7 +18,7 @@ export interface CreatedByTagProps {
 export const CreatedByTag: React.FC<CreatedByTagProps> = ({
   createdBy,
   currentUserId,
-  users,
+  userById,
   prefix = 'Created by',
 }) => {
   // Don't show tag if current user created it
@@ -27,7 +27,7 @@ export const CreatedByTag: React.FC<CreatedByTagProps> = ({
   }
 
   // Look up the user
-  const user = users.find((u) => u.user_id === createdBy);
+  const user = userById.get(createdBy);
 
   // If user not found or is anonymous, show minimal tag
   if (!user || createdBy === 'anonymous') {
