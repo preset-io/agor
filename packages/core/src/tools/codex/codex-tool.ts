@@ -12,7 +12,6 @@ import type { Database } from '../../db/client';
 import type { MessagesRepository } from '../../db/repositories/messages';
 import type { SessionMCPServerRepository } from '../../db/repositories/session-mcp-servers';
 import type { SessionRepository } from '../../db/repositories/sessions';
-import type { TaskRepository } from '../../db/repositories/tasks';
 import type { WorktreeRepository } from '../../db/repositories/worktrees';
 import { generateId } from '../../lib/ids';
 import {
@@ -38,6 +37,7 @@ interface CodexExecutionResult {
   contextWindowLimit?: number;
   model?: string;
   rawSdkResponse?: unknown; // Raw SDK event from Codex
+  wasStopped?: boolean; // True if execution was stopped early via stopTask()
 }
 
 export class CodexTool implements ITool {
@@ -49,7 +49,6 @@ export class CodexTool implements ITool {
   private sessionsRepo?: SessionRepository;
   private messagesService?: MessagesService;
   private tasksService?: TasksService;
-  private tasksRepo?: TaskRepository;
 
   constructor(
     messagesRepo?: MessagesRepository,
@@ -59,14 +58,12 @@ export class CodexTool implements ITool {
     apiKey?: string,
     messagesService?: MessagesService,
     tasksService?: TasksService,
-    db?: Database,
-    tasksRepo?: TaskRepository
+    db?: Database
   ) {
     this.messagesRepo = messagesRepo;
     this.sessionsRepo = sessionsRepo;
     this.messagesService = messagesService;
     this.tasksService = tasksService;
-    this.tasksRepo = tasksRepo;
 
     if (messagesRepo && sessionsRepo) {
       this.promptService = new CodexPromptService(
@@ -146,6 +143,7 @@ export class CodexTool implements ITool {
     let _streamStartTime = Date.now();
     let _firstTokenTime: number | null = null;
     let rawSdkResponse: unknown;
+    let wasStopped = false;
 
     for await (const event of this.promptService.promptSessionStreaming(
       sessionId,
@@ -153,6 +151,12 @@ export class CodexTool implements ITool {
       taskId,
       permissionMode
     )) {
+      // Detect if execution was stopped early
+      if (event.type === 'stopped') {
+        wasStopped = true;
+        console.log(`🛑 Codex execution was stopped for session ${sessionId}`);
+        continue; // Skip processing this event
+      }
       // Capture resolved model from partial/complete events
       if (!resolvedModel) {
         if (event.type === 'partial') {
@@ -302,6 +306,7 @@ export class CodexTool implements ITool {
       contextWindowLimit: undefined,
       model: resolvedModel || DEFAULT_CODEX_MODEL,
       rawSdkResponse,
+      wasStopped,
     };
   }
 
@@ -439,6 +444,7 @@ export class CodexTool implements ITool {
     let _contextWindow: number | undefined;
     let _contextWindowLimit: number | undefined;
     let rawSdkResponse: unknown;
+    let wasStopped = false;
 
     for await (const event of this.promptService.promptSessionStreaming(
       sessionId,
@@ -446,6 +452,13 @@ export class CodexTool implements ITool {
       taskId,
       permissionMode
     )) {
+      // Detect if execution was stopped early
+      if (event.type === 'stopped') {
+        wasStopped = true;
+        console.log(`🛑 Codex execution was stopped for session ${sessionId}`);
+        continue; // Skip processing this event
+      }
+
       // Capture resolved model from partial/complete events
       if (!resolvedModel) {
         if (event.type === 'partial') {
@@ -506,6 +519,7 @@ export class CodexTool implements ITool {
       contextWindowLimit: undefined,
       model: resolvedModel || DEFAULT_CODEX_MODEL,
       rawSdkResponse,
+      wasStopped,
     };
   }
 
@@ -594,31 +608,15 @@ export class CodexTool implements ITool {
       return cumulativeTokens;
     }
 
-    // Fallback: look up from database (used when computing for already-saved tasks)
-    if (!this.tasksRepo) {
-      console.warn('computeContextWindow: tasksRepo not available, returning 0');
-      return 0;
-    }
-
-    const tasks = await this.tasksRepo.findBySession(sessionId as SessionID);
-
-    // Find the most recent task with raw_sdk_response
-    for (let i = tasks.length - 1; i >= 0; i--) {
-      const task = tasks[i];
-      if (task.raw_sdk_response) {
-        const response =
-          task.raw_sdk_response as import('../../types/sdk-response').CodexSdkResponse;
-        const inputTokens = response.usage?.input_tokens || 0;
-        const outputTokens = response.usage?.output_tokens || 0;
-        const cumulativeTokens = inputTokens + outputTokens;
-        console.log(
-          `✅ Computed context window for Codex session ${sessionId}: ${cumulativeTokens} tokens (from DB)`
-        );
-        return cumulativeTokens;
-      }
-    }
-
-    console.log(`⚠️  No tasks with SDK response found for session ${sessionId}`);
+    // IMPORTANT: Do NOT query database when currentRawSdkResponse is not provided
+    // This method is called during task UPDATE operations, and querying the database
+    // during a pending UPDATE causes deadlocks in PostgreSQL due to read-while-write
+    // in the same transaction. The caller should ALWAYS provide currentRawSdkResponse
+    // during task completion.
+    console.warn(
+      `⚠️  computeContextWindow called without currentRawSdkResponse for session ${sessionId}. ` +
+        'This should not happen during task completion. Returning 0 to avoid database deadlock.'
+    );
     return 0;
   }
 }

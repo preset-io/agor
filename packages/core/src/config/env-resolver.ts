@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm';
 import type { Database } from '../db/client';
+import { select } from '../db/database-wrapper';
 import { decryptApiKey } from '../db/encryption';
 import { users } from '../db/schema';
 import type { UserID } from '../types';
@@ -14,7 +15,7 @@ export async function resolveUserEnvironment(
   const env: Record<string, string> = {};
 
   try {
-    const row = await db.select().from(users).where(eq(users.user_id, userId)).get();
+    const row = await select(db).from(users).where(eq(users.user_id, userId)).one();
 
     if (row) {
       const data = row.data as { env_vars?: Record<string, string> };

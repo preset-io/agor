@@ -8,6 +8,7 @@ import type { Board, BoardObject, UUID } from '@agor/core/types';
 import { eq, like } from 'drizzle-orm';
 import { formatShortId, generateId } from '../../lib/ids';
 import type { Database } from '../client';
+import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { type BoardInsert, type BoardRow, boards } from '../schema';
 import {
   AmbiguousIdError,
@@ -86,11 +87,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
     const normalized = id.replace(/-/g, '').toLowerCase();
     const pattern = `${normalized}%`;
 
-    const results = await this.db
-      .select({ board_id: boards.board_id })
-      .from(boards)
-      .where(like(boards.board_id, pattern))
-      .all();
+    const results = await select(this.db).from(boards).where(like(boards.board_id, pattern)).all();
 
     if (results.length === 0) {
       throw new EntityNotFoundError('Board', id);
@@ -100,7 +97,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
       throw new AmbiguousIdError(
         'Board',
         id,
-        results.map((r) => formatShortId(r.board_id as UUID))
+        results.map((r: { board_id: string }) => formatShortId(r.board_id as UUID))
       );
     }
 
@@ -112,14 +109,13 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
    */
   async create(data: Partial<Board>): Promise<Board> {
     try {
-      const insert = this.boardToInsert(data);
-      await this.db.insert(boards).values(insert);
+      const insertData = this.boardToInsert(data);
+      await insert(this.db, boards).values(insertData).run();
 
-      const row = await this.db
-        .select()
+      const row = await select(this.db)
         .from(boards)
-        .where(eq(boards.board_id, insert.board_id))
-        .get();
+        .where(eq(boards.board_id, insertData.board_id))
+        .one();
 
       if (!row) {
         throw new RepositoryError('Failed to retrieve created board');
@@ -141,7 +137,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
   async findById(id: string): Promise<Board | null> {
     try {
       const fullId = await this.resolveId(id);
-      const row = await this.db.select().from(boards).where(eq(boards.board_id, fullId)).get();
+      const row = await select(this.db).from(boards).where(eq(boards.board_id, fullId)).one();
 
       return row ? this.rowToBoard(row) : null;
     } catch (error) {
@@ -159,7 +155,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
    */
   async findBySlug(slug: string): Promise<Board | null> {
     try {
-      const row = await this.db.select().from(boards).where(eq(boards.slug, slug)).get();
+      const row = await select(this.db).from(boards).where(eq(boards.slug, slug)).one();
 
       return row ? this.rowToBoard(row) : null;
     } catch (error) {
@@ -175,8 +171,8 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
    */
   async findAll(): Promise<Board[]> {
     try {
-      const rows = await this.db.select().from(boards).all();
-      return rows.map((row) => this.rowToBoard(row));
+      const rows = await select(this.db).from(boards).all();
+      return rows.map((row: BoardRow) => this.rowToBoard(row));
     } catch (error) {
       throw new RepositoryError(
         `Failed to find all boards: ${error instanceof Error ? error.message : String(error)}`,
@@ -199,17 +195,17 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
       }
 
       const merged = { ...current, ...updates };
-      const insert = this.boardToInsert(merged);
+      const insertData = this.boardToInsert(merged);
 
-      await this.db
-        .update(boards)
+      await update(this.db, boards)
         .set({
-          name: insert.name,
-          slug: insert.slug,
+          name: insertData.name,
+          slug: insertData.slug,
           updated_at: new Date(),
-          data: insert.data,
+          data: insertData.data,
         })
-        .where(eq(boards.board_id, fullId));
+        .where(eq(boards.board_id, fullId))
+        .run();
 
       const updated = await this.findById(fullId);
       if (!updated) {
@@ -234,7 +230,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
     try {
       const fullId = await this.resolveId(id);
 
-      const result = await this.db.delete(boards).where(eq(boards.board_id, fullId)).run();
+      const result = await deleteFrom(this.db, boards).where(eq(boards.board_id, fullId)).run();
 
       if (result.rowsAffected === 0) {
         throw new EntityNotFoundError('Board', id);

@@ -4,11 +4,25 @@
 
 import { join } from 'node:path';
 import { getConfigPath } from '@agor/core/config';
-import { createDatabase, users } from '@agor/core/db';
+import { createDatabase, select, users } from '@agor/core/db';
 import type { User } from '@agor/core/types';
 import { Command } from '@oclif/core';
 import chalk from 'chalk';
 import Table from 'cli-table3';
+
+/**
+ * User row from database query
+ */
+interface UserRow {
+  user_id: string;
+  email: string;
+  name: string | null;
+  role: string;
+  data: unknown;
+  onboarding_completed: number;
+  created_at: number;
+  updated_at: number | null;
+}
 
 export default class UserList extends Command {
   static description = 'List all users';
@@ -17,16 +31,23 @@ export default class UserList extends Command {
 
   async run(): Promise<void> {
     try {
-      // Get database path
-      const configPath = getConfigPath();
-      const agorHome = join(configPath, '..');
-      const dbPath = join(agorHome, 'agor.db');
+      // Get database URL
+      // Priority: DATABASE_URL env var > default SQLite file path
+      let databaseUrl = process.env.DATABASE_URL;
 
-      // Connect to database
-      const db = createDatabase({ url: `file:${dbPath}` });
+      if (!databaseUrl) {
+        // Default to SQLite if no DATABASE_URL specified
+        const configPath = getConfigPath();
+        const agorHome = join(configPath, '..');
+        const dbPath = join(agorHome, 'agor.db');
+        databaseUrl = `file:${dbPath}`;
+      }
+
+      // Connect to database (dialect is auto-detected from URL)
+      const db = createDatabase({ url: databaseUrl });
 
       // Fetch users
-      const rows = await db.select().from(users).all();
+      const rows = await select(db).from(users).all();
 
       if (rows.length === 0) {
         this.log(chalk.yellow('No users found'));
@@ -36,18 +57,19 @@ export default class UserList extends Command {
       }
 
       // Convert to User type
-      const userList: User[] = rows.map((row) => {
-        const data = row.data as { avatar?: string; preferences?: Record<string, unknown> };
+      const userList: User[] = rows.map((row: unknown) => {
+        const userRow = row as UserRow;
+        const data = userRow.data as { avatar?: string; preferences?: Record<string, unknown> };
         return {
-          user_id: row.user_id as User['user_id'],
-          email: row.email,
-          name: row.name ?? undefined,
-          role: row.role as User['role'],
+          user_id: userRow.user_id as User['user_id'],
+          email: userRow.email,
+          name: userRow.name ?? undefined,
+          role: userRow.role as User['role'],
           avatar: data.avatar,
           preferences: data.preferences,
-          onboarding_completed: !!row.onboarding_completed,
-          created_at: row.created_at,
-          updated_at: row.updated_at ?? undefined,
+          onboarding_completed: !!userRow.onboarding_completed,
+          created_at: userRow.created_at,
+          updated_at: userRow.updated_at ?? undefined,
         };
       });
 

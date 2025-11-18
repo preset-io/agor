@@ -96,7 +96,7 @@ describe('WorktreeRepository.create', () => {
 
     const repo = await repoRepo.create(createRepoData());
     const boardId = generateId() as UUID;
-    await db.insert(boards).values({
+    await (db as any).insert(boards).values({
       board_id: boardId,
       created_at: new Date(),
       created_by: 'anonymous' as UUID,
@@ -467,7 +467,7 @@ describe('WorktreeRepository.update', () => {
 
     const repo = await repoRepo.create(createRepoData());
     const boardId = generateId() as UUID;
-    await db.insert(boards).values({
+    await (db as any).insert(boards).values({
       board_id: boardId,
       created_at: new Date(),
       created_by: 'anonymous' as UUID,
@@ -531,7 +531,7 @@ describe('WorktreeRepository.update', () => {
 
     const repo = await repoRepo.create(createRepoData());
     const boardId = generateId() as UUID;
-    await db.insert(boards).values({
+    await (db as any).insert(boards).values({
       board_id: boardId,
       created_at: new Date(),
       created_by: 'anonymous' as UUID,

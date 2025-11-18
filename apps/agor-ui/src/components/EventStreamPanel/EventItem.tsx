@@ -11,7 +11,7 @@ import {
   ToolOutlined,
 } from '@ant-design/icons';
 import { Button, Popover, Tag, Typography, theme } from 'antd';
-import React from 'react';
+import type React from 'react';
 import type { SocketEvent } from '../../hooks/useEventStream';
 
 const { Text } = Typography;

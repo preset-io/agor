@@ -132,7 +132,19 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
   ): Promise<Worktree> {
     const repo = await this.get(id, params);
 
+    console.log('🔍 RepoService.createWorktree - repo lookup result:', {
+      repo_id: repo.repo_id,
+      slug: repo.slug,
+      local_path: repo.local_path,
+      remote_url: repo.remote_url,
+    });
+
     const worktreePath = getWorktreePath(repo.slug, data.name);
+
+    console.log('🔍 RepoService.createWorktree - computed paths:', {
+      worktreePath,
+      repoLocalPath: repo.local_path,
+    });
 
     let userEnv: Record<string, string> | undefined;
     const userId = (params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined;

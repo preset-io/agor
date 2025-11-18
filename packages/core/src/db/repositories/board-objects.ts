@@ -9,6 +9,7 @@ import type { BoardEntityObject, BoardID, WorktreeID } from '@agor/core/types';
 import { eq } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
+import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { type BoardObjectInsert, type BoardObjectRow, boardObjects } from '../schema';
 import { EntityNotFoundError, RepositoryError } from './base';
 
@@ -23,7 +24,7 @@ export class BoardObjectRepository {
    */
   async findAll(): Promise<BoardEntityObject[]> {
     try {
-      const rows = await this.db.select().from(boardObjects).all();
+      const rows = await select(this.db).from(boardObjects).all();
 
       return rows.map(this.rowToEntity);
     } catch (error) {
@@ -39,8 +40,7 @@ export class BoardObjectRepository {
    */
   async findByBoardId(boardId: BoardID): Promise<BoardEntityObject[]> {
     try {
-      const rows = await this.db
-        .select()
+      const rows = await select(this.db)
         .from(boardObjects)
         .where(eq(boardObjects.board_id, boardId))
         .all();
@@ -59,11 +59,10 @@ export class BoardObjectRepository {
    */
   async findByObjectId(objectId: string): Promise<BoardEntityObject | null> {
     try {
-      const row = await this.db
-        .select()
+      const row = await select(this.db)
         .from(boardObjects)
         .where(eq(boardObjects.object_id, objectId))
-        .get();
+        .one();
 
       return row ? this.rowToEntity(row) : null;
     } catch (error) {
@@ -79,11 +78,10 @@ export class BoardObjectRepository {
    */
   async findByWorktreeId(worktreeId: WorktreeID): Promise<BoardEntityObject | null> {
     try {
-      const row = await this.db
-        .select()
+      const row = await select(this.db)
         .from(boardObjects)
         .where(eq(boardObjects.worktree_id, worktreeId))
-        .get();
+        .one();
 
       return row ? this.rowToEntity(row) : null;
     } catch (error) {
@@ -105,17 +103,16 @@ export class BoardObjectRepository {
   }): Promise<BoardEntityObject> {
     try {
       // Check if worktree already on a board
-      const existing = await this.db
-        .select()
+      const existing = await select(this.db)
         .from(boardObjects)
         .where(eq(boardObjects.worktree_id, data.worktree_id))
-        .get();
+        .one();
 
       if (existing) {
         throw new RepositoryError(`Worktree already on a board (object_id: ${existing.object_id})`);
       }
 
-      const insert: BoardObjectInsert = {
+      const newObject: BoardObjectInsert = {
         object_id: generateId(),
         board_id: data.board_id,
         worktree_id: data.worktree_id,
@@ -126,14 +123,13 @@ export class BoardObjectRepository {
         },
       };
 
-      await this.db.insert(boardObjects).values(insert);
+      await insert(this.db, boardObjects).values(newObject).run();
 
       // Fetch and return created object
-      const row = await this.db
-        .select()
+      const row = await select(this.db)
         .from(boardObjects)
-        .where(eq(boardObjects.object_id, insert.object_id))
-        .get();
+        .where(eq(boardObjects.object_id, newObject.object_id))
+        .one();
 
       if (!row) {
         throw new RepositoryError('Failed to retrieve created board object');
@@ -157,11 +153,10 @@ export class BoardObjectRepository {
     position: { x: number; y: number }
   ): Promise<BoardEntityObject> {
     try {
-      const existing = await this.db
-        .select()
+      const existing = await select(this.db)
         .from(boardObjects)
         .where(eq(boardObjects.object_id, objectId))
-        .get();
+        .one();
 
       if (!existing) {
         throw new EntityNotFoundError('BoardObject', objectId);
@@ -171,21 +166,20 @@ export class BoardObjectRepository {
       const existingData =
         typeof existing.data === 'string' ? JSON.parse(existing.data) : existing.data;
 
-      await this.db
-        .update(boardObjects)
+      await update(this.db, boardObjects)
         .set({
           data: {
             position,
             zone_id: existingData.zone_id,
           },
         })
-        .where(eq(boardObjects.object_id, objectId));
+        .where(eq(boardObjects.object_id, objectId))
+        .run();
 
-      const row = await this.db
-        .select()
+      const row = await select(this.db)
         .from(boardObjects)
         .where(eq(boardObjects.object_id, objectId))
-        .get();
+        .one();
 
       if (!row) {
         throw new RepositoryError('Failed to retrieve updated board object');
@@ -209,11 +203,10 @@ export class BoardObjectRepository {
     zoneId: string | undefined | null
   ): Promise<BoardEntityObject> {
     try {
-      const existing = await this.db
-        .select()
+      const existing = await select(this.db)
         .from(boardObjects)
         .where(eq(boardObjects.object_id, objectId))
-        .get();
+        .one();
 
       if (!existing) {
         throw new EntityNotFoundError('BoardObject', objectId);
@@ -223,8 +216,7 @@ export class BoardObjectRepository {
       const existingData =
         typeof existing.data === 'string' ? JSON.parse(existing.data) : existing.data;
 
-      await this.db
-        .update(boardObjects)
+      await update(this.db, boardObjects)
         .set({
           data: {
             position: existingData.position,
@@ -232,13 +224,13 @@ export class BoardObjectRepository {
             zone_id: zoneId === null ? undefined : zoneId,
           },
         })
-        .where(eq(boardObjects.object_id, objectId));
+        .where(eq(boardObjects.object_id, objectId))
+        .run();
 
-      const row = await this.db
-        .select()
+      const row = await select(this.db)
         .from(boardObjects)
         .where(eq(boardObjects.object_id, objectId))
-        .get();
+        .one();
 
       if (!row) {
         throw new RepositoryError('Failed to retrieve updated board object');
@@ -259,8 +251,7 @@ export class BoardObjectRepository {
    */
   async remove(objectId: string): Promise<void> {
     try {
-      const result = await this.db
-        .delete(boardObjects)
+      const result = await deleteFrom(this.db, boardObjects)
         .where(eq(boardObjects.object_id, objectId))
         .run();
 
@@ -281,7 +272,7 @@ export class BoardObjectRepository {
    */
   async removeByWorktreeId(worktreeId: WorktreeID): Promise<void> {
     try {
-      await this.db.delete(boardObjects).where(eq(boardObjects.worktree_id, worktreeId));
+      await deleteFrom(this.db, boardObjects).where(eq(boardObjects.worktree_id, worktreeId)).run();
     } catch (error) {
       throw new RepositoryError(
         `Failed to remove board objects by worktree: ${error instanceof Error ? error.message : String(error)}`,

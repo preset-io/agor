@@ -15,6 +15,9 @@ export { formatShortId, generateId, IdResolutionError, resolveShortId } from '..
 // Client and database
 export * from './client';
 
+// Database wrapper utilities (type-safe operations for union Database type)
+export * from './database-wrapper';
+
 // Encryption utilities
 export * from './encryption';
 

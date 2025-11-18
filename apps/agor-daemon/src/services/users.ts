@@ -11,9 +11,13 @@ import {
   compare,
   type Database,
   decryptApiKey,
+  deleteFrom,
   encryptApiKey,
   eq,
   hash,
+  insert,
+  select,
+  update,
   users,
 } from '@agor/core/db';
 import type { Paginated, Params, User, UserID } from '@agor/core/types';
@@ -69,11 +73,11 @@ export class UsersService {
     let rows: (typeof users.$inferSelect)[];
     if (email) {
       // Find by email (for LocalStrategy)
-      const row = await this.db.select().from(users).where(eq(users.email, email)).get();
+      const row = await select(this.db).from(users).where(eq(users.email, email)).one();
       rows = row ? [row] : [];
     } else {
       // Find all
-      rows = await this.db.select().from(users).all();
+      rows = await select(this.db).from(users).all();
     }
 
     const results = rows.map((row) => this.rowToUser(row, includePassword));
@@ -90,7 +94,7 @@ export class UsersService {
    * Get user by ID
    */
   async get(id: UserID, _params?: Params): Promise<User> {
-    const row = await this.db.select().from(users).where(eq(users.user_id, id)).get();
+    const row = await select(this.db).from(users).where(eq(users.user_id, id)).one();
 
     if (!row) {
       throw new Error(`User not found: ${id}`);
@@ -104,7 +108,7 @@ export class UsersService {
    */
   async create(data: CreateUserData, _params?: Params): Promise<User> {
     // Check if email already exists
-    const existing = await this.db.select().from(users).where(eq(users.email, data.email)).get();
+    const existing = await select(this.db).from(users).where(eq(users.email, data.email)).one();
 
     if (existing) {
       throw new Error(`User with email ${data.email} already exists`);
@@ -120,8 +124,7 @@ export class UsersService {
     const role = data.role || 'member';
     const defaultEmoji = role === 'admin' ? '⭐' : '👤';
 
-    const row = await this.db
-      .insert(users)
+    const row = await insert(this.db, users)
       .values({
         user_id,
         email: data.email,
@@ -136,7 +139,7 @@ export class UsersService {
         },
       })
       .returning()
-      .get();
+      .one();
 
     return this.rowToUser(row);
   }
@@ -170,7 +173,7 @@ export class UsersService {
       data.default_agentic_config
     ) {
       const current = await this.get(id);
-      const currentRow = await this.db.select().from(users).where(eq(users.user_id, id)).get();
+      const currentRow = await select(this.db).from(users).where(eq(users.user_id, id)).one();
       const currentData = currentRow?.data as {
         avatar?: string;
         preferences?: Record<string, unknown>;
@@ -241,12 +244,11 @@ export class UsersService {
       };
     }
 
-    const row = await this.db
-      .update(users)
+    const row = await update(this.db, users)
       .set(updates)
       .where(eq(users.user_id, id))
       .returning()
-      .get();
+      .one();
 
     if (!row) {
       throw new Error(`User not found: ${id}`);
@@ -261,7 +263,7 @@ export class UsersService {
   async remove(id: UserID, _params?: Params): Promise<User> {
     const user = await this.get(id);
 
-    await this.db.delete(users).where(eq(users.user_id, id)).run();
+    await deleteFrom(this.db, users).where(eq(users.user_id, id)).run();
 
     return user;
   }
@@ -270,7 +272,7 @@ export class UsersService {
    * Find user by email (for authentication)
    */
   async findByEmail(email: string): Promise<User | null> {
-    const row = await this.db.select().from(users).where(eq(users.email, email)).get();
+    const row = await select(this.db).from(users).where(eq(users.email, email)).one();
 
     return row ? this.rowToUser(row) : null;
   }
@@ -280,7 +282,7 @@ export class UsersService {
    */
   async verifyPassword(user: User, password: string): Promise<boolean> {
     // Need to fetch password from database (not in User type)
-    const row = await this.db.select().from(users).where(eq(users.user_id, user.user_id)).get();
+    const row = await select(this.db).from(users).where(eq(users.user_id, user.user_id)).one();
 
     if (!row) return false;
 
@@ -295,7 +297,7 @@ export class UsersService {
     userId: UserID,
     keyName: 'ANTHROPIC_API_KEY' | 'OPENAI_API_KEY' | 'GEMINI_API_KEY'
   ): Promise<string | undefined> {
-    const row = await this.db.select().from(users).where(eq(users.user_id, userId)).get();
+    const row = await select(this.db).from(users).where(eq(users.user_id, userId)).one();
 
     if (!row) return undefined;
 
@@ -317,7 +319,7 @@ export class UsersService {
    * Used by subprocess spawning, terminal sessions, etc.
    */
   async getEnvironmentVariables(userId: UserID): Promise<Record<string, string>> {
-    const row = await this.db.select().from(users).where(eq(users.user_id, userId)).get();
+    const row = await select(this.db).from(users).where(eq(users.user_id, userId)).one();
 
     if (!row) return {};
 
@@ -411,7 +413,7 @@ class UsersServiceWithAuth extends UsersService {
    * (FeathersJS LocalStrategy needs this)
    */
   async getWithPassword(id: UserID): Promise<UserWithPassword> {
-    const row = await this.db.select().from(users).where(eq(users.user_id, id)).get();
+    const row = await select(this.db).from(users).where(eq(users.user_id, id)).one();
 
     if (!row) {
       throw new Error(`User not found: ${id}`);

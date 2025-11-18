@@ -161,17 +161,48 @@ docker compose -f docker-compose.prod.yml build
 
 ## Advanced Usage
 
-### Multiple Instances (Dev)
+### Multiple Worktrees (Dev)
 
-Run multiple dev instances with separate volumes:
+Each git worktree can run its own isolated Docker environment with:
+
+- **Separate images** (tagged per project name)
+- **Separate volumes** (node_modules, database, config)
+- **Separate ports** (using unique_id offset)
+- **Automatic dependency sync** (based on each worktree's pnpm-lock.yaml)
+
+This is configured in `.agor.yml`:
+
+```yaml
+environment:
+  start: DAEMON_PORT={{add 3000 worktree.unique_id}} UI_PORT={{add 5000 worktree.unique_id}} docker compose -p agor-{{worktree.name}} up -d
+  stop: docker compose -p agor-{{worktree.name}} down
+```
+
+Manual example:
 
 ```bash
-# Instance 1
-docker compose -p agor-worktree-1 up
+# Worktree 1 (postgres-support branch)
+cd ~/.agor/worktrees/preset-io/agor/postgres-support
+DAEMON_PORT=3001 UI_PORT=5001 docker compose -p agor-postgres-support up -d
 
-# Instance 2 (different ports)
-DAEMON_PORT=3031 UI_PORT=5174 docker compose -p agor-worktree-2 up
+# Worktree 2 (main branch)
+cd ~/.agor/worktrees/preset-io/agor/main
+DAEMON_PORT=3002 UI_PORT=5002 docker compose -p agor-main up -d
 ```
+
+**How it works:**
+
+1. **Image isolation**: `${COMPOSE_PROJECT_NAME}-agor-dev` means each `-p` project builds its own image
+2. **Volume isolation**: Docker Compose creates separate volumes per project (named volumes + anonymous volumes for node_modules)
+3. **Dependency sync**: Entrypoint runs `pnpm install` on startup, syncing to the mounted worktree's `pnpm-lock.yaml`
+4. **No conflicts**: Worktree A with PostgreSQL deps won't conflict with Worktree B without them
+
+**Benefits:**
+
+- Work on multiple branches simultaneously
+- Each worktree has correct dependencies (even if branches diverge)
+- No manual dependency management needed
+- Clean separation of databases and configs
 
 ### SSH Key Authentication (Dev)
 

@@ -14,6 +14,7 @@
 
 import { sql } from 'drizzle-orm';
 import { createDatabase, DEFAULT_DB_PATH } from '../client';
+import { isSQLiteDatabase } from '../database-wrapper';
 import { initializeDatabase, seedInitialData } from '../migrate';
 
 interface SetupOptions {
@@ -40,17 +41,34 @@ async function parseArgs(): Promise<SetupOptions> {
 
 async function dropTables(db: ReturnType<typeof createDatabase>): Promise<void> {
   console.log('Dropping existing tables...');
-  await db.run(sql`DROP TABLE IF EXISTS board_comments`);
-  await db.run(sql`DROP TABLE IF EXISTS session_mcp_servers`);
-  await db.run(sql`DROP TABLE IF EXISTS mcp_servers`);
-  await db.run(sql`DROP TABLE IF EXISTS board_objects`);
-  await db.run(sql`DROP TABLE IF EXISTS messages`);
-  await db.run(sql`DROP TABLE IF EXISTS tasks`);
-  await db.run(sql`DROP TABLE IF EXISTS sessions`);
-  await db.run(sql`DROP TABLE IF EXISTS worktrees`);
-  await db.run(sql`DROP TABLE IF EXISTS boards`);
-  await db.run(sql`DROP TABLE IF EXISTS repos`);
-  await db.run(sql`DROP TABLE IF EXISTS users`);
+
+  // Execute raw SQL based on database type
+  if (isSQLiteDatabase(db)) {
+    await db.run(sql`DROP TABLE IF EXISTS board_comments`);
+    await db.run(sql`DROP TABLE IF EXISTS session_mcp_servers`);
+    await db.run(sql`DROP TABLE IF EXISTS mcp_servers`);
+    await db.run(sql`DROP TABLE IF EXISTS board_objects`);
+    await db.run(sql`DROP TABLE IF EXISTS messages`);
+    await db.run(sql`DROP TABLE IF EXISTS tasks`);
+    await db.run(sql`DROP TABLE IF EXISTS sessions`);
+    await db.run(sql`DROP TABLE IF EXISTS worktrees`);
+    await db.run(sql`DROP TABLE IF EXISTS boards`);
+    await db.run(sql`DROP TABLE IF EXISTS repos`);
+    await db.run(sql`DROP TABLE IF EXISTS users`);
+  } else {
+    await db.execute(sql`DROP TABLE IF EXISTS board_comments`);
+    await db.execute(sql`DROP TABLE IF EXISTS session_mcp_servers`);
+    await db.execute(sql`DROP TABLE IF EXISTS mcp_servers`);
+    await db.execute(sql`DROP TABLE IF EXISTS board_objects`);
+    await db.execute(sql`DROP TABLE IF EXISTS messages`);
+    await db.execute(sql`DROP TABLE IF EXISTS tasks`);
+    await db.execute(sql`DROP TABLE IF EXISTS sessions`);
+    await db.execute(sql`DROP TABLE IF EXISTS worktrees`);
+    await db.execute(sql`DROP TABLE IF EXISTS boards`);
+    await db.execute(sql`DROP TABLE IF EXISTS repos`);
+    await db.execute(sql`DROP TABLE IF EXISTS users`);
+  }
+
   console.log('Tables dropped');
 }
 

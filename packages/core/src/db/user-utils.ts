@@ -9,6 +9,7 @@ import { eq } from 'drizzle-orm';
 import { generateId } from '../lib/ids';
 import type { User, UserID } from '../types';
 import type { Database } from './client';
+import { insert, select } from './database-wrapper';
 import { users } from './schema';
 
 /**
@@ -33,7 +34,7 @@ export interface CreateUserData {
  */
 export async function createUser(db: Database, data: CreateUserData): Promise<User> {
   // Check if email already exists
-  const existing = await db.select().from(users).where(eq(users.email, data.email)).get();
+  const existing = await select(db).from(users).where(eq(users.email, data.email)).one();
 
   if (existing) {
     throw new Error(`User with email ${data.email} already exists`);
@@ -49,8 +50,12 @@ export async function createUser(db: Database, data: CreateUserData): Promise<Us
   const role = data.role || 'member';
   const defaultEmoji = role === 'admin' ? '⭐' : '👤';
 
-  const row = await db
-    .insert(users)
+  // For PostgreSQL, we need to use ISO strings for timestamps
+  // For SQLite, Date objects work because of timestamp_ms mode
+  const createdAt = now;
+  const updatedAt = now;
+
+  const row = await insert(db, users)
     .values({
       user_id,
       email: data.email,
@@ -58,14 +63,16 @@ export async function createUser(db: Database, data: CreateUserData): Promise<Us
       name: data.name,
       emoji: defaultEmoji,
       role,
-      created_at: now,
-      updated_at: now,
+      // biome-ignore lint/suspicious/noExplicitAny: Database wrapper accepts Date but schema types vary by dialect
+      created_at: createdAt as any,
+      // biome-ignore lint/suspicious/noExplicitAny: Database wrapper accepts Date but schema types vary by dialect
+      updated_at: updatedAt as any,
       data: {
         preferences: {},
       },
     })
     .returning()
-    .get();
+    .one();
 
   // Convert to User type
   const userData = row.data as { avatar?: string; preferences?: Record<string, unknown> };
@@ -92,7 +99,7 @@ export async function createUser(db: Database, data: CreateUserData): Promise<Us
  * @returns True if user exists
  */
 export async function userExists(db: Database, email: string): Promise<boolean> {
-  const existing = await db.select().from(users).where(eq(users.email, email)).get();
+  const existing = await select(db).from(users).where(eq(users.email, email)).one();
   return !!existing;
 }
 
@@ -104,7 +111,7 @@ export async function userExists(db: Database, email: string): Promise<boolean> 
  * @returns User or null if not found
  */
 export async function getUserByEmail(db: Database, email: string): Promise<User | null> {
-  const row = await db.select().from(users).where(eq(users.email, email)).get();
+  const row = await select(db).from(users).where(eq(users.email, email)).one();
 
   if (!row) {
     return null;

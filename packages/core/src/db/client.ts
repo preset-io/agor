@@ -1,43 +1,82 @@
 /**
- * LibSQL Client Factory
+ * Database Client Factory
  *
- * Creates and configures LibSQL database clients for Drizzle ORM.
- * Supports both local file-based SQLite and remote Turso endpoints.
+ * Creates and configures database clients for Drizzle ORM.
+ * Supports both SQLite (LibSQL) and PostgreSQL.
  */
 
 import type { Client, Config } from '@libsql/client';
 import { createClient } from '@libsql/client';
 import type { LibSQLDatabase } from 'drizzle-orm/libsql';
-import { drizzle } from 'drizzle-orm/libsql';
-import * as schema from './schema';
+import { drizzle as drizzleSQLite } from 'drizzle-orm/libsql';
+import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import { drizzle as drizzlePostgres } from 'drizzle-orm/postgres-js';
+import postgres from 'postgres';
+import * as postgresSchema from './schema.postgres';
+
+// Import both schemas explicitly
+import * as sqliteSchema from './schema.sqlite';
+import { detectDialectFromUrl, getDatabaseDialect } from './schema-factory';
 
 /**
  * Database configuration options
  */
 export interface DbConfig {
   /**
+   * Database dialect
+   */
+  dialect?: 'sqlite' | 'postgresql';
+
+  /**
    * Database URL
-   * - Local file: 'file:~/.agor/agor.db' or 'file:/absolute/path/agor.db'
+   * - SQLite local file: 'file:~/.agor/agor.db' or 'file:/absolute/path/agor.db'
    * - Remote Turso: 'libsql://your-db.turso.io'
+   * - PostgreSQL: 'postgresql://user:pass@host:port/db'
    */
   url: string;
 
   /**
-   * Auth token for Turso (required for remote databases)
+   * Auth token for Turso (required for remote databases, SQLite only)
    */
   authToken?: string;
 
   /**
-   * Sync URL for embedded replica (Turso only)
+   * Sync URL for embedded replica (Turso only, SQLite only)
    * Enables offline-first mode with local replica
    */
   syncUrl?: string;
 
   /**
    * Sync interval in seconds (default: 60)
-   * Only used when syncUrl is provided
+   * Only used when syncUrl is provided (SQLite only)
    */
   syncInterval?: number;
+
+  /**
+   * PostgreSQL connection pool settings
+   */
+  pool?: {
+    min?: number;
+    max?: number;
+    idleTimeout?: number;
+  };
+
+  /**
+   * SSL configuration for PostgreSQL
+   */
+  ssl?:
+    | boolean
+    | {
+        rejectUnauthorized?: boolean;
+        ca?: string;
+        cert?: string;
+        key?: string;
+      };
+
+  /**
+   * PostgreSQL schema name (default: 'public')
+   */
+  schema?: string;
 }
 
 /**
@@ -107,17 +146,14 @@ async function configureSQLitePragmas(client: Client): Promise<void> {
 }
 
 /**
- * Create Drizzle database instance (synchronous)
- *
- * NOTE: This function enables foreign key constraints asynchronously after returning.
- * For guaranteed foreign key enforcement, use createDatabaseAsync() instead.
+ * Create Drizzle database instance based on configured dialect
  *
  * @param config Database configuration
- * @returns Drizzle database instance with schema
+ * @returns Drizzle database instance with schema (LibSQL or PostgreSQL)
  *
  * @example
  * ```typescript
- * // Local SQLite file
+ * // Local SQLite file (default)
  * const db = createDatabase({ url: 'file:~/.agor/agor.db' });
  *
  * // Remote Turso
@@ -125,11 +161,68 @@ async function configureSQLitePragmas(client: Client): Promise<void> {
  *   url: 'libsql://your-db.turso.io',
  *   authToken: process.env.TURSO_AUTH_TOKEN
  * });
+ *
+ * // PostgreSQL
+ * const db = createDatabase({
+ *   dialect: 'postgresql',
+ *   url: 'postgresql://user:pass@host:port/db'
+ * });
  * ```
  */
-export function createDatabase(config: DbConfig): LibSQLDatabase<typeof schema> {
+export function createDatabase(config: DbConfig): Database {
+  // Auto-detect dialect from URL if not explicitly set
+  let dialect = config.dialect;
+
+  if (!dialect) {
+    // Check if URL starts with postgresql://, postgres://, or pg://
+    if (
+      config.url.startsWith('postgresql://') ||
+      config.url.startsWith('postgres://') ||
+      config.url.startsWith('pg://')
+    ) {
+      dialect = 'postgresql';
+    } else {
+      // Fall back to environment variable or default
+      dialect = getDatabaseDialect();
+    }
+  }
+
+  if (dialect === 'postgresql') {
+    return createPostgresDatabase(config);
+  }
+
+  return createSQLiteDatabase(config);
+}
+
+/**
+ * Create PostgreSQL database client
+ */
+function createPostgresDatabase(config: DbConfig): PostgresJsDatabase<typeof postgresSchema> {
+  try {
+    const sql = postgres(config.url, {
+      max: config.pool?.max || 10,
+      idle_timeout: config.pool?.idleTimeout || 30,
+      ssl: config.ssl,
+      // Disable prepared statements - they can cause issues with DDL statements like CREATE SCHEMA
+      // and with Drizzle's migration system
+      prepare: false,
+    });
+
+    return drizzlePostgres(sql, { schema: postgresSchema });
+  } catch (error) {
+    throw new DatabaseConnectionError(
+      `Failed to create PostgreSQL client: ${error instanceof Error ? error.message : String(error)}`,
+      error
+    );
+  }
+}
+
+/**
+ * Create SQLite database client
+ */
+function createSQLiteDatabase(config: DbConfig): LibSQLDatabase<typeof sqliteSchema> {
   const client = createLibSQLClient(config);
-  const db = drizzle(client, { schema });
+  const db = drizzleSQLite(client, { schema: sqliteSchema });
 
   // Configure SQLite pragmas asynchronously (fire-and-forget)
   // This doesn't block database creation but pragmas will be set shortly after
@@ -141,27 +234,40 @@ export function createDatabase(config: DbConfig): LibSQLDatabase<typeof schema> 
 /**
  * Create Drizzle database instance with foreign keys enabled (async)
  *
- * Use this when you need guaranteed foreign key constraint enforcement immediately.
+ * For SQLite: Guarantees foreign key constraint enforcement immediately.
+ * For PostgreSQL: No difference from sync version (pragmas not needed).
  *
  * @param config Database configuration
- * @returns Promise resolving to Drizzle database instance with foreign keys enabled
+ * @returns Promise resolving to Drizzle database instance
  */
-export async function createDatabaseAsync(
-  config: DbConfig
-): Promise<LibSQLDatabase<typeof schema>> {
+export async function createDatabaseAsync(config: DbConfig): Promise<Database> {
+  // Determine dialect: use config.dialect, then auto-detect from URL, then fallback to env/default
+  let dialect = config.dialect;
+  if (!dialect && config.url) {
+    const detected = detectDialectFromUrl(config.url);
+    dialect = detected || getDatabaseDialect();
+  } else {
+    dialect = dialect || getDatabaseDialect();
+  }
+
+  if (dialect === 'postgresql') {
+    // PostgreSQL doesn't need pragma configuration
+    return createPostgresDatabase(config);
+  }
+
+  // SQLite: Wait for pragmas to be configured
   const client = createLibSQLClient(config);
-  const db = drizzle(client, { schema });
-
-  // Configure SQLite pragmas and wait for completion
+  const db = drizzleSQLite(client, { schema: sqliteSchema });
   await configureSQLitePragmas(client);
-
   return db;
 }
 
 /**
- * Type alias for Drizzle database instance
+ * Type alias for Drizzle database instance (union of LibSQL and PostgreSQL)
  */
-export type Database = LibSQLDatabase<typeof schema>;
+export type Database =
+  | LibSQLDatabase<typeof sqliteSchema>
+  | PostgresJsDatabase<typeof postgresSchema>;
 
 /**
  * Default database path for local development

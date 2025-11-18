@@ -19,6 +19,7 @@ import type {
 import { and, eq, like } from 'drizzle-orm';
 import { formatShortId, generateId } from '../../lib/ids';
 import type { Database } from '../client';
+import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { type MCPServerInsert, type MCPServerRow, mcpServers } from '../schema';
 import {
   AmbiguousIdError,
@@ -130,8 +131,7 @@ export class MCPServerRepository
     const normalized = id.replace(/-/g, '').toLowerCase();
     const pattern = `${normalized}%`;
 
-    const results = await this.db
-      .select({ mcp_server_id: mcpServers.mcp_server_id })
+    const results = await select(this.db)
       .from(mcpServers)
       .where(like(mcpServers.mcp_server_id, pattern))
       .all();
@@ -144,7 +144,7 @@ export class MCPServerRepository
       throw new AmbiguousIdError(
         'MCPServer',
         id,
-        results.map((r) => formatShortId(r.mcp_server_id as UUID))
+        results.map((r: { mcp_server_id: string }) => formatShortId(r.mcp_server_id as UUID))
       );
     }
 
@@ -156,14 +156,13 @@ export class MCPServerRepository
    */
   async create(data: CreateMCPServerInput): Promise<MCPServer> {
     try {
-      const insert = this.mcpServerToInsert(data);
-      await this.db.insert(mcpServers).values(insert);
+      const insertData = this.mcpServerToInsert(data);
+      await insert(this.db, mcpServers).values(insertData).run();
 
-      const row = await this.db
-        .select()
+      const row = await select(this.db)
         .from(mcpServers)
-        .where(eq(mcpServers.mcp_server_id, insert.mcp_server_id))
-        .get();
+        .where(eq(mcpServers.mcp_server_id, insertData.mcp_server_id))
+        .one();
 
       if (!row) {
         throw new RepositoryError('Failed to retrieve created MCP server');
@@ -185,11 +184,10 @@ export class MCPServerRepository
   async findById(id: string): Promise<MCPServer | null> {
     try {
       const fullId = await this.resolveId(id);
-      const row = await this.db
-        .select()
+      const row = await select(this.db)
         .from(mcpServers)
         .where(eq(mcpServers.mcp_server_id, fullId))
-        .get();
+        .one();
 
       return row ? this.rowToMCPServer(row) : null;
     } catch (error) {
@@ -207,7 +205,7 @@ export class MCPServerRepository
    */
   async findAll(filters?: MCPServerFilters): Promise<MCPServer[]> {
     try {
-      let query = this.db.select().from(mcpServers);
+      let query = select(this.db).from(mcpServers);
 
       // Apply filters
       const conditions = [];
@@ -247,7 +245,7 @@ export class MCPServerRepository
       }
 
       const rows = await query.all();
-      return rows.map((row) => this.rowToMCPServer(row));
+      return rows.map((row: MCPServerRow) => this.rowToMCPServer(row));
     } catch (error) {
       throw new RepositoryError(
         `Failed to find MCP servers: ${error instanceof Error ? error.message : String(error)}`,
@@ -277,17 +275,17 @@ export class MCPServerRepository
       }
 
       const merged = { ...current, ...updates };
-      const insert = this.mcpServerToInsert(merged);
+      const insertData = this.mcpServerToInsert(merged);
 
-      await this.db
-        .update(mcpServers)
+      await update(this.db, mcpServers)
         .set({
-          enabled: insert.enabled,
-          scope: insert.scope,
+          enabled: insertData.enabled,
+          scope: insertData.scope,
           updated_at: new Date(),
-          data: insert.data,
+          data: insertData.data,
         })
-        .where(eq(mcpServers.mcp_server_id, fullId));
+        .where(eq(mcpServers.mcp_server_id, fullId))
+        .run();
 
       const updated = await this.findById(fullId);
       if (!updated) {
@@ -312,8 +310,7 @@ export class MCPServerRepository
     try {
       const fullId = await this.resolveId(id);
 
-      const result = await this.db
-        .delete(mcpServers)
+      const result = await deleteFrom(this.db, mcpServers)
         .where(eq(mcpServers.mcp_server_id, fullId))
         .run();
 

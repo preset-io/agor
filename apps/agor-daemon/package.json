@@ -6,8 +6,8 @@
   "main": "./dist/index.js",
   "scripts": {
     "build": "tsup",
-    "dev": "concurrently -k -n core,daemon -c cyan,green \"pnpm --filter @agor/core dev\" \"./node_modules/.bin/tsx watch --clear-screen=false --ignore 'node_modules/**' src/index.ts ../../packages/core/dist\"",
-    "dev:daemon-only": "tsx watch --clear-screen=false --ignore 'node_modules/**' src/index.ts ../../packages/core/dist",
+    "dev": "concurrently -k -n core,daemon -c cyan,green \"pnpm --filter @agor/core dev\" \"./node_modules/.bin/tsx watch --clear-screen=false --ignore 'node_modules/**' src/index.ts\"",
+    "dev:daemon-only": "tsx watch --clear-screen=false --ignore 'node_modules/**' src/index.ts",
     "start": "node dist/index.js",
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit",

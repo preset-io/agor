@@ -55,7 +55,9 @@ import {
   MessagesRepository,
   RepoRepository,
   SessionMCPServerRepository,
+  type SessionMCPServerRow,
   SessionRepository,
+  select,
   sessionMcpServers,
   TaskRepository,
   WorktreeRepository,
@@ -171,7 +173,15 @@ interface FeathersSocket extends Socket {
 // Expand ~ to home directory in database path
 import { expandPath, extractDbFilePath } from '@agor/core/utils/path';
 
-const DB_PATH = expandPath(process.env.AGOR_DB_PATH || 'file:~/.agor/agor.db');
+// Determine database URL based on dialect preference
+// Priority:
+// 1. If AGOR_DB_DIALECT=postgresql, use DATABASE_URL (required for Postgres)
+// 2. Otherwise, use AGOR_DB_PATH or default SQLite path
+// This prevents using DATABASE_URL when Postgres profile isn't active
+const DB_PATH =
+  process.env.AGOR_DB_DIALECT === 'postgresql'
+    ? process.env.DATABASE_URL || 'postgresql://localhost:5432/agor'
+    : expandPath(process.env.AGOR_DB_PATH || 'file:~/.agor/agor.db');
 
 /**
  * Initialize Gemini API key with OAuth fallback support
@@ -632,26 +642,29 @@ async function main() {
   // Initialize database (auto-create if it doesn't exist)
   console.log(`📦 Connecting to database: ${DB_PATH}`);
 
-  // Extract file path from DB_PATH (remove 'file:' prefix and expand ~)
-  const dbFilePath = extractDbFilePath(DB_PATH);
-  const dbDir = dbFilePath.substring(0, dbFilePath.lastIndexOf('/'));
+  // Only handle file system setup for SQLite (file: URLs)
+  if (DB_PATH.startsWith('file:')) {
+    // Extract file path from DB_PATH (remove 'file:' prefix and expand ~)
+    const dbFilePath = extractDbFilePath(DB_PATH);
+    const dbDir = dbFilePath.substring(0, dbFilePath.lastIndexOf('/'));
 
-  // Ensure database directory exists
-  const { mkdir, access } = await import('node:fs/promises');
-  const { constants } = await import('node:fs');
+    // Ensure database directory exists
+    const { mkdir, access } = await import('node:fs/promises');
+    const { constants } = await import('node:fs');
 
-  try {
-    await access(dbDir, constants.F_OK);
-  } catch {
-    console.log(`📁 Creating database directory: ${dbDir}`);
-    await mkdir(dbDir, { recursive: true });
-  }
+    try {
+      await access(dbDir, constants.F_OK);
+    } catch {
+      console.log(`📁 Creating database directory: ${dbDir}`);
+      await mkdir(dbDir, { recursive: true });
+    }
 
-  // Check if database file exists (create message if needed)
-  try {
-    await access(dbFilePath, constants.F_OK);
-  } catch {
-    console.log('🆕 Database does not exist - will create on first connection');
+    // Check if database file exists (create message if needed)
+    try {
+      await access(dbFilePath, constants.F_OK);
+    } catch {
+      console.log('🆕 Database does not exist - will create on first connection');
+    }
   }
 
   // Create database with foreign keys enabled
@@ -774,8 +787,8 @@ async function main() {
     async find() {
       // Return all session-MCP relationships
       // This allows the UI to fetch all relationships in one call
-      const rows = await db.select().from(sessionMcpServers).all();
-      return rows.map((row) => ({
+      const rows = await select(db).from(sessionMcpServers).all();
+      return rows.map((row: SessionMCPServerRow) => ({
         session_id: row.session_id,
         mcp_server_id: row.mcp_server_id,
         enabled: Boolean(row.enabled),
@@ -1560,8 +1573,7 @@ async function main() {
     app.service('sessions'), // Sessions service for permission persistence (WebSocket broadcast)
     worktreesRepo, // Worktrees repo for fetching worktree paths
     reposRepo, // Repos repo for repo-level permissions
-    config.daemon?.mcpEnabled !== false, // Pass MCP enabled flag
-    _tasksRepo // Tasks repo for computeContextWindow
+    config.daemon?.mcpEnabled !== false // Pass MCP enabled flag
   );
 
   // Handle OPENAI_API_KEY with priority: config.yaml > env var
@@ -1581,8 +1593,7 @@ async function main() {
     openaiApiKey,
     app.service('messages'),
     app.service('tasks'),
-    db, // Database for env var resolution
-    _tasksRepo // Tasks repo for computeContextWindow
+    db // Database for env var resolution
   );
 
   if (!openaiApiKey) {
@@ -1603,8 +1614,7 @@ async function main() {
     mcpServerRepo,
     sessionMCPRepo,
     config.daemon?.mcpEnabled !== false, // Pass MCP enabled flag
-    db, // Database for env var resolution
-    _tasksRepo // Tasks repo for computeContextWindow
+    db // Database for env var resolution
   );
 
   // Initialize OpenCodeTool
@@ -2004,6 +2014,16 @@ async function main() {
               const endTimestamp = new Date().toISOString();
               const totalMessages = 1 + result.assistantMessageIds.length; // user + assistants
 
+              // Check if execution was stopped early (Codex/Gemini specific)
+              // If wasStopped is true, the stop handler will set session to IDLE
+              // Skip normal completion to avoid race condition
+              if ('wasStopped' in result && result.wasStopped) {
+                console.log(
+                  `⏭️  Task ${task.task_id.substring(0, 8)} was stopped - skipping normal completion (stop handler will update session)`
+                );
+                return;
+              }
+
               // Check if task still exists and get current status
               const currentTask = await entityExists(tasksService, task.task_id);
               if (!currentTask) {
@@ -2081,6 +2101,9 @@ async function main() {
                   }
                 }
 
+                console.log(
+                  `📝 [Completion] Updating task ${task.task_id.substring(0, 8)} to COMPLETED...`
+                );
                 const updated = await safePatch(
                   'tasks',
                   task.task_id,
@@ -2170,13 +2193,22 @@ async function main() {
                 );
 
                 if (updated) {
-                  console.log(`✅ Task ${task.task_id} completed successfully`);
+                  console.log(
+                    `✅ [Completion] Task ${task.task_id.substring(0, 8)} marked as COMPLETED`
+                  );
+                } else {
+                  console.warn(
+                    `⚠️  [Completion] Task ${task.task_id.substring(0, 8)} update returned false (may have been deleted)`
+                  );
                 }
               }
 
               // Token accounting is handled via raw_sdk_response and normalizers
 
-              await safePatch(
+              console.log(
+                `📝 [Completion] Updating session ${id.substring(0, 8)} to IDLE with ready_for_prompt=true...`
+              );
+              const sessionUpdated = await safePatch(
                 'sessions',
                 id,
                 {
@@ -2188,6 +2220,14 @@ async function main() {
                 'Session',
                 params
               );
+
+              if (sessionUpdated) {
+                console.log(`✅ [Completion] Session ${id.substring(0, 8)} marked as IDLE`);
+              } else {
+                console.warn(
+                  `⚠️  [Completion] Session ${id.substring(0, 8)} update returned false (may have been deleted)`
+                );
+              }
 
               // Check for queued messages and auto-process next one
               // NOTE: Only process queue if task completed successfully

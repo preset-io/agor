@@ -16,7 +16,6 @@ import type { MessagesRepository } from '../../db/repositories/messages';
 import type { RepoRepository } from '../../db/repositories/repos';
 import type { SessionMCPServerRepository } from '../../db/repositories/session-mcp-servers';
 import type { SessionRepository } from '../../db/repositories/sessions';
-import type { TaskRepository } from '../../db/repositories/tasks';
 import type { WorktreeRepository } from '../../db/repositories/worktrees';
 import { withSessionGuard } from '../../db/session-guard';
 import { generateId } from '../../lib/ids';
@@ -26,7 +25,6 @@ import {
   type MessageID,
   MessageRole,
   type SessionID,
-  type Task,
   type TaskID,
   TaskStatus,
 } from '../../types';
@@ -94,8 +92,7 @@ export class ClaudeTool implements ITool {
     sessionsService?: SessionsService,
     worktreesRepo?: WorktreeRepository,
     reposRepo?: RepoRepository,
-    mcpEnabled?: boolean,
-    private tasksRepo?: TaskRepository
+    mcpEnabled?: boolean
   ) {
     if (messagesRepo && sessionsRepo) {
       this.promptService = new ClaudePromptService(
@@ -819,39 +816,6 @@ export class ClaudeTool implements ITool {
   }
 
   /**
-   * Check if a task contains a compaction event
-   *
-   * Compaction events reset the context window, so we need to stop accumulating
-   * tokens when we encounter one.
-   *
-   * TODO: Consider denormalizing this to session level for better performance
-   * (e.g., Session.last_compaction_task_id) to avoid scanning all messages.
-   *
-   * @param taskId - Task ID to check for compaction
-   * @returns Promise resolving to true if task has compaction, false otherwise
-   */
-  private async hasCompaction(taskId: TaskID): Promise<boolean> {
-    if (!this.messagesRepo) {
-      return false;
-    }
-
-    const taskMessages = await this.messagesRepo.findByTaskId(taskId);
-    return taskMessages.some((msg) => {
-      if (msg.role !== MessageRole.SYSTEM) return false;
-
-      // Check if message content contains compaction event
-      const content = msg.content;
-      if (Array.isArray(content)) {
-        return content.some(
-          (block: { type?: string; systemType?: string }) =>
-            block.type === 'system_complete' && block.systemType === 'compaction'
-        );
-      }
-      return false;
-    });
-  }
-
-  /**
    * Compute token count from a Claude SDK raw response
    *
    * Sums across ALL models (Haiku for tools, Sonnet for responses, etc.)
@@ -903,69 +867,33 @@ export class ClaudeTool implements ITool {
     currentTaskId?: string,
     currentRawSdkResponse?: unknown
   ): Promise<number> {
-    if (!this.tasksRepo || !this.messagesRepo) {
-      console.warn('computeContextWindow: repos not available, returning 0');
-      return 0;
-    }
-
-    let cumulativeTokens = 0;
-
-    // Check if CURRENT task has compaction
-    // If so, context was reset - only return current task tokens
-    if (currentTaskId && (await this.hasCompaction(currentTaskId as TaskID))) {
-      console.log(`🗜️  Compaction event found in CURRENT task ${currentTaskId}`);
-      if (currentRawSdkResponse) {
-        const currentTaskTokens = this.computeContextTokensFromRawResponse(currentRawSdkResponse);
-        console.log(
-          `📊 Current task (post-compaction): ${currentTaskTokens} tokens (context was reset)`
-        );
-        return currentTaskTokens;
-      }
-      console.log(`📊 Current task has compaction but no token data, returning 0`);
-      return 0;
-    }
-
-    // Include current task tokens if provided
+    // IMPORTANT: When currentRawSdkResponse is provided (during task completion),
+    // we MUST NOT query the database because this is called during task UPDATE
+    // operations. Querying the database during a pending UPDATE causes deadlocks
+    // in PostgreSQL due to read-while-write in the same transaction.
+    //
+    // For Claude Code, we need to sum previous tasks + current task, but we can't
+    // safely query previous tasks during the UPDATE. The solution is to compute
+    // incrementally: store cumulative tokens in each task, then just use the
+    // current task's tokens.
+    //
+    // TODO: In the future, we should store cumulative tokens in raw_sdk_response
+    // or compute them before the UPDATE begins.
     if (currentRawSdkResponse) {
       const currentTaskTokens = this.computeContextTokensFromRawResponse(currentRawSdkResponse);
-      cumulativeTokens += currentTaskTokens;
       console.log(
-        `📊 Current task: +${currentTaskTokens} tokens (cumulative: ${cumulativeTokens})`
+        `✅ Computed context window for Claude Code session ${sessionId}: ${currentTaskTokens} tokens (from current task only - safe mode)`
       );
+      return currentTaskTokens;
     }
 
-    // Get all tasks for this session (won't include current task since it's not saved yet)
-    const tasks = await this.tasksRepo.findBySession(sessionId as SessionID);
-
-    // Sort tasks by created_at descending (most recent first)
-    tasks.sort((a: Task, b: Task) => {
-      const dateA = new Date(a.created_at).getTime();
-      const dateB = new Date(b.created_at).getTime();
-      return dateB - dateA;
-    });
-
-    // Iterate backwards through tasks (from most recent to oldest)
-    for (const task of tasks) {
-      // Check if this task has a compaction event
-      // If so, we stop here (context was reset)
-      if (await this.hasCompaction(task.task_id)) {
-        console.log(
-          `🗜️  Compaction event found in task ${task.task_id}, stopping token accumulation`
-        );
-        break;
-      }
-
-      // Accumulate tokens from this task's SDK response
-      if (task.raw_sdk_response) {
-        const taskTokens = this.computeContextTokensFromRawResponse(task.raw_sdk_response);
-        cumulativeTokens += taskTokens;
-        console.log(
-          `📊 Task ${task.task_id}: +${taskTokens} tokens (cumulative: ${cumulativeTokens})`
-        );
-      }
-    }
-
-    console.log(`✅ Computed context window for session ${sessionId}: ${cumulativeTokens} tokens`);
-    return cumulativeTokens;
+    // IMPORTANT: Do NOT query database when currentRawSdkResponse is not provided
+    // This prevents deadlocks in PostgreSQL when called during task UPDATE operations.
+    // The caller should ALWAYS provide currentRawSdkResponse during task completion.
+    console.warn(
+      `⚠️  computeContextWindow called without currentRawSdkResponse for session ${sessionId}. ` +
+        'This should not happen during task completion. Returning 0 to avoid database deadlock.'
+    );
+    return 0;
   }
 }

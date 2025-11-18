@@ -12,9 +12,8 @@
 import os from 'node:os';
 import path from 'node:path';
 import type { UUID, WorktreeID } from '@agor/core/types';
-import { createLocalDatabase } from '../db/client';
 import { BoardRepository, RepoRepository, WorktreeRepository } from '../db/repositories';
-import { cloneRepo } from '../git';
+import { cloneRepo, getWorktreePath } from '../git';
 import { generateId } from '../lib/ids';
 
 export interface SeedOptions {
@@ -44,7 +43,23 @@ export interface SeedResult {
  * Seed development fixtures
  */
 export async function seedDevFixtures(options: SeedOptions = {}): Promise<SeedResult> {
-  const db = createLocalDatabase();
+  // Respect DATABASE_URL and AGOR_DB_DIALECT environment variables
+  // Priority: DATABASE_URL env var > default SQLite file path
+  let databaseUrl: string;
+  const dialect = process.env.AGOR_DB_DIALECT;
+
+  if (dialect === 'postgresql') {
+    // Use DATABASE_URL for PostgreSQL
+    databaseUrl = process.env.DATABASE_URL || 'postgresql://localhost:5432/agor';
+  } else {
+    // Use SQLite file path (default)
+    const configPath = path.join(os.homedir(), '.agor');
+    const dbPath = path.join(configPath, 'agor.db');
+    databaseUrl = process.env.DATABASE_URL || `file:${dbPath}`;
+  }
+
+  const { createDatabase } = await import('../db/client');
+  const db = createDatabase({ url: databaseUrl });
   const repoRepo = new RepoRepository(db);
   const worktreeRepo = new WorktreeRepository(db);
   const boardRepo = new BoardRepository(db);
@@ -109,7 +124,7 @@ export async function seedDevFixtures(options: SeedOptions = {}): Promise<SeedRe
   console.log('3️⃣  Creating test-worktree...');
 
   const worktreeName = 'test-worktree';
-  const worktreePath = path.join(baseDir, repoSlug, 'worktrees', worktreeName);
+  const worktreePath = getWorktreePath(repoSlug, worktreeName);
 
   // Generate unique numeric ID for worktree (used for port allocation)
   const worktreeUniqueId = Math.floor(Math.random() * 1000) + 1;

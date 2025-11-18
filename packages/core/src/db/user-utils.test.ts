@@ -83,8 +83,8 @@ describe('createUser', () => {
     await createUser(db, data);
 
     // Verify password is hashed by checking it's not stored in plain text
-    const result = await db.query.users.findFirst({
-      where: (users, { eq }) => eq(users.email, 'hash@example.com'),
+    const result = await (db as any).query.users.findFirst({
+      where: (users: any, { eq }: any) => eq(users.email, 'hash@example.com'),
     });
 
     expect(result?.password).toBeDefined();
@@ -240,8 +240,8 @@ describe('createUser', () => {
     expect(user.user_id).toBeDefined();
 
     // Verify password hashes correctly
-    const result = await db.query.users.findFirst({
-      where: (users, { eq }) => eq(users.email, 'long@example.com'),
+    const result = await (db as any).query.users.findFirst({
+      where: (users: any, { eq }: any) => eq(users.email, 'long@example.com'),
     });
 
     const isValid = await bcrypt.compare(longPassword, result!.password);
@@ -446,8 +446,8 @@ describe('createDefaultAdminUser', () => {
   dbTest('should hash default password', async ({ db }) => {
     await createDefaultAdminUser(db);
 
-    const result = await db.query.users.findFirst({
-      where: (users, { eq }) => eq(users.email, 'admin@agor.live'),
+    const result = await (db as any).query.users.findFirst({
+      where: (users: any, { eq }: any) => eq(users.email, 'admin@agor.live'),
     });
 
     expect(result?.password).not.toBe('admin');

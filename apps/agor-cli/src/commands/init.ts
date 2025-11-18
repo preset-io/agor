@@ -81,14 +81,16 @@ export default class Init extends Command {
     repos: number;
   } | null> {
     try {
-      const { createDatabase, sessions, tasks, messages, repos } = await import('@agor/core/db');
+      const { createDatabase, select, sessions, tasks, messages, repos } = await import(
+        '@agor/core/db'
+      );
       const db = createDatabase({ url: `file:${dbPath}` });
 
       // Count rows by selecting all and measuring length
-      const sessionRows = await db.select({ id: sessions.session_id }).from(sessions).all();
-      const taskRows = await db.select({ id: tasks.task_id }).from(tasks).all();
-      const messageRows = await db.select({ id: messages.message_id }).from(messages).all();
-      const repoRows = await db.select({ id: repos.repo_id }).from(repos).all();
+      const sessionRows = await select(db).from(sessions).all();
+      const taskRows = await select(db).from(tasks).all();
+      const messageRows = await select(db).from(messages).all();
+      const repoRows = await select(db).from(repos).all();
 
       return {
         sessions: sessionRows.length,

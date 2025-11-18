@@ -62,7 +62,7 @@ export const ENVIRONMENT = {
    * Maximum number of log lines to return from logs command
    * Prevents daemon crashes from massive log outputs
    */
-  LOGS_MAX_LINES: 100,
+  LOGS_MAX_LINES: 500,
 
   /**
    * Maximum bytes to read from logs command output

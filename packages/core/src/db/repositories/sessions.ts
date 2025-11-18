@@ -9,6 +9,7 @@ import { SessionStatus } from '@agor/core/types';
 import { eq, like, or, sql } from 'drizzle-orm';
 import { formatShortId, generateId } from '../../lib/ids';
 import type { Database } from '../client';
+import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { type SessionInsert, type SessionRow, sessions } from '../schema';
 import {
   AmbiguousIdError,
@@ -135,8 +136,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
     const normalized = id.replace(/-/g, '').toLowerCase();
     const pattern = `${normalized}%`;
 
-    const results = await this.db
-      .select({ session_id: sessions.session_id })
+    const results = await select(this.db)
       .from(sessions)
       .where(like(sessions.session_id, pattern))
       .all();
@@ -149,7 +149,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       throw new AmbiguousIdError(
         'Session',
         id,
-        results.map((r) => formatShortId(r.session_id as UUID))
+        results.map((r: { session_id: string }) => formatShortId(r.session_id as UUID))
       );
     }
 
@@ -161,14 +161,13 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
    */
   async create(data: Partial<Session>): Promise<Session> {
     try {
-      const insert = this.sessionToInsert(data);
-      await this.db.insert(sessions).values(insert);
+      const insertData = this.sessionToInsert(data);
+      await insert(this.db, sessions).values(insertData).run();
 
-      const row = await this.db
-        .select()
+      const row = await select(this.db)
         .from(sessions)
-        .where(eq(sessions.session_id, insert.session_id))
-        .get();
+        .where(eq(sessions.session_id, insertData.session_id))
+        .one();
 
       if (!row) {
         throw new RepositoryError('Failed to retrieve created session');
@@ -190,11 +189,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
   async findById(id: string): Promise<Session | null> {
     try {
       const fullId = await this.resolveId(id);
-      const row = await this.db
-        .select()
-        .from(sessions)
-        .where(eq(sessions.session_id, fullId))
-        .get();
+      const row = await select(this.db).from(sessions).where(eq(sessions.session_id, fullId)).one();
 
       return row ? this.rowToSession(row) : null;
     } catch (error) {
@@ -212,8 +207,8 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
    */
   async findAll(): Promise<Session[]> {
     try {
-      const rows = await this.db.select().from(sessions).all();
-      return rows.map((row) => this.rowToSession(row));
+      const rows = await select(this.db).from(sessions).all();
+      return rows.map((row: SessionRow) => this.rowToSession(row));
     } catch (error) {
       throw new RepositoryError(
         `Failed to find all sessions: ${error instanceof Error ? error.message : String(error)}`,
@@ -227,9 +222,9 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
    */
   async findByStatus(status: Session['status']): Promise<Session[]> {
     try {
-      const rows = await this.db.select().from(sessions).where(eq(sessions.status, status)).all();
+      const rows = await select(this.db).from(sessions).where(eq(sessions.status, status)).all();
 
-      return rows.map((row) => this.rowToSession(row));
+      return rows.map((row: SessionRow) => this.rowToSession(row));
     } catch (error) {
       throw new RepositoryError(
         `Failed to find sessions by status: ${error instanceof Error ? error.message : String(error)}`,
@@ -245,13 +240,9 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
     try {
       // OPTIMIZED: Uses materialized board_id column for O(1) indexed lookup
       // Previously loaded ALL sessions and filtered in-memory (O(n) full table scan)
-      const rows = await this.db
-        .select()
-        .from(sessions)
-        .where(eq(sessions.board_id, boardId))
-        .all();
+      const rows = await select(this.db).from(sessions).where(eq(sessions.board_id, boardId)).all();
 
-      return rows.map((row) => this.rowToSession(row));
+      return rows.map((row: SessionRow) => this.rowToSession(row));
     } catch (error) {
       throw new RepositoryError(
         `Failed to find sessions by board: ${error instanceof Error ? error.message : String(error)}`,
@@ -268,18 +259,20 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       const fullId = await this.resolveId(sessionId);
 
       // Query sessions where parent_session_id or forked_from_session_id matches
-      const rows = await this.db
-        .select()
+      // Use database-agnostic JSON extraction helper
+      const { jsonExtract } = await import('../database-wrapper');
+
+      const rows = await select(this.db)
         .from(sessions)
         .where(
           or(
-            sql`json_extract(${sessions.data}, '$.genealogy.parent_session_id') = ${fullId}`,
-            sql`json_extract(${sessions.data}, '$.genealogy.forked_from_session_id') = ${fullId}`
+            sql`${jsonExtract(this.db, sessions.data, 'genealogy.parent_session_id')} = ${fullId}`,
+            sql`${jsonExtract(this.db, sessions.data, 'genealogy.forked_from_session_id')} = ${fullId}`
           )
         )
         .all();
 
-      return rows.map((row) => this.rowToSession(row));
+      return rows.map((row: SessionRow) => this.rowToSession(row));
     } catch (error) {
       throw new RepositoryError(
         `Failed to find child sessions: ${error instanceof Error ? error.message : String(error)}`,
@@ -345,15 +338,22 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
     try {
       const fullId = await this.resolveId(id);
 
+      const statusInfo = updates.status
+        ? ` (status: ${updates.status}, ready_for_prompt: ${updates.ready_for_prompt})`
+        : '';
+      console.log(
+        `🔄 [SessionRepo] Starting transaction for session ${fullId.substring(0, 8)}${statusInfo}`
+      );
+
       // Use transaction to make read-merge-write atomic
       // This prevents race conditions where another update happens between read and write
-      return await this.db.transaction(async (tx) => {
+      const result = await this.db.transaction(async (tx) => {
         // STEP 1: Read current session (within transaction)
-        const currentRow = await tx
-          .select()
+        // biome-ignore lint/suspicious/noExplicitAny: Transaction context requires type assertion for database wrapper functions
+        const currentRow = await select(tx as any)
           .from(sessions)
           .where(eq(sessions.session_id, fullId))
-          .get();
+          .one();
 
         if (!currentRow) {
           throw new EntityNotFoundError('Session', id);
@@ -367,32 +367,25 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         // Strategy: Objects = deep merge, Arrays = replace, Primitives = replace
         const merged = deepMerge(current, updates);
 
-        // Debug logging for permission_config persistence
-        if (updates.permission_config) {
-          console.log(`📝 [SessionRepository] Merging permission_config update (atomic tx)`);
-          console.log(`   Before merge: ${JSON.stringify(current.permission_config)}`);
-          console.log(`   Update: ${JSON.stringify(updates.permission_config)}`);
-          console.log(`   After merge: ${JSON.stringify(merged.permission_config)}`);
-        }
-
-        const insert = this.sessionToInsert(merged);
+        const insertData = this.sessionToInsert(merged);
 
         // STEP 3: Write merged session (within same transaction)
-        await tx
-          .update(sessions)
+        // biome-ignore lint/suspicious/noExplicitAny: Transaction context requires type assertion for database wrapper functions
+        await update(tx as any, sessions)
           .set({
-            status: insert.status,
+            status: insertData.status,
             updated_at: new Date(),
-            ready_for_prompt: insert.ready_for_prompt,
-            data: insert.data,
+            ready_for_prompt: insertData.ready_for_prompt,
+            data: insertData.data,
           })
-          .where(eq(sessions.session_id, fullId));
-
-        console.log(`✅ [SessionRepository] Atomic update complete`);
+          .where(eq(sessions.session_id, fullId))
+          .run();
 
         // Return merged session (no need to re-fetch, we have it in memory)
         return merged;
       });
+
+      return result;
     } catch (error) {
       if (error instanceof RepositoryError) throw error;
       if (error instanceof EntityNotFoundError) throw error;
@@ -410,12 +403,15 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
     try {
       const fullId = await this.resolveId(id);
 
-      const result = await this.db.delete(sessions).where(eq(sessions.session_id, fullId)).run();
+      const result = await deleteFrom(this.db, sessions)
+        .where(eq(sessions.session_id, fullId))
+        .run();
 
       if (result.rowsAffected === 0) {
         throw new EntityNotFoundError('Session', id);
       }
     } catch (error) {
+      console.error(`❌ [SessionRepo] Failed to delete session ${id}:`, error);
       if (error instanceof EntityNotFoundError) throw error;
       throw new RepositoryError(
         `Failed to delete session: ${error instanceof Error ? error.message : String(error)}`,
@@ -436,7 +432,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
    */
   async count(): Promise<number> {
     try {
-      const result = await this.db.select({ count: sql<number>`count(*)` }).from(sessions).get();
+      const result = await select(this.db, { count: sql<number>`count(*)` }).from(sessions).one();
 
       return result?.count ?? 0;
     } catch (error) {

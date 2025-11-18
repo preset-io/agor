@@ -8,7 +8,7 @@
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import { createClient } from '@libsql/client';
-import { and, eq, gte, isNull, lte } from 'drizzle-orm';
+import { and, count, eq, gte, isNull, lte } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/libsql';
 import { messages, tasks } from '../schema';
 
@@ -22,7 +22,8 @@ async function main() {
   const db = drizzle(client);
 
   // Find all tasks
-  const allTasks = await db.select().from(tasks).all();
+  // biome-ignore lint/suspicious/noExplicitAny: SQLite-specific .all() method not available in unified Database type
+  const allTasks = await (db as any).select().from(tasks).all();
   console.log(`Found ${allTasks.length} tasks total\n`);
 
   let fixedSessions = 0;
@@ -40,7 +41,7 @@ async function main() {
   for (const [sessionId, sessionTasks] of tasksBySession) {
     // Check if this session has orphaned messages
     const orphanedCount = await db
-      .select({ count: messages.message_id })
+      .select({ count: count() })
       .from(messages)
       .where(and(eq(messages.session_id, sessionId), isNull(messages.task_id)))
       .all();

@@ -421,7 +421,7 @@ importers:
         version: 17.2.3
       drizzle-orm:
         specifier: ^0.44.6
-        version: 0.44.7(@libsql/client@0.15.15)(@opentelemetry/api@1.9.0)
+        version: 0.44.7(@libsql/client@0.15.15)(@opentelemetry/api@1.9.0)(postgres@3.4.7)
       express:
         specifier: ^5.1.0
         version: 5.1.0
@@ -506,12 +506,12 @@ importers:
       '@google/genai':
         specifier: ^1.26.0
         version: 1.29.0(@modelcontextprotocol/sdk@1.21.0)
-      '@libsql/client':
-        specifier: ^0.15.15
-        version: 0.15.15
       '@iarna/toml':
         specifier: ^2.2.5
         version: 2.2.5
+      '@libsql/client':
+        specifier: ^0.15.15
+        version: 0.15.15
       '@openai/codex-sdk':
         specifier: ^0.58.0
         version: 0.58.0
@@ -529,13 +529,16 @@ importers:
         version: 3.9.0
       drizzle-orm:
         specifier: ^0.44.6
-        version: 0.44.7(@libsql/client@0.15.15)(@opentelemetry/api@1.9.0)
+        version: 0.44.7(@libsql/client@0.15.15)(@opentelemetry/api@1.9.0)(postgres@3.4.7)
       handlebars:
         specifier: ^4.7.8
         version: 4.7.8
       js-yaml:
         specifier: ^4.1.1
         version: 4.1.1
+      postgres:
+        specifier: ^3.4.7
+        version: 3.4.7
       simple-git:
         specifier: ^3.28.0
         version: 3.30.0
@@ -549,6 +552,9 @@ importers:
       '@types/bcryptjs':
         specifier: ^2.4.6
         version: 2.4.6
+      '@types/iarna__toml':
+        specifier: ^2.0.5
+        version: 2.0.5
       '@types/js-yaml':
         specifier: ^4.0.9
         version: 4.0.9
@@ -3483,6 +3489,9 @@ packages:
   '@types/http-errors@2.0.5':
     resolution: {integrity: sha512-r8Tayk8HJnX0FztbZN7oVqGccWgw98T/0neJphO91KkmOzug1KkofZURD4UaD5uH8AqcFLfdPErnBod0u71/qg==}
 
+  '@types/iarna__toml@2.0.5':
+    resolution: {integrity: sha512-I55y+SxI0ayM4MBU6yfGJGmi4wRll6wtSeKiFYAZj+Z5Q1DVbMgBSVDYY+xQZbjIlLs/pN4fidnvR8faDrmxPg==}
+
   '@types/js-yaml@4.0.9':
     resolution: {integrity: sha512-k4MGaQl5TGo/iipqb2UDG2UwjXziSWkh0uysQelTlJpX1qGlpUZYm8PnO4DxG1qBomtJUdYJ6qR6xdIah10JLg==}
 
@@ -5571,8 +5580,12 @@ packages:
   js-tokens@9.0.1:
     resolution: {integrity: sha512-mxa9E9ITFOt0ban3j6L5MpjwegGz6lBQmM1IJkWeBZGcMxto50+eWdjC/52xDbS2vy0k7vIMK0Fe2wfL9OQSpQ==}
 
-  js-yaml@3.14.2:
-    resolution: {integrity: sha512-PMSmkqxr106Xa156c2M265Z+FTrPl+oxd/rgOQy2tijQeK5TxQ43psO1ZCwhVOSdnn+RzkzlRz/eY4BgJBYVpg==}
+  js-yaml@3.14.1:
+    resolution: {integrity: sha512-okMH7OXXJ7YrN9Ok3/SXrnu4iX9yOk+25nqX4imS2npuvTYDmo/QEZoqwZkYaIDk3jVvBOTOIEgEhaLOynBS9g==}
+    hasBin: true
+
+  js-yaml@4.1.0:
+    resolution: {integrity: sha512-wpxZs9NoxZaJESJGIZTyDEaYpl0FKSA+FB9aJiyemKhMwkxQg63h4T1KJgUGHpTqPDNRcmmYLugrRjJlBtWvRA==}
     hasBin: true
 
   js-yaml@4.1.1:
@@ -5686,6 +5699,7 @@ packages:
 
   libsql@0.5.22:
     resolution: {integrity: sha512-NscWthMQt7fpU8lqd7LXMvT9pi+KhhmTHAJWUB/Lj6MWa0MKFv0F2V4C6WKKpjCVZl0VwcDz4nOI3CyaT1DDiA==}
+    cpu: [x64, arm64, wasm32, arm]
     os: [darwin, linux, win32]
 
   lilconfig@3.1.3:
@@ -6503,6 +6517,10 @@ packages:
   postcss@8.5.6:
     resolution: {integrity: sha512-3Ybi1tAuwAP9s0r1UQ2J4n5Y0G05bJkpUIO0/bI9MhwmD70S5aTWbXGBwxHrelT+XM1k6dM0pk+SwNkpTRN7Pg==}
     engines: {node: ^10 || ^12 || >=14}
+
+  postgres@3.4.7:
+    resolution: {integrity: sha512-Jtc2612XINuBjIl/QTWsV5UvE8UHuNblcO3vVADSrKsrc6RqGX6lOW1cEo3CM2v0XG4Nat8nI+YM7/f26VxXLw==}
+    engines: {node: '>=12'}
 
   prebuild-install@7.1.3:
     resolution: {integrity: sha512-8Mf2cbV7x1cXPUILADGI3wuhfqWvtiLA1iclTDbFRZkgRQS0NqsPZphna9V+HyTEadheuPmjaJMsbzKQFOzLug==}
@@ -12099,6 +12117,10 @@ snapshots:
 
   '@types/http-errors@2.0.5': {}
 
+  '@types/iarna__toml@2.0.5':
+    dependencies:
+      '@types/node': 24.10.0
+
   '@types/js-yaml@4.0.9': {}
 
   '@types/json-schema@7.0.15': {}
@@ -13257,10 +13279,11 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  drizzle-orm@0.44.7(@libsql/client@0.15.15)(@opentelemetry/api@1.9.0):
+  drizzle-orm@0.44.7(@libsql/client@0.15.15)(@opentelemetry/api@1.9.0)(postgres@3.4.7):
     optionalDependencies:
       '@libsql/client': 0.15.15
       '@opentelemetry/api': 1.9.0
+      postgres: 3.4.7
 
   dunder-proto@1.0.1:
     dependencies:
@@ -14055,7 +14078,7 @@ snapshots:
 
   gray-matter@4.0.3:
     dependencies:
-      js-yaml: 3.14.2
+      js-yaml: 3.14.1
       kind-of: 6.0.3
       section-matter: 1.0.0
       strip-bom-string: 1.0.0
@@ -14519,10 +14542,14 @@ snapshots:
 
   js-tokens@9.0.1: {}
 
-  js-yaml@3.14.2:
+  js-yaml@3.14.1:
     dependencies:
       argparse: 1.0.10
       esprima: 4.0.1
+
+  js-yaml@4.1.0:
+    dependencies:
+      argparse: 2.0.1
 
   js-yaml@4.1.1:
     dependencies:
@@ -14648,7 +14675,7 @@ snapshots:
       fast-glob: 3.3.3
       formatly: 0.3.0
       jiti: 2.6.1
-      js-yaml: 4.1.1
+      js-yaml: 4.1.0
       minimist: 1.2.8
       oxc-resolver: 11.13.1
       picocolors: 1.1.1
@@ -15846,6 +15873,8 @@ snapshots:
       nanoid: 3.3.11
       picocolors: 1.1.1
       source-map-js: 1.2.1
+
+  postgres@3.4.7: {}
 
   prebuild-install@7.1.3:
     dependencies:

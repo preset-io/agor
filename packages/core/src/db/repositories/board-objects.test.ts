@@ -58,7 +58,7 @@ function createWorktreeData(overrides?: {
  */
 async function createBoard(db: Database, overrides?: { board_id?: BoardID; name?: string }) {
   const boardId = (overrides?.board_id ?? generateId()) as BoardID;
-  await db.insert(boards).values({
+  await (db as any).insert(boards).values({
     board_id: boardId,
     created_at: new Date(),
     created_by: 'anonymous',
@@ -920,7 +920,7 @@ describe('BoardObjectRepository FK constraints', () => {
     });
 
     // Delete the board
-    await db.delete(boards).where(require('drizzle-orm').eq(boards.board_id, boardId));
+    await (db as any).delete(boards).where(require('drizzle-orm').eq(boards.board_id, boardId));
 
     // Board object should be cascade deleted
     const found = await boRepo.findByWorktreeId(worktree.worktree_id);

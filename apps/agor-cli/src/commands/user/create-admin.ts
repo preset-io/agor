@@ -21,13 +21,20 @@ export default class UserCreateAdmin extends Command {
 
   async run(): Promise<void> {
     try {
-      // Get database path
-      const configPath = getConfigPath();
-      const agorHome = join(configPath, '..');
-      const dbPath = join(agorHome, 'agor.db');
+      // Get database connection URL
+      // Priority: DATABASE_URL env var > default SQLite file path
+      let databaseUrl = process.env.DATABASE_URL;
 
-      // Connect to database
-      const db = createDatabase({ url: `file:${dbPath}` });
+      if (!databaseUrl) {
+        // Default to SQLite if no DATABASE_URL specified
+        const configPath = getConfigPath();
+        const agorHome = join(configPath, '..');
+        const dbPath = join(agorHome, 'agor.db');
+        databaseUrl = `file:${dbPath}`;
+      }
+
+      // Connect to database (dialect is auto-detected from URL)
+      const db = createDatabase({ url: databaseUrl });
 
       // Ensure migrations are run (idempotent, safe to run multiple times)
       // This is critical for Docker environments where init --skip-if-exists
@@ -77,6 +84,20 @@ export default class UserCreateAdmin extends Command {
       this.log(chalk.red('✗ Failed to create admin user'));
       if (error instanceof Error) {
         this.log(chalk.red(`  ${error.message}`));
+        if (error.stack) {
+          this.log(chalk.gray(error.stack));
+        }
+        // Check for nested errors
+        if ('cause' in error && error.cause) {
+          this.log(chalk.red('  Caused by:'));
+          if (error.cause instanceof Error) {
+            this.log(chalk.red(`    ${error.cause.message}`));
+          } else {
+            this.log(chalk.red(`    ${String(error.cause)}`));
+          }
+        }
+      } else {
+        this.log(chalk.red(`  ${String(error)}`));
       }
       process.exit(1);
     }

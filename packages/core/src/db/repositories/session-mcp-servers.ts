@@ -7,6 +7,7 @@
 import type { MCPServer, MCPServerID, SessionID, SessionMCPServer } from '@agor/core/types';
 import { and, eq } from 'drizzle-orm';
 import type { Database } from '../client';
+import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { type SessionMCPServerInsert, sessionMcpServers } from '../schema';
 import { EntityNotFoundError, RepositoryError } from './base';
 import { MCPServerRepository } from './mcp-servers';
@@ -42,8 +43,7 @@ export class SessionMCPServerRepository {
       }
 
       // Check if relationship already exists
-      const existing = await this.db
-        .select()
+      const existing = await select(this.db)
         .from(sessionMcpServers)
         .where(
           and(
@@ -51,31 +51,31 @@ export class SessionMCPServerRepository {
             eq(sessionMcpServers.mcp_server_id, serverId)
           )
         )
-        .get();
+        .one();
 
       if (existing) {
         // Already exists, just ensure it's enabled
-        await this.db
-          .update(sessionMcpServers)
+        await update(this.db, sessionMcpServers)
           .set({ enabled: true })
           .where(
             and(
               eq(sessionMcpServers.session_id, sessionId),
               eq(sessionMcpServers.mcp_server_id, serverId)
             )
-          );
+          )
+          .run();
         return;
       }
 
       // Create new relationship
-      const insert: SessionMCPServerInsert = {
+      const newRelationship: SessionMCPServerInsert = {
         session_id: sessionId,
         mcp_server_id: serverId,
         enabled: true,
         added_at: new Date(),
       };
 
-      await this.db.insert(sessionMcpServers).values(insert);
+      await insert(this.db, sessionMcpServers).values(newRelationship).run();
     } catch (error) {
       if (error instanceof EntityNotFoundError) throw error;
       throw new RepositoryError(
@@ -90,8 +90,7 @@ export class SessionMCPServerRepository {
    */
   async removeServer(sessionId: SessionID, serverId: MCPServerID): Promise<void> {
     try {
-      const result = await this.db
-        .delete(sessionMcpServers)
+      const result = await deleteFrom(this.db, sessionMcpServers)
         .where(
           and(
             eq(sessionMcpServers.session_id, sessionId),
@@ -117,8 +116,7 @@ export class SessionMCPServerRepository {
    */
   async toggleServer(sessionId: SessionID, serverId: MCPServerID, enabled: boolean): Promise<void> {
     try {
-      const result = await this.db
-        .update(sessionMcpServers)
+      const result = await update(this.db, sessionMcpServers)
         .set({ enabled })
         .where(
           and(
@@ -152,8 +150,7 @@ export class SessionMCPServerRepository {
         conditions.push(eq(sessionMcpServers.enabled, true));
       }
 
-      const relationships = await this.db
-        .select()
+      const relationships = await select(this.db)
         .from(sessionMcpServers)
         .where(and(...conditions))
         .all();
@@ -189,7 +186,9 @@ export class SessionMCPServerRepository {
       }
 
       // Remove all existing relationships
-      await this.db.delete(sessionMcpServers).where(eq(sessionMcpServers.session_id, sessionId));
+      await deleteFrom(this.db, sessionMcpServers)
+        .where(eq(sessionMcpServers.session_id, sessionId))
+        .run();
 
       // Add new relationships
       if (serverIds.length > 0) {
@@ -200,7 +199,7 @@ export class SessionMCPServerRepository {
           added_at: new Date(),
         }));
 
-        await this.db.insert(sessionMcpServers).values(inserts);
+        await insert(this.db, sessionMcpServers).values(inserts).run();
       }
     } catch (error) {
       if (error instanceof EntityNotFoundError) throw error;
@@ -219,8 +218,7 @@ export class SessionMCPServerRepository {
     serverId: MCPServerID
   ): Promise<SessionMCPServer | null> {
     try {
-      const row = await this.db
-        .select()
+      const row = await select(this.db)
         .from(sessionMcpServers)
         .where(
           and(
@@ -228,7 +226,7 @@ export class SessionMCPServerRepository {
             eq(sessionMcpServers.mcp_server_id, serverId)
           )
         )
-        .get();
+        .one();
 
       if (!row) {
         return null;

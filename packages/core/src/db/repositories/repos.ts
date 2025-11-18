@@ -8,6 +8,7 @@ import type { Repo, UUID } from '@agor/core/types';
 import { eq, like, sql } from 'drizzle-orm';
 import { formatShortId, generateId } from '../../lib/ids';
 import type { Database } from '../client';
+import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { type RepoInsert, type RepoRow, repos } from '../schema';
 import {
   AmbiguousIdError,
@@ -81,11 +82,7 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
     const normalized = id.replace(/-/g, '').toLowerCase();
     const pattern = `${normalized}%`;
 
-    const results = await this.db
-      .select({ repo_id: repos.repo_id })
-      .from(repos)
-      .where(like(repos.repo_id, pattern))
-      .all();
+    const results = await select(this.db).from(repos).where(like(repos.repo_id, pattern)).all();
 
     if (results.length === 0) {
       throw new EntityNotFoundError('Repo', id);
@@ -95,7 +92,7 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
       throw new AmbiguousIdError(
         'Repo',
         id,
-        results.map((r) => formatShortId(r.repo_id as UUID))
+        results.map((r: { repo_id: string }) => formatShortId(r.repo_id as UUID))
       );
     }
 
@@ -107,10 +104,13 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
    */
   async create(data: Partial<Repo>): Promise<Repo> {
     try {
-      const insert = this.repoToInsert(data);
-      await this.db.insert(repos).values(insert);
+      const insertData = this.repoToInsert(data);
+      await insert(this.db, repos).values(insertData).run();
 
-      const row = await this.db.select().from(repos).where(eq(repos.repo_id, insert.repo_id)).get();
+      const row = await select(this.db)
+        .from(repos)
+        .where(eq(repos.repo_id, insertData.repo_id))
+        .one();
 
       if (!row) {
         throw new RepositoryError('Failed to retrieve created repo');
@@ -132,7 +132,7 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
   async findById(id: string): Promise<Repo | null> {
     try {
       const fullId = await this.resolveId(id);
-      const row = await this.db.select().from(repos).where(eq(repos.repo_id, fullId)).get();
+      const row = await select(this.db).from(repos).where(eq(repos.repo_id, fullId)).one();
 
       return row ? this.rowToRepo(row) : null;
     } catch (error) {
@@ -150,7 +150,7 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
    */
   async findBySlug(slug: string): Promise<Repo | null> {
     try {
-      const row = await this.db.select().from(repos).where(eq(repos.slug, slug)).get();
+      const row = await select(this.db).from(repos).where(eq(repos.slug, slug)).one();
 
       return row ? this.rowToRepo(row) : null;
     } catch (error) {
@@ -166,8 +166,8 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
    */
   async findAll(): Promise<Repo[]> {
     try {
-      const rows = await this.db.select().from(repos).all();
-      return rows.map((row) => this.rowToRepo(row));
+      const rows = await select(this.db).from(repos).all();
+      return rows.map((row: RepoRow) => this.rowToRepo(row));
     } catch (error) {
       throw new RepositoryError(
         `Failed to find all repos: ${error instanceof Error ? error.message : String(error)}`,
@@ -198,7 +198,11 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
       // Use transaction to make read-merge-write atomic
       return await this.db.transaction(async (tx) => {
         // STEP 1: Read current repo (within transaction)
-        const currentRow = await tx.select().from(repos).where(eq(repos.repo_id, fullId)).get();
+        // biome-ignore lint/suspicious/noExplicitAny: Transaction context requires type assertion for database wrapper functions
+        const currentRow = await select(tx as any)
+          .from(repos)
+          .where(eq(repos.repo_id, fullId))
+          .one();
 
         if (!currentRow) {
           throw new EntityNotFoundError('Repo', id);
@@ -209,17 +213,18 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
         // STEP 2: Deep merge updates into current repo (in memory)
         // Preserves nested objects like permission_config when doing partial updates
         const merged = deepMerge(current, updates);
-        const insert = this.repoToInsert(merged);
+        const insertData = this.repoToInsert(merged);
 
         // STEP 3: Write merged repo (within same transaction)
-        await tx
-          .update(repos)
+        // biome-ignore lint/suspicious/noExplicitAny: Transaction context requires type assertion for database wrapper functions
+        await update(tx as any, repos)
           .set({
-            slug: insert.slug,
+            slug: insertData.slug,
             updated_at: new Date(),
-            data: insert.data,
+            data: insertData.data,
           })
-          .where(eq(repos.repo_id, fullId));
+          .where(eq(repos.repo_id, fullId))
+          .run();
 
         // Return merged repo (no need to re-fetch, we have it in memory)
         return merged;
@@ -241,7 +246,7 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
     try {
       const fullId = await this.resolveId(id);
 
-      const result = await this.db.delete(repos).where(eq(repos.repo_id, fullId)).run();
+      const result = await deleteFrom(this.db, repos).where(eq(repos.repo_id, fullId)).run();
 
       if (result.rowsAffected === 0) {
         throw new EntityNotFoundError('Repo', id);
@@ -276,7 +281,7 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
    */
   async count(): Promise<number> {
     try {
-      const result = await this.db.select({ count: sql<number>`count(*)` }).from(repos).get();
+      const result = await select(this.db, { count: sql<number>`count(*)` }).from(repos).one();
 
       return result?.count ?? 0;
     } catch (error) {

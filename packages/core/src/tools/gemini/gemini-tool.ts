@@ -16,7 +16,6 @@ import type { MCPServerRepository } from '../../db/repositories/mcp-servers';
 import type { MessagesRepository } from '../../db/repositories/messages';
 import type { SessionMCPServerRepository } from '../../db/repositories/session-mcp-servers';
 import type { SessionRepository } from '../../db/repositories/sessions';
-import type { TaskRepository } from '../../db/repositories/tasks';
 import type { WorktreeRepository } from '../../db/repositories/worktrees';
 import { generateId } from '../../lib/ids';
 import {
@@ -49,7 +48,6 @@ export class GeminiTool implements ITool {
   readonly name = 'Google Gemini';
 
   private promptService?: GeminiPromptService;
-  private tasksRepo?: TaskRepository;
 
   constructor(
     private messagesRepo?: MessagesRepository,
@@ -61,10 +59,8 @@ export class GeminiTool implements ITool {
     mcpServerRepo?: MCPServerRepository,
     sessionMCPRepo?: SessionMCPServerRepository,
     mcpEnabled?: boolean,
-    db?: Database,
-    tasksRepo?: TaskRepository
+    db?: Database
   ) {
-    this.tasksRepo = tasksRepo;
     if (messagesRepo && sessionsRepo) {
       this.promptService = new GeminiPromptService(
         messagesRepo,
@@ -507,31 +503,15 @@ export class GeminiTool implements ITool {
       return cumulativeTokens;
     }
 
-    // Fallback: look up from database (used when computing for already-saved tasks)
-    if (!this.tasksRepo) {
-      console.warn('computeContextWindow: tasksRepo not available, returning 0');
-      return 0;
-    }
-
-    const tasks = await this.tasksRepo.findBySession(sessionId as SessionID);
-
-    // Find the most recent task with raw_sdk_response
-    for (let i = tasks.length - 1; i >= 0; i--) {
-      const task = tasks[i];
-      if (task.raw_sdk_response) {
-        const response =
-          task.raw_sdk_response as import('../../types/sdk-response').GeminiSdkResponse;
-        const inputTokens = response.value?.usageMetadata?.promptTokenCount || 0;
-        const outputTokens = response.value?.usageMetadata?.candidatesTokenCount || 0;
-        const cumulativeTokens = inputTokens + outputTokens;
-        console.log(
-          `✅ Computed context window for Gemini session ${sessionId}: ${cumulativeTokens} tokens (from DB)`
-        );
-        return cumulativeTokens;
-      }
-    }
-
-    console.log(`⚠️  No tasks with SDK response found for session ${sessionId}`);
+    // IMPORTANT: Do NOT query database when currentRawSdkResponse is not provided
+    // This method is called during task UPDATE operations, and querying the database
+    // during a pending UPDATE causes deadlocks in PostgreSQL due to read-while-write
+    // in the same transaction. The caller should ALWAYS provide currentRawSdkResponse
+    // during task completion.
+    console.warn(
+      `⚠️  computeContextWindow called without currentRawSdkResponse for session ${sessionId}. ` +
+        'This should not happen during task completion. Returning 0 to avoid database deadlock.'
+    );
     return 0;
   }
 }

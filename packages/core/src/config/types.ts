@@ -84,6 +84,59 @@ export interface AgorOpenCodeSettings {
 }
 
 /**
+ * Database configuration settings
+ */
+export interface AgorDatabaseSettings {
+  /** Database dialect (default: 'sqlite') */
+  dialect?: 'sqlite' | 'postgresql';
+
+  /** SQLite configuration */
+  sqlite?: {
+    /** Database file path (default: '~/.agor/agor.db') */
+    path?: string;
+
+    /** Enable WAL mode (default: true) */
+    walMode?: boolean;
+
+    /** Busy timeout in ms (default: 5000) */
+    busyTimeout?: number;
+  };
+
+  /** PostgreSQL configuration */
+  postgresql?: {
+    /** Connection URL (postgresql://user:pass@host:port/db) */
+    url?: string;
+
+    /** Individual connection parameters (alternative to URL) */
+    host?: string;
+    port?: number;
+    database?: string;
+    user?: string;
+    password?: string;
+
+    /** Connection pool settings */
+    pool?: {
+      min?: number; // Default: 2
+      max?: number; // Default: 10
+      idleTimeout?: number; // Default: 30000ms
+    };
+
+    /** SSL/TLS configuration */
+    ssl?:
+      | boolean
+      | {
+          rejectUnauthorized?: boolean;
+          ca?: string;
+          cert?: string;
+          key?: string;
+        };
+
+    /** Schema name (default: 'public') */
+    schema?: string;
+  };
+}
+
+/**
  * Codex-specific configuration
  */
 export interface AgorCodexSettings {
@@ -130,6 +183,9 @@ export interface AgorConfig {
   /** UI settings */
   ui?: AgorUISettings;
 
+  /** Database configuration */
+  database?: AgorDatabaseSettings;
+
   /** OpenCode.ai integration settings */
   opencode?: AgorOpenCodeSettings;
 
@@ -148,6 +204,7 @@ export type ConfigKey =
   | `display.${keyof AgorDisplaySettings}`
   | `daemon.${keyof AgorDaemonSettings}`
   | `ui.${keyof AgorUISettings}`
+  | `database.${keyof AgorDatabaseSettings}`
   | `opencode.${keyof AgorOpenCodeSettings}`
   | `codex.${keyof AgorCodexSettings}`
   | `credentials.${keyof AgorCredentials}`;

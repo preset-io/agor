@@ -344,10 +344,6 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
 
     // Recursively delete all children first
     if (children.length > 0) {
-      console.log(
-        `🗑️  Cascading delete: session ${String(id).substring(0, 8)} has ${children.length} children`
-      );
-
       for (const child of children) {
         await this.remove(child.session_id, params);
       }
@@ -355,8 +351,6 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
 
     // Now delete the current session (messages and tasks are cascade-deleted by DB)
     await this.sessionRepo.delete(id as string);
-
-    console.log(`✅ Deleted session ${String(id).substring(0, 8)} and all descendants`);
 
     // Emit removed event for WebSocket broadcasting
     this.emit?.('removed', session, params);

@@ -11,6 +11,7 @@ import {
   type Database,
   desc,
   eq,
+  jsonExtract,
   type SQL,
   sessions,
   sql,
@@ -125,13 +126,17 @@ export class LeaderboardService {
     }
 
     if (startDate) {
-      const startMs = new Date(startDate).getTime();
-      conditions.push(sql`${tasks.created_at} >= ${startMs}`);
+      // Use Date object for Postgres compatibility (timestamp with time zone)
+      // For SQLite (stored as integer ms), Drizzle will auto-convert Date to ms
+      const startDateObj = new Date(startDate);
+      conditions.push(sql`${tasks.created_at} >= ${startDateObj}`);
     }
 
     if (endDate) {
-      const endMs = new Date(endDate).getTime();
-      conditions.push(sql`${tasks.created_at} <= ${endMs}`);
+      // Use Date object for Postgres compatibility (timestamp with time zone)
+      // For SQLite (stored as integer ms), Drizzle will auto-convert Date to ms
+      const endDateObj = new Date(endDate);
+      conditions.push(sql`${tasks.created_at} <= ${endDateObj}`);
     }
 
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
@@ -145,17 +150,17 @@ export class LeaderboardService {
     const selectFields: Record<string, any> = {
       totalTokens: sql<number>`COALESCE(SUM(
         CASE
-          WHEN json_extract(${sessions.data}, '$.agentic_tool') = 'codex' THEN
-            (CAST(json_extract(${tasks.data}, '$.raw_sdk_response.tokenUsage.input_tokens') AS INTEGER) -
-             COALESCE(CAST(json_extract(${tasks.data}, '$.raw_sdk_response.tokenUsage.cache_read_tokens') AS INTEGER), 0)) +
-            CAST(json_extract(${tasks.data}, '$.raw_sdk_response.tokenUsage.output_tokens') AS INTEGER)
+          WHEN ${jsonExtract(this.db, sessions.data, 'agentic_tool')} = 'codex' THEN
+            (CAST(${jsonExtract(this.db, tasks.data, 'raw_sdk_response.tokenUsage.input_tokens')} AS INTEGER) -
+             COALESCE(CAST(${jsonExtract(this.db, tasks.data, 'raw_sdk_response.tokenUsage.cache_read_tokens')} AS INTEGER), 0)) +
+            CAST(${jsonExtract(this.db, tasks.data, 'raw_sdk_response.tokenUsage.output_tokens')} AS INTEGER)
           ELSE
-            CAST(json_extract(${tasks.data}, '$.raw_sdk_response.tokenUsage.input_tokens') AS INTEGER) +
-            CAST(json_extract(${tasks.data}, '$.raw_sdk_response.tokenUsage.output_tokens') AS INTEGER)
+            CAST(${jsonExtract(this.db, tasks.data, 'raw_sdk_response.tokenUsage.input_tokens')} AS INTEGER) +
+            CAST(${jsonExtract(this.db, tasks.data, 'raw_sdk_response.tokenUsage.output_tokens')} AS INTEGER)
         END
       ), 0)`.as('total_tokens'),
       totalCost: sql<number>`COALESCE(SUM(
-        CAST(json_extract(${tasks.data}, '$.raw_sdk_response.tokenUsage.estimated_cost_usd') AS REAL)
+        CAST(${jsonExtract(this.db, tasks.data, 'raw_sdk_response.tokenUsage.estimated_cost_usd')} AS REAL)
       ), 0.0)`.as('total_cost'),
       taskCount: sql<number>`COUNT(DISTINCT ${tasks.task_id})`.as('task_count'),
     };
@@ -187,7 +192,8 @@ export class LeaderboardService {
 
     // Execute aggregation query
     // Join: tasks -> sessions -> worktrees
-    const results = await this.db
+    // biome-ignore lint/suspicious/noExplicitAny: Complex multi-table join with dynamic grouping requires Drizzle type assertion
+    const results = await (this.db as any)
       .select(selectFields)
       .from(tasks)
       .innerJoin(sessions, eq(tasks.session_id, sessions.session_id))
@@ -208,7 +214,8 @@ export class LeaderboardService {
         ? sql`COUNT(DISTINCT ${sql.raw(distinctParts.join(" || '-' || "))})`
         : sql`COUNT(*)`;
 
-    const countResult = await this.db
+    // biome-ignore lint/suspicious/noExplicitAny: Complex aggregation query with dynamic SELECT fields requires Drizzle type assertion
+    const countResult = await (this.db as any)
       .select({
         count: sql<number>`${distinctExpr}`,
       })
@@ -219,18 +226,32 @@ export class LeaderboardService {
 
     const total = countResult[0]?.count || 0;
 
+    // Define result row type based on selected fields
+    interface ResultRow {
+      userId?: string;
+      worktreeId?: string;
+      worktreeName?: string;
+      repoId?: string;
+      totalTokens: number;
+      totalCost: number;
+      taskCount: number;
+    }
+
     // Transform results to match our interface
-    const data: LeaderboardEntry[] = results.map((row) => ({
-      ...(includeUser && { userId: row.userId as string }),
-      ...(includeWorktree && {
-        worktreeId: row.worktreeId as string,
-        worktreeName: row.worktreeName as string,
-      }),
-      ...(includeRepo && { repoId: row.repoId as string }),
-      totalTokens: (row.totalTokens as number) || 0,
-      totalCost: (row.totalCost as number) || 0,
-      taskCount: (row.taskCount as number) || 0,
-    }));
+    const data: LeaderboardEntry[] = results.map((row: unknown) => {
+      const r = row as ResultRow;
+      return {
+        ...(includeUser && { userId: r.userId as string }),
+        ...(includeWorktree && {
+          worktreeId: r.worktreeId as string,
+          worktreeName: r.worktreeName as string,
+        }),
+        ...(includeRepo && { repoId: r.repoId as string }),
+        totalTokens: r.totalTokens || 0,
+        totalCost: r.totalCost || 0,
+        taskCount: r.taskCount || 0,
+      };
+    });
 
     return {
       data,

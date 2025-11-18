@@ -84,6 +84,10 @@ export type CodexStreamEvent =
       threadId?: string;
     }
   | {
+      type: 'stopped';
+      threadId?: string;
+    }
+  | {
       type: 'complete';
       content: Array<{
         type: string;
@@ -603,10 +607,21 @@ export class CodexPromptService {
         }
       }
 
-      // Use streaming API
-      const { events } = await thread.runStreamed(prompt);
+      // Clear any stale stop flag from previous executions
+      // This prevents a stop request meant for a previous prompt from affecting this one
+      if (this.stopRequested.has(sessionId)) {
+        console.log(
+          `⚠️  Clearing stale stop flag for session ${sessionId} before starting new prompt`
+        );
+        this.stopRequested.delete(sessionId);
+      }
 
-      let currentMessage: Array<{
+      // Use streaming API
+      console.log(`🎬 [Codex] Starting runStreamed() for session ${sessionId.substring(0, 8)}`);
+      const { events } = await thread.runStreamed(prompt);
+      console.log(`✅ [Codex] runStreamed() returned, starting event iteration`);
+
+      const currentMessage: Array<{
         type: string;
         text?: string;
         id?: string;
@@ -620,11 +635,21 @@ export class CodexPromptService {
       const resolvedModel: string | undefined = session.model_config?.model || undefined;
       let allToolUses: Array<{ id: string; name: string; input: Record<string, unknown> }> = [];
 
+      let eventCount = 0;
+
       for await (const event of events) {
+        eventCount++;
+        console.log(`📨 [Codex] Event ${eventCount}: ${event.type}`);
+
         // Check if stop was requested
         if (this.stopRequested.get(sessionId)) {
           console.log(`🛑 Stop requested for session ${sessionId}, breaking event loop`);
           this.stopRequested.delete(sessionId);
+          // Yield stopped event so caller knows execution was stopped early
+          yield {
+            type: 'stopped',
+            threadId: thread.id || undefined,
+          };
           break;
         }
 
@@ -727,10 +752,9 @@ export class CodexPromptService {
               rawSdkEvent: event, // Pass through the actual SDK event (UNMUTATED)
             };
 
-            // Reset for next message
-            currentMessage = [];
-            allToolUses = [];
-            break;
+            // Exit the event loop after turn completion
+            // Codex SDK doesn't always close the stream properly, so we break manually
+            return;
           }
 
           case 'turn.failed': {

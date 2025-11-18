@@ -1,6 +1,75 @@
+# Agor Development Environment
+#
+# This Docker Compose setup supports:
+# - Multiple worktrees running simultaneously (via -p flag)
+# - Both SQLite (default) and PostgreSQL databases
+# - Isolated environments per worktree (separate volumes, ports, node_modules)
+#
+# ==============================================================================
+# Quick Start
+# ==============================================================================
+#
+# Single worktree (SQLite):
+#   docker compose up
+#
+# Multiple worktrees (recommended - see .agor.yml):
+#   docker compose -p agor-postgres-support up -d
+#   docker compose -p agor-main up -d
+#
+# PostgreSQL (optional - for multi-user or production-like setup):
+#   docker compose --profile postgres up
+#
+# Or set in .env file:
+#   COMPOSE_PROFILES=postgres
+#   docker compose up
+#
+# ==============================================================================
+# Multi-Worktree Isolation
+# ==============================================================================
+#
+# The -p (project name) flag creates completely isolated environments:
+# - Separate Docker image per worktree (image tag includes project name)
+# - Separate volumes (node_modules, database, config)
+# - Separate networks and containers
+# - Separate ports (using unique_id offset in .agor.yml)
+#
+# Dependencies are synced at container startup based on the mounted pnpm-lock.yaml,
+# so each worktree gets the exact dependencies it needs, even if branches differ.
+#
+# ==============================================================================
+# Database Modes
+# ==============================================================================
+#
+# 1. SQLite Mode (default):
+#    - No PostgreSQL container runs
+#    - Database stored in ~/.agor/agor.db (inside container volume)
+#    - Lightweight, perfect for single-user development
+#
+# 2. PostgreSQL Mode (with --profile postgres):
+#    - PostgreSQL container runs automatically
+#    - Database in postgres-data volume
+#    - Better for multi-user scenarios or testing production setup
+#    - Set DATABASE_URL or it auto-connects to postgres:5432
+#
+# ==============================================================================
+# Configuration
+# ==============================================================================
+#
+# Copy .env.example to .env and customize:
+#   cp .env.example .env
+#
+# Key environment variables:
+#   AGOR_DB_DIALECT      - 'sqlite' (default) or 'postgresql'
+#   DATABASE_URL         - Full PostgreSQL connection URL (when using PostgreSQL)
+#   POSTGRES_DB          - Database name (default: agor)
+#   POSTGRES_USER        - Database user (default: agor)
+#   POSTGRES_PASSWORD    - Database password (default: agor_dev_secret)
+#
+# ==============================================================================
+
 services:
   agor-dev:
-    image: agor-dev
+    image: ${COMPOSE_PROJECT_NAME:-agor}-agor-dev
     build:
       context: .
       dockerfile: docker/Dockerfile
@@ -22,6 +91,13 @@ services:
       # UI connects to daemon via localhost (inside container)
       - VITE_DAEMON_PORT=${DAEMON_PORT:-3030}
 
+      # Database configuration (SQLite by default, PostgreSQL with --profile postgres)
+      - AGOR_DB_DIALECT=${AGOR_DB_DIALECT:-sqlite}
+      # DATABASE_URL for PostgreSQL (only used when AGOR_DB_DIALECT=postgresql)
+      # Auto-connects to postgres container when profile is active
+      # Override in .env for custom connection string
+      - DATABASE_URL=${DATABASE_URL:-postgresql://${POSTGRES_USER:-agor}:${POSTGRES_PASSWORD:-agor_dev_secret}@postgres:5432/${POSTGRES_DB:-agor}}
+
       # Seed development fixtures (optional, set SEED=true to populate test data)
       # Creates: Agor repo (https://github.com/preset-io/agor.git) + test-worktree
       - SEED=${SEED:-false}
@@ -30,10 +106,16 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: false # Optional dependency - only needed when postgres profile is active
     volumes:
       # Mount entire repo for hot-reload (but exclude node_modules and build outputs)
       - .:/app
-      # Exclude all node_modules directories (use container's versions)
+      # Exclude all node_modules directories (use container's versions synced to pnpm-lock.yaml)
+      # These anonymous volumes are project-specific (due to -p flag), so each worktree
+      # gets its own node_modules that match its pnpm-lock.yaml (synced at startup)
       - /app/node_modules
       - /app/apps/agor-daemon/node_modules
       - /app/apps/agor-cli/node_modules
@@ -49,8 +131,43 @@ services:
     stdin_open: true
     tty: true
 
+  # PostgreSQL database (ONLY active with --profile postgres)
+  # Usage: docker-compose --profile postgres up
+  postgres:
+    profiles: ['postgres'] # Optional service - only runs when profile is specified
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-agor}
+      POSTGRES_USER: ${POSTGRES_USER:-agor}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agor_dev_secret}
+      # Performance tuning for development
+      POSTGRES_INITDB_ARGS: '-E UTF8 --locale=C'
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # Init script to grant permissions (runs only on first startup)
+      - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'pg_isready -U ${POSTGRES_USER:-agor} -d ${POSTGRES_DB:-agor} && psql -U ${POSTGRES_USER:-agor} -d ${POSTGRES_DB:-agor} -tAc "SELECT 1 FROM information_schema.schemata WHERE schema_name=''drizzle''" | grep -q 1',
+        ]
+      interval: 2s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+    restart: unless-stopped
+
 volumes:
-  # Named volume - unique per docker-compose project
-  # Use -p flag to create separate volumes per worktree
-  # Persists: database, config, agent auth tokens, caches, etc.
+  # Named volume - unique per docker-compose project (via -p flag)
+  # Each worktree gets its own isolated volume for:
+  # - Database (~/.agor/agor.db)
+  # - Config (~/.agor/config.yaml)
+  # - Agent auth tokens
+  # - Caches, etc.
   agor-home:
+
+  # PostgreSQL data (only created when postgres profile is active)
+  postgres-data:

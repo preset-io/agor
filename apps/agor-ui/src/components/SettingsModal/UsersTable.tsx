@@ -165,17 +165,23 @@ export const UsersTable: React.FC<UsersTableProps> = ({
   };
 
   const handleCreate = () => {
-    form.validateFields().then((values) => {
-      onCreate?.({
-        email: values.email,
-        password: values.password,
-        name: values.name,
-        emoji: values.emoji || '👤',
-        role: values.role || 'member',
+    form
+      .validateFields()
+      .then((values) => {
+        onCreate?.({
+          email: values.email,
+          password: values.password,
+          name: values.name,
+          emoji: values.emoji || '👤',
+          role: values.role || 'member',
+        });
+        form.resetFields();
+        setCreateModalOpen(false);
+      })
+      .catch((error) => {
+        // Form validation failed - Ant Design will show field errors automatically
+        console.log('Form validation failed:', error);
       });
-      form.resetFields();
-      setCreateModalOpen(false);
-    });
   };
 
   const handleUpdate = () => {

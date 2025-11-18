@@ -31,11 +31,19 @@ const TEST_DB_PATH = 'file:/tmp/agor-test.db';
 async function cleanup() {
   const db = createDatabase({ url: TEST_DB_PATH });
   const { sql } = await import('drizzle-orm');
+  const { isSQLiteDatabase } = await import('../database-wrapper');
 
-  await db.run(sql`DROP TABLE IF EXISTS tasks`);
-  await db.run(sql`DROP TABLE IF EXISTS sessions`);
-  await db.run(sql`DROP TABLE IF EXISTS boards`);
-  await db.run(sql`DROP TABLE IF EXISTS repos`);
+  if (isSQLiteDatabase(db)) {
+    await db.run(sql`DROP TABLE IF EXISTS tasks`);
+    await db.run(sql`DROP TABLE IF EXISTS sessions`);
+    await db.run(sql`DROP TABLE IF EXISTS boards`);
+    await db.run(sql`DROP TABLE IF EXISTS repos`);
+  } else {
+    await db.execute(sql`DROP TABLE IF EXISTS tasks`);
+    await db.execute(sql`DROP TABLE IF EXISTS sessions`);
+    await db.execute(sql`DROP TABLE IF EXISTS boards`);
+    await db.execute(sql`DROP TABLE IF EXISTS repos`);
+  }
 }
 
 async function testIdGeneration() {

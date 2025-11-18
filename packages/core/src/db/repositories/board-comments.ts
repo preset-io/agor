@@ -9,6 +9,7 @@ import type { BoardComment, CommentID, UUID } from '@agor/core/types';
 import { and, eq, isNull, like } from 'drizzle-orm';
 import { formatShortId, generateId } from '../../lib/ids';
 import type { Database } from '../client';
+import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { type BoardCommentInsert, type BoardCommentRow, boardComments } from '../schema';
 import {
   AmbiguousIdError,
@@ -116,8 +117,7 @@ export class BoardCommentsRepository
     const normalized = id.replace(/-/g, '').toLowerCase();
     const pattern = `${normalized}%`;
 
-    const results = await this.db
-      .select({ comment_id: boardComments.comment_id })
+    const results = await select(this.db)
       .from(boardComments)
       .where(like(boardComments.comment_id, pattern))
       .all();
@@ -130,7 +130,7 @@ export class BoardCommentsRepository
       throw new AmbiguousIdError(
         'BoardComment',
         id,
-        results.map((r) => formatShortId(r.comment_id as UUID))
+        results.map((r: { comment_id: string }) => formatShortId(r.comment_id as UUID))
       );
     }
 
@@ -142,14 +142,13 @@ export class BoardCommentsRepository
    */
   async create(data: Partial<BoardComment>): Promise<BoardComment> {
     try {
-      const insert = this.commentToInsert(data);
-      await this.db.insert(boardComments).values(insert);
+      const insertData = this.commentToInsert(data);
+      await insert(this.db, boardComments).values(insertData).run();
 
-      const row = await this.db
-        .select()
+      const row = await select(this.db)
         .from(boardComments)
-        .where(eq(boardComments.comment_id, insert.comment_id))
-        .get();
+        .where(eq(boardComments.comment_id, insertData.comment_id))
+        .one();
 
       if (!row) {
         throw new RepositoryError('Failed to retrieve created comment');
@@ -171,11 +170,10 @@ export class BoardCommentsRepository
   async findById(id: string): Promise<BoardComment | null> {
     try {
       const fullId = await this.resolveId(id);
-      const row = await this.db
-        .select()
+      const row = await select(this.db)
         .from(boardComments)
         .where(eq(boardComments.comment_id, fullId))
-        .get();
+        .one();
 
       return row ? this.rowToComment(row) : null;
     } catch (error) {
@@ -201,7 +199,7 @@ export class BoardCommentsRepository
     created_by?: string;
   }): Promise<BoardComment[]> {
     try {
-      let query = this.db.select().from(boardComments);
+      let query = select(this.db).from(boardComments);
 
       // Apply filters
       const conditions = [];
@@ -248,7 +246,7 @@ export class BoardCommentsRepository
       }
 
       const rows = await query.all();
-      return rows.map((row) => this.rowToComment(row));
+      return rows.map((row: BoardCommentRow) => this.rowToComment(row));
     } catch (error) {
       throw new RepositoryError(
         `Failed to find comments: ${error instanceof Error ? error.message : String(error)}`,
@@ -282,25 +280,25 @@ export class BoardCommentsRepository
         merged.edited = true;
       }
 
-      const insert = this.commentToInsert(merged);
+      const insertData = this.commentToInsert(merged);
 
-      await this.db
-        .update(boardComments)
+      await update(this.db, boardComments)
         .set({
-          content: insert.content,
-          content_preview: insert.content_preview,
-          session_id: insert.session_id,
-          task_id: insert.task_id,
-          message_id: insert.message_id,
-          worktree_id: insert.worktree_id,
-          parent_comment_id: insert.parent_comment_id,
-          resolved: insert.resolved,
-          edited: insert.edited,
-          reactions: insert.reactions,
+          content: insertData.content,
+          content_preview: insertData.content_preview,
+          session_id: insertData.session_id,
+          task_id: insertData.task_id,
+          message_id: insertData.message_id,
+          worktree_id: insertData.worktree_id,
+          parent_comment_id: insertData.parent_comment_id,
+          resolved: insertData.resolved,
+          edited: insertData.edited,
+          reactions: insertData.reactions,
           updated_at: new Date(),
-          data: insert.data,
+          data: insertData.data,
         })
-        .where(eq(boardComments.comment_id, fullId));
+        .where(eq(boardComments.comment_id, fullId))
+        .run();
 
       const updated = await this.findById(fullId);
       if (!updated) {
@@ -327,11 +325,12 @@ export class BoardCommentsRepository
       const fullId = await this.resolveId(id);
 
       // First, delete all replies (if this is a thread root)
-      await this.db.delete(boardComments).where(eq(boardComments.parent_comment_id, fullId)).run();
+      await deleteFrom(this.db, boardComments)
+        .where(eq(boardComments.parent_comment_id, fullId))
+        .run();
 
       // Then delete the comment itself
-      const result = await this.db
-        .delete(boardComments)
+      const result = await deleteFrom(this.db, boardComments)
         .where(eq(boardComments.comment_id, fullId))
         .run();
 
@@ -405,12 +404,11 @@ export class BoardCommentsRepository
       const inserts = comments.map((comment) => this.commentToInsert(comment));
 
       // Batch insert
-      await this.db.insert(boardComments).values(inserts);
+      await insert(this.db, boardComments).values(inserts).run();
 
       // Fetch all created comments
-      const commentIds = inserts.map((insert) => insert.comment_id);
-      const rows = await this.db
-        .select()
+      const commentIds = inserts.map((insertItem) => insertItem.comment_id);
+      const rows = await select(this.db)
         .from(boardComments)
         .where(
           eq(
@@ -420,7 +418,7 @@ export class BoardCommentsRepository
         )
         .all();
 
-      return rows.map((row) => this.rowToComment(row));
+      return rows.map((row: BoardCommentRow) => this.rowToComment(row));
     } catch (error) {
       throw new RepositoryError(
         `Failed to bulk create comments: ${error instanceof Error ? error.message : String(error)}`,

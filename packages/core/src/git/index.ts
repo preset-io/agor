@@ -318,6 +318,19 @@ export async function createWorktree(
   sourceBranch?: string,
   env?: Record<string, string>
 ): Promise<void> {
+  console.log('🔍 createWorktree called with:', {
+    repoPath,
+    worktreePath,
+    ref,
+    createBranch,
+    pullLatest,
+    sourceBranch,
+  });
+
+  if (!repoPath) {
+    throw new Error('repoPath is required but was null/undefined');
+  }
+
   const git = createGit(repoPath, env);
 
   let fetchSucceeded = false;
