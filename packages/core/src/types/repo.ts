@@ -24,11 +24,16 @@ export type RepoSlug = string;
 export type WorktreeName = string;
 
 /**
- * Git repository managed by Agor
+ * Git repository registered with Agor
  *
- * All repositories are cloned to ~/.agor/repos/{slug}
- * and managed by Agor for worktree creation and parallel development.
+ * Repositories can be:
+ * - remote: cloned into ~/.agor/repos/{slug} and managed by Agor
+ * - local: referencing a user-managed clone elsewhere on disk
+ *
+ * Both repository types support the same worktree operations.
  */
+export type RepoType = 'remote' | 'local';
+
 export interface Repo {
   /** Unique repository identifier (UUIDv7) */
   repo_id: UUID;
@@ -53,18 +58,27 @@ export interface Repo {
   name: string;
 
   /**
+   * Repository management type
+   *
+   * - 'remote': cloned and managed by Agor under ~/.agor/repos/{slug}
+   * - 'local': references an existing user-managed clone
+   */
+  repo_type: RepoType;
+
+  /**
    * Git remote URL
    *
    * Examples:
    * - "https://github.com/user/repo.git"
    * - "git@github.com:user/repo.git"
    */
-  remote_url: string;
+  remote_url?: string;
 
   /**
    * Local path to repository
    *
-   * Always: ~/.agor/repos/{slug}
+   * - Remote repos: ~/.agor/repos/{slug}
+   * - Local repos: user-provided absolute path
    */
   local_path: string;
 

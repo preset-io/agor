@@ -67,7 +67,11 @@ async function createTestSession(
   // Create repo first
   const repo = await repoRepo.create({
     slug: `test-repo-${uniqueId}`,
+    name: `Test Repo ${uniqueId}`,
+    repo_type: 'remote' as const,
     remote_url: 'https://github.com/test/repo.git',
+    local_path: `/tmp/test-repo-${uniqueId}`,
+    default_branch: 'main',
   });
 
   // Create worktree

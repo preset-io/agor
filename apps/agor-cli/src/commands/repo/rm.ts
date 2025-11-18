@@ -70,6 +70,7 @@ export default class RepoRm extends BaseCommand {
       this.log(chalk.bold.red('⚠ Repository to be removed:'));
       this.log(`  ${chalk.cyan('ID')}: ${repo.repo_id}`);
       this.log(`  ${chalk.cyan('Slug')}: ${repo.slug}`);
+      this.log(`  ${chalk.cyan('Type')}: ${repo.repo_type}`);
       this.log(`  ${chalk.cyan('Path')}: ${repo.local_path}`);
 
       // Note: Worktrees are now in a separate table, not nested in repo
@@ -77,10 +78,19 @@ export default class RepoRm extends BaseCommand {
       this.log('');
 
       if (flags['delete-files']) {
-        this.log(chalk.yellow('⚠ WARNING: Local files will also be deleted:'));
-        this.log(chalk.yellow(`  Main repo: ${repo.local_path}`));
-        this.log(chalk.yellow(`  Note: Any associated worktrees will also be deleted`));
-        this.log('');
+        if (repo.repo_type === 'local') {
+          this.log(
+            chalk.yellow(
+              '⚠ WARNING: --delete-files is ignored for local repositories to protect your working copy.'
+            )
+          );
+          this.log('');
+        } else {
+          this.log(chalk.yellow('⚠ WARNING: Local files will also be deleted:'));
+          this.log(chalk.yellow(`  Main repo: ${repo.local_path}`));
+          this.log(chalk.yellow(`  Note: Any associated worktrees will also be deleted`));
+          this.log('');
+        }
       } else {
         this.log(chalk.dim('(Local files will NOT be deleted)'));
         this.log('');
@@ -125,6 +135,15 @@ export default class RepoRm extends BaseCommand {
       }
 
       // Delete files if confirmed
+      if (deleteFiles && repo.repo_type === 'local') {
+        this.log(
+          chalk.yellow(
+            'Skipping filesystem deletion for local repository to avoid removing your original clone.'
+          )
+        );
+        deleteFiles = false;
+      }
+
       if (deleteFiles) {
         // Import fs dynamically
         const fs = await import('node:fs/promises');

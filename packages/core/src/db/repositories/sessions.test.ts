@@ -51,8 +51,11 @@ async function createTestWorktree(db: any, overrides?: { worktree_id?: UUID; rep
   const repo = await repoRepo.create({
     repo_id: overrides?.repo_id ?? generateId(),
     slug: `test-repo-${Date.now()}`,
+    name: 'Test Repo',
+    repo_type: 'remote' as const,
     remote_url: 'https://github.com/test/repo.git',
     local_path: '/tmp/test-repo',
+    default_branch: 'main',
   });
 
   // Create worktree

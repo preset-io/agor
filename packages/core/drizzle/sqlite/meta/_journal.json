@@ -64,6 +64,13 @@
       "when": 1762817237696,
       "tag": "0010_add_archive_columns",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1763450776445,
+      "tag": "0011_curious_felicia_hardy",
+      "breakpoints": true
     }
   ]
 }

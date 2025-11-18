@@ -320,13 +320,16 @@ export const repos = sqliteTable(
 
     // Materialized for querying
     slug: text('slug').notNull().unique(),
+    repo_type: text('repo_type', { enum: ['remote', 'local'] })
+      .notNull()
+      .default('remote'),
 
     data: t
       .json<unknown>('data')
       .$type<{
         name: string;
-        remote_url: string; // Required: all repos are cloned from a remote
-        local_path: string; // Always ~/.agor/repos/{slug}
+        remote_url?: string;
+        local_path: string; // Absolute path to base repository
         default_branch?: string;
         environment_config?: {
           up_command: string; // Handlebars template

@@ -237,6 +237,7 @@ async function testRepoRepository(db: ReturnType<typeof createDatabase>) {
   const repoData = await repo.create({
     slug: 'test-repo',
     name: 'Test Repository',
+    repo_type: 'remote',
     remote_url: 'https://github.com/test/test-repo.git',
     local_path: '/Users/test/.agor/repos/test-repo',
     default_branch: 'main',

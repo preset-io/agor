@@ -108,6 +108,7 @@ export async function seedDevFixtures(options: SeedOptions = {}): Promise<SeedRe
   const repo = await repoRepo.create({
     slug: repoSlug,
     name: 'Agor',
+    repo_type: 'remote',
     remote_url: remoteUrl,
     local_path: repoPath,
     default_branch: defaultBranch,

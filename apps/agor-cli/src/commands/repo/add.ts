@@ -10,12 +10,20 @@ import chalk from 'chalk';
 import { BaseCommand } from '../../base-command';
 
 export default class RepoAdd extends BaseCommand {
-  static description = 'Clone and register a Git repository';
+  static description = 'Clone a remote git repository and register it with Agor';
 
   static examples = [
+    '# Clone from GitHub (SSH)',
     '<%= config.bin %> <%= command.id %> git@github.com:apache/superset.git',
+    '',
+    '# Clone from GitHub (HTTPS)',
     '<%= config.bin %> <%= command.id %> https://github.com/facebook/react.git',
+    '',
+    '# Custom slug',
     '<%= config.bin %> <%= command.id %> https://github.com/apache/superset.git --slug my-org/custom-name',
+    '',
+    '# Already have the repo locally?',
+    '<%= config.bin %> repo add-local ~/code/myapp',
   ];
 
   static args = {
@@ -79,6 +87,7 @@ export default class RepoAdd extends BaseCommand {
       const repo = await client.service('repos').clone({
         url: args.url,
         name: slug,
+        slug,
       });
 
       this.log(`${chalk.green('✓')} Repository cloned and registered`);

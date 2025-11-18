@@ -24,6 +24,7 @@ function createRepoData(overrides?: { repo_id?: UUID; slug?: string }) {
     repo_id: overrides?.repo_id ?? generateId(),
     slug,
     name: slug,
+    repo_type: 'remote' as const,
     remote_url: 'https://github.com/test/repo.git',
     local_path: `/home/user/.agor/repos/${slug}`,
     default_branch: 'main',

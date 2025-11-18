@@ -31,6 +31,7 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
     return {
       repo_id: row.repo_id as UUID,
       slug: row.slug,
+      repo_type: (row.repo_type as Repo['repo_type']) ?? 'remote',
       created_at: new Date(row.created_at).toISOString(),
       last_updated: row.updated_at
         ? new Date(row.updated_at).toISOString()
@@ -50,8 +51,16 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
       throw new RepositoryError('slug is required when creating a repo');
     }
 
-    if (!repo.remote_url) {
-      throw new RepositoryError('Repo must have a remote_url');
+    if (!repo.repo_type) {
+      throw new RepositoryError('repo_type is required when creating a repo');
+    }
+
+    if (!repo.local_path) {
+      throw new RepositoryError('Repo must have a local_path');
+    }
+
+    if (repo.repo_type === 'remote' && !repo.remote_url) {
+      throw new RepositoryError('Remote repos must have a remote_url');
     }
 
     return {
@@ -59,10 +68,11 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
       slug: repo.slug,
       created_at: new Date(repo.created_at ?? now),
       updated_at: repo.last_updated ? new Date(repo.last_updated) : new Date(now),
+      repo_type: repo.repo_type,
       data: {
         name: repo.name ?? repo.slug,
-        remote_url: repo.remote_url,
-        local_path: repo.local_path ?? '',
+        remote_url: repo.remote_url || undefined,
+        local_path: repo.local_path,
         default_branch: repo.default_branch,
         environment_config: repo.environment_config,
       },
@@ -221,6 +231,7 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
           .set({
             slug: insertData.slug,
             updated_at: new Date(),
+            repo_type: insertData.repo_type,
             data: insertData.data,
           })
           .where(eq(repos.repo_id, fullId))

@@ -83,8 +83,9 @@ export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersP
  * Repos service with custom methods (server-side implementation)
  */
 export interface ReposServiceImpl extends Service<Repo, Partial<Repo>, FeathersParams> {
+  addLocalRepository(data: { path: string; slug?: string }, params?: FeathersParams): Promise<Repo>;
   cloneRepository(
-    data: { url: string; name?: string; destination?: string },
+    data: { url: string; name?: string; slug?: string; destination?: string },
     params?: FeathersParams
   ): Promise<Repo>;
   createWorktree(

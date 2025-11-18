@@ -5,18 +5,34 @@
  * Uses DrizzleService adapter with RepoRepository.
  */
 
+import { homedir } from 'node:os';
 import path from 'node:path';
-import { parseAgorYml, resolveUserEnvironment, writeAgorYml } from '@agor/core/config';
+import {
+  extractSlugFromUrl,
+  isValidGitUrl,
+  isValidSlug,
+  parseAgorYml,
+  resolveUserEnvironment,
+  writeAgorYml,
+} from '@agor/core/config';
 import { type Database, RepoRepository } from '@agor/core/db';
 import { autoAssignWorktreeUniqueId } from '@agor/core/environment/variable-resolver';
 import type { Application } from '@agor/core/feathers';
-import { cloneRepo, getWorktreePath, createWorktree as gitCreateWorktree } from '@agor/core/git';
+import {
+  cloneRepo,
+  getDefaultBranch,
+  getRemoteUrl,
+  getWorktreePath,
+  createWorktree as gitCreateWorktree,
+  isValidGitRepo,
+} from '@agor/core/git';
 import { renderTemplate } from '@agor/core/templates/handlebars-helpers';
 import type {
   AuthenticatedParams,
   QueryParams,
   Repo,
   RepoEnvironmentConfig,
+  RepoSlug,
   UserID,
   Worktree,
 } from '@agor/core/types';
@@ -29,6 +45,28 @@ export type RepoParams = QueryParams<{
   slug?: string;
   managed_by_agor?: boolean;
 }>;
+
+async function deriveLocalRepoSlug(path: string, explicitSlug?: string): Promise<RepoSlug> {
+  if (explicitSlug) {
+    if (!isValidSlug(explicitSlug)) {
+      throw new Error(`Invalid slug format: ${explicitSlug}`);
+    }
+    return explicitSlug as RepoSlug;
+  }
+
+  const remoteUrl = await getRemoteUrl(path);
+  if (remoteUrl && isValidGitUrl(remoteUrl)) {
+    try {
+      return extractSlugFromUrl(remoteUrl);
+    } catch {
+      // fall through to error below
+    }
+  }
+
+  throw new Error(
+    `Could not auto-detect slug for local repository at ${path}.\nUse --slug to provide one explicitly`
+  );
+}
 
 /**
  * Extended repos service with custom methods
@@ -64,11 +102,19 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
   /**
    * Custom method: Clone repository
    */
-  async cloneRepository(data: { url: string; slug: string }, params?: RepoParams): Promise<Repo> {
+  async cloneRepository(
+    data: { url: string; slug?: string; name?: string },
+    params?: RepoParams
+  ): Promise<Repo> {
+    const slug = data.slug ?? data.name;
+    if (!slug) {
+      throw new Error('Slug is required to clone a repository');
+    }
+
     // Check if repo with this slug already exists in database
-    const existing = await this.repoRepo.findBySlug(data.slug);
+    const existing = await this.repoRepo.findBySlug(slug);
     if (existing) {
-      throw new Error(`Repository '${data.slug}' already exists in database`);
+      throw new Error(`Repository '${slug}' already exists in database`);
     }
 
     let userEnv: Record<string, string> | undefined;
@@ -90,11 +136,11 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     try {
       environmentConfig = parseAgorYml(agorYmlPath);
       if (environmentConfig) {
-        console.log(`✅ Loaded environment config from .agor.yml for ${data.slug}`);
+        console.log(`✅ Loaded environment config from .agor.yml for ${slug}`);
       }
     } catch (error) {
       console.warn(
-        `⚠️  Failed to parse .agor.yml for ${data.slug}:`,
+        `⚠️  Failed to parse .agor.yml for ${slug}:`,
         error instanceof Error ? error.message : String(error)
       );
     }
@@ -102,12 +148,90 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // Create database record
     return this.create(
       {
-        slug: data.slug,
-        name: result.repoName,
+        repo_type: 'remote',
+        slug,
+        name: data.name ?? result.repoName ?? slug,
         remote_url: data.url,
         local_path: result.path,
         default_branch: result.defaultBranch,
         environment_config: environmentConfig || undefined,
+      },
+      params
+    ) as Promise<Repo>;
+  }
+
+  /**
+   * Custom method: Register an existing local repository
+   */
+  async addLocalRepository(
+    data: { path: string; slug?: string },
+    params?: RepoParams
+  ): Promise<Repo> {
+    if (!data.path) {
+      throw new Error('Path is required to add a local repository');
+    }
+
+    let inputPath = data.path.trim();
+    if (!inputPath) {
+      throw new Error('Path is required to add a local repository');
+    }
+
+    // Expand leading ~ to user's home directory
+    if (inputPath.startsWith('~')) {
+      const homeDir = homedir();
+      inputPath = path.join(homeDir, inputPath.slice(1).replace(/^[/\\]?/, ''));
+    }
+
+    if (!path.isAbsolute(inputPath)) {
+      throw new Error(`Path must be absolute: ${inputPath}`);
+    }
+
+    const repoPath = path.resolve(inputPath);
+
+    const isValidRepo = await isValidGitRepo(repoPath);
+    if (!isValidRepo) {
+      throw new Error(`Not a valid git repository: ${repoPath}`);
+    }
+
+    const slug = await deriveLocalRepoSlug(repoPath, data.slug);
+
+    const existing = await this.repoRepo.findBySlug(slug);
+    if (existing) {
+      throw new Error(
+        `Repository '${slug}' already exists.\nUse a different slug with: --slug custom/name`
+      );
+    }
+
+    const defaultBranch = await getDefaultBranch(repoPath);
+
+    const agorYmlPath = path.join(repoPath, '.agor.yml');
+    let environmentConfig: RepoEnvironmentConfig | undefined;
+
+    try {
+      const parsed = parseAgorYml(agorYmlPath);
+      if (parsed) {
+        environmentConfig = parsed;
+        console.log(`✅ Loaded environment config from .agor.yml for ${slug}`);
+      }
+    } catch (error) {
+      console.warn(
+        `⚠️  Failed to parse .agor.yml for ${slug}:`,
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+
+    const remoteUrl = (await getRemoteUrl(repoPath)) ?? undefined;
+    const name = slug.split('/').pop() ?? slug;
+
+    return this.create(
+      {
+        repo_type: 'local',
+        slug,
+        name,
+        remote_url: remoteUrl,
+        local_path: repoPath,
+        default_branch: defaultBranch,
+        environment_config: environmentConfig,
       },
       params
     ) as Promise<Repo>;

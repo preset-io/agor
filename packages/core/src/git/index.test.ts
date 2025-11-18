@@ -26,6 +26,7 @@ import {
   hasRemoteBranch,
   isClean,
   isGitRepo,
+  isValidGitRepo,
   listWorktrees,
   pruneWorktrees,
   removeWorktree,
@@ -151,7 +152,7 @@ describe('getWorktreePath', () => {
   });
 });
 
-describe('isGitRepo', () => {
+describe('isValidGitRepo', () => {
   let tempDir: string;
 
   beforeEach(async () => {
@@ -164,15 +165,18 @@ describe('isGitRepo', () => {
 
   it('should return true for valid git repository', async () => {
     await createTestRepo(tempDir);
+    expect(await isValidGitRepo(tempDir)).toBe(true);
     expect(await isGitRepo(tempDir)).toBe(true);
   });
 
   it('should return false for non-git directory', async () => {
     await fs.mkdir(path.join(tempDir, 'not-a-repo'), { recursive: true });
+    expect(await isValidGitRepo(path.join(tempDir, 'not-a-repo'))).toBe(false);
     expect(await isGitRepo(path.join(tempDir, 'not-a-repo'))).toBe(false);
   });
 
   it('should return false for non-existent directory', async () => {
+    expect(await isValidGitRepo(path.join(tempDir, 'does-not-exist'))).toBe(false);
     expect(await isGitRepo(path.join(tempDir, 'does-not-exist'))).toBe(false);
   });
 
@@ -180,6 +184,7 @@ describe('isGitRepo', () => {
     await createBareRepo(tempDir);
     // Note: isGitRepo uses 'git status' which fails on bare repos
     // This is acceptable behavior - bare repos are edge case
+    expect(await isValidGitRepo(tempDir)).toBe(false);
     expect(await isGitRepo(tempDir)).toBe(false);
   });
 });
@@ -359,18 +364,24 @@ describe('getRemoteUrl', () => {
     expect(url).toBe(remoteDir);
   });
 
-  it('should return empty string for non-existent remote', async () => {
+  it('should return null for non-existent remote', async () => {
     await createTestRepo(tempDir);
     const url = await getRemoteUrl(tempDir, 'nonexistent');
 
-    expect(url).toBe('');
+    expect(url).toBeNull();
   });
 
-  it('should return empty string for repo with no remotes', async () => {
+  it('should return null for repo with no remotes', async () => {
     await createTestRepo(tempDir);
     const url = await getRemoteUrl(tempDir);
 
-    expect(url).toBe('');
+    expect(url).toBeNull();
+  });
+
+  it('should return null when repository path is invalid', async () => {
+    const url = await getRemoteUrl(path.join(tempDir, 'missing'));
+
+    expect(url).toBeNull();
   });
 });
 

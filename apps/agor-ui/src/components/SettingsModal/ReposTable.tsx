@@ -124,7 +124,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({ repos, onCreate, onUpdat
         }}
       >
         <Typography.Text type="secondary">
-          Clone and manage git repositories for your sessions.
+          Connect remote or local git repositories for your sessions.
         </Typography.Text>
         <Button type="primary" icon={<PlusOutlined />} onClick={handleOpenCreateModal}>
           New Repository
@@ -142,7 +142,8 @@ export const ReposTable: React.FC<ReposTableProps> = ({ repos, onCreate, onUpdat
         >
           <Empty description="No repositories yet">
             <Typography.Text type="secondary">
-              Click "New Repository" to clone a git repository.
+              Click "New Repository" to clone a remote repo, or run{' '}
+              <code>agor repo add-local &lt;path&gt;</code> to link an existing clone.
             </Typography.Text>
           </Empty>
         </div>
@@ -150,82 +151,102 @@ export const ReposTable: React.FC<ReposTableProps> = ({ repos, onCreate, onUpdat
 
       {repos.length > 0 && (
         <Space direction="vertical" size={16} style={{ width: '100%' }}>
-          {repos.map((repo) => (
-            <Card
-              key={repo.repo_id}
-              size="small"
-              title={
-                <Space>
-                  <FolderOutlined />
-                  <Typography.Text strong>{repo.name}</Typography.Text>
-                  <Tag color="blue" style={{ marginLeft: 8 }}>
-                    Managed
-                  </Tag>
-                </Space>
-              }
-              extra={
-                <Space>
-                  <Button
-                    type="text"
-                    size="small"
-                    icon={<EditOutlined />}
-                    onClick={() => handleOpenEditModal(repo)}
-                  />
-                  <Popconfirm
-                    title="Delete repository?"
-                    description={
-                      <>
-                        <p>Are you sure you want to delete "{repo.name}"?</p>
-                        <p style={{ color: '#ff4d4f' }}>
-                          ⚠️ This will delete the local repository and all associated worktrees.
-                        </p>
-                      </>
-                    }
-                    onConfirm={() => handleDeleteRepo(repo.repo_id)}
-                    okText="Delete"
-                    cancelText="Cancel"
-                    okButtonProps={{ danger: true }}
-                  >
-                    <Button type="text" size="small" icon={<DeleteOutlined />} danger />
-                  </Popconfirm>
-                </Space>
-              }
-            >
-              {/* Repo metadata */}
-              <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                <div>
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    Slug:{' '}
-                  </Typography.Text>
-                  <Typography.Text code style={{ fontSize: 12 }}>
-                    {repo.slug}
-                  </Typography.Text>
-                </div>
+          {repos.map((repo) => {
+            const isLocal = repo.repo_type === 'local';
+            const tagColor = isLocal ? 'green' : 'blue';
+            const tagLabel = isLocal ? 'Local' : 'Remote';
 
-                {repo.remote_url && (
+            return (
+              <Card
+                key={repo.repo_id}
+                size="small"
+                title={
+                  <Space>
+                    <FolderOutlined />
+                    <Typography.Text strong>{repo.name}</Typography.Text>
+                    <Tag color={tagColor} style={{ marginLeft: 8 }}>
+                      {tagLabel}
+                    </Tag>
+                  </Space>
+                }
+                extra={
+                  <Space>
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<EditOutlined />}
+                      onClick={() => handleOpenEditModal(repo)}
+                    />
+                    <Popconfirm
+                      title="Delete repository?"
+                      description={
+                        <>
+                          <p>Are you sure you want to delete "{repo.name}"?</p>
+                          {isLocal ? (
+                            <p style={{ color: '#ff4d4f' }}>
+                              ⚠️ This removes the repository from Agor. Your local files at{' '}
+                              <code>{repo.local_path}</code> will remain untouched.
+                            </p>
+                          ) : (
+                            <p style={{ color: '#ff4d4f' }}>
+                              ⚠️ This will delete the Agor-managed clone and associated worktrees.
+                            </p>
+                          )}
+                        </>
+                      }
+                      onConfirm={() => handleDeleteRepo(repo.repo_id)}
+                      okText="Delete"
+                      cancelText="Cancel"
+                      okButtonProps={{ danger: true }}
+                    >
+                      <Button type="text" size="small" icon={<DeleteOutlined />} danger />
+                    </Popconfirm>
+                  </Space>
+                }
+              >
+                {/* Repo metadata */}
+                <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                  <div>
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      Slug:{' '}
+                    </Typography.Text>
+                    <Typography.Text code style={{ fontSize: 12 }}>
+                      {repo.slug}
+                    </Typography.Text>
+                  </div>
+
+                  <div>
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      Type:{' '}
+                    </Typography.Text>
+                    <Typography.Text code style={{ fontSize: 11 }}>
+                      {tagLabel.toLowerCase()}
+                    </Typography.Text>
+                  </div>
+
                   <div>
                     <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                       Remote:{' '}
                     </Typography.Text>
                     <Typography.Text code style={{ fontSize: 11 }}>
-                      {repo.remote_url}
+                      {repo.remote_url ?? '—'}
                     </Typography.Text>
                   </div>
-                )}
 
-                {repo.local_path && (
-                  <div>
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      Path:{' '}
-                    </Typography.Text>
-                    <Typography.Text code style={{ fontSize: 11 }}>
-                      {repo.local_path}
-                    </Typography.Text>
-                  </div>
-                )}
-              </Space>
-            </Card>
-          ))}
+                  {repo.local_path && (
+                    <div>
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        Path:{' '}
+                      </Typography.Text>
+                      <Typography.Text code style={{ fontSize: 11 }}>
+                        {repo.local_path}
+                      </Typography.Text>
+                    </div>
+                  )}
+                </Space>
+              </Card>
+            );
+          })}
         </Space>
       )}
 

@@ -40,6 +40,7 @@ async function setupRepoAndWorktree(db: ReturnType<typeof createDatabase>) {
   const repo = await repoRepo.create({
     slug: 'test-repo',
     name: 'Test Repository',
+    repo_type: 'remote',
     remote_url: 'https://github.com/test/repo.git',
     local_path: '/Users/test/.agor/repos/test-repo',
     default_branch: 'main',
@@ -523,6 +524,7 @@ describe('Repo Repository Integration', () => {
     const created = await repo.create({
       slug: 'test-repo',
       name: 'Test Repository',
+      repo_type: 'remote',
       remote_url: 'https://github.com/test/test-repo.git',
       local_path: '/Users/test/.agor/repos/test-repo',
       default_branch: 'main',
@@ -541,6 +543,7 @@ describe('Repo Repository Integration', () => {
     const created = await repo.create({
       slug: 'my-repo',
       name: 'My Repository',
+      repo_type: 'remote',
       remote_url: 'https://github.com/test/repo.git',
       local_path: '/test/path',
       default_branch: 'main',
@@ -561,6 +564,7 @@ describe('Repo Repository Integration', () => {
     const github = await repo.create({
       slug: 'github-repo',
       name: 'GitHub Repo',
+      repo_type: 'remote',
       remote_url: 'https://github.com/user/repo.git',
       local_path: '/path',
       default_branch: 'main',
@@ -569,6 +573,7 @@ describe('Repo Repository Integration', () => {
     const gitlab = await repo.create({
       slug: 'gitlab-repo',
       name: 'GitLab Repo',
+      repo_type: 'remote',
       remote_url: 'https://gitlab.com/user/repo.git',
       local_path: '/path2',
       default_branch: 'main',

@@ -1,0 +1,1 @@
+ALTER TABLE "repos" ADD COLUMN "repo_type" text DEFAULT 'remote' NOT NULL;

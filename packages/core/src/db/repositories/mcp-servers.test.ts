@@ -225,8 +225,11 @@ describe('MCPServerRepository.create', () => {
     // Create actual repo first (FK constraint)
     const testRepo = await repoRepo.create({
       slug: 'test-repo',
+      name: 'Test Repo',
+      repo_type: 'remote' as const,
       remote_url: 'https://github.com/test/repo.git',
       local_path: '/tmp/test',
+      default_branch: 'main',
     });
 
     const data = createMCPServerData({
@@ -256,8 +259,11 @@ describe('MCPServerRepository.create', () => {
     const repoRepo = new RepoRepository(db);
     const testRepo = await repoRepo.create({
       slug: 'test-session-repo',
+      name: 'Test Session Repo',
+      repo_type: 'remote' as const,
       remote_url: 'https://github.com/test/repo.git',
       local_path: '/tmp/test',
+      default_branch: 'main',
     });
 
     const worktreeRepo = new WorktreeRepository(db);
@@ -519,13 +525,19 @@ describe('MCPServerRepository.findAll', () => {
     // Create actual repos first (FK constraint)
     const testRepo1 = await repoRepo.create({
       slug: 'test-repo-1',
+      name: 'Test Repo 1',
+      repo_type: 'remote' as const,
       remote_url: 'https://github.com/test/repo1.git',
       local_path: '/tmp/test1',
+      default_branch: 'main',
     });
     const testRepo2 = await repoRepo.create({
       slug: 'test-repo-2',
+      name: 'Test Repo 2',
+      repo_type: 'remote' as const,
       remote_url: 'https://github.com/test/repo2.git',
       local_path: '/tmp/test2',
+      default_branch: 'main',
     });
 
     await mcpRepo.create(
@@ -552,8 +564,11 @@ describe('MCPServerRepository.findAll', () => {
     const repoRepo = new RepoRepository(db);
     const testRepo = await repoRepo.create({
       slug: 'test-session-scope-repo',
+      name: 'Test Session Scope Repo',
+      repo_type: 'remote' as const,
       remote_url: 'https://github.com/test/repo.git',
       local_path: '/tmp/test',
+      default_branch: 'main',
     });
 
     const worktreeRepo = new WorktreeRepository(db);

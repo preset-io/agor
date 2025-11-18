@@ -56,8 +56,11 @@ async function createSessionWithDeps(db: Database): Promise<UUID> {
   const repo = await repoRepo.create({
     repo_id: generateId(),
     slug: `test-repo-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    name: 'Test Repo',
+    repo_type: 'remote' as const,
     remote_url: 'https://github.com/test/repo.git',
     local_path: '/tmp/test',
+    default_branch: 'main',
   });
 
   // Create worktree

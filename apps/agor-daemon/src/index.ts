@@ -2681,6 +2681,12 @@ async function main() {
 
   // Configure custom methods for repos service
   const reposService = app.service('repos') as unknown as ReposServiceImpl;
+  app.use('/repos/local', {
+    async create(data: { path: string; slug?: string }, params: RouteParams) {
+      ensureMinimumRole(params, 'member', 'add local repositories');
+      return reposService.addLocalRepository(data, params);
+    },
+  });
   app.use('/repos/clone', {
     async create(data: { url: string; name?: string; destination?: string }, params: RouteParams) {
       ensureMinimumRole(params, 'member', 'clone repositories');

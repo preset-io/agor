@@ -97,14 +97,9 @@ export default class SessionLoadClaude extends BaseCommand {
 
       // Create repo if it doesn't exist
       if (!repo) {
-        const newRepo = (await reposService.create({
-          repo_id: generateId() as UUID,
+        const newRepo = (await client.service('repos/local').create({
+          path: absoluteProjectDir,
           slug: `imported-${projectName}`,
-          name: projectName,
-          remote_url: '', // No remote for imported sessions
-          local_path: absoluteProjectDir,
-          created_at: new Date().toISOString(),
-          last_updated: new Date().toISOString(),
         })) as Repo;
         repo = { repo_id: newRepo.repo_id, slug: newRepo.slug };
         this.log(`${chalk.green('✓')} Created repo: ${chalk.cyan(repo.slug)}`);

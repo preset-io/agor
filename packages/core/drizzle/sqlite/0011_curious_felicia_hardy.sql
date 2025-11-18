@@ -1,0 +1,1 @@
+ALTER TABLE `repos` ADD `repo_type` text DEFAULT 'remote' NOT NULL;

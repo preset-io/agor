@@ -18,6 +18,7 @@ function createRepoData(overrides?: {
   repo_id?: UUID;
   slug?: string;
   name?: string;
+  repo_type?: 'remote' | 'local';
   remote_url?: string;
   local_path?: string;
   default_branch?: string;
@@ -27,6 +28,7 @@ function createRepoData(overrides?: {
     repo_id: overrides?.repo_id ?? generateId(),
     slug,
     name: overrides?.name ?? slug,
+    repo_type: overrides?.repo_type ?? 'remote',
     remote_url: overrides?.remote_url ?? 'https://github.com/test/repo.git',
     local_path: overrides?.local_path ?? `/home/user/.agor/repos/${slug}`,
     default_branch: overrides?.default_branch ?? 'main',
@@ -47,6 +49,7 @@ describe('RepoRepository.create', () => {
     expect(created.repo_id).toBe(data.repo_id);
     expect(created.slug).toBe(data.slug);
     expect(created.name).toBe(data.name);
+    expect(created.repo_type).toBe('remote');
     expect(created.remote_url).toBe(data.remote_url);
     expect(created.local_path).toBe(data.local_path);
     expect(created.default_branch).toBe(data.default_branch);
@@ -92,7 +95,38 @@ describe('RepoRepository.create', () => {
     delete (data as any).remote_url;
 
     await expect(repo.create(data)).rejects.toThrow(RepositoryError);
-    await expect(repo.create(data)).rejects.toThrow('must have a remote_url');
+    await expect(repo.create(data)).rejects.toThrow('Remote repos must have a remote_url');
+  });
+
+  dbTest('should allow local repo without remote_url', async ({ db }) => {
+    const repo = new RepoRepository(db);
+    const data = createRepoData({
+      repo_type: 'local',
+    });
+    delete (data as any).remote_url;
+
+    const created = await repo.create(data);
+
+    expect(created.repo_type).toBe('local');
+    expect(created.remote_url).toBeUndefined();
+  });
+
+  dbTest('should throw error if repo_type is missing', async ({ db }) => {
+    const repo = new RepoRepository(db);
+    const data = createRepoData();
+    delete (data as any).repo_type;
+
+    await expect(repo.create(data)).rejects.toThrow(RepositoryError);
+    await expect(repo.create(data)).rejects.toThrow('repo_type is required when creating a repo');
+  });
+
+  dbTest('should throw error if local_path is missing', async ({ db }) => {
+    const repo = new RepoRepository(db);
+    const data = createRepoData();
+    delete (data as any).local_path;
+
+    await expect(repo.create(data)).rejects.toThrow(RepositoryError);
+    await expect(repo.create(data)).rejects.toThrow('Repo must have a local_path');
   });
 
   dbTest('should handle environment_config', async ({ db }) => {
@@ -342,6 +376,7 @@ describe('RepoRepository.findAll', () => {
     expect(found.repo_id).toBe(data.repo_id);
     expect(found.slug).toBe(data.slug);
     expect(found.name).toBe(data.name);
+    expect(found.repo_type).toBe('remote');
     expect(found.remote_url).toBe(data.remote_url);
     expect(found.created_at).toBeDefined();
     expect(found.last_updated).toBeDefined();
@@ -380,6 +415,7 @@ describe('RepoRepository.update', () => {
     expect(updated.name).toBe('Updated Name');
     expect(updated.repo_id).toBe(data.repo_id);
     expect(updated.slug).toBe(data.slug); // Unchanged
+    expect(updated.repo_type).toBe('remote');
   });
 
   dbTest('should update repo by short ID', async ({ db }) => {
@@ -392,6 +428,7 @@ describe('RepoRepository.update', () => {
 
     expect(updated.default_branch).toBe('develop');
     expect(updated.repo_id).toBe(data.repo_id);
+    expect(updated.repo_type).toBe('remote');
   });
 
   dbTest('should update multiple fields', async ({ db }) => {
@@ -411,6 +448,21 @@ describe('RepoRepository.update', () => {
     expect(updated.name).toBe('Updated');
     expect(updated.default_branch).toBe('develop');
     expect(updated.local_path).toBe('/new/path');
+  });
+
+  dbTest('should update local repo without requiring remote_url', async ({ db }) => {
+    const repo = new RepoRepository(db);
+    const data = createRepoData({
+      repo_type: 'local',
+    });
+    delete (data as any).remote_url;
+    await repo.create(data);
+
+    const updated = await repo.update(data.repo_id, { name: 'Updated Local' });
+
+    expect(updated.name).toBe('Updated Local');
+    expect(updated.repo_type).toBe('local');
+    expect(updated.remote_url).toBeUndefined();
   });
 
   dbTest('should update environment_config', async ({ db }) => {
@@ -457,7 +509,9 @@ describe('RepoRepository.update', () => {
     const data = createRepoData();
     await repo.create(data);
 
-    await expect(repo.update(data.repo_id, { remote_url: '' })).rejects.toThrow(RepositoryError);
+    await expect(repo.update(data.repo_id, { remote_url: '' })).rejects.toThrow(
+      /Remote repos must have a remote_url/
+    );
   });
 
   dbTest('should preserve unchanged fields', async ({ db }) => {

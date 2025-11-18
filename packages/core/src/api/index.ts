@@ -37,6 +37,7 @@ export interface ServiceTypes {
   tasks: Task;
   boards: Board;
   repos: Repo;
+  'repos/local': Repo;
   worktrees: Worktree;
   users: User;
   'mcp-servers': MCPServer;
@@ -126,7 +127,7 @@ export interface ReposService extends AgorService<Repo> {
   /**
    * Clone a repository and register it
    */
-  clone(data: { url: string; name?: string }, params?: Params): Promise<Repo>;
+  clone(data: { url: string; name?: string; slug?: string }, params?: Params): Promise<Repo>;
 
   /**
    * Create a git worktree for a repository
@@ -147,6 +148,10 @@ export interface ReposService extends AgorService<Repo> {
    * Remove a git worktree
    */
   removeWorktree(id: string, name: string, params?: Params): Promise<Repo>;
+}
+
+export interface ReposLocalService extends AgorService<Repo> {
+  create(data: { path: string; slug?: string }, params?: Params): Promise<Repo>;
 }
 
 /**
@@ -236,6 +241,7 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   service(path: 'tasks'): TasksService;
   service(path: 'messages'): MessagesService;
   service(path: 'repos'): ReposService;
+  service(path: 'repos/local'): ReposLocalService;
   service(path: 'worktrees'): WorktreesService;
 
   // Bulk operation endpoints

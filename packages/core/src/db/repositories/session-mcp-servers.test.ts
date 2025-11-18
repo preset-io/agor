@@ -83,8 +83,11 @@ async function setupTestData(db: any) {
   const repo = await repoRepo.create({
     repo_id: generateId() as UUID,
     slug: `test-repo-${Date.now()}`,
+    name: 'Test Repo',
+    repo_type: 'remote' as const,
     remote_url: 'https://github.com/test/repo.git',
     local_path: '/tmp/test-repo',
+    default_branch: 'main',
   });
 
   // Create worktree
@@ -590,8 +593,11 @@ describe('SessionMCPServerRepository error handling', () => {
     const testRepo = await repoRepo.create({
       repo_id: generateId() as UUID,
       slug: `test-repo-${Date.now()}`,
+      name: 'Test Repo',
+      repo_type: 'remote' as const,
       remote_url: 'https://github.com/test/repo.git',
       local_path: '/tmp/test-repo',
+      default_branch: 'main',
     });
 
     const worktree = await worktreeRepo.create({
@@ -634,8 +640,11 @@ describe('SessionMCPServerRepository error handling', () => {
     const testRepo = await repoRepo.create({
       repo_id: generateId() as UUID,
       slug: `test-repo-${Date.now()}`,
+      name: 'Test Repo',
+      repo_type: 'remote' as const,
       remote_url: 'https://github.com/test/repo.git',
       local_path: '/tmp/test-repo',
+      default_branch: 'main',
     });
 
     const worktree = await worktreeRepo.create({

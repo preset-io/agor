@@ -19,6 +19,7 @@ const baseRepo: Repo = {
   repo_id: '0193d1e2-3f4a-7b5c-a8f3-9d2e1c4b5a6f',
   slug: 'myapp',
   name: 'My App',
+  repo_type: 'remote',
   remote_url: 'https://github.com/user/myapp',
   local_path: '/Users/user/.agor/repos/myapp',
   default_branch: 'main',

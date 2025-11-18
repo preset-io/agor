@@ -67,8 +67,10 @@ export async function seedDevFixtures(options: SeedOptions = {}): Promise<SeedRe
   const myRepo = await repoRepo.create({
     slug: 'my-project',
     name: 'My Project',
+    repo_type: 'remote',
     remote_url: 'https://github.com/me/my-project.git',
     local_path: path.join(baseDir, 'my-project'),
+    default_branch: 'main',
   });
 
   // Return custom result

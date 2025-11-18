@@ -61,7 +61,11 @@ export default class RepoList extends BaseCommand {
       if (!Array.isArray(repos) || repos.length === 0) {
         this.log(chalk.dim('No repositories found.'));
         this.log('');
-        this.log(`Add one with: ${chalk.cyan('agor repo add <git-url>')}`);
+        this.log(
+          `Add one with: ${chalk.cyan('agor repo add <git-url>')} or ${chalk.cyan(
+            'agor repo add-local <path>'
+          )}`
+        );
         this.log('');
         await this.cleanupClient(client);
         return;
@@ -72,6 +76,7 @@ export default class RepoList extends BaseCommand {
         head: [
           chalk.cyan('ID'),
           chalk.cyan('Slug'),
+          chalk.cyan('Type'),
           chalk.cyan('Remote URL'),
           chalk.cyan('Path'),
           chalk.cyan('Default Branch'),
@@ -80,7 +85,7 @@ export default class RepoList extends BaseCommand {
           head: [],
           border: ['dim'],
         },
-        colWidths: [10, 20, 45, 30, 15],
+        colWidths: [10, 22, 10, 38, 32, 15],
       });
 
       // Add rows
@@ -90,8 +95,9 @@ export default class RepoList extends BaseCommand {
         table.push([
           chalk.dim(shortId),
           repo.slug,
-          this.truncate(repo.remote_url || '(no remote)', 42),
-          chalk.dim(this.truncate(repo.local_path, 27)),
+          repo.repo_type,
+          this.truncate(repo.remote_url || '(no remote)', 35),
+          chalk.dim(this.truncate(repo.local_path, 30)),
           chalk.dim(repo.default_branch || '-'),
         ]);
       }
