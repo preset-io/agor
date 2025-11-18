@@ -20,7 +20,6 @@ import type {
 import { useCallback, useEffect, useState } from 'react';
 
 interface UseAgorDataResult {
-  sessions: Session[];
   sessionById: Map<string, Session>; // O(1) lookups by session_id - efficient, stable references
   sessionsByWorktree: Map<string, Session[]>; // O(1) worktree-scoped filtering
   tasks: Record<string, Task[]>;
@@ -44,7 +43,6 @@ interface UseAgorDataResult {
  * @returns Sessions, tasks (grouped by session), boards, loading state, and refetch function
  */
 export function useAgorData(client: AgorClient | null): UseAgorDataResult {
-  const [sessions, setSessions] = useState<Session[]>([]);
   const [sessionById, setSessionById] = useState<Map<string, Session>>(new Map());
   const [sessionsByWorktree, setSessionsByWorktree] = useState<Map<string, Session[]>>(new Map());
   const [tasks, setTasks] = useState<Record<string, Task[]>>({});
@@ -122,8 +120,6 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
         ? sessionMcpResult
         : sessionMcpResult.data;
 
-      setSessions(sessionsList);
-
       // Build session Maps for efficient lookups
       const sessionsById = new Map<string, Session>();
       const sessionsByWorktreeId = new Map<string, Session[]>();
@@ -200,8 +196,6 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
     // Subscribe to session events
     const sessionsService = client.service('sessions');
     const handleSessionCreated = (session: Session) => {
-      setSessions((prev) => [...prev, session]);
-
       // Update sessionById
       setSessionById((prev) => {
         const next = new Map(prev);
@@ -218,8 +212,6 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       });
     };
     const handleSessionPatched = (session: Session) => {
-      setSessions((prev) => prev.map((s) => (s.session_id === session.session_id ? session : s)));
-
       // Update sessionById - simple replace
       setSessionById((prev) => {
         const next = new Map(prev);
@@ -239,8 +231,6 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       });
     };
     const handleSessionRemoved = (session: Session) => {
-      setSessions((prev) => prev.filter((s) => s.session_id !== session.session_id));
-
       // Update sessionById
       setSessionById((prev) => {
         const next = new Map(prev);
@@ -513,7 +503,6 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
   }, [client, fetchData, hasInitiallyFetched]);
 
   return {
-    sessions,
     sessionById,
     sessionsByWorktree,
     tasks,

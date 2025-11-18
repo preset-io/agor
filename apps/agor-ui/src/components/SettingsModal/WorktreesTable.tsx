@@ -39,7 +39,6 @@ interface WorktreesTableProps {
   worktreeById: Map<string, Worktree>;
   repos: Repo[];
   boards: Board[];
-  sessions: Session[]; // Kept for backwards compat
   sessionsByWorktree: Map<string, Session[]>; // O(1) worktree filtering
   onArchiveOrDelete?: (
     worktreeId: string,
@@ -69,7 +68,6 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
   worktreeById,
   repos,
   boards,
-  sessions,
   sessionsByWorktree,
   onArchiveOrDelete,
   onUnarchive,

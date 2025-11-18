@@ -9,7 +9,6 @@ import { MobilePromptInput } from './MobilePromptInput';
 
 interface SessionPageProps {
   client: AgorClient | null;
-  sessions: Session[]; // Kept for backwards compat
   sessionById: Map<string, Session>; // O(1) ID lookups
   worktreeById: Map<string, Worktree>;
   repos: Repo[];
@@ -23,7 +22,6 @@ interface SessionPageProps {
 
 export const SessionPage: React.FC<SessionPageProps> = ({
   client,
-  sessions,
   sessionById,
   worktreeById,
   repos,

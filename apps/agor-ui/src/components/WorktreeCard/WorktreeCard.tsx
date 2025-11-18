@@ -52,7 +52,7 @@ if (typeof document !== 'undefined' && !document.getElementById('worktree-card-a
 interface WorktreeCardProps {
   worktree: Worktree;
   repo: Repo;
-  sessions: Session[];
+  sessions: Session[]; // Sessions for this specific worktree
   users: User[];
   currentUserId?: string;
   selectedSessionId?: string | null; // Currently open session in drawer

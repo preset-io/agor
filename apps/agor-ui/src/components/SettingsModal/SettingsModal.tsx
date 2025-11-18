@@ -33,7 +33,6 @@ export interface SettingsModalProps {
   boardObjects: BoardEntityObject[];
   repos: Repo[];
   worktreeById: Map<string, Worktree>;
-  sessions: Session[]; // Kept for backwards compat
   sessionById: Map<string, Session>; // O(1) ID lookups - efficient, stable references
   sessionsByWorktree: Map<string, Session[]>; // O(1) worktree filtering
   users: User[];
@@ -88,7 +87,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   boardObjects,
   repos,
   worktreeById,
-  sessions,
   sessionsByWorktree,
   users,
   mcpServers,
@@ -167,7 +165,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             children: (
               <BoardsTable
                 boards={boards}
-                sessions={sessions}
                 sessionsByWorktree={sessionsByWorktree}
                 worktreeById={worktreeById}
                 onCreate={onCreateBoard}
@@ -196,7 +193,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 worktreeById={worktreeById}
                 repos={repos}
                 boards={boards}
-                sessions={sessions}
                 sessionsByWorktree={sessionsByWorktree}
                 onArchiveOrDelete={onArchiveOrDeleteWorktree}
                 onUnarchive={onUnarchiveWorktree}

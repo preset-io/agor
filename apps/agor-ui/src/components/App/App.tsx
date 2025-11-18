@@ -47,7 +47,6 @@ export interface AppProps {
   user?: User | null;
   connected?: boolean;
   connecting?: boolean;
-  sessions: Session[];
   sessionById: Map<string, Session>; // O(1) lookups by session_id - efficient, stable references
   sessionsByWorktree: Map<string, Session[]>; // O(1) worktree-scoped filtering
   tasks: Record<string, Task[]>;
@@ -121,7 +120,6 @@ export const App: React.FC<AppProps> = ({
   user,
   connected = false,
   connecting = false,
-  sessions,
   sessionById,
   sessionsByWorktree,
   tasks,
@@ -413,11 +411,6 @@ export const App: React.FC<AppProps> = ({
     .map((bo) => worktreeById.get(bo.worktree_id))
     .filter((wt): wt is Worktree => wt !== undefined);
 
-  const boardWorktreeIds = boardWorktrees.map((wt) => wt.worktree_id);
-
-  // Filter sessions by current board's worktrees - use sessionsByWorktree for efficiency
-  const boardSessions = boardWorktreeIds.flatMap((wtId) => sessionsByWorktree.get(wtId) || []);
-
   // Track active users via cursor presence
   const { activeUsers } = usePresence({
     client,
@@ -491,7 +484,6 @@ export const App: React.FC<AppProps> = ({
           <SessionCanvas
             board={currentBoard || null}
             client={client}
-            sessions={boardSessions}
             sessionById={sessionById}
             sessionsByWorktree={sessionsByWorktree}
             tasks={tasks}
@@ -608,7 +600,6 @@ export const App: React.FC<AppProps> = ({
         boardObjects={boardObjects}
         repos={repos}
         worktreeById={worktreeById}
-        sessions={sessions}
         sessionById={sessionById}
         sessionsByWorktree={sessionsByWorktree}
         users={users}
@@ -677,7 +668,6 @@ export const App: React.FC<AppProps> = ({
         boards={boards}
         currentBoardId={currentBoardId}
         onBoardChange={setCurrentBoardId}
-        sessions={sessions}
         sessionsByWorktree={sessionsByWorktree}
         worktreeById={worktreeById}
         onSessionClick={setSelectedSessionId}

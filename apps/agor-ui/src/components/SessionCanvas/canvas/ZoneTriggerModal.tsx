@@ -30,7 +30,6 @@ interface ZoneTriggerModalProps {
   onCancel: () => void;
   worktreeId: WorktreeID;
   worktree: Worktree | undefined;
-  sessions: Session[]; // Kept for backwards compat
   sessionsByWorktree: Map<string, Session[]>; // O(1) worktree filtering
   zoneName: string;
   trigger: ZoneTrigger;
@@ -57,7 +56,6 @@ export const ZoneTriggerModal = ({
   onCancel,
   worktreeId,
   worktree,
-  sessions,
   sessionsByWorktree,
   zoneName,
   trigger,

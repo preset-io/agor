@@ -10,7 +10,6 @@ import type { Node } from 'reactflow';
 interface UseBoardObjectsProps {
   board: Board | null;
   client: AgorClient | null;
-  sessions: Session[]; // Kept for backwards compat
   sessionsByWorktree: Map<string, Session[]>; // O(1) worktree filtering
   worktrees: Worktree[];
   boardObjects: BoardEntityObject[];
@@ -24,7 +23,6 @@ interface UseBoardObjectsProps {
 export const useBoardObjects = ({
   board,
   client,
-  sessions,
   sessionsByWorktree,
   worktrees,
   boardObjects,

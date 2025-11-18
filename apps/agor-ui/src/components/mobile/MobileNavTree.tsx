@@ -9,7 +9,6 @@ const { Text } = Typography;
 interface MobileNavTreeProps {
   boards: Board[];
   worktreeById: Map<string, Worktree>;
-  sessions: Session[]; // Kept for backwards compat
   sessionsByWorktree: Map<string, Session[]>; // O(1) worktree filtering
   tasks: Record<string, Task[]>;
   comments: BoardComment[];
@@ -19,7 +18,6 @@ interface MobileNavTreeProps {
 export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
   boards,
   worktreeById,
-  sessions,
   sessionsByWorktree,
   tasks,
   comments,

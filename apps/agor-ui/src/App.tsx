@@ -122,7 +122,6 @@ function AppContent() {
 
   // Fetch data (only when connected and authenticated)
   const {
-    sessions,
     sessionById,
     sessionsByWorktree,
     tasks,
@@ -160,10 +159,10 @@ function AppContent() {
 
   // Mark as loaded once we have data
   useEffect(() => {
-    if (!loading && (sessions.length > 0 || boards.length > 0 || repos.length > 0)) {
+    if (!loading && (sessionById.size > 0 || boards.length > 0 || repos.length > 0)) {
       setHasLoadedOnce(true);
     }
-  }, [loading, sessions.length, boards.length, repos.length]);
+  }, [loading, sessionById.size, boards.length, repos.length]);
 
   // Get current user from users array (real-time updates via WebSocket)
   // This ensures we get the latest onboarding_completed status
@@ -175,9 +174,9 @@ function AppContent() {
     () => ({
       repoCount: repos.length,
       worktreeCount: worktreeById.size,
-      sessionCount: sessions.length,
+      sessionCount: sessionById.size,
     }),
-    [repos.length, worktreeById.size, sessions.length]
+    [repos.length, worktreeById.size, sessionById.size]
   );
 
   // Show welcome modal if user hasn't completed onboarding
@@ -993,7 +992,6 @@ function AppContent() {
             <MobileApp
               client={client}
               user={user}
-              sessions={sessions}
               sessionById={sessionById}
               sessionsByWorktree={sessionsByWorktree}
               tasks={tasks}
@@ -1038,7 +1036,6 @@ function AppContent() {
                 user={currentUser}
                 connected={connected}
                 connecting={connecting}
-                sessions={sessions}
                 sessionById={sessionById}
                 sessionsByWorktree={sessionsByWorktree}
                 tasks={tasks}

@@ -12,7 +12,7 @@ export interface WorktreeModalProps {
   onClose: () => void;
   worktree: Worktree | null;
   repo: Repo | null;
-  sessions: Session[];
+  sessions: Session[]; // Used for GeneralTab session count
   boards?: Board[];
   boardObjects?: BoardEntityObject[];
   client: AgorClient | null;

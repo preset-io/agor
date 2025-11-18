@@ -14,7 +14,6 @@ const { Text } = Typography;
 interface MobileAppProps {
   client: AgorClient | null;
   user?: User | null;
-  sessions: Session[]; // Kept for backwards compat
   sessionById: Map<string, Session>; // O(1) ID lookups
   sessionsByWorktree: Map<string, Session[]>; // O(1) worktree filtering
   tasks: Record<string, Task[]>;
@@ -37,7 +36,6 @@ interface MobileAppProps {
 export const MobileApp: React.FC<MobileAppProps> = ({
   client,
   user,
-  sessions,
   sessionById,
   sessionsByWorktree,
   tasks,
@@ -74,7 +72,6 @@ export const MobileApp: React.FC<MobileAppProps> = ({
         <MobileNavTree
           boards={boards}
           worktreeById={worktreeById}
-          sessions={sessions}
           sessionsByWorktree={sessionsByWorktree}
           tasks={tasks}
           comments={comments}
@@ -128,7 +125,6 @@ export const MobileApp: React.FC<MobileAppProps> = ({
           element={
             <SessionPage
               client={client}
-              sessions={sessions}
               sessionById={sessionById}
               worktreeById={worktreeById}
               repos={repos}

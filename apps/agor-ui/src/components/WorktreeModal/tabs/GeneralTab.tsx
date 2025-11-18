@@ -20,7 +20,7 @@ export type WorktreeUpdate = Omit<
 interface GeneralTabProps {
   worktree: Worktree;
   repo: Repo;
-  sessions: Session[];
+  sessions: Session[]; // Used to count sessions for this worktree
   boards?: Board[];
   onUpdate?: (worktreeId: string, updates: WorktreeUpdate) => void;
   onArchiveOrDelete?: (

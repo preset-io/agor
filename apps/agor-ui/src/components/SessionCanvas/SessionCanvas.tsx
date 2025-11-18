@@ -71,7 +71,6 @@ const { Paragraph } = Typography;
 interface SessionCanvasProps {
   board: Board | null;
   client: AgorClient | null;
-  sessions: Session[]; // Kept for backwards compat
   sessionById: Map<string, Session>; // O(1) ID lookups
   sessionsByWorktree: Map<string, Session[]>; // O(1) worktree filtering
   tasks: Record<string, Task[]>;
@@ -229,7 +228,6 @@ const nodeTypes = {
 const SessionCanvas = ({
   board,
   client,
-  sessions,
   sessionById,
   sessionsByWorktree,
   repos,
@@ -406,7 +404,6 @@ const SessionCanvas = ({
   const { getBoardObjectNodes, batchUpdateObjectPositions, deleteObject } = useBoardObjects({
     board,
     client,
-    sessions,
     sessionsByWorktree,
     worktrees,
     boardObjects,
@@ -2274,7 +2271,6 @@ const SessionCanvas = ({
           onCancel={() => setWorktreeTriggerModal(null)}
           worktreeId={worktreeTriggerModal.worktreeId}
           worktree={worktrees.find((wt) => wt.worktree_id === worktreeTriggerModal.worktreeId)}
-          sessions={sessions}
           sessionsByWorktree={sessionsByWorktree}
           zoneName={worktreeTriggerModal.zoneName}
           trigger={worktreeTriggerModal.trigger}

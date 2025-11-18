@@ -93,7 +93,6 @@ const BACKGROUND_PRESETS = [
 
 interface BoardsTableProps {
   boards: Board[];
-  sessions: Session[]; // Kept for backwards compat
   sessionsByWorktree: Map<string, Session[]>; // O(1) worktree filtering
   worktreeById: Map<string, Worktree>;
   onCreate?: (board: Partial<Board>) => void;
@@ -103,7 +102,6 @@ interface BoardsTableProps {
 
 export const BoardsTable: React.FC<BoardsTableProps> = ({
   boards,
-  sessions,
   sessionsByWorktree,
   worktreeById,
   onCreate,
