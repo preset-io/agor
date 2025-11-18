@@ -38,6 +38,7 @@ interface UsersTableProps {
   onUpdate?: (userId: string, updates: UpdateUserInput) => void;
   onDelete?: (userId: string) => void;
   editUserId?: string; // Auto-open edit modal for this user
+  onClearEditUserId?: () => void; // Callback to clear editUserId in parent
 }
 
 export const UsersTable: React.FC<UsersTableProps> = ({
@@ -47,6 +48,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
   onUpdate,
   onDelete,
   editUserId,
+  onClearEditUserId,
 }) => {
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
@@ -206,6 +208,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
         form.resetFields();
         setEditModalOpen(false);
         setEditingUser(null);
+        onClearEditUserId?.(); // Clear editUserId in parent to prevent reopening
       })
       .catch((err) => {
         console.error('Validation failed:', err);
@@ -340,6 +343,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
       // Close modal after successful save
       setEditModalOpen(false);
       setEditingUser(null);
+      onClearEditUserId?.(); // Clear editUserId in parent to prevent reopening
     } catch (err) {
       console.error(`Failed to save ${tool} config:`, err);
       throw err;
@@ -383,11 +387,13 @@ export const UsersTable: React.FC<UsersTableProps> = ({
         // API Keys tab - nothing to save (keys save individually)
         setEditModalOpen(false);
         setEditingUser(null);
+        onClearEditUserId?.(); // Clear editUserId in parent to prevent reopening
         break;
       case 'env-vars':
         // Env Vars tab - nothing to save (vars save individually)
         setEditModalOpen(false);
         setEditingUser(null);
+        onClearEditUserId?.(); // Clear editUserId in parent to prevent reopening
         break;
       case 'audio':
         await handleAudioSave();
@@ -421,6 +427,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
 
       setEditModalOpen(false);
       setEditingUser(null);
+      onClearEditUserId?.(); // Clear editUserId in parent to prevent reopening
     } catch (error) {
       console.error('Failed to save audio settings:', error);
     }
@@ -596,6 +603,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
           setEditModalOpen(false);
           setEditingUser(null);
           setActiveTab('general');
+          onClearEditUserId?.(); // Clear editUserId in parent to prevent reopening
         }}
         okText="Save"
         cancelText="Close"

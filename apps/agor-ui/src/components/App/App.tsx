@@ -610,6 +610,7 @@ export const App: React.FC<AppProps> = ({
         mcpServers={mcpServers}
         activeTab={effectiveSettingsTab}
         editUserId={settingsEditUserId}
+        onClearEditUserId={() => setSettingsEditUserId(undefined)}
         onTabChange={(newTab) => {
           setSettingsActiveTab(newTab);
           setSettingsEditUserId(undefined); // Clear editUserId when switching tabs

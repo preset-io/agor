@@ -10,6 +10,7 @@ import {
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { Badge, Button, Divider, Dropdown, Layout, Space, Tooltip, Typography, theme } from 'antd';
+import { useState } from 'react';
 import { ConnectionStatus } from '../ConnectionStatus';
 import { Facepile } from '../Facepile';
 import { ThemeSwitcher } from '../ThemeSwitcher';
@@ -58,6 +59,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
 }) => {
   const { token } = theme.useToken();
   const userEmoji = user?.emoji || '👤';
+  const [userDropdownOpen, setUserDropdownOpen] = useState(false);
 
   const userMenuItems: MenuProps['items'] = [
     {
@@ -80,13 +82,19 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       key: 'user-settings',
       label: 'User Settings',
       icon: <UserOutlined />,
-      onClick: onUserSettingsClick,
+      onClick: () => {
+        setUserDropdownOpen(false);
+        onUserSettingsClick?.();
+      },
     },
     {
       key: 'logout',
       label: 'Logout',
       icon: <LogoutOutlined />,
-      onClick: onLogout,
+      onClick: () => {
+        setUserDropdownOpen(false);
+        onLogout?.();
+      },
     },
   ];
 
@@ -205,7 +213,13 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             onClick={onSettingsClick}
           />
         </Tooltip>
-        <Dropdown menu={{ items: userMenuItems }} placement="bottomRight" trigger={['click']}>
+        <Dropdown
+          menu={{ items: userMenuItems }}
+          placement="bottomRight"
+          trigger={['click']}
+          open={userDropdownOpen}
+          onOpenChange={setUserDropdownOpen}
+        >
           <Tooltip title={user?.name || 'User menu'} placement="bottom">
             <Button type="text" icon={<UserOutlined style={{ fontSize: token.fontSizeLG }} />} />
           </Tooltip>
