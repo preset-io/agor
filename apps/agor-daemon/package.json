@@ -27,7 +27,7 @@
     "feathers-swagger": "^3.0.0",
     "handlebars": "^4.7.8",
     "jsonwebtoken": "^9.0.2",
-    "socket.io": "^4.7.2",
+    "socket.io": "^4.8.1",
     "swagger-ui-dist": "^5.30.0"
   },
   "devDependencies": {
