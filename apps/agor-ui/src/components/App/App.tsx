@@ -656,6 +656,7 @@ export const App: React.FC<AppProps> = ({
         worktree={selectedWorktree || null}
         repo={selectedWorktreeRepo || null}
         sessions={worktreeSessions}
+        boardById={boardById}
         client={client}
         onUpdateWorktree={onUpdateWorktree}
         onUpdateRepo={onUpdateRepo}
@@ -690,7 +691,7 @@ export const App: React.FC<AppProps> = ({
           onNewWorktreeModalClose?.();
         }}
         onCreate={handleCreateWorktree}
-        repos={mapToArray(repoById)}
+        repoById={repoById}
         currentBoardId={currentBoardId}
       />
       {logsModalWorktreeId && (

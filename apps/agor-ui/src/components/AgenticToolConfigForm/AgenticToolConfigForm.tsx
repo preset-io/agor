@@ -11,6 +11,7 @@
 
 import type { AgenticToolName, MCPServer } from '@agor/core/types';
 import { Form, Select } from 'antd';
+import { mapToArray } from '@/utils/mapHelpers';
 import { CodexNetworkAccessToggle } from '../CodexNetworkAccessToggle';
 import { MCPServerSelect } from '../MCPServerSelect';
 import { ModelSelector } from '../ModelSelector';
@@ -24,7 +25,7 @@ export interface AgenticToolConfigFormProps {
   /** The agentic tool being configured */
   agenticTool: AgenticToolName;
   /** Available MCP servers */
-  mcpServers: MCPServer[];
+  mcpServerById: Map<string, MCPServer>;
   /** Whether to show help text under each field */
   showHelpText?: boolean;
 }
@@ -39,7 +40,7 @@ export interface AgenticToolConfigFormProps {
  */
 export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
   agenticTool,
-  mcpServers,
+  mcpServerById,
   showHelpText = true,
 }) => {
   // Get model label based on tool
@@ -138,7 +139,10 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
         label="MCP Servers"
         help={showHelpText ? 'Select MCP servers to make available in this session' : undefined}
       >
-        <MCPServerSelect mcpServers={mcpServers} placeholder="No MCP servers attached" />
+        <MCPServerSelect
+          mcpServers={mapToArray(mcpServerById)}
+          placeholder="No MCP servers attached"
+        />
       </Form.Item>
     </>
   );
