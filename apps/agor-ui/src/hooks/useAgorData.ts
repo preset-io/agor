@@ -213,33 +213,66 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       });
     };
     const handleSessionPatched = (session: Session) => {
+      // Track old worktree_id for migration detection
+      let oldWorktreeId: string | null = null;
+
       // Update sessionById - ONLY create new Map if session changed
       setSessionById((prev) => {
         const existing = prev.get(session.session_id);
         if (existing === session) return prev; // Same reference, no change
+
+        // Capture old worktree_id before updating
+        oldWorktreeId = existing?.worktree_id || null;
+
         const next = new Map(prev);
         next.set(session.session_id, session);
         return next;
       });
 
-      // Update sessionsByWorktree - ONLY create new Map if data changed
+      // Update sessionsByWorktree - handle both in-place updates and worktree migrations
       setSessionsByWorktree((prev) => {
-        const worktreeSessions = prev.get(session.worktree_id) || [];
+        const newWorktreeId = session.worktree_id;
+        const worktreeSessions = prev.get(newWorktreeId) || [];
         const index = worktreeSessions.findIndex((s) => s.session_id === session.session_id);
 
-        // Session not found in this worktree (shouldn't happen, but be safe)
+        // Check if session migrated to a different worktree
+        const worktreeMigrated = oldWorktreeId && oldWorktreeId !== newWorktreeId;
+
+        if (worktreeMigrated) {
+          // Session moved between worktrees - remove from old, add to new
+          const next = new Map(prev);
+
+          // Remove from old worktree bucket
+          const oldSessions = prev.get(oldWorktreeId!) || [];
+          const filteredOldSessions = oldSessions.filter(
+            (s) => s.session_id !== session.session_id
+          );
+          if (filteredOldSessions.length > 0) {
+            next.set(oldWorktreeId!, filteredOldSessions);
+          } else {
+            next.delete(oldWorktreeId!); // Remove empty bucket
+          }
+
+          // Add to new worktree bucket
+          const newSessions = prev.get(newWorktreeId) || [];
+          next.set(newWorktreeId, [...newSessions, session]);
+
+          return next;
+        }
+
+        // Session not found in this worktree and didn't migrate (shouldn't happen, but be safe)
         if (index === -1) return prev;
 
         // Check if session actually changed (reference equality is sufficient for socket updates)
         if (worktreeSessions[index] === session) return prev;
 
-        // Create new array with updated session
+        // Create new array with updated session (in-place update)
         const updatedSessions = [...worktreeSessions];
         updatedSessions[index] = session;
 
         // Only create new Map with updated worktree entry
         const next = new Map(prev);
-        next.set(session.worktree_id, updatedSessions);
+        next.set(newWorktreeId, updatedSessions);
         return next;
       });
     };
