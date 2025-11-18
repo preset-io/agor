@@ -219,14 +219,24 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
         return next;
       });
 
-      // Update sessionsByWorktree - replace in array
+      // Update sessionsByWorktree - ONLY create new Map if data changed
       setSessionsByWorktree((prev) => {
+        const worktreeSessions = prev.get(session.worktree_id) || [];
+        const index = worktreeSessions.findIndex((s) => s.session_id === session.session_id);
+
+        // Session not found in this worktree (shouldn't happen, but be safe)
+        if (index === -1) return prev;
+
+        // Check if session actually changed (reference equality is sufficient for socket updates)
+        if (worktreeSessions[index] === session) return prev;
+
+        // Create new array with updated session
+        const updatedSessions = [...worktreeSessions];
+        updatedSessions[index] = session;
+
+        // Only create new Map with updated worktree entry
         const next = new Map(prev);
-        const worktreeSessions = next.get(session.worktree_id) || [];
-        next.set(
-          session.worktree_id,
-          worktreeSessions.map((s) => (s.session_id === session.session_id ? session : s))
-        );
+        next.set(session.worktree_id, updatedSessions);
         return next;
       });
     };
