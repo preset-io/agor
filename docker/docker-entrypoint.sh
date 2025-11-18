@@ -3,22 +3,34 @@ set -e
 
 echo "🚀 Starting Agor development environment..."
 
-# Dependencies are installed during Docker build and node_modules are excluded from volume mount
-# Just verify they exist, don't reinstall unless something is actually missing
-if [ ! -d "/app/node_modules" ]; then
-  echo "📦 Installing dependencies (first run)..."
-  yes | pnpm install
-else
-  echo "📦 Dependencies already installed (from Docker build)"
-fi
+# Fix volume permissions FIRST (before any operations)
+# Mounted volumes may be created with wrong ownership, causing EACCES errors
+echo "🔧 Fixing volume permissions..."
+sudo chown -R agor:agor /app
+
+# Sync dependencies to match the mounted pnpm-lock.yaml
+# This ensures each worktree gets its exact dependencies, even if the Docker image
+# was built from a different worktree with different dependencies
+echo "📦 Syncing dependencies with pnpm-lock.yaml..."
+pnpm install
 
 # Initialize husky git hooks (required for git commit hooks)
 echo "🎣 Initializing git hooks..."
 pnpm husky install
 
-# Build @agor/core once (required for CLI commands like init and user create-admin)
-echo "🔨 Building @agor/core..."
-pnpm --filter @agor/core build
+# Start @agor/core in watch mode FIRST (for hot-reload during development)
+# We start this early and wait for initial build before running CLI commands
+echo "🔄 Starting @agor/core watch mode..."
+pnpm --filter @agor/core dev &
+CORE_PID=$!
+
+# Wait for initial watch build to complete
+# tsup --watch does a full build on startup, then watches for changes
+echo "⏳ Waiting for @agor/core initial build..."
+while [ ! -f "/app/packages/core/dist/index.js" ] || [ ! -f "/app/packages/core/dist/utils/logger.js" ]; do
+  sleep 0.1
+done
+echo "✅ @agor/core build ready"
 
 # Fix volume permissions (volumes may be created with wrong ownership)
 # Only chown .agor directory (not .ssh which is mounted read-only)
@@ -39,19 +51,6 @@ if [ "$SEED" = "true" ]; then
   echo "🌱 Seeding development fixtures..."
   pnpm tsx scripts/seed.ts --skip-if-exists
 fi
-
-# Start @agor/core in watch mode (for hot-reload during development)
-# This will rebuild core, but daemon will wait for it via tsx watch on dist/
-echo "🔄 Starting @agor/core watch mode..."
-pnpm --filter @agor/core dev &
-CORE_PID=$!
-
-# Wait for watch build to complete (tsup --watch cleans dist/ first, then rebuilds)
-echo "⏳ Waiting for @agor/core watch build..."
-while [ ! -f "/app/packages/core/dist/index.js" ]; do
-  sleep 0.1
-done
-echo "✅ @agor/core build ready"
 
 # Start daemon in background (use dev:daemon-only to avoid duplicate core watch)
 # Core watch is already running above, daemon just runs tsx watch

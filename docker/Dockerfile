@@ -67,7 +67,7 @@ COPY packages/core/package.json ./packages/core/
 # Install dependencies as agor user (cached in Docker layer)
 # This creates node_modules with correct platform binaries for container
 RUN sudo chown -R agor:agor /app && \
-    yes | pnpm install --frozen-lockfile
+    pnpm install --frozen-lockfile
 
 # Copy entrypoint script
 COPY docker/docker-entrypoint.sh /usr/local/bin/
