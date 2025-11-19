@@ -461,6 +461,27 @@ const SessionCanvas = ({
         `📍 Unpinning worktree ${worktreeId.substring(0, 8)}: relative (${boardObject.position.x}, ${boardObject.position.y}) -> absolute (${absoluteX}, ${absoluteY})`
       );
 
+      // Optimistically store absolute position in localPositionsRef
+      // This will be used by the node sync effect until WebSocket confirms
+      localPositionsRef.current[worktreeId] = {
+        x: absoluteX,
+        y: absoluteY,
+      };
+
+      // Trigger immediate React Flow update
+      setNodes((currentNodes) =>
+        currentNodes.map((node) => {
+          if (node.id === worktreeId) {
+            return {
+              ...node,
+              position: { x: absoluteX, y: absoluteY },
+              parentId: undefined, // Remove parent relationship
+            };
+          }
+          return node;
+        })
+      );
+
       // Update with absolute position and clear zone_id
       await client.service('board-objects').patch(boardObject.object_id, {
         position: { x: absoluteX, y: absoluteY },
@@ -469,7 +490,7 @@ const SessionCanvas = ({
 
       console.log(`✓ Unpinned worktree ${worktreeId.substring(0, 8)}`);
     },
-    [board, client, boardObjectByWorktree]
+    [board, client, boardObjectByWorktree, setNodes]
   );
 
   // Convert worktrees to React Flow nodes (worktree-centric approach)
@@ -1283,7 +1304,7 @@ const SessionCanvas = ({
                   worktree_id,
                   position,
                   // zone_id will be included if worktree was dropped on zone
-                  ...(zone_id !== undefined && { zone_id }),
+                  ...(zone_id ? { zone_id } : {}),
                 });
               }
             }

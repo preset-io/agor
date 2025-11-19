@@ -12,7 +12,7 @@ import {
   SubnodeOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import { Badge, Button, Card, Collapse, Space, Spin, Tag, Tree, Typography, theme } from 'antd';
+import { Badge, Button, Card, Collapse, Space, Spin, Tree, Typography, theme } from 'antd';
 import { AggregationColor } from 'antd/es/color-picker/color';
 import { useEffect, useMemo, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
@@ -512,24 +512,20 @@ const WorktreeCard = ({
         </Space>
 
         <Space size={4}>
-          {!inPopover && (
-            <div className="nodrag">
-              {isPinned && zoneName && (
-                <Tag
-                  icon={<PushpinFilled style={{ color: zoneColor }} />}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onUnpin?.(worktree.worktree_id);
-                  }}
-                  style={{
-                    cursor: 'pointer',
-                    backgroundColor: zoneColor ? `${zoneColor}1a` : undefined, // 10% alpha (1a in hex = 26/255 ≈ 10%)
-                    borderColor: zoneColor,
-                  }}
-                  title={`Pinned to ${zoneName} (click to unpin)`}
-                />
-              )}
-            </div>
+          {!inPopover && isPinned && (
+            <Button
+              type="text"
+              size="small"
+              icon={<PushpinFilled style={{ color: zoneColor }} />}
+              onClick={(e) => {
+                e.stopPropagation();
+                onUnpin?.(worktree.worktree_id);
+              }}
+              className="nodrag"
+              title={
+                zoneName ? `Pinned to ${zoneName} (click to unpin)` : 'Pinned (click to unpin)'
+              }
+            />
           )}
           {!inPopover && (
             <Button
