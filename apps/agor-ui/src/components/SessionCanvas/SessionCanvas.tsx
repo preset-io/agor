@@ -735,6 +735,7 @@ const SessionCanvas = ({
     setNodes((currentNodes) => {
       // Separate existing nodes by type
       const existingZones = currentNodes.filter((n) => n.type === 'zone');
+      const existingMarkdown = currentNodes.filter((n) => n.type === 'markdown');
       const existingCursors = currentNodes.filter((n) => n.type === 'cursor');
       const existingComments = currentNodes.filter((n) => n.type === 'comment');
 
@@ -789,8 +790,14 @@ const SessionCanvas = ({
         return { ...newNode, selected: existingNode?.selected };
       });
 
-      // Merge: zones (back) + worktrees (middle) + cursors/comments (front)
-      return [...existingZones, ...updatedWorktrees, ...existingCursors, ...existingComments];
+      // Merge: zones (back) + worktrees (middle) + markdown + cursors/comments (front)
+      return [
+        ...existingZones,
+        ...updatedWorktrees,
+        ...existingMarkdown,
+        ...existingCursors,
+        ...existingComments,
+      ];
     });
   }, [initialNodes, setNodes]);
 

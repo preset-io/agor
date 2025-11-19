@@ -37,6 +37,12 @@ export const useBoardObjects = ({
   const boardRef = useRef(board);
   boardRef.current = board;
 
+  // Stabilize board.objects reference using deep equality comparison
+  // This prevents unnecessary re-renders when board object changes but content is identical
+  const boardObjectsJson = board?.objects ? JSON.stringify(board.objects) : null;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Intentionally using JSON serialization for deep equality
+  const boardObjects = useMemo(() => board?.objects, [boardObjectsJson]);
+
   // Get session IDs for this board (worktree-centric model)
   const _boardSessionIds = useMemo(() => {
     if (!board) return [];
@@ -131,9 +137,9 @@ export const useBoardObjects = ({
    * Convert board.objects to React Flow nodes
    */
   const getBoardObjectNodes = useCallback((): Node[] => {
-    if (!board?.objects) return [];
+    if (!boardObjects) return [];
 
-    return Object.entries(board.objects)
+    return Object.entries(boardObjects)
       .filter(([, objectData]) => {
         // Filter out objects with invalid positions (prevents NaN errors in React Flow)
         const hasValidPosition =
@@ -218,7 +224,7 @@ export const useBoardObjects = ({
         };
       });
   }, [
-    board?.objects,
+    boardObjects, // Use stabilized boardObjects instead of board?.objects
     boardObjectById,
     sessionsByWorktree,
     handleUpdateObject,
