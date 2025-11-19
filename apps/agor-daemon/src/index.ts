@@ -646,7 +646,8 @@ async function main() {
   if (DB_PATH.startsWith('file:')) {
     // Extract file path from DB_PATH (remove 'file:' prefix and expand ~)
     const dbFilePath = extractDbFilePath(DB_PATH);
-    const dbDir = dbFilePath.substring(0, dbFilePath.lastIndexOf('/'));
+    const path = await import('node:path');
+    const dbDir = path.dirname(dbFilePath);
 
     // Ensure database directory exists
     const { mkdir, access } = await import('node:fs/promises');

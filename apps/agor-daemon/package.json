@@ -6,10 +6,10 @@
   "main": "./dist/index.js",
   "scripts": {
     "build": "tsup",
-    "dev": "concurrently -k -n core,daemon -c cyan,green \"pnpm --filter @agor/core dev\" \"./node_modules/.bin/tsx watch --clear-screen=false --ignore 'node_modules/**' src/index.ts\"",
+    "dev": "concurrently -k -n core,daemon -c cyan,green \"pnpm --filter @agor/core dev\" \"nodemon --watch dist --ext js --exec node dist/src/index.js\"",
     "dev:daemon-only": "tsx watch --clear-screen=false --ignore 'node_modules/**' src/index.ts",
     "start": "node dist/index.js",
-    "clean": "rm -rf dist",
+    "clean": "rimraf dist",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
@@ -17,7 +17,6 @@
   "dependencies": {
     "@agor/core": "workspace:*",
     "@feathersjs/schema": "^5.0.37",
-    "@homebridge/node-pty-prebuilt-multiarch": "^0.13.1",
     "compression": "^1.8.1",
     "cors": "^2.8.5",
     "cron-parser": "^5.4.0",
@@ -27,6 +26,7 @@
     "feathers-swagger": "^3.0.0",
     "handlebars": "^4.7.8",
     "jsonwebtoken": "^9.0.2",
+    "node-pty": "^1.0.0",
     "socket.io": "^4.8.1",
     "swagger-ui-dist": "^5.30.0"
   },
@@ -40,6 +40,7 @@
     "@types/node": "^22.10.2",
     "concurrently": "^9.2.1",
     "glob": "^11.0.3",
+    "nodemon": "^3.1.11",
     "tsup": "^8.3.5",
     "tsx": "^4.19.2",
     "typescript": "^5.9.3",

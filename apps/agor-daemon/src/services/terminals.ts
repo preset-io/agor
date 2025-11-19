@@ -18,8 +18,8 @@ import { resolveUserEnvironment } from '@agor/core/config';
 import { type Database, WorktreeRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { UserID, WorktreeID } from '@agor/core/types';
-import type { IPty } from '@homebridge/node-pty-prebuilt-multiarch';
-import * as pty from '@homebridge/node-pty-prebuilt-multiarch';
+import type { IPty } from 'node-pty';
+import * as pty from 'node-pty';
 
 interface TerminalSession {
   terminalId: string;

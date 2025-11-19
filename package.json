@@ -27,16 +27,18 @@
     "typecheck": "turbo run typecheck",
     "check": "pnpm typecheck && pnpm lint && pnpm build",
     "check:fix": "pnpm lint:fix && pnpm typecheck && pnpm build",
-    "clean": "turbo run clean && rm -rf node_modules",
+    "clean": "turbo run clean && rimraf node_modules",
     "prepare": "husky",
     "cli:link": "pnpm -C apps/agor-cli link --global",
     "cli:unlink": "pnpm -C apps/agor-cli unlink --global",
-    "agor": "NODE_NO_WARNINGS=1 pnpm --filter @agor/cli exec tsx bin/dev.ts",
+    "agor": "cross-env NODE_NO_WARNINGS=1 pnpm --filter @agor/cli exec tsx bin/dev.ts",
     "seed": "tsx scripts/seed.ts"
   },
   "devDependencies": {
+    "rimraf": "^5.0.5",
     "@biomejs/biome": "^2.2.6",
     "@google-analytics/admin": "^9.0.1",
+    "cross-env": "^10.1.0",
     "husky": "^9.1.7",
     "knip": "^5.66.2",
     "lint-staged": "^16.2.5",
@@ -47,7 +49,7 @@
   },
   "packageManager": "pnpm@9.15.1",
   "engines": {
-    "node": ">=20.0.0 <21.0.0",
+    "node": ">=20.0.0 <26.0.0",
     "pnpm": ">=9.0.0"
   },
   "pnpm": {
@@ -56,5 +58,8 @@
       "glob": "^11.1.0",
       "npm-run-path": "^5.3.0"
     }
+  },
+  "dependencies": {
+    "pnpm": "^10.22.0"
   }
 }

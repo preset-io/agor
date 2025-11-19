@@ -8,8 +8,8 @@
   },
   "scripts": {
     "build": "tsup",
-    "dev": "NODE_NO_WARNINGS=1 tsx bin/dev.ts",
-    "clean": "rm -rf dist",
+    "dev": "cross-env NODE_NO_WARNINGS=1 tsx bin/dev.ts",
+    "clean": "rimraf dist",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
