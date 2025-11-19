@@ -9,7 +9,7 @@
   "scripts": {
     "build": "tsup",
     "dev": "cross-env NODE_NO_WARNINGS=1 tsx bin/dev.ts",
-    "clean": "rm -rf dist",
+    "clean": "rimraf dist",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
