@@ -4,7 +4,7 @@
  * Non-modal right panel that displays real-time socket events with filtering capabilities
  */
 
-import type { Worktree } from '@agor/core/types';
+import type { Repo, Session, User, Worktree } from '@agor/core/types';
 import {
   ApiOutlined,
   CloseOutlined,
@@ -15,7 +15,7 @@ import {
 import { Badge, Button, Checkbox, Empty, Space, Tag, Typography, theme } from 'antd';
 import { useMemo, useState } from 'react';
 import type { SocketEvent } from '../../hooks/useEventStream';
-import { EventItem } from './EventItem';
+import { EventItem, type WorktreeActions } from './EventItem';
 
 const { Text, Title } = Typography;
 
@@ -26,6 +26,13 @@ export interface EventStreamPanelProps {
   onClear: () => void;
   width?: number | string;
   worktreeById: Map<string, Worktree>;
+  sessionById: Map<string, Session>;
+  sessionsByWorktree: Map<string, Session[]>;
+  repos: Repo[];
+  users: User[];
+  currentUserId?: string;
+  selectedSessionId?: string | null;
+  worktreeActions?: WorktreeActions;
 }
 
 export const EventStreamPanel: React.FC<EventStreamPanelProps> = ({
@@ -35,6 +42,13 @@ export const EventStreamPanel: React.FC<EventStreamPanelProps> = ({
   onClear,
   width = 600,
   worktreeById,
+  sessionById,
+  sessionsByWorktree,
+  repos,
+  users,
+  currentUserId,
+  selectedSessionId,
+  worktreeActions,
 }) => {
   const { token } = theme.useToken();
   const [includeCursor, setIncludeCursor] = useState(false);
@@ -206,7 +220,18 @@ export const EventStreamPanel: React.FC<EventStreamPanelProps> = ({
             }}
           >
             {filteredEvents.map((event) => (
-              <EventItem key={event.id} event={event} worktreeById={worktreeById} />
+              <EventItem
+                key={event.id}
+                event={event}
+                worktreeById={worktreeById}
+                sessionById={sessionById}
+                sessionsByWorktree={sessionsByWorktree}
+                repos={repos}
+                users={users}
+                currentUserId={currentUserId}
+                selectedSessionId={selectedSessionId}
+                worktreeActions={worktreeActions}
+              />
             ))}
           </div>
         )}

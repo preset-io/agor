@@ -2,7 +2,7 @@
  * EventItem - Display a single socket event with timestamp, type, and data
  */
 
-import type { Worktree } from '@agor/core/types';
+import type { Repo, Session, SpawnConfig, User, Worktree } from '@agor/core/types';
 import {
   AimOutlined,
   ApiOutlined,
@@ -16,16 +16,46 @@ import {
 import { Button, Popover, Tag, Typography, theme } from 'antd';
 import type React from 'react';
 import type { SocketEvent } from '../../hooks/useEventStream';
-import { EventStreamPill } from './EventStreamPill';
+import { EventStreamPill, SessionMetadataCard } from '../Pill';
+import WorktreeCard from '../WorktreeCard/WorktreeCard';
 
 const { Text } = Typography;
+
+export interface WorktreeActions {
+  onSessionClick?: (sessionId: string) => void;
+  onCreateSession?: (worktreeId: string) => void;
+  onForkSession?: (sessionId: string, prompt: string) => Promise<void>;
+  onSpawnSession?: (sessionId: string, config: string | Partial<SpawnConfig>) => Promise<void>;
+  onOpenTerminal?: (commands: string[], worktreeId?: string) => void;
+  onStartEnvironment?: (worktreeId: string) => void;
+  onStopEnvironment?: (worktreeId: string) => void;
+  onOpenSettings?: (worktreeId: string) => void;
+  onViewLogs?: (worktreeId: string) => void;
+}
 
 export interface EventItemProps {
   event: SocketEvent;
   worktreeById: Map<string, Worktree>;
+  sessionById: Map<string, Session>;
+  sessionsByWorktree: Map<string, Session[]>;
+  repos: Repo[];
+  users: User[];
+  currentUserId?: string;
+  selectedSessionId?: string | null;
+  worktreeActions?: WorktreeActions;
 }
 
-export const EventItem = ({ event, worktreeById }: EventItemProps): React.JSX.Element => {
+export const EventItem = ({
+  event,
+  worktreeById,
+  sessionById,
+  sessionsByWorktree,
+  repos,
+  users,
+  currentUserId,
+  selectedSessionId,
+  worktreeActions,
+}: EventItemProps): React.JSX.Element => {
   const { token } = theme.useToken();
 
   // Get icon based on event type
@@ -98,6 +128,14 @@ export const EventItem = ({ event, worktreeById }: EventItemProps): React.JSX.El
       ? (event.data.worktree_id as string)
       : undefined;
 
+  // Lookup full objects from maps
+  const session = sessionId ? sessionById.get(sessionId) : undefined;
+  // Derive worktree from session if not directly in event data
+  const derivedWorktreeId = worktreeId || session?.worktree_id;
+  const worktree = derivedWorktreeId ? worktreeById.get(derivedWorktreeId) : undefined;
+  const repo = worktree ? repos.find((r) => r.repo_id === worktree.repo_id) : undefined;
+  const worktreeSessions = worktree ? sessionsByWorktree.get(worktree.worktree_id) || [] : [];
+
   // JSON details popover content
   const detailsContent: React.JSX.Element = event.data ? (
     <div style={{ maxWidth: 400, maxHeight: 400, overflow: 'auto' }}>
@@ -160,17 +198,46 @@ export const EventItem = ({ event, worktreeById }: EventItemProps): React.JSX.El
 
       {/* Session ID pill */}
       {sessionId && (
-        <EventStreamPill id={sessionId} icon={CodeOutlined} color="cyan" copyLabel="Session ID" />
+        <EventStreamPill
+          id={sessionId}
+          icon={CodeOutlined}
+          color="cyan"
+          copyLabel="Session ID"
+          metadataCard={
+            session ? (
+              <SessionMetadataCard
+                session={session}
+                worktree={worktree}
+                repo={repo}
+                users={users}
+                currentUserId={currentUserId}
+                compact
+              />
+            ) : undefined
+          }
+        />
       )}
 
       {/* Worktree ID pill */}
-      {worktreeId && (
+      {derivedWorktreeId && worktree && repo && (
         <EventStreamPill
-          id={worktreeId}
-          label={worktreeById.get(worktreeId)?.name}
+          id={derivedWorktreeId}
+          label={worktree.name}
           icon={FolderOutlined}
           color="geekblue"
           copyLabel="Worktree ID"
+          metadataCard={
+            <WorktreeCard
+              worktree={worktree}
+              repo={repo}
+              sessions={worktreeSessions}
+              users={users}
+              currentUserId={currentUserId}
+              selectedSessionId={selectedSessionId}
+              inPopover={true}
+              {...worktreeActions}
+            />
+          }
         />
       )}
 

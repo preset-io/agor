@@ -544,6 +544,23 @@ export const App: React.FC<AppProps> = ({
           events={events}
           onClear={clearEvents}
           worktreeById={worktreeById}
+          sessionById={sessionById}
+          sessionsByWorktree={sessionsByWorktree}
+          repos={repos}
+          users={users}
+          currentUserId={user?.user_id}
+          selectedSessionId={selectedSessionId}
+          worktreeActions={{
+            onSessionClick: setSelectedSessionId,
+            onCreateSession: (worktreeId) => setNewSessionWorktreeId(worktreeId),
+            onForkSession,
+            onSpawnSession,
+            onOpenTerminal: handleOpenTerminal,
+            onStartEnvironment,
+            onStopEnvironment,
+            onOpenSettings: (worktreeId) => setWorktreeModalWorktreeId(worktreeId),
+            onViewLogs: (worktreeId) => setLogsModalWorktreeId(worktreeId),
+          }}
         />
       </Content>
       {newSessionWorktreeId && (

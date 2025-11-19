@@ -2,10 +2,11 @@
  * EventStreamPill - Reusable clickable ID pill for event stream
  *
  * Displays short IDs with copy-to-clipboard functionality
+ * Optionally wraps in Popover for rich metadata display
  */
 
 import type { AntdIconProps } from '@ant-design/icons/lib/components/AntdIcon';
-import { message, Tag } from 'antd';
+import { message, Popover, Tag } from 'antd';
 import type React from 'react';
 
 export interface EventStreamPillProps {
@@ -19,6 +20,8 @@ export interface EventStreamPillProps {
   color: string;
   /** Human-readable label for copy notification */
   copyLabel: string;
+  /** Optional metadata card to show in popover on hover */
+  metadataCard?: React.ReactNode;
 }
 
 /**
@@ -48,8 +51,9 @@ export const EventStreamPill = ({
   icon: Icon,
   color,
   copyLabel,
+  metadataCard,
 }: EventStreamPillProps): React.JSX.Element => {
-  return (
+  const pill = (
     <Tag
       icon={<Icon />}
       color={color}
@@ -64,4 +68,21 @@ export const EventStreamPill = ({
       {label ?? toShortId(id)}
     </Tag>
   );
+
+  // If metadata card provided, wrap in popover
+  if (metadataCard) {
+    return (
+      <Popover
+        content={metadataCard}
+        title={null}
+        trigger="hover"
+        placement="left"
+        mouseEnterDelay={0.3}
+      >
+        {pill}
+      </Popover>
+    );
+  }
+
+  return pill;
 };

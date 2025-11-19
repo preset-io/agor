@@ -78,6 +78,7 @@ interface WorktreeCardProps {
   zoneName?: string;
   zoneColor?: string;
   defaultExpanded?: boolean;
+  inPopover?: boolean; // NEW: Enable popover-optimized mode (hides board-specific controls)
 }
 
 const WorktreeCard = ({
@@ -103,6 +104,7 @@ const WorktreeCard = ({
   zoneName,
   zoneColor,
   defaultExpanded = true,
+  inPopover = false,
 }: WorktreeCardProps) => {
   const { token } = theme.useToken();
   const connectionDisabled = useConnectionDisabled();
@@ -457,7 +459,7 @@ const WorktreeCard = ({
         cursor: 'default', // Override React Flow's drag cursor - only drag handles should show grab cursor
         transition: 'box-shadow 1s ease-in-out, border 1s ease-in-out',
         ...(isPinned && zoneColor ? { borderColor: zoneColor, borderWidth: 1 } : {}),
-        ...(needsAttention
+        ...(needsAttention && !inPopover
           ? {
               // Intense multi-layer glow for dark mode visibility
               animation: 'worktree-card-pulse 2s ease-in-out infinite',
@@ -480,23 +482,25 @@ const WorktreeCard = ({
         }}
       >
         <Space size={8} align="center">
-          <div
-            className="drag-handle"
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              cursor: 'grab',
-              width: 32,
-              height: 32,
-              justifyContent: 'center',
-            }}
-          >
-            {hasRunningSession ? (
-              <Spin size="large" />
-            ) : (
-              <BranchesOutlined style={{ fontSize: 32, color: token.colorPrimary }} />
-            )}
-          </div>
+          {!inPopover && (
+            <div
+              className="drag-handle"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                cursor: 'grab',
+                width: 32,
+                height: 32,
+                justifyContent: 'center',
+              }}
+            >
+              {hasRunningSession ? (
+                <Spin size="large" />
+              ) : (
+                <BranchesOutlined style={{ fontSize: 32, color: token.colorPrimary }} />
+              )}
+            </div>
+          )}
           <div style={{ display: 'flex', flexDirection: 'column' }}>
             <Typography.Text strong className="nodrag">
               {worktree.name}
@@ -508,31 +512,35 @@ const WorktreeCard = ({
         </Space>
 
         <Space size={4}>
-          <div className="nodrag">
-            {isPinned && zoneName && (
-              <Tag
-                icon={<PushpinFilled style={{ color: zoneColor }} />}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onUnpin?.(worktree.worktree_id);
-                }}
-                style={{
-                  cursor: 'pointer',
-                  backgroundColor: zoneColor ? `${zoneColor}1a` : undefined, // 10% alpha (1a in hex = 26/255 ≈ 10%)
-                  borderColor: zoneColor,
-                }}
-                title={`Pinned to ${zoneName} (click to unpin)`}
-              />
-            )}
-          </div>
-          <Button
-            type="text"
-            size="small"
-            icon={<DragOutlined />}
-            className="drag-handle"
-            title="Drag to reposition"
-            style={{ cursor: 'grab' }}
-          />
+          {!inPopover && (
+            <div className="nodrag">
+              {isPinned && zoneName && (
+                <Tag
+                  icon={<PushpinFilled style={{ color: zoneColor }} />}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onUnpin?.(worktree.worktree_id);
+                  }}
+                  style={{
+                    cursor: 'pointer',
+                    backgroundColor: zoneColor ? `${zoneColor}1a` : undefined, // 10% alpha (1a in hex = 26/255 ≈ 10%)
+                    borderColor: zoneColor,
+                  }}
+                  title={`Pinned to ${zoneName} (click to unpin)`}
+                />
+              )}
+            </div>
+          )}
+          {!inPopover && (
+            <Button
+              type="text"
+              size="small"
+              icon={<DragOutlined />}
+              className="drag-handle"
+              title="Drag to reposition"
+              style={{ cursor: 'grab' }}
+            />
+          )}
           <div className="nodrag">
             {onOpenTerminal && (
               <Button
@@ -558,7 +566,7 @@ const WorktreeCard = ({
                 title="Edit worktree"
               />
             )}
-            {onArchiveOrDelete && (
+            {!inPopover && onArchiveOrDelete && (
               <Button
                 type="text"
                 size="small"

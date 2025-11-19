@@ -1,5 +1,7 @@
+import { CodeOutlined, FolderOutlined } from '@ant-design/icons';
 import type { Meta, StoryObj } from '@storybook/react';
 import { Space } from 'antd';
+import { EventStreamPill } from './EventStreamPill';
 import {
   ConceptPill,
   DirtyStatePill,
@@ -13,6 +15,7 @@ import {
   ToolCountPill,
   WorktreePill,
 } from './Pill';
+import { SessionMetadataCard } from './SessionMetadataCard';
 import { TimerPill } from './TimerPill';
 
 const meta = {
@@ -202,6 +205,207 @@ export const Features: Story = {
       <ConceptPill name="authentication" />
       <WorktreePill managed={true} />
       <DirtyStatePill />
+    </Space>
+  ),
+};
+
+export const EventStream: Story = {
+  render: () => (
+    <Space direction="vertical" size="large">
+      <div>
+        <h3>EventStreamPill - Basic (no popover)</h3>
+        <Space wrap>
+          <EventStreamPill
+            id="0199b856-1234-5678-9abc-def012345678"
+            icon={CodeOutlined}
+            color="cyan"
+            copyLabel="Session ID"
+          />
+          <EventStreamPill
+            id="0199b857-abcd-1234-5678-9abcdef01234"
+            label="auth-fix"
+            icon={FolderOutlined}
+            color="geekblue"
+            copyLabel="Worktree ID"
+          />
+        </Space>
+      </div>
+
+      <div>
+        <h3>EventStreamPill - With Metadata Card (hover to see)</h3>
+        <Space wrap>
+          <EventStreamPill
+            id="0199b856-1234-5678-9abc-def012345678"
+            icon={CodeOutlined}
+            color="cyan"
+            copyLabel="Session ID"
+            metadataCard={
+              <SessionMetadataCard
+                session={{
+                  session_id: '0199b856-1234-5678-9abc-def012345678',
+                  sdk_session_id: 'sdk-01a1b2c3',
+                  agentic_tool: 'claude-code',
+                  title: 'Fix authentication middleware bug',
+                  description: 'Add JWT validation to auth middleware',
+                  status: 'running',
+                  permission_mode: 'auto',
+                  created_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+                  updated_at: new Date().toISOString(),
+                  created_by: 'user-123',
+                  worktree_id: 'worktree-456',
+                  repo_id: 'repo-789',
+                  forked_from_session_id: '0199b850-d329-7893-bc1c-197cbf4f4a7f',
+                  ready_for_prompt: false,
+                }}
+                worktree={{
+                  worktree_id: 'worktree-456',
+                  name: 'auth-fix',
+                  repo_id: 'repo-789',
+                  path: '/Users/dev/.agor/worktrees/my-app/auth-fix',
+                  created_at: new Date().toISOString(),
+                  updated_at: new Date().toISOString(),
+                }}
+                repo={{
+                  repo_id: 'repo-789',
+                  slug: 'my-org/my-app',
+                  url: 'https://github.com/my-org/my-app',
+                  default_branch: 'main',
+                  created_at: new Date().toISOString(),
+                  updated_at: new Date().toISOString(),
+                }}
+                users={[
+                  {
+                    user_id: 'user-123',
+                    email: 'dev@example.com',
+                    name: 'Alice Developer',
+                    created_at: new Date().toISOString(),
+                    updated_at: new Date().toISOString(),
+                  },
+                ]}
+                currentUserId="user-456"
+                compact
+              />
+            }
+          />
+        </Space>
+      </div>
+    </Space>
+  ),
+};
+
+export const SessionMetadata: Story = {
+  render: () => (
+    <Space direction="vertical" size="large">
+      <div>
+        <h3>Running Session (Forked)</h3>
+        <SessionMetadataCard
+          session={{
+            session_id: '0199b856-1234-5678-9abc-def012345678',
+            sdk_session_id: 'sdk-01a1b2c3',
+            agentic_tool: 'claude-code',
+            title: 'Fix authentication middleware bug',
+            description: 'Add JWT validation to auth middleware',
+            status: 'running',
+            permission_mode: 'auto',
+            created_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+            updated_at: new Date().toISOString(),
+            created_by: 'user-123',
+            worktree_id: 'worktree-456',
+            repo_id: 'repo-789',
+            forked_from_session_id: '0199b850-d329-7893-bc1c-197cbf4f4a7f',
+            ready_for_prompt: false,
+          }}
+          worktree={{
+            worktree_id: 'worktree-456',
+            name: 'auth-fix',
+            repo_id: 'repo-789',
+            path: '/Users/dev/.agor/worktrees/my-app/auth-fix',
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          }}
+          repo={{
+            repo_id: 'repo-789',
+            slug: 'my-org/my-app',
+            url: 'https://github.com/my-org/my-app',
+            default_branch: 'main',
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          }}
+          users={[
+            {
+              user_id: 'user-123',
+              email: 'dev@example.com',
+              name: 'Alice Developer',
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            },
+          ]}
+          currentUserId="user-456"
+          compact
+        />
+      </div>
+
+      <div>
+        <h3>Completed Session (Spawned)</h3>
+        <SessionMetadataCard
+          session={{
+            session_id: '0199b858-5678-abcd-1234-56789abcdef0',
+            agentic_tool: 'codex',
+            title: 'Run integration tests',
+            status: 'completed',
+            permission_mode: 'on-request',
+            created_at: new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString(),
+            updated_at: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
+            created_by: 'user-123',
+            worktree_id: 'worktree-456',
+            repo_id: 'repo-789',
+            spawned_from_session_id: '0199b850-d329-7893-bc1c-197cbf4f4a7f',
+            ready_for_prompt: false,
+          }}
+          users={[
+            {
+              user_id: 'user-123',
+              email: 'dev@example.com',
+              name: 'Alice Developer',
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            },
+          ]}
+          currentUserId="user-123"
+          compact
+        />
+      </div>
+
+      <div>
+        <h3>Failed Session (No Genealogy)</h3>
+        <SessionMetadataCard
+          session={{
+            session_id: '0199b859-9abc-def0-1234-56789abcdef0',
+            sdk_session_id: 'gemini-thread-xyz789',
+            agentic_tool: 'gemini',
+            description: 'Debug memory leak in worker process',
+            status: 'failed',
+            permission_mode: 'ask',
+            created_at: new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString(),
+            updated_at: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
+            created_by: 'user-456',
+            worktree_id: 'worktree-789',
+            repo_id: 'repo-123',
+            ready_for_prompt: false,
+          }}
+          users={[
+            {
+              user_id: 'user-456',
+              email: 'bob@example.com',
+              name: 'Bob Engineer',
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            },
+          ]}
+          currentUserId="user-456"
+          compact
+        />
+      </div>
     </Space>
   ),
 };

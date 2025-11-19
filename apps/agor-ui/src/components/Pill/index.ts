@@ -1,3 +1,4 @@
+export { EventStreamPill } from './EventStreamPill';
 export {
   BranchPill,
   ConceptPill,
@@ -22,4 +23,5 @@ export {
   ToolCountPill,
   WorktreePill,
 } from './Pill';
+export { SessionMetadataCard } from './SessionMetadataCard';
 export { TimerPill } from './TimerPill';
