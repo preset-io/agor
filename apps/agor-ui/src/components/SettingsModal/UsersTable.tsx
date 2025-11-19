@@ -97,7 +97,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
         name: user.name,
         emoji: user.emoji,
         role: user.role,
-        eventStreamEnabled: user.preferences?.eventStream?.enabled ?? false,
+        eventStreamEnabled: user.preferences?.eventStream?.enabled ?? true,
       });
 
       // Initialize agentic tool forms with user's defaults
@@ -204,7 +204,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
           preferences: {
             ...editingUser.preferences,
             eventStream: {
-              enabled: values.eventStreamEnabled ?? false,
+              enabled: values.eventStreamEnabled ?? true,
             },
           },
         };

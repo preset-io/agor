@@ -16,6 +16,11 @@ echo "📍 Repository root: $REPO_ROOT"
 echo "📦 Package directory: $SCRIPT_DIR"
 echo ""
 
+echo "🔍 Verifying agor-live dependency alignment..."
+cd "$REPO_ROOT"
+pnpm check:agor-live-deps
+echo ""
+
 # Clean previous build
 echo "🧹 Cleaning previous build..."
 rm -rf "$SCRIPT_DIR/dist"

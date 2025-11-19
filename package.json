@@ -31,12 +31,15 @@
     "prepare": "husky",
     "cli:link": "pnpm -C apps/agor-cli link --global",
     "cli:unlink": "pnpm -C apps/agor-cli unlink --global",
-    "agor": "NODE_NO_WARNINGS=1 pnpm --filter @agor/cli exec tsx bin/dev.ts",
-    "seed": "tsx scripts/seed.ts"
+    "agor": "cross-env NODE_NO_WARNINGS=1 pnpm --filter @agor/cli exec tsx bin/dev.ts",
+    "seed": "tsx scripts/seed.ts",
+    "sync:agor-live-deps": "node scripts/sync-agor-live-deps.mjs",
+    "check:agor-live-deps": "node scripts/sync-agor-live-deps.mjs --check"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.2.6",
     "@google-analytics/admin": "^9.0.1",
+    "cross-env": "^10.1.0",
     "husky": "^9.1.7",
     "knip": "^5.66.2",
     "lint-staged": "^16.2.5",

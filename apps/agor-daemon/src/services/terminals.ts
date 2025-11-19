@@ -17,7 +17,7 @@ import os from 'node:os';
 import { resolveUserEnvironment } from '@agor/core/config';
 import { type Database, WorktreeRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { UserID, WorktreeID } from '@agor/core/types';
+import type { AuthenticatedParams, UserID, WorktreeID } from '@agor/core/types';
 import type { IPty } from '@homebridge/node-pty-prebuilt-multiarch';
 import * as pty from '@homebridge/node-pty-prebuilt-multiarch';
 
@@ -39,6 +39,7 @@ interface CreateTerminalData {
   cols?: number;
   userId?: UserID; // User context for env resolution
   worktreeId?: WorktreeID; // Worktree context for tmux integration
+  useTmux?: boolean; // Optional flag to disable tmux even when available
 }
 
 interface ResizeTerminalData {
@@ -95,6 +96,66 @@ function findTmuxWindow(sessionName: string, windowName: string): number | null 
 }
 
 /**
+ * Ensure tmux session is configured to pass OSC hyperlinks and other rich output.
+ */
+function configureTmuxSession(sessionName: string): void {
+  try {
+    execSync(`tmux set-option -t "${sessionName}" -g allow-passthrough on`, { stdio: 'pipe' });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(
+      `⚠️ Failed to enable tmux allow-passthrough for session ${sessionName}: ${message}`
+    );
+  }
+
+  try {
+    execSync(`tmux set-option -t "${sessionName}" -g default-terminal 'tmux-256color'`, {
+      stdio: 'pipe',
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`⚠️ Failed to set tmux default-terminal for ${sessionName}: ${message}`);
+  }
+
+  try {
+    execSync(`tmux set-option -ga terminal-features 'xterm*:allow-passthrough'`, { stdio: 'pipe' });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`⚠️ Failed to advertise tmux allow-passthrough feature: ${message}`);
+  }
+
+  try {
+    execSync(`tmux set-option -ga terminal-features 'tmux-256color:hyperlinks,RGB,extkeys'`, {
+      stdio: 'pipe',
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`⚠️ Failed to advertise tmux tmux-256color features: ${message}`);
+  }
+
+  try {
+    execSync(`tmux set-option -ga terminal-features 'xterm*:hyperlinks'`, { stdio: 'pipe' });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`⚠️ Failed to enable tmux hyperlink feature: ${message}`);
+  }
+
+  try {
+    execSync(`tmux set-option -as terminal-overrides ',*:allow-passthrough'`, { stdio: 'pipe' });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`⚠️ Failed to configure tmux allow-passthrough override: ${message}`);
+  }
+
+  try {
+    execSync(`tmux set-option -as terminal-overrides ',*:hyperlinks'`, { stdio: 'pipe' });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`⚠️ Failed to configure tmux hyperlink override: ${message}`);
+  }
+}
+
+/**
  * Terminals service - manages PTY sessions
  */
 export class TerminalsService {
@@ -102,13 +163,17 @@ export class TerminalsService {
   private app: Application;
   private db: Database;
   private hasTmux: boolean;
+  private forceTmux: boolean;
 
   constructor(app: Application, db: Database) {
     this.app = app;
     this.db = db;
     this.hasTmux = isTmuxAvailable();
+    this.forceTmux = process.env.AGOR_DISABLE_TMUX !== 'true';
 
-    if (this.hasTmux) {
+    if (!this.forceTmux) {
+      console.log('ℹ️  tmux disabled via AGOR_DISABLE_TMUX=true - using direct PTY sessions');
+    } else if (this.hasTmux) {
       console.log('\x1b[36m✅ tmux detected\x1b[0m - persistent terminal sessions enabled');
     } else {
       console.log('ℹ️  tmux not found - using ephemeral terminal sessions');
@@ -118,7 +183,10 @@ export class TerminalsService {
   /**
    * Create a new terminal session
    */
-  async create(data: CreateTerminalData): Promise<{
+  async create(
+    data: CreateTerminalData,
+    params?: AuthenticatedParams
+  ): Promise<{
     terminalId: string;
     cwd: string;
     tmuxSession?: string;
@@ -126,6 +194,13 @@ export class TerminalsService {
     worktreeName?: string;
   }> {
     const terminalId = `term-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const authenticatedUserId = params?.user?.user_id as UserID | undefined;
+    const resolvedUserId = data.userId ?? authenticatedUserId;
+    const userSessionSuffix = (() => {
+      if (!resolvedUserId) return 'shared';
+      const sanitized = resolvedUserId.replace(/[^a-zA-Z0-9_-]/g, '');
+      return sanitized.length > 0 ? sanitized : 'user';
+    })();
 
     // Resolve worktree context if provided
     let worktree = null;
@@ -142,20 +217,25 @@ export class TerminalsService {
     }
 
     // Determine shell and tmux configuration
-    let shell: string;
-    let shellArgs: string[] = [];
+    const defaultShell = data.shell || (os.platform() === 'win32' ? 'powershell.exe' : 'bash');
+    const defaultShellArgs: string[] = [];
+    let shell: string = defaultShell;
+    let shellArgs: string[] = [...defaultShellArgs];
     let tmuxSession: string | undefined;
     let tmuxReused = false;
 
-    if (this.hasTmux && worktree) {
+    const tmuxRequested = data.useTmux !== false;
+
+    if (this.hasTmux && this.forceTmux && worktree && tmuxRequested) {
       // Use single shared tmux session with one window per worktree
-      tmuxSession = 'agor';
+      tmuxSession = `agor-${userSessionSuffix}`;
       const sessionExists = tmuxSessionExists(tmuxSession);
       const windowName = worktreeName || 'unnamed';
 
       shell = 'tmux';
 
       if (sessionExists) {
+        configureTmuxSession(tmuxSession);
         // Session exists - check if this worktree has a window
         const windowIndex = findTmuxWindow(tmuxSession, windowName);
 
@@ -199,8 +279,45 @@ export class TerminalsService {
           'set-option',
           '-t',
           tmuxSession,
+          'default-terminal',
+          'tmux-256color',
+          ';',
+          'set-option',
+          '-t',
+          tmuxSession,
           'status-style',
           'bg=#2e9a92,fg=#000000',
+          ';',
+          'set-option',
+          '-t',
+          tmuxSession,
+          'allow-passthrough',
+          'on',
+          ';',
+          'set-option',
+          '-ga',
+          'terminal-features',
+          'xterm*:hyperlinks',
+          ';',
+          'set-option',
+          '-ga',
+          'terminal-features',
+          'tmux-256color:hyperlinks,RGB,extkeys',
+          ';',
+          'set-option',
+          '-ga',
+          'terminal-features',
+          'xterm*:allow-passthrough',
+          ';',
+          'set-option',
+          '-as',
+          'terminal-overrides',
+          ',*:allow-passthrough',
+          ';',
+          'set-option',
+          '-as',
+          'terminal-overrides',
+          ',*:hyperlinks',
         ];
         tmuxReused = false;
         console.log(
@@ -208,27 +325,81 @@ export class TerminalsService {
         );
       }
     } else {
+      if (this.hasTmux && this.forceTmux && !tmuxRequested) {
+        console.log('ℹ️ tmux disabled for this terminal session (user toggle)');
+      }
       // Fallback to regular shell
-      shell = data.shell || (os.platform() === 'win32' ? 'powershell.exe' : 'bash');
+      shell = defaultShell;
+      shellArgs = [...defaultShellArgs];
     }
 
     // Resolve environment with user env vars if userId provided
-    let env: Record<string, string> = process.env as Record<string, string>;
-    if (data.userId) {
-      env = await resolveUserEnvironment(data.userId, this.db);
+    let env: Record<string, string> = { ...(process.env as Record<string, string>) };
+    if (resolvedUserId) {
+      const userEnv = await resolveUserEnvironment(resolvedUserId, this.db);
       console.log(
-        `🔐 Loaded ${Object.keys(env).length} env vars for user ${data.userId.substring(0, 8)}`
+        `🔐 Loaded ${Object.keys(userEnv).length} env vars for user ${resolvedUserId.substring(0, 8)}`
       );
+      env = { ...env, ...userEnv };
+    }
+    env = { ...env };
+
+    // Ensure terminal capabilities advertised to downstream processes
+    if (!env.TERM) {
+      env.TERM = 'xterm-256color';
+    }
+    if (!env.COLORTERM) {
+      env.COLORTERM = 'truecolor';
+    }
+    if (!env.ENABLE_HYPERLINKS) {
+      env.ENABLE_HYPERLINKS = '1';
+    }
+    if (!env.RICH_FORCE_COLOR) {
+      env.RICH_FORCE_COLOR = '1';
+    }
+    if (!env.RICH_FORCE_HYPERLINK) {
+      env.RICH_FORCE_HYPERLINK = '1';
+    }
+    if (!env.LANG) {
+      env.LANG = 'C.UTF-8';
+    }
+    if (!env.LC_ALL) {
+      env.LC_ALL = env.LANG;
+    }
+    if (!env.LC_CTYPE) {
+      env.LC_CTYPE = env.LANG;
     }
 
     // Spawn PTY process
-    const ptyProcess = pty.spawn(shell, shellArgs, {
-      name: 'xterm-color',
-      cols: data.cols || 80,
-      rows: data.rows || 30,
-      cwd,
-      env, // Use resolved environment
-    });
+    let ptyProcess: IPty;
+    try {
+      ptyProcess = pty.spawn(shell, shellArgs, {
+        name: 'xterm-256color',
+        cols: data.cols || 80,
+        rows: data.rows || 30,
+        cwd,
+        env, // Use resolved environment
+      });
+    } catch (error) {
+      if (shell === 'tmux') {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`⚠️ Failed to launch tmux session, falling back to direct shell: ${message}`);
+        this.hasTmux = false;
+        tmuxSession = undefined;
+        tmuxReused = false;
+        shell = defaultShell;
+        shellArgs = [...defaultShellArgs];
+        ptyProcess = pty.spawn(shell, shellArgs, {
+          name: 'xterm-256color',
+          cols: data.cols || 80,
+          rows: data.rows || 30,
+          cwd,
+          env,
+        });
+      } else {
+        throw error;
+      }
+    }
 
     // Store session
     this.sessions.set(terminalId, {
@@ -236,7 +407,7 @@ export class TerminalsService {
       pty: ptyProcess,
       shell,
       cwd,
-      userId: data.userId,
+      userId: resolvedUserId,
       worktreeId: data.worktreeId,
       tmuxSession,
       createdAt: new Date(),

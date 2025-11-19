@@ -117,6 +117,21 @@ const EventItemComponent = ({
     }
   };
 
+  // Split event name into entity and action
+  const parseEventName = (eventName: string): { entity?: string; action?: string } => {
+    const actions = ['created', 'patched', 'updated', 'removed'];
+    const foundAction = actions.find((action) => eventName.includes(action));
+
+    if (foundAction) {
+      // Extract entity by removing the action
+      const entity = eventName.replace(foundAction, '').trim();
+      return { entity, action: foundAction };
+    }
+
+    // If no action found, return the full event name as entity
+    return { entity: eventName };
+  };
+
   // Extract session_id and worktree_id from event data
   const sessionId =
     event.data && typeof event.data === 'object' && 'session_id' in event.data
@@ -135,6 +150,9 @@ const EventItemComponent = ({
   const worktree = derivedWorktreeId ? worktreeById.get(derivedWorktreeId) : undefined;
   const repo = worktree ? repos.find((r) => r.repo_id === worktree.repo_id) : undefined;
   const worktreeSessions = worktree ? sessionsByWorktree.get(worktree.worktree_id) || [] : [];
+
+  // Parse event name into entity and action
+  const { entity, action } = parseEventName(event.eventName);
 
   // JSON details popover content
   const detailsContent: React.JSX.Element = event.data ? (
@@ -183,18 +201,56 @@ const EventItemComponent = ({
         {event.type}
       </Tag>
 
-      <Text
-        strong
-        style={{
-          fontSize: 12,
-          flex: 1,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-        }}
-      >
-        {event.eventName}
-      </Text>
+      {/* Entity tag (e.g., "sessions", "worktrees") */}
+      {entity && (
+        <Tag
+          style={{
+            margin: 0,
+            fontSize: 11,
+            backgroundColor: token.colorBgContainer,
+            borderColor: token.colorBorder,
+            color: token.colorText,
+          }}
+        >
+          {entity}
+        </Tag>
+      )}
+
+      {/* Action tag (e.g., "created", "patched") */}
+      {action && (
+        <Tag
+          color={
+            action === 'created'
+              ? 'green'
+              : action === 'removed'
+                ? 'red'
+                : action === 'patched' || action === 'updated'
+                  ? 'orange'
+                  : 'default'
+          }
+          style={{ margin: 0, fontSize: 11 }}
+        >
+          {action}
+        </Tag>
+      )}
+
+      {/* Fallback: if no entity/action split, show full event name */}
+      {!entity && !action && (
+        <Text
+          strong
+          style={{
+            fontSize: 12,
+            flex: 1,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {event.eventName}
+        </Text>
+      )}
+
+      <div style={{ flex: 1 }} />
 
       {/* Session ID pill */}
       {sessionId && (
