@@ -100,11 +100,11 @@ const client = createClient('http://localhost:3030');
 
 // List sessions with real-time updates
 const sessions = await client.service('sessions').find({
-  query: { board_id: 'abc123' }
+  query: { board_id: 'abc123' },
 });
 
 // Subscribe to new messages
-client.service('messages').on('created', (message) => {
+client.service('messages').on('created', message => {
   console.log('New message:', message.content);
 });
 ```
@@ -163,10 +163,10 @@ jobs:
       - uses: agor-live/agor-action@v1
         with:
           agent: claude-code
-          prompt: "Review this PR for security issues and best practices"
-          board: "ci-reviews"
-          worktree: "pr-${{ github.event.pull_request.number }}"
-          mcp-servers: "playwright,context7"
+          prompt: 'Review this PR for security issues and best practices'
+          board: 'ci-reviews'
+          worktree: 'pr-${{ github.event.pull_request.number }}'
+          mcp-servers: 'playwright,context7'
 ```
 
 What happens:
@@ -244,18 +244,18 @@ const client = createClient(process.env.AGOR_DAEMON_URL);
 const session = await client.service('sessions').create({
   worktree_id: 'abc123',
   agent: 'claude-code',
-  prompt: 'Implement dark mode for the dashboard'
+  prompt: 'Implement dark mode for the dashboard',
 });
 
 // Watch progress in real-time
-client.service('messages').on('created', (message) => {
+client.service('messages').on('created', message => {
   if (message.session_id === session.session_id) {
     console.log('Agent update:', message.content);
   }
 });
 
 // Wait for completion
-client.service('sessions').on('patched', (updated) => {
+client.service('sessions').on('patched', updated => {
   if (updated.session_id === session.session_id && updated.status === 'completed') {
     console.log('Session complete!');
   }
@@ -293,18 +293,18 @@ const sessions = await Promise.all([
   client.service('sessions').create({
     worktree_id: 'frontend-wt',
     agent: 'claude-code',
-    prompt: 'Add dark mode to React components'
+    prompt: 'Add dark mode to React components',
   }),
   client.service('sessions').create({
     worktree_id: 'backend-wt',
     agent: 'codex',
-    prompt: 'Add dark mode preference to user API'
+    prompt: 'Add dark mode preference to user API',
   }),
   client.service('sessions').create({
     worktree_id: 'docs-wt',
     agent: 'gemini',
-    prompt: 'Update docs to mention dark mode feature'
-  })
+    prompt: 'Update docs to mention dark mode feature',
+  }),
 ]);
 
 // Wait for all to complete
@@ -322,7 +322,7 @@ Connect your issue tracker directly to Agor:
 
 ```typescript
 // GitHub webhook handler
-app.post('/webhooks/github', async (req) => {
+app.post('/webhooks/github', async req => {
   const issue = req.body.issue;
 
   if (issue.labels.includes('agent-fix')) {
@@ -330,13 +330,13 @@ app.post('/webhooks/github', async (req) => {
     const worktree = await client.service('worktrees').create({
       repo_id: 'myapp',
       worktree_name: `issue-${issue.number}`,
-      source_branch: 'main'
+      source_branch: 'main',
     });
 
     await client.service('sessions').create({
       worktree_id: worktree.worktree_id,
       agent: 'claude-code',
-      prompt: `Fix issue #${issue.number}: ${issue.title}`
+      prompt: `Fix issue #${issue.number}: ${issue.title}`,
     });
 
     // Session appears on your board, you watch it work
@@ -362,7 +362,7 @@ async function reviewPR(prNumber: number, prBranch: string) {
     worktree_name: `pr-${prNumber}`,
     ref: prBranch,
     source_branch: 'main',
-    board_id: 'ci-reviews'  // Lands on your CI board
+    board_id: 'ci-reviews', // Lands on your CI board
   });
 
   // Spawn review agent
@@ -374,22 +374,21 @@ async function reviewPR(prNumber: number, prBranch: string) {
     - Performance concerns
     - Best practices violations
 
-    Provide detailed feedback with line numbers.`
+    Provide detailed feedback with line numbers.`,
   });
 
   // Subscribe to results
   const messages = [];
-  client.service('messages').on('created', (msg) => {
+  client.service('messages').on('created', msg => {
     if (msg.session_id === session.session_id && msg.role === 'assistant') {
       messages.push(msg.content);
     }
   });
 
   // Wait for completion
-  await new Promise((resolve) => {
-    client.service('sessions').on('patched', (updated) => {
-      if (updated.session_id === session.session_id &&
-          updated.status === 'completed') {
+  await new Promise(resolve => {
+    client.service('sessions').on('patched', updated => {
+      if (updated.session_id === session.session_id && updated.status === 'completed') {
         resolve();
       }
     });

@@ -85,7 +85,7 @@ interface SessionCanvasProps {
   selectedSessionId?: string | null;
   availableAgents?: AgenticToolOption[];
   mcpServerById?: Map<string, MCPServer>; // Map-based MCP server storage
-  sessionMcpServerIds?: Record<string, string[]>; // Map sessionId -> mcpServerIds[]
+  sessionMcpServerIds?: Map<string, string[]>; // Map sessionId -> mcpServerIds[]
   onSessionClick?: (sessionId: string) => void;
   onTaskClick?: (taskId: string) => void;
   onSessionUpdate?: (sessionId: string, updates: Partial<Session>) => void;
@@ -242,7 +242,7 @@ const SessionCanvas = ({
   selectedSessionId,
   availableAgents = [],
   mcpServerById = new Map(),
-  sessionMcpServerIds = {},
+  sessionMcpServerIds = new Map(),
   onSessionClick,
   onTaskClick,
   onSessionUpdate,
@@ -272,6 +272,7 @@ const SessionCanvas = ({
 
   // Stabilize board objects for this board using a JSON key for deep equality
   // This prevents recomputation when board objects on OTHER boards change
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Using board_id instead of board for targeted memoization
   const boardObjectsKey = useMemo(() => {
     if (!board) return '[]';
     const boardObjectsArray: BoardEntityObject[] = [];
@@ -282,7 +283,7 @@ const SessionCanvas = ({
     }
     // Sort by object_id for stable JSON key
     boardObjectsArray.sort((a, b) => a.object_id.localeCompare(b.object_id));
-    return JSON.stringify(boardObjectsArray.map(bo => [bo.object_id, bo.updated_at]));
+    return JSON.stringify(boardObjectsArray.map((bo) => bo.object_id));
   }, [board?.board_id, boardObjectById]);
 
   // Index by worktree_id for O(1) lookups
@@ -1028,6 +1029,7 @@ const SessionCanvas = ({
   }, []);
 
   // Handle node drag end - persist layout to board (debounced)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: boardObjectByWorktree used via .get() method, boardObjectById removed as Map is stable
   const handleNodeDragStop: NodeDragHandler = useCallback(
     (_event, node) => {
       if (!board || !client || !reactFlowInstanceRef.current) return;
@@ -1412,7 +1414,7 @@ const SessionCanvas = ({
         }
       }, 500);
     },
-    [board, client, batchUpdateObjectPositions, nodes, boardObjectById, worktrees, setNodes]
+    [board, client, batchUpdateObjectPositions, nodes, boardObjectByWorktree, worktrees, setNodes]
   );
 
   // Cleanup debounce timers on unmount

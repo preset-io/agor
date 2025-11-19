@@ -29,21 +29,25 @@ Add a real-time activity feed that displays a stream of interesting events happe
 ### Why Build This?
 
 **1. Reinforces "Aliveness"**
+
 - Makes multiplayer aspect visceral rather than abstract
 - Seeing activity stream = feeling the pulse of the system
 - Especially valuable when multiple teammates are active
 
 **2. Discovery & Awareness**
+
 - "What changed while I was away?"
 - "What are my teammates working on?"
 - Quick context without hunting through boards
 
 **3. Debugging & Monitoring**
+
 - See system activity in real-time
 - Troubleshoot WebSocket issues
 - Understand agent behavior patterns
 
 **4. Engagement**
+
 - Makes solo work feel less lonely (seeing your own activity)
 - Creates FOMO/excitement around collaboration
 - Low-key addictive (like GitHub activity feed)
@@ -82,38 +86,39 @@ Add a real-time activity feed that displays a stream of interesting events happe
 
 **Always show these - they represent meaningful work:**
 
-| Event | Example | Summary Format |
-|-------|---------|----------------|
-| `sessions:created` | New agent session started | "🤖 {user} started session '{title}'" |
-| `sessions:patched` | Session status/title changed | "📝 {user} updated session '{title}'" |
-| `tasks:created` | User gave agent a prompt | "💭 {user}: '{prompt_preview}'" |
-| `worktrees:created` | New worktree created | "🌳 New worktree: {name}" |
-| `worktrees:patched` | Worktree metadata updated | "📝 Worktree updated: {name}" |
-| `board-comments:created` | User left comment | "💬 {user} commented: '{preview}'" |
-| `board-comments:patched` | Comment resolved/edited | "✅ {user} resolved comment" |
+| Event                    | Example                      | Summary Format                        |
+| ------------------------ | ---------------------------- | ------------------------------------- |
+| `sessions:created`       | New agent session started    | "🤖 {user} started session '{title}'" |
+| `sessions:patched`       | Session status/title changed | "📝 {user} updated session '{title}'" |
+| `tasks:created`          | User gave agent a prompt     | "💭 {user}: '{prompt_preview}'"       |
+| `worktrees:created`      | New worktree created         | "🌳 New worktree: {name}"             |
+| `worktrees:patched`      | Worktree metadata updated    | "📝 Worktree updated: {name}"         |
+| `board-comments:created` | User left comment            | "💬 {user} commented: '{preview}'"    |
+| `board-comments:patched` | Comment resolved/edited      | "✅ {user} resolved comment"          |
 
 ### 🟡 Medium Priority (Structural Changes)
 
 **Show these for context, but lower visual weight:**
 
-| Event | Example | Summary Format |
-|-------|---------|----------------|
-| `boards:created` | New board created | "📊 {user} created board '{name}'" |
-| `board-objects:patched` | Worktree moved on canvas | "🔄 {user} moved worktree" |
-| `repos:created` | New repo added | "📦 New repo: {path}" |
+| Event                   | Example                  | Summary Format                     |
+| ----------------------- | ------------------------ | ---------------------------------- |
+| `boards:created`        | New board created        | "📊 {user} created board '{name}'" |
+| `board-objects:patched` | Worktree moved on canvas | "🔄 {user} moved worktree"         |
+| `repos:created`         | New repo added           | "📦 New repo: {path}"              |
 
 ### 🔴 Low Priority / Noisy (Skip)
 
 **Too frequent or ephemeral - exclude from feed:**
 
-| Event | Why Skip |
-|-------|----------|
-| `messages:created` | Too noisy (agents send many messages per task) |
-| `cursor-positions:*` | Too noisy (100ms throttle = 10/sec per user) |
-| `active-users:*` | Ephemeral, not interesting |
-| `terminals:*` | Internal system events |
+| Event                | Why Skip                                       |
+| -------------------- | ---------------------------------------------- |
+| `messages:created`   | Too noisy (agents send many messages per task) |
+| `cursor-positions:*` | Too noisy (100ms throttle = 10/sec per user)   |
+| `active-users:*`     | Ephemeral, not interesting                     |
+| `terminals:*`        | Internal system events                         |
 
 **Note:** `messages:created` could be **grouped** into single item:
+
 - Raw: 45 `messages:created` events
 - Grouped: "✨ Claude responded (45 messages)"
 
@@ -371,12 +376,12 @@ const buildSummary = (
 
 const getEmojiForEvent = (service: string, action: string): string => {
   const emojiMap: Record<string, string> = {
-    'sessions': '🤖',
-    'tasks': '💭',
-    'worktrees': '🌳',
+    sessions: '🤖',
+    tasks: '💭',
+    worktrees: '🌳',
     'board-comments': '💬',
-    'boards': '📊',
-    'repos': '📦',
+    boards: '📊',
+    repos: '📦',
   };
   return emojiMap[service] || '📋';
 };
@@ -391,12 +396,14 @@ const getEmojiForEvent = (service: string, action: string): string => {
 #### Option 1: Modal (RECOMMENDED FOR V1)
 
 **Why start with modal:**
+
 - Fastest to prototype (< 4 hours)
 - Test concept before committing to layout changes
 - Familiar pattern (like notifications)
 - Zero layout impact
 
 **Implementation:**
+
 ```tsx
 <Badge count={unreadCount} offset={[-2, 2]}>
   <Tooltip title="Activity Feed" placement="bottom">
@@ -416,6 +423,7 @@ const getEmojiForEvent = (service: string, action: string): string => {
 ```
 
 **Visual:**
+
 ```
 ┌─────────────────────────────────────────────┐
 │ Header [Activity 🔴 3] [Comments] [User]   │
@@ -452,11 +460,13 @@ const getEmojiForEvent = (service: string, action: string): string => {
 ```
 
 **Benefits:**
+
 - Persistent visibility
 - Symmetrical with comments panel (left)
 - More immersive
 
 **Trade-offs:**
+
 - Takes horizontal space
 - More complex layout
 
@@ -482,16 +492,11 @@ export const ActivityFeedModal: React.FC<{
       bodyStyle={{ maxHeight: '60vh', overflowY: 'auto', padding: 0 }}
     >
       {activities.length === 0 ? (
-        <Empty
-          description="No recent activity"
-          style={{ padding: 24 }}
-        />
+        <Empty description="No recent activity" style={{ padding: 24 }} />
       ) : (
         <List
           dataSource={activities}
-          renderItem={activity => (
-            <ActivityItem activity={activity} />
-          )}
+          renderItem={activity => <ActivityItem activity={activity} />}
           style={{ padding: 8 }}
         />
       )}
@@ -523,9 +528,7 @@ const ActivityItem: React.FC<{ activity: ActivityItem }> = ({ activity }) => {
         {activity.user?.emoji || getEmojiForEvent(activity.service, activity.action)}
       </span>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <Typography.Text style={{ display: 'block' }}>
-          {activity.summary}
-        </Typography.Text>
+        <Typography.Text style={{ display: 'block' }}>{activity.summary}</Typography.Text>
         <Typography.Text
           type="secondary"
           style={{ fontSize: token.fontSizeSM, display: 'block', marginTop: 4 }}
@@ -570,12 +573,7 @@ return (
 **Start simple - show only high-value events:**
 
 ```typescript
-const INTERESTING_SERVICES = [
-  'sessions',
-  'tasks',
-  'worktrees',
-  'board-comments',
-];
+const INTERESTING_SERVICES = ['sessions', 'tasks', 'worktrees', 'board-comments'];
 
 const INTERESTING_ACTIONS = ['created', 'patched'];
 ```
@@ -688,6 +686,7 @@ const groupMessages = (activities: ActivityItem[]): ActivityItem[] => {
 **Goal:** Validate concept with minimal UI
 
 **Tasks:**
+
 1. Create `ActivityItem` type in `packages/core/src/types/activity.ts`
 2. Create `useActivityFeed` hook in `apps/agor-ui/src/hooks/useActivityFeed.ts`
 3. Create `ActivityFeedModal` component in `apps/agor-ui/src/components/ActivityFeedModal/`
@@ -695,6 +694,7 @@ const groupMessages = (activities: ActivityItem[]): ActivityItem[] => {
 5. Test with real usage - does anyone use it?
 
 **Success Criteria:**
+
 - Feed updates in real-time when events happen
 - Zero perf impact when closed (verify with React DevTools Profiler)
 - Users find it useful (ask for feedback!)
@@ -702,6 +702,7 @@ const groupMessages = (activities: ActivityItem[]): ActivityItem[] => {
 ### Phase 2: Refinement (2-4 hours)
 
 **If Phase 1 successful, add:**
+
 - Event filtering controls (checkboxes for services)
 - Persist filter preferences to localStorage
 - Click-to-navigate (jump to session/worktree)
@@ -711,6 +712,7 @@ const groupMessages = (activities: ActivityItem[]): ActivityItem[] => {
 ### Phase 3: Advanced Features (8-12 hours)
 
 **If widely adopted, consider:**
+
 - Right sidebar panel (persistent visibility)
 - Time-based grouping ("Just Now", "5m ago", "1h ago")
 - Smart message grouping (collapse rapid messages)
@@ -792,6 +794,7 @@ const groupMessages = (activities: ActivityItem[]): ActivityItem[] => {
 ✅ Low risk (can be removed if not valuable)
 
 **Recommended next steps:**
+
 1. Implement Phase 1 (modal prototype) this week
 2. Dogfood with internal usage for 1-2 weeks
 3. Gather feedback and decide on Phase 2

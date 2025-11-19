@@ -28,14 +28,14 @@ Think of subsessions as **delegated subagents** - you can spawn them from any ru
 
 If you're familiar with [Claude Code's subagent feature](https://docs.claudecode.com/subagents), Agor's subsessions take the concept further:
 
-| Feature | Claude Code Subagents | Agor Subsessions |
-|---------|----------------------|------------------|
-| **Parent Blocking** | Parent locks while subagent runs | ✅ Parent remains responsive |
-| **Callback Queuing** | N/A | ✅ Callbacks queue if parent is busy |
-| **Introspection** | Limited | ✅ Full conversation & git history |
-| **Post-Completion Prompting** | No | ✅ Can prompt child after it's done |
-| **Hierarchical Spawning** | No | ✅ Children can spawn their own children |
-| **Multi-Tool Support** | Claude Code only | ✅ Works with any agent (Claude, Codex, Gemini, OpenCode) |
+| Feature                       | Claude Code Subagents            | Agor Subsessions                                          |
+| ----------------------------- | -------------------------------- | --------------------------------------------------------- |
+| **Parent Blocking**           | Parent locks while subagent runs | ✅ Parent remains responsive                              |
+| **Callback Queuing**          | N/A                              | ✅ Callbacks queue if parent is busy                      |
+| **Introspection**             | Limited                          | ✅ Full conversation & git history                        |
+| **Post-Completion Prompting** | No                               | ✅ Can prompt child after it's done                       |
+| **Hierarchical Spawning**     | No                               | ✅ Children can spawn their own children                  |
+| **Multi-Tool Support**        | Claude Code only                 | ✅ Works with any agent (Claude, Codex, Gemini, OpenCode) |
 
 **Key Advantages:**
 
@@ -49,6 +49,7 @@ If you're familiar with [Claude Code's subagent feature](https://docs.claudecode
 **As of this writing**, neither Codex, Gemini, nor OpenCode SDKs natively support spawning subsessions or subagents. **Agor unlocks this powerful capability for all supported agents**, not just Claude Code.
 
 This means you can:
+
 - Spawn a Codex subsession from a Claude parent
 - Have Gemini generate tests as a subsession
 - Build multi-agent orchestration across any combination of tools
@@ -84,6 +85,7 @@ Claude (planning): "Here's the architecture plan"
 ```
 
 Each agent does what it's best at:
+
 - **Claude** for high-level planning and code review
 - **Codex** for fast, raw implementation
 - **Gemini** for comprehensive testing
@@ -207,6 +209,7 @@ Subsessions work best with specific, isolated tasks. Instead of "Fix the entire 
 ### Review Subsessions
 
 Click through to inspect full conversation and git changes. Subsessions are first-class citizens - you can:
+
 - View complete conversation history
 - See all tool calls and file changes
 - Open in terminal to inspect git diff
@@ -215,6 +218,7 @@ Click through to inspect full conversation and git changes. Subsessions are firs
 ### Post-Prompt Anytime
 
 Subsessions don't disappear after completion. Send follow-ups whenever needed:
+
 - "Can you add error handling to the code you wrote?"
 - "Run the tests you generated"
 - "Spawn a new subsession to fix the lint errors"
@@ -222,6 +226,7 @@ Subsessions don't disappear after completion. Send follow-ups whenever needed:
 ### Parallelize Smartly
 
 Spawn multiple subsessions for independent tasks, but be mindful of:
+
 - **Git conflicts** - Avoid having multiple subsessions edit the same files
 - **Resource limits** - Each subsession consumes API tokens
 - **Callback ordering** - Callbacks may arrive in any order
@@ -233,6 +238,7 @@ Spawn multiple subsessions for independent tasks, but be mindful of:
 Here's a real-world example of using subsessions to refactor a feature:
 
 **Parent Session (Claude Code):**
+
 ```
 "I need to refactor our authentication system to use OAuth2.
 Let me break this down into parallel tasks."
@@ -241,6 +247,7 @@ Let me break this down into parallel tasks."
 ```
 
 **Subsession 1 (Codex):**
+
 ```
 Prompt: "Implement OAuth2 server endpoints in backend/auth/"
 Status: ✅ Complete
@@ -248,6 +255,7 @@ Callback: "Implemented 4 endpoints, created migration, updated docs"
 ```
 
 **Subsession 2 (Claude Code):**
+
 ```
 Prompt: "Update frontend login flow to use OAuth2"
 Status: ✅ Complete
@@ -255,6 +263,7 @@ Callback: "Updated React components, added OAuth2 redirect flow"
 ```
 
 **Subsession 3 (Gemini):**
+
 ```
 Prompt: "Generate comprehensive tests for OAuth2 flow"
 Status: ✅ Complete
@@ -262,6 +271,7 @@ Callback: "Created 12 test cases covering happy path and edge cases"
 ```
 
 **Parent receives all callbacks, then:**
+
 ```
 "Great! Let me review the changes across all subsessions.
 [Spawns Subsession 4] Review and integrate the OAuth2 implementation."

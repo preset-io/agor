@@ -57,7 +57,7 @@ The solution: treat context like code. Stop dumping everything into `CLAUDE.md` 
 
 This is [context engineering](/blog/context-engineering)—the realization that good AI-assisted development requires good information architecture. Your codebase's context graph became as important as its dependency graph.
 
-Anthropic formalized this in their September 2025 engineering blog: *"Context engineering is the art and science of curating what will go into the limited context window from the constantly evolving universe of possible information."*
+Anthropic formalized this in their September 2025 engineering blog: _"Context engineering is the art and science of curating what will go into the limited context window from the constantly evolving universe of possible information."_
 
 Many also realized that agents do much better when provided with [only] the required context. Context is precious. Many discovered the joys of putting together a solid PRD, `/clear` and subagents, and started obsessing over context. Your AGENTS.md / CLAUDE.md grew out of proportion, and realize you should start factoring out context into a collection of smaller files elswhere, and your AGENTS.md became more of an glossary pointing to a collection of context files.
 
@@ -67,7 +67,7 @@ Then Claude Code got really good. Claude 4 launched in May, Sonnet 4.5 dropped i
 
 People realized: I can just open another terminal.
 
-As Simon Willison wrote in October 2025: *"I've become one of those people who run multiple coding agents at once—firing up several Claude Code or Codex CLI instances at the same time, sometimes in the same repo, sometimes against multiple checkouts or git worktrees."*
+As Simon Willison wrote in October 2025: _"I've become one of those people who run multiple coding agents at once—firing up several Claude Code or Codex CLI instances at the same time, sometimes in the same repo, sometimes against multiple checkouts or git worktrees."_
 
 Suddenly developers were running 2, 5, 10 parallel Claude Code sessions:
 
@@ -81,7 +81,7 @@ The limiting factor became **cognitive overhead**. You were now a manager of age
 
 The workflow worked, but it didn't scale. You'd lose track of which agent did what. Merge conflicts became more common. Prompts went into the wrong terminal. Environment port collisions and confusion happened.
 
-But something else was happening too: the quality kept improving. As Armin Ronacher observed in June: *"Already today the code looks nothing like the terrible slop from a few months ago."* The agents were getting good enough to justify the coordination overhead.
+But something else was happening too: the quality kept improving. As Armin Ronacher observed in June: _"Already today the code looks nothing like the terrible slop from a few months ago."_ The agents were getting good enough to justify the coordination overhead.
 
 ## Phase 5: Multi-Agent Tooling (Now)
 
@@ -207,7 +207,7 @@ Human: reviews and merges (or rejects and triggers fixes)
 
 You'd orchestrate the orchestra, not play every instrument. The supervisor keeps the rhythm.
 
-As Addy Osmani described in July 2025: *"Background agents turn coding into delegated background work: submit a task, let it run in the cloud, review a completed PR later—coding as queued, asynchronous workflow."*
+As Addy Osmani described in July 2025: _"Background agents turn coding into delegated background work: submit a task, let it run in the cloud, review a completed PR later—coding as queued, asynchronous workflow."_
 
 This is software development reimagined as an async, delegated process—closer to how you'd manage a distributed team than how you'd code alone. Except your team runs 24/7, costs pennies, and never complains about meetings.
 

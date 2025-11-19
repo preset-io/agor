@@ -50,7 +50,7 @@ export interface AppProps {
   connecting?: boolean;
   sessionById: Map<string, Session>; // O(1) lookups by session_id - efficient, stable references
   sessionsByWorktree: Map<string, Session[]>; // O(1) worktree-scoped filtering
-  tasks: Record<string, Task[]>;
+  tasks: Map<string, Task[]>; // Map-based task storage by session_id
   availableAgents: AgenticToolOption[];
   boardById: Map<string, Board>; // Map-based board storage
   boardObjectById: Map<string, BoardEntityObject>; // Map-based board object storage
@@ -59,7 +59,7 @@ export interface AppProps {
   worktreeById: Map<string, Worktree>; // Efficient worktree lookups
   userById: Map<string, User>; // Map-based user storage
   mcpServerById: Map<string, MCPServer>; // Map-based MCP server storage
-  sessionMcpServerIds: Record<string, string[]>; // Map: sessionId -> mcpServerIds[]
+  sessionMcpServerIds: Map<string, string[]>; // Map-based session-MCP relationships
   initialBoardId?: string;
   openSettingsTab?: string | null; // Open settings modal to a specific tab
   onSettingsClose?: () => void; // Called when settings modal closes
@@ -569,7 +569,9 @@ export const App: React.FC<AppProps> = ({
         currentUserId={user?.user_id}
         repoById={repoById}
         mcpServerById={mcpServerById}
-        sessionMcpServerIds={selectedSessionId ? sessionMcpServerIds.get(selectedSessionId) || [] : []}
+        sessionMcpServerIds={
+          selectedSessionId ? sessionMcpServerIds.get(selectedSessionId) || [] : []
+        }
         open={!!selectedSessionId}
         onClose={() => {
           setSelectedSessionId(null);
