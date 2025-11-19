@@ -241,6 +241,9 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       // Update sessionsByWorktree - only create new Map when adding new session
       setSessionsByWorktree((prev) => {
         const worktreeSessions = prev.get(session.worktree_id) || [];
+        // Check if session already exists in this worktree (duplicate event)
+        if (worktreeSessions.some((s) => s.session_id === session.session_id)) return prev;
+
         const next = new Map(prev);
         next.set(session.worktree_id, [...worktreeSessions, session]);
         return next;
@@ -343,6 +346,9 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
     const handleTaskCreated = (task: Task) => {
       setTasks((prev) => {
         const sessionTasks = prev.get(task.session_id) || [];
+        // Check if task already exists (duplicate event)
+        if (sessionTasks.some((t) => t.task_id === task.task_id)) return prev;
+
         const next = new Map(prev);
         next.set(task.session_id, [...sessionTasks, task]);
         return next;
@@ -599,6 +605,9 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
     }) => {
       setSessionMcpServerIds((prev) => {
         const sessionMcpIds = prev.get(relationship.session_id) || [];
+        // Check if relationship already exists (duplicate event)
+        if (sessionMcpIds.includes(relationship.mcp_server_id)) return prev;
+
         const next = new Map(prev);
         next.set(relationship.session_id, [...sessionMcpIds, relationship.mcp_server_id]);
         return next;
