@@ -283,7 +283,8 @@ const SessionCanvas = ({
     }
     // Sort by object_id for stable JSON key
     boardObjectsArray.sort((a, b) => a.object_id.localeCompare(b.object_id));
-    return JSON.stringify(boardObjectsArray.map((bo) => bo.object_id));
+    // Include full object data (position, zone_id) so changes trigger re-renders
+    return JSON.stringify(boardObjectsArray);
   }, [board?.board_id, boardObjectById]);
 
   // Index by worktree_id for O(1) lookups
@@ -457,10 +458,6 @@ const SessionCanvas = ({
       const absoluteX = boardObject.position.x + zone.x;
       const absoluteY = boardObject.position.y + zone.y;
 
-      console.log(
-        `📍 Unpinning worktree ${worktreeId.substring(0, 8)}: relative (${boardObject.position.x}, ${boardObject.position.y}) -> absolute (${absoluteX}, ${absoluteY})`
-      );
-
       // Optimistically store absolute position in localPositionsRef
       // This will be used by the node sync effect until WebSocket confirms
       localPositionsRef.current[worktreeId] = {
@@ -487,8 +484,6 @@ const SessionCanvas = ({
         position: { x: absoluteX, y: absoluteY },
         zone_id: null, // null serializes correctly, undefined gets stripped
       });
-
-      console.log(`✓ Unpinned worktree ${worktreeId.substring(0, 8)}`);
     },
     [board, client, boardObjectByWorktree, setNodes]
   );

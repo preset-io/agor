@@ -113,10 +113,19 @@ export class BoardObjectsService {
   ): Promise<BoardEntityObject> {
     // Handle simultaneous position + zone_id update
     if (data.position && 'zone_id' in data) {
-      // Update position first (preserves zone_id)
-      await this.updatePosition(id, data.position, params);
-      // Then update zone_id
-      return this.updateZone(id, data.zone_id, params);
+      // Update both atomically without emitting intermediate events
+      await this.boardObjectRepo.updatePosition(id, data.position);
+      const boardObject = await this.boardObjectRepo.updateZone(id, data.zone_id);
+
+      // Emit single WebSocket event with both updates
+      // Explicitly include zone_id field (even if undefined) to signal zone changes to clients
+      const eventPayload = {
+        ...boardObject,
+        ...(boardObject.zone_id === undefined ? { zone_id: null } : {}),
+      };
+      this.emit?.('patched', eventPayload as BoardEntityObject, params);
+
+      return boardObject;
     }
 
     if (data.position) {
@@ -169,8 +178,13 @@ export class BoardObjectsService {
   ): Promise<BoardEntityObject> {
     const boardObject = await this.boardObjectRepo.updateZone(objectId, zoneId);
 
-    // Emit WebSocket event
-    this.emit?.('patched', boardObject, params);
+    // Emit WebSocket event with explicit null for undefined zone_id
+    // JSON.stringify strips undefined fields, so convert to null to signal zone was cleared
+    const eventPayload = {
+      ...boardObject,
+      ...(boardObject.zone_id === undefined ? { zone_id: null } : {}),
+    };
+    this.emit?.('patched', eventPayload as BoardEntityObject, params);
 
     return boardObject;
   }
