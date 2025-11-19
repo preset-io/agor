@@ -38,7 +38,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   user,
   sessionById,
   sessionsByWorktree,
-  tasks,
+  tasksBySession,
   boardById,
   commentById,
   repoById,
@@ -73,7 +73,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
           boardById={boardById}
           worktreeById={worktreeById}
           sessionsByWorktree={sessionsByWorktree}
-          tasksBySession={tasks}
+          tasksBySession={tasksBySession}
           commentById={commentById}
           onNavigate={() => setDrawerOpen(false)}
         />

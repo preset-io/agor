@@ -124,7 +124,7 @@ export const App: React.FC<AppProps> = ({
   connecting = false,
   sessionById,
   sessionsByWorktree,
-  tasks,
+  tasksBySession,
   availableAgents,
   boardById,
   boardObjectById,
@@ -391,7 +391,9 @@ export const App: React.FC<AppProps> = ({
     ? worktreeById.get(selectedSession.worktree_id)
     : null;
   const sessionSettingsSession = sessionSettingsId ? sessionById.get(sessionSettingsId) : null;
-  const _selectedSessionTasks = selectedSessionId ? tasks.get(selectedSessionId) || [] : [];
+  const _selectedSessionTasks = selectedSessionId
+    ? tasksBySession.get(selectedSessionId) || []
+    : [];
   const currentBoard = boardById.get(currentBoardId);
 
   // Find worktree and repo for WorktreeModal
@@ -491,7 +493,7 @@ export const App: React.FC<AppProps> = ({
             client={client}
             sessionById={sessionById}
             sessionsByWorktree={sessionsByWorktree}
-            tasksBySession={tasks}
+            tasksBySession={tasksBySession}
             userById={userById}
             repoById={repoById}
             worktrees={boardWorktrees}
