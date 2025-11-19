@@ -232,7 +232,6 @@ const SessionCanvas = ({
   worktreeById,
   boardObjectById,
   commentById,
-  tasks,
   userById,
   currentUserId,
   selectedSessionId,
