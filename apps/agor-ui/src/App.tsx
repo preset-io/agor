@@ -834,7 +834,7 @@ function AppContent() {
 
     try {
       // Get current session-MCP relationships for this session
-      const currentIds = sessionMcpServerIds[sessionId] || [];
+      const currentIds = sessionMcpServerIds.get(sessionId) || [];
 
       // Find servers to add (in new list but not in current)
       const toAdd = mcpServerIds.filter((id) => !currentIds.includes(id));

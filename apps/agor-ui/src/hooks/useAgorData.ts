@@ -22,7 +22,7 @@ import { useCallback, useEffect, useState } from 'react';
 interface UseAgorDataResult {
   sessionById: Map<string, Session>; // O(1) lookups by session_id - efficient, stable references
   sessionsByWorktree: Map<string, Session[]>; // O(1) worktree-scoped filtering
-  tasks: Record<string, Task[]>;
+  tasks: Map<string, Task[]>; // O(1) lookups by session_id - efficient, stable references
   boardById: Map<string, Board>; // O(1) lookups by board_id - efficient, stable references
   boardObjectById: Map<string, BoardEntityObject>; // O(1) lookups by object_id - efficient, stable references
   commentById: Map<string, BoardComment>; // O(1) lookups by comment_id - efficient, stable references
@@ -30,7 +30,7 @@ interface UseAgorDataResult {
   worktreeById: Map<string, Worktree>; // Primary storage - efficient lookups, stable references
   userById: Map<string, User>; // O(1) lookups by user_id - efficient, stable references
   mcpServerById: Map<string, MCPServer>; // O(1) lookups by mcp_server_id - efficient, stable references
-  sessionMcpServerIds: Record<string, string[]>; // Map: sessionId -> mcpServerIds[]
+  sessionMcpServerIds: Map<string, string[]>; // O(1) lookups by session_id - efficient, stable references
   loading: boolean;
   error: string | null;
   refetch: () => Promise<void>;
@@ -45,7 +45,7 @@ interface UseAgorDataResult {
 export function useAgorData(client: AgorClient | null): UseAgorDataResult {
   const [sessionById, setSessionById] = useState<Map<string, Session>>(new Map());
   const [sessionsByWorktree, setSessionsByWorktree] = useState<Map<string, Session[]>>(new Map());
-  const [tasks, setTasks] = useState<Record<string, Task[]>>({});
+  const [tasks, setTasks] = useState<Map<string, Task[]>>(new Map());
   const [boardById, setBoardById] = useState<Map<string, Board>>(new Map());
   const [boardObjectById, setBoardObjectById] = useState<Map<string, BoardEntityObject>>(new Map());
   const [commentById, setCommentById] = useState<Map<string, BoardComment>>(new Map());
@@ -53,7 +53,7 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
   const [worktreeById, setWorktreeById] = useState<Map<string, Worktree>>(new Map());
   const [userById, setUserById] = useState<Map<string, User>>(new Map());
   const [mcpServerById, setMcpServerById] = useState<Map<string, MCPServer>>(new Map());
-  const [sessionMcpServerIds, setSessionMcpServerIds] = useState<Record<string, string[]>>({});
+  const [sessionMcpServerIds, setSessionMcpServerIds] = useState<Map<string, string[]>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -140,12 +140,12 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       setSessionsByWorktree(sessionsByWorktreeId);
 
       // Group tasks by session_id
-      const tasksMap: Record<string, Task[]> = {};
+      const tasksMap = new Map<string, Task[]>();
       for (const task of tasksList) {
-        if (!tasksMap[task.session_id]) {
-          tasksMap[task.session_id] = [];
+        if (!tasksMap.has(task.session_id)) {
+          tasksMap.set(task.session_id, []);
         }
-        tasksMap[task.session_id].push(task);
+        tasksMap.get(task.session_id)!.push(task);
       }
       setTasks(tasksMap);
 
@@ -199,12 +199,12 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       setMcpServerById(mcpServersMap);
 
       // Group session-MCP relationships by session_id
-      const sessionMcpMap: Record<string, string[]> = {};
+      const sessionMcpMap = new Map<string, string[]>();
       for (const relationship of sessionMcpList) {
-        if (!sessionMcpMap[relationship.session_id]) {
-          sessionMcpMap[relationship.session_id] = [];
+        if (!sessionMcpMap.has(relationship.session_id)) {
+          sessionMcpMap.set(relationship.session_id, []);
         }
-        sessionMcpMap[relationship.session_id].push(relationship.mcp_server_id);
+        sessionMcpMap.get(relationship.session_id)!.push(relationship.mcp_server_id);
       }
       setSessionMcpServerIds(sessionMcpMap);
     } catch (err) {
@@ -341,24 +341,51 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
     // Subscribe to task events
     const tasksService = client.service('tasks');
     const handleTaskCreated = (task: Task) => {
-      setTasks((prev) => ({
-        ...prev,
-        [task.session_id]: [...(prev[task.session_id] || []), task],
-      }));
+      setTasks((prev) => {
+        const sessionTasks = prev.get(task.session_id) || [];
+        const next = new Map(prev);
+        next.set(task.session_id, [...sessionTasks, task]);
+        return next;
+      });
     };
     const handleTaskPatched = (task: Task) => {
-      setTasks((prev) => ({
-        ...prev,
-        [task.session_id]: (prev[task.session_id] || []).map((t) =>
-          t.task_id === task.task_id ? task : t
-        ),
-      }));
+      setTasks((prev) => {
+        const sessionTasks = prev.get(task.session_id) || [];
+        const index = sessionTasks.findIndex((t) => t.task_id === task.task_id);
+
+        // Task not found in this session, shouldn't happen
+        if (index === -1) return prev;
+
+        // Check if task actually changed (reference equality)
+        if (sessionTasks[index] === task) return prev;
+
+        // Create new array with updated task
+        const updatedTasks = [...sessionTasks];
+        updatedTasks[index] = task;
+
+        // Only create new Map with updated session entry
+        const next = new Map(prev);
+        next.set(task.session_id, updatedTasks);
+        return next;
+      });
     };
     const handleTaskRemoved = (task: Task) => {
-      setTasks((prev) => ({
-        ...prev,
-        [task.session_id]: (prev[task.session_id] || []).filter((t) => t.task_id !== task.task_id),
-      }));
+      setTasks((prev) => {
+        const sessionTasks = prev.get(task.session_id) || [];
+        const filtered = sessionTasks.filter((t) => t.task_id !== task.task_id);
+
+        // No change if task wasn't in the list
+        if (filtered.length === sessionTasks.length) return prev;
+
+        const next = new Map(prev);
+        if (filtered.length > 0) {
+          next.set(task.session_id, filtered);
+        } else {
+          // Clean up empty arrays
+          next.delete(task.session_id);
+        }
+        return next;
+      });
     };
 
     tasksService.on('created', handleTaskCreated);
@@ -570,24 +597,33 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       session_id: string;
       mcp_server_id: string;
     }) => {
-      setSessionMcpServerIds((prev) => ({
-        ...prev,
-        [relationship.session_id]: [
-          ...(prev[relationship.session_id] || []),
-          relationship.mcp_server_id,
-        ],
-      }));
+      setSessionMcpServerIds((prev) => {
+        const sessionMcpIds = prev.get(relationship.session_id) || [];
+        const next = new Map(prev);
+        next.set(relationship.session_id, [...sessionMcpIds, relationship.mcp_server_id]);
+        return next;
+      });
     };
     const handleSessionMcpRemoved = (relationship: {
       session_id: string;
       mcp_server_id: string;
     }) => {
-      setSessionMcpServerIds((prev) => ({
-        ...prev,
-        [relationship.session_id]: (prev[relationship.session_id] || []).filter(
-          (id) => id !== relationship.mcp_server_id
-        ),
-      }));
+      setSessionMcpServerIds((prev) => {
+        const sessionMcpIds = prev.get(relationship.session_id) || [];
+        const filtered = sessionMcpIds.filter((id) => id !== relationship.mcp_server_id);
+
+        // No change if MCP server wasn't in the list
+        if (filtered.length === sessionMcpIds.length) return prev;
+
+        const next = new Map(prev);
+        if (filtered.length > 0) {
+          next.set(relationship.session_id, filtered);
+        } else {
+          // Clean up empty arrays
+          next.delete(relationship.session_id);
+        }
+        return next;
+      });
     };
 
     sessionMcpService.on('created', handleSessionMcpCreated);

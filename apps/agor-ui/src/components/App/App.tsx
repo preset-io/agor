@@ -391,7 +391,7 @@ export const App: React.FC<AppProps> = ({
     ? worktreeById.get(selectedSession.worktree_id)
     : null;
   const sessionSettingsSession = sessionSettingsId ? sessionById.get(sessionSettingsId) : null;
-  const _selectedSessionTasks = selectedSessionId ? tasks[selectedSessionId] || [] : [];
+  const _selectedSessionTasks = selectedSessionId ? tasks.get(selectedSessionId) || [] : [];
   const currentBoard = boardById.get(currentBoardId);
 
   // Find worktree and repo for WorktreeModal
@@ -569,7 +569,7 @@ export const App: React.FC<AppProps> = ({
         currentUserId={user?.user_id}
         repoById={repoById}
         mcpServerById={mcpServerById}
-        sessionMcpServerIds={selectedSessionId ? sessionMcpServerIds[selectedSessionId] || [] : []}
+        sessionMcpServerIds={selectedSessionId ? sessionMcpServerIds.get(selectedSessionId) || [] : []}
         open={!!selectedSessionId}
         onClose={() => {
           setSelectedSessionId(null);
@@ -647,7 +647,7 @@ export const App: React.FC<AppProps> = ({
           session={sessionSettingsSession}
           mcpServerById={mcpServerById}
           sessionMcpServerIds={
-            sessionSettingsId ? sessionMcpServerIds[sessionSettingsId] || [] : []
+            sessionSettingsId ? sessionMcpServerIds.get(sessionSettingsId) || [] : []
           }
           onUpdate={onUpdateSession}
           onUpdateSessionMcpServers={onUpdateSessionMcpServers}

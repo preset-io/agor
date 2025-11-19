@@ -16,7 +16,7 @@ interface MobileAppProps {
   user?: User | null;
   sessionById: Map<string, Session>; // O(1) ID lookups
   sessionsByWorktree: Map<string, Session[]>; // O(1) worktree filtering
-  tasks: Record<string, Task[]>;
+  tasks: Map<string, Task[]>;
   boardById: Map<string, Board>;
   commentById: Map<string, BoardComment>;
   repoById: Map<string, Repo>;

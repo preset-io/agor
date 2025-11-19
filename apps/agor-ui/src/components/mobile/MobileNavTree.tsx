@@ -11,7 +11,7 @@ interface MobileNavTreeProps {
   boardById: Map<string, Board>;
   worktreeById: Map<string, Worktree>;
   sessionsByWorktree: Map<string, Session[]>; // O(1) worktree filtering
-  tasks: Record<string, Task[]>;
+  tasks: Map<string, Task[]>;
   commentById: Map<string, BoardComment>;
   onNavigate?: () => void;
 }
@@ -70,7 +70,7 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
 
   // Get the first task prompt for a session as its title
   const getSessionTitle = (sessionId: string): string => {
-    const sessionTasks = tasks[sessionId] || [];
+    const sessionTasks = tasks.get(sessionId) || [];
     if (sessionTasks.length > 0 && sessionTasks[0]?.full_prompt) {
       const firstPrompt = sessionTasks[0].full_prompt;
       return firstPrompt.length > 50 ? `${firstPrompt.slice(0, 50)}...` : firstPrompt;
