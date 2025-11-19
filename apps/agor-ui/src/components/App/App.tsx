@@ -538,6 +538,7 @@ export const App: React.FC<AppProps> = ({
             hasRepos={repos.length > 0}
           />
         </div>
+        {/* Event Stream Panel with rich pills */}
         <EventStreamPanel
           collapsed={eventStreamPanelCollapsed}
           onToggleCollapse={() => setEventStreamPanelCollapsed(!eventStreamPanelCollapsed)}
