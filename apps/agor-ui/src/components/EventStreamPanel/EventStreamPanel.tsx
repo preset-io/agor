@@ -29,7 +29,7 @@ export interface EventStreamPanelProps {
   sessionById: Map<string, Session>;
   sessionsByWorktree: Map<string, Session[]>;
   repos: Repo[];
-  users: User[];
+  userById: Map<string, User>;
   currentUserId?: string;
   selectedSessionId?: string | null;
   worktreeActions?: WorktreeActions;
@@ -45,7 +45,7 @@ export const EventStreamPanel: React.FC<EventStreamPanelProps> = ({
   sessionById,
   sessionsByWorktree,
   repos,
-  users,
+  userById,
   currentUserId,
   selectedSessionId,
   worktreeActions,
@@ -227,7 +227,7 @@ export const EventStreamPanel: React.FC<EventStreamPanelProps> = ({
                 sessionById={sessionById}
                 sessionsByWorktree={sessionsByWorktree}
                 repos={repos}
-                users={users}
+                userById={userById}
                 currentUserId={currentUserId}
                 selectedSessionId={selectedSessionId}
                 worktreeActions={worktreeActions}

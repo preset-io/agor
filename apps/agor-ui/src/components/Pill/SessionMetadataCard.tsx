@@ -20,7 +20,7 @@ export interface SessionMetadataCardProps {
   session: Session;
   worktree?: Worktree;
   repo?: Repo;
-  users?: User[];
+  userById?: Map<string, User>;
   currentUserId?: string;
   compact?: boolean; // Always true for popover use case
 }
@@ -29,7 +29,7 @@ export const SessionMetadataCard: React.FC<SessionMetadataCardProps> = ({
   session,
   worktree,
   repo,
-  users = [],
+  userById = new Map(),
   currentUserId,
   compact = true,
 }) => {
@@ -205,7 +205,7 @@ export const SessionMetadataCard: React.FC<SessionMetadataCardProps> = ({
             <CreatedByTag
               createdBy={session.created_by}
               currentUserId={currentUserId}
-              users={users}
+              userById={userById}
               prefix="Created by"
             />
           </div>

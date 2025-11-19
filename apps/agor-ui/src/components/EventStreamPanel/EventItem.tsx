@@ -39,7 +39,7 @@ export interface EventItemProps {
   sessionById: Map<string, Session>;
   sessionsByWorktree: Map<string, Session[]>;
   repos: Repo[];
-  users: User[];
+  userById: Map<string, User>;
   currentUserId?: string;
   selectedSessionId?: string | null;
   worktreeActions?: WorktreeActions;
@@ -51,7 +51,7 @@ export const EventItem = ({
   sessionById,
   sessionsByWorktree,
   repos,
-  users,
+  userById,
   currentUserId,
   selectedSessionId,
   worktreeActions,
@@ -209,7 +209,7 @@ export const EventItem = ({
                 session={session}
                 worktree={worktree}
                 repo={repo}
-                users={users}
+                userById={userById}
                 currentUserId={currentUserId}
                 compact
               />
@@ -231,7 +231,7 @@ export const EventItem = ({
               worktree={worktree}
               repo={repo}
               sessions={worktreeSessions}
-              users={users}
+              userById={userById}
               currentUserId={currentUserId}
               selectedSessionId={selectedSessionId}
               inPopover={true}

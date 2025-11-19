@@ -292,16 +292,21 @@ export const EventStream: Story = {
                   updated_at: new Date().toISOString(),
                   created_by: 'user-123',
                 }}
-                users={[
-                  {
-                    user_id: 'user-123',
-                    email: 'dev@example.com',
-                    name: 'Alice Developer',
-                    role: 'member',
-                    created_at: new Date().toISOString(),
-                    updated_at: new Date().toISOString(),
-                  },
-                ]}
+                userById={
+                  new Map([
+                    [
+                      'user-123',
+                      {
+                        user_id: 'user-123',
+                        email: 'dev@example.com',
+                        name: 'Alice Developer',
+                        role: 'member',
+                        created_at: new Date().toISOString(),
+                        updated_at: new Date().toISOString(),
+                      },
+                    ],
+                  ])
+                }
                 currentUserId="user-456"
                 compact
               />
@@ -370,16 +375,21 @@ export const SessionMetadata: Story = {
             updated_at: new Date().toISOString(),
             created_by: 'user-123',
           }}
-          users={[
-            {
-              user_id: 'user-123',
-              email: 'dev@example.com',
-              name: 'Alice Developer',
-              role: 'member',
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-            },
-          ]}
+          userById={
+            new Map([
+              [
+                'user-123',
+                {
+                  user_id: 'user-123',
+                  email: 'dev@example.com',
+                  name: 'Alice Developer',
+                  role: 'member',
+                  created_at: new Date().toISOString(),
+                  updated_at: new Date().toISOString(),
+                },
+              ],
+            ])
+          }
           currentUserId="user-456"
           compact
         />
@@ -451,16 +461,21 @@ export const SessionMetadata: Story = {
             ready_for_prompt: false,
             archived: false,
           }}
-          users={[
-            {
-              user_id: 'user-456',
-              email: 'bob@example.com',
-              name: 'Bob Engineer',
-              role: 'member',
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-            },
-          ]}
+          userById={
+            new Map([
+              [
+                'user-456',
+                {
+                  user_id: 'user-456',
+                  email: 'bob@example.com',
+                  name: 'Bob Engineer',
+                  role: 'member',
+                  created_at: new Date().toISOString(),
+                  updated_at: new Date().toISOString(),
+                },
+              ],
+            ])
+          }
           currentUserId="user-456"
           compact
         />
