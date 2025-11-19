@@ -6,7 +6,7 @@ import type { AgorClient } from '@agor/core/api';
 import type { Board, BoardEntityObject, BoardObject, Session, Worktree } from '@agor/core/types';
 import { useCallback, useMemo, useRef } from 'react';
 import type { Node } from 'reactflow';
-import { mapToArray } from '@/utils/mapHelpers';
+import { findInMap, mapToArray } from '@/utils/mapHelpers';
 
 interface UseBoardObjectsProps {
   board: Board | null;
@@ -97,7 +97,8 @@ export const useBoardObjects = ({
         // IMPORTANT: Unpin worktrees FIRST before deleting the zone
         // This prevents a race condition where worktrees have parentId pointing to a deleted zone
         for (const worktreeId of affectedWorktreeIds) {
-          const boardObj = boardObjectById.get(worktreeId);
+          // boardObjectById is keyed by object_id, not worktree_id, so we need to find by worktree_id
+          const boardObj = findInMap(boardObjectById, (obj) => obj.worktree_id === worktreeId);
           if (boardObj) {
             await client.service('board-objects').patch(boardObj.object_id, {
               zone_id: null,
