@@ -44,7 +44,7 @@ export interface CommentsPanelProps {
   client: AgorClient | null;
   boardId: string;
   comments: BoardComment[];
-  users: User[];
+  userById: Map<string, User>;
   currentUserId: string;
   boardObjects?: Record<string, BoardObject>; // For zone names
   worktreeById?: Map<string, Worktree>; // For worktree names
@@ -69,9 +69,9 @@ type FilterMode = 'all' | 'active';
 const ReactionDisplay: React.FC<{
   reactions: CommentReaction[];
   currentUserId: string;
-  users: User[];
+  userById: Map<string, User>;
   onToggle: (emoji: string) => void;
-}> = ({ reactions, currentUserId, users, onToggle }) => {
+}> = ({ reactions, currentUserId, userById, onToggle }) => {
   const { token } = theme.useToken();
   const grouped: ReactionSummary = groupReactions(reactions);
 
@@ -86,7 +86,7 @@ const ReactionDisplay: React.FC<{
 
         // Build tooltip content with list of users who reacted
         const reactedUsers = userIds
-          .map((userId) => users.find((u) => u.user_id === userId))
+          .map((userId) => userById.get(userId))
           .filter(Boolean)
           .map((user) => user!.name || user!.email.split('@')[0]);
 
@@ -169,14 +169,14 @@ const EmojiPickerButton: React.FC<{
  */
 const ReplyItem: React.FC<{
   reply: BoardComment;
-  users: User[];
+  userById: Map<string, User>;
   currentUserId: string;
   onToggleReaction?: (commentId: string, emoji: string) => void;
   onDelete?: (commentId: string) => void;
-}> = ({ reply, users, currentUserId, onToggleReaction, onDelete }) => {
+}> = ({ reply, userById, currentUserId, onToggleReaction, onDelete }) => {
   const { token } = theme.useToken();
   const [replyHovered, setReplyHovered] = useState(false);
-  const replyUser = users.find((u) => u.user_id === reply.created_by);
+  const replyUser = userById.get(reply.created_by);
   const isReplyCurrentUser = reply.created_by === currentUserId;
 
   return (
@@ -214,7 +214,7 @@ const ReplyItem: React.FC<{
                   <ReactionDisplay
                     reactions={reply.reactions || []}
                     currentUserId={currentUserId}
-                    users={users}
+                    userById={userById}
                     onToggle={(emoji) => onToggleReaction(reply.comment_id, emoji)}
                   />
                 </div>
@@ -267,7 +267,7 @@ const ReplyItem: React.FC<{
 const CommentThread: React.FC<{
   comment: BoardComment;
   replies: BoardComment[];
-  users: User[];
+  userById: Map<string, User>;
   currentUserId: string;
   onReply?: (parentId: string, content: string) => void;
   onResolve?: (commentId: string) => void;
@@ -278,7 +278,7 @@ const CommentThread: React.FC<{
 }> = ({
   comment,
   replies,
-  users,
+  userById,
   currentUserId,
   onReply,
   onResolve,
@@ -290,7 +290,7 @@ const CommentThread: React.FC<{
   const { token } = theme.useToken();
   const [showReplyInput, setShowReplyInput] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
-  const user = users.find((u) => u.user_id === comment.created_by);
+  const user = userById.get(comment.created_by);
   const isCurrentUser = comment.created_by === currentUserId;
 
   return (
@@ -347,7 +347,7 @@ const CommentThread: React.FC<{
                   <ReactionDisplay
                     reactions={comment.reactions || []}
                     currentUserId={currentUserId}
-                    users={users}
+                    userById={userById}
                     onToggle={(emoji) => onToggleReaction(comment.comment_id, emoji)}
                   />
                 </div>
@@ -435,7 +435,7 @@ const CommentThread: React.FC<{
               renderItem={(reply) => (
                 <ReplyItem
                   reply={reply}
-                  users={users}
+                  userById={userById}
                   currentUserId={currentUserId}
                   onToggleReaction={onToggleReaction}
                   onDelete={onDelete}
@@ -472,7 +472,7 @@ const CommentThread: React.FC<{
 export const CommentsPanel: React.FC<CommentsPanelProps> = ({
   boardId,
   comments,
-  users,
+  userById,
   currentUserId,
   boardObjects = {},
   worktreeById,
@@ -763,7 +763,7 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
                       <CommentThread
                         comment={thread}
                         replies={repliesByParent[thread.comment_id] || []}
-                        users={users}
+                        userById={userById}
                         currentUserId={currentUserId}
                         onReply={onReplyComment}
                         onResolve={onResolveComment}

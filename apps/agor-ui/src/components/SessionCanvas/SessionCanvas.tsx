@@ -43,6 +43,7 @@ import {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import './SessionCanvas.css';
+import { mapToArray } from '@/utils/mapHelpers';
 import { DEFAULT_BACKGROUNDS } from '../../constants/ui';
 import { useCursorTracking } from '../../hooks/useCursorTracking';
 import { usePresence } from '../../hooks/usePresence';
@@ -74,16 +75,16 @@ interface SessionCanvasProps {
   sessionById: Map<string, Session>; // O(1) ID lookups
   sessionsByWorktree: Map<string, Session[]>; // O(1) worktree filtering
   tasks: Record<string, Task[]>;
-  users: User[];
-  repos: Repo[];
+  userById: Map<string, User>; // Map-based user storage
+  repoById: Map<string, Repo>; // Map-based repo storage
   worktrees: Worktree[];
   worktreeById: Map<string, Worktree>;
-  boardObjects: BoardEntityObject[];
-  comments: BoardComment[];
+  boardObjectById: Map<string, BoardEntityObject>; // Map-based board object storage
+  commentById: Map<string, BoardComment>; // Map-based comment storage
   currentUserId?: string;
   selectedSessionId?: string | null;
   availableAgents?: AgenticToolOption[];
-  mcpServers?: MCPServer[];
+  mcpServerById?: Map<string, MCPServer>; // Map-based MCP server storage
   sessionMcpServerIds?: Record<string, string[]>; // Map sessionId -> mcpServerIds[]
   onSessionClick?: (sessionId: string) => void;
   onTaskClick?: (taskId: string) => void;
@@ -114,7 +115,7 @@ interface SessionCanvasProps {
 interface SessionNodeData {
   session: Session;
   tasks: Task[];
-  users: User[];
+  userById: Map<string, User>;
   currentUserId?: string;
   onTaskClick?: (taskId: string) => void;
   onSessionClick?: () => void;
@@ -135,7 +136,7 @@ const SessionNode = ({ data }: { data: SessionNodeData }) => {
       <SessionCard
         session={data.session}
         tasks={data.tasks}
-        users={data.users}
+        userById={data.userById}
         currentUserId={data.currentUserId}
         onTaskClick={data.onTaskClick}
         onSessionClick={data.onSessionClick}
@@ -155,7 +156,7 @@ interface WorktreeNodeData {
   worktree: Worktree;
   repo: Repo;
   sessions: Session[];
-  users: User[];
+  userById: Map<string, User>;
   currentUserId?: string;
   onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
@@ -191,7 +192,7 @@ const WorktreeNode = ({ data }: { data: WorktreeNodeData }) => {
         worktree={data.worktree}
         repo={data.repo}
         sessions={data.sessions}
-        users={data.users}
+        userById={data.userById}
         currentUserId={data.currentUserId}
         selectedSessionId={data.selectedSessionId}
         onTaskClick={data.onTaskClick}
@@ -230,17 +231,17 @@ const SessionCanvas = ({
   client,
   sessionById,
   sessionsByWorktree,
-  repos,
+  repoById,
   worktrees,
   worktreeById,
-  boardObjects,
-  comments,
+  boardObjectById,
+  commentById,
   tasks,
-  users,
+  userById,
   currentUserId,
   selectedSessionId,
   availableAgents = [],
-  mcpServers = [],
+  mcpServerById = new Map(),
   sessionMcpServerIds = {},
   onSessionClick,
   onTaskClick,
@@ -272,29 +273,13 @@ const SessionCanvas = ({
   const boardObjectByWorktree = useMemo(() => {
     if (!board) return new Map<string, BoardEntityObject>();
     const map = new Map<string, BoardEntityObject>();
-    for (const boardObject of boardObjects) {
+    for (const boardObject of mapToArray(boardObjectById)) {
       if (boardObject.board_id === board.board_id) {
         map.set(boardObject.worktree_id, boardObject);
       }
     }
     return map;
-  }, [board, boardObjects]);
-
-  const repoById = useMemo(() => {
-    const map = new Map<string, Repo>();
-    for (const repo of repos) {
-      map.set(repo.repo_id, repo);
-    }
-    return map;
-  }, [repos]);
-
-  const userById = useMemo(() => {
-    const map = new Map<string, User>();
-    for (const user of users) {
-      map.set(user.user_id, user);
-    }
-    return map;
-  }, [users]);
+  }, [board, boardObjectById]);
 
   // Note: worktreeById is now passed as prop from parent (no longer computed locally)
   // This enables efficient O(1) lookups and stable references across re-renders
@@ -406,7 +391,7 @@ const SessionCanvas = ({
     client,
     sessionsByWorktree,
     worktrees,
-    boardObjects,
+    boardObjectById,
     setNodes,
     deletedObjectsRef,
     eraserMode: activeTool === 'eraser',
@@ -525,7 +510,7 @@ const SessionCanvas = ({
           worktree,
           repo,
           sessions: worktreeSessions,
-          users,
+          userById,
           currentUserId,
           selectedSessionId,
           onTaskClick,
@@ -555,7 +540,6 @@ const SessionCanvas = ({
     boardObjectByWorktree,
     repoById,
     sessionsByWorktree,
-    users,
     currentUserId,
     selectedSessionId,
     onSessionClick,
@@ -571,6 +555,7 @@ const SessionCanvas = ({
     onViewLogs,
     handleUnpinWorktree,
     zoneLabels,
+    userById,
   ]);
 
   // No edges needed for worktree-centric boards
@@ -592,7 +577,7 @@ const SessionCanvas = ({
   const { remoteCursors } = usePresence({
     client,
     boardId: board?.board_id as BoardID | null,
-    users,
+    users: mapToArray(userById),
     enabled: !!board && !!client,
   });
 
@@ -626,10 +611,11 @@ const SessionCanvas = ({
   // Create comment nodes from spatial comments
   const commentNodes: Node[] = useMemo(() => {
     const nodes: Node[] = [];
+    const commentsArray = mapToArray(commentById);
 
     // Filter to only spatial comments on this board (absolute OR relative positioned) and not resolved
-    const spatialComments = comments.filter(
-      (c) =>
+    const spatialComments = commentsArray.filter(
+      (c: BoardComment) =>
         (c.position?.absolute || c.position?.relative) &&
         c.board_id === board?.board_id &&
         !c.resolved
@@ -637,7 +623,7 @@ const SessionCanvas = ({
 
     // Count replies for each thread root
     const replyCount = new Map<string, number>();
-    for (const comment of comments) {
+    for (const comment of commentsArray) {
       if (comment.parent_comment_id) {
         replyCount.set(
           comment.parent_comment_id,
@@ -732,7 +718,7 @@ const SessionCanvas = ({
 
     return nodes;
   }, [
-    comments,
+    commentById,
     board,
     worktrees,
     userById,
@@ -1149,8 +1135,9 @@ const SessionCanvas = ({
               }
 
               // Check if worktree was already pinned to a zone before this drag
-              const existingBoardObject = boardObjects.find(
-                (bo) => bo.worktree_id === nodeId && bo.board_id === board.board_id
+              const existingBoardObject = mapToArray(boardObjectById).find(
+                (bo: BoardEntityObject) =>
+                  bo.worktree_id === nodeId && bo.board_id === board.board_id
               );
               const oldZoneId = existingBoardObject?.zone_id;
 
@@ -1250,8 +1237,9 @@ const SessionCanvas = ({
           if (worktreeUpdates.length > 0) {
             for (const { worktree_id, position, zone_id } of worktreeUpdates) {
               // Find existing board_object or create new one
-              const existingBoardObject = boardObjects.find(
-                (bo) => bo.worktree_id === worktree_id && bo.board_id === board.board_id
+              const existingBoardObject = mapToArray(boardObjectById).find(
+                (bo: BoardEntityObject) =>
+                  bo.worktree_id === worktree_id && bo.board_id === board.board_id
               );
 
               if (existingBoardObject) {
@@ -1404,7 +1392,7 @@ const SessionCanvas = ({
         }
       }, 500);
     },
-    [board, client, batchUpdateObjectPositions, nodes, boardObjects, worktrees, setNodes]
+    [board, client, batchUpdateObjectPositions, nodes, boardObjectById, worktrees, setNodes]
   );
 
   // Cleanup debounce timers on unmount
@@ -2278,8 +2266,8 @@ const SessionCanvas = ({
           boardDescription={board?.description}
           boardCustomContext={board?.custom_context}
           availableAgents={availableAgents}
-          mcpServers={mcpServers}
-          currentUser={currentUserId ? users.find((u) => u.user_id === currentUserId) : null}
+          mcpServerById={mcpServerById}
+          currentUser={currentUserId ? userById.get(currentUserId) || null : null}
           onExecute={async ({
             sessionId,
             action,

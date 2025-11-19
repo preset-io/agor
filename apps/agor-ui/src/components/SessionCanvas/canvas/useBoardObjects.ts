@@ -6,13 +6,14 @@ import type { AgorClient } from '@agor/core/api';
 import type { Board, BoardEntityObject, BoardObject, Session, Worktree } from '@agor/core/types';
 import { useCallback, useMemo, useRef } from 'react';
 import type { Node } from 'reactflow';
+import { findInMap, mapToArray } from '@/utils/mapHelpers';
 
 interface UseBoardObjectsProps {
   board: Board | null;
   client: AgorClient | null;
   sessionsByWorktree: Map<string, Session[]>; // O(1) worktree filtering
   worktrees: Worktree[];
-  boardObjects: BoardEntityObject[];
+  boardObjectById: Map<string, BoardEntityObject>; // Map-based board object storage
   setNodes: React.Dispatch<React.SetStateAction<Node[]>>;
   deletedObjectsRef: React.MutableRefObject<Set<string>>;
   eraserMode?: boolean;
@@ -25,7 +26,7 @@ export const useBoardObjects = ({
   client,
   sessionsByWorktree,
   worktrees,
-  boardObjects,
+  boardObjectById,
   setNodes,
   deletedObjectsRef,
   eraserMode = false,
@@ -83,7 +84,7 @@ export const useBoardObjects = ({
 
       // Find worktrees that are pinned to this zone (via board_objects.zone_id)
       const affectedWorktreeIds: string[] = [];
-      for (const boardObj of boardObjects) {
+      for (const boardObj of mapToArray(boardObjectById)) {
         if (boardObj.zone_id === objectId) {
           affectedWorktreeIds.push(boardObj.worktree_id);
         }
@@ -96,9 +97,8 @@ export const useBoardObjects = ({
         // IMPORTANT: Unpin worktrees FIRST before deleting the zone
         // This prevents a race condition where worktrees have parentId pointing to a deleted zone
         for (const worktreeId of affectedWorktreeIds) {
-          const boardObj = boardObjects.find(
-            (obj: BoardEntityObject) => obj.worktree_id === worktreeId
-          );
+          // boardObjectById is keyed by object_id, not worktree_id, so we need to find by worktree_id
+          const boardObj = findInMap(boardObjectById, (obj) => obj.worktree_id === worktreeId);
           if (boardObj) {
             await client.service('board-objects').patch(boardObj.object_id, {
               zone_id: null,
@@ -124,7 +124,7 @@ export const useBoardObjects = ({
         // Note: WebSocket update should restore the actual state
       }
     },
-    [board, client, setNodes, deletedObjectsRef, boardObjects]
+    [board, client, setNodes, deletedObjectsRef, boardObjectById]
   );
 
   /**
@@ -173,7 +173,7 @@ export const useBoardObjects = ({
         let sessionCount = 0;
         if (objectData.type === 'zone') {
           // Count worktrees pinned to this zone via board_objects.zone_id
-          for (const boardObj of boardObjects) {
+          for (const boardObj of mapToArray(boardObjectById)) {
             if (boardObj.zone_id === objectId) {
               // Count sessions in this worktree using O(1) Map lookup
               const worktreeSessions = sessionsByWorktree.get(boardObj.worktree_id) || [];
@@ -219,7 +219,7 @@ export const useBoardObjects = ({
       });
   }, [
     board?.objects,
-    boardObjects,
+    boardObjectById,
     sessionsByWorktree,
     handleUpdateObject,
     deleteZone,

@@ -73,7 +73,7 @@ interface TaskBlockProps {
   client: AgorClient | null;
   agentic_tool?: string;
   sessionModel?: string;
-  users?: User[];
+  userById?: Map<string, User>;
   currentUserId?: string;
   isExpanded: boolean;
   onExpandChange: (expanded: boolean) => void;
@@ -336,7 +336,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     client,
     agentic_tool,
     sessionModel,
-    users = [],
+    userById = new Map(),
     currentUserId,
     isExpanded,
     onExpandChange,
@@ -453,7 +453,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
               <CreatedByTag
                 createdBy={task.created_by}
                 currentUserId={currentUserId}
-                users={users}
+                userById={userById}
                 prefix="By"
               />
             )}
@@ -585,7 +585,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                           key={block.message.message_id}
                           message={block.message}
                           agentic_tool={agentic_tool}
-                          users={users}
+                          userById={userById}
                           currentUserId={task.created_by}
                           isTaskRunning={task.status === TaskStatus.RUNNING}
                           sessionId={sessionId}

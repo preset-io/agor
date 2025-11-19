@@ -15,14 +15,14 @@ interface DefaultAgenticSettingsProps {
   /** Current default agentic config */
   defaultConfig?: DefaultAgenticConfig;
   /** Available MCP servers */
-  mcpServers: MCPServer[];
+  mcpServerById: Map<string, MCPServer>;
   /** Callback when settings are saved */
   onSave: (config: DefaultAgenticConfig) => Promise<void>;
 }
 
 export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
   defaultConfig,
-  mcpServers,
+  mcpServerById,
   onSave,
 }) => {
   // Separate form for each tool
@@ -174,7 +174,7 @@ export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
             >
               <AgenticToolConfigForm
                 agenticTool={tool}
-                mcpServers={mcpServers}
+                mcpServerById={mcpServerById}
                 showHelpText={false}
               />
 

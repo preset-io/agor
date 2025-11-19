@@ -2,25 +2,26 @@ import type { Board, BoardComment, Session, Task, Worktree } from '@agor/core/ty
 import { CommentOutlined, DownOutlined } from '@ant-design/icons';
 import { Badge, Button, Collapse, List, Space, Typography, theme } from 'antd';
 import { useNavigate } from 'react-router-dom';
+import { mapToArray } from '@/utils/mapHelpers';
 import { BoardCollapse } from '../BoardCollapse';
 
 const { Text } = Typography;
 
 interface MobileNavTreeProps {
-  boards: Board[];
+  boardById: Map<string, Board>;
   worktreeById: Map<string, Worktree>;
   sessionsByWorktree: Map<string, Session[]>; // O(1) worktree filtering
   tasks: Record<string, Task[]>;
-  comments: BoardComment[];
+  commentById: Map<string, BoardComment>;
   onNavigate?: () => void;
 }
 
 export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
-  boards,
+  boardById,
   worktreeById,
   sessionsByWorktree,
   tasks,
-  comments,
+  commentById,
   onNavigate,
 }) => {
   const navigate = useNavigate();
@@ -39,8 +40,9 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
 
   // Count active comments per board (unresolved)
   const getActiveCommentCount = (boardId: string): number => {
-    return comments.filter((c) => c.board_id === boardId && !c.resolved && !c.parent_comment_id)
-      .length;
+    return mapToArray(commentById).filter(
+      (c: BoardComment) => c.board_id === boardId && !c.resolved && !c.parent_comment_id
+    ).length;
   };
 
   // Group worktrees by board
@@ -84,6 +86,8 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
     return '⏸️';
   };
 
+  const boards = mapToArray(boardById);
+
   return (
     <div
       style={{
@@ -92,7 +96,7 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
       }}
     >
       <BoardCollapse
-        items={boards.map((board) => {
+        items={boards.map((board: Board) => {
           const boardWorktrees = worktreesByBoard[board.board_id] || [];
           const activeComments = getActiveCommentCount(board.board_id);
 

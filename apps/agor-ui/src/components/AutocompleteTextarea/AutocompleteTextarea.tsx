@@ -9,6 +9,7 @@ import type { AgorClient } from '@agor/core/api';
 import type { SessionID, User } from '@agor/core/types';
 import { Input, Popover, Spin, Typography, theme } from 'antd';
 import React, { useCallback, useMemo, useRef, useState } from 'react';
+import { mapToArray } from '@/utils/mapHelpers';
 import './AutocompleteTextarea.css';
 
 const { TextArea } = Input;
@@ -39,7 +40,7 @@ interface AutocompleteTextareaProps {
   placeholder?: string;
   client: AgorClient | null;
   sessionId: SessionID | null;
-  users: User[];
+  userById: Map<string, User>;
   autoSize?: {
     minRows?: number;
     maxRows?: number;
@@ -94,7 +95,7 @@ export const AutocompleteTextarea = React.forwardRef<
       placeholder = 'Send a prompt, fork, or create a subsession... (type @ for autocomplete)',
       client,
       sessionId,
-      users,
+      userById,
       autoSize,
     },
     ref
@@ -175,20 +176,20 @@ export const AutocompleteTextarea = React.forwardRef<
         }
 
         const lowercaseQuery = searchQuery.toLowerCase();
-        return users
+        return mapToArray(userById)
           .filter(
-            (u) =>
+            (u: User) =>
               u.name?.toLowerCase().includes(lowercaseQuery) ||
               u.email.toLowerCase().includes(lowercaseQuery)
           )
           .slice(0, MAX_USER_RESULTS)
-          .map((u) => ({
+          .map((u: User) => ({
             name: u.name || u.email,
             email: u.email,
             type: 'user' as const,
           }));
       },
-      [users]
+      [userById]
     );
 
     /**

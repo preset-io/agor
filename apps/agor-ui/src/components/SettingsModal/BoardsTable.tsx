@@ -15,6 +15,7 @@ import {
   Typography,
 } from 'antd';
 import { useMemo, useState } from 'react';
+import { mapToArray } from '@/utils/mapHelpers';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { JSONEditor, validateJSON } from '../JSONEditor';
 
@@ -92,7 +93,7 @@ const BACKGROUND_PRESETS = [
 ];
 
 interface BoardsTableProps {
-  boards: Board[];
+  boardById: Map<string, Board>;
   sessionsByWorktree: Map<string, Session[]>; // O(1) worktree filtering
   worktreeById: Map<string, Worktree>;
   onCreate?: (board: Partial<Board>) => void;
@@ -101,7 +102,7 @@ interface BoardsTableProps {
 }
 
 export const BoardsTable: React.FC<BoardsTableProps> = ({
-  boards,
+  boardById,
   sessionsByWorktree,
   worktreeById,
   onCreate,
@@ -127,7 +128,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
   const boardSessionCounts = useMemo(() => {
     const counts = new Map<string, number>();
 
-    boards.forEach((board) => {
+    for (const board of boardById.values()) {
       // Get worktree IDs for this board by iterating the Map
       const boardWorktreeIds: string[] = [];
       for (const worktree of worktreeById.values()) {
@@ -142,10 +143,10 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
       ).length;
 
       counts.set(board.board_id, sessionCount);
-    });
+    }
 
     return counts;
-  }, [boards, sessionsByWorktree, worktreeById]);
+  }, [boardById, sessionsByWorktree, worktreeById]);
 
   const handleCreate = () => {
     form.validateFields().then((values) => {
@@ -277,7 +278,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
       </div>
 
       <Table
-        dataSource={boards}
+        dataSource={mapToArray(boardById)}
         columns={columns}
         rowKey="board_id"
         pagination={false}

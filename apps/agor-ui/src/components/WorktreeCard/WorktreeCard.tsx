@@ -53,7 +53,7 @@ interface WorktreeCardProps {
   worktree: Worktree;
   repo: Repo;
   sessions: Session[]; // Sessions for this specific worktree
-  users: User[];
+  userById: Map<string, User>;
   currentUserId?: string;
   selectedSessionId?: string | null; // Currently open session in drawer
   onTaskClick?: (taskId: string) => void;
@@ -85,7 +85,7 @@ const WorktreeCard = ({
   worktree,
   repo,
   sessions,
-  users,
+  userById,
   currentUserId,
   selectedSessionId,
   onTaskClick,
@@ -591,7 +591,7 @@ const WorktreeCard = ({
             <CreatedByTag
               createdBy={worktree.created_by}
               currentUserId={currentUserId}
-              users={users}
+              userById={userById}
               prefix="Created by"
             />
           )}
@@ -690,7 +690,7 @@ const WorktreeCard = ({
         open={forkSpawnModal.open}
         action={forkSpawnModal.action}
         session={forkSpawnModal.session}
-        currentUser={users.find((u) => u.user_id === currentUserId)}
+        currentUser={currentUserId ? userById.get(currentUserId) : undefined}
         onConfirm={handleForkSpawnConfirm}
         onCancel={() =>
           setForkSpawnModal({

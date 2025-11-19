@@ -9,10 +9,11 @@
 import type { Board, Repo } from '@agor/core/types';
 import { Checkbox, Form, Input, Select, Space, Typography } from 'antd';
 import { useState } from 'react';
+import { mapToArray } from '@/utils/mapHelpers';
 
 export interface WorktreeFormFieldsProps {
-  repos: Repo[];
-  boards?: Board[];
+  repoById: Map<string, Repo>;
+  boardById?: Map<string, Board>;
   selectedRepoId: string | null;
   onRepoChange: (repoId: string) => void;
   defaultBranch: string;
@@ -31,8 +32,8 @@ export interface WorktreeFormFieldsProps {
 }
 
 export const WorktreeFormFields: React.FC<WorktreeFormFieldsProps> = ({
-  repos,
-  boards = [],
+  repoById,
+  boardById = new Map(),
   selectedRepoId,
   onRepoChange,
   defaultBranch,
@@ -72,9 +73,11 @@ export const WorktreeFormFields: React.FC<WorktreeFormFieldsProps> = ({
           placeholder="Select repository..."
           showSearch
           filterOption={(input, option) =>
-            (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
+            String(option?.label ?? '')
+              .toLowerCase()
+              .includes(input.toLowerCase())
           }
-          options={repos.map((repo) => ({
+          options={mapToArray(repoById).map((repo: Repo) => ({
             value: repo.repo_id,
             label: repo.name || repo.slug,
           }))}
@@ -93,9 +96,11 @@ export const WorktreeFormFields: React.FC<WorktreeFormFieldsProps> = ({
             allowClear
             showSearch
             filterOption={(input, option) =>
-              (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
+              String(option?.label ?? '')
+                .toLowerCase()
+                .includes(input.toLowerCase())
             }
-            options={boards.map((board) => ({
+            options={mapToArray(boardById).map((board: Board) => ({
               value: board.board_id,
               label: `${board.icon || '📋'} ${board.name}`,
             }))}

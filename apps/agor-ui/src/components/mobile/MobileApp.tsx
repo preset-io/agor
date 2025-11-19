@@ -17,11 +17,11 @@ interface MobileAppProps {
   sessionById: Map<string, Session>; // O(1) ID lookups
   sessionsByWorktree: Map<string, Session[]>; // O(1) worktree filtering
   tasks: Record<string, Task[]>;
-  boards: Board[];
-  comments: BoardComment[];
-  repos: Repo[];
+  boardById: Map<string, Board>;
+  commentById: Map<string, BoardComment>;
+  repoById: Map<string, Repo>;
   worktreeById: Map<string, Worktree>;
-  users: User[];
+  userById: Map<string, User>;
   onSendPrompt?: (sessionId: string, prompt: string) => void;
   onSendComment: (boardId: string, content: string) => void;
   onReplyComment?: (parentId: string, content: string) => void;
@@ -39,11 +39,11 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   sessionById,
   sessionsByWorktree,
   tasks,
-  boards,
-  comments,
-  repos,
+  boardById,
+  commentById,
+  repoById,
   worktreeById,
-  users,
+  userById,
   onSendPrompt,
   onSendComment,
   onReplyComment,
@@ -70,11 +70,11 @@ export const MobileApp: React.FC<MobileAppProps> = ({
         }}
       >
         <MobileNavTree
-          boards={boards}
+          boardById={boardById}
           worktreeById={worktreeById}
           sessionsByWorktree={sessionsByWorktree}
           tasks={tasks}
-          comments={comments}
+          commentById={commentById}
           onNavigate={() => setDrawerOpen(false)}
         />
       </Drawer>
@@ -127,8 +127,8 @@ export const MobileApp: React.FC<MobileAppProps> = ({
               client={client}
               sessionById={sessionById}
               worktreeById={worktreeById}
-              repos={repos}
-              users={users}
+              repoById={repoById}
+              userById={userById}
               currentUser={user}
               onSendPrompt={onSendPrompt}
               onMenuClick={() => setDrawerOpen(true)}
@@ -144,10 +144,10 @@ export const MobileApp: React.FC<MobileAppProps> = ({
           element={
             <MobileCommentsPage
               client={client}
-              boards={boards}
-              comments={comments}
+              boardById={boardById}
+              commentById={commentById}
               worktreeById={worktreeById}
-              users={users}
+              userById={userById}
               currentUser={user}
               onMenuClick={() => setDrawerOpen(true)}
               onSendComment={onSendComment}

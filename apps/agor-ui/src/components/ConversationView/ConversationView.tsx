@@ -62,9 +62,9 @@ export interface ConversationViewProps {
   sessionModel?: string;
 
   /**
-   * All users for emoji avatars
+   * All users for emoji avatars (Map-based)
    */
-  users?: User[];
+  userById?: Map<string, User>;
 
   /**
    * Current user ID for showing emoji
@@ -131,7 +131,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
     sessionId,
     agentic_tool,
     sessionModel,
-    users = [],
+    userById = new Map(),
     currentUserId,
     onScrollRef,
     onPermissionDecision,
@@ -168,7 +168,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
     }, [onScrollRef, scrollToBottom]);
 
     // Fetch tasks for this session
-    const currentUser = users.find((u) => u.user_id === currentUserId) || null;
+    const currentUser = currentUserId ? userById.get(currentUserId) || null : null;
     const {
       tasks,
       loading: tasksLoading,
@@ -401,7 +401,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
             client={client}
             agentic_tool={agentic_tool}
             sessionModel={sessionModel}
-            users={users}
+            userById={userById}
             currentUserId={currentUserId}
             isExpanded={expandedTaskIds.has(task.task_id)}
             onExpandChange={expandHandlers.get(task.task_id)!}

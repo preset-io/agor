@@ -32,13 +32,14 @@ import {
   theme,
 } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { mapToArray } from '@/utils/mapHelpers';
 import { ArchiveDeleteWorktreeModal } from '../ArchiveDeleteWorktreeModal';
 import { WorktreeFormFields } from '../WorktreeFormFields';
 
 interface WorktreesTableProps {
   worktreeById: Map<string, Worktree>;
-  repos: Repo[];
-  boards: Board[];
+  repoById: Map<string, Repo>;
+  boardById: Map<string, Board>;
   sessionsByWorktree: Map<string, Session[]>; // O(1) worktree filtering
   onArchiveOrDelete?: (
     worktreeId: string,
@@ -66,8 +67,8 @@ interface WorktreesTableProps {
 
 export const WorktreesTable: React.FC<WorktreesTableProps> = ({
   worktreeById,
-  repos,
-  boards,
+  repoById,
+  boardById,
   sessionsByWorktree,
   onArchiveOrDelete,
   onUnarchive,
@@ -76,6 +77,8 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
   onStartEnvironment,
   onStopEnvironment,
 }) => {
+  const repos = mapToArray(repoById);
+  const boards = mapToArray(boardById);
   const { token } = theme.useToken();
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [form] = Form.useForm();
@@ -88,7 +91,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
   const [selectedWorktree, setSelectedWorktree] = useState<Worktree | null>(null);
   const [hoveredArchiveButton, setHoveredArchiveButton] = useState<string | null>(null);
 
-  const reposById = useMemo(() => new Map(repos.map((repo) => [repo.repo_id, repo])), [repos]);
+  // No need for reposById anymore, we already have it as a prop
 
   // Validate form fields to enable/disable Create button
   const validateForm = useCallback(() => {
@@ -109,10 +112,12 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
       const lastBoardId = localStorage.getItem('agor:lastUsedBoardId');
 
       const defaultRepoId =
-        lastRepoId && repos.find((r) => r.repo_id === lastRepoId) ? lastRepoId : repos[0].repo_id;
+        lastRepoId && repos.find((r: Repo) => r.repo_id === lastRepoId)
+          ? lastRepoId
+          : repos[0].repo_id;
 
       const defaultBoardId =
-        lastBoardId && boards.find((b) => b.board_id === lastBoardId)
+        lastBoardId && boards.find((b: Board) => b.board_id === lastBoardId)
           ? lastBoardId
           : boards.length > 0
             ? boards[0].board_id
@@ -122,7 +127,8 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
       form.setFieldsValue({
         repoId: defaultRepoId,
         boardId: defaultBoardId,
-        sourceBranch: repos.find((r) => r.repo_id === defaultRepoId)?.default_branch || 'main',
+        sourceBranch:
+          repos.find((r: Repo) => r.repo_id === defaultRepoId)?.default_branch || 'main',
       });
 
       setSelectedRepoId(defaultRepoId);
@@ -132,7 +138,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
 
   // Helper to get repo name from repo_id
   const getRepoName = (repoId: string): string => {
-    const repo = reposById.get(repoId as Repo['repo_id']);
+    const repo = repoById.get(repoId as Repo['repo_id']);
     return repo?.name || 'Unknown Repo';
   };
 
@@ -199,14 +205,14 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
   // Get selected repo's default branch
   const getDefaultBranch = (): string => {
     if (!selectedRepoId) return 'main';
-    const repo = repos.find((r) => r.repo_id === selectedRepoId);
+    const repo = repos.find((r: Repo) => r.repo_id === selectedRepoId);
     return repo?.default_branch || 'main';
   };
 
   // Update source branch when repo changes
   const handleRepoChange = (repoId: string) => {
     setSelectedRepoId(repoId);
-    const repo = repos.find((r) => r.repo_id === repoId);
+    const repo = repos.find((r: Repo) => r.repo_id === repoId);
     const defaultBranch = repo?.default_branch || 'main';
     form.setFieldValue('sourceBranch', defaultBranch);
   };
@@ -277,7 +283,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
       render: (_: unknown, record: Worktree) => {
         const status = record.environment_instance?.status;
         const healthStatus = record.environment_instance?.last_health_check?.status;
-        const repo = repos.find((r) => r.repo_id === record.repo_id);
+        const repo = repos.find((r: Repo) => r.repo_id === record.repo_id);
         const hasEnvConfig = !!repo?.environment_config;
 
         const isRunningOrHealthy =
@@ -471,7 +477,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
     }
 
     return filtered.filter((worktree) => {
-      const repo = reposById.get(worktree.repo_id);
+      const repo = repoById.get(worktree.repo_id);
       const haystacks = [
         worktree.name,
         worktree.ref,
@@ -488,7 +494,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
         return value.toString().toLowerCase().includes(term);
       });
     });
-  }, [archiveFilter, reposById, searchTerm, worktreeById]);
+  }, [archiveFilter, repoById, searchTerm, worktreeById]);
 
   return (
     <div>
@@ -591,8 +597,8 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
       >
         <Form form={form} layout="vertical" onFieldsChange={validateForm}>
           <WorktreeFormFields
-            repos={repos}
-            boards={boards}
+            repoById={repoById}
+            boardById={boardById}
             selectedRepoId={selectedRepoId}
             onRepoChange={handleRepoChange}
             defaultBranch={getDefaultBranch()}

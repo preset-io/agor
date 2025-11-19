@@ -11,8 +11,8 @@ interface SessionPageProps {
   client: AgorClient | null;
   sessionById: Map<string, Session>; // O(1) ID lookups
   worktreeById: Map<string, Worktree>;
-  repos: Repo[];
-  users: User[];
+  repoById: Map<string, Repo>;
+  userById: Map<string, User>;
   currentUser?: User | null;
   onSendPrompt?: (sessionId: string, prompt: string, permissionMode?: PermissionMode) => void;
   onMenuClick?: () => void;
@@ -24,8 +24,8 @@ export const SessionPage: React.FC<SessionPageProps> = ({
   client,
   sessionById,
   worktreeById,
-  repos,
-  users,
+  repoById,
+  userById,
   currentUser,
   onSendPrompt,
   onMenuClick,
@@ -108,7 +108,7 @@ export const SessionPage: React.FC<SessionPageProps> = ({
           sessionId={session.session_id}
           agentic_tool={session.agentic_tool}
           sessionModel={session.model_config?.model}
-          users={users}
+          userById={userById}
           currentUserId={currentUser?.user_id}
           onPermissionDecision={handlePermissionDecision}
           scheduledFromWorktree={session.scheduled_from_worktree}

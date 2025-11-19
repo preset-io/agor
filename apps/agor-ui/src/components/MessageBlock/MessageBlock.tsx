@@ -62,7 +62,7 @@ interface MessageBlockProps {
   message:
     | Message
     | (Message & { isStreaming?: boolean; thinkingContent?: string; isThinking?: boolean });
-  users?: User[];
+  userById?: Map<string, User>;
   currentUserId?: string;
   isTaskRunning?: boolean; // Whether the task is running (for loading state)
   agentic_tool?: string; // Agentic tool name for showing tool icon
@@ -178,7 +178,7 @@ function isTaskToolResult(message: Message): boolean {
 
 export const MessageBlock: React.FC<MessageBlockProps> = ({
   message,
-  users = [],
+  userById = new Map(),
   currentUserId,
   isTaskRunning = false,
   agentic_tool,
@@ -255,7 +255,7 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
   const shouldUseTyping = isStreaming && hasContent;
 
   // Get current user's emoji
-  const currentUser = users.find((u) => u.user_id === currentUserId);
+  const currentUser = currentUserId ? userById.get(currentUserId) : undefined;
   const userEmoji = currentUser?.emoji || '👤';
 
   // Skip rendering if message has no content
