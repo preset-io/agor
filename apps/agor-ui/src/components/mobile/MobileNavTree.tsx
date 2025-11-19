@@ -11,7 +11,7 @@ interface MobileNavTreeProps {
   boardById: Map<string, Board>;
   worktreeById: Map<string, Worktree>;
   sessionsByWorktree: Map<string, Session[]>; // O(1) worktree filtering
-  tasks: Map<string, Task[]>;
+  tasksBySession: Map<string, Task[]>;
   commentById: Map<string, BoardComment>;
   onNavigate?: () => void;
 }

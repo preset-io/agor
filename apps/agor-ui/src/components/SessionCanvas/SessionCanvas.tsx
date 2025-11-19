@@ -74,7 +74,7 @@ interface SessionCanvasProps {
   client: AgorClient | null;
   sessionById: Map<string, Session>; // O(1) ID lookups
   sessionsByWorktree: Map<string, Session[]>; // O(1) worktree filtering
-  tasks: Map<string, Task[]>;
+  tasksBySession: Map<string, Task[]>;
   userById: Map<string, User>; // Map-based user storage
   repoById: Map<string, Repo>; // Map-based repo storage
   worktrees: Worktree[];
@@ -135,7 +135,7 @@ const SessionNode = ({ data }: { data: SessionNodeData }) => {
     <div className="session-node">
       <SessionCard
         session={data.session}
-        tasks={data.tasks}
+        tasksBySession={data.tasks}
         userById={data.userById}
         currentUserId={data.currentUserId}
         onTaskClick={data.onTaskClick}

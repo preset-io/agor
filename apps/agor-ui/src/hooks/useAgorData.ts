@@ -22,7 +22,7 @@ import { useCallback, useEffect, useState } from 'react';
 interface UseAgorDataResult {
   sessionById: Map<string, Session>; // O(1) lookups by session_id - efficient, stable references
   sessionsByWorktree: Map<string, Session[]>; // O(1) worktree-scoped filtering
-  tasks: Map<string, Task[]>; // O(1) lookups by session_id - efficient, stable references
+  tasksBySession: Map<string, Task[]>; // O(1) lookups by session_id - efficient, stable references
   boardById: Map<string, Board>; // O(1) lookups by board_id - efficient, stable references
   boardObjectById: Map<string, BoardEntityObject>; // O(1) lookups by object_id - efficient, stable references
   commentById: Map<string, BoardComment>; // O(1) lookups by comment_id - efficient, stable references
@@ -45,7 +45,7 @@ interface UseAgorDataResult {
 export function useAgorData(client: AgorClient | null): UseAgorDataResult {
   const [sessionById, setSessionById] = useState<Map<string, Session>>(new Map());
   const [sessionsByWorktree, setSessionsByWorktree] = useState<Map<string, Session[]>>(new Map());
-  const [tasks, setTasks] = useState<Map<string, Task[]>>(new Map());
+  const [tasksBySession, setTasksBySession] = useState<Map<string, Task[]>>(new Map());
   const [boardById, setBoardById] = useState<Map<string, Board>>(new Map());
   const [boardObjectById, setBoardObjectById] = useState<Map<string, BoardEntityObject>>(new Map());
   const [commentById, setCommentById] = useState<Map<string, BoardComment>>(new Map());
@@ -147,7 +147,7 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
         }
         tasksMap.get(task.session_id)!.push(task);
       }
-      setTasks(tasksMap);
+      setTasksBySession(tasksMap);
 
       // Build board Map for efficient lookups
       const boardsMap = new Map<string, Board>();
@@ -344,7 +344,7 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
     // Subscribe to task events
     const tasksService = client.service('tasks');
     const handleTaskCreated = (task: Task) => {
-      setTasks((prev) => {
+      setTasksBySession((prev) => {
         const sessionTasks = prev.get(task.session_id) || [];
         // Check if task already exists (duplicate event)
         if (sessionTasks.some((t) => t.task_id === task.task_id)) return prev;
@@ -355,7 +355,7 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       });
     };
     const handleTaskPatched = (task: Task) => {
-      setTasks((prev) => {
+      setTasksBySession((prev) => {
         const sessionTasks = prev.get(task.session_id) || [];
         const index = sessionTasks.findIndex((t) => t.task_id === task.task_id);
 
@@ -376,7 +376,7 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       });
     };
     const handleTaskRemoved = (task: Task) => {
-      setTasks((prev) => {
+      setTasksBySession((prev) => {
         const sessionTasks = prev.get(task.session_id) || [];
         const filtered = sessionTasks.filter((t) => t.task_id !== task.task_id);
 
@@ -726,7 +726,7 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
   return {
     sessionById,
     sessionsByWorktree,
-    tasks,
+    tasksBySession,
     boardById,
     boardObjectById,
     commentById,

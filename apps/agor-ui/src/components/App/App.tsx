@@ -50,7 +50,7 @@ export interface AppProps {
   connecting?: boolean;
   sessionById: Map<string, Session>; // O(1) lookups by session_id - efficient, stable references
   sessionsByWorktree: Map<string, Session[]>; // O(1) worktree-scoped filtering
-  tasks: Map<string, Task[]>; // Map-based task storage by session_id
+  tasksBySession: Map<string, Task[]>; // Map-based task storage by session_id
   availableAgents: AgenticToolOption[];
   boardById: Map<string, Board>; // Map-based board storage
   boardObjectById: Map<string, BoardEntityObject>; // Map-based board object storage
@@ -491,7 +491,7 @@ export const App: React.FC<AppProps> = ({
             client={client}
             sessionById={sessionById}
             sessionsByWorktree={sessionsByWorktree}
-            tasks={tasks}
+            tasksBySession={tasks}
             userById={userById}
             repoById={repoById}
             worktrees={boardWorktrees}

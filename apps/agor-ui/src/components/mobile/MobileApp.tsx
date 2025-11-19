@@ -16,7 +16,7 @@ interface MobileAppProps {
   user?: User | null;
   sessionById: Map<string, Session>; // O(1) ID lookups
   sessionsByWorktree: Map<string, Session[]>; // O(1) worktree filtering
-  tasks: Map<string, Task[]>;
+  tasksBySession: Map<string, Task[]>;
   boardById: Map<string, Board>;
   commentById: Map<string, BoardComment>;
   repoById: Map<string, Repo>;
@@ -73,7 +73,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
           boardById={boardById}
           worktreeById={worktreeById}
           sessionsByWorktree={sessionsByWorktree}
-          tasks={tasks}
+          tasksBySession={tasks}
           commentById={commentById}
           onNavigate={() => setDrawerOpen(false)}
         />
