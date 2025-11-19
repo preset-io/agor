@@ -53,6 +53,10 @@ export const EventStreamPill = ({
   copyLabel,
   metadataCard,
 }: EventStreamPillProps): React.JSX.Element => {
+  // If metadata card provided, don't copy on click - just show popover
+  // Otherwise, copy to clipboard on click
+  const handleClick = metadataCard ? undefined : () => copyToClipboard(id, copyLabel);
+
   const pill = (
     <Tag
       icon={<Icon />}
@@ -63,7 +67,7 @@ export const EventStreamPill = ({
         cursor: 'pointer',
         fontFamily: 'monospace',
       }}
-      onClick={() => copyToClipboard(id, copyLabel)}
+      onClick={handleClick}
     >
       {label ?? toShortId(id)}
     </Tag>
@@ -72,13 +76,7 @@ export const EventStreamPill = ({
   // If metadata card provided, wrap in popover
   if (metadataCard) {
     return (
-      <Popover
-        content={metadataCard}
-        title={null}
-        trigger="hover"
-        placement="left"
-        mouseEnterDelay={0.3}
-      >
+      <Popover content={metadataCard} title={null} trigger="click" placement="left">
         {pill}
       </Popover>
     );

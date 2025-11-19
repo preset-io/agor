@@ -11,7 +11,6 @@ import type {
   Repo,
   Session,
   SpawnConfig,
-  Task,
   User,
   UserID,
   Worktree,
@@ -74,7 +73,6 @@ interface SessionCanvasProps {
   client: AgorClient | null;
   sessionById: Map<string, Session>; // O(1) ID lookups
   sessionsByWorktree: Map<string, Session[]>; // O(1) worktree filtering
-  tasksBySession: Map<string, Task[]>;
   userById: Map<string, User>; // Map-based user storage
   repoById: Map<string, Repo>; // Map-based repo storage
   worktrees: Worktree[];
@@ -114,7 +112,6 @@ interface SessionCanvasProps {
 
 interface SessionNodeData {
   session: Session;
-  tasks: Task[];
   userById: Map<string, User>;
   currentUserId?: string;
   onTaskClick?: (taskId: string) => void;
@@ -135,7 +132,6 @@ const SessionNode = ({ data }: { data: SessionNodeData }) => {
     <div className="session-node">
       <SessionCard
         session={data.session}
-        tasksBySession={data.tasks}
         userById={data.userById}
         currentUserId={data.currentUserId}
         onTaskClick={data.onTaskClick}
@@ -1045,7 +1041,6 @@ const SessionCanvas = ({
   }, []);
 
   // Handle node drag end - persist layout to board (debounced)
-  // biome-ignore lint/correctness/useExhaustiveDependencies: boardObjectByWorktree used via .get() method, boardObjectById removed as Map is stable
   const handleNodeDragStop: NodeDragHandler = useCallback(
     (_event, node) => {
       if (!board || !client || !reactFlowInstanceRef.current) return;

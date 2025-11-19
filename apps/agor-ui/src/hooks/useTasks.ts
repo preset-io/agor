@@ -85,11 +85,9 @@ export function useTasks(
           if (prev.some((t) => t.task_id === task.task_id)) {
             return prev;
           }
-          // Insert in correct position based on created_at
-          const newTasks = [...prev, task];
-          return newTasks.sort(
-            (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-          );
+          // Tasks are created chronologically, so new tasks always go at the end
+          // No need to re-sort - DB already sorted initial load by created_at ascending
+          return [...prev, task];
         });
       }
     };
@@ -97,8 +95,17 @@ export function useTasks(
     const handleTaskPatched = (task: Task) => {
       if (task.session_id === sessionId) {
         setTasks((prev) => {
-          // Find the previous task state to detect transitions
-          const oldTask = prev.find((t) => t.task_id === task.task_id);
+          // Find index and previous task state
+          const index = prev.findIndex((t) => t.task_id === task.task_id);
+
+          // Task not found - shouldn't happen but handle gracefully
+          if (index === -1) return prev;
+
+          const oldTask = prev[index];
+
+          // Check if task actually changed (reference equality)
+          if (oldTask === task) return prev;
+
           const wasRunning = oldTask?.status === TaskStatus.RUNNING;
           const isNowDone =
             task.status === TaskStatus.COMPLETED || task.status === TaskStatus.FAILED;
@@ -108,7 +115,10 @@ export function useTasks(
             playTaskCompletionChime(task, user?.preferences?.audio);
           }
 
-          return prev.map((t) => (t.task_id === task.task_id ? task : t));
+          // Create new array with updated task at same position
+          const newTasks = [...prev];
+          newTasks[index] = task;
+          return newTasks;
         });
       }
     };

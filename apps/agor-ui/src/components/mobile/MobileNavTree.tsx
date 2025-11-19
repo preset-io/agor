@@ -1,4 +1,4 @@
-import type { Board, BoardComment, Session, Task, Worktree } from '@agor/core/types';
+import type { Board, BoardComment, Session, Worktree } from '@agor/core/types';
 import { CommentOutlined, DownOutlined } from '@ant-design/icons';
 import { Badge, Button, Collapse, List, Space, Typography, theme } from 'antd';
 import { useNavigate } from 'react-router-dom';
@@ -11,7 +11,6 @@ interface MobileNavTreeProps {
   boardById: Map<string, Board>;
   worktreeById: Map<string, Worktree>;
   sessionsByWorktree: Map<string, Session[]>; // O(1) worktree filtering
-  tasksBySession: Map<string, Task[]>;
   commentById: Map<string, BoardComment>;
   onNavigate?: () => void;
 }
@@ -20,7 +19,6 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
   boardById,
   worktreeById,
   sessionsByWorktree,
-  tasks,
   commentById,
   onNavigate,
 }) => {
@@ -68,14 +66,12 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
     ])
   );
 
-  // Get the first task prompt for a session as its title
-  const getSessionTitle = (sessionId: string): string => {
-    const sessionTasks = tasks.get(sessionId) || [];
-    if (sessionTasks.length > 0 && sessionTasks[0]?.full_prompt) {
-      const firstPrompt = sessionTasks[0].full_prompt;
-      return firstPrompt.length > 50 ? `${firstPrompt.slice(0, 50)}...` : firstPrompt;
+  // Get session title - uses session.title if available, falls back to session ID
+  const getSessionTitle = (session: Session): string => {
+    if (session.title) {
+      return session.title.length > 50 ? `${session.title.slice(0, 50)}...` : session.title;
     }
-    return `Session ${sessionId.slice(0, 8)}`;
+    return `Session ${session.session_id.slice(0, 8)}`;
   };
 
   // Get session status icon
@@ -220,7 +216,7 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
                                   >
                                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                                       <span>{getSessionStatusIcon(session)}</span>
-                                      <Text>{getSessionTitle(session.session_id)}</Text>
+                                      <Text>{getSessionTitle(session)}</Text>
                                     </div>
                                     <Text
                                       type="secondary"

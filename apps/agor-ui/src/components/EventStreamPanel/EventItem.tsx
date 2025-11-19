@@ -14,7 +14,7 @@ import {
   ToolOutlined,
 } from '@ant-design/icons';
 import { Button, Popover, Tag, Typography, theme } from 'antd';
-import type React from 'react';
+import React from 'react';
 import type { SocketEvent } from '../../hooks/useEventStream';
 import { EventStreamPill, SessionMetadataCard } from '../Pill';
 import WorktreeCard from '../WorktreeCard/WorktreeCard';
@@ -45,7 +45,7 @@ export interface EventItemProps {
   worktreeActions?: WorktreeActions;
 }
 
-export const EventItem = ({
+const EventItemComponent = ({
   event,
   worktreeById,
   sessionById,
@@ -254,3 +254,7 @@ export const EventItem = ({
     </div>
   );
 };
+
+// Memoize to prevent re-rendering existing items when new events arrive
+// Only re-render if the event itself or any of the lookup maps change
+export const EventItem = React.memo(EventItemComponent);

@@ -1,5 +1,5 @@
 import type { AgorClient } from '@agor/core/api';
-import type { Board, BoardComment, Repo, Session, Task, User, Worktree } from '@agor/core/types';
+import type { Board, BoardComment, Repo, Session, User, Worktree } from '@agor/core/types';
 import { Drawer, Layout, Typography } from 'antd';
 import { useState } from 'react';
 import { Route, Routes } from 'react-router-dom';
@@ -16,7 +16,6 @@ interface MobileAppProps {
   user?: User | null;
   sessionById: Map<string, Session>; // O(1) ID lookups
   sessionsByWorktree: Map<string, Session[]>; // O(1) worktree filtering
-  tasksBySession: Map<string, Task[]>;
   boardById: Map<string, Board>;
   commentById: Map<string, BoardComment>;
   repoById: Map<string, Repo>;
@@ -38,7 +37,6 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   user,
   sessionById,
   sessionsByWorktree,
-  tasksBySession,
   boardById,
   commentById,
   repoById,
@@ -73,7 +71,6 @@ export const MobileApp: React.FC<MobileAppProps> = ({
           boardById={boardById}
           worktreeById={worktreeById}
           sessionsByWorktree={sessionsByWorktree}
-          tasksBySession={tasksBySession}
           commentById={commentById}
           onNavigate={() => setDrawerOpen(false)}
         />

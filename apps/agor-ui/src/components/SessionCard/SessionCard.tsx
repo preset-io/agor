@@ -25,7 +25,7 @@ const SESSION_TITLE_FALLBACK_CHARS = 150; // Fallback truncation for unsupported
 
 interface SessionCardProps {
   session: Session;
-  tasks: Task[];
+  tasks?: Task[]; // Optional - will be fetched via useTasks if not provided
   userById: Map<string, User>;
   currentUserId?: string;
   onTaskClick?: (taskId: string) => void;
@@ -41,7 +41,7 @@ interface SessionCardProps {
 
 const SessionCard = ({
   session,
-  tasks,
+  tasks = [], // Default to empty array - tasks fetching will be added later via useTasks
   userById,
   currentUserId,
   onTaskClick,

@@ -124,7 +124,6 @@ function AppContent() {
   const {
     sessionById,
     sessionsByWorktree,
-    tasksBySession,
     boardById,
     boardObjectById,
     commentById,
@@ -1016,7 +1015,6 @@ function AppContent() {
               user={user}
               sessionById={sessionById}
               sessionsByWorktree={sessionsByWorktree}
-              tasksBySession={tasksBySession}
               boardById={boardById}
               commentById={commentById}
               repoById={repoById}
@@ -1060,7 +1058,6 @@ function AppContent() {
                 connecting={connecting}
                 sessionById={sessionById}
                 sessionsByWorktree={sessionsByWorktree}
-                tasksBySession={tasksBySession}
                 availableAgents={AVAILABLE_AGENTS}
                 boardById={boardById}
                 boardObjectById={boardObjectById}

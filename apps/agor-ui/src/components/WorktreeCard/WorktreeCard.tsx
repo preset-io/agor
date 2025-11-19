@@ -14,7 +14,7 @@ import {
 import type { MenuProps } from 'antd';
 import { Badge, Button, Card, Collapse, Space, Spin, Tree, Typography, theme } from 'antd';
 import { AggregationColor } from 'antd/es/color-picker/color';
-import { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { isDarkTheme } from '../../utils/theme';
 import { ArchiveDeleteWorktreeModal } from '../ArchiveDeleteWorktreeModal';
@@ -81,7 +81,7 @@ interface WorktreeCardProps {
   inPopover?: boolean; // NEW: Enable popover-optimized mode (hides board-specific controls)
 }
 
-const WorktreeCard = ({
+const WorktreeCardComponent = ({
   worktree,
   repo,
   sessions,
@@ -712,5 +712,9 @@ const WorktreeCard = ({
     </Card>
   );
 };
+
+// Memoize WorktreeCard to prevent unnecessary re-renders when parent updates
+// Only re-render when worktree, repo, sessions, or callback props actually change
+const WorktreeCard = React.memo(WorktreeCardComponent);
 
 export default WorktreeCard;
