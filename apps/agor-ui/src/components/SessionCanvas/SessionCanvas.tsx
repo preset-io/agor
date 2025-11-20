@@ -612,22 +612,30 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
     // Store ReactFlow instance ref
     const reactFlowInstanceRef = useRef<ReactFlowInstance | null>(null);
+    const reactFlowWrapperRef = useRef<HTMLDivElement | null>(null);
 
     // Expose methods to parent via ref
     useImperativeHandle(
       ref,
       () => ({
         getViewportCenter: () => {
-          if (!reactFlowInstanceRef.current) return null;
+          if (!reactFlowInstanceRef.current || !reactFlowWrapperRef.current) return null;
 
-          const viewport = reactFlowInstanceRef.current.getViewport();
-          const { innerWidth, innerHeight } = window;
+          // Get the actual canvas dimensions (excluding app header, panels, etc.)
+          const rect = reactFlowWrapperRef.current.getBoundingClientRect();
 
-          // Calculate center of viewport in flow coordinates
-          const centerX = (innerWidth / 2 - viewport.x) / viewport.zoom;
-          const centerY = (innerHeight / 2 - viewport.y) / viewport.zoom;
+          // Calculate center in screen coordinates
+          const centerScreenX = rect.left + rect.width / 2;
+          const centerScreenY = rect.top + rect.height / 2;
 
-          return { x: centerX, y: centerY };
+          // Convert screen coordinates to flow coordinates using screenToFlowPosition
+          // This automatically accounts for viewport pan, zoom, and all UI chrome
+          const center = reactFlowInstanceRef.current.screenToFlowPosition({
+            x: centerScreenX,
+            y: centerScreenY,
+          });
+
+          return center;
         },
       }),
       []
@@ -1877,6 +1885,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         )}
 
         <div
+          ref={reactFlowWrapperRef}
           style={{
             width: '100%',
             height: '100%',
