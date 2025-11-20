@@ -1,7 +1,7 @@
 import type { Board, Worktree } from '@agor/core/types';
 import { DownOutlined } from '@ant-design/icons';
-import { Badge, Button, Dropdown, Space, Typography, theme } from 'antd';
 import type { MenuProps } from 'antd';
+import { Badge, Button, Dropdown, Space, Typography, theme } from 'antd';
 import type React from 'react';
 import { useMemo } from 'react';
 
@@ -82,11 +82,7 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
   }, [boards, currentBoardId, worktreeCountByBoard, onBoardChange, token]);
 
   return (
-    <Dropdown
-      menu={{ items: menuItems }}
-      trigger={['click']}
-      placement="bottomLeft"
-    >
+    <Dropdown menu={{ items: menuItems }} trigger={['click']} placement="bottomLeft">
       <Button
         type="text"
         style={{
