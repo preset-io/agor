@@ -3,6 +3,7 @@
  */
 
 import type { Repo, Session, SpawnConfig, User, Worktree } from '@agor/core/types';
+import type { AgorClient } from '@agor/core/api';
 import {
   AimOutlined,
   ApiOutlined,
@@ -43,6 +44,7 @@ export interface EventItemProps {
   currentUserId?: string;
   selectedSessionId?: string | null;
   worktreeActions?: WorktreeActions;
+  client: AgorClient | null;
 }
 
 const EventItemComponent = ({
@@ -55,6 +57,7 @@ const EventItemComponent = ({
   currentUserId,
   selectedSessionId,
   worktreeActions,
+  client,
 }: EventItemProps): React.JSX.Element => {
   const { token } = theme.useToken();
 
@@ -291,6 +294,7 @@ const EventItemComponent = ({
               currentUserId={currentUserId}
               selectedSessionId={selectedSessionId}
               inPopover={true}
+              client={client}
               {...worktreeActions}
             />
           }

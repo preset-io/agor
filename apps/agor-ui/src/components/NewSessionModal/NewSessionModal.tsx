@@ -8,6 +8,7 @@ import type {
   Worktree,
 } from '@agor/core/types';
 import { getDefaultPermissionMode } from '@agor/core/types';
+import type { AgorClient } from '@agor/core/api';
 import { DownOutlined } from '@ant-design/icons';
 import { Alert, Collapse, Form, Input, Modal, Typography } from 'antd';
 import { useEffect, useState } from 'react';
@@ -17,8 +18,7 @@ import {
   AgentSelectionGrid,
 } from '../AgentSelectionGrid/AgentSelectionGrid';
 import type { ModelConfig } from '../ModelSelector';
-
-const { TextArea } = Input;
+import { AutocompleteTextarea } from '../AutocompleteTextarea';
 
 export interface NewSessionConfig {
   worktree_id: string; // Required - sessions are always created from a worktree
@@ -44,6 +44,8 @@ export interface NewSessionModalProps {
   worktree?: Worktree; // Optional - worktree details for display
   mcpServerById?: Map<string, MCPServer>;
   currentUser?: User | null; // Optional - current user for default settings
+  client: AgorClient | null;
+  userById: Map<string, User>;
 }
 
 export const NewSessionModal: React.FC<NewSessionModalProps> = ({
@@ -55,6 +57,8 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
   worktree,
   mcpServerById = new Map(),
   currentUser,
+  client,
+  userById,
 }) => {
   const [form] = Form.useForm();
   const [selectedAgent, setSelectedAgent] = useState<string>('claude-code');
@@ -211,10 +215,14 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
           label="Initial Prompt (optional)"
           help="First message to send to the agent when session starts"
         >
-          <TextArea
-            rows={4}
-            placeholder="e.g., Build a JWT authentication system with secure password storage..."
-            autoFocus
+          <AutocompleteTextarea
+            value={form.getFieldValue('initialPrompt') || ''}
+            onChange={(value) => form.setFieldValue('initialPrompt', value)}
+            placeholder="e.g., Build a JWT authentication system with secure password storage... (type @ for autocomplete)"
+            autoSize={{ minRows: 4, maxRows: 8 }}
+            client={client}
+            sessionId={null}
+            userById={userById}
           />
         </Form.Item>
 

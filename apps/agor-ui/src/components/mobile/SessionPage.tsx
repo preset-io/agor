@@ -123,6 +123,9 @@ export const SessionPage: React.FC<SessionPageProps> = ({
         placeholder={session.status === 'running' ? 'Agent is working...' : 'Send a prompt...'}
         promptDraft={sessionId ? promptDrafts.get(sessionId) || '' : ''}
         onUpdateDraft={(draft: string) => sessionId && onUpdateDraft(sessionId, draft)}
+        client={client}
+        sessionId={sessionId || null}
+        userById={userById}
       />
     </div>
   );

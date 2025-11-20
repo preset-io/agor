@@ -36,6 +36,7 @@ export interface AppHeaderProps {
   currentBoardIcon?: string;
   unreadCommentsCount?: number;
   eventStreamEnabled?: boolean;
+  hasUserMentions?: boolean; // True if current user is mentioned in active comments
 }
 
 export const AppHeader: React.FC<AppHeaderProps> = ({
@@ -56,6 +57,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   currentBoardIcon,
   unreadCommentsCount = 0,
   eventStreamEnabled = false,
+  hasUserMentions = false,
 }) => {
   const { token } = theme.useToken();
   const userEmoji = user?.emoji || '👤';
@@ -155,7 +157,9 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           <Badge
             count={unreadCommentsCount}
             offset={[-2, 2]}
-            style={{ backgroundColor: token.colorPrimaryBgHover }}
+            style={{
+              backgroundColor: hasUserMentions ? token.colorError : token.colorPrimaryBgHover,
+            }}
           >
             <Tooltip title="Toggle comments panel" placement="bottom">
               <Button

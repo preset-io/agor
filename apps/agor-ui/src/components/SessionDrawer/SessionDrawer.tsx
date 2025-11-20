@@ -1075,6 +1075,8 @@ const SessionDrawer = ({
         initialPrompt={inputValue}
         onConfirm={handleSpawnModalConfirm}
         onCancel={() => setSpawnModalOpen(false)}
+        client={client}
+        userById={userById}
       />
     </Drawer>
   );

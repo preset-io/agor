@@ -15,6 +15,7 @@ import { Typography, theme } from 'antd';
 import type React from 'react';
 import { Streamdown } from 'streamdown';
 import { isDarkTheme } from '../../utils/theme';
+import { highlightMentionsInMarkdown } from '../../utils/highlightMentions';
 
 interface MarkdownRendererProps {
   /**
@@ -45,7 +46,10 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
   const { token } = theme.useToken();
 
   // Handle array of strings: filter empty, join with double newlines
-  const text = Array.isArray(content) ? content.filter((t) => t.trim()).join('\n\n') : content;
+  let text = Array.isArray(content) ? content.filter((t) => t.trim()).join('\n\n') : content;
+
+  // Pre-process text to highlight @ mentions
+  text = highlightMentionsInMarkdown(text);
 
   // Detect dark mode from Ant Design token system
   const isDarkMode = isDarkTheme(token);

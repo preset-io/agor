@@ -3,6 +3,7 @@
  *
  * Textarea with @ mentions autocomplete for files and users.
  * Uses Ant Design Popover for dropdown and native textarea for input.
+ * Highlights @ mentions with a background overlay.
  */
 
 import type { AgorClient } from '@agor/core/api';
@@ -81,6 +82,51 @@ const getAtTokenQuery = (text: string, position: number): string | null => {
  */
 const quoteIfNeeded = (text: string): string => {
   return text.includes(' ') ? `"${text}"` : text;
+};
+
+/**
+ * Highlight @ mentions in text
+ * Returns JSX with highlighted mentions
+ */
+const highlightMentions = (text: string, highlightColor: string): React.ReactNode[] => {
+  // Match @ followed by either:
+  // 1. Quoted text: @"anything including spaces"
+  // 2. Unquoted text: @word (until space/newline)
+  const mentionRegex = /@(?:"[^"]*"|[^\s]+)/g;
+  const parts: React.ReactNode[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = mentionRegex.exec(text)) !== null) {
+    // Add text before mention
+    if (match.index > lastIndex) {
+      parts.push(text.substring(lastIndex, match.index));
+    }
+
+    // Add highlighted mention
+    parts.push(
+      <span
+        key={`mention-${match.index}`}
+        style={{
+          backgroundColor: highlightColor,
+          borderRadius: '3px',
+          padding: '0 2px',
+          fontWeight: 600,
+        }}
+      >
+        {match[0]}
+      </span>
+    );
+
+    lastIndex = match.index + match[0].length;
+  }
+
+  // Add remaining text
+  if (lastIndex < text.length) {
+    parts.push(text.substring(lastIndex));
+  }
+
+  return parts;
 };
 
 export const AutocompleteTextarea = React.forwardRef<
@@ -457,6 +503,10 @@ export const AutocompleteTextarea = React.forwardRef<
       </div>
     );
 
+    // Compute highlighted text
+    const highlightColor = token.colorBgTextHover;
+    const hasHighlights = value?.includes('@') ?? false;
+
     return (
       <Popover
         content={popoverContent}
@@ -465,43 +515,77 @@ export const AutocompleteTextarea = React.forwardRef<
         placement="bottomLeft"
         overlayStyle={{ paddingTop: 4 }}
       >
-        <TextArea
-          ref={(node) => {
-            let textarea: HTMLTextAreaElement | null = null;
-            if (
-              node &&
-              typeof node === 'object' &&
-              'resizableTextArea' in node &&
-              node.resizableTextArea &&
-              typeof node.resizableTextArea === 'object' &&
-              'textArea' in node.resizableTextArea &&
-              node.resizableTextArea.textArea instanceof HTMLTextAreaElement
-            ) {
-              textarea = node.resizableTextArea.textArea;
-            }
-            if (textarea) {
-              textareaRef.current.current = textarea;
-              if (typeof ref === 'function') {
-                ref(textarea);
-              } else if (ref) {
-                try {
-                  ref.current = textarea;
-                } catch {
-                  // Read-only ref, ignore
+        <div style={{ position: 'relative', width: '100%' }}>
+          {/* Highlighting overlay (behind textarea) */}
+          {hasHighlights && (
+            <div
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                pointerEvents: 'none',
+                whiteSpace: 'pre-wrap',
+                wordWrap: 'break-word',
+                color: 'transparent',
+                overflow: 'hidden',
+                fontFamily: token.fontFamily,
+                fontSize: token.fontSize,
+                lineHeight: token.lineHeight,
+                padding: '4px 11px',
+                border: '1px solid transparent',
+                borderRadius: token.borderRadius,
+                zIndex: 0,
+              }}
+              aria-hidden="true"
+            >
+              {highlightMentions(value, highlightColor)}
+            </div>
+          )}
+
+          {/* Textarea (with transparent background to show highlights) */}
+          <TextArea
+            ref={(node) => {
+              let textarea: HTMLTextAreaElement | null = null;
+              if (
+                node &&
+                typeof node === 'object' &&
+                'resizableTextArea' in node &&
+                node.resizableTextArea &&
+                typeof node.resizableTextArea === 'object' &&
+                'textArea' in node.resizableTextArea &&
+                node.resizableTextArea.textArea instanceof HTMLTextAreaElement
+              ) {
+                textarea = node.resizableTextArea.textArea;
+              }
+              if (textarea) {
+                textareaRef.current.current = textarea;
+                if (typeof ref === 'function') {
+                  ref(textarea);
+                } else if (ref) {
+                  try {
+                    ref.current = textarea;
+                  } catch {
+                    // Read-only ref, ignore
+                  }
                 }
               }
-            }
-          }}
-          value={value}
-          onChange={handleChange}
-          onKeyDown={handleKeyDown}
-          placeholder={placeholder}
-          autoSize={autoSize || { minRows: 2, maxRows: 10 }}
-          className="agor-textarea"
-          style={{
-            borderColor: token.colorBorder,
-          }}
-        />
+            }}
+            value={value}
+            onChange={handleChange}
+            onKeyDown={handleKeyDown}
+            placeholder={placeholder}
+            autoSize={autoSize || { minRows: 2, maxRows: 10 }}
+            className="agor-textarea agor-textarea-with-highlights"
+            style={{
+              borderColor: token.colorBorder,
+              backgroundColor: hasHighlights ? 'transparent' : undefined,
+              position: 'relative',
+              zIndex: 1,
+            }}
+          />
+        </div>
       </Popover>
     );
   }

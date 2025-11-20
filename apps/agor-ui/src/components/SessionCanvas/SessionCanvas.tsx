@@ -178,6 +178,7 @@ interface WorktreeNodeData {
   zoneName?: string;
   zoneColor?: string;
   selectedSessionId?: string | null;
+  client: AgorClient | null;
 }
 
 // Custom node component that renders WorktreeCard
@@ -205,6 +206,7 @@ const WorktreeNode = ({ data }: { data: WorktreeNodeData }) => {
         onUnpin={data.onUnpin}
         isPinned={data.isPinned}
         zoneName={data.zoneName}
+        client={data.client}
         zoneColor={data.zoneColor}
         defaultExpanded={!data.compact}
       />
@@ -558,6 +560,7 @@ const SessionCanvas = ({
           isPinned: !!dbZoneId,
           zoneName,
           zoneColor,
+          client,
         },
       });
     });
