@@ -177,6 +177,18 @@ export interface BoardsServiceImpl extends Service<Board, Partial<Board>, Feathe
     deleteAssociatedSessions: boolean,
     params?: FeathersParams
   ): Promise<{ board: Board; affectedSessions: string[] }>;
+  // Export/import/clone methods
+  toBlob(
+    boardId: string,
+    params?: FeathersParams
+  ): Promise<import('@agor/core/types').BoardExportBlob>;
+  fromBlob(
+    blob: import('@agor/core/types').BoardExportBlob,
+    params?: FeathersParams
+  ): Promise<Board>;
+  toYaml(boardId: string, params?: FeathersParams): Promise<string>;
+  fromYaml(yamlContent: string, params?: FeathersParams): Promise<Board>;
+  clone(boardId: string, newName: string, params?: FeathersParams): Promise<Board>;
 }
 
 /**

@@ -247,13 +247,14 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
           return Promise.reject(new Error('Not connected to daemon'));
         }
 
-        const boardsService = client.service('boards');
-        return boardsService
-          .clone(board.board_id, newName)
+        // Call custom route: POST /boards/:id/clone
+        return client
+          .service(`boards/${board.board_id}/clone` as 'boards')
+          .create({ newName })
           .then((clonedBoard) => {
-            showSuccess(`Board cloned: ${clonedBoard.name}`);
+            showSuccess(`Board cloned: ${(clonedBoard as unknown as Board).name}`);
             // Trigger parent refresh by calling onCreate
-            onCreate?.(clonedBoard);
+            onCreate?.(clonedBoard as unknown as Board);
           })
           .catch((error) => {
             showError(`Clone failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -270,8 +271,10 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
       return;
     }
     try {
-      const boardsService = client.service('boards');
-      const yaml = await boardsService.toYaml(board.board_id);
+      // Call custom route: GET /boards/:id/toYaml
+      const yaml = (await client
+        .service(`boards/${board.board_id}/toYaml` as 'boards')
+        .find()) as unknown as string;
 
       // Trigger download
       const blob = new Blob([yaml], { type: 'text/yaml' });
@@ -307,13 +310,18 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
     const content = await file.text();
 
     try {
-      const boardsService = client.service('boards');
       let board: Board;
 
       if (file.name.endsWith('.json')) {
-        board = await boardsService.fromBlob(JSON.parse(content));
+        // Call custom route: POST /boards/fromBlob
+        board = (await client
+          .service('boards/fromBlob' as 'boards')
+          .create(JSON.parse(content))) as unknown as Board;
       } else {
-        board = await boardsService.fromYaml(content);
+        // Call custom route: POST /boards/fromYaml
+        board = (await client
+          .service('boards/fromYaml' as 'boards')
+          .create({ yamlContent: content })) as unknown as Board;
       }
 
       showSuccess(`Board imported: ${board.name}`);

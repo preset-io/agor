@@ -950,26 +950,7 @@ async function main() {
     // biome-ignore lint/suspicious/noExplicitAny: feathers-swagger docs option not typed in FeathersJS
   } as any);
 
-  app.use('/boards', createBoardsService(db), {
-    methods: [
-      'find',
-      'get',
-      'create',
-      'update',
-      'patch',
-      'remove',
-      'findBySlug',
-      'upsertBoardObject',
-      'removeBoardObject',
-      'batchUpsertBoardObjects',
-      'deleteZone',
-      'toBlob',
-      'fromBlob',
-      'toYaml',
-      'fromYaml',
-      'clone',
-    ],
-  });
+  app.use('/boards', createBoardsService(db));
 
   // Register board-objects service (positioned entities on boards)
   app.use('/board-objects', createBoardObjectsService(db));
@@ -2899,6 +2880,53 @@ async function main() {
       if (!id) throw new Error('Board ID required');
       if (!data.sessionId) throw new Error('Session ID required');
       return boardsService.addSession(id, data.sessionId, params);
+    },
+  });
+
+  // Board export/import/clone routes
+  app.use('/boards/:id/toYaml', {
+    async find(_data: unknown, params: RouteParams) {
+      ensureMinimumRole(params, 'member', 'export boards');
+      const id = params.route?.id;
+      if (!id) throw new Error('Board ID required');
+      return boardsService.toYaml(id, params);
+    },
+    // biome-ignore lint/suspicious/noExplicitAny: FeathersJS route handler type mismatch
+  } as any);
+
+  app.use('/boards/:id/toBlob', {
+    async find(_data: unknown, params: RouteParams) {
+      ensureMinimumRole(params, 'member', 'export boards');
+      const id = params.route?.id;
+      if (!id) throw new Error('Board ID required');
+      return boardsService.toBlob(id, params);
+    },
+    // biome-ignore lint/suspicious/noExplicitAny: FeathersJS route handler type mismatch
+  } as any);
+
+  app.use('/boards/fromYaml', {
+    async create(data: { yamlContent: string }, params: RouteParams) {
+      ensureMinimumRole(params, 'member', 'import boards');
+      if (!data.yamlContent) throw new Error('yamlContent required');
+      return boardsService.fromYaml(data.yamlContent, params);
+    },
+  });
+
+  app.use('/boards/fromBlob', {
+    async create(data: import('@agor/core/types').BoardExportBlob, params: RouteParams) {
+      ensureMinimumRole(params, 'member', 'import boards');
+      if (!data) throw new Error('Board export blob required');
+      return boardsService.fromBlob(data, params);
+    },
+  });
+
+  app.use('/boards/:id/clone', {
+    async create(data: { newName: string }, params: RouteParams) {
+      ensureMinimumRole(params, 'member', 'clone boards');
+      const id = params.route?.id;
+      if (!id) throw new Error('Board ID required');
+      if (!data.newName) throw new Error('newName required');
+      return boardsService.clone(id, data.newName, params);
     },
   });
 
