@@ -950,7 +950,26 @@ async function main() {
     // biome-ignore lint/suspicious/noExplicitAny: feathers-swagger docs option not typed in FeathersJS
   } as any);
 
-  app.use('/boards', createBoardsService(db));
+  app.use('/boards', createBoardsService(db), {
+    methods: [
+      'find',
+      'get',
+      'create',
+      'update',
+      'patch',
+      'remove',
+      'findBySlug',
+      'upsertBoardObject',
+      'removeBoardObject',
+      'batchUpsertBoardObjects',
+      'deleteZone',
+      'toBlob',
+      'fromBlob',
+      'toYaml',
+      'fromYaml',
+      'clone',
+    ],
+  });
 
   // Register board-objects service (positioned entities on boards)
   app.use('/board-objects', createBoardObjectsService(db));

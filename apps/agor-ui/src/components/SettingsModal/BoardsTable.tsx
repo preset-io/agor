@@ -240,20 +240,24 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
           }}
         />
       ),
-      onOk: async () => {
+      onOk: () => {
         if (!client) {
           showError('Not connected to daemon');
-          return;
+          return Promise.reject(new Error('Not connected to daemon'));
         }
-        try {
-          const boardsService = client.service('boards');
-          const clonedBoard = await boardsService.clone(board.board_id, newName);
-          showSuccess(`Board cloned: ${clonedBoard.name}`);
-          // Trigger parent refresh by calling onCreate
-          onCreate?.(clonedBoard);
-        } catch (error) {
-          showError(`Clone failed: ${error instanceof Error ? error.message : String(error)}`);
-        }
+
+        const boardsService = client.service('boards');
+        return boardsService
+          .clone(board.board_id, newName)
+          .then((clonedBoard) => {
+            showSuccess(`Board cloned: ${clonedBoard.name}`);
+            // Trigger parent refresh by calling onCreate
+            onCreate?.(clonedBoard);
+          })
+          .catch((error) => {
+            showError(`Clone failed: ${error instanceof Error ? error.message : String(error)}`);
+            return Promise.reject(error);
+          });
       },
     });
   };
