@@ -115,6 +115,29 @@ export async function setupQuery(
     throw new Error(`Session not found: ${sessionId}`);
   }
 
+  // Determine which user's context to use for environment variables and API keys
+  // Priority: task creator (if task exists) > session owner (fallback)
+  // This enables collaborative sessions where multiple users can send prompts
+  let contextUserId = session.created_by as import('../../types').UserID | undefined;
+
+  if (taskId && deps.tasksService) {
+    try {
+      const task = await deps.tasksService.get(taskId);
+      contextUserId = task.created_by as import('../../types').UserID;
+      console.log(
+        `🔐 Using task creator ${contextUserId.substring(0, 8)} for env/API keys (task: ${taskId.substring(0, 8)})`
+      );
+    } catch (err) {
+      console.warn(
+        `⚠️  Could not load task ${taskId.substring(0, 8)}, falling back to session owner ${contextUserId?.substring(0, 8) || 'unknown'}`
+      );
+    }
+  } else {
+    console.log(
+      `🔐 Using session owner ${contextUserId?.substring(0, 8) || 'unknown'} for env/API keys (no task provided)`
+    );
+  }
+
   // Determine model to use (session config or default)
   const modelConfig = session.model_config;
   const model = modelConfig?.model || DEFAULT_CLAUDE_MODEL;
@@ -268,7 +291,7 @@ export async function setupQuery(
   // NOTE: Don't require API key - user may have used `claude login` (OAuth)
   // Precedence: per-user key > config.yaml (UI) > process.env
   const apiKey = await resolveApiKey('ANTHROPIC_API_KEY', {
-    userId: session.created_by as import('../../types').UserID | undefined,
+    userId: contextUserId,
     db: deps.db,
   });
   if (apiKey) {
@@ -277,13 +300,12 @@ export async function setupQuery(
 
   // Resolve user environment variables and augment process.env
   // This allows the Claude Code subprocess to access per-user env vars
-  const userIdForEnv = session.created_by as import('../../types').UserID | undefined;
   const originalProcessEnv = { ...process.env };
   let userEnvCount = 0;
 
-  if (userIdForEnv && deps.db) {
+  if (contextUserId && deps.db) {
     try {
-      const userEnv = await resolveUserEnvironment(userIdForEnv, deps.db);
+      const userEnv = await resolveUserEnvironment(contextUserId, deps.db);
       // Count how many user env vars we're adding (exclude system vars)
       const systemVarCount = Object.keys(originalProcessEnv).length;
       const totalVarCount = Object.keys(userEnv).length;
@@ -294,7 +316,7 @@ export async function setupQuery(
 
       if (userEnvCount > 0) {
         console.log(
-          `🔐 Augmented process.env with ${userEnvCount} user env vars for ${userIdForEnv.substring(0, 8)}`
+          `🔐 Augmented process.env with ${userEnvCount} user env vars for ${contextUserId.substring(0, 8)}`
         );
       }
     } catch (err) {

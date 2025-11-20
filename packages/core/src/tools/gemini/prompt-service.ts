@@ -86,6 +86,7 @@ export class GeminiPromptService {
   private sessionClients = new Map<SessionID, GeminiClient>();
   private activeControllers = new Map<SessionID, AbortController>();
   private db?: Database;
+  private tasksService?: { get: (id: TaskID) => Promise<{ created_by: string }> };
 
   constructor(
     _messagesRepo: MessagesRepository,
@@ -95,9 +96,11 @@ export class GeminiPromptService {
     private mcpServerRepo?: MCPServerRepository,
     private sessionMCPRepo?: SessionMCPServerRepository,
     private mcpEnabled?: boolean,
-    db?: Database
+    db?: Database,
+    tasksService?: { get: (id: TaskID) => Promise<{ created_by: string }> }
   ) {
     this.db = db;
+    this.tasksService = tasksService;
   }
 
   /**
@@ -112,17 +115,39 @@ export class GeminiPromptService {
   async *promptSessionStreaming(
     sessionId: SessionID,
     prompt: string,
-    _taskId?: TaskID,
+    taskId?: TaskID,
     permissionMode?: PermissionMode
   ): AsyncGenerator<GeminiStreamEvent> {
-    // Get or create Gemini client for this session
-    const client = await this.getOrCreateClient(sessionId, permissionMode);
-
     // Get session metadata for model
     const session = await this.sessionsRepo.findById(sessionId);
     if (!session) {
       throw new Error(`Session ${sessionId} not found`);
     }
+
+    // Determine which user's context to use for environment variables and API keys
+    // Priority: task creator (if task exists) > session owner (fallback)
+    let contextUserId = session.created_by as import('../../types').UserID | undefined;
+
+    if (taskId && this.tasksService) {
+      try {
+        const task = await this.tasksService.get(taskId);
+        contextUserId = task.created_by as import('../../types').UserID;
+        console.log(
+          `🔐 [Gemini] Using task creator ${contextUserId.substring(0, 8)} for env/API keys (task: ${taskId.substring(0, 8)})`
+        );
+      } catch (err) {
+        console.warn(
+          `⚠️  [Gemini] Could not load task ${taskId.substring(0, 8)}, falling back to session owner ${contextUserId?.substring(0, 8) || 'unknown'}`
+        );
+      }
+    } else {
+      console.log(
+        `🔐 [Gemini] Using session owner ${contextUserId?.substring(0, 8) || 'unknown'} for env/API keys (no task provided)`
+      );
+    }
+
+    // Get or create Gemini client for this session (passing contextUserId for API key resolution)
+    const client = await this.getOrCreateClient(sessionId, permissionMode, contextUserId);
 
     const model = (session.model_config?.model as GeminiModel) || DEFAULT_GEMINI_MODEL;
 
@@ -147,13 +172,12 @@ export class GeminiPromptService {
 
         // Resolve user environment variables and augment process.env
         // This allows the Gemini subprocess to access per-user env vars
-        const userIdForEnv = session.created_by as import('../../types').UserID | undefined;
         const originalProcessEnv = { ...process.env };
         let userEnvCount = 0;
 
-        if (userIdForEnv && this.db) {
+        if (contextUserId && this.db) {
           try {
-            const userEnv = await resolveUserEnvironment(userIdForEnv, this.db);
+            const userEnv = await resolveUserEnvironment(contextUserId, this.db);
             // Count how many user env vars we're adding (exclude system vars)
             const systemVarCount = Object.keys(originalProcessEnv).length;
             const totalVarCount = Object.keys(userEnv).length;
@@ -165,7 +189,7 @@ export class GeminiPromptService {
             if (userEnvCount > 0 && loopCount === 1) {
               // Only log on first iteration to avoid spam
               console.log(
-                `🔐 [Gemini] Augmented process.env with ${userEnvCount} user env vars for ${userIdForEnv.substring(0, 8)}`
+                `🔐 [Gemini] Augmented process.env with ${userEnvCount} user env vars for ${contextUserId.substring(0, 8)}`
               );
             }
           } catch (err) {
@@ -512,7 +536,8 @@ export class GeminiPromptService {
    */
   private async getOrCreateClient(
     sessionId: SessionID,
-    permissionMode?: PermissionMode
+    permissionMode?: PermissionMode,
+    contextUserId?: import('../../types').UserID
   ): Promise<GeminiClient> {
     // Resolve per-user API key FIRST, before checking for existing client
     // This ensures we use the correct key even when reusing a cached client
@@ -521,7 +546,8 @@ export class GeminiPromptService {
       throw new Error(`Session ${sessionId} not found`);
     }
 
-    const userIdForApiKey = session.created_by as import('../../types').UserID | undefined;
+    // Use provided contextUserId (task creator) or fall back to session owner
+    const userIdForApiKey = contextUserId || (session.created_by as import('../../types').UserID | undefined);
     const resolvedApiKey = await resolveApiKey('GEMINI_API_KEY', {
       userId: userIdForApiKey,
       db: this.db,

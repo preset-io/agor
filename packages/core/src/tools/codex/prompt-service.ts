@@ -115,6 +115,7 @@ export class CodexPromptService {
   private apiKey: string | undefined;
   private db?: Database;
   private lastCodexHome: string | null = null;
+  private tasksService?: { get: (id: TaskID) => Promise<{ created_by: string }> };
 
   constructor(
     _messagesRepo: MessagesRepository,
@@ -122,11 +123,13 @@ export class CodexPromptService {
     private sessionMCPServerRepo?: SessionMCPServerRepository,
     private worktreesRepo?: WorktreeRepository,
     apiKey?: string,
-    db?: Database
+    db?: Database,
+    tasksService?: { get: (id: TaskID) => Promise<{ created_by: string }> }
   ) {
     // Store API key for reinitializing SDK
     this.apiKey = apiKey;
     this.db = db;
+    this.tasksService = tasksService;
     const initialApiKey = apiKey || process.env.OPENAI_API_KEY || '';
     this.lastApiKey = initialApiKey;
     // Initialize Codex SDK
@@ -434,7 +437,7 @@ export class CodexPromptService {
   async *promptSessionStreaming(
     sessionId: SessionID,
     prompt: string,
-    _taskId?: TaskID,
+    taskId?: TaskID,
     permissionMode?: PermissionMode
   ): AsyncGenerator<CodexStreamEvent> {
     // Get session to check for existing thread ID and working directory
@@ -443,11 +446,32 @@ export class CodexPromptService {
       throw new Error(`Session ${sessionId} not found`);
     }
 
+    // Determine which user's context to use for environment variables and API keys
+    // Priority: task creator (if task exists) > session owner (fallback)
+    let contextUserId = session.created_by as import('../../types').UserID | undefined;
+
+    if (taskId && this.tasksService) {
+      try {
+        const task = await this.tasksService.get(taskId);
+        contextUserId = task.created_by as import('../../types').UserID;
+        console.log(
+          `🔐 [Codex] Using task creator ${contextUserId.substring(0, 8)} for env/API keys (task: ${taskId.substring(0, 8)})`
+        );
+      } catch (err) {
+        console.warn(
+          `⚠️  [Codex] Could not load task ${taskId.substring(0, 8)}, falling back to session owner ${contextUserId?.substring(0, 8) || 'unknown'}`
+        );
+      }
+    } else {
+      console.log(
+        `🔐 [Codex] Using session owner ${contextUserId?.substring(0, 8) || 'unknown'} for env/API keys (no task provided)`
+      );
+    }
+
     // Resolve per-user API key with precedence: per-user > global config > env var
     // This allows each user to have their own OPENAI_API_KEY
-    const userIdForApiKey = session.created_by as import('../../types').UserID | undefined;
     const resolvedApiKey = await resolveApiKey('OPENAI_API_KEY', {
-      userId: userIdForApiKey,
+      userId: contextUserId,
       db: this.db,
     });
 
@@ -581,13 +605,12 @@ export class CodexPromptService {
 
       // Resolve user environment variables and augment process.env
       // This allows the Codex subprocess to access per-user env vars
-      const userIdForEnv = session.created_by as import('../../types').UserID | undefined;
       const originalProcessEnv = { ...process.env };
       let userEnvCount = 0;
 
-      if (userIdForEnv && this.db) {
+      if (contextUserId && this.db) {
         try {
-          const userEnv = await resolveUserEnvironment(userIdForEnv, this.db);
+          const userEnv = await resolveUserEnvironment(contextUserId, this.db);
           // Count how many user env vars we're adding (exclude system vars)
           const systemVarCount = Object.keys(originalProcessEnv).length;
           const totalVarCount = Object.keys(userEnv).length;
@@ -598,7 +621,7 @@ export class CodexPromptService {
 
           if (userEnvCount > 0) {
             console.log(
-              `🔐 [Codex] Augmented process.env with ${userEnvCount} user env vars for ${userIdForEnv.substring(0, 8)}`
+              `🔐 [Codex] Augmented process.env with ${userEnvCount} user env vars for ${contextUserId.substring(0, 8)}`
             );
           }
         } catch (err) {
