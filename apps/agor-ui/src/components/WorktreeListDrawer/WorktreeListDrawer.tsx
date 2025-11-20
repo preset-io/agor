@@ -1,8 +1,9 @@
 import type { Board, Session, Worktree } from '@agor/core/types';
 import { SearchOutlined } from '@ant-design/icons';
-import { Badge, Drawer, Input, List, Select, Space, Typography, theme } from 'antd';
+import { Badge, Drawer, Input, List, Space, Typography, theme } from 'antd';
 import type React from 'react';
 import { useMemo, useState } from 'react';
+import { BoardSwitcher } from '../BoardSwitcher';
 import { ToolIcon } from '../ToolIcon';
 
 const { Title } = Typography;
@@ -98,14 +99,11 @@ export const WorktreeListDrawer: React.FC<WorktreeListDrawerProps> = ({
         <Title level={5} style={{ marginBottom: 8 }}>
           Board
         </Title>
-        <Select
-          style={{ width: '100%' }}
-          value={currentBoardId}
-          onChange={onBoardChange}
-          options={boards.map((board) => ({
-            label: `${board.icon || '📋'} ${board.name}`,
-            value: board.board_id,
-          }))}
+        <BoardSwitcher
+          boards={boards}
+          currentBoardId={currentBoardId}
+          onBoardChange={onBoardChange}
+          worktreeById={worktreeById}
         />
       </div>
 
