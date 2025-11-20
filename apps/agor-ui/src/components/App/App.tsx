@@ -173,7 +173,9 @@ export const App: React.FC<AppProps> = ({
   const { showWarning } = useThemedMessage();
   const [newSessionWorktreeId, setNewSessionWorktreeId] = useState<string | null>(null);
   const [newWorktreeModalOpen, setNewWorktreeModalOpen] = useState(false);
-  const [newWorktreePosition, setNewWorktreePosition] = useState<{ x: number; y: number } | undefined>(undefined);
+  const [newWorktreePosition, setNewWorktreePosition] = useState<
+    { x: number; y: number } | undefined
+  >(undefined);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const sessionCanvasRef = useRef<SessionCanvasRef>(null);
   const [listDrawerOpen, setListDrawerOpen] = useState(false);
@@ -283,7 +285,7 @@ export const App: React.FC<AppProps> = ({
   };
 
   const handleCreateWorktree = async (config: NewWorktreeConfig) => {
-    const worktree = await onCreateWorktree?.(config.repoId, {
+    await onCreateWorktree?.(config.repoId, {
       name: config.name,
       ref: config.ref,
       createBranch: config.createBranch,
