@@ -248,8 +248,8 @@ export const App: React.FC<AppProps> = ({
   // Update favicon based on session activity on current board
   useFaviconStatus(currentBoardId, sessionsByWorktree, mapToArray(boardObjectById));
 
-  // Check if event stream is enabled in user preferences
-  const eventStreamEnabled = user?.preferences?.eventStream?.enabled ?? false;
+  // Check if event stream is enabled in user preferences (default: true)
+  const eventStreamEnabled = user?.preferences?.eventStream?.enabled ?? true;
 
   // Event stream hook - only captures events when panel is open
   const { events, clearEvents } = useEventStream({
@@ -549,6 +549,7 @@ export const App: React.FC<AppProps> = ({
           userById={userById}
           currentUserId={user?.user_id}
           selectedSessionId={selectedSessionId}
+          currentBoard={currentBoard}
           worktreeActions={{
             onSessionClick: setSelectedSessionId,
             onCreateSession: (worktreeId) => setNewSessionWorktreeId(worktreeId),
