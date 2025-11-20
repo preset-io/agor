@@ -32,7 +32,9 @@
     "cli:link": "pnpm -C apps/agor-cli link --global",
     "cli:unlink": "pnpm -C apps/agor-cli unlink --global",
     "agor": "cross-env NODE_NO_WARNINGS=1 pnpm --filter @agor/cli exec tsx bin/dev.ts",
-    "seed": "tsx scripts/seed.ts"
+    "seed": "tsx scripts/seed.ts",
+    "sync:agor-live-deps": "node scripts/sync-agor-live-deps.mjs",
+    "check:agor-live-deps": "node scripts/sync-agor-live-deps.mjs --check"
   },
   "devDependencies": {
     "rimraf": "^5.0.5",

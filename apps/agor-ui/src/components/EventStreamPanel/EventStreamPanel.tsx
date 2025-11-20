@@ -4,7 +4,7 @@
  * Non-modal right panel that displays real-time socket events with filtering capabilities
  */
 
-import type { Repo, Session, User, Worktree } from '@agor/core/types';
+import type { Board, Repo, Session, User, Worktree } from '@agor/core/types';
 import {
   ApiOutlined,
   CloseOutlined,
@@ -12,7 +12,7 @@ import {
   PauseOutlined,
   PlayCircleOutlined,
 } from '@ant-design/icons';
-import { Badge, Button, Checkbox, Empty, Space, Tag, Typography, theme } from 'antd';
+import { Badge, Button, Checkbox, Empty, Select, Space, Tag, Typography, theme } from 'antd';
 import { useMemo, useState } from 'react';
 import type { SocketEvent } from '../../hooks/useEventStream';
 import { EventItem, type WorktreeActions } from './EventItem';
@@ -33,6 +33,7 @@ export interface EventStreamPanelProps {
   currentUserId?: string;
   selectedSessionId?: string | null;
   worktreeActions?: WorktreeActions;
+  currentBoard?: Board | null;
 }
 
 export const EventStreamPanel: React.FC<EventStreamPanelProps> = ({
@@ -49,11 +50,19 @@ export const EventStreamPanel: React.FC<EventStreamPanelProps> = ({
   currentUserId,
   selectedSessionId,
   worktreeActions,
+  currentBoard,
 }) => {
   const { token } = theme.useToken();
   const [includeCursor, setIncludeCursor] = useState(false);
   const [includeMessages, setIncludeMessages] = useState(false);
+  const [includeTerminalData, setIncludeTerminalData] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
+
+  // Event type filters (cursor, message, tool, crud, connection, other)
+  const [eventTypeFilters, setEventTypeFilters] = useState<Set<string>>(new Set());
+
+  // CRUD operation filters (created, patched, updated, removed)
+  const [crudOperationFilters, setCrudOperationFilters] = useState<Set<string>>(new Set());
 
   // When paused, freeze the displayed events at the moment of pause
   const [frozenEvents, setFrozenEvents] = useState<SocketEvent[]>([]);
@@ -73,17 +82,45 @@ export const EventStreamPanel: React.FC<EventStreamPanelProps> = ({
   // Filter events based on user preferences
   const filteredEvents = useMemo(() => {
     return displayEvents.filter((event) => {
-      // Filter cursor events
+      // Filter cursor events (checkbox)
       if (!includeCursor && event.type === 'cursor') {
         return false;
       }
-      // Filter message events
+      // Filter message events (checkbox)
       if (!includeMessages && event.type === 'message') {
         return false;
       }
+      // Filter terminal data events (checkbox) - event name contains 'terminals'
+      if (!includeTerminalData && event.eventName.includes('terminals')) {
+        return false;
+      }
+
+      // Filter by event type (if any filters are active)
+      if (eventTypeFilters.size > 0 && !eventTypeFilters.has(event.type)) {
+        return false;
+      }
+
+      // Filter by CRUD operation (if any filters are active)
+      if (crudOperationFilters.size > 0 && event.type === 'crud') {
+        // Extract operation from event name (e.g., "sessions created" -> "created")
+        const operation = ['created', 'patched', 'updated', 'removed'].find((op) =>
+          event.eventName.includes(op)
+        );
+        if (!operation || !crudOperationFilters.has(operation)) {
+          return false;
+        }
+      }
+
       return true;
     });
-  }, [displayEvents, includeCursor, includeMessages]);
+  }, [
+    displayEvents,
+    includeCursor,
+    includeMessages,
+    includeTerminalData,
+    eventTypeFilters,
+    crudOperationFilters,
+  ]);
 
   const totalCount = displayEvents.length;
   const displayCount = filteredEvents.length;
@@ -123,11 +160,14 @@ export const EventStreamPanel: React.FC<EventStreamPanelProps> = ({
           <Tag color="blue" style={{ fontSize: 10, marginLeft: 4 }}>
             BETA
           </Tag>
-          <Badge
-            count={displayCount}
-            showZero
-            style={{ backgroundColor: token.colorPrimaryBgHover }}
-          />
+          {currentBoard && (
+            <Tag
+              icon={currentBoard.icon ? <span>{currentBoard.icon}</span> : undefined}
+              style={{ fontSize: 11, marginLeft: 4 }}
+            >
+              {currentBoard.name}
+            </Tag>
+          )}
         </Space>
         {onToggleCollapse && (
           <Button
@@ -176,30 +216,118 @@ export const EventStreamPanel: React.FC<EventStreamPanelProps> = ({
           backgroundColor: token.colorBgContainer,
         }}
       >
+        {/* Event count badge */}
+        <div style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 4 }}>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            Showing
+          </Text>
+          <Badge
+            count={displayCount}
+            showZero
+            style={{
+              backgroundColor: token.colorPrimaryBgHover,
+              color: token.colorText,
+            }}
+          />
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            out of
+          </Text>
+          <Badge
+            count={totalCount}
+            showZero
+            style={{
+              backgroundColor: token.colorPrimaryBgHover,
+              color: token.colorText,
+            }}
+          />
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            events
+          </Text>
+          {isPaused && missedCount > 0 && (
+            <>
+              <Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
+                •
+              </Text>
+              <Badge
+                count={missedCount}
+                style={{
+                  backgroundColor: token.colorWarningBg,
+                  color: token.colorWarning,
+                }}
+              />
+              <Text type="warning" style={{ fontSize: 11 }}>
+                new while paused
+              </Text>
+            </>
+          )}
+        </div>
+
         <Text type="secondary" style={{ display: 'block', marginBottom: 8, fontSize: 12 }}>
-          Filters:
+          Quick Filters:
         </Text>
-        <Space direction="vertical" size="small">
+        <Space wrap size="middle" style={{ width: '100%' }}>
           <Checkbox checked={includeCursor} onChange={(e) => setIncludeCursor(e.target.checked)}>
-            <Text style={{ fontSize: 13 }}>Include cursor movement</Text>
+            <Text style={{ fontSize: 12 }}>Cursor movement</Text>
           </Checkbox>
           <Checkbox
             checked={includeMessages}
             onChange={(e) => setIncludeMessages(e.target.checked)}
           >
-            <Text style={{ fontSize: 13 }}>Include message streams</Text>
+            <Text style={{ fontSize: 12 }}>Message streams</Text>
+          </Checkbox>
+          <Checkbox
+            checked={includeTerminalData}
+            onChange={(e) => setIncludeTerminalData(e.target.checked)}
+          >
+            <Text style={{ fontSize: 12 }}>Terminal data</Text>
           </Checkbox>
         </Space>
-        {totalCount !== displayCount && (
-          <Text type="secondary" style={{ display: 'block', marginTop: 8, fontSize: 11 }}>
-            Showing {displayCount} of {totalCount} events
-          </Text>
-        )}
-        {isPaused && missedCount > 0 && (
-          <Text type="warning" style={{ display: 'block', marginTop: 8, fontSize: 11 }}>
-            {missedCount} new events captured while paused
-          </Text>
-        )}
+
+        <Space direction="horizontal" size="small" style={{ width: '100%', marginTop: 12 }} wrap>
+          <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 200 }}>
+            <Text type="secondary" style={{ marginBottom: 4, fontSize: 11 }}>
+              Event Types:
+            </Text>
+            <Select
+              mode="multiple"
+              placeholder="Filter by type"
+              value={Array.from(eventTypeFilters)}
+              onChange={(values) => setEventTypeFilters(new Set(values))}
+              style={{ width: '100%' }}
+              size="small"
+              allowClear
+              maxTagCount="responsive"
+            >
+              {['cursor', 'message', 'tool', 'crud', 'connection', 'other'].map((type) => (
+                <Select.Option key={type} value={type}>
+                  {type}
+                </Select.Option>
+              ))}
+            </Select>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 200 }}>
+            <Text type="secondary" style={{ marginBottom: 4, fontSize: 11 }}>
+              CRUD Operations:
+            </Text>
+            <Select
+              mode="multiple"
+              placeholder="Filter by operation"
+              value={Array.from(crudOperationFilters)}
+              onChange={(values) => setCrudOperationFilters(new Set(values))}
+              style={{ width: '100%' }}
+              size="small"
+              allowClear
+              maxTagCount="responsive"
+            >
+              {['created', 'patched', 'updated', 'removed'].map((operation) => (
+                <Select.Option key={operation} value={operation}>
+                  {operation}
+                </Select.Option>
+              ))}
+            </Select>
+          </div>
+        </Space>
       </div>
 
       <div style={{ flex: 1, overflow: 'auto' }}>
