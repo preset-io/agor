@@ -7,6 +7,7 @@
 import type {
   AuthenticationResult,
   Board,
+  BoardExportBlob,
   ContextFileDetail,
   ContextFileListItem,
   MCPServer,
@@ -155,6 +156,36 @@ export interface ReposLocalService extends AgorService<Repo> {
 }
 
 /**
+ * Boards service with export/import/clone functionality
+ */
+export interface BoardsService extends AgorService<Board> {
+  /**
+   * Export board to a portable JSON blob
+   */
+  toBlob(boardId: string, params?: Params): Promise<BoardExportBlob>;
+
+  /**
+   * Import board from a JSON blob
+   */
+  fromBlob(blob: BoardExportBlob, params?: Params): Promise<Board>;
+
+  /**
+   * Export board to YAML string
+   */
+  toYaml(boardId: string, params?: Params): Promise<string>;
+
+  /**
+   * Import board from YAML string
+   */
+  fromYaml(yamlContent: string, params?: Params): Promise<Board>;
+
+  /**
+   * Clone an existing board with a new name
+   */
+  clone(boardId: string, newName: string, params?: Params): Promise<Board>;
+}
+
+/**
  * Worktrees service with environment management
  */
 export interface WorktreesService extends AgorService<Worktree> {
@@ -243,13 +274,13 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   service(path: 'repos'): ReposService;
   service(path: 'repos/local'): ReposLocalService;
   service(path: 'worktrees'): WorktreesService;
+  service(path: 'boards'): BoardsService;
 
   // Bulk operation endpoints
   service(path: 'messages/bulk'): MessagesService;
   service(path: 'tasks/bulk'): TasksService;
 
   // Standard services (CRUD only)
-  service(path: 'boards'): AgorService<Board>;
   service(path: 'users'): AgorService<User>;
   service(path: 'mcp-servers'): AgorService<MCPServer>;
   service(path: 'context'): AgorService<ContextFileListItem | ContextFileDetail>;

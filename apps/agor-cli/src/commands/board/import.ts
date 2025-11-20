@@ -1,4 +1,4 @@
-import type { Board, BoardsServiceMethods } from '@agor/core/types';
+import type { Board } from '@agor/core/types';
 import { Args } from '@oclif/core';
 import { BaseCommand } from '../../base-command';
 
@@ -25,7 +25,7 @@ export default class BoardImport extends BaseCommand {
     const client = await this.connectToDaemon();
 
     try {
-      const boardsService = client.service('boards') as unknown as BoardsServiceMethods;
+      const boardsService = client.service('boards');
 
       // Read content from file or stdin
       let content: string;

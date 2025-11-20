@@ -1,4 +1,3 @@
-import type { BoardsServiceMethods } from '@agor/core/types';
 import { Args, Flags } from '@oclif/core';
 import { BaseCommand } from '../../base-command';
 
@@ -39,7 +38,7 @@ export default class BoardExport extends BaseCommand {
     const client = await this.connectToDaemon();
 
     try {
-      const boardsService = client.service('boards') as unknown as BoardsServiceMethods;
+      const boardsService = client.service('boards');
 
       // Export based on format
       let content: string;

@@ -1,5 +1,5 @@
 import type { AgorClient } from '@agor/core/api';
-import type { Board, BoardsServiceMethods, Session, Worktree } from '@agor/core/types';
+import type { Board, Session, Worktree } from '@agor/core/types';
 import {
   CopyOutlined,
   DeleteOutlined,
@@ -25,6 +25,7 @@ import {
 } from 'antd';
 import { useMemo, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
+import { useThemedMessage } from '@/utils/message';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { JSONEditor, validateJSON } from '../JSONEditor';
 
@@ -120,7 +121,8 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
   onUpdate,
   onDelete,
 }) => {
-  const { modal, message } = App.useApp();
+  const { modal } = App.useApp();
+  const { showSuccess, showError } = useThemedMessage();
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editingBoard, setEditingBoard] = useState<Board | null>(null);
@@ -240,17 +242,17 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
       ),
       onOk: async () => {
         if (!client) {
-          message.error('Not connected to daemon');
+          showError('Not connected to daemon');
           return;
         }
         try {
-          const boardsService = client.service('boards') as unknown as BoardsServiceMethods;
+          const boardsService = client.service('boards');
           const clonedBoard = await boardsService.clone(board.board_id, newName);
-          message.success(`Board cloned: ${clonedBoard.name}`);
+          showSuccess(`Board cloned: ${clonedBoard.name}`);
           // Trigger parent refresh by calling onCreate
           onCreate?.(clonedBoard);
         } catch (error) {
-          message.error(`Clone failed: ${error instanceof Error ? error.message : String(error)}`);
+          showError(`Clone failed: ${error instanceof Error ? error.message : String(error)}`);
         }
       },
     });
@@ -259,11 +261,11 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
   // Export board (download YAML file)
   const handleExport = async (board: Board) => {
     if (!client) {
-      message.error('Not connected to daemon');
+      showError('Not connected to daemon');
       return;
     }
     try {
-      const boardsService = client.service('boards') as unknown as BoardsServiceMethods;
+      const boardsService = client.service('boards');
       const yaml = await boardsService.toYaml(board.board_id);
 
       // Trigger download
@@ -275,9 +277,9 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
       a.click();
       URL.revokeObjectURL(url);
 
-      message.success('Board exported');
+      showSuccess('Board exported');
     } catch (error) {
-      message.error(`Export failed: ${error instanceof Error ? error.message : String(error)}`);
+      showError(`Export failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
@@ -293,14 +295,14 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
   const handleImportFile = async (file: File | undefined) => {
     if (!file) return;
     if (!client) {
-      message.error('Not connected to daemon');
+      showError('Not connected to daemon');
       return;
     }
 
     const content = await file.text();
 
     try {
-      const boardsService = client.service('boards') as unknown as BoardsServiceMethods;
+      const boardsService = client.service('boards');
       let board: Board;
 
       if (file.name.endsWith('.json')) {
@@ -309,11 +311,11 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
         board = await boardsService.fromYaml(content);
       }
 
-      message.success(`Board imported: ${board.name}`);
+      showSuccess(`Board imported: ${board.name}`);
       // Trigger parent refresh by calling onCreate
       onCreate?.(board);
     } catch (error) {
-      message.error(`Import failed: ${error instanceof Error ? error.message : String(error)}`);
+      showError(`Import failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
 

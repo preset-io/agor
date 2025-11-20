@@ -198,36 +198,3 @@ export interface BoardExportBlob {
   // Custom context for templates
   custom_context?: Record<string, unknown>;
 }
-
-/**
- * Extended boards service interface with custom import/export methods
- *
- * Extends the standard Feathers service with board-specific operations
- * for cloning, exporting, and importing boards.
- */
-export interface BoardsServiceMethods {
-  /**
-   * Export board to a portable JSON blob
-   */
-  toBlob(boardId: string): Promise<BoardExportBlob>;
-
-  /**
-   * Import board from a JSON blob
-   */
-  fromBlob(blob: BoardExportBlob): Promise<Board>;
-
-  /**
-   * Export board to YAML string
-   */
-  toYaml(boardId: string): Promise<string>;
-
-  /**
-   * Import board from YAML string
-   */
-  fromYaml(yamlContent: string): Promise<Board>;
-
-  /**
-   * Clone an existing board with a new name
-   */
-  clone(boardId: string, newName: string): Promise<Board>;
-}

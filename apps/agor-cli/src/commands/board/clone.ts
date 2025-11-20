@@ -1,4 +1,3 @@
-import type { BoardsServiceMethods } from '@agor/core/types';
 import { Args } from '@oclif/core';
 import { BaseCommand } from '../../base-command';
 
@@ -28,7 +27,7 @@ export default class BoardClone extends BaseCommand {
     const client = await this.connectToDaemon();
 
     try {
-      const boardsService = client.service('boards') as unknown as BoardsServiceMethods;
+      const boardsService = client.service('boards');
 
       const clonedBoard = await boardsService.clone(board, name);
 
