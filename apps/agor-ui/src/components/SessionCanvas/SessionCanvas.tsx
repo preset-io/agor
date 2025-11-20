@@ -26,7 +26,7 @@ import {
 } from '@ant-design/icons';
 import { Button, Input, Modal, Popover, Slider, Typography, theme } from 'antd';
 import Handlebars from 'handlebars';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import {
   Background,
   ControlButton,
@@ -108,6 +108,10 @@ interface SessionCanvasProps {
   onOpenCommentsPanel?: () => void;
   onCommentHover?: (commentId: string | null) => void;
   onCommentSelect?: (commentId: string | null) => void;
+}
+
+export interface SessionCanvasRef {
+  getViewportCenter: () => { x: number; y: number } | null;
 }
 
 interface SessionNodeData {
@@ -222,7 +226,7 @@ const nodeTypes = {
   markdown: MarkdownNode,
 };
 
-const SessionCanvas = ({
+const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(({
   board,
   client,
   sessionById,
@@ -256,7 +260,7 @@ const SessionCanvas = ({
   onOpenCommentsPanel,
   onCommentHover,
   onCommentSelect,
-}: SessionCanvasProps) => {
+}: SessionCanvasProps, ref) => {
   const { token } = theme.useToken();
   const isDarkMode = isDarkTheme(token);
   const defaultBackground = DEFAULT_BACKGROUNDS[isDarkMode ? 'dark' : 'light'];
@@ -593,6 +597,22 @@ const SessionCanvas = ({
 
   // Store ReactFlow instance ref
   const reactFlowInstanceRef = useRef<ReactFlowInstance | null>(null);
+
+  // Expose methods to parent via ref
+  useImperativeHandle(ref, () => ({
+    getViewportCenter: () => {
+      if (!reactFlowInstanceRef.current) return null;
+
+      const viewport = reactFlowInstanceRef.current.getViewport();
+      const { innerWidth, innerHeight } = window;
+
+      // Calculate center of viewport in flow coordinates
+      const centerX = (innerWidth / 2 - viewport.x) / viewport.zoom;
+      const centerY = (innerHeight / 2 - viewport.y) / viewport.zoom;
+
+      return { x: centerX, y: centerY };
+    },
+  }), []);
 
   // Cursor tracking hook
   useCursorTracking({
@@ -2402,6 +2422,8 @@ const SessionCanvas = ({
       )}
     </div>
   );
-};
+});
+
+SessionCanvas.displayName = 'SessionCanvas';
 
 export default SessionCanvas;
