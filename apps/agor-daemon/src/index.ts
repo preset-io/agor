@@ -952,6 +952,57 @@ async function main() {
 
   app.use('/boards', createBoardsService(db));
 
+  // Board custom methods (export/import/clone)
+  // Get the boards service instance for custom routes
+  const getBoardsService = () => app.service('boards') as unknown as BoardsServiceImpl;
+
+  app.use('/boards/:id/toYaml', {
+    async find(_data: unknown, params: RouteParams) {
+      ensureMinimumRole(params, 'member', 'export boards');
+      const id = params.route?.id;
+      if (!id) throw new Error('Board ID required');
+      return getBoardsService().toYaml(id, params);
+    },
+    // biome-ignore lint/suspicious/noExplicitAny: Feathers parametrized custom route requires any cast
+  } as any);
+
+  app.use('/boards/:id/toBlob', {
+    async find(_data: unknown, params: RouteParams) {
+      ensureMinimumRole(params, 'member', 'export boards');
+      const id = params.route?.id;
+      if (!id) throw new Error('Board ID required');
+      return getBoardsService().toBlob(id, params);
+    },
+    // biome-ignore lint/suspicious/noExplicitAny: Feathers parametrized custom route requires any cast
+  } as any);
+
+  app.use('/boards/fromYaml', {
+    async create(data: { yaml: string }, params: RouteParams) {
+      ensureMinimumRole(params, 'member', 'import boards');
+      if (!data.yaml) throw new Error('YAML content required');
+      return getBoardsService().fromYaml(data.yaml, params);
+    },
+  });
+
+  app.use('/boards/fromBlob', {
+    async create(data: unknown, params: RouteParams) {
+      ensureMinimumRole(params, 'member', 'import boards');
+      // biome-ignore lint/suspicious/noExplicitAny: BoardExportBlob type is complex, cast for simplicity
+      return getBoardsService().fromBlob(data as any, params);
+    },
+  });
+
+  app.use('/boards/:id/clone', {
+    async create(data: { name: string }, params: RouteParams) {
+      ensureMinimumRole(params, 'member', 'clone boards');
+      const id = params.route?.id;
+      if (!id) throw new Error('Board ID required');
+      if (!data.name) throw new Error('Board name required');
+      return getBoardsService().clone(id, data.name, params);
+    },
+    // biome-ignore lint/suspicious/noExplicitAny: Feathers parametrized custom route requires any cast
+  } as any);
+
   // Register board-objects service (positioned entities on boards)
   app.use('/board-objects', createBoardObjectsService(db));
 
