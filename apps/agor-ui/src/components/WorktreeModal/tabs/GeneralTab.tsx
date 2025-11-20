@@ -124,7 +124,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
             <Typography.Text code>{worktree.ref}</Typography.Text>
           </Descriptions.Item>
           {worktree.base_ref && (
-            <Descriptions.Item label="Base Branch">
+            <Descriptions.Item label={worktree.ref_type === 'tag' ? 'Base Tag' : 'Base Branch'}>
               <Typography.Text code>
                 {worktree.base_ref}
                 {worktree.base_sha && ` (${worktree.base_sha.substring(0, 7)})`}

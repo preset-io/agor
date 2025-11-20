@@ -33,6 +33,7 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
       created_by: row.created_by as UUID,
       name: row.name,
       ref: row.ref,
+      ref_type: row.ref_type ?? 'branch',
       worktree_unique_id: row.worktree_unique_id,
       start_command: row.start_command ?? undefined, // Static environment fields
       stop_command: row.stop_command ?? undefined,
@@ -68,6 +69,7 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
       created_by: worktree.created_by ?? 'anonymous',
       name: worktree.name!,
       ref: worktree.ref!,
+      ref_type: worktree.ref_type,
       worktree_unique_id: worktree.worktree_unique_id!, // Required field
       // Static environment fields (initialized from templates, then user-editable)
       start_command: worktree.start_command ?? null,

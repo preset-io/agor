@@ -366,8 +366,9 @@ export async function createWorktree(
   // Pull latest from remote if requested
   if (pullLatest) {
     try {
-      // Fetch all branches and tags to ensure remote tracking exists
-      await git.fetch(['origin', '--tags']);
+      // Fetch branches, and tags only if working with a tag
+      const fetchArgs = refType === 'tag' ? ['origin', '--tags'] : ['origin'];
+      await git.fetch(fetchArgs);
       fetchSucceeded = true;
       console.log('✅ Fetched latest from origin');
 
