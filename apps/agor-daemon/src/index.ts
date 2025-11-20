@@ -2695,11 +2695,28 @@ async function main() {
   });
 
   app.use('/repos/:id/worktrees', {
-    async create(data: { name: string; ref: string; createBranch?: boolean }, params: RouteParams) {
+    async create(
+      data: {
+        name: string;
+        ref: string;
+        createBranch?: boolean;
+        refType?: 'branch' | 'tag';
+        pullLatest?: boolean;
+        sourceBranch?: string;
+        issue_url?: string;
+        pull_request_url?: string;
+        boardId?: string;
+      },
+      params: RouteParams
+    ) {
       ensureMinimumRole(params, 'member', 'create worktrees');
       const id = params.route?.id;
       if (!id) throw new Error('Repo ID required');
-      return reposService.createWorktree(id, data, params);
+      return reposService.createWorktree(
+        id,
+        { ...data, refType: data.refType ?? 'branch' },
+        params
+      );
     },
   });
 

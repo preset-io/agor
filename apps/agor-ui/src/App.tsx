@@ -726,6 +726,7 @@ function AppContent() {
     data: {
       name: string;
       ref: string;
+      refType?: 'branch' | 'tag';
       createBranch: boolean;
       sourceBranch: string;
       pullLatest: boolean;
@@ -741,6 +742,7 @@ function AppContent() {
       const worktree = (await client.service(`repos/${repoId}/worktrees`).create({
         name: data.name,
         ref: data.ref,
+        refType: data.refType,
         createBranch: data.createBranch,
         pullLatest: data.pullLatest, // Fetch latest from remote before creating
         sourceBranch: data.sourceBranch, // Base new branch on specified source branch

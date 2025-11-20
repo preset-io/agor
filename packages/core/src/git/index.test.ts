@@ -615,6 +615,94 @@ describe('createWorktree', () => {
       expect(await getCurrentSha(worktreeDir)).toBe(sha);
     }
   });
+
+  it('should create worktree with new branch from tag', async () => {
+    await createTestRepo(repoDir);
+    const git = simpleGit(repoDir);
+
+    // Create a tag
+    await git.tag(['v1.0.0']);
+
+    // Make another commit after the tag
+    await fs.writeFile(path.join(repoDir, 'new-file.txt'), 'content', 'utf-8');
+    await git.add('new-file.txt');
+    await git.commit('Post-tag commit');
+
+    // Create worktree with new branch from tag
+    await createWorktree(
+      repoDir,
+      worktreeDir,
+      'hotfix-branch', // new branch name
+      true, // createBranch
+      false, // pullLatest
+      'v1.0.0', // sourceBranch (tag name)
+      undefined, // env
+      'tag' // refType
+    );
+
+    expect(await isGitRepo(worktreeDir)).toBe(true);
+    expect(await getCurrentBranch(worktreeDir)).toBe('hotfix-branch');
+
+    // Verify it was based on the tag (should NOT have new-file.txt from post-tag commit)
+    const newFileExists = await fs
+      .access(path.join(worktreeDir, 'new-file.txt'))
+      .then(() => true)
+      .catch(() => false);
+    expect(newFileExists).toBe(false);
+  });
+
+  it('should create worktree directly from tag without new branch', async () => {
+    await createTestRepo(repoDir);
+    const git = simpleGit(repoDir);
+
+    // Create a tag
+    await git.tag(['v2.0.0']);
+
+    // Create worktree from tag (detached HEAD)
+    await createWorktree(
+      repoDir,
+      worktreeDir,
+      'v2.0.0', // ref is the tag name
+      false, // createBranch = false
+      false, // pullLatest
+      undefined, // sourceBranch
+      undefined, // env
+      'tag' // refType
+    );
+
+    expect(await isGitRepo(worktreeDir)).toBe(true);
+    // When checking out a tag without creating a branch, git goes to detached HEAD
+    const branch = await getCurrentBranch(worktreeDir);
+    // simple-git returns 'HEAD' for detached state
+    expect(branch).toBe('HEAD');
+  });
+
+  it('should handle tag with remote repository', async () => {
+    const remoteDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-git-remote-'));
+    await createRepoWithRemote(repoDir, remoteDir);
+    const git = simpleGit(repoDir);
+
+    // Create and push a tag
+    await git.tag(['v3.0.0']);
+    await git.push('origin', 'v3.0.0');
+
+    // Create worktree with new branch from tag
+    await createWorktree(
+      repoDir,
+      worktreeDir,
+      'release-branch',
+      true, // createBranch
+      true, // pullLatest - should fetch tags
+      'v3.0.0',
+      undefined,
+      'tag'
+    );
+
+    expect(await isGitRepo(worktreeDir)).toBe(true);
+    expect(await getCurrentBranch(worktreeDir)).toBe('release-branch');
+
+    await fs.rm(remoteDir, { recursive: true, force: true });
+  });
 });
 
 describe('listWorktrees', () => {

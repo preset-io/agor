@@ -8,6 +8,7 @@ export interface NewWorktreeConfig {
   repoId: string;
   name: string;
   ref: string;
+  refType?: 'branch' | 'tag';
   createBranch: boolean;
   sourceBranch: string;
   pullLatest: boolean;
@@ -90,10 +91,12 @@ export const NewWorktreeModal: React.FC<NewWorktreeModalProps> = ({
   const handleCreate = async () => {
     const values = await form.validateFields();
 
+    const refType = values.refType || 'branch';
     const config: NewWorktreeConfig = {
       repoId: values.repoId,
       name: values.name,
       ref: values.name, // Use worktree name as ref (branch name)
+      refType,
       createBranch: true,
       sourceBranch: values.sourceBranch || selectedRepo?.default_branch || 'main',
       pullLatest: true,

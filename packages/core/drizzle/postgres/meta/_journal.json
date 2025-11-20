@@ -15,6 +15,13 @@
       "when": 1763452111230,
       "tag": "0001_smart_obadiah_stane",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1763608073556,
+      "tag": "0002_greedy_rawhide_kid",
+      "breakpoints": true
     }
   ]
 }

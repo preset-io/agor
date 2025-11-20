@@ -7,7 +7,7 @@
  */
 
 import type { Board, Repo } from '@agor/core/types';
-import { Checkbox, Form, Input, Select, Space, Typography } from 'antd';
+import { Checkbox, Form, Input, Radio, Select, Space, Typography } from 'antd';
 import { useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
 
@@ -45,6 +45,7 @@ export const WorktreeFormFields: React.FC<WorktreeFormFieldsProps> = ({
   onUseSameBranchNameChange,
 }) => {
   const [internalUseSameBranchName, setInternalUseSameBranchName] = useState(true);
+  const [refType, setRefType] = useState<'branch' | 'tag'>('branch');
 
   // Use controlled or internal state
   const useSameBranchName = controlledUseSameBranchName ?? internalUseSameBranchName;
@@ -109,15 +110,33 @@ export const WorktreeFormFields: React.FC<WorktreeFormFieldsProps> = ({
         </Form.Item>
       )}
 
+      <Form.Item name={`${fieldPrefix}refType`} label="Source Type" initialValue="branch">
+        <Radio.Group
+          onChange={(e) => {
+            setRefType(e.target.value);
+            // Clear sourceBranch when switching to tag
+            if (e.target.value === 'tag') {
+              form.setFieldValue(`${fieldPrefix}sourceBranch`, undefined);
+            } else {
+              form.setFieldValue(`${fieldPrefix}sourceBranch`, defaultBranch);
+            }
+            onFormChange?.();
+          }}
+        >
+          <Radio value="branch">Branch</Radio>
+          <Radio value="tag">Tag</Radio>
+        </Radio.Group>
+      </Form.Item>
+
       <Form.Item
         name={`${fieldPrefix}sourceBranch`}
-        label="Source Branch"
-        rules={[{ required: true, message: 'Please enter source branch' }]}
+        label={refType === 'branch' ? 'Source Branch' : 'Source Tag'}
+        rules={[{ required: true, message: `Please enter source ${refType}` }]}
         validateTrigger={['onBlur', 'onChange']}
-        tooltip="Branch to use as base for the new worktree branch"
+        tooltip={`${refType} to use as base for the new worktree branch`}
         initialValue={defaultBranch}
       >
-        <Input placeholder={defaultBranch} />
+        <Input placeholder={refType === 'branch' ? defaultBranch : 'v1.0.0'} />
       </Form.Item>
 
       <Form.Item
@@ -141,7 +160,9 @@ export const WorktreeFormFields: React.FC<WorktreeFormFieldsProps> = ({
           checked={useSameBranchName}
           onChange={(e) => handleCheckboxChange(e.target.checked)}
         >
-          Use worktree name as branch name
+          {refType === 'tag'
+            ? 'Use worktree name as branch name (new branch from tag)'
+            : 'Use worktree name as branch name'}
         </Checkbox>
       </Form.Item>
 
@@ -195,9 +216,10 @@ export const WorktreeFormFields: React.FC<WorktreeFormFieldsProps> = ({
         <Typography.Text code>
           {useSameBranchName ? '<worktree-name>' : '<branch-name>'}
         </Typography.Text>{' '}
-        based on{' '}
+        based on {refType === 'tag' ? 'tag' : 'branch'}{' '}
         <Typography.Text code>
-          {form.getFieldValue(`${fieldPrefix}sourceBranch`) || defaultBranch}
+          {form.getFieldValue(`${fieldPrefix}sourceBranch`) ||
+            (refType === 'tag' ? '<tag-name>' : defaultBranch)}
         </Typography.Text>
         <br />• Worktree location:{' '}
         <Typography.Text code>

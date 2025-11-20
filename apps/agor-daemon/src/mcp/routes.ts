@@ -459,6 +459,11 @@ export function setupMCPRoutes(app: Application): void {
                     description:
                       'Git ref to checkout. Defaults to the worktree name when creating a new branch.',
                   },
+                  refType: {
+                    type: 'string',
+                    enum: ['branch', 'tag'],
+                    description: 'Type of ref (branch or tag). Defaults to branch.',
+                  },
                   createBranch: {
                     type: 'boolean',
                     description:
@@ -1466,6 +1471,7 @@ export function setupMCPRoutes(app: Application): void {
           const defaultBranch =
             coerceString((repo as { default_branch?: unknown }).default_branch) ?? 'main';
 
+          let refType = (coerceString(args?.refType) as 'branch' | 'tag') || 'branch';
           let createBranch = typeof args?.createBranch === 'boolean' ? args.createBranch : true;
           let ref = coerceString(args?.ref);
           let sourceBranch = coerceString(args?.sourceBranch);
@@ -1537,6 +1543,7 @@ export function setupMCPRoutes(app: Application): void {
               name: worktreeName,
               ref,
               createBranch,
+              refType,
               ...(pullLatest !== undefined ? { pullLatest } : {}),
               ...(sourceBranch ? { sourceBranch } : {}),
               ...(issueUrl ? { issue_url: issueUrl } : {}),
