@@ -20,7 +20,7 @@ const mode = process.argv.includes('--check') ? 'check' : 'write';
 
 const readJson = (relPath) => JSON.parse(readFileSync(resolve(repoRoot, relPath), 'utf8'));
 const writeJson = (relPath, data) =>
-  writeFileSync(resolve(repoRoot, relPath), JSON.stringify(data, null, 2) + '\n');
+  writeFileSync(resolve(repoRoot, relPath), `${JSON.stringify(data, null, 2)}\n`);
 
 const target = readJson(targetManifest);
 const targetDeps = { ...(target.dependencies ?? {}) };

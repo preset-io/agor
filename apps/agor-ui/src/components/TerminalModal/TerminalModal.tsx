@@ -1,10 +1,65 @@
 import type { AgorClient } from '@agor/core/api';
 import type { User } from '@agor/core/types';
-import { Alert, App, Modal } from 'antd';
+import { App, Modal, Switch, Tooltip } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import { Terminal } from 'xterm';
 import { WebLinksAddon } from 'xterm-addon-web-links';
 import 'xterm/css/xterm.css';
+
+const OSC_SEQUENCE_START = '\u001B]8;';
+const OSC_SEQUENCE_END = '\u001B]8;;\u0007';
+const BELL = '\u0007';
+
+const expandOscHyperlinks = (input: string): string => {
+  let output = '';
+  let index = 0;
+
+  while (index < input.length) {
+    const start = input.indexOf(OSC_SEQUENCE_START, index);
+    if (start === -1) {
+      output += input.slice(index);
+      break;
+    }
+
+    output += input.slice(index, start);
+
+    const paramUriStart = start + OSC_SEQUENCE_START.length;
+    const firstBell = input.indexOf(BELL, paramUriStart);
+    if (firstBell === -1) {
+      output += input.slice(start);
+      break;
+    }
+
+    const paramUriSegment = input.slice(paramUriStart, firstBell);
+    const lastSemicolon = paramUriSegment.lastIndexOf(';');
+    const rawUri =
+      lastSemicolon === -1 ? paramUriSegment : paramUriSegment.slice(lastSemicolon + 1);
+    const trimmedUri = rawUri.trim();
+
+    const labelStart = firstBell + 1;
+    const terminatorIndex = input.indexOf(OSC_SEQUENCE_END, labelStart);
+    if (terminatorIndex === -1) {
+      output += input.slice(labelStart);
+      break;
+    }
+
+    const rawLabel = input.slice(labelStart, terminatorIndex);
+
+    if (!trimmedUri) {
+      output += rawLabel;
+    } else if (rawLabel.includes(trimmedUri)) {
+      output += rawLabel;
+    } else {
+      const trimmedLabel = rawLabel.trim();
+      const safeLabel = trimmedLabel.length > 0 ? trimmedLabel : trimmedUri;
+      output += `${safeLabel} (${trimmedUri})`;
+    }
+
+    index = terminatorIndex + OSC_SEQUENCE_END.length;
+  }
+
+  return output;
+};
 
 export interface TerminalModalProps {
   open: boolean;
@@ -32,7 +87,9 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
     tmuxSession?: string;
     tmuxReused?: boolean;
     worktreeName?: string;
+    tmuxRequested?: boolean;
   }>({});
+  const [useTmux, setUseTmux] = useState(true);
 
   // Check if user has admin role
   const isAdmin = user?.role === 'admin' || user?.role === 'owner';
@@ -45,18 +102,56 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
 
     let mounted = true;
     let currentTerminalId: string | null = null;
+    let transformData: (value: string) => string = (value) => value;
+    const terminalService = client.service('terminals');
+
+    const removeListeners = () => {
+      terminalService.removeListener?.('data', handleData);
+      terminalService.removeListener?.('exit', handleExit);
+    };
+
+    const handleData = (payload: unknown) => {
+      if (!terminalRef.current || typeof payload !== 'object' || payload === null) {
+        return;
+      }
+      const message = payload as Partial<{ terminalId: string; data: string }>;
+      if (message.terminalId === currentTerminalId && typeof message.data === 'string') {
+        terminalRef.current.write(transformData(message.data));
+      }
+    };
+
+    const handleExit = (payload: unknown) => {
+      if (!terminalRef.current || typeof payload !== 'object' || payload === null) {
+        return;
+      }
+      const message = payload as Partial<{ terminalId: string; exitCode: number }>;
+      if (message.terminalId === currentTerminalId && typeof message.exitCode === 'number') {
+        terminalRef.current.writeln(`\r\n\r\n[Process exited with code ${message.exitCode}]`);
+        terminalRef.current.writeln('[Close and reopen terminal to start a new session]');
+      }
+    };
 
     // Create terminal instance and connect to backend
     const setupTerminal = async () => {
       // Create xterm instance with larger size to fit modal
       // Custom theme with Agor teal (#2e9a92) for cyan
       const terminal = new Terminal({
+        allowProposedApi: true,
         fontSize: 14,
         fontFamily: 'Menlo, Monaco, "Courier New", monospace',
         cursorBlink: true,
         scrollback: 1000,
         rows: 40,
         cols: 160,
+        linkHandler: {
+          activate: (_event, uri) => {
+            console.debug('[Terminal] Opening link', uri);
+            window.open(uri, '_blank', 'noopener,noreferrer');
+          },
+          hover: () => {
+            // no-op but ensures handler exists so OSC links get hover feedback
+          },
+        },
         theme: {
           background: '#000000',
           foreground: '#ffffff',
@@ -80,6 +175,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
           rows: 40,
           cols: 160,
           worktreeId,
+          useTmux,
         })) as {
           terminalId: string;
           cwd: string;
@@ -97,10 +193,13 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
         currentTerminalId = result.terminalId;
         setTerminalId(result.terminalId);
         setIsConnected(true);
+        const tmuxActive = Boolean(result.tmuxSession);
+        transformData = tmuxActive ? expandOscHyperlinks : (value) => value;
         setSessionInfo({
           tmuxSession: result.tmuxSession,
           tmuxReused: result.tmuxReused,
           worktreeName: result.worktreeName,
+          tmuxRequested: useTmux,
         });
         terminal.clear();
 
@@ -121,24 +220,11 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
         });
 
         // Listen for terminal output from backend
-        client.service('terminals').on('data', ((message: { terminalId: string; data: string }) => {
-          if (message.terminalId === result.terminalId && terminalRef.current) {
-            terminalRef.current.write(message.data);
-          }
-          // biome-ignore lint/suspicious/noExplicitAny: Socket event listener type mismatch
-        }) as any);
+        removeListeners();
+        terminalService.on('data', handleData);
 
         // Listen for terminal exit
-        client.service('terminals').on('exit', ((message: {
-          terminalId: string;
-          exitCode: number;
-        }) => {
-          if (message.terminalId === result.terminalId && terminalRef.current) {
-            terminalRef.current.writeln(`\r\n\r\n[Process exited with code ${message.exitCode}]`);
-            terminalRef.current.writeln('[Close and reopen terminal to start a new session]');
-          }
-          // biome-ignore lint/suspicious/noExplicitAny: Socket event listener type mismatch
-        }) as any);
+        terminalService.on('exit', handleExit);
       } catch (error) {
         console.error('Failed to create terminal:', error);
         if (terminalRef.current) {
@@ -163,11 +249,12 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
       if (currentTerminalId) {
         client.service('terminals').remove(currentTerminalId).catch(console.error);
       }
+      removeListeners();
       setTerminalId(null);
       setIsConnected(false);
       setSessionInfo({});
     };
-  }, [open, client, initialCommands, isAdmin, worktreeId]);
+  }, [open, client, initialCommands, isAdmin, worktreeId, useTmux]);
 
   const handleClose = () => {
     if (isConnected) {
@@ -194,11 +281,32 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
   return (
     <Modal
       title={
-        <div>
-          Terminal{sessionInfo.worktreeName ? ` - ${sessionInfo.worktreeName}` : ''}{' '}
-          <span style={{ fontSize: '12px', fontWeight: 'normal', opacity: 0.6 }}>
-            {sessionInfo.tmuxSession ? `(tmux: ${sessionInfo.tmuxSession})` : '(ephemeral session)'}
-          </span>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12,
+            paddingRight: 36,
+          }}
+        >
+          <div>Terminal{sessionInfo.worktreeName ? ` - ${sessionInfo.worktreeName}` : ''}</div>
+          <Tooltip
+            title={
+              isAdmin
+                ? 'Toggle tmux integration (off = launch direct shell)'
+                : 'Only admins can toggle tmux integration'
+            }
+          >
+            <Switch
+              checked={useTmux}
+              onChange={setUseTmux}
+              size="default"
+              checkedChildren="tmux"
+              unCheckedChildren="direct"
+              disabled={!isAdmin}
+            />
+          </Tooltip>
         </div>
       }
       open={open}
@@ -214,26 +322,19 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
       centered
     >
       {!isAdmin ? (
-        <div style={{ padding: '24px' }}>
-          <Alert
-            message="Admin Access Required"
-            description={
-              <div>
-                <p>
-                  Terminal access requires <strong>admin</strong> or <strong>owner</strong> role.
-                </p>
-                <p style={{ marginBottom: 0 }}>
-                  Terminal sessions run as the daemon's system user and can execute arbitrary code.
-                  Contact your Agor administrator to request elevated permissions.
-                </p>
-              </div>
-            }
-            type="warning"
-            showIcon
-          />
+        <div style={{ padding: '24px', color: '#fff' }}>
+          <p>
+            Terminal access requires <strong>admin</strong> or <strong>owner</strong> role.
+          </p>
+          <p style={{ marginBottom: 0 }}>
+            Terminal sessions run as the daemon's system user and can execute arbitrary code.
+            Contact your Agor administrator to request elevated permissions.
+          </p>
         </div>
       ) : (
-        <div ref={terminalDivRef} />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, color: '#fff' }}>
+          <div ref={terminalDivRef} />
+        </div>
       )}
     </Modal>
   );
