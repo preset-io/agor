@@ -21,6 +21,7 @@ import {
   Select,
   Space,
   Table,
+  Tooltip,
   Typography,
 } from 'antd';
 import { useMemo, useState } from 'react';
@@ -354,27 +355,30 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
       width: 240,
       render: (_: unknown, board: Board) => (
         <Space size="small">
-          <Button
-            type="text"
-            size="small"
-            icon={<CopyOutlined />}
-            onClick={() => handleClone(board)}
-            title="Clone board"
-          />
-          <Button
-            type="text"
-            size="small"
-            icon={<DownloadOutlined />}
-            onClick={() => handleExport(board)}
-            title="Export board"
-          />
-          <Button
-            type="text"
-            size="small"
-            icon={<EditOutlined />}
-            onClick={() => handleEdit(board)}
-            title="Edit board"
-          />
+          <Tooltip title="Clone board (zones, configuration, and positions only)">
+            <Button
+              type="text"
+              size="small"
+              icon={<CopyOutlined />}
+              onClick={() => handleClone(board)}
+            />
+          </Tooltip>
+          <Tooltip title="Export board to YAML (zones, configuration, and positions only)">
+            <Button
+              type="text"
+              size="small"
+              icon={<DownloadOutlined />}
+              onClick={() => handleExport(board)}
+            />
+          </Tooltip>
+          <Tooltip title="Edit board settings">
+            <Button
+              type="text"
+              size="small"
+              icon={<EditOutlined />}
+              onClick={() => handleEdit(board)}
+            />
+          </Tooltip>
           <Popconfirm
             title="Delete board?"
             description={`Are you sure you want to delete "${board.name}"? Sessions will not be deleted.`}
@@ -383,7 +387,9 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
             cancelText="Cancel"
             okButtonProps={{ danger: true }}
           >
-            <Button type="text" size="small" icon={<DeleteOutlined />} danger />
+            <Tooltip title="Delete board (sessions will not be deleted)">
+              <Button type="text" size="small" icon={<DeleteOutlined />} danger />
+            </Tooltip>
           </Popconfirm>
         </Space>
       ),
