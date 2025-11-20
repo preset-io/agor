@@ -3,6 +3,7 @@ import type { User } from '@agor/core/types';
 import { Alert, App, Modal } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import { Terminal } from 'xterm';
+import { WebLinksAddon } from 'xterm-addon-web-links';
 import 'xterm/css/xterm.css';
 
 export interface TerminalModalProps {
@@ -67,6 +68,9 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
 
       terminal.open(terminalDivRef.current!);
       terminalRef.current = terminal;
+
+      // Load Web Links addon for clickable URLs
+      terminal.loadAddon(new WebLinksAddon());
 
       terminal.writeln('🚀 Connecting to shell...');
 
