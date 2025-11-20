@@ -732,6 +732,7 @@ function AppContent() {
       issue_url?: string;
       pull_request_url?: string;
       boardId?: string;
+      position?: { x: number; y: number };
     }
   ): Promise<Worktree | null> => {
     if (!client) return null;
@@ -747,6 +748,7 @@ function AppContent() {
         issue_url: data.issue_url,
         pull_request_url: data.pull_request_url,
         boardId: data.boardId, // Optional: add to board
+        position: data.position, // Optional: position on board (defaults to center of viewport)
       })) as Worktree;
 
       // Dismiss loading message - worktree will appear on board via WebSocket broadcast

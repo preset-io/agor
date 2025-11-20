@@ -268,6 +268,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       issue_url?: string;
       pull_request_url?: string;
       boardId?: string;
+      position?: { x: number; y: number };
     },
     params?: RepoParams
   ): Promise<Worktree> {
@@ -388,10 +389,19 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     )) as Worktree;
     if (data.boardId) {
       const boardObjectsService = this.app.service('board-objects');
+
+      // Fallback position: stagger by unique_id if viewport center not provided
+      const fallbackPosition = {
+        x: 100 + (worktreeUniqueId - 1) * 60,
+        y: 100 + (worktreeUniqueId - 1) * 60,
+      };
+
+      const finalPosition = data.position || fallbackPosition;
+
       await boardObjectsService.create({
         board_id: data.boardId,
         worktree_id: worktree.worktree_id,
-        position: { x: 100, y: 100 },
+        position: finalPosition,
       });
     }
 
