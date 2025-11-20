@@ -95,6 +95,8 @@ export interface AppProps {
       pullLatest: boolean;
       issue_url?: string;
       pull_request_url?: string;
+      boardId?: string;
+      position?: { x: number; y: number };
     }
   ) => Promise<Worktree | null>;
   onStartEnvironment?: (worktreeId: string) => void;
