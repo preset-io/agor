@@ -1,6 +1,15 @@
-import type { Board, Session, Worktree } from '@agor/core/types';
-import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
+import type { AgorClient } from '@agor/core/api';
+import type { Board, BoardsServiceMethods, Session, Worktree } from '@agor/core/types';
 import {
+  CopyOutlined,
+  DeleteOutlined,
+  DownloadOutlined,
+  EditOutlined,
+  PlusOutlined,
+  UploadOutlined,
+} from '@ant-design/icons';
+import {
+  App,
   Button,
   Checkbox,
   ColorPicker,
@@ -93,6 +102,7 @@ const BACKGROUND_PRESETS = [
 ];
 
 interface BoardsTableProps {
+  client: AgorClient | null;
   boardById: Map<string, Board>;
   sessionsByWorktree: Map<string, Session[]>; // O(1) worktree filtering
   worktreeById: Map<string, Worktree>;
@@ -102,6 +112,7 @@ interface BoardsTableProps {
 }
 
 export const BoardsTable: React.FC<BoardsTableProps> = ({
+  client,
   boardById,
   sessionsByWorktree,
   worktreeById,
@@ -109,6 +120,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
   onUpdate,
   onDelete,
 }) => {
+  const { modal, message } = App.useApp();
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editingBoard, setEditingBoard] = useState<Board | null>(null);
@@ -207,6 +219,104 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
     onDelete?.(boardId);
   };
 
+  // Clone board (inline prompt for new name)
+  const handleClone = (board: Board) => {
+    const defaultName = `${board.name} (Copy)`;
+    let newName = defaultName;
+
+    modal.confirm({
+      title: 'Clone Board',
+      content: (
+        <Input
+          placeholder="New board name"
+          defaultValue={defaultName}
+          onChange={(e) => {
+            newName = e.target.value;
+          }}
+          onPressEnter={(e) => {
+            e.preventDefault();
+          }}
+        />
+      ),
+      onOk: async () => {
+        if (!client) {
+          message.error('Not connected to daemon');
+          return;
+        }
+        try {
+          const boardsService = client.service('boards') as unknown as BoardsServiceMethods;
+          const clonedBoard = await boardsService.clone(board.board_id, newName);
+          message.success(`Board cloned: ${clonedBoard.name}`);
+          // Trigger parent refresh by calling onCreate
+          onCreate?.(clonedBoard);
+        } catch (error) {
+          message.error(`Clone failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      },
+    });
+  };
+
+  // Export board (download YAML file)
+  const handleExport = async (board: Board) => {
+    if (!client) {
+      message.error('Not connected to daemon');
+      return;
+    }
+    try {
+      const boardsService = client.service('boards') as unknown as BoardsServiceMethods;
+      const yaml = await boardsService.toYaml(board.board_id);
+
+      // Trigger download
+      const blob = new Blob([yaml], { type: 'text/yaml' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${board.slug || board.name.toLowerCase().replace(/\s+/g, '-')}.agor-board.yaml`;
+      a.click();
+      URL.revokeObjectURL(url);
+
+      message.success('Board exported');
+    } catch (error) {
+      message.error(`Export failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+
+  // Import board (file picker dialog)
+  const handleImportClick = () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.yaml,.yml,.json';
+    input.onchange = (e) => handleImportFile((e.target as HTMLInputElement).files?.[0]);
+    input.click();
+  };
+
+  const handleImportFile = async (file: File | undefined) => {
+    if (!file) return;
+    if (!client) {
+      message.error('Not connected to daemon');
+      return;
+    }
+
+    const content = await file.text();
+
+    try {
+      const boardsService = client.service('boards') as unknown as BoardsServiceMethods;
+      let board: Board;
+
+      if (file.name.endsWith('.json')) {
+        board = await boardsService.fromBlob(JSON.parse(content));
+      } else {
+        board = await boardsService.fromYaml(content);
+      }
+
+      message.success(`Board imported: ${board.name}`);
+      // Trigger parent refresh by calling onCreate
+      onCreate?.(board);
+    } catch (error) {
+      message.error(`Import failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+
   const columns = [
     {
       title: 'Icon',
@@ -235,14 +345,29 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
     {
       title: 'Actions',
       key: 'actions',
-      width: 120,
+      width: 240,
       render: (_: unknown, board: Board) => (
         <Space size="small">
           <Button
             type="text"
             size="small"
+            icon={<CopyOutlined />}
+            onClick={() => handleClone(board)}
+            title="Clone board"
+          />
+          <Button
+            type="text"
+            size="small"
+            icon={<DownloadOutlined />}
+            onClick={() => handleExport(board)}
+            title="Export board"
+          />
+          <Button
+            type="text"
+            size="small"
             icon={<EditOutlined />}
             onClick={() => handleEdit(board)}
+            title="Edit board"
           />
           <Popconfirm
             title="Delete board?"
@@ -272,9 +397,14 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
         <Typography.Text type="secondary">
           Create and manage boards for organizing sessions.
         </Typography.Text>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
-          New Board
-        </Button>
+        <Space>
+          <Button icon={<UploadOutlined />} onClick={handleImportClick}>
+            Import Board
+          </Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
+            New Board
+          </Button>
+        </Space>
       </div>
 
       <Table

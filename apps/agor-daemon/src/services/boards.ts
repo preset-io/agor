@@ -6,16 +6,25 @@
  */
 
 import { BoardRepository, type Database } from '@agor/core/db';
-import type { Board, BoardObject, QueryParams } from '@agor/core/types';
+import type {
+  AuthenticatedParams,
+  Board,
+  BoardExportBlob,
+  BoardObject,
+  QueryParams,
+} from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 
 /**
  * Board service params
  */
-export type BoardParams = QueryParams<{
-  slug?: string;
-  name?: string;
-}>;
+export interface BoardParams
+  extends QueryParams<{
+    slug?: string;
+    name?: string;
+  }> {
+  user?: AuthenticatedParams['user'];
+}
 
 /**
  * Extended boards service with custom methods
@@ -111,6 +120,44 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     _params?: BoardParams
   ): Promise<{ board: Board; affectedSessions: string[] }> {
     return this.boardRepo.deleteZone(boardId, objectId, deleteAssociatedSessions);
+  }
+
+  /**
+   * Export board to blob (JSON)
+   */
+  async toBlob(boardId: string, _params?: BoardParams): Promise<BoardExportBlob> {
+    return this.boardRepo.toBlob(boardId);
+  }
+
+  /**
+   * Import board from blob (JSON)
+   */
+  async fromBlob(blob: BoardExportBlob, params?: BoardParams): Promise<Board> {
+    const userId = params?.user?.user_id || 'anonymous';
+    return this.boardRepo.fromBlob(blob, userId);
+  }
+
+  /**
+   * Export board to YAML string
+   */
+  async toYaml(boardId: string, _params?: BoardParams): Promise<string> {
+    return this.boardRepo.toYaml(boardId);
+  }
+
+  /**
+   * Import board from YAML string
+   */
+  async fromYaml(yamlContent: string, params?: BoardParams): Promise<Board> {
+    const userId = params?.user?.user_id || 'anonymous';
+    return this.boardRepo.fromYaml(yamlContent, userId);
+  }
+
+  /**
+   * Clone board (create copy with new ID)
+   */
+  async clone(boardId: string, newName: string, params?: BoardParams): Promise<Board> {
+    const userId = params?.user?.user_id || 'anonymous';
+    return this.boardRepo.clone(boardId, newName, userId);
   }
 }
 

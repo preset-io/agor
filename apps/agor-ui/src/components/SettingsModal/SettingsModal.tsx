@@ -162,6 +162,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             label: 'Boards',
             children: (
               <BoardsTable
+                client={client}
                 boardById={boardById}
                 sessionsByWorktree={sessionsByWorktree}
                 worktreeById={worktreeById}

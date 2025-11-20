@@ -4,8 +4,9 @@
  * Type-safe CRUD operations for boards with short ID support.
  */
 
-import type { Board, BoardObject, UUID } from '@agor/core/types';
+import type { Board, BoardExportBlob, BoardObject, UUID } from '@agor/core/types';
 import { and, eq, like, ne } from 'drizzle-orm';
+import * as yaml from 'js-yaml';
 import { formatShortId, generateId } from '../../lib/ids';
 import { generateSlug } from '../../lib/slugs';
 import type { Database } from '../client';
@@ -464,5 +465,184 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
       board: updatedBoard,
       affectedSessions: [], // No sessions to track yet
     };
+  }
+
+  /**
+   * Export board to blob (JSON)
+   *
+   * Strips runtime-specific fields (IDs, timestamps, user attribution).
+   * Returns a portable board template.
+   */
+  async toBlob(boardId: string): Promise<BoardExportBlob> {
+    const board = await this.findById(boardId);
+    if (!board) {
+      throw new EntityNotFoundError('Board', boardId);
+    }
+
+    return {
+      name: board.name,
+      slug: board.slug,
+      description: board.description,
+      icon: board.icon,
+      color: board.color,
+      background_color: board.background_color,
+      objects: board.objects,
+      custom_context: board.custom_context,
+    };
+  }
+
+  /**
+   * Import board from blob (JSON)
+   *
+   * Creates a new board with fresh IDs and timestamps.
+   * Returns the created board.
+   */
+  async fromBlob(blob: BoardExportBlob, userId: string): Promise<Board> {
+    // Validate blob structure
+    this.validateBoardBlob(blob);
+
+    // Ensure unique slug (append -copy, -copy-2, etc.)
+    let slug = blob.slug;
+    if (slug) {
+      slug = await this.getUniqueSlug(slug);
+    }
+
+    // Create new board with fresh IDs
+    return this.create({
+      name: blob.name,
+      slug,
+      description: blob.description,
+      icon: blob.icon,
+      color: blob.color,
+      background_color: blob.background_color,
+      objects: blob.objects,
+      custom_context: blob.custom_context,
+      created_by: userId,
+    });
+  }
+
+  /**
+   * Export board to YAML string
+   */
+  async toYaml(boardId: string): Promise<string> {
+    const blob = await this.toBlob(boardId);
+
+    // Add header comment with metadata
+    const header = [
+      '# Agor Board Export',
+      `# Generated: ${new Date().toISOString()}`,
+      '# Version: 1.0',
+      '',
+    ].join('\n');
+
+    return header + yaml.dump(blob, { indent: 2, lineWidth: -1 });
+  }
+
+  /**
+   * Import board from YAML string
+   */
+  async fromYaml(yamlContent: string, userId: string): Promise<Board> {
+    try {
+      const blob = yaml.load(yamlContent) as BoardExportBlob;
+      return this.fromBlob(blob, userId);
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to parse YAML: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Clone board (create copy with new ID)
+   *
+   * Convenience method that combines toBlob + fromBlob.
+   */
+  async clone(boardId: string, newName: string, userId: string): Promise<Board> {
+    const blob = await this.toBlob(boardId);
+    blob.name = newName;
+
+    // Generate slug from name if original had slug
+    if (blob.slug) {
+      blob.slug = this.slugify(newName);
+      blob.slug = await this.getUniqueSlug(blob.slug);
+    }
+
+    return this.fromBlob(blob, userId);
+  }
+
+  /**
+   * Validate board export blob structure
+   */
+  private validateBoardBlob(blob: unknown): asserts blob is BoardExportBlob {
+    if (!blob || typeof blob !== 'object') {
+      throw new RepositoryError('Invalid board export: must be an object');
+    }
+
+    const b = blob as Partial<BoardExportBlob>;
+
+    if (!b.name || typeof b.name !== 'string') {
+      throw new RepositoryError('Invalid board export: name is required');
+    }
+
+    // Validate objects structure
+    if (b.objects) {
+      for (const [id, obj] of Object.entries(b.objects)) {
+        if (!obj || typeof obj !== 'object') {
+          throw new RepositoryError(`Invalid object ${id}: must be an object`);
+        }
+
+        if (!obj.type || !['zone', 'text', 'markdown'].includes(obj.type)) {
+          throw new RepositoryError(`Invalid object ${id}: unsupported type`);
+        }
+
+        // Type-specific validation
+        if (obj.type === 'zone') {
+          const zone = obj as { x?: unknown; y?: unknown; width?: unknown; height?: unknown };
+          if (
+            typeof zone.x !== 'number' ||
+            typeof zone.y !== 'number' ||
+            typeof zone.width !== 'number' ||
+            typeof zone.height !== 'number'
+          ) {
+            throw new RepositoryError(`Invalid zone ${id}: missing position/dimensions`);
+          }
+        }
+      }
+    }
+
+    // Validate custom_context if present
+    if (b.custom_context) {
+      try {
+        JSON.parse(JSON.stringify(b.custom_context));
+      } catch (_error) {
+        throw new RepositoryError('Invalid custom_context: must be valid JSON');
+      }
+    }
+  }
+
+  /**
+   * Get unique slug by appending -copy, -copy-2, etc.
+   */
+  private async getUniqueSlug(baseSlug: string): Promise<string> {
+    let slug = baseSlug;
+    let counter = 1;
+
+    while (await this.findBySlug(slug)) {
+      slug = `${baseSlug}-copy${counter > 1 ? `-${counter}` : ''}`;
+      counter++;
+    }
+
+    return slug;
+  }
+
+  /**
+   * Convert name to URL-friendly slug
+   */
+  private slugify(name: string): string {
+    return name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '');
   }
 }
