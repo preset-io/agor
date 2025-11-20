@@ -464,6 +464,10 @@ export const App: React.FC<AppProps> = ({
           ).length
         }
         eventStreamEnabled={eventStreamEnabled}
+        boards={mapToArray(boardById)}
+        currentBoardId={currentBoardId}
+        onBoardChange={setCurrentBoardId}
+        worktreeById={worktreeById}
       />
       <Content style={{ position: 'relative', overflow: 'hidden', display: 'flex' }}>
         <CommentsPanel

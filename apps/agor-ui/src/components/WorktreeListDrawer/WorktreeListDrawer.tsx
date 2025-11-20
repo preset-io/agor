@@ -3,10 +3,8 @@ import { SearchOutlined } from '@ant-design/icons';
 import { Badge, Drawer, Input, List, Space, Typography, theme } from 'antd';
 import type React from 'react';
 import { useMemo, useState } from 'react';
-import { BoardSwitcher } from '../BoardSwitcher';
 import { ToolIcon } from '../ToolIcon';
 
-const { Title } = Typography;
 const { useToken } = theme;
 
 interface WorktreeListDrawerProps {
@@ -89,24 +87,6 @@ export const WorktreeListDrawer: React.FC<WorktreeListDrawerProps> = ({
         body: { padding: 0 },
       }}
     >
-      {/* Board Switcher Header */}
-      <div
-        style={{
-          padding: '16px 24px',
-          borderBottom: `1px solid ${token.colorBorder}`,
-        }}
-      >
-        <Title level={5} style={{ marginBottom: 8 }}>
-          Board
-        </Title>
-        <BoardSwitcher
-          boards={boards}
-          currentBoardId={currentBoardId}
-          onBoardChange={onBoardChange}
-          worktreeById={worktreeById}
-        />
-      </div>
-
       {/* Search Bar */}
       <div
         style={{
