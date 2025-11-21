@@ -3,8 +3,16 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'apps/agor-docs/**'
+      - '*.md'
+      - 'context/**'
   pull_request:
     branches: [main]
+    paths-ignore:
+      - 'apps/agor-docs/**'
+      - '*.md'
+      - 'context/**'
 
 jobs:
   check:
@@ -36,4 +44,4 @@ jobs:
         run: pnpm lint
 
       - name: Build
-        run: pnpm build
+        run: pnpm turbo run build --filter='!@agor/docs'
