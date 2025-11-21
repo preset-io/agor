@@ -279,6 +279,60 @@ Callback: "Created 12 test cases covering happy path and edge cases"
 
 ---
 
+## Example: Cross-Agent Code Review
+
+One powerful pattern is using subsessions to get an independent code review from a different agent. This provides a fresh perspective and can catch issues the original implementer might miss.
+
+**The Workflow:**
+
+<img
+  src="/screenshots/subsession-spawn-codex-review.png"
+  alt="Claude Code spawning a Codex subsession for code review"
+  style={{ maxWidth: '400px' }}
+/>
+
+Claude Code spawns a Codex subsession to review PR changes for a task creator user context feature.
+
+<img
+  src="/screenshots/subsession-codex-running.png"
+  alt="Codex subsession running the code review"
+  style={{ maxWidth: '400px' }}
+/>
+
+Codex reviews the implementation across 6 files, checking correctness, consistency, error handling, code quality, security, and performance.
+
+<img
+  src="/screenshots/subsession-board-hierarchy.png"
+  alt="Board view showing parent and child session hierarchy"
+  style={{ maxWidth: '400px' }}
+/>
+
+The worktree card shows both sessions - parent and child subsession maintain their own context while working in the same codebase.
+
+<img
+  src="/screenshots/subsession-callback-findings.png"
+  alt="Callback with detailed code review findings"
+  style={{ maxWidth: '400px' }}
+/>
+
+Codex completes the review and sends a callback with detailed findings, including a critical bug with specific file locations and line numbers.
+
+**Why This Works:**
+
+- **Independent perspective** - Different agent, fresh eyes on the code
+- **Specialized review** - Codex focuses purely on reviewing, not defending implementation choices
+- **Non-blocking** - Parent can continue working while review runs
+- **Structured feedback** - Callback includes findings with specific file locations
+- **Actionable results** - Parent can immediately fix issues or spawn another review round
+
+This pattern is especially effective for:
+- Getting unbiased code reviews
+- Catching bugs before PR submission
+- Validating cross-SDK consistency
+- Security audits by specialized agents
+
+---
+
 ## Related Docs
 
 - [Concepts](/guide/concepts) - Understanding worktrees, sessions, and boards
