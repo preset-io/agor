@@ -17,7 +17,7 @@ import { Badge, Button, Card, Collapse, Space, Spin, Tree, Typography, theme } f
 import { AggregationColor } from 'antd/es/color-picker/color';
 import React, { useEffect, useMemo, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
-import { isDarkTheme } from '../../utils/theme';
+import { ensureColorVisible, isDarkTheme } from '../../utils/theme';
 import { ArchiveDeleteWorktreeModal } from '../ArchiveDeleteWorktreeModal';
 import { EnvironmentPill } from '../EnvironmentPill';
 import { type ForkSpawnAction, ForkSpawnModal } from '../ForkSpawnModal';
@@ -455,6 +455,12 @@ const WorktreeCardComponent = ({
     0 0 60px 12px ${glowColor}44
   `;
 
+  // Ensure pin color is visible (adjust lightness if too pale)
+  const visiblePinColor = useMemo(() => {
+    if (!zoneColor) return undefined;
+    return ensureColorVisible(zoneColor, isDarkMode, 50, 50);
+  }, [zoneColor, isDarkMode]);
+
   return (
     <Card
       style={{
@@ -519,7 +525,7 @@ const WorktreeCardComponent = ({
             <Button
               type="text"
               size="small"
-              icon={<PushpinFilled style={{ color: zoneColor }} />}
+              icon={<PushpinFilled style={{ color: visiblePinColor }} />}
               onClick={(e) => {
                 e.stopPropagation();
                 onUnpin?.(worktree.worktree_id);
