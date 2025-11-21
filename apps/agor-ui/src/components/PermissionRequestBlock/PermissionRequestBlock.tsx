@@ -194,7 +194,7 @@ export const PermissionRequestBlock: React.FC<PermissionRequestBlockProps> = ({
             {/* Radio group for remember choice */}
             <Radio.Group
               value={remember}
-              onChange={e => setRemember(e.target.value)}
+              onChange={(e) => setRemember(e.target.value)}
               style={{ width: '100%' }}
             >
               <Space direction="vertical" size={token.sizeUnit / 2} style={{ width: '100%' }}>

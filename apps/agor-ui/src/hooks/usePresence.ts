@@ -68,7 +68,7 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
       };
 
       // Update cursor map (for rendering cursors)
-      setCursorMap(prev => {
+      setCursorMap((prev) => {
         const next = new Map(prev);
         const existing = prev.get(event.userId);
 
@@ -82,7 +82,7 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
       });
 
       // Update presence map (for facepile)
-      setPresenceMap(prev => {
+      setPresenceMap((prev) => {
         const next = new Map(prev);
         const existing = prev.get(event.userId);
 
@@ -100,13 +100,13 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
     const handleCursorLeft = (event: { userId: string; boardId: BoardID }) => {
       if (event.boardId !== boardId) return;
 
-      setCursorMap(prev => {
+      setCursorMap((prev) => {
         const next = new Map(prev);
         next.delete(event.userId);
         return next;
       });
 
-      setPresenceMap(prev => {
+      setPresenceMap((prev) => {
         const next = new Map(prev);
         next.delete(event.userId);
         return next;
@@ -122,7 +122,7 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
       const now = Date.now();
 
       // Check if there are any stale cursors BEFORE calling setCursorMap
-      setCursorMap(prev => {
+      setCursorMap((prev) => {
         let hasChanges = false;
 
         // First pass: check if any cursors are stale
@@ -152,7 +152,7 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
     // Cleanup stale presence every 30 seconds (for facepile)
     const presenceCleanupInterval = setInterval(() => {
       const now = Date.now();
-      setPresenceMap(prev => {
+      setPresenceMap((prev) => {
         const next = new Map(prev);
         let hasChanges = false;
 
@@ -189,7 +189,7 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
 
     // Build active users from presenceMap (longer timeout for facepile)
     for (const [userId, presence] of presenceMap.entries()) {
-      const user = usersRef.current.find(u => u.user_id === userId);
+      const user = usersRef.current.find((u) => u.user_id === userId);
       if (!user) continue;
 
       activeUsers.push({
@@ -204,7 +204,7 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
 
     // Build remote cursors from cursorMap (shorter timeout for cursor rendering)
     for (const [userId, cursor] of cursorMap.entries()) {
-      const user = usersRef.current.find(u => u.user_id === userId);
+      const user = usersRef.current.find((u) => u.user_id === userId);
       if (!user) continue;
 
       remoteCursors.set(userId, {

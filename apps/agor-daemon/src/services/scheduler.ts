@@ -72,13 +72,13 @@ export class SchedulerService {
     this.isRunning = true;
 
     // Run first tick immediately
-    this.tick().catch(error => {
+    this.tick().catch((error) => {
       console.error('❌ Scheduler tick failed:', error);
     });
 
     // Schedule recurring ticks
     this.intervalHandle = setInterval(() => {
-      this.tick().catch(error => {
+      this.tick().catch((error) => {
         console.error('❌ Scheduler tick failed:', error);
       });
     }, this.config.tickInterval);
@@ -148,7 +148,7 @@ export class SchedulerService {
     const allWorktrees = await this.worktreeRepo.findAll();
 
     // Filter to only enabled schedules
-    const enabledSchedules = allWorktrees.filter(wt => wt.schedule_enabled === true);
+    const enabledSchedules = allWorktrees.filter((wt) => wt.schedule_enabled === true);
 
     return enabledSchedules;
   }
@@ -229,8 +229,8 @@ export class SchedulerService {
     // 1. Check deduplication using repository
     // Use repository to check for existing sessions (bypasses auth)
     const allSessions = await this.sessionRepo.findAll();
-    const worktreeSessions = allSessions.filter(s => s.worktree_id === worktree.worktree_id);
-    const existingSession = worktreeSessions.find(s => s.scheduled_run_at === scheduledRunAt);
+    const worktreeSessions = allSessions.filter((s) => s.worktree_id === worktree.worktree_id);
+    const existingSession = worktreeSessions.find((s) => s.scheduled_run_at === scheduledRunAt);
 
     if (existingSession) {
       // Still update next_run_at to prevent repeated checks
@@ -242,7 +242,7 @@ export class SchedulerService {
     const renderedPrompt = this.renderPrompt(schedule.prompt_template, worktree);
 
     // 3. Get current run index (count of all scheduled sessions for this worktree)
-    const scheduledSessions = worktreeSessions.filter(s => s.scheduled_from_worktree === true);
+    const scheduledSessions = worktreeSessions.filter((s) => s.scheduled_from_worktree === true);
     const runIndex = scheduledSessions.length + 1;
 
     // 4. Create session with schedule metadata
@@ -393,8 +393,8 @@ export class SchedulerService {
     try {
       // Fetch all scheduled sessions for this worktree using repository
       const allSessions = await this.sessionRepo.findAll();
-      const worktreeSessions = allSessions.filter(s => s.worktree_id === worktree.worktree_id);
-      const scheduledSessions = worktreeSessions.filter(s => s.scheduled_from_worktree === true);
+      const worktreeSessions = allSessions.filter((s) => s.worktree_id === worktree.worktree_id);
+      const scheduledSessions = worktreeSessions.filter((s) => s.scheduled_from_worktree === true);
 
       // Sort by scheduled_run_at DESC (newest first)
       scheduledSessions.sort((a, b) => {

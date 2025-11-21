@@ -94,7 +94,7 @@ export function highlightMentionsInMarkdown(text: string): string {
 
   // Helper to check if a position is inside a code block
   const isInCodeBlock = (pos: number): boolean => {
-    return codeRanges.some(range => pos >= range.start && pos < range.end);
+    return codeRanges.some((range) => pos >= range.start && pos < range.end);
   };
 
   // Replace @ mentions only if they're not in code blocks

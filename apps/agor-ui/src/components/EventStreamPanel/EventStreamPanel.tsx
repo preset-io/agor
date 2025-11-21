@@ -84,7 +84,7 @@ export const EventStreamPanel: React.FC<EventStreamPanelProps> = ({
 
   // Filter events based on user preferences
   const filteredEvents = useMemo(() => {
-    return displayEvents.filter(event => {
+    return displayEvents.filter((event) => {
       // Filter cursor events (checkbox)
       if (!includeCursor && event.type === 'cursor') {
         return false;
@@ -106,7 +106,7 @@ export const EventStreamPanel: React.FC<EventStreamPanelProps> = ({
       // Filter by CRUD operation (if any filters are active)
       if (crudOperationFilters.size > 0 && event.type === 'crud') {
         // Extract operation from event name (e.g., "sessions created" -> "created")
-        const operation = ['created', 'patched', 'updated', 'removed'].find(op =>
+        const operation = ['created', 'patched', 'updated', 'removed'].find((op) =>
           event.eventName.includes(op)
         );
         if (!operation || !crudOperationFilters.has(operation)) {
@@ -269,15 +269,18 @@ export const EventStreamPanel: React.FC<EventStreamPanelProps> = ({
           Quick Filters:
         </Text>
         <Space wrap size="middle" style={{ width: '100%' }}>
-          <Checkbox checked={includeCursor} onChange={e => setIncludeCursor(e.target.checked)}>
+          <Checkbox checked={includeCursor} onChange={(e) => setIncludeCursor(e.target.checked)}>
             <Text style={{ fontSize: 12 }}>Cursor movement</Text>
           </Checkbox>
-          <Checkbox checked={includeMessages} onChange={e => setIncludeMessages(e.target.checked)}>
+          <Checkbox
+            checked={includeMessages}
+            onChange={(e) => setIncludeMessages(e.target.checked)}
+          >
             <Text style={{ fontSize: 12 }}>Message streams</Text>
           </Checkbox>
           <Checkbox
             checked={includeTerminalData}
-            onChange={e => setIncludeTerminalData(e.target.checked)}
+            onChange={(e) => setIncludeTerminalData(e.target.checked)}
           >
             <Text style={{ fontSize: 12 }}>Terminal data</Text>
           </Checkbox>
@@ -292,13 +295,13 @@ export const EventStreamPanel: React.FC<EventStreamPanelProps> = ({
               mode="multiple"
               placeholder="Filter by type"
               value={Array.from(eventTypeFilters)}
-              onChange={values => setEventTypeFilters(new Set(values))}
+              onChange={(values) => setEventTypeFilters(new Set(values))}
               style={{ width: '100%' }}
               size="small"
               allowClear
               maxTagCount="responsive"
             >
-              {['cursor', 'message', 'tool', 'crud', 'connection', 'other'].map(type => (
+              {['cursor', 'message', 'tool', 'crud', 'connection', 'other'].map((type) => (
                 <Select.Option key={type} value={type}>
                   {type}
                 </Select.Option>
@@ -314,13 +317,13 @@ export const EventStreamPanel: React.FC<EventStreamPanelProps> = ({
               mode="multiple"
               placeholder="Filter by operation"
               value={Array.from(crudOperationFilters)}
-              onChange={values => setCrudOperationFilters(new Set(values))}
+              onChange={(values) => setCrudOperationFilters(new Set(values))}
               style={{ width: '100%' }}
               size="small"
               allowClear
               maxTagCount="responsive"
             >
-              {['created', 'patched', 'updated', 'removed'].map(operation => (
+              {['created', 'patched', 'updated', 'removed'].map((operation) => (
                 <Select.Option key={operation} value={operation}>
                   {operation}
                 </Select.Option>
@@ -347,7 +350,7 @@ export const EventStreamPanel: React.FC<EventStreamPanelProps> = ({
               margin: 12,
             }}
           >
-            {filteredEvents.map(event => (
+            {filteredEvents.map((event) => (
               <EventItem
                 key={event.id}
                 event={event}

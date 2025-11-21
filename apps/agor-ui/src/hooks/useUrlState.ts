@@ -112,8 +112,8 @@ export function useUrlState(options: UseUrlStateOptions) {
 
     const newUrl = buildUrl(currentBoardId, currentSessionId);
     // Normalize current path (add trailing slash if missing)
-    const currentPath = (location.pathname + location.search).replace(/\/$/, '') + '/';
-    const normalizedNewUrl = newUrl.replace(/\/$/, '') + '/';
+    const currentPath = `${(location.pathname + location.search).replace(/\/$/, '')}/`;
+    const normalizedNewUrl = `${newUrl.replace(/\/$/, '')}/`;
 
     // Only navigate if URL actually changed
     if (normalizedNewUrl !== currentPath && newUrl !== lastNavigatedRef.current) {
@@ -243,7 +243,7 @@ export function useUrlState(options: UseUrlStateOptions) {
     }
 
     updateUrlFromState();
-  }, [currentBoardId, currentSessionId, boardById.size, updateUrlFromState]);
+  }, [boardById.size, updateUrlFromState]);
 
   return {
     urlBoardParam,

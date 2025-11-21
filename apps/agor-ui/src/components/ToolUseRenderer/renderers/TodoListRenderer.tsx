@@ -152,8 +152,8 @@ export const TodoListRenderer: React.FC<TodoListRendererProps> = ({ toolUseId, i
   }
 
   // Count statuses for summary
-  const completedCount = todos.filter(t => t.status === 'completed').length;
-  const inProgressCount = todos.filter(t => t.status === 'in_progress').length;
+  const completedCount = todos.filter((t) => t.status === 'completed').length;
+  const inProgressCount = todos.filter((t) => t.status === 'in_progress').length;
   const totalCount = todos.length;
 
   return (

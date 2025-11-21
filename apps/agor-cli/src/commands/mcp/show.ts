@@ -38,7 +38,7 @@ export default class McpShow extends BaseCommand {
           query: { $limit: 1 },
         });
         const servers = (Array.isArray(result) ? result : result.data) as MCPServer[];
-        server = servers.find(s => s.name === args.id) || null;
+        server = servers.find((s) => s.name === args.id) || null;
       }
 
       if (!server) {

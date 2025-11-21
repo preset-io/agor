@@ -42,7 +42,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       created_by: row.created_by,
       worktree_id: row.worktree_id as UUID,
       ...row.data,
-      tasks: row.data.tasks.map(id => id as UUID),
+      tasks: row.data.tasks.map((id) => id as UUID),
       genealogy: {
         parent_session_id: row.parent_session_id as UUID | undefined,
         forked_from_session_id: row.forked_from_session_id as UUID | undefined,
@@ -50,7 +50,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         fork_point_message_index: genealogyData.fork_point_message_index,
         spawn_point_task_id: genealogyData.spawn_point_task_id as UUID | undefined,
         spawn_point_message_index: genealogyData.spawn_point_message_index,
-        children: genealogyData.children.map(id => id as UUID),
+        children: genealogyData.children.map((id) => id as UUID),
       },
       permission_config: row.data.permission_config,
       scheduled_run_at: row.scheduled_run_at ?? undefined,
@@ -347,7 +347,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
 
       // Use transaction to make read-merge-write atomic
       // This prevents race conditions where another update happens between read and write
-      const result = await this.db.transaction(async tx => {
+      const result = await this.db.transaction(async (tx) => {
         // STEP 1: Read current session (within transaction)
         // biome-ignore lint/suspicious/noExplicitAny: Transaction context requires type assertion for database wrapper functions
         const currentRow = await select(tx as any)
@@ -432,9 +432,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
    */
   async count(): Promise<number> {
     try {
-      const result = await select(this.db, { count: sql<number>`count(*)` })
-        .from(sessions)
-        .one();
+      const result = await select(this.db, { count: sql<number>`count(*)` }).from(sessions).one();
 
       return result?.count ?? 0;
     } catch (error) {

@@ -9,7 +9,7 @@ const meta = {
     layout: 'fullscreen',
   },
   decorators: [
-    Story => (
+    (Story) => (
       <ConfigProvider theme={{ algorithm: theme.darkAlgorithm }}>
         <div style={{ height: '100vh', position: 'relative', background: '#141414' }}>
           <Story />

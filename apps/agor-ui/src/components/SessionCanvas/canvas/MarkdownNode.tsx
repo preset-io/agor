@@ -48,7 +48,7 @@ export const MarkdownNode = ({ data }: { data: MarkdownNodeData }) => {
             type="text"
             size="small"
             icon={<EditOutlined />}
-            onClick={e => {
+            onClick={(e) => {
               e.stopPropagation();
               handleEdit();
             }}

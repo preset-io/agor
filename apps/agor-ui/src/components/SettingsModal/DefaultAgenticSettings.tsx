@@ -75,7 +75,7 @@ export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
   };
 
   const handleSave = async (tool: AgenticToolName) => {
-    setSaving(prev => ({ ...prev, [tool]: true }));
+    setSaving((prev) => ({ ...prev, [tool]: true }));
     try {
       const currentForm = getFormForTool(tool);
       const values = currentForm.getFieldsValue();
@@ -101,7 +101,7 @@ export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
       message.error('Failed to save settings');
       console.error('Error saving default agentic settings:', error);
     } finally {
-      setSaving(prev => ({ ...prev, [tool]: false }));
+      setSaving((prev) => ({ ...prev, [tool]: false }));
     }
   };
 
@@ -161,7 +161,7 @@ export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
 
       <Tabs
         activeKey={activeTab}
-        onChange={key => setActiveTab(key as AgenticToolName)}
+        onChange={(key) => setActiveTab(key as AgenticToolName)}
         items={tabItems.map(({ key, label, tool, form }) => ({
           key,
           label,

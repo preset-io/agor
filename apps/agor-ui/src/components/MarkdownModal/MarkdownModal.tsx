@@ -35,7 +35,7 @@ export interface MarkdownModalProps {
  */
 function parseBreadcrumb(filePath: string): { title: string }[] {
   const parts = filePath.split('/');
-  return parts.map(part => ({ title: part }));
+  return parts.map((part) => ({ title: part }));
 }
 
 export const MarkdownModal: React.FC<MarkdownModalProps> = ({

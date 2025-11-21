@@ -28,13 +28,13 @@ export const MCPServerSelect: React.FC<MCPServerSelectProps> = ({
 }) => {
   // Filter servers by scope if specified
   const filteredServers = filterByScope
-    ? mcpServers.filter(server => server.scope === filterByScope)
+    ? mcpServers.filter((server) => server.scope === filterByScope)
     : mcpServers;
 
   // Only show enabled servers
-  const enabledServers = filteredServers.filter(server => server.enabled);
+  const enabledServers = filteredServers.filter((server) => server.enabled);
 
-  const options = enabledServers.map(server => ({
+  const options = enabledServers.map((server) => ({
     label: `${server.display_name || server.name} (${server.transport})`,
     value: server.mcp_server_id,
     disabled: !server.enabled,

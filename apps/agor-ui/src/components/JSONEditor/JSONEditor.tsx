@@ -23,7 +23,7 @@ export const JSONEditor: React.FC<JSONEditorProps> = ({
   return (
     <Input.TextArea
       value={value}
-      onChange={e => onChange?.(e.target.value)}
+      onChange={(e) => onChange?.(e.target.value)}
       placeholder={placeholder}
       rows={rows}
       style={{ fontFamily: 'monospace' }}

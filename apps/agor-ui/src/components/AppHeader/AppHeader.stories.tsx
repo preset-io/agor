@@ -9,7 +9,7 @@ const meta = {
     layout: 'fullscreen',
   },
   decorators: [
-    Story => (
+    (Story) => (
       <ConfigProvider theme={{ algorithm: theme.darkAlgorithm }}>
         <Story />
       </ConfigProvider>

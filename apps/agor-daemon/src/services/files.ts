@@ -71,11 +71,11 @@ export class FilesService {
       const result = await git.raw(['ls-files', '-z']);
 
       // Parse null-separated file list
-      const allFiles = result.split('\0').filter(f => f.length > 0);
+      const allFiles = result.split('\0').filter((f) => f.length > 0);
 
       // Extract unique folders from file paths
       const foldersSet = new Set<string>();
-      allFiles.forEach(filePath => {
+      allFiles.forEach((filePath) => {
         const parts = filePath.split('/');
         // Build up folder paths (e.g., "src", "src/components", etc.)
         for (let i = 1; i < parts.length; i++) {
@@ -87,14 +87,14 @@ export class FilesService {
       const searchLower = search.toLowerCase();
 
       const matchingFiles = allFiles
-        .filter(f => f.toLowerCase().includes(searchLower))
-        .map(path => ({ path, type: 'file' as const }));
+        .filter((f) => f.toLowerCase().includes(searchLower))
+        .map((path) => ({ path, type: 'file' as const }));
 
       // Add trailing slash first, then filter so searches like "context/" work
       const matchingFolders = Array.from(foldersSet)
-        .map(path => `${path}/`)
-        .filter(f => f.toLowerCase().includes(searchLower))
-        .map(path => ({ path, type: 'folder' as const }));
+        .map((path) => `${path}/`)
+        .filter((f) => f.toLowerCase().includes(searchLower))
+        .map((path) => ({ path, type: 'folder' as const }));
 
       // Combine and sort: folders first, then files
       const combined = [...matchingFolders, ...matchingFiles].slice(0, MAX_FILE_RESULTS);

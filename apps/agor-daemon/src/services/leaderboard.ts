@@ -105,7 +105,7 @@ export class LeaderboardService {
     } = query;
 
     // Parse groupBy dimensions
-    const dimensions = groupBy.split(',').map(d => d.trim());
+    const dimensions = groupBy.split(',').map((d) => d.trim());
     const includeUser = dimensions.includes('user');
     const includeWorktree = dimensions.includes('worktree');
     const includeRepo = dimensions.includes('repo');

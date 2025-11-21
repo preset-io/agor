@@ -70,7 +70,7 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
     if (!value) return;
 
     await onSave(field, value);
-    setInputValues(prev => ({ ...prev, [field]: '' }));
+    setInputValues((prev) => ({ ...prev, [field]: '' }));
   };
 
   const renderKeyField = (config: KeyFieldConfig) => {
@@ -109,7 +109,7 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
               <Input.Password
                 placeholder={placeholder}
                 value={inputValues[field] || ''}
-                onChange={e => setInputValues(prev => ({ ...prev, [field]: e.target.value }))}
+                onChange={(e) => setInputValues((prev) => ({ ...prev, [field]: e.target.value }))}
                 onPressEnter={() => handleSave(field)}
                 style={{ flex: 1 }}
                 disabled={disabled}
@@ -138,7 +138,7 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
 
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
-      {KEY_CONFIGS.filter(config => config.field in keyStatus).map(config =>
+      {KEY_CONFIGS.filter((config) => config.field in keyStatus).map((config) =>
         renderKeyField(config)
       )}
     </Space>

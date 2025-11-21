@@ -67,7 +67,7 @@ export function createCanUseToolCallback(
 
       // STEP 2: Create lock for this permission check
       console.log(`🔒 [canUseTool] Requesting permission for ${toolName}...`);
-      const newLock = new Promise<void>(resolve => {
+      const newLock = new Promise<void>((resolve) => {
         releaseLock = resolve;
       });
       deps.permissionLocks.set(sessionId, newLock);

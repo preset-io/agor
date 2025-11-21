@@ -312,9 +312,9 @@ describe('WorktreeRepository.findAll', () => {
     const worktrees = await wtRepo.findAll();
 
     expect(worktrees).toHaveLength(3);
-    expect(worktrees.map(w => w.name).sort()).toEqual(['worktree-1', 'worktree-2', 'worktree-3']);
+    expect(worktrees.map((w) => w.name).sort()).toEqual(['worktree-1', 'worktree-2', 'worktree-3']);
     // Verify full object population
-    const first = worktrees.find(w => w.name === 'worktree-1');
+    const first = worktrees.find((w) => w.name === 'worktree-1');
     expect(first?.base_ref).toBe('main');
     expect(first?.notes).toBe('Test notes');
   });
@@ -351,8 +351,8 @@ describe('WorktreeRepository.findAll', () => {
     const repo2Worktrees = await wtRepo.findAll({ repo_id: repo2.repo_id });
 
     expect(repo2Worktrees).toHaveLength(2);
-    expect(repo2Worktrees.map(w => w.name).sort()).toEqual(['repo2-wt1', 'repo2-wt2']);
-    expect(repo2Worktrees.every(w => w.repo_id === repo2.repo_id)).toBe(true);
+    expect(repo2Worktrees.map((w) => w.name).sort()).toEqual(['repo2-wt1', 'repo2-wt2']);
+    expect(repo2Worktrees.every((w) => w.repo_id === repo2.repo_id)).toBe(true);
   });
 
   dbTest('should return empty array for no matches', async ({ db }) => {
@@ -485,7 +485,7 @@ describe('WorktreeRepository.update', () => {
     });
     const created = await wtRepo.create(data);
 
-    await new Promise(resolve => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, 10));
 
     const updated = await wtRepo.update(data.worktree_id, {
       board_id: boardId,
@@ -631,7 +631,7 @@ describe('WorktreeRepository.delete', () => {
     // Verify only data1 deleted
     const remaining = await wtRepo.findAll();
     expect(remaining).toHaveLength(2);
-    expect(remaining.map(w => w.name).sort()).toEqual(['wt2', 'wt3']);
+    expect(remaining.map((w) => w.name).sort()).toEqual(['wt2', 'wt3']);
 
     const repo2Worktrees = await wtRepo.findAll({ repo_id: repo2.repo_id });
     expect(repo2Worktrees).toHaveLength(1);

@@ -102,13 +102,13 @@ describe('PermissionService.emitRequest', () => {
     const sessionId = 'session-789' as SessionID;
     const tools = ['Bash', 'Write', 'Edit', 'Read', 'Glob'];
 
-    tools.forEach(toolName => {
+    tools.forEach((toolName) => {
       const request = createRequest({ toolName });
       service.emitRequest(sessionId, request);
     });
 
     expect(emitEvent).toHaveBeenCalledTimes(tools.length);
-    expect(emitEvent.mock.calls.map(c => (c[1] as PermissionRequest).toolName)).toEqual(tools);
+    expect(emitEvent.mock.calls.map((c) => (c[1] as PermissionRequest).toolName)).toEqual(tools);
   });
 
   it('should preserve all request fields', () => {

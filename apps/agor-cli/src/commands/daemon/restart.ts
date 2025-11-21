@@ -45,7 +45,7 @@ export default class DaemonRestart extends Command {
       }
 
       // Wait a moment before starting
-      await new Promise(resolve => setTimeout(resolve, 500));
+      await new Promise((resolve) => setTimeout(resolve, 500));
 
       // Start daemon
       const pid = startDaemon(daemonPath);
@@ -59,7 +59,7 @@ export default class DaemonRestart extends Command {
       this.log('');
 
       // Wait a moment and check if it's actually running
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await new Promise((resolve) => setTimeout(resolve, 1000));
       const daemonUrl = await getDaemonUrl();
       const running = await isDaemonRunning(daemonUrl);
 

@@ -393,7 +393,7 @@ export class BoardCommentsRepository
    */
   async findMentions(userId: string, boardId?: string): Promise<BoardComment[]> {
     const comments = await this.findAll({ board_id: boardId });
-    return comments.filter(comment => comment.mentions?.includes(userId as UUID));
+    return comments.filter((comment) => comment.mentions?.includes(userId as UUID));
   }
 
   /**
@@ -401,13 +401,13 @@ export class BoardCommentsRepository
    */
   async bulkCreate(comments: Partial<BoardComment>[]): Promise<BoardComment[]> {
     try {
-      const inserts = comments.map(comment => this.commentToInsert(comment));
+      const inserts = comments.map((comment) => this.commentToInsert(comment));
 
       // Batch insert
       await insert(this.db, boardComments).values(inserts).run();
 
       // Fetch all created comments
-      const commentIds = inserts.map(insertItem => insertItem.comment_id);
+      const commentIds = inserts.map((insertItem) => insertItem.comment_id);
       const rows = await select(this.db)
         .from(boardComments)
         .where(
@@ -443,7 +443,7 @@ export class BoardCommentsRepository
       }
 
       const reactions = comment.reactions || [];
-      const existingIndex = reactions.findIndex(r => r.user_id === userId && r.emoji === emoji);
+      const existingIndex = reactions.findIndex((r) => r.user_id === userId && r.emoji === emoji);
 
       let updatedReactions: typeof reactions;
       if (existingIndex >= 0) {

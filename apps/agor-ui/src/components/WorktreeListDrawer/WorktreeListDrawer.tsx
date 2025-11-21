@@ -32,7 +32,7 @@ export const WorktreeListDrawer: React.FC<WorktreeListDrawerProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
 
   // Get current board
-  const currentBoard = boards.find(b => b.board_id === currentBoardId);
+  const currentBoard = boards.find((b) => b.board_id === currentBoardId);
 
   // Filter sessions by current board (worktree-centric model)
   const boardSessions = useMemo(() => {
@@ -46,13 +46,13 @@ export const WorktreeListDrawer: React.FC<WorktreeListDrawerProps> = ({
 
     // Get sessions for these worktrees using O(1) Map lookups, sorted by last_updated desc
     return boardWorktreeIds
-      .flatMap(worktreeId => sessionsByWorktree.get(worktreeId) || [])
+      .flatMap((worktreeId) => sessionsByWorktree.get(worktreeId) || [])
       .sort((a, b) => new Date(b.last_updated).getTime() - new Date(a.last_updated).getTime());
   }, [sessionsByWorktree, worktreeById, currentBoardId]);
 
   // Filter sessions by search query
   const filteredSessions = boardSessions.filter(
-    session =>
+    (session) =>
       session.title?.toLowerCase().includes(searchQuery.toLowerCase()) ||
       session.description?.toLowerCase().includes(searchQuery.toLowerCase()) ||
       session.agentic_tool.toLowerCase().includes(searchQuery.toLowerCase())
@@ -98,7 +98,7 @@ export const WorktreeListDrawer: React.FC<WorktreeListDrawerProps> = ({
           placeholder="Search sessions..."
           prefix={<SearchOutlined />}
           value={searchQuery}
-          onChange={e => setSearchQuery(e.target.value)}
+          onChange={(e) => setSearchQuery(e.target.value)}
           allowClear
         />
       </div>
@@ -108,17 +108,17 @@ export const WorktreeListDrawer: React.FC<WorktreeListDrawerProps> = ({
         <List
           dataSource={filteredSessions}
           locale={{ emptyText: 'No sessions in this board' }}
-          renderItem={session => (
+          renderItem={(session) => (
             <List.Item
               style={{
                 cursor: 'pointer',
                 padding: '12px 24px',
                 transition: 'background 0.2s',
               }}
-              onMouseEnter={e => {
+              onMouseEnter={(e) => {
                 e.currentTarget.style.background = token.colorBgTextHover;
               }}
-              onMouseLeave={e => {
+              onMouseLeave={(e) => {
                 e.currentTarget.style.background = 'transparent';
               }}
               onClick={() => {

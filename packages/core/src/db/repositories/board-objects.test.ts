@@ -264,7 +264,7 @@ describe('BoardObjectRepository.findAll', () => {
     const all = await boRepo.findAll();
 
     expect(all).toHaveLength(3);
-    expect(all.map(o => o.worktree_id).sort()).toEqual(
+    expect(all.map((o) => o.worktree_id).sort()).toEqual(
       [wt1.worktree_id, wt2.worktree_id, wt3.worktree_id].sort()
     );
   });
@@ -344,8 +344,8 @@ describe('BoardObjectRepository.findByBoardId', () => {
     const board1Objects = await boRepo.findByBoardId(boardId1);
 
     expect(board1Objects).toHaveLength(2);
-    expect(board1Objects.every(o => o.board_id === boardId1)).toBe(true);
-    expect(board1Objects.map(o => o.worktree_id).sort()).toEqual(
+    expect(board1Objects.every((o) => o.board_id === boardId1)).toBe(true);
+    expect(board1Objects.map((o) => o.worktree_id).sort()).toEqual(
       [wt1.worktree_id, wt2.worktree_id].sort()
     );
 
@@ -379,8 +379,8 @@ describe('BoardObjectRepository.findByBoardId', () => {
 
     const objects = await boRepo.findByBoardId(boardId);
 
-    const obj1 = objects.find(o => o.worktree_id === wt1.worktree_id);
-    const obj2 = objects.find(o => o.worktree_id === wt2.worktree_id);
+    const obj1 = objects.find((o) => o.worktree_id === wt1.worktree_id);
+    const obj2 = objects.find((o) => o.worktree_id === wt2.worktree_id);
 
     expect(obj1?.position).toEqual({ x: 111, y: 222 });
     expect(obj1?.zone_id).toBe('zone-1');

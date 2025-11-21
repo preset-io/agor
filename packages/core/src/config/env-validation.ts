@@ -108,5 +108,5 @@ export function formatValidationError(error: ValidationError): string {
  */
 export function formatValidationErrors(errors: ValidationError[]): string {
   if (errors.length === 0) return '';
-  return errors.map(e => `[${e.field}] ${e.message}`).join('\n');
+  return errors.map((e) => `[${e.field}] ${e.message}`).join('\n');
 }

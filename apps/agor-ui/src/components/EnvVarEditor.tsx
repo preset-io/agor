@@ -90,7 +90,7 @@ export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
               <Input.Password
                 placeholder="Enter new value"
                 value={editingValue}
-                onChange={e => setEditingValue(e.target.value)}
+                onChange={(e) => setEditingValue(e.target.value)}
                 onPressEnter={() => handleUpdate(record.key)}
                 autoFocus
                 disabled={disabled}
@@ -186,7 +186,7 @@ export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
           <Input
             placeholder="Variable name (e.g., GITHUB_TOKEN)"
             value={newKey}
-            onChange={e => setNewKey(e.target.value)}
+            onChange={(e) => setNewKey(e.target.value)}
             onPressEnter={handleAdd}
             style={{ width: '30%' }}
             disabled={disabled}
@@ -194,7 +194,7 @@ export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
           <Input.Password
             placeholder="Value"
             value={newValue}
-            onChange={e => setNewValue(e.target.value)}
+            onChange={(e) => setNewValue(e.target.value)}
             onPressEnter={handleAdd}
             style={{ flex: 1 }}
             disabled={disabled}

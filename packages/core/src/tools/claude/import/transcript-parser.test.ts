@@ -129,7 +129,7 @@ function createCommandMessage(uuid: string, commandType: string): TranscriptMess
 
 function createTempTranscriptFile(messages: TranscriptMessage[]): string {
   const tmpFile = path.join(os.tmpdir(), `test-transcript-${Date.now()}.jsonl`);
-  const lines = messages.map(msg => JSON.stringify(msg)).join('\n');
+  const lines = messages.map((msg) => JSON.stringify(msg)).join('\n');
   fs.writeFileSync(tmpFile, lines, 'utf-8');
   return tmpFile;
 }
@@ -416,7 +416,7 @@ describe('loadSessionTranscript', () => {
       createUserMessage('msg-1'),
       createAssistantMessage('msg-2', 'msg-1'),
     ];
-    fs.writeFileSync(transcriptPath, messages.map(m => JSON.stringify(m)).join('\n'), 'utf-8');
+    fs.writeFileSync(transcriptPath, messages.map((m) => JSON.stringify(m)).join('\n'), 'utf-8');
 
     const result = await loadSessionTranscript(sessionId, projectDir);
 
@@ -444,7 +444,7 @@ describe('loadSessionTranscript', () => {
     const transcriptPath = path.join(transcriptDir, `${sessionId}.jsonl`);
 
     const messages: TranscriptMessage[] = [createUserMessage('msg-1')];
-    fs.writeFileSync(transcriptPath, messages.map(m => JSON.stringify(m)).join('\n'), 'utf-8');
+    fs.writeFileSync(transcriptPath, messages.map((m) => JSON.stringify(m)).join('\n'), 'utf-8');
 
     const result = await loadSessionTranscript(sessionId);
 
@@ -481,7 +481,7 @@ describe('filterConversationMessages', () => {
     const result = filterConversationMessages(messages);
 
     expect(result).toHaveLength(2);
-    expect(result.every(m => m.type !== 'file-history-snapshot')).toBe(true);
+    expect(result.every((m) => m.type !== 'file-history-snapshot')).toBe(true);
   });
 
   it('should exclude meta messages', () => {
@@ -494,7 +494,7 @@ describe('filterConversationMessages', () => {
     const result = filterConversationMessages(messages);
 
     expect(result).toHaveLength(2);
-    expect(result.every(m => !m.isMeta)).toBe(true);
+    expect(result.every((m) => !m.isMeta)).toBe(true);
   });
 
   it('should exclude tool_result messages', () => {
@@ -522,7 +522,7 @@ describe('filterConversationMessages', () => {
 
     expect(result).toHaveLength(2);
     expect(
-      result.every(m => {
+      result.every((m) => {
         const content = m.message?.content;
         return typeof content !== 'string' || !content.includes('<command-name>');
       })
@@ -591,7 +591,7 @@ describe('filterConversationMessages', () => {
     const result = filterConversationMessages(messages);
 
     expect(result).toHaveLength(3);
-    expect(result.map(m => m.uuid)).toEqual(['msg-1', 'msg-2', 'msg-3']);
+    expect(result.map((m) => m.uuid)).toEqual(['msg-1', 'msg-2', 'msg-3']);
   });
 
   it('should preserve message order', () => {
@@ -604,7 +604,7 @@ describe('filterConversationMessages', () => {
 
     const result = filterConversationMessages(messages);
 
-    expect(result.map(m => m.uuid)).toEqual(['msg-1', 'msg-2', 'msg-3', 'msg-4']);
+    expect(result.map((m) => m.uuid)).toEqual(['msg-1', 'msg-2', 'msg-3', 'msg-4']);
   });
 });
 

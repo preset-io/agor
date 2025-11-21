@@ -116,7 +116,7 @@ export function useEventStream(options: UseEventStreamOptions): UseEventStreamRe
         data,
       };
 
-      setEvents(prev => {
+      setEvents((prev) => {
         const newEvents = [event, ...prev];
         // Keep only the most recent maxEvents
         return newEvents.slice(0, maxEvents);

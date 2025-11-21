@@ -791,7 +791,7 @@ describe('listWorktrees', () => {
     const realWorktree1 = await fs.realpath(worktree1);
     const realWorktree2 = await fs.realpath(worktree2);
 
-    const worktreePaths = worktrees.map(w => w.path);
+    const worktreePaths = worktrees.map((w) => w.path);
     expect(worktreePaths).toContain(realRepoDir);
     expect(worktreePaths).toContain(realWorktree1);
     expect(worktreePaths).toContain(realWorktree2);
@@ -805,7 +805,7 @@ describe('listWorktrees', () => {
 
     const worktrees = await listWorktrees(repoDir);
     const realWorktreeDir = await fs.realpath(worktreeDir);
-    const testWorktree = worktrees.find(w => w.path === realWorktreeDir);
+    const testWorktree = worktrees.find((w) => w.path === realWorktreeDir);
 
     expect(testWorktree).toBeDefined();
     expect(testWorktree?.name).toBe('worktree');
@@ -827,7 +827,7 @@ describe('listWorktrees', () => {
 
       const worktrees = await listWorktrees(repoDir);
       const realWorktreeDir = await fs.realpath(worktreeDir);
-      const detachedWorktree = worktrees.find(w => w.path === realWorktreeDir);
+      const detachedWorktree = worktrees.find((w) => w.path === realWorktreeDir);
 
       expect(detachedWorktree).toBeDefined();
       expect(detachedWorktree?.sha).toBe(sha);
@@ -866,7 +866,7 @@ describe('removeWorktree', () => {
     // Verify worktree removed
     worktrees = await listWorktrees(repoDir);
     expect(worktrees.length).toBe(initialCount - 1);
-    expect(worktrees.find(w => w.path === worktreeDir)).toBeUndefined();
+    expect(worktrees.find((w) => w.path === worktreeDir)).toBeUndefined();
   });
 });
 

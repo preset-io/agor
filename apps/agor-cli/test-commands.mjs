@@ -53,13 +53,13 @@ for (const test of tests) {
   }
 
   // Small delay between commands
-  await new Promise(r => setTimeout(r, 200));
+  await new Promise((r) => setTimeout(r, 200));
 }
 
 // Check for hanging processes
 console.log('');
 console.log(chalk.cyan('Checking for hanging processes...'));
-await new Promise(r => setTimeout(r, 500));
+await new Promise((r) => setTimeout(r, 500));
 
 let hangingCount = 0;
 try {

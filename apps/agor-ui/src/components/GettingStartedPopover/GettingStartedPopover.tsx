@@ -86,7 +86,7 @@ export const GettingStartedPopover: React.FC<GettingStartedPopoverProps> = ({
           strokeColor="#13c2c2"
           trailColor="rgba(255, 255, 255, 0.1)"
           showInfo={true}
-          format={percent => `${percent}%`}
+          format={(percent) => `${percent}%`}
         />
 
         <Space direction="vertical" size="small" style={{ width: '100%' }}>
@@ -101,10 +101,10 @@ export const GettingStartedPopover: React.FC<GettingStartedPopoverProps> = ({
               borderRadius: 4,
               transition: 'background-color 0.2s',
             }}
-            onMouseEnter={e => {
+            onMouseEnter={(e) => {
               e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.1)';
             }}
-            onMouseLeave={e => {
+            onMouseLeave={(e) => {
               e.currentTarget.style.backgroundColor = 'transparent';
             }}
             onClick={() => {
@@ -134,10 +134,10 @@ export const GettingStartedPopover: React.FC<GettingStartedPopoverProps> = ({
               borderRadius: 4,
               transition: 'background-color 0.2s',
             }}
-            onMouseEnter={e => {
+            onMouseEnter={(e) => {
               e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.1)';
             }}
-            onMouseLeave={e => {
+            onMouseLeave={(e) => {
               e.currentTarget.style.backgroundColor = 'transparent';
             }}
             onClick={() => {
@@ -169,10 +169,10 @@ export const GettingStartedPopover: React.FC<GettingStartedPopoverProps> = ({
               borderRadius: 4,
               transition: 'background-color 0.2s',
             }}
-            onMouseEnter={e => {
+            onMouseEnter={(e) => {
               e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.1)';
             }}
-            onMouseLeave={e => {
+            onMouseLeave={(e) => {
               e.currentTarget.style.backgroundColor = 'transparent';
             }}
             onClick={() => {

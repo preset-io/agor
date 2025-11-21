@@ -51,7 +51,7 @@ export default class UserUpdate extends BaseCommand {
       const users = (Array.isArray(result) ? result : result.data) as User[];
 
       const user = users.find(
-        u => u.email === args.user || u.user_id === args.user || u.user_id.startsWith(args.user)
+        (u) => u.email === args.user || u.user_id === args.user || u.user_id.startsWith(args.user)
       );
 
       if (!user) {

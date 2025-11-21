@@ -184,7 +184,7 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
     }
 
     // Use transaction to make read-merge-write atomic
-    return await this.db.transaction(async tx => {
+    return await this.db.transaction(async (tx) => {
       // STEP 2: Re-read within transaction to ensure we have latest data
       // biome-ignore lint/suspicious/noExplicitAny: Transaction context requires type assertion for database wrapper functions
       const currentRow = await select(tx as any)

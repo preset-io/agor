@@ -81,10 +81,14 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
         mcpServersResult,
         sessionMcpResult,
       ] = await Promise.all([
-        client.service('sessions').find({ query: { $limit: 1000, $sort: { updated_at: -1 } } }), // Fetch up to 1000 sessions, sorted by most recent
+        client
+          .service('sessions')
+          .find({ query: { $limit: 1000, $sort: { updated_at: -1 } } }), // Fetch up to 1000 sessions, sorted by most recent
         client.service('boards').find(),
         client.service('board-objects').find(),
-        client.service('board-comments').find({ query: { $limit: 500 } }), // Fetch up to 500 comments
+        client
+          .service('board-comments')
+          .find({ query: { $limit: 500 } }), // Fetch up to 500 comments
         client.service('repos').find(),
         client.service('worktrees').find(),
         client.service('users').find(),
@@ -210,7 +214,7 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
     const sessionsService = client.service('sessions');
     const handleSessionCreated = (session: Session) => {
       // Update sessionById - only create new Map if session doesn't exist
-      setSessionById(prev => {
+      setSessionById((prev) => {
         if (prev.has(session.session_id)) return prev; // Already exists, shouldn't happen
         const next = new Map(prev);
         next.set(session.session_id, session);
@@ -218,10 +222,10 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       });
 
       // Update sessionsByWorktree - only create new Map when adding new session
-      setSessionsByWorktree(prev => {
+      setSessionsByWorktree((prev) => {
         const worktreeSessions = prev.get(session.worktree_id) || [];
         // Check if session already exists in this worktree (duplicate event)
-        if (worktreeSessions.some(s => s.session_id === session.session_id)) return prev;
+        if (worktreeSessions.some((s) => s.session_id === session.session_id)) return prev;
 
         const next = new Map(prev);
         next.set(session.worktree_id, [...worktreeSessions, session]);
@@ -233,7 +237,7 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       let oldWorktreeId: string | null = null;
 
       // Update sessionById - ONLY create new Map if session changed
-      setSessionById(prev => {
+      setSessionById((prev) => {
         const existing = prev.get(session.session_id);
         if (existing === session) return prev; // Same reference, no change
 
@@ -246,10 +250,10 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       });
 
       // Update sessionsByWorktree - handle both in-place updates and worktree migrations
-      setSessionsByWorktree(prev => {
+      setSessionsByWorktree((prev) => {
         const newWorktreeId = session.worktree_id;
         const worktreeSessions = prev.get(newWorktreeId) || [];
-        const index = worktreeSessions.findIndex(s => s.session_id === session.session_id);
+        const index = worktreeSessions.findIndex((s) => s.session_id === session.session_id);
 
         // Check if session migrated to a different worktree
         const worktreeMigrated = oldWorktreeId && oldWorktreeId !== newWorktreeId;
@@ -260,7 +264,9 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
 
           // Remove from old worktree bucket
           const oldSessions = prev.get(oldWorktreeId!) || [];
-          const filteredOldSessions = oldSessions.filter(s => s.session_id !== session.session_id);
+          const filteredOldSessions = oldSessions.filter(
+            (s) => s.session_id !== session.session_id
+          );
           if (filteredOldSessions.length > 0) {
             next.set(oldWorktreeId!, filteredOldSessions);
           } else {
@@ -292,17 +298,17 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
     };
     const handleSessionRemoved = (session: Session) => {
       // Update sessionById
-      setSessionById(prev => {
+      setSessionById((prev) => {
         const next = new Map(prev);
         next.delete(session.session_id);
         return next;
       });
 
       // Update sessionsByWorktree
-      setSessionsByWorktree(prev => {
+      setSessionsByWorktree((prev) => {
         const next = new Map(prev);
         const worktreeSessions = next.get(session.worktree_id) || [];
-        const filtered = worktreeSessions.filter(s => s.session_id !== session.session_id);
+        const filtered = worktreeSessions.filter((s) => s.session_id !== session.session_id);
         if (filtered.length > 0) {
           next.set(session.worktree_id, filtered);
         } else {
@@ -321,7 +327,7 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
     // Subscribe to board events
     const boardsService = client.service('boards');
     const handleBoardCreated = (board: Board) => {
-      setBoardById(prev => {
+      setBoardById((prev) => {
         if (prev.has(board.board_id)) return prev; // Already exists, shouldn't happen
         const next = new Map(prev);
         next.set(board.board_id, board);
@@ -329,7 +335,7 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       });
     };
     const handleBoardPatched = (board: Board) => {
-      setBoardById(prev => {
+      setBoardById((prev) => {
         const existing = prev.get(board.board_id);
         if (existing === board) return prev; // Same reference, no change
         const next = new Map(prev);
@@ -338,7 +344,7 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       });
     };
     const handleBoardRemoved = (board: Board) => {
-      setBoardById(prev => {
+      setBoardById((prev) => {
         if (!prev.has(board.board_id)) return prev; // Doesn't exist, nothing to remove
         const next = new Map(prev);
         next.delete(board.board_id);
@@ -354,7 +360,7 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
     // Subscribe to board object events
     const boardObjectsService = client.service('board-objects');
     const handleBoardObjectCreated = (boardObject: BoardEntityObject) => {
-      setBoardObjectById(prev => {
+      setBoardObjectById((prev) => {
         if (prev.has(boardObject.object_id)) return prev; // Already exists, shouldn't happen
         const next = new Map(prev);
         next.set(boardObject.object_id, boardObject);
@@ -362,7 +368,7 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       });
     };
     const handleBoardObjectPatched = (boardObject: BoardEntityObject) => {
-      setBoardObjectById(prev => {
+      setBoardObjectById((prev) => {
         const existing = prev.get(boardObject.object_id);
         if (existing === boardObject) return prev; // Same reference, no change
         const next = new Map(prev);
@@ -371,7 +377,7 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       });
     };
     const handleBoardObjectRemoved = (boardObject: BoardEntityObject) => {
-      setBoardObjectById(prev => {
+      setBoardObjectById((prev) => {
         if (!prev.has(boardObject.object_id)) return prev; // Doesn't exist, nothing to remove
         const next = new Map(prev);
         next.delete(boardObject.object_id);
@@ -387,7 +393,7 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
     // Subscribe to repo events
     const reposService = client.service('repos');
     const handleRepoCreated = (repo: Repo) => {
-      setRepoById(prev => {
+      setRepoById((prev) => {
         if (prev.has(repo.repo_id)) return prev; // Already exists, shouldn't happen
         const next = new Map(prev);
         next.set(repo.repo_id, repo);
@@ -395,7 +401,7 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       });
     };
     const handleRepoPatched = (repo: Repo) => {
-      setRepoById(prev => {
+      setRepoById((prev) => {
         const existing = prev.get(repo.repo_id);
         if (existing === repo) return prev; // Same reference, no change
         const next = new Map(prev);
@@ -404,7 +410,7 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       });
     };
     const handleRepoRemoved = (repo: Repo) => {
-      setRepoById(prev => {
+      setRepoById((prev) => {
         if (!prev.has(repo.repo_id)) return prev; // Doesn't exist, nothing to remove
         const next = new Map(prev);
         next.delete(repo.repo_id);
@@ -420,7 +426,7 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
     // Subscribe to worktree events
     const worktreesService = client.service('worktrees');
     const handleWorktreeCreated = (worktree: Worktree) => {
-      setWorktreeById(prev => {
+      setWorktreeById((prev) => {
         if (prev.has(worktree.worktree_id)) return prev; // Already exists, shouldn't happen
         const next = new Map(prev);
         next.set(worktree.worktree_id, worktree);
@@ -428,7 +434,7 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       });
     };
     const handleWorktreePatched = (worktree: Worktree) => {
-      setWorktreeById(prev => {
+      setWorktreeById((prev) => {
         const existing = prev.get(worktree.worktree_id);
         if (existing === worktree) return prev; // Same reference, no change
         const next = new Map(prev);
@@ -437,7 +443,7 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       });
     };
     const handleWorktreeRemoved = (worktree: Worktree) => {
-      setWorktreeById(prev => {
+      setWorktreeById((prev) => {
         if (!prev.has(worktree.worktree_id)) return prev; // Doesn't exist, nothing to remove
         const next = new Map(prev);
         next.delete(worktree.worktree_id);
@@ -453,7 +459,7 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
     // Subscribe to user events
     const usersService = client.service('users');
     const handleUserCreated = (user: User) => {
-      setUserById(prev => {
+      setUserById((prev) => {
         if (prev.has(user.user_id)) return prev; // Already exists, shouldn't happen
         const next = new Map(prev);
         next.set(user.user_id, user);
@@ -461,7 +467,7 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       });
     };
     const handleUserPatched = (user: User) => {
-      setUserById(prev => {
+      setUserById((prev) => {
         const existing = prev.get(user.user_id);
         if (existing === user) return prev; // Same reference, no change
         const next = new Map(prev);
@@ -470,7 +476,7 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       });
     };
     const handleUserRemoved = (user: User) => {
-      setUserById(prev => {
+      setUserById((prev) => {
         if (!prev.has(user.user_id)) return prev; // Doesn't exist, nothing to remove
         const next = new Map(prev);
         next.delete(user.user_id);
@@ -486,7 +492,7 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
     // Subscribe to MCP server events
     const mcpServersService = client.service('mcp-servers');
     const handleMCPServerCreated = (server: MCPServer) => {
-      setMcpServerById(prev => {
+      setMcpServerById((prev) => {
         if (prev.has(server.mcp_server_id)) return prev; // Already exists, shouldn't happen
         const next = new Map(prev);
         next.set(server.mcp_server_id, server);
@@ -494,7 +500,7 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       });
     };
     const handleMCPServerPatched = (server: MCPServer) => {
-      setMcpServerById(prev => {
+      setMcpServerById((prev) => {
         const existing = prev.get(server.mcp_server_id);
         if (existing === server) return prev; // Same reference, no change
         const next = new Map(prev);
@@ -503,7 +509,7 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       });
     };
     const handleMCPServerRemoved = (server: MCPServer) => {
-      setMcpServerById(prev => {
+      setMcpServerById((prev) => {
         if (!prev.has(server.mcp_server_id)) return prev; // Doesn't exist, nothing to remove
         const next = new Map(prev);
         next.delete(server.mcp_server_id);
@@ -522,7 +528,7 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       session_id: string;
       mcp_server_id: string;
     }) => {
-      setSessionMcpServerIds(prev => {
+      setSessionMcpServerIds((prev) => {
         const sessionMcpIds = prev.get(relationship.session_id) || [];
         // Check if relationship already exists (duplicate event)
         if (sessionMcpIds.includes(relationship.mcp_server_id)) return prev;
@@ -536,9 +542,9 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       session_id: string;
       mcp_server_id: string;
     }) => {
-      setSessionMcpServerIds(prev => {
+      setSessionMcpServerIds((prev) => {
         const sessionMcpIds = prev.get(relationship.session_id) || [];
-        const filtered = sessionMcpIds.filter(id => id !== relationship.mcp_server_id);
+        const filtered = sessionMcpIds.filter((id) => id !== relationship.mcp_server_id);
 
         // No change if MCP server wasn't in the list
         if (filtered.length === sessionMcpIds.length) return prev;
@@ -560,7 +566,7 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
     // Subscribe to board comment events
     const commentsService = client.service('board-comments');
     const handleCommentCreated = (comment: BoardComment) => {
-      setCommentById(prev => {
+      setCommentById((prev) => {
         if (prev.has(comment.comment_id)) return prev; // Already exists, shouldn't happen
         const next = new Map(prev);
         next.set(comment.comment_id, comment);
@@ -568,7 +574,7 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       });
     };
     const handleCommentPatched = (comment: BoardComment) => {
-      setCommentById(prev => {
+      setCommentById((prev) => {
         const existing = prev.get(comment.comment_id);
         if (existing === comment) return prev; // Same reference, no change
         const next = new Map(prev);
@@ -577,7 +583,7 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       });
     };
     const handleCommentRemoved = (comment: BoardComment) => {
-      setCommentById(prev => {
+      setCommentById((prev) => {
         if (!prev.has(comment.comment_id)) return prev; // Doesn't exist, nothing to remove
         const next = new Map(prev);
         next.delete(comment.comment_id);

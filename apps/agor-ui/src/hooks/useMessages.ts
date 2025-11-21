@@ -74,9 +74,9 @@ export function useMessages(
         // OPTIMIZED: Removed flushSync - React 18 automatic batching is efficient
         // and doesn't require forcing synchronous renders. Message ordering is
         // guaranteed by the server index field, not client-side ordering.
-        setMessages(prev => {
+        setMessages((prev) => {
           // Check if message already exists (avoid duplicates)
-          if (prev.some(m => m.message_id === message.message_id)) {
+          if (prev.some((m) => m.message_id === message.message_id)) {
             return prev;
           }
           // Insert in correct position based on index
@@ -90,13 +90,13 @@ export function useMessages(
 
     const handleMessagePatched = (message: Message) => {
       if (message.session_id === sessionId) {
-        setMessages(prev => prev.map(m => (m.message_id === message.message_id ? message : m)));
+        setMessages((prev) => prev.map((m) => (m.message_id === message.message_id ? message : m)));
       }
     };
 
     const handleMessageRemoved = (message: Message) => {
       if (message.session_id === sessionId) {
-        setMessages(prev => prev.filter(m => m.message_id !== message.message_id));
+        setMessages((prev) => prev.filter((m) => m.message_id !== message.message_id));
       }
     };
 

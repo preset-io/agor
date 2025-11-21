@@ -675,7 +675,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                   </Typography.Text>
                   <TextArea
                     value={upCommand}
-                    onChange={e => setUpCommand(e.target.value)}
+                    onChange={(e) => setUpCommand(e.target.value)}
                     placeholder="DAEMON_PORT={{add 3000 worktree.unique_id}} UI_PORT={{add 5000 worktree.unique_id}} docker compose -p {{worktree.name}} up -d"
                     rows={3}
                     style={{ fontFamily: 'monospace', fontSize: 11 }}
@@ -699,7 +699,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                   </Typography.Text>
                   <TextArea
                     value={downCommand}
-                    onChange={e => setDownCommand(e.target.value)}
+                    onChange={(e) => setDownCommand(e.target.value)}
                     placeholder="docker compose -p {{worktree.name}} down"
                     rows={2}
                     style={{ fontFamily: 'monospace', fontSize: 11 }}
@@ -723,7 +723,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                   </Typography.Text>
                   <Input
                     value={healthCheckUrlTemplate}
-                    onChange={e => setHealthCheckUrlTemplate(e.target.value)}
+                    onChange={(e) => setHealthCheckUrlTemplate(e.target.value)}
                     placeholder="http://localhost:{{add 9000 worktree.unique_id}}/health"
                     style={{ fontFamily: 'monospace', fontSize: 11 }}
                   />
@@ -739,7 +739,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                   </Typography.Text>
                   <Input
                     value={appUrlTemplate}
-                    onChange={e => setAppUrlTemplate(e.target.value)}
+                    onChange={(e) => setAppUrlTemplate(e.target.value)}
                     placeholder="http://localhost:{{add 5000 worktree.unique_id}}"
                     style={{ fontFamily: 'monospace', fontSize: 11 }}
                   />
@@ -762,7 +762,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                   </Typography.Text>
                   <TextArea
                     value={logsCommand}
-                    onChange={e => setLogsCommand(e.target.value)}
+                    onChange={(e) => setLogsCommand(e.target.value)}
                     placeholder="docker compose -p {{worktree.name}} logs --tail=100"
                     rows={2}
                     style={{ fontFamily: 'monospace', fontSize: 11 }}
@@ -918,7 +918,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                 <>
                   <TextArea
                     value={customContextJson}
-                    onChange={e => setCustomContextJson(e.target.value)}
+                    onChange={(e) => setCustomContextJson(e.target.value)}
                     placeholder='{\n  "feature_name": "authentication",\n  "extra_port": 3001\n}'
                     rows={6}
                     style={{ fontFamily: 'monospace', fontSize: 11 }}
@@ -1009,7 +1009,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                       </Typography.Text>
                       <Input
                         value={staticStartCommand}
-                        onChange={e => setStaticStartCommand(e.target.value)}
+                        onChange={(e) => setStaticStartCommand(e.target.value)}
                         placeholder="pnpm dev"
                         style={{ fontFamily: 'monospace', fontSize: 11 }}
                       />
@@ -1023,7 +1023,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                       </Typography.Text>
                       <Input
                         value={staticStopCommand}
-                        onChange={e => setStaticStopCommand(e.target.value)}
+                        onChange={(e) => setStaticStopCommand(e.target.value)}
                         placeholder="pkill -f 'pnpm dev'"
                         style={{ fontFamily: 'monospace', fontSize: 11 }}
                       />
@@ -1037,7 +1037,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                       </Typography.Text>
                       <Input
                         value={staticHealthCheckUrl}
-                        onChange={e => setStaticHealthCheckUrl(e.target.value)}
+                        onChange={(e) => setStaticHealthCheckUrl(e.target.value)}
                         placeholder="http://localhost:5173/health"
                         style={{ fontFamily: 'monospace', fontSize: 11 }}
                       />
@@ -1051,7 +1051,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                       </Typography.Text>
                       <Input
                         value={staticAppUrl}
-                        onChange={e => setStaticAppUrl(e.target.value)}
+                        onChange={(e) => setStaticAppUrl(e.target.value)}
                         placeholder="http://localhost:5173"
                         style={{ fontFamily: 'monospace', fontSize: 11 }}
                       />
@@ -1065,7 +1065,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                       </Typography.Text>
                       <Input
                         value={staticLogsCommand}
-                        onChange={e => setStaticLogsCommand(e.target.value)}
+                        onChange={(e) => setStaticLogsCommand(e.target.value)}
                         placeholder="docker logs agor-daemon"
                         style={{ fontFamily: 'monospace', fontSize: 11 }}
                       />

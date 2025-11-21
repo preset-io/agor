@@ -51,7 +51,7 @@ function buildTree(files: ConceptListItem[], searchQuery: string): TreeNode[] {
   // Filter files by search query
   const filteredFiles = searchQuery
     ? files.filter(
-        f =>
+        (f) =>
           f.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
           f.path.toLowerCase().includes(searchQuery.toLowerCase())
       )
@@ -132,15 +132,15 @@ function buildTree(files: ConceptListItem[], searchQuery: string): TreeNode[] {
   // Sort function: directories first, then files, alphabetically within each group
   const sortNodes = (nodes: TreeNode[]): TreeNode[] => {
     // Separate directories and files
-    const directories = nodes.filter(n => !n.isLeaf);
-    const files = nodes.filter(n => n.isLeaf);
+    const directories = nodes.filter((n) => !n.isLeaf);
+    const files = nodes.filter((n) => n.isLeaf);
 
     // Sort each group alphabetically by key
     directories.sort((a, b) => a.key.localeCompare(b.key));
     files.sort((a, b) => a.key.localeCompare(b.key));
 
     // Recursively sort children
-    directories.forEach(dir => {
+    directories.forEach((dir) => {
       if (dir.children) {
         dir.children = sortNodes(dir.children);
       }
@@ -224,7 +224,7 @@ export const MarkdownFileCollection: React.FC<MarkdownFileCollectionProps> = ({
           placeholder="Search files..."
           allowClear
           onSearch={handleSearch}
-          onChange={e => !e.target.value && handleSearch('')}
+          onChange={(e) => !e.target.value && handleSearch('')}
           style={{ width: '100%' }}
         />
       </div>
@@ -234,7 +234,7 @@ export const MarkdownFileCollection: React.FC<MarkdownFileCollectionProps> = ({
         onSelect={handleSelect}
         showIcon
         expandedKeys={expandedKeys}
-        onExpand={keys => setExpandedKeys(keys as string[])}
+        onExpand={(keys) => setExpandedKeys(keys as string[])}
         style={{ background: 'transparent' }}
       />
     </div>

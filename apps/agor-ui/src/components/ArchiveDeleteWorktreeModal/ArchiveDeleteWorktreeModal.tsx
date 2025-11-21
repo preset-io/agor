@@ -73,7 +73,10 @@ export const ArchiveDeleteWorktreeModal: React.FC<ArchiveDeleteWorktreeModalProp
           <Text strong style={{ display: 'block', marginBottom: 8 }}>
             Filesystem
           </Text>
-          <Radio.Group value={filesystemAction} onChange={e => setFilesystemAction(e.target.value)}>
+          <Radio.Group
+            value={filesystemAction}
+            onChange={(e) => setFilesystemAction(e.target.value)}
+          >
             <Space direction="vertical">
               <Radio value="preserved">
                 <div>
@@ -108,7 +111,7 @@ export const ArchiveDeleteWorktreeModal: React.FC<ArchiveDeleteWorktreeModalProp
           <Text strong style={{ display: 'block', marginBottom: 8 }}>
             Metadata & Sessions
           </Text>
-          <Radio.Group value={metadataAction} onChange={e => setMetadataAction(e.target.value)}>
+          <Radio.Group value={metadataAction} onChange={(e) => setMetadataAction(e.target.value)}>
             <Space direction="vertical">
               <Radio value="archive">
                 <div>

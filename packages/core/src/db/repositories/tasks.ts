@@ -152,16 +152,16 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         return [];
       }
 
-      const inserts = taskList.map(task => this.taskToInsert(task));
+      const inserts = taskList.map((task) => this.taskToInsert(task));
 
       // Bulk insert all tasks
       await insert(this.db, tasks).values(inserts).run();
 
       // Retrieve all inserted tasks
-      const taskIds = inserts.map(t => t.task_id);
+      const taskIds = inserts.map((t) => t.task_id);
       const rows = await select(this.db)
         .from(tasks)
-        .where(sql`${tasks.task_id} IN ${sql.raw(`(${taskIds.map(id => `'${id}'`).join(',')})`)}`)
+        .where(sql`${tasks.task_id} IN ${sql.raw(`(${taskIds.map((id) => `'${id}'`).join(',')})`)}`)
         .all();
 
       return rows.map((row: TaskRow) => this.rowToTask(row));
@@ -297,7 +297,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       );
 
       // Use transaction to make read-merge-write atomic
-      const result = await this.db.transaction(async tx => {
+      const result = await this.db.transaction(async (tx) => {
         // STEP 1: Read current task (within transaction)
         // biome-ignore lint/suspicious/noExplicitAny: Transaction context requires type assertion for database wrapper functions
         const currentRow = await select(tx as any)

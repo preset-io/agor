@@ -186,7 +186,7 @@ export class ClaudePromptService {
         }
 
         // If we got an end event, break the outer loop
-        if (events.some(e => e.type === 'end')) {
+        if (events.some((e) => e.type === 'end')) {
           break;
         }
       }

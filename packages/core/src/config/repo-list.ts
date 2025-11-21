@@ -58,7 +58,7 @@ export function getRepoReferenceOptions(
   const options: RepoReferenceOption[] = [];
 
   // Create a map of repo_id to repo for fast lookups
-  const repoMap = new Map(repos.map(repo => [repo.repo_id, repo]));
+  const repoMap = new Map(repos.map((repo) => [repo.repo_id, repo]));
 
   for (const repo of repos) {
     // Add bare repo option
@@ -117,7 +117,7 @@ export function getGroupedRepoReferenceOptions(
   const grouped: Record<RepoSlug, RepoReferenceOption[]> = {};
 
   // Create a map of repo_id to repo for fast lookups
-  const repoMap = new Map(repos.map(repo => [repo.repo_id, repo]));
+  const repoMap = new Map(repos.map((repo) => [repo.repo_id, repo]));
 
   for (const repo of repos) {
     const options: RepoReferenceOption[] = [];

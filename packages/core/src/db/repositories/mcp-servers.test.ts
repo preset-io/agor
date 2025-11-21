@@ -465,7 +465,7 @@ describe('MCPServerRepository.findAll', () => {
     const servers = await repo.findAll();
 
     expect(servers).toHaveLength(3);
-    expect(servers.map(s => s.name).sort()).toEqual(['server-1', 'server-2', 'server-3']);
+    expect(servers.map((s) => s.name).sort()).toEqual(['server-1', 'server-2', 'server-3']);
   });
 
   dbTest('should filter by scope', async ({ db }) => {
@@ -478,7 +478,7 @@ describe('MCPServerRepository.findAll', () => {
     const globalServers = await repo.findAll({ scope: 'global' });
 
     expect(globalServers).toHaveLength(2);
-    expect(globalServers.map(s => s.name).sort()).toEqual(['global-1', 'global-2']);
+    expect(globalServers.map((s) => s.name).sort()).toEqual(['global-1', 'global-2']);
   });
 
   dbTest('should filter by scope and scopeId for global scope', async ({ db }) => {
@@ -641,7 +641,7 @@ describe('MCPServerRepository.findAll', () => {
     const stdioServers = await repo.findAll({ transport: 'stdio' });
 
     expect(stdioServers).toHaveLength(2);
-    expect(stdioServers.map(s => s.name).sort()).toEqual(['stdio-1', 'stdio-2']);
+    expect(stdioServers.map((s) => s.name).sort()).toEqual(['stdio-1', 'stdio-2']);
   });
 
   dbTest('should filter by enabled status', async ({ db }) => {
@@ -654,7 +654,7 @@ describe('MCPServerRepository.findAll', () => {
     const enabledServers = await repo.findAll({ enabled: true });
 
     expect(enabledServers).toHaveLength(2);
-    expect(enabledServers.map(s => s.name).sort()).toEqual(['enabled-1', 'enabled-2']);
+    expect(enabledServers.map((s) => s.name).sort()).toEqual(['enabled-1', 'enabled-2']);
   });
 
   dbTest('should filter by source', async ({ db }) => {
@@ -667,7 +667,7 @@ describe('MCPServerRepository.findAll', () => {
     const userServers = await repo.findAll({ source: 'user' });
 
     expect(userServers).toHaveLength(2);
-    expect(userServers.map(s => s.name).sort()).toEqual(['user-1', 'user-2']);
+    expect(userServers.map((s) => s.name).sort()).toEqual(['user-1', 'user-2']);
   });
 
   dbTest('should support multiple filters simultaneously', async ({ db }) => {
@@ -838,7 +838,7 @@ describe('MCPServerRepository.update', () => {
     const data = createMCPServerData();
     const created = await repo.create(data);
 
-    await new Promise(resolve => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, 10));
 
     const updated = await repo.update(data.mcp_server_id, { enabled: false });
 

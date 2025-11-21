@@ -46,7 +46,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
   const { token } = theme.useToken();
 
   // Handle array of strings: filter empty, join with double newlines
-  let text = Array.isArray(content) ? content.filter(t => t.trim()).join('\n\n') : content;
+  let text = Array.isArray(content) ? content.filter((t) => t.trim()).join('\n\n') : content;
 
   // Pre-process text to highlight @ mentions
   text = highlightMentionsInMarkdown(text);

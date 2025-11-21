@@ -86,10 +86,10 @@ export default class WorktreeList extends BaseCommand {
       // Filter by archive status
       let filteredWorktrees = allWorktrees;
       if (flags.archived) {
-        filteredWorktrees = allWorktrees.filter(w => w.archived);
+        filteredWorktrees = allWorktrees.filter((w) => w.archived);
       } else if (!flags.all) {
         // Default: show only active (not archived)
-        filteredWorktrees = allWorktrees.filter(w => !w.archived);
+        filteredWorktrees = allWorktrees.filter((w) => !w.archived);
       }
 
       if (filteredWorktrees.length === 0) {

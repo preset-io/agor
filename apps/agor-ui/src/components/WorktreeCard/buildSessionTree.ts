@@ -70,12 +70,12 @@ export function buildSessionTree(sessions: Session[]): SessionTreeNode[] {
     };
 
     if (children.length > 0) {
-      node.children = children.map(child => buildNode(child, false));
+      node.children = children.map((child) => buildNode(child, false));
     }
 
     return node;
   }
 
   // Build trees for each root
-  return roots.map(root => buildNode(root, true));
+  return roots.map((root) => buildNode(root, true));
 }

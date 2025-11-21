@@ -64,10 +64,10 @@ export function LoginPage({ onLogin, loading = false, error }: LoginPageProps) {
           zIndex: 0,
           transition: 'color 0.3s',
         }}
-        onMouseEnter={e => {
+        onMouseEnter={(e) => {
           e.currentTarget.style.color = 'rgba(46, 154, 146, 0.6)';
         }}
-        onMouseLeave={e => {
+        onMouseLeave={(e) => {
           e.currentTarget.style.color = 'rgba(46, 154, 146, 0.3)';
         }}
       >

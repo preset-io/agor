@@ -9,7 +9,7 @@ const baseCommandFile = ['src/base-command.ts'];
 
 // Create entry points
 const entries = Object.fromEntries(
-  [...commandFiles, ...libFiles, ...hookFiles, ...baseCommandFile].map(file => [
+  [...commandFiles, ...libFiles, ...hookFiles, ...baseCommandFile].map((file) => [
     file.replace(/^src\//, '').replace(/\.ts$/, ''),
     file,
   ])

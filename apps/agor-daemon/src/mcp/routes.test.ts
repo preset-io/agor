@@ -69,7 +69,7 @@ describeIntegration('MCP Tools - Session Tools', () => {
     const data = (await resp.json()) as { result: { tools: Array<{ name: string }> } };
     expect(data.result.tools).toHaveLength(19);
 
-    const toolNames = data.result.tools.map(t => t.name);
+    const toolNames = data.result.tools.map((t) => t.name);
     expect(toolNames).toContain('agor_sessions_list');
     expect(toolNames).toContain('agor_sessions_get');
     expect(toolNames).toContain('agor_sessions_get_current');

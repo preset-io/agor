@@ -43,7 +43,7 @@ export function extractTasksFromMessages(
   // Find all user messages (these become task boundaries)
   const userMessageIndices = messages
     .map((msg, idx) => (msg.type === 'user' ? idx : -1))
-    .filter(idx => idx !== -1);
+    .filter((idx) => idx !== -1);
 
   // Create a task for each user message
   for (let i = 0; i < userMessageIndices.length; i++) {
@@ -70,8 +70,8 @@ export function extractTasksFromMessages(
     } else if (Array.isArray(userMessage.content)) {
       // If content is an array, extract text content only
       const textContent = userMessage.content
-        .filter(c => c.type === 'text')
-        .map(c => c.text || '')
+        .filter((c) => c.type === 'text')
+        .map((c) => c.text || '')
         .join('\n');
       fullPrompt = textContent || JSON.stringify(userMessage.content);
     } else {

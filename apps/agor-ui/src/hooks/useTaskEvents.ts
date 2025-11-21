@@ -57,9 +57,9 @@ export function useTaskEvents(
 
       console.debug(`🔧 Tool start: ${data.tool_name} (${data.tool_use_id.substring(0, 8)})`);
 
-      setToolsExecuting(prev => {
+      setToolsExecuting((prev) => {
         // Avoid duplicates
-        if (prev.some(t => t.toolUseId === data.tool_use_id)) {
+        if (prev.some((t) => t.toolUseId === data.tool_use_id)) {
           return prev;
         }
 
@@ -83,9 +83,9 @@ export function useTaskEvents(
 
       console.debug(`✅ Tool complete: ${data.tool_use_id.substring(0, 8)}`);
 
-      setToolsExecuting(prev => {
+      setToolsExecuting((prev) => {
         // Mark as complete
-        const updated = prev.map(tool =>
+        const updated = prev.map((tool) =>
           tool.toolUseId === data.tool_use_id ? { ...tool, status: 'complete' as const } : tool
         );
 
@@ -94,7 +94,7 @@ export function useTaskEvents(
 
       // Remove from list after 2 seconds (gives time for visual feedback)
       setTimeout(() => {
-        setToolsExecuting(prev => prev.filter(t => t.toolUseId !== data.tool_use_id));
+        setToolsExecuting((prev) => prev.filter((t) => t.toolUseId !== data.tool_use_id));
       }, 2000);
     };
 

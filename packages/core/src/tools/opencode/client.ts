@@ -311,12 +311,12 @@ export class OpenCodeClient {
 
           // Extract text parts
           const textParts = parts
-            .filter(part => part.type === 'text' && typeof part.text === 'string')
-            .map(part => part.text as string);
+            .filter((part) => part.type === 'text' && typeof part.text === 'string')
+            .map((part) => part.text as string);
           text = textParts.join('\n');
 
           // Extract metadata from step-finish part
-          const stepFinish = parts.find(part => part.type === 'step-finish');
+          const stepFinish = parts.find((part) => part.type === 'step-finish');
           if (stepFinish) {
             if (typeof stepFinish.cost === 'number') {
               metadata.cost = stepFinish.cost;

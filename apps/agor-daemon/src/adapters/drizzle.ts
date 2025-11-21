@@ -259,7 +259,7 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
     if (Array.isArray(data)) {
       // Bulk create
       const results = await Promise.all(
-        data.map(item => this.repository.create(item as Partial<T>))
+        data.map((item) => this.repository.create(item as Partial<T>))
       );
       // Emit created event for each item
       for (const result of results) {
@@ -302,7 +302,7 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
       records = this.filterData(records, query);
 
       const results = await Promise.all(
-        records.map(record =>
+        records.map((record) =>
           this.repository.update(
             (record as Record<string, unknown>)[this.id] as string,
             data as Partial<T>
@@ -343,7 +343,7 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
       records = this.filterData(records, query);
 
       // biome-ignore lint/suspicious/noExplicitAny: Need to access ID field dynamically
-      await Promise.all(records.map(record => this.repository.delete((record as any)[this.id])));
+      await Promise.all(records.map((record) => this.repository.delete((record as any)[this.id])));
 
       // Emit removed event for each record
       for (const record of records) {

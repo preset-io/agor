@@ -15,7 +15,7 @@ export const ParticleBackground = memo(function ParticleBackground() {
   const [init, setInit] = useState(false);
 
   useEffect(() => {
-    initParticlesEngine(async engine => {
+    initParticlesEngine(async (engine) => {
       await loadSlim(engine);
     }).then(() => {
       console.log('tsParticles initialized');

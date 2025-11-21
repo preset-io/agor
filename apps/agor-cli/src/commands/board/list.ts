@@ -48,7 +48,7 @@ export default class BoardList extends BaseCommand {
 
       // Add rows
       for (const board of boards) {
-        const worktreeCount = boardObjects.filter(bo => bo.board_id === board.board_id).length;
+        const worktreeCount = boardObjects.filter((bo) => bo.board_id === board.board_id).length;
         table.push([
           board.board_id.substring(0, 8),
           `${board.icon || '📋'} ${board.name}`,

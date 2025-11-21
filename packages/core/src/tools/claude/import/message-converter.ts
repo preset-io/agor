@@ -29,9 +29,9 @@ export function transcriptToMessage(
   // Extract tool uses from message content (for assistant messages)
   let toolUses: Message['tool_uses'];
   if (Array.isArray(content)) {
-    const tools = content.filter(c => c.type === 'tool_use');
+    const tools = content.filter((c) => c.type === 'tool_use');
     if (tools.length > 0) {
-      toolUses = tools.map(tool => ({
+      toolUses = tools.map((tool) => ({
         id: tool.id as string,
         name: tool.name as string,
         input: (tool.input as Record<string, unknown>) || {},

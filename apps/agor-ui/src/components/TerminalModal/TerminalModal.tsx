@@ -102,7 +102,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
 
     let mounted = true;
     let currentTerminalId: string | null = null;
-    let transformData: (value: string) => string = value => value;
+    let transformData: (value: string) => string = (value) => value;
     const terminalService = client.service('terminals');
 
     const removeListeners = () => {
@@ -194,7 +194,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
         setTerminalId(result.terminalId);
         setIsConnected(true);
         const tmuxActive = Boolean(result.tmuxSession);
-        transformData = tmuxActive ? expandOscHyperlinks : value => value;
+        transformData = tmuxActive ? expandOscHyperlinks : (value) => value;
         setSessionInfo({
           tmuxSession: result.tmuxSession,
           tmuxReused: result.tmuxReused,
@@ -213,7 +213,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
 
         // Handle user input - send to backend
         // FeathersJS automatically uses WebSocket when available, REST as fallback
-        terminal.onData(data => {
+        terminal.onData((data) => {
           if (result.terminalId && client) {
             client.service('terminals').patch(result.terminalId, { input: data });
           }

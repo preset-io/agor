@@ -183,7 +183,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         onUpdate?.(user.user_id, updates);
         handleClose();
       })
-      .catch(err => {
+      .catch((err) => {
         console.error('Validation failed:', err);
       });
   };
@@ -193,18 +193,18 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     if (!user) return;
 
     try {
-      setSavingApiKeys(prev => ({ ...prev, [field]: true }));
+      setSavingApiKeys((prev) => ({ ...prev, [field]: true }));
       await onUpdate?.(user.user_id, {
         api_keys: {
           [field]: value,
         },
       });
-      setUserApiKeyStatus(prev => ({ ...prev, [field]: true }));
+      setUserApiKeyStatus((prev) => ({ ...prev, [field]: true }));
     } catch (err) {
       console.error(`Failed to save ${field}:`, err);
       throw err;
     } finally {
-      setSavingApiKeys(prev => ({ ...prev, [field]: false }));
+      setSavingApiKeys((prev) => ({ ...prev, [field]: false }));
     }
   };
 
@@ -213,18 +213,18 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     if (!user) return;
 
     try {
-      setSavingApiKeys(prev => ({ ...prev, [field]: true }));
+      setSavingApiKeys((prev) => ({ ...prev, [field]: true }));
       await onUpdate?.(user.user_id, {
         api_keys: {
           [field]: null,
         },
       });
-      setUserApiKeyStatus(prev => ({ ...prev, [field]: false }));
+      setUserApiKeyStatus((prev) => ({ ...prev, [field]: false }));
     } catch (err) {
       console.error(`Failed to clear ${field}:`, err);
       throw err;
     } finally {
-      setSavingApiKeys(prev => ({ ...prev, [field]: false }));
+      setSavingApiKeys((prev) => ({ ...prev, [field]: false }));
     }
   };
 
@@ -233,16 +233,16 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     if (!user) return;
 
     try {
-      setSavingEnvVars(prev => ({ ...prev, [key]: true }));
+      setSavingEnvVars((prev) => ({ ...prev, [key]: true }));
       await onUpdate?.(user.user_id, {
         env_vars: { [key]: value },
       });
-      setUserEnvVars(prev => ({ ...prev, [key]: true }));
+      setUserEnvVars((prev) => ({ ...prev, [key]: true }));
     } catch (err) {
       console.error(`Failed to save ${key}:`, err);
       throw err;
     } finally {
-      setSavingEnvVars(prev => ({ ...prev, [key]: false }));
+      setSavingEnvVars((prev) => ({ ...prev, [key]: false }));
     }
   };
 
@@ -251,11 +251,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     if (!user) return;
 
     try {
-      setSavingEnvVars(prev => ({ ...prev, [key]: true }));
+      setSavingEnvVars((prev) => ({ ...prev, [key]: true }));
       await onUpdate?.(user.user_id, {
         env_vars: { [key]: null },
       });
-      setUserEnvVars(prev => {
+      setUserEnvVars((prev) => {
         const updated = { ...prev };
         delete updated[key];
         return updated;
@@ -264,7 +264,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       console.error(`Failed to delete ${key}:`, err);
       throw err;
     } finally {
-      setSavingEnvVars(prev => ({ ...prev, [key]: false }));
+      setSavingEnvVars((prev) => ({ ...prev, [key]: false }));
     }
   };
 
@@ -282,7 +282,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     const currentForm = formMap[tool];
 
     try {
-      setSavingAgenticConfig(prev => ({ ...prev, [tool]: true }));
+      setSavingAgenticConfig((prev) => ({ ...prev, [tool]: true }));
 
       const values = currentForm.getFieldsValue();
 
@@ -309,7 +309,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       console.error(`Failed to save ${tool} config:`, err);
       throw err;
     } finally {
-      setSavingAgenticConfig(prev => ({ ...prev, [tool]: false }));
+      setSavingAgenticConfig((prev) => ({ ...prev, [tool]: false }));
     }
   };
 

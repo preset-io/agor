@@ -391,7 +391,7 @@ describe('TaskRepository.findAll', () => {
     const tasks = await taskRepo.findAll();
 
     expect(tasks).toHaveLength(3);
-    expect(tasks.map(t => t.description).sort()).toEqual(['Task 1', 'Task 2', 'Task 3']);
+    expect(tasks.map((t) => t.description).sort()).toEqual(['Task 1', 'Task 2', 'Task 3']);
   });
 
   dbTest('should return fully populated task objects', async ({ db }) => {
@@ -450,8 +450,11 @@ describe('TaskRepository.findBySession', () => {
     const tasks = await taskRepo.findBySession(session1);
 
     expect(tasks).toHaveLength(2);
-    expect(tasks.every(t => t.session_id === session1)).toBe(true);
-    expect(tasks.map(t => t.description).sort()).toEqual(['Session 1 Task 1', 'Session 1 Task 2']);
+    expect(tasks.every((t) => t.session_id === session1)).toBe(true);
+    expect(tasks.map((t) => t.description).sort()).toEqual([
+      'Session 1 Task 1',
+      'Session 1 Task 2',
+    ]);
   });
 
   dbTest('should return tasks ordered by created_at', async ({ db }) => {
@@ -460,9 +463,9 @@ describe('TaskRepository.findBySession', () => {
 
     // Create tasks with small delays to ensure different timestamps
     await taskRepo.create(createTaskData({ session_id: sessionId, description: 'First' }));
-    await new Promise(resolve => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, 10));
     await taskRepo.create(createTaskData({ session_id: sessionId, description: 'Second' }));
-    await new Promise(resolve => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, 10));
     await taskRepo.create(createTaskData({ session_id: sessionId, description: 'Third' }));
 
     const tasks = await taskRepo.findBySession(sessionId);
@@ -537,8 +540,8 @@ describe('TaskRepository.findRunning', () => {
     const running = await taskRepo.findRunning();
 
     expect(running).toHaveLength(2);
-    expect(running.every(t => t.status === TaskStatus.RUNNING)).toBe(true);
-    expect(running.map(t => t.description).sort()).toEqual(['Running 1', 'Running 2']);
+    expect(running.every((t) => t.status === TaskStatus.RUNNING)).toBe(true);
+    expect(running.map((t) => t.description).sort()).toEqual(['Running 1', 'Running 2']);
   });
 
   dbTest('should return running tasks from all sessions', async ({ db }) => {
@@ -571,7 +574,7 @@ describe('TaskRepository.findByStatus', () => {
     const completed = await taskRepo.findByStatus(TaskStatus.COMPLETED);
 
     expect(completed).toHaveLength(2);
-    expect(completed.every(t => t.status === TaskStatus.COMPLETED)).toBe(true);
+    expect(completed.every((t) => t.status === TaskStatus.COMPLETED)).toBe(true);
   });
 
   dbTest('should return empty array for status with no tasks', async ({ db }) => {

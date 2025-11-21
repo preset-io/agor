@@ -29,17 +29,17 @@ export const CompactionBlock: React.FC<CompactionBlockProps> = ({ messages, agen
   const { token } = theme.useToken();
 
   // Find start and complete messages
-  const startMessage = messages.find(m => {
+  const startMessage = messages.find((m) => {
     if (!Array.isArray(m.content)) return false;
     return m.content.some(
-      b => b.type === 'system_status' && 'status' in b && b.status === 'compacting'
+      (b) => b.type === 'system_status' && 'status' in b && b.status === 'compacting'
     );
   });
 
-  const completeMessage = messages.find(m => {
+  const completeMessage = messages.find((m) => {
     if (!Array.isArray(m.content)) return false;
     return m.content.some(
-      b => b.type === 'system_complete' && 'systemType' in b && b.systemType === 'compaction'
+      (b) => b.type === 'system_complete' && 'systemType' in b && b.systemType === 'compaction'
     );
   });
 
@@ -52,7 +52,7 @@ export const CompactionBlock: React.FC<CompactionBlockProps> = ({ messages, agen
   // If we have complete message, show completion state
   if (completeMessage && Array.isArray(completeMessage.content)) {
     const completeBlock = completeMessage.content.find(
-      b => b.type === 'system_complete' && 'systemType' in b && b.systemType === 'compaction'
+      (b) => b.type === 'system_complete' && 'systemType' in b && b.systemType === 'compaction'
     );
 
     if (completeBlock) {

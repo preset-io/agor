@@ -202,12 +202,12 @@ export class CodexPromptService {
 
     console.log(`📊 [Codex MCP] Found ${mcpServers.length} MCP server(s) for session`);
     if (mcpServers.length > 0) {
-      console.log(`   Servers: ${mcpServers.map(s => `${s.name} (${s.transport})`).join(', ')}`);
+      console.log(`   Servers: ${mcpServers.map((s) => `${s.name} (${s.transport})`).join(', ')}`);
     }
 
     // Filter MCP servers: Codex ONLY supports stdio transport (not HTTP/SSE)
-    const stdioServers = mcpServers.filter(s => s.transport === 'stdio');
-    const unsupportedServers = mcpServers.filter(s => s.transport !== 'stdio');
+    const stdioServers = mcpServers.filter((s) => s.transport === 'stdio');
+    const unsupportedServers = mcpServers.filter((s) => s.transport !== 'stdio');
 
     if (unsupportedServers.length > 0) {
       console.warn(
@@ -219,7 +219,7 @@ export class CodexPromptService {
     }
 
     // Create hash to detect changes (include network access in hash)
-    const configHash = `${approvalPolicy}:${networkAccess}:${JSON.stringify(stdioServers.map(s => s.mcp_server_id))}`;
+    const configHash = `${approvalPolicy}:${networkAccess}:${JSON.stringify(stdioServers.map((s) => s.mcp_server_id))}`;
 
     const codexHome = await ensureCodexHome();
     process.env.CODEX_HOME = codexHome;
@@ -350,7 +350,7 @@ export class CodexPromptService {
     this.reinitializeCodex();
     if (stdioServers.length > 0) {
       console.log(
-        `✅ [Codex MCP] Configured ${stdioServers.length} STDIO MCP server(s): ${stdioServers.map(s => s.name).join(', ')}`
+        `✅ [Codex MCP] Configured ${stdioServers.length} STDIO MCP server(s): ${stdioServers.map((s) => s.name).join(', ')}`
       );
     }
 

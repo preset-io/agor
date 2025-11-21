@@ -31,7 +31,7 @@ export async function loadClaudeSession(
   const messages = await parseTranscript(transcriptPath);
 
   // Extract cwd from first message with cwd field
-  const cwdMessage = messages.find(msg => msg.cwd);
+  const cwdMessage = messages.find((msg) => msg.cwd);
   const cwd = cwdMessage?.cwd || null;
 
   return {

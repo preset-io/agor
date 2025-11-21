@@ -192,7 +192,7 @@ export class SessionMCPServerRepository {
 
       // Add new relationships
       if (serverIds.length > 0) {
-        const inserts: SessionMCPServerInsert[] = serverIds.map(serverId => ({
+        const inserts: SessionMCPServerInsert[] = serverIds.map((serverId) => ({
           session_id: sessionId,
           mcp_server_id: serverId,
           enabled: true,

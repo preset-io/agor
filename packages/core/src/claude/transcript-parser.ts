@@ -102,7 +102,7 @@ export async function loadSessionTranscript(
  * Filter transcript messages (exclude meta messages, snapshots, etc.)
  */
 export function filterConversationMessages(messages: TranscriptMessage[]): TranscriptMessage[] {
-  return messages.filter(msg => {
+  return messages.filter((msg) => {
     // Exclude file history snapshots
     if (msg.type === 'file-history-snapshot') return false;
 
@@ -111,7 +111,7 @@ export function filterConversationMessages(messages: TranscriptMessage[]): Trans
 
     // Exclude tool result messages (these are internal, not user prompts)
     const content = msg.message?.content;
-    if (Array.isArray(content) && content.some(c => c.type === 'tool_result')) {
+    if (Array.isArray(content) && content.some((c) => c.type === 'tool_result')) {
       return false;
     }
 

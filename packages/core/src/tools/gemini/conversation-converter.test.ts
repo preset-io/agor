@@ -305,7 +305,7 @@ describe('convertConversationToHistory', () => {
       };
       const history = convertConversationToHistory(conversation);
 
-      expect(history.every(h => h.role === 'user')).toBe(true);
+      expect(history.every((h) => h.role === 'user')).toBe(true);
     });
 
     it('should always convert "gemini" type to "model" role', () => {
@@ -318,7 +318,7 @@ describe('convertConversationToHistory', () => {
       };
       const history = convertConversationToHistory(conversation);
 
-      expect(history.every(h => h.role === 'model')).toBe(true);
+      expect(history.every((h) => h.role === 'model')).toBe(true);
     });
   });
 

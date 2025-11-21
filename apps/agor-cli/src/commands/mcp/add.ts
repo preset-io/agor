@@ -111,12 +111,12 @@ export default class McpAdd extends BaseCommand {
 
       // Add transport-specific config
       if (flags.command) data.command = flags.command;
-      if (flags.args) data.args = flags.args.split(',').map(arg => arg.trim());
+      if (flags.args) data.args = flags.args.split(',').map((arg) => arg.trim());
       if (flags.url) data.url = flags.url;
 
       // Add environment variables
       if (flags.env) {
-        const envPairs = flags.env.split(',').map(pair => pair.trim());
+        const envPairs = flags.env.split(',').map((pair) => pair.trim());
         const envObject: Record<string, string> = {};
         for (const pair of envPairs) {
           const [key, value] = pair.split('=');

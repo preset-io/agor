@@ -51,7 +51,7 @@ export const DeleteZoneModal = ({
 
             <Radio.Group
               value={deleteAssociatedSessions}
-              onChange={e => setDeleteAssociatedSessions(e.target.value)}
+              onChange={(e) => setDeleteAssociatedSessions(e.target.value)}
             >
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <Radio value={false}>

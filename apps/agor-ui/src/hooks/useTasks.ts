@@ -80,9 +80,9 @@ export function useTasks(
     const handleTaskCreated = (task: Task) => {
       // Only add if it belongs to this session
       if (task.session_id === sessionId) {
-        setTasks(prev => {
+        setTasks((prev) => {
           // Check if task already exists (avoid duplicates)
-          if (prev.some(t => t.task_id === task.task_id)) {
+          if (prev.some((t) => t.task_id === task.task_id)) {
             return prev;
           }
           // Tasks are created chronologically, so new tasks always go at the end
@@ -94,9 +94,9 @@ export function useTasks(
 
     const handleTaskPatched = (task: Task) => {
       if (task.session_id === sessionId) {
-        setTasks(prev => {
+        setTasks((prev) => {
           // Find index and previous task state
-          const index = prev.findIndex(t => t.task_id === task.task_id);
+          const index = prev.findIndex((t) => t.task_id === task.task_id);
 
           // Task not found - shouldn't happen but handle gracefully
           if (index === -1) return prev;
@@ -125,7 +125,7 @@ export function useTasks(
 
     const handleTaskRemoved = (task: Task) => {
       if (task.session_id === sessionId) {
-        setTasks(prev => prev.filter(t => t.task_id !== task.task_id));
+        setTasks((prev) => prev.filter((t) => t.task_id !== task.task_id));
       }
     };
 
