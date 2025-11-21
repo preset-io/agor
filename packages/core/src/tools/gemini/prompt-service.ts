@@ -131,7 +131,9 @@ export class GeminiPromptService {
     if (taskId && this.tasksService) {
       try {
         const task = await this.tasksService.get(taskId);
-        contextUserId = task.created_by as UserID;
+        if (task?.created_by) {
+          contextUserId = task.created_by as UserID;
+        }
       } catch (_err) {
         // Fall back to session owner if task not found
       }
