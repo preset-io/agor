@@ -480,7 +480,7 @@ export class CodexPromptService {
       process.env.OPENAI_API_KEY = resolvedApiKey;
       currentApiKey = resolvedApiKey;
       console.log(
-        `🔑 [Codex] Using per-user/global API key for ${userIdForApiKey?.substring(0, 8) ?? 'unknown user'}`
+        `🔑 [Codex] Using per-user/global API key for ${contextUserId?.substring(0, 8) ?? 'unknown user'}`
       );
     } else {
       // Clear stale API key to ensure SDK fails if no valid key is found
