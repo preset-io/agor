@@ -19,7 +19,7 @@ import type { SessionRepository } from '../../db/repositories/sessions';
 import type { WorktreeRepository } from '../../db/repositories/worktrees';
 import { validateDirectory } from '../../lib/validation';
 import type { PermissionService } from '../../permissions/permission-service';
-import type { MCPServersConfig, SessionID, TaskID } from '../../types';
+import type { MCPServersConfig, SessionID, TaskID, UserID } from '../../types';
 import type { MessagesService, SessionsService, TasksService } from './claude-tool';
 import { DEFAULT_CLAUDE_MODEL } from './models';
 import { createCanUseToolCallback } from './permissions/permission-hooks';
@@ -117,25 +117,15 @@ export async function setupQuery(
 
   // Determine which user's context to use for environment variables and API keys
   // Priority: task creator (if task exists) > session owner (fallback)
-  // This enables collaborative sessions where multiple users can send prompts
-  let contextUserId = session.created_by as import('../../types').UserID | undefined;
+  let contextUserId = session.created_by as UserID | undefined;
 
   if (taskId && deps.tasksService) {
     try {
       const task = await deps.tasksService.get(taskId);
-      contextUserId = task.created_by as import('../../types').UserID;
-      console.log(
-        `🔐 Using task creator ${contextUserId.substring(0, 8)} for env/API keys (task: ${taskId.substring(0, 8)})`
-      );
+      contextUserId = task.created_by as UserID;
     } catch (_err) {
-      console.warn(
-        `⚠️  Could not load task ${taskId.substring(0, 8)}, falling back to session owner ${contextUserId?.substring(0, 8) || 'unknown'}`
-      );
+      // Fall back to session owner if task not found
     }
-  } else {
-    console.log(
-      `🔐 Using session owner ${contextUserId?.substring(0, 8) || 'unknown'} for env/API keys (no task provided)`
-    );
   }
 
   // Determine model to use (session config or default)

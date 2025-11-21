@@ -30,7 +30,7 @@ import type { MessagesRepository } from '../../db/repositories/messages';
 import type { SessionMCPServerRepository } from '../../db/repositories/session-mcp-servers';
 import type { SessionRepository } from '../../db/repositories/sessions';
 import type { WorktreeRepository } from '../../db/repositories/worktrees';
-import type { PermissionMode, SessionID, TaskID } from '../../types';
+import type { PermissionMode, SessionID, TaskID, UserID } from '../../types';
 import type { TokenUsage } from '../../types/token-usage';
 import { convertConversationToHistory } from './conversation-converter';
 import { DEFAULT_GEMINI_MODEL, type GeminiModel } from './models';
@@ -126,24 +126,15 @@ export class GeminiPromptService {
 
     // Determine which user's context to use for environment variables and API keys
     // Priority: task creator (if task exists) > session owner (fallback)
-    let contextUserId = session.created_by as import('../../types').UserID | undefined;
+    let contextUserId = session.created_by as UserID | undefined;
 
     if (taskId && this.tasksService) {
       try {
         const task = await this.tasksService.get(taskId);
-        contextUserId = task.created_by as import('../../types').UserID;
-        console.log(
-          `🔐 [Gemini] Using task creator ${contextUserId.substring(0, 8)} for env/API keys (task: ${taskId.substring(0, 8)})`
-        );
+        contextUserId = task.created_by as UserID;
       } catch (_err) {
-        console.warn(
-          `⚠️  [Gemini] Could not load task ${taskId.substring(0, 8)}, falling back to session owner ${contextUserId?.substring(0, 8) || 'unknown'}`
-        );
+        // Fall back to session owner if task not found
       }
-    } else {
-      console.log(
-        `🔐 [Gemini] Using session owner ${contextUserId?.substring(0, 8) || 'unknown'} for env/API keys (no task provided)`
-      );
     }
 
     // Get or create Gemini client for this session (passing contextUserId for API key resolution)
@@ -547,8 +538,7 @@ export class GeminiPromptService {
     }
 
     // Use provided contextUserId (task creator) or fall back to session owner
-    const userIdForApiKey =
-      contextUserId || (session.created_by as import('../../types').UserID | undefined);
+    const userIdForApiKey = contextUserId || (session.created_by as UserID | undefined);
     const resolvedApiKey = await resolveApiKey('GEMINI_API_KEY', {
       userId: userIdForApiKey,
       db: this.db,
