@@ -182,23 +182,6 @@ export const AutocompleteTextarea = React.forwardRef<
     }, []);
 
     /**
-     * Clamp highlighted index when options list changes to prevent out of bounds access
-     */
-    React.useEffect(() => {
-      if (highlightedIndex >= autocompleteOptions.length) {
-        // Find last selectable item
-        let lastSelectableIndex = -1;
-        for (let i = autocompleteOptions.length - 1; i >= 0; i--) {
-          if (!('heading' in autocompleteOptions[i])) {
-            lastSelectableIndex = i;
-            break;
-          }
-        }
-        setHighlightedIndex(lastSelectableIndex);
-      }
-    }, [autocompleteOptions, highlightedIndex]);
-
-    /**
      * Scroll highlighted item into view
      */
     React.useEffect(() => {
@@ -296,6 +279,23 @@ export const AutocompleteTextarea = React.forwardRef<
 
       return options;
     }, [fileResults, query, filterUsers]);
+
+    /**
+     * Clamp highlighted index when options list changes to prevent out of bounds access
+     */
+    React.useEffect(() => {
+      if (highlightedIndex >= autocompleteOptions.length) {
+        // Find last selectable item
+        let lastSelectableIndex = -1;
+        for (let i = autocompleteOptions.length - 1; i >= 0; i--) {
+          if (!('heading' in autocompleteOptions[i])) {
+            lastSelectableIndex = i;
+            break;
+          }
+        }
+        setHighlightedIndex(lastSelectableIndex);
+      }
+    }, [autocompleteOptions, highlightedIndex]);
 
     /**
      * Handle textarea change
