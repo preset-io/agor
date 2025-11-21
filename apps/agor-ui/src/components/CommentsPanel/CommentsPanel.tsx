@@ -500,12 +500,36 @@ const CommentThread: React.FC<{
 };
 
 /**
- * Check if comment content mentions a user by name
+ * Escape special regex characters in a string
  */
-function checkMentionsUser(content: string, userName?: string): boolean {
-  if (!userName) return false;
-  // Match @name or @"name" patterns
-  return content.includes(`@${userName}`) || content.includes(`@"${userName}"`);
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Check if comment content mentions a user by name or email.
+ * Uses word boundary matching to avoid false positives (e.g., @ann matching @anna).
+ */
+function checkMentionsUser(content: string, userName?: string, userEmail?: string): boolean {
+  if (!userName && !userEmail) return false;
+
+  const patterns: RegExp[] = [];
+
+  if (userName) {
+    // @name not followed by word char (avoids @ann matching @anna)
+    patterns.push(new RegExp(`@${escapeRegex(userName)}(?![\\w])`, 'i'));
+    // @"name" quoted form
+    patterns.push(new RegExp(`@"${escapeRegex(userName)}"`, 'i'));
+  }
+
+  if (userEmail) {
+    // @email not followed by word char
+    patterns.push(new RegExp(`@${escapeRegex(userEmail)}(?![\\w])`, 'i'));
+    // @"email" quoted form
+    patterns.push(new RegExp(`@"${escapeRegex(userEmail)}"`, 'i'));
+  }
+
+  return patterns.some((pattern) => pattern.test(content));
 }
 
 /**
@@ -535,9 +559,10 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
   const [filter, setFilter] = useState<FilterMode>('active');
   const [commentInputValue, setCommentInputValue] = useState('');
 
-  // Get current user's name for mention detection
+  // Get current user's name and email for mention detection
   const currentUser = currentUserId ? userById.get(currentUserId) : undefined;
   const currentUserName = currentUser?.name;
+  const currentUserEmail = currentUser?.email;
 
   // Create refs for scroll-to-view
   const commentRefs = React.useRef<Record<string, React.RefObject<HTMLDivElement>>>({});
@@ -560,6 +585,19 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
     }
     return grouped;
   }, [allReplies]);
+
+  // Check if a thread (including its replies) mentions the current user
+  const threadMentionsUser = useMemo(() => {
+    return (thread: BoardComment) => {
+      // Check thread root
+      if (checkMentionsUser(thread.content, currentUserName, currentUserEmail)) {
+        return true;
+      }
+      // Check replies
+      const replies = repliesByParent[thread.comment_id] || [];
+      return replies.some((r) => checkMentionsUser(r.content, currentUserName, currentUserEmail));
+    };
+  }, [repliesByParent, currentUserName, currentUserEmail]);
 
   // Apply filters to thread roots only
   const filteredThreads = useMemo(() => {
@@ -694,9 +732,7 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
             count={filteredThreads.length}
             showZero={false}
             style={{
-              backgroundColor: filteredThreads.some((t) =>
-                checkMentionsUser(t.content, currentUserName)
-              )
+              backgroundColor: filteredThreads.some(threadMentionsUser)
                 ? token.colorError
                 : token.colorPrimaryBgHover,
             }}
@@ -796,9 +832,7 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
                   <Badge
                     count={group.threads.length}
                     style={{
-                      backgroundColor: group.threads.some((t) =>
-                        checkMentionsUser(t.content, currentUserName)
-                      )
+                      backgroundColor: group.threads.some(threadMentionsUser)
                         ? token.colorError
                         : token.colorPrimaryBg,
                     }}
