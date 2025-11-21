@@ -10,7 +10,7 @@ import {
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { Badge, Button, Divider, Dropdown, Layout, Space, Tooltip, Typography, theme } from 'antd';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { BoardSwitcher } from '../BoardSwitcher';
 import { ConnectionStatus } from '../ConnectionStatus';
 import { Facepile } from '../Facepile';
@@ -86,17 +86,6 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   const { token } = theme.useToken();
   const userEmoji = user?.emoji || '👤';
   const [userDropdownOpen, setUserDropdownOpen] = useState(false);
-
-  // Debug logging for onboarding state
-  useEffect(() => {
-    if (user) {
-      console.log('[AppHeader] User state:', {
-        email: user.email,
-        onboarding_completed: user.onboarding_completed,
-        condition: !user.onboarding_completed,
-      });
-    }
-  }, [user]);
 
   const userMenuItems: MenuProps['items'] = [
     {
