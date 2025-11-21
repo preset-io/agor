@@ -25,6 +25,7 @@ export interface GettingStartedPopoverProps {
   user?: User | null;
   onOpenSettings?: () => void;
   onOpenRepoSettings?: () => void;
+  onOpenAuthSettings?: () => void;
   onOpenNewWorktree?: () => void;
   onDismiss?: () => void;
   children: React.ReactNode;
@@ -35,6 +36,7 @@ export const GettingStartedPopover: React.FC<GettingStartedPopoverProps> = ({
   user,
   onOpenSettings,
   onOpenRepoSettings,
+  onOpenAuthSettings,
   onOpenNewWorktree,
   onDismiss,
   children,
@@ -174,8 +176,8 @@ export const GettingStartedPopover: React.FC<GettingStartedPopoverProps> = ({
               e.currentTarget.style.backgroundColor = 'transparent';
             }}
             onClick={() => {
-              if (onOpenSettings) {
-                onOpenSettings();
+              if (onOpenAuthSettings) {
+                onOpenAuthSettings();
               }
             }}
           >
@@ -192,17 +194,17 @@ export const GettingStartedPopover: React.FC<GettingStartedPopoverProps> = ({
         {!stats.hasAuthentication && (
           <Text type="secondary" style={{ fontSize: 12 }}>
             Run <Text code>claude login</Text> or add API key in{' '}
-            {onOpenSettings ? (
+            {onOpenAuthSettings ? (
               <Link
                 onClick={(e) => {
                   e.preventDefault();
-                  onOpenSettings();
+                  onOpenAuthSettings();
                 }}
               >
-                Settings
+                Settings → Agentic Tool
               </Link>
             ) : (
-              'Settings'
+              'Settings → Agentic Tool'
             )}
           </Text>
         )}

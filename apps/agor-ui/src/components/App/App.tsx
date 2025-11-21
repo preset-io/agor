@@ -492,6 +492,10 @@ export const App: React.FC<AppProps> = ({
           setSettingsActiveTab('repos');
           setSettingsOpen(true);
         }}
+        onOpenAuthSettings={() => {
+          setSettingsActiveTab('agentic-tools');
+          setSettingsOpen(true);
+        }}
         onOpenNewWorktree={() => {
           setNewWorktreeModalOpen(true);
         }}

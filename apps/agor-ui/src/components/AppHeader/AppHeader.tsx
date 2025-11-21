@@ -48,6 +48,7 @@ export interface AppHeaderProps {
   hasAuthentication?: boolean;
   onDismissOnboarding?: () => void;
   onOpenRepoSettings?: () => void;
+  onOpenAuthSettings?: () => void;
   onOpenNewWorktree?: () => void;
 }
 
@@ -79,6 +80,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   hasAuthentication = false,
   onDismissOnboarding,
   onOpenRepoSettings,
+  onOpenAuthSettings,
   onOpenNewWorktree,
 }) => {
   const { token } = theme.useToken();
@@ -223,6 +225,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           user={user}
           onOpenSettings={() => onSettingsClick?.()}
           onOpenRepoSettings={onOpenRepoSettings}
+          onOpenAuthSettings={onOpenAuthSettings}
           onOpenNewWorktree={onOpenNewWorktree}
           onDismiss={onDismissOnboarding}
         >
