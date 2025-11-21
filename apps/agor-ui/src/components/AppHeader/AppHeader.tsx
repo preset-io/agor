@@ -216,28 +216,28 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             />
           </Tooltip>
         )}
-        <GettingStartedPopover
-          stats={{
-            repoCount,
-            worktreeCount,
-            hasAuthentication,
-          }}
-          user={user}
-          onOpenSettings={() => onSettingsClick?.()}
-          onOpenRepoSettings={onOpenRepoSettings}
-          onOpenAuthSettings={onOpenAuthSettings}
-          onOpenNewWorktree={onOpenNewWorktree}
-          onDismiss={onDismissOnboarding}
-        >
-          <Tooltip title="Getting Started" placement="bottom">
-            <Button
-              type="text"
-              icon={<QuestionCircleOutlined style={{ fontSize: token.fontSizeLG }} />}
-              style={{
-                position: 'relative',
-              }}
-            >
-              {user && !user.onboarding_completed && (
+        {user && !user.onboarding_completed ? (
+          <GettingStartedPopover
+            stats={{
+              repoCount,
+              worktreeCount,
+              hasAuthentication,
+            }}
+            user={user}
+            onOpenSettings={() => onSettingsClick?.()}
+            onOpenRepoSettings={onOpenRepoSettings}
+            onOpenAuthSettings={onOpenAuthSettings}
+            onOpenNewWorktree={onOpenNewWorktree}
+            onDismiss={onDismissOnboarding}
+          >
+            <Tooltip title="Getting Started" placement="bottom">
+              <Button
+                type="text"
+                icon={<QuestionCircleOutlined style={{ fontSize: token.fontSizeLG }} />}
+                style={{
+                  position: 'relative',
+                }}
+              >
                 <span
                   style={{
                     position: 'absolute',
@@ -249,10 +249,20 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
                     backgroundColor: token.colorError,
                   }}
                 />
-              )}
-            </Button>
+              </Button>
+            </Tooltip>
+          </GettingStartedPopover>
+        ) : (
+          <Tooltip title="Documentation" placement="bottom">
+            <Button
+              type="text"
+              icon={<QuestionCircleOutlined style={{ fontSize: token.fontSizeLG }} />}
+              href="https://agor.live/guide/getting-started"
+              target="_blank"
+              rel="noopener noreferrer"
+            />
           </Tooltip>
-        </GettingStartedPopover>
+        )}
         <ThemeSwitcher onOpenThemeEditor={onThemeEditorClick} />
         <Tooltip title="Settings" placement="bottom">
           <Button
