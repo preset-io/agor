@@ -33,7 +33,7 @@ import { type NewWorktreeConfig, NewWorktreeModal } from '../NewWorktreeModal';
 import { SessionCanvas } from '../SessionCanvas';
 import SessionDrawer from '../SessionDrawer';
 import { SessionSettingsModal } from '../SessionSettingsModal';
-import { SettingsModal } from '../SettingsModal';
+import { SettingsModal, UserSettingsModal } from '../SettingsModal';
 import { TerminalModal } from '../TerminalModal';
 import { ThemeEditorModal } from '../ThemeEditorModal';
 import { WorktreeListDrawer } from '../WorktreeListDrawer';
@@ -177,7 +177,7 @@ export const App: React.FC<AppProps> = ({
   const [listDrawerOpen, setListDrawerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsActiveTab, setSettingsActiveTab] = useState<string>('boards');
-  const [settingsEditUserId, setSettingsEditUserId] = useState<string | undefined>(undefined);
+  const [userSettingsOpen, setUserSettingsOpen] = useState(false);
 
   // Handle external settings tab control (e.g., from welcome modal)
   const effectiveSettingsOpen = settingsOpen || !!openSettingsTab;
@@ -461,11 +461,7 @@ export const App: React.FC<AppProps> = ({
         onCommentsClick={() => setCommentsPanelCollapsed(!commentsPanelCollapsed)}
         onEventStreamClick={() => setEventStreamPanelCollapsed(!eventStreamPanelCollapsed)}
         onSettingsClick={() => setSettingsOpen(true)}
-        onUserSettingsClick={() => {
-          setSettingsActiveTab('users');
-          setSettingsEditUserId(user?.user_id);
-          setSettingsOpen(true);
-        }}
+        onUserSettingsClick={() => setUserSettingsOpen(true)}
         onThemeEditorClick={() => setThemeEditorOpen(true)}
         onLogout={onLogout}
         onRetryConnection={onRetryConnection}
@@ -636,7 +632,6 @@ export const App: React.FC<AppProps> = ({
         open={effectiveSettingsOpen}
         onClose={() => {
           setSettingsOpen(false);
-          setSettingsEditUserId(undefined);
           onSettingsClose?.();
         }}
         client={client}
@@ -650,11 +645,8 @@ export const App: React.FC<AppProps> = ({
         userById={userById}
         mcpServerById={mcpServerById}
         activeTab={effectiveSettingsTab}
-        editUserId={settingsEditUserId}
-        onClearEditUserId={() => setSettingsEditUserId(undefined)}
         onTabChange={(newTab) => {
           setSettingsActiveTab(newTab);
-          setSettingsEditUserId(undefined); // Clear editUserId when switching tabs
           // Clear openSettingsTab when user manually changes tabs
           // This allows normal tab switching after opening from onboarding
           if (openSettingsTab) {
@@ -747,6 +739,13 @@ export const App: React.FC<AppProps> = ({
         />
       )}
       <ThemeEditorModal open={themeEditorOpen} onClose={() => setThemeEditorOpen(false)} />
+      <UserSettingsModal
+        open={userSettingsOpen}
+        onClose={() => setUserSettingsOpen(false)}
+        user={user || null}
+        mcpServerById={mcpServerById}
+        onUpdate={onUpdateUser}
+      />
     </Layout>
   );
 };
