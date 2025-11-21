@@ -57,15 +57,27 @@ export const GettingStartedPopover: React.FC<GettingStartedPopoverProps> = ({
 
   // Open popover automatically when onboarding is not complete
   useEffect(() => {
+    console.log('[GettingStartedPopover] useEffect triggered:', {
+      user: user?.email,
+      onboarding_completed: user?.onboarding_completed,
+      will_open: !user?.onboarding_completed,
+    });
     if (!user?.onboarding_completed) {
       setOpen(true);
     }
-  }, [user?.onboarding_completed]);
+  }, [user?.onboarding_completed, user?.email]);
 
   // Don't show if user has dismissed onboarding
   if (user?.onboarding_completed) {
+    console.log('[GettingStartedPopover] Early return - onboarding completed');
     return <>{children}</>;
   }
+
+  console.log('[GettingStartedPopover] Rendering popover:', {
+    user: user?.email,
+    open,
+    progressPercent,
+  });
 
   const handleDismiss = () => {
     setOpen(false);
@@ -201,10 +213,10 @@ export const GettingStartedPopover: React.FC<GettingStartedPopoverProps> = ({
                   onOpenAuthSettings();
                 }}
               >
-                Settings → Agentic Tool
+                Settings → Agentic Tools
               </Link>
             ) : (
-              'Settings → Agentic Tool'
+              'Settings → Agentic Tools'
             )}
           </Text>
         )}

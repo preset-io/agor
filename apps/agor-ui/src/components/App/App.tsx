@@ -478,7 +478,17 @@ export const App: React.FC<AppProps> = ({
         worktreeById={worktreeById}
         repoCount={repoById.size}
         worktreeCount={worktreeById.size}
-        hasAuthentication={!!client}
+        hasAuthentication={
+          // Check if user has any AI provider credentials configured
+          !!(
+            currentUser?.api_keys?.ANTHROPIC_API_KEY ||
+            currentUser?.api_keys?.OPENAI_API_KEY ||
+            currentUser?.api_keys?.GEMINI_API_KEY ||
+            currentUser?.env_vars?.ANTHROPIC_API_KEY ||
+            currentUser?.env_vars?.OPENAI_API_KEY ||
+            currentUser?.env_vars?.GEMINI_API_KEY
+          )
+        }
         onDismissOnboarding={
           onUpdateUser
             ? () => {
