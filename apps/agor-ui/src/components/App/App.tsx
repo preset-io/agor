@@ -481,12 +481,12 @@ export const App: React.FC<AppProps> = ({
         hasAuthentication={
           // Check if user has any AI provider credentials configured
           !!(
-            currentUser?.api_keys?.ANTHROPIC_API_KEY ||
-            currentUser?.api_keys?.OPENAI_API_KEY ||
-            currentUser?.api_keys?.GEMINI_API_KEY ||
-            currentUser?.env_vars?.ANTHROPIC_API_KEY ||
-            currentUser?.env_vars?.OPENAI_API_KEY ||
-            currentUser?.env_vars?.GEMINI_API_KEY
+            user?.api_keys?.ANTHROPIC_API_KEY ||
+            user?.api_keys?.OPENAI_API_KEY ||
+            user?.api_keys?.GEMINI_API_KEY ||
+            user?.env_vars?.ANTHROPIC_API_KEY ||
+            user?.env_vars?.OPENAI_API_KEY ||
+            user?.env_vars?.GEMINI_API_KEY
           )
         }
         onDismissOnboarding={
