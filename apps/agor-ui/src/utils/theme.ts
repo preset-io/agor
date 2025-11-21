@@ -33,15 +33,18 @@ export const ensureColorVisible = (
     const colorObj = new AggregationColor(color);
     const hsl = colorObj.toHsl();
 
+    // Convert lightness from [0, 1] to [0, 100] for comparison
+    const lightnessPercent = hsl.l * 100;
+
     // For dark theme: ensure color is bright enough
-    if (isDark && hsl.l < minLightness) {
-      hsl.l = minLightness;
+    if (isDark && lightnessPercent < minLightness) {
+      hsl.l = minLightness / 100;
       return new AggregationColor(hsl).toHexString();
     }
 
     // For light theme: ensure color is dark enough
-    if (!isDark && hsl.l > maxLightness) {
-      hsl.l = maxLightness;
+    if (!isDark && lightnessPercent > maxLightness) {
+      hsl.l = maxLightness / 100;
       return new AggregationColor(hsl).toHexString();
     }
 

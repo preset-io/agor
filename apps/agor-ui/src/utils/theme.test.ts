@@ -1,3 +1,4 @@
+import { AggregationColor } from 'antd/es/color-picker/color';
 import { describe, expect, it } from 'vitest';
 import { ensureColorVisible, isDarkTheme } from './theme';
 
@@ -25,73 +26,126 @@ describe('isDarkTheme', () => {
 describe('ensureColorVisible', () => {
   describe('dark theme', () => {
     it('increases lightness for pale colors', () => {
-      // Very pale color (lightness ~90%) should be adjusted to 50%
+      // Very pale color (lightness ~88%) should be adjusted to 50%
       const result = ensureColorVisible('#e0e0e0', true, 50);
       expect(result).toMatch(/^#[0-9a-f]{6}$/i);
-      // Result should be darker than input (lower L value means darker in dark mode context)
-      // But since we're increasing to minimum 50%, it should still be visible
+
+      // Verify lightness was actually adjusted to 50%
+      const resultColor = new AggregationColor(result);
+      const resultHsl = resultColor.toHsl();
+      expect(Math.round(resultHsl.l * 100)).toBe(50);
     });
 
     it('preserves hue when adjusting lightness', () => {
       // Pale blue should become a more saturated blue
       const paleBlue = '#d0d0ff'; // Very pale blue
+      const inputColor = new AggregationColor(paleBlue);
+      const inputHsl = inputColor.toHsl();
+
       const result = ensureColorVisible(paleBlue, true, 50);
-      expect(result).toMatch(/^#[0-9a-f]{6}$/i);
-      // The result should still be in the blue family
+      const resultColor = new AggregationColor(result);
+      const resultHsl = resultColor.toHsl();
+
+      // Hue should be preserved (blue)
+      expect(Math.round(resultHsl.h)).toBe(Math.round(inputHsl.h));
+      // Lightness should be adjusted to 50%
+      expect(Math.round(resultHsl.l * 100)).toBe(50);
     });
 
     it('does not modify already visible colors', () => {
       // Color with 60% lightness should not be changed (above 50% minimum)
       const visibleColor = '#8080ff';
+      const inputColor = new AggregationColor(visibleColor);
+      const inputHsl = inputColor.toHsl();
+
       const result = ensureColorVisible(visibleColor, true, 50);
-      // Should return the color unchanged (or very close to it)
-      expect(result).toMatch(/^#[0-9a-f]{6}$/i);
+      const resultColor = new AggregationColor(result);
+      const resultHsl = resultColor.toHsl();
+
+      // Lightness should remain unchanged (already above 50%)
+      expect(Math.round(resultHsl.l * 100)).toBe(Math.round(inputHsl.l * 100));
     });
 
     it('handles custom minimum lightness', () => {
       const paleColor = '#e0e0e0';
       const result = ensureColorVisible(paleColor, true, 60);
-      expect(result).toMatch(/^#[0-9a-f]{6}$/i);
+      const resultColor = new AggregationColor(result);
+      const resultHsl = resultColor.toHsl();
+
+      // Should be adjusted to custom 60% threshold
+      expect(Math.round(resultHsl.l * 100)).toBe(60);
     });
   });
 
   describe('light theme', () => {
     it('decreases lightness for pale colors', () => {
-      // Very pale color should be adjusted to 50%
+      // Very pale color (lightness ~94%) should be adjusted to 50%
       const result = ensureColorVisible('#f0f0f0', false, 50, 50);
-      expect(result).toMatch(/^#[0-9a-f]{6}$/i);
+      const resultColor = new AggregationColor(result);
+      const resultHsl = resultColor.toHsl();
+
+      // Should be darkened to 50%
+      expect(Math.round(resultHsl.l * 100)).toBe(50);
     });
 
     it('preserves hue when adjusting lightness', () => {
       // Pale yellow should become a more saturated yellow
       const paleYellow = '#ffffcc';
+      const inputColor = new AggregationColor(paleYellow);
+      const inputHsl = inputColor.toHsl();
+
       const result = ensureColorVisible(paleYellow, false, 50, 50);
-      expect(result).toMatch(/^#[0-9a-f]{6}$/i);
+      const resultColor = new AggregationColor(result);
+      const resultHsl = resultColor.toHsl();
+
+      // Hue should be preserved (yellow)
+      expect(Math.round(resultHsl.h)).toBe(Math.round(inputHsl.h));
+      // Lightness should be adjusted to 50%
+      expect(Math.round(resultHsl.l * 100)).toBe(50);
     });
 
     it('does not modify already visible colors', () => {
       // Color with 40% lightness should not be changed (below 50% maximum)
       const visibleColor = '#666666';
+      const inputColor = new AggregationColor(visibleColor);
+      const inputHsl = inputColor.toHsl();
+
       const result = ensureColorVisible(visibleColor, false, 50, 50);
-      expect(result).toMatch(/^#[0-9a-f]{6}$/i);
+      const resultColor = new AggregationColor(result);
+      const resultHsl = resultColor.toHsl();
+
+      // Lightness should remain unchanged (already below 50%)
+      expect(Math.round(resultHsl.l * 100)).toBe(Math.round(inputHsl.l * 100));
     });
 
     it('handles custom maximum lightness', () => {
       const paleColor = '#f0f0f0';
       const result = ensureColorVisible(paleColor, false, 50, 40);
-      expect(result).toMatch(/^#[0-9a-f]{6}$/i);
+      const resultColor = new AggregationColor(result);
+      const resultHsl = resultColor.toHsl();
+
+      // Should be darkened to custom 40% threshold
+      expect(Math.round(resultHsl.l * 100)).toBe(40);
     });
   });
 
   describe('edge cases', () => {
-    it('handles black color', () => {
+    it('handles black color in dark theme', () => {
       const result = ensureColorVisible('#000000', true, 50);
-      expect(result).toMatch(/^#[0-9a-f]{6}$/i);
+      const resultColor = new AggregationColor(result);
+      const resultHsl = resultColor.toHsl();
+
+      // Black (0% lightness) should be brightened to 50%
+      expect(Math.round(resultHsl.l * 100)).toBe(50);
     });
 
-    it('handles white color', () => {
+    it('handles white color in light theme', () => {
       const result = ensureColorVisible('#ffffff', false, 50, 50);
-      expect(result).toMatch(/^#[0-9a-f]{6}$/i);
+      const resultColor = new AggregationColor(result);
+      const resultHsl = resultColor.toHsl();
+
+      // White (100% lightness) should be darkened to 50%
+      expect(Math.round(resultHsl.l * 100)).toBe(50);
     });
 
     it('handles invalid color input', () => {
@@ -113,10 +167,14 @@ describe('ensureColorVisible', () => {
 
   describe('real-world zone colors', () => {
     it('ensures visibility for common pale zone borders', () => {
-      // Pale lavender
+      // Pale lavender (lightness ~96%)
       const paleLavender = '#e6e6fa';
       const result = ensureColorVisible(paleLavender, true, 50);
-      expect(result).toMatch(/^#[0-9a-f]{6}$/i);
+      const resultColor = new AggregationColor(result);
+      const resultHsl = resultColor.toHsl();
+
+      // Should be adjusted to 50% lightness
+      expect(Math.round(resultHsl.l * 100)).toBe(50);
       expect(result.toLowerCase()).not.toBe(paleLavender.toLowerCase());
     });
 
