@@ -1,5 +1,5 @@
 import data from 'emojibase-data/en/compact.json';
-import shortcodes from 'emojibase-data/en/shortcodes/github.json';
+import shortcodes from 'emojibase-data/en/shortcodes/emojibase.json';
 import { useMemo } from 'react';
 
 /**
@@ -13,7 +13,7 @@ export interface EmojiOption {
 
 /**
  * Hook that provides emoji autocomplete functionality using emojibase data
- * Uses GitHub shortcodes for compatibility with common platforms
+ * Uses comprehensive emojibase shortcodes for maximum emoji coverage
  */
 export const useEmojiAutocomplete = () => {
   // Build emoji lookup from emojibase data
@@ -34,14 +34,16 @@ export const useEmojiAutocomplete = () => {
     const options: EmojiOption[] = [];
     for (const [hexcode, codes] of Object.entries(shortcodes)) {
       const emojiData = emojiMap.get(hexcode);
-      if (emojiData && Array.isArray(codes)) {
-        for (const code of codes) {
-          options.push({
-            shortcode: code,
-            emoji: emojiData.emoji,
-            keywords: emojiData.tags,
-          });
-        }
+      if (!emojiData) continue;
+
+      // Shortcodes can be either a string or an array of strings
+      const codeArray = Array.isArray(codes) ? codes : [codes];
+      for (const code of codeArray) {
+        options.push({
+          shortcode: code,
+          emoji: emojiData.emoji,
+          keywords: emojiData.tags,
+        });
       }
     }
 
