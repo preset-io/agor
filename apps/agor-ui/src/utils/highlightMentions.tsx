@@ -72,7 +72,8 @@ export function highlightMentionsInMarkdown(text: string): string {
   const codeRanges: Array<{ start: number; end: number }> = [];
 
   // Match fenced code blocks (```...``` or ~~~...~~~)
-  const fencedCodeRegex = /^```[\s\S]*?^```|^~~~[\s\S]*?^~~~/gm;
+  // Markdown allows up to 3 leading spaces before a fence
+  const fencedCodeRegex = /^ {0,3}```[\s\S]*?^ {0,3}```|^ {0,3}~~~[\s\S]*?^ {0,3}~~~/gm;
   let match: RegExpExecArray | null = fencedCodeRegex.exec(text);
   while (match !== null) {
     codeRanges.push({ start: match.index, end: match.index + match[0].length });

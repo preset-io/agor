@@ -160,6 +160,27 @@ export const AutocompleteTextarea = React.forwardRef<
     const [fileResults, setFileResults] = useState<FileResult[]>([]);
     const [highlightedIndex, setHighlightedIndex] = useState(-1);
 
+    // Scroll synchronization state
+    const [scrollTop, setScrollTop] = useState(0);
+    const overlayRef = useRef<HTMLDivElement>(null);
+
+    /**
+     * Synchronize overlay scroll with textarea scroll
+     */
+    React.useEffect(() => {
+      const textarea = textareaRef.current?.current;
+      if (!textarea) return;
+
+      const handleScroll = () => {
+        setScrollTop(textarea.scrollTop);
+      };
+
+      textarea.addEventListener('scroll', handleScroll);
+      return () => {
+        textarea.removeEventListener('scroll', handleScroll);
+      };
+    }, []);
+
     /**
      * Scroll highlighted item into view
      */
@@ -520,6 +541,7 @@ export const AutocompleteTextarea = React.forwardRef<
           {/* Highlighting overlay (behind textarea) */}
           {hasHighlights && (
             <div
+              ref={overlayRef}
               style={{
                 position: 'absolute',
                 top: 0,
@@ -541,7 +563,13 @@ export const AutocompleteTextarea = React.forwardRef<
               }}
               aria-hidden="true"
             >
-              {highlightMentions(value, highlightColor)}
+              <div
+                style={{
+                  transform: `translateY(-${scrollTop}px)`,
+                }}
+              >
+                {highlightMentions(value, highlightColor)}
+              </div>
             </div>
           )}
 
