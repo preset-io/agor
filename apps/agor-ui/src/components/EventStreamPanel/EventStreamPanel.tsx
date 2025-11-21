@@ -4,6 +4,7 @@
  * Non-modal right panel that displays real-time socket events with filtering capabilities
  */
 
+import type { AgorClient } from '@agor/core/api';
 import type { Board, Repo, Session, User, Worktree } from '@agor/core/types';
 import {
   ApiOutlined,
@@ -34,6 +35,7 @@ export interface EventStreamPanelProps {
   selectedSessionId?: string | null;
   worktreeActions?: WorktreeActions;
   currentBoard?: Board | null;
+  client: AgorClient | null;
 }
 
 export const EventStreamPanel: React.FC<EventStreamPanelProps> = ({
@@ -51,6 +53,7 @@ export const EventStreamPanel: React.FC<EventStreamPanelProps> = ({
   selectedSessionId,
   worktreeActions,
   currentBoard,
+  client,
 }) => {
   const { token } = theme.useToken();
   const [includeCursor, setIncludeCursor] = useState(false);
@@ -359,6 +362,7 @@ export const EventStreamPanel: React.FC<EventStreamPanelProps> = ({
                 currentUserId={currentUserId}
                 selectedSessionId={selectedSessionId}
                 worktreeActions={worktreeActions}
+                client={client}
               />
             ))}
           </div>

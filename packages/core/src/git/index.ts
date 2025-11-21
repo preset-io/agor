@@ -342,7 +342,8 @@ export async function createWorktree(
   createBranch: boolean = false,
   pullLatest: boolean = true,
   sourceBranch?: string,
-  env?: Record<string, string>
+  env?: Record<string, string>,
+  refType?: 'branch' | 'tag'
 ): Promise<void> {
   console.log('🔍 createWorktree called with:', {
     repoPath,
@@ -351,6 +352,7 @@ export async function createWorktree(
     createBranch,
     pullLatest,
     sourceBranch,
+    refType,
   });
 
   if (!repoPath) {
@@ -364,13 +366,15 @@ export async function createWorktree(
   // Pull latest from remote if requested
   if (pullLatest) {
     try {
-      // Fetch all branches to ensure remote tracking branches exist
-      await git.fetch(['origin']);
+      // Fetch branches, and tags only if working with a tag
+      const fetchArgs = refType === 'tag' ? ['origin', '--tags'] : ['origin'];
+      await git.fetch(fetchArgs);
       fetchSucceeded = true;
       console.log('✅ Fetched latest from origin');
 
-      // If not creating a new branch, update local branch to match remote
-      if (!createBranch) {
+      // If not creating a new branch and this is a branch (not a tag), update local branch to match remote
+      // Tags don't need this update - they're immutable and don't have origin/ prefix
+      if (!createBranch && refType !== 'tag') {
         try {
           // Check if local branch exists
           const branches = await git.branch();
@@ -406,14 +410,22 @@ export async function createWorktree(
 
   if (createBranch) {
     args.push('-b', ref);
-    // Use sourceBranch as base (e.g., 'main' or 'origin/main')
+    // Use sourceBranch as base
     if (sourceBranch) {
-      // If fetch succeeded, use origin/<branch> to get latest
-      const baseRef = fetchSucceeded ? `origin/${sourceBranch}` : sourceBranch;
-      args.push(baseRef);
+      if (refType === 'tag') {
+        // For tags, use the tag name directly (tags don't have origin/ prefix)
+        // The tag name IS the sourceBranch when creating a branch from a tag
+        args.push(sourceBranch);
+        console.log(`📌 Creating branch '${ref}' from tag '${sourceBranch}'`);
+      } else {
+        // For branches, use origin/<branch> to get latest if fetch succeeded
+        const baseRef = fetchSucceeded ? `origin/${sourceBranch}` : sourceBranch;
+        args.push(baseRef);
+      }
     }
   } else {
-    // Not creating a new branch - use the (now updated) local branch
+    // Not creating a new branch - use the ref directly
+    // For tags, the ref is the tag name; for branches, it's the (now updated) local branch
     args.push(ref);
   }
 

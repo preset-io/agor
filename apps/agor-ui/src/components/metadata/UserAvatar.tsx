@@ -1,5 +1,5 @@
 import type { User } from '@agor/core/types';
-import { Space, Tooltip } from 'antd';
+import { Space, Tooltip, theme } from 'antd';
 
 export interface UserAvatarProps {
   user: User;
@@ -24,12 +24,24 @@ export const UserAvatar: React.FC<UserAvatarProps> = ({
   size = 'default',
 }) => {
   const fontSize = sizeMap[size];
+  const { token } = theme.useToken();
 
   return (
     <Tooltip title={`${user.name || user.email} (${user.role})`}>
       <Space size={4}>
         <span style={{ fontSize }}>{user.emoji || '👤'}</span>
-        {showName && <span>{user.name || user.email.split('@')[0]}</span>}
+        {showName && (
+          <span
+            style={{
+              backgroundColor: token.colorBgTextHover,
+              borderRadius: '3px',
+              padding: '0 2px',
+              fontWeight: 600,
+            }}
+          >
+            {user.name || user.email.split('@')[0]}
+          </span>
+        )}
       </Space>
     </Tooltip>
   );

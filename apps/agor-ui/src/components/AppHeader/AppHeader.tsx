@@ -1,4 +1,4 @@
-import type { ActiveUser, User } from '@agor/core/types';
+import type { ActiveUser, Board, User, Worktree } from '@agor/core/types';
 import {
   ApiOutlined,
   CommentOutlined,
@@ -11,6 +11,7 @@ import {
 import type { MenuProps } from 'antd';
 import { Badge, Button, Divider, Dropdown, Layout, Space, Tooltip, Typography, theme } from 'antd';
 import { useState } from 'react';
+import { BoardSwitcher } from '../BoardSwitcher';
 import { ConnectionStatus } from '../ConnectionStatus';
 import { Facepile } from '../Facepile';
 import { ThemeSwitcher } from '../ThemeSwitcher';
@@ -36,6 +37,11 @@ export interface AppHeaderProps {
   currentBoardIcon?: string;
   unreadCommentsCount?: number;
   eventStreamEnabled?: boolean;
+  hasUserMentions?: boolean; // True if current user is mentioned in active comments
+  boards?: Board[];
+  currentBoardId?: string;
+  onBoardChange?: (boardId: string) => void;
+  worktreeById?: Map<string, Worktree>;
 }
 
 export const AppHeader: React.FC<AppHeaderProps> = ({
@@ -56,6 +62,11 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   currentBoardIcon,
   unreadCommentsCount = 0,
   eventStreamEnabled = false,
+  hasUserMentions = false,
+  boards = [],
+  currentBoardId,
+  onBoardChange,
+  worktreeById = new Map(),
 }) => {
   const { token } = theme.useToken();
   const userEmoji = user?.emoji || '👤';
@@ -124,38 +135,32 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           agor
         </Title>
         <Divider type="vertical" style={{ height: 32, margin: '0 8px' }} />
+        {currentBoardId && boards.length > 0 && (
+          <div style={{ minWidth: 200 }}>
+            <BoardSwitcher
+              boards={boards}
+              currentBoardId={currentBoardId}
+              onBoardChange={onBoardChange || (() => {})}
+              worktreeById={worktreeById}
+            />
+          </div>
+        )}
         {currentBoardName && (
-          <Tooltip title="Toggle board drawer" placement="bottom">
-            <Space
-              size={8}
-              align="center"
-              style={{
-                cursor: 'pointer',
-                padding: '4px 8px',
-                borderRadius: token.borderRadius,
-                transition: 'background 0.2s',
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = token.colorBgTextHover;
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = 'transparent';
-              }}
+          <Tooltip title="Toggle session drawer" placement="bottom">
+            <Button
+              type="text"
+              icon={<MenuOutlined style={{ fontSize: token.fontSizeLG }} />}
               onClick={onMenuClick}
-            >
-              {currentBoardIcon && <span style={{ fontSize: 16 }}>{currentBoardIcon}</span>}
-              <Typography.Text style={{ color: token.colorTextSecondary, fontSize: 14 }}>
-                {currentBoardName}
-              </Typography.Text>
-              <MenuOutlined style={{ fontSize: token.fontSizeLG }} />
-            </Space>
+            />
           </Tooltip>
         )}
         {currentBoardName && (
           <Badge
             count={unreadCommentsCount}
             offset={[-2, 2]}
-            style={{ backgroundColor: token.colorPrimaryBgHover }}
+            style={{
+              backgroundColor: hasUserMentions ? token.colorError : token.colorPrimaryBgHover,
+            }}
           >
             <Tooltip title="Toggle comments panel" placement="bottom">
               <Button

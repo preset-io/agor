@@ -430,6 +430,25 @@ export const App: React.FC<AppProps> = ({
       ]
     : activeUsers;
 
+  // Check if current user is mentioned in active comments
+  const activeComments = mapToArray(commentById).filter(
+    (c: BoardComment) => c.board_id === currentBoardId && !c.resolved
+  );
+
+  const currentUserName = user?.name || user?.email?.split('@')[0] || '';
+  const hasUserMentions =
+    !!currentUserName &&
+    activeComments.some((comment) => {
+      // Check if comment content mentions the user
+      const mentionPatterns = [
+        `@${currentUserName}`,
+        `@"${currentUserName}"`,
+        `@${user?.email}`,
+        `@"${user?.email}"`,
+      ];
+      return mentionPatterns.some((pattern) => comment.content.includes(pattern));
+    });
+
   return (
     <Layout style={{ height: '100vh' }}>
       <AppHeader
@@ -453,12 +472,14 @@ export const App: React.FC<AppProps> = ({
         currentBoardName={currentBoard?.name}
         currentBoardIcon={currentBoard?.icon}
         unreadCommentsCount={
-          mapToArray(commentById).filter(
-            (c: BoardComment) =>
-              c.board_id === currentBoardId && !c.resolved && !c.parent_comment_id
-          ).length
+          activeComments.filter((c: BoardComment) => !c.parent_comment_id).length
         }
         eventStreamEnabled={eventStreamEnabled}
+        hasUserMentions={hasUserMentions}
+        boards={mapToArray(boardById)}
+        currentBoardId={currentBoardId}
+        onBoardChange={setCurrentBoardId}
+        worktreeById={worktreeById}
       />
       <Content style={{ position: 'relative', overflow: 'hidden', display: 'flex' }}>
         <CommentsPanel
@@ -550,6 +571,7 @@ export const App: React.FC<AppProps> = ({
           currentUserId={user?.user_id}
           selectedSessionId={selectedSessionId}
           currentBoard={currentBoard}
+          client={client}
           worktreeActions={{
             onSessionClick: setSelectedSessionId,
             onCreateSession: (worktreeId) => setNewSessionWorktreeId(worktreeId),
@@ -573,6 +595,8 @@ export const App: React.FC<AppProps> = ({
           worktree={newSessionWorktree || undefined}
           mcpServerById={mcpServerById}
           currentUser={user}
+          client={client}
+          userById={userById}
         />
       )}
       <SessionDrawer

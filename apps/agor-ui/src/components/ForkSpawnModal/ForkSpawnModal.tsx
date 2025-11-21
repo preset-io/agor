@@ -5,6 +5,7 @@
  * For spawn: includes advanced configuration options (agent, callback, etc.)
  */
 
+import type { AgorClient } from '@agor/core/api';
 import type {
   AgenticToolName,
   CodexApprovalPolicy,
@@ -16,17 +17,16 @@ import type {
 } from '@agor/core/types';
 import { getDefaultPermissionMode } from '@agor/core/types';
 import { DownOutlined } from '@ant-design/icons';
-import { Checkbox, Collapse, Form, Input, Modal, Radio, Typography } from 'antd';
+import { Checkbox, Collapse, Form, Modal, Radio, Typography } from 'antd';
 import Handlebars from 'handlebars';
 import { useEffect, useMemo, useState } from 'react';
 import spawnSubsessionTemplate from '../../templates/spawn_subsession.hbs?raw';
 import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
 import { AgentSelectionGrid } from '../AgentSelectionGrid/AgentSelectionGrid';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
+import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import type { ModelConfig } from '../ModelSelector';
-
-const { TextArea } = Input;
 
 // Register helper to check if value is defined (not undefined)
 // This allows us to distinguish between false and undefined in templates
@@ -61,6 +61,8 @@ export interface ForkSpawnModalProps {
   initialPrompt?: string;
   onConfirm: (config: string | Partial<SpawnConfig>) => Promise<void>;
   onCancel: () => void;
+  client: AgorClient | null;
+  userById: Map<string, User>;
 }
 
 export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
@@ -72,6 +74,8 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
   initialPrompt = '',
   onConfirm,
   onCancel,
+  client,
+  userById,
 }) => {
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
@@ -266,12 +270,18 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
           label={`Prompt for ${action === 'fork' ? 'forked' : 'spawned'} session`}
           rules={[{ required: true, message: 'Please enter a prompt' }]}
         >
-          <TextArea
+          <AutocompleteTextarea
+            value={form.getFieldValue('prompt') || ''}
+            onChange={(value) => form.setFieldValue('prompt', value)}
             placeholder={
-              action === 'fork' ? 'Try a different approach by...' : 'Work on this subsession...'
+              action === 'fork'
+                ? 'Try a different approach by... (type @ for autocomplete)'
+                : 'Work on this subsession... (type @ for autocomplete)'
             }
             autoSize={{ minRows: 3, maxRows: 8 }}
-            autoFocus
+            client={client}
+            sessionId={session?.session_id || null}
+            userById={userById}
           />
         </Form.Item>
 
@@ -365,9 +375,14 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
               label="Extra Instructions (optional)"
               help="Append additional context or constraints to the spawn prompt"
             >
-              <TextArea
-                placeholder='e.g., "Only use safe operations", "Prioritize performance"'
+              <AutocompleteTextarea
+                value={form.getFieldValue('extraInstructions') || ''}
+                onChange={(value) => form.setFieldValue('extraInstructions', value)}
+                placeholder='e.g., "Only use safe operations", "Prioritize performance" (type @ for autocomplete)'
                 autoSize={{ minRows: 2, maxRows: 4 }}
+                client={client}
+                sessionId={session?.session_id || null}
+                userById={userById}
               />
             </Form.Item>
 

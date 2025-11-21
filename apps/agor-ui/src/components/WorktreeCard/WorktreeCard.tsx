@@ -1,3 +1,4 @@
+import type { AgorClient } from '@agor/core/api';
 import type { Repo, Session, SpawnConfig, User, Worktree } from '@agor/core/types';
 import {
   BranchesOutlined,
@@ -79,6 +80,7 @@ interface WorktreeCardProps {
   zoneColor?: string;
   defaultExpanded?: boolean;
   inPopover?: boolean; // NEW: Enable popover-optimized mode (hides board-specific controls)
+  client: AgorClient | null;
 }
 
 const WorktreeCardComponent = ({
@@ -105,6 +107,7 @@ const WorktreeCardComponent = ({
   zoneColor,
   defaultExpanded = true,
   inPopover = false,
+  client,
 }: WorktreeCardProps) => {
   const { token } = theme.useToken();
   const connectionDisabled = useConnectionDisabled();
@@ -695,6 +698,8 @@ const WorktreeCardComponent = ({
             session: null,
           })
         }
+        client={client}
+        userById={userById}
       />
 
       {/* Archive/Delete Modal */}

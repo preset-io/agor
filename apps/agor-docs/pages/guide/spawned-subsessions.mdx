@@ -279,6 +279,106 @@ Callback: "Created 12 test cases covering happy path and edge cases"
 
 ---
 
+## Example: Cross-Agent Code Review
+
+One powerful pattern is using subsessions to get an independent code review from a different agent. This provides a fresh perspective and can catch issues the original implementer might miss.
+
+**The Workflow:**
+
+<img
+  src="/screenshots/subsession-spawn-codex-review.png"
+  alt="Claude Code spawning a Codex subsession for code review"
+  style={{ maxWidth: '400px' }}
+/>
+
+Claude Code spawns a Codex subsession to review PR changes for a task creator user context feature.
+
+<img
+  src="/screenshots/subsession-codex-running.png"
+  alt="Codex subsession running the code review"
+  style={{ maxWidth: '400px' }}
+/>
+
+Codex reviews the implementation across 6 files, checking correctness, consistency, error handling, code quality, security, and performance.
+
+<img
+  src="/screenshots/subsession-board-hierarchy.png"
+  alt="Board view showing parent and child session hierarchy"
+  style={{ maxWidth: '400px' }}
+/>
+
+The worktree card shows both sessions - parent and child subsession maintain their own context while working in the same codebase.
+
+<img
+  src="/screenshots/subsession-callback-findings.png"
+  alt="Callback with detailed code review findings"
+  style={{ maxWidth: '400px' }}
+/>
+
+Codex completes the review and sends a callback with detailed findings, including a critical bug with specific file locations and line numbers.
+
+**Why This Works:**
+
+- **Independent perspective** - Different agent, fresh eyes on the code
+- **Specialized review** - Codex focuses purely on reviewing, not defending implementation choices
+- **Non-blocking** - Parent can continue working while review runs
+- **Structured feedback** - Callback includes findings with specific file locations
+- **Actionable results** - Parent can immediately fix issues or spawn another review round
+
+This pattern is especially effective for:
+- Getting unbiased code reviews
+- Catching bugs before PR submission
+- Validating cross-SDK consistency
+- Security audits by specialized agents
+
+---
+
+## Example: Parallel Test Generation
+
+A powerful way to leverage subsessions is spawning multiple agents in parallel to divide and conquer independent work. Here's a real example of generating unit tests for 5 different files simultaneously.
+
+**The Workflow:**
+
+<img
+  src="/screenshots/parallel-spawn-5-codex.png"
+  alt="Claude Code spawning 5 parallel Codex subsessions for unit test generation"
+  style={{ maxWidth: '400px' }}
+/>
+
+User provides testing guidelines and asks Claude Code to spawn 5 Codex subsessions in parallel, each responsible for writing unit tests for a specific file.
+
+<img
+  src="/screenshots/parallel-board-5-sessions.png"
+  alt="Board view showing parent session with 5 child subsessions running in parallel"
+  style={{ maxWidth: '400px' }}
+/>
+
+The worktree card shows all 6 sessions (1 parent + 5 children) with clear hierarchy - each Codex agent working independently on their assigned file.
+
+<img
+  src="/screenshots/parallel-first-callback.png"
+  alt="First callback arriving with comprehensive test results"
+  style={{ maxWidth: '400px' }}
+/>
+
+First callback arrives with detailed results - 5 focused test cases covering all scenarios. Parent reviews the quality while waiting for the other 4 subsessions to complete.
+
+**Why This Works:**
+
+- **Massive parallelization** - 5 agents working simultaneously instead of sequentially
+- **Focused context** - Each agent only sees their file + guidelines, not entire codebase
+- **Non-blocking review** - Parent can evaluate results as callbacks stream in
+- **Independent work** - No conflicts since each agent works on different files
+- **Quality orchestration** - Parent coordinates overall quality and can run final tests
+
+This pattern is especially effective for:
+- Generating tests for multiple modules
+- Parallel documentation writing
+- Multi-file refactoring tasks
+- Batch code analysis across files
+
+---
+
 ## Related Docs
 
 - [Concepts](/guide/concepts) - Understanding worktrees, sessions, and boards
