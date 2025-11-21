@@ -13,14 +13,16 @@
  * - Removes consecutive hyphens
  * - Trims hyphens from start/end
  * - Limits length to 64 characters
+ * - Returns empty string if no alphanumeric characters remain
  *
  * @param name - The name to slugify
- * @returns URL-friendly slug
+ * @returns URL-friendly slug, or empty string if name has no alphanumeric chars
  *
  * @example
  * generateSlug("My Board Name") // => "my-board-name"
  * generateSlug("Auth & Security") // => "auth-security"
  * generateSlug("  Multiple   Spaces  ") // => "multiple-spaces"
+ * generateSlug("🎉✨💫") // => "" (emoji-only, no alphanumeric chars)
  */
 export function generateSlug(name: string): string {
   return (
@@ -41,13 +43,18 @@ export function generateSlug(name: string): string {
 /**
  * Generate a unique slug by appending a number suffix if needed.
  *
+ * Returns empty string for names that contain no alphanumeric characters
+ * (e.g., emoji-only names, CJK punctuation). The caller should handle this
+ * by storing null in the database to avoid uniqueness constraint issues.
+ *
  * @param baseName - The name to slugify
  * @param existingSlugs - Set or array of existing slugs to check against
- * @returns A unique slug (with -N suffix if needed)
+ * @returns A unique slug (with -N suffix if needed), or empty string if no valid slug
  *
  * @example
  * generateUniqueSlug("My Board", ["my-board"]) // => "my-board-1"
  * generateUniqueSlug("My Board", ["my-board", "my-board-1"]) // => "my-board-2"
+ * generateUniqueSlug("🎉✨", []) // => "" (no alphanumeric chars)
  */
 export function generateUniqueSlug(
   baseName: string,
@@ -57,7 +64,8 @@ export function generateUniqueSlug(
   const baseSlug = generateSlug(baseName);
 
   if (!baseSlug) {
-    // Edge case: name produces empty slug
+    // Edge case: name produces empty slug (emoji-only, CJK punctuation, etc.)
+    // Return empty string - caller should store null in DB
     return '';
   }
 

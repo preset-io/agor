@@ -71,6 +71,11 @@ export function useUrlState(options: UseUrlStateOptions) {
   // Track the last URL params we processed to avoid re-processing
   const lastUrlBoardParamRef = useRef<string | null>(null);
   const lastUrlSessionParamRef = useRef<string | null>(null);
+  // Track whether we successfully resolved URL params (for retry logic)
+  const urlParamsResolvedRef = useRef<{ board: boolean; session: boolean }>({
+    board: false,
+    session: false,
+  });
 
   // Keep refs in sync with state
   useEffect(() => {
@@ -173,20 +178,24 @@ export function useUrlState(options: UseUrlStateOptions) {
   );
 
   // Sync URL -> State on mount and URL changes
-  // Only triggers when URL params actually change
+  // Retries resolution when data becomes available (for deep links)
   useEffect(() => {
     // Check if URL params actually changed
     const urlParamsChanged =
       urlBoardParam !== lastUrlBoardParamRef.current ||
       urlSessionParam !== lastUrlSessionParamRef.current;
 
-    if (!urlParamsChanged) {
-      return;
+    // Reset resolution tracking when URL params change
+    if (urlParamsChanged) {
+      urlParamsResolvedRef.current = { board: false, session: false };
+      lastUrlBoardParamRef.current = urlBoardParam;
+      lastUrlSessionParamRef.current = urlSessionParam;
     }
 
-    // Update last processed URL params
-    lastUrlBoardParamRef.current = urlBoardParam;
-    lastUrlSessionParamRef.current = urlSessionParam;
+    // Skip if URL hasn't changed AND we've already successfully resolved
+    if (!urlParamsChanged && urlParamsResolvedRef.current.board) {
+      return;
+    }
 
     if (!urlBoardParam) {
       // No board in URL - if we have a current board, update URL
@@ -196,9 +205,22 @@ export function useUrlState(options: UseUrlStateOptions) {
       return;
     }
 
+    // Only try to resolve if we have boards loaded
+    if (boardById.size === 0) {
+      return;
+    }
+
     // Only sync from URL if the URL actually represents a different board/session
     const resolvedBoardId = resolveBoardFromUrl(urlBoardParam);
     const resolvedSessionId = urlSessionParam ? resolveSessionFromShortId(urlSessionParam) : null;
+
+    // Track resolution status
+    if (resolvedBoardId) {
+      urlParamsResolvedRef.current.board = true;
+    }
+    if (!urlSessionParam || resolvedSessionId) {
+      urlParamsResolvedRef.current.session = true;
+    }
 
     // Check if URL is different from current state (using refs)
     const boardChanged = resolvedBoardId && resolvedBoardId !== currentBoardIdRef.current;
@@ -242,8 +264,14 @@ export function useUrlState(options: UseUrlStateOptions) {
       return;
     }
 
+    // Don't overwrite URL if we're still trying to resolve incoming URL params
+    // This prevents the race where we redirect to / before boards are loaded
+    if (urlBoardParam && !urlParamsResolvedRef.current.board) {
+      return;
+    }
+
     updateUrlFromState();
-  }, [boardById.size, updateUrlFromState]);
+  }, [boardById.size, urlBoardParam, updateUrlFromState]);
 
   return {
     urlBoardParam,
