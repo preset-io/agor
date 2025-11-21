@@ -182,6 +182,23 @@ export const AutocompleteTextarea = React.forwardRef<
     }, []);
 
     /**
+     * Clamp highlighted index when options list changes to prevent out of bounds access
+     */
+    React.useEffect(() => {
+      if (highlightedIndex >= autocompleteOptions.length) {
+        // Find last selectable item
+        let lastSelectableIndex = -1;
+        for (let i = autocompleteOptions.length - 1; i >= 0; i--) {
+          if (!('heading' in autocompleteOptions[i])) {
+            lastSelectableIndex = i;
+            break;
+          }
+        }
+        setHighlightedIndex(lastSelectableIndex);
+      }
+    }, [autocompleteOptions, highlightedIndex]);
+
+    /**
      * Scroll highlighted item into view
      */
     React.useEffect(() => {
@@ -364,9 +381,17 @@ export const AutocompleteTextarea = React.forwardRef<
             if (isPopoverOpen) {
               e.preventDefault();
               e.stopPropagation();
-              setHighlightedIndex((prev) =>
-                prev < autocompleteOptions.length - 1 ? prev + 1 : prev
-              );
+              setHighlightedIndex((prev) => {
+                // Find next non-heading item
+                let nextIndex = prev + 1;
+                while (nextIndex < autocompleteOptions.length) {
+                  if (!('heading' in autocompleteOptions[nextIndex])) {
+                    return nextIndex;
+                  }
+                  nextIndex++;
+                }
+                return prev; // No more selectable items
+              });
             }
             break;
 
@@ -374,7 +399,17 @@ export const AutocompleteTextarea = React.forwardRef<
             if (isPopoverOpen) {
               e.preventDefault();
               e.stopPropagation();
-              setHighlightedIndex((prev) => (prev > 0 ? prev - 1 : -1));
+              setHighlightedIndex((prev) => {
+                // Find previous non-heading item
+                let prevIndex = prev - 1;
+                while (prevIndex >= 0) {
+                  if (!('heading' in autocompleteOptions[prevIndex])) {
+                    return prevIndex;
+                  }
+                  prevIndex--;
+                }
+                return -1; // No more selectable items, reset to nothing highlighted
+              });
             }
             break;
 

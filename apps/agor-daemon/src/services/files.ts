@@ -90,7 +90,9 @@ export class FilesService {
         .filter((f) => f.toLowerCase().includes(searchLower))
         .map((path) => ({ path, type: 'file' as const }));
 
+      // Add trailing slash first, then filter so searches like "context/" work
       const matchingFolders = Array.from(foldersSet)
+        .map((path) => `${path}/`)
         .filter((f) => f.toLowerCase().includes(searchLower))
         .map((path) => ({ path, type: 'folder' as const }));
 
