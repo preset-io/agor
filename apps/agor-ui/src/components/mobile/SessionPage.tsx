@@ -1,5 +1,5 @@
 import type { AgorClient } from '@agor/core/api';
-import type { PermissionMode, Repo, Session, User, Worktree } from '@agor/core/types';
+import type { PermissionMode, Repo, Session, SessionID, User, Worktree } from '@agor/core/types';
 import { PermissionScope } from '@agor/core/types';
 import { Alert, Spin } from 'antd';
 import { useParams } from 'react-router-dom';
@@ -124,7 +124,7 @@ export const SessionPage: React.FC<SessionPageProps> = ({
         promptDraft={sessionId ? promptDrafts.get(sessionId) || '' : ''}
         onUpdateDraft={(draft: string) => sessionId && onUpdateDraft(sessionId, draft)}
         client={client}
-        sessionId={sessionId || null}
+        sessionId={(sessionId as SessionID) || null}
         userById={userById}
       />
     </div>

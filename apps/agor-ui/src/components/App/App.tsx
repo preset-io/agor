@@ -437,7 +437,7 @@ export const App: React.FC<AppProps> = ({
 
   const currentUserName = user?.name || user?.email?.split('@')[0] || '';
   const hasUserMentions =
-    currentUserName &&
+    !!currentUserName &&
     activeComments.some((comment) => {
       // Check if comment content mentions the user
       const mentionPatterns = [

@@ -1471,7 +1471,7 @@ export function setupMCPRoutes(app: Application): void {
           const defaultBranch =
             coerceString((repo as { default_branch?: unknown }).default_branch) ?? 'main';
 
-          let refType = (coerceString(args?.refType) as 'branch' | 'tag') || 'branch';
+          const refType = (coerceString(args?.refType) as 'branch' | 'tag') || 'branch';
           let createBranch = typeof args?.createBranch === 'boolean' ? args.createBranch : true;
           let ref = coerceString(args?.ref);
           let sourceBranch = coerceString(args?.sourceBranch);

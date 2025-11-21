@@ -4,8 +4,8 @@
  * Non-modal right panel that displays real-time socket events with filtering capabilities
  */
 
-import type { Board, Repo, Session, User, Worktree } from '@agor/core/types';
 import type { AgorClient } from '@agor/core/api';
+import type { Board, Repo, Session, User, Worktree } from '@agor/core/types';
 import {
   ApiOutlined,
   CloseOutlined,

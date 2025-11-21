@@ -1,5 +1,5 @@
-import type { Repo, Session, SpawnConfig, User, Worktree } from '@agor/core/types';
 import type { AgorClient } from '@agor/core/api';
+import type { Repo, Session, SpawnConfig, User, Worktree } from '@agor/core/types';
 import {
   BranchesOutlined,
   ClockCircleOutlined,

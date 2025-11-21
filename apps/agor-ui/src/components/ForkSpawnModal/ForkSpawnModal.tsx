@@ -5,6 +5,7 @@
  * For spawn: includes advanced configuration options (agent, callback, etc.)
  */
 
+import type { AgorClient } from '@agor/core/api';
 import type {
   AgenticToolName,
   CodexApprovalPolicy,
@@ -15,7 +16,6 @@ import type {
   User,
 } from '@agor/core/types';
 import { getDefaultPermissionMode } from '@agor/core/types';
-import type { AgorClient } from '@agor/core/api';
 import { DownOutlined } from '@ant-design/icons';
 import { Checkbox, Collapse, Form, Modal, Radio, Typography } from 'antd';
 import Handlebars from 'handlebars';
@@ -24,9 +24,9 @@ import spawnSubsessionTemplate from '../../templates/spawn_subsession.hbs?raw';
 import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
 import { AgentSelectionGrid } from '../AgentSelectionGrid/AgentSelectionGrid';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
+import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import type { ModelConfig } from '../ModelSelector';
-import { AutocompleteTextarea } from '../AutocompleteTextarea';
 
 // Register helper to check if value is defined (not undefined)
 // This allows us to distinguish between false and undefined in templates

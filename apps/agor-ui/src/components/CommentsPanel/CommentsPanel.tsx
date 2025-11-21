@@ -35,8 +35,8 @@ import {
 import EmojiPicker, { Theme } from 'emoji-picker-react';
 import React, { useEffect, useMemo, useState } from 'react';
 import { AgorAvatar } from '../AgorAvatar';
-import { ZONE_CONTENT_OPACITY } from '../SessionCanvas/canvas/BoardObjectNodes';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
+import { ZONE_CONTENT_OPACITY } from '../SessionCanvas/canvas/BoardObjectNodes';
 
 const { Text, Title } = Typography;
 
@@ -450,7 +450,15 @@ const CommentThread: React.FC<{
 
         {/* Reply Input */}
         {showReplyInput && onReply && (
-          <div style={{ marginLeft: 32, marginTop: 8, display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+          <div
+            style={{
+              marginLeft: 32,
+              marginTop: 8,
+              display: 'flex',
+              gap: 8,
+              alignItems: 'flex-end',
+            }}
+          >
             <div style={{ flex: 1 }}>
               <AutocompleteTextarea
                 value={replyValue}

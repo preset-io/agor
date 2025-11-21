@@ -3,8 +3,8 @@
  * Used in both textareas and rendered messages
  */
 
-import React from 'react';
 import { theme } from 'antd';
+import type React from 'react';
 
 /**
  * Highlight @ mentions in text for display (JSX version)
@@ -20,9 +20,9 @@ export function highlightMentionsInText(text: string): React.ReactNode {
   const mentionRegex = /@(?:"[^"]*"|[^\s]+)/g;
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
-  let match: RegExpExecArray | null;
+  let match: RegExpExecArray | null = mentionRegex.exec(text);
 
-  while ((match = mentionRegex.exec(text)) !== null) {
+  while (match !== null) {
     // Add text before mention
     if (match.index > lastIndex) {
       parts.push(text.substring(lastIndex, match.index));
@@ -44,6 +44,7 @@ export function highlightMentionsInText(text: string): React.ReactNode {
     );
 
     lastIndex = match.index + match[0].length;
+    match = mentionRegex.exec(text);
   }
 
   // Add remaining text
@@ -72,16 +73,19 @@ export function highlightMentionsInMarkdown(text: string): string {
 
   // Match fenced code blocks (```...``` or ~~~...~~~)
   const fencedCodeRegex = /^```[\s\S]*?^```|^~~~[\s\S]*?^~~~/gm;
-  let match: RegExpExecArray | null;
-  while ((match = fencedCodeRegex.exec(text)) !== null) {
+  let match: RegExpExecArray | null = fencedCodeRegex.exec(text);
+  while (match !== null) {
     codeRanges.push({ start: match.index, end: match.index + match[0].length });
+    match = fencedCodeRegex.exec(text);
   }
 
   // Match inline code (`...`)
   // More robust: handles escaped backticks and multiple backticks
   const inlineCodeRegex = /`[^`\n]+`|``[^`\n]+``/g;
-  while ((match = inlineCodeRegex.exec(text)) !== null) {
+  match = inlineCodeRegex.exec(text);
+  while (match !== null) {
     codeRanges.push({ start: match.index, end: match.index + match[0].length });
+    match = inlineCodeRegex.exec(text);
   }
 
   // Sort ranges by start position

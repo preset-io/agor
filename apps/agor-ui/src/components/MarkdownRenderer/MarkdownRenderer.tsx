@@ -14,8 +14,8 @@
 import { Typography, theme } from 'antd';
 import type React from 'react';
 import { Streamdown } from 'streamdown';
-import { isDarkTheme } from '../../utils/theme';
 import { highlightMentionsInMarkdown } from '../../utils/highlightMentions';
+import { isDarkTheme } from '../../utils/theme';
 
 interface MarkdownRendererProps {
   /**

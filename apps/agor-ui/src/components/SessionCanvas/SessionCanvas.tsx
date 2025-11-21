@@ -153,7 +153,6 @@ const SessionNode = ({ data }: { data: SessionNodeData }) => {
         onUnpin={data.onUnpin}
         isPinned={data.isPinned}
         zoneName={data.zoneName}
-        client={data.client}
         zoneColor={data.zoneColor}
         defaultExpanded={!data.compact}
       />
@@ -608,6 +607,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       handleUnpinWorktree,
       zoneLabels,
       userById,
+      client,
     ]);
 
     // No edges needed for worktree-centric boards

@@ -95,9 +95,9 @@ const highlightMentions = (text: string, highlightColor: string): React.ReactNod
   const mentionRegex = /@(?:"[^"]*"|[^\s]+)/g;
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
-  let match: RegExpExecArray | null;
+  let match: RegExpExecArray | null = mentionRegex.exec(text);
 
-  while ((match = mentionRegex.exec(text)) !== null) {
+  while (match !== null) {
     // Add text before mention
     if (match.index > lastIndex) {
       parts.push(text.substring(lastIndex, match.index));
@@ -119,6 +119,7 @@ const highlightMentions = (text: string, highlightColor: string): React.ReactNod
     );
 
     lastIndex = match.index + match[0].length;
+    match = mentionRegex.exec(text);
   }
 
   // Add remaining text

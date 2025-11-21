@@ -1,3 +1,4 @@
+import type { AgorClient } from '@agor/core/api';
 import type {
   AgenticToolName,
   CodexApprovalPolicy,
@@ -8,7 +9,6 @@ import type {
   Worktree,
 } from '@agor/core/types';
 import { getDefaultPermissionMode } from '@agor/core/types';
-import type { AgorClient } from '@agor/core/api';
 import { DownOutlined } from '@ant-design/icons';
 import { Alert, Collapse, Form, Input, Modal, Typography } from 'antd';
 import { useEffect, useState } from 'react';
@@ -17,8 +17,8 @@ import {
   type AgenticToolOption,
   AgentSelectionGrid,
 } from '../AgentSelectionGrid/AgentSelectionGrid';
-import type { ModelConfig } from '../ModelSelector';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
+import type { ModelConfig } from '../ModelSelector';
 
 export interface NewSessionConfig {
   worktree_id: string; // Required - sessions are always created from a worktree
