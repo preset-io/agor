@@ -146,6 +146,7 @@ function AppContent() {
   // Welcome modal state (onboarding for new users)
   const [welcomeModalOpen, setWelcomeModalOpen] = useState(false);
   const [settingsTabToOpen, setSettingsTabToOpen] = useState<string | null>(null);
+  const [openUserSettings, setOpenUserSettings] = useState(false);
   const [openNewWorktree, setOpenNewWorktree] = useState(false);
   const [inOnboardingFlow, setInOnboardingFlow] = useState(false);
 
@@ -982,12 +983,20 @@ function AppContent() {
   const handleWelcomeOpenApiKeys = () => {
     setInOnboardingFlow(true);
     setWelcomeModalOpen(false);
-    setSettingsTabToOpen('api-keys');
+    setOpenUserSettings(true); // Open user settings modal directly (has API Keys tab)
   };
 
   // Re-open welcome modal after completing sub-actions during onboarding
   const handleSettingsClose = () => {
     setSettingsTabToOpen(null);
+    // Re-open welcome modal if still in onboarding flow
+    if (inOnboardingFlow && currentUser && !currentUser.onboarding_completed) {
+      setWelcomeModalOpen(true);
+    }
+  };
+
+  const handleUserSettingsClose = () => {
+    setOpenUserSettings(false);
     // Re-open welcome modal if still in onboarding flow
     if (inOnboardingFlow && currentUser && !currentUser.onboarding_completed) {
       setWelcomeModalOpen(true);
@@ -1074,6 +1083,8 @@ function AppContent() {
                 initialBoardId={Array.from(boardById.values())[0]?.board_id}
                 openSettingsTab={settingsTabToOpen}
                 onSettingsClose={handleSettingsClose}
+                openUserSettings={openUserSettings}
+                onUserSettingsClose={handleUserSettingsClose}
                 openNewWorktreeModal={openNewWorktree}
                 onNewWorktreeModalClose={handleNewWorktreeModalClose}
                 onCreateSession={handleCreateSession}

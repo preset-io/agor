@@ -113,8 +113,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     }
   }, [open, user, initializeForms]);
 
-  // Load user's API key and env var status
+  // Load user's API key and env var status when modal opens
+  // Include `open` in deps to rehydrate from server state each time modal opens
   useEffect(() => {
+    if (!open) return;
+
     if (user?.api_keys) {
       setUserApiKeyStatus({
         ANTHROPIC_API_KEY: !!user.api_keys.ANTHROPIC_API_KEY,
@@ -134,7 +137,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     } else {
       setUserEnvVars({});
     }
-  }, [user]);
+  }, [open, user]);
 
   const handleClose = () => {
     form.resetFields();
