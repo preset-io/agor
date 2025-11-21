@@ -213,12 +213,12 @@ export const GettingStartedPopover: React.FC<GettingStartedPopoverProps> = ({
         <div style={{ paddingTop: 8, borderTop: '1px solid rgba(255, 255, 255, 0.1)' }}>
           <Space size="small" style={{ width: '100%', justifyContent: 'space-between' }}>
             <Link
-              href="https://agor.live/guide"
+              href="https://agor.live/guide/getting-started"
               target="_blank"
               rel="noopener noreferrer"
               style={{ fontSize: 12 }}
             >
-              Go to documentation
+              Getting Started Guide
             </Link>
             {progressPercent === 100 && (
               <Button type="link" size="small" onClick={handleDismiss} style={{ padding: 0 }}>

@@ -1,11 +1,11 @@
 ---
 title: Getting Started
-description: Install and set up agor for AI agent orchestration in under 2 minutes. Learn how to initialize, start the daemon, and create your first session.
+description: Install and set up agor for AI agent orchestration in under 5 minutes. Learn how to add repositories, create worktrees, authenticate with AI providers, and start your first session.
 ---
 
 # Getting Started
 
-Get Agor running in under 2 minutes.
+Get Agor running and create your first AI coding session in under 5 minutes.
 
 ## Installation
 
@@ -26,11 +26,218 @@ agor daemon start
 agor open
 ```
 
-**That's it!** The UI will guide you through onboarding, adding repositories, and creating your first session.
+**That's it!** Now follow the steps below to start your first AI coding session.
 
 **Try in GitHub Codespaces (up in 1-2 minutes):**
 
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://github.com/codespaces/new?skip_quickstart=true&machine=basicLinux32gb&repo=1069864589&ref=main&devcontainer_path=.devcontainer%2Fdevcontainer.json&geo=UsWest)
+
+---
+
+## Step 1: Link a Code Repository
+
+Before you can create AI sessions, Agor needs to know about your code repositories.
+
+### Add a Local Repository
+
+If you have a git repository on your machine:
+
+**Via UI:**
+1. Open Agor (`agor open`)
+2. Click **Settings** (⚙️ icon in header)
+3. Go to **Repos** tab
+4. Click **Add Repository**
+5. Enter the absolute path to your repo (e.g., `/Users/you/projects/myapp`)
+
+**Via CLI:**
+
+```bash
+agor repo add /path/to/your/repo
+```
+
+### Add a Remote Repository
+
+Agor can clone remote repositories for you:
+
+**Via UI:**
+1. Open Settings → Repos
+2. Click **Add Repository**
+3. Enter the git URL (e.g., `https://github.com/username/repo.git`)
+4. Agor will clone it to `~/.agor/repos/<repo-name>`
+
+**Via CLI:**
+
+```bash
+agor repo add https://github.com/username/repo.git
+```
+
+---
+
+## Step 2: Create Your First Worktree
+
+**What's a worktree?** A worktree is an isolated working directory for your repository - think of it as checking out a branch in a separate location. This lets you work on multiple features simultaneously without switching branches or stashing changes.
+
+[Learn more about worktrees →](/guide/concepts#worktrees)
+
+### Why Worktrees?
+
+Git worktrees allow you to have multiple branches checked out at once in different places on your filesystem. In Agor:
+- **1 worktree = 1 issue = 1 PR = 1 feature**
+- Each worktree contains a tree of AI sessions working on that feature
+- Completely isolated - changes in one don't affect others
+
+### Create a Worktree
+
+**Via UI:**
+1. Click **New Worktree** button (+ icon near top)
+2. Choose your repository
+3. Pick a name (like you would for a branch - e.g., `auth-feature`, `fix-bug-123`)
+4. Optionally:
+   - Create a new branch or checkout existing one
+   - Link to an issue URL or PR URL
+   - Add notes about what you're working on
+
+**Via CLI:**
+
+```bash
+# Create worktree with new branch
+agor worktree create my-repo feature-name
+
+# Create from existing branch
+agor worktree create my-repo feature-name --branch existing-branch
+
+# Link to issue
+agor worktree create my-repo feature-name --issue https://github.com/user/repo/issues/123
+```
+
+Your worktree will be created at `~/.agor/worktrees/<repo>/<name>`
+
+---
+
+## Step 3: Authenticate with AI Providers
+
+Agor supports multiple AI coding agents (Claude Code, Codex, Gemini, OpenCode). To use them, you need to authenticate.
+
+### Authentication Options
+
+Agor offers **three ways** to configure AI credentials, in order of priority:
+
+#### Option 1: CLI Login (Recommended for Claude)
+
+The fastest way to get started with Claude Code:
+
+```bash
+claude login
+```
+
+This stores your credentials in `~/.claude/` and Agor automatically detects them.
+
+#### Option 2: Per-User API Keys (Recommended for Teams)
+
+Store encrypted API keys in Agor, scoped to your user account:
+
+**Via UI:**
+1. Open **Settings** → **Agentic Tools** tab
+2. Enter your API keys:
+   - **Anthropic API Key** for Claude Code
+   - **OpenAI API Key** for Codex
+   - **Google AI API Key** for Gemini
+3. Click **Save**
+
+Your keys are:
+- ✅ Encrypted at rest in the database
+- ✅ Only visible to you (per-user scope)
+- ✅ Automatically used by all your sessions
+
+**Get API Keys:**
+- Anthropic: https://console.anthropic.com/settings/keys
+- OpenAI: https://platform.openai.com/api-keys
+- Google AI: https://aistudio.google.com/app/apikey
+
+#### Option 3: Environment Variables (Global Fallback)
+
+Set environment variables that all users can access (workspace-level):
+
+```bash
+export ANTHROPIC_API_KEY="sk-ant-..."
+export OPENAI_API_KEY="sk-..."
+export GOOGLE_AI_API_KEY="..."
+```
+
+**Via UI (Global Settings):**
+1. Open **Settings** → **Environment Variables** tab
+2. Add variables for your workspace
+
+**Note:** Environment variables are visible to all users in your Agor instance.
+
+### How Authentication Priority Works
+
+When you start a session, Agor checks for credentials in this order:
+
+1. **Per-user API keys** (if set in Settings → Agentic Tools)
+2. **`claude login` credentials** (if you ran `claude login`)
+3. **Environment variables** (global fallback)
+
+This lets you mix approaches - use `claude login` for yourself while teammates use per-user keys.
+
+---
+
+## Step 4: Start Your First AI Session
+
+Now you're ready to create an AI coding session!
+
+**Via UI:**
+1. Find your worktree card on the board
+2. Click **New Session** (+ icon on the worktree card)
+3. Choose your agentic tool (Claude Code, Codex, or Gemini)
+4. Optionally configure:
+   - Model selection
+   - Permission mode (auto-approve tools, ask before each, etc.)
+   - MCP servers
+5. Click **Create**
+
+**Via CLI:**
+
+```bash
+# Create session in your worktree
+agor session create <worktree-id> --tool claude-code
+
+# Or use interactive mode
+agor session create <worktree-id> --interactive
+```
+
+### Send Your First Prompt
+
+Once the session is created:
+1. Click on the session to open the conversation view
+2. Type your prompt (e.g., "Add a login form to the app")
+3. Hit **Enter** or click **Send**
+
+Watch as the AI agent:
+- Reads your code
+- Plans changes
+- Edits files
+- Runs tests
+- Reports back to you
+
+All tool calls, file edits, and command outputs are streamed in real-time!
+
+---
+
+## What's Next?
+
+Now that you have your first session running:
+
+- **[Concepts](/guide/concepts)** - Deep dive into worktrees, boards, sessions, and environments
+- **[Advanced Features](/guide/advanced-features)** - Zones, subsessions, schedulers, and more
+- **[Architecture](/guide/architecture)** - System design and internals
+- **[Development Guide](/guide/development)** - Contributing to Agor
+
+**Pro Tips:**
+- Use **zones** on your board to automate workflows (drag worktree to "Ready for Review" → auto-prompt for code review)
+- **Fork sessions** to try different approaches to the same problem
+- **Spawn subsessions** to delegate subtasks to child agents
+- Check the **environment status** to see if your dev server is running
 
 ## Troubleshooting
 
