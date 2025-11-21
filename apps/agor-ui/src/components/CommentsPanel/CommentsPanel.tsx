@@ -500,6 +500,15 @@ const CommentThread: React.FC<{
 };
 
 /**
+ * Check if comment content mentions a user by name
+ */
+function checkMentionsUser(content: string, userName?: string): boolean {
+  if (!userName) return false;
+  // Match @name or @"name" patterns
+  return content.includes(`@${userName}`) || content.includes(`@"${userName}"`);
+}
+
+/**
  * Main CommentsPanel component - permanent left sidebar with threading and reactions
  */
 export const CommentsPanel: React.FC<CommentsPanelProps> = ({
@@ -525,6 +534,10 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
   const { token } = theme.useToken();
   const [filter, setFilter] = useState<FilterMode>('active');
   const [commentInputValue, setCommentInputValue] = useState('');
+
+  // Get current user's name for mention detection
+  const currentUser = currentUserId ? userById.get(currentUserId) : undefined;
+  const currentUserName = currentUser?.name;
 
   // Create refs for scroll-to-view
   const commentRefs = React.useRef<Record<string, React.RefObject<HTMLDivElement>>>({});
@@ -680,7 +693,13 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
           <Badge
             count={filteredThreads.length}
             showZero={false}
-            style={{ backgroundColor: token.colorPrimaryBgHover }}
+            style={{
+              backgroundColor: filteredThreads.some((t) =>
+                checkMentionsUser(t.content, currentUserName)
+              )
+                ? token.colorError
+                : token.colorPrimaryBgHover,
+            }}
           />
         </Space>
         {onToggleCollapse && (
@@ -776,7 +795,13 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
                   <Text strong>{group.label}</Text>
                   <Badge
                     count={group.threads.length}
-                    style={{ backgroundColor: token.colorPrimaryBg }}
+                    style={{
+                      backgroundColor: group.threads.some((t) =>
+                        checkMentionsUser(t.content, currentUserName)
+                      )
+                        ? token.colorError
+                        : token.colorPrimaryBg,
+                    }}
                   />
                 </div>
               ),
