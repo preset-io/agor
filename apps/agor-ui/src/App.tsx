@@ -142,12 +142,10 @@ function AppContent() {
   // Board actions
   const { createBoard, updateBoard, deleteBoard } = useBoardActions(client);
 
-  // Welcome modal state (onboarding for new users)
-  const [welcomeModalOpen, setWelcomeModalOpen] = useState(false);
+  // Onboarding state (for new users)
   const [settingsTabToOpen, setSettingsTabToOpen] = useState<string | null>(null);
   const [openUserSettings, setOpenUserSettings] = useState(false);
   const [openNewWorktree, setOpenNewWorktree] = useState(false);
-  const [inOnboardingFlow, setInOnboardingFlow] = useState(false);
 
   // Per-session prompt drafts (persists across session switches)
   const [promptDrafts, setPromptDrafts] = useState<Map<string, string>>(new Map());
@@ -927,69 +925,17 @@ function AppContent() {
   const _worktreeOptions = allOptions.filter((opt) => opt.type === 'managed-worktree');
   const _repoOptions = allOptions.filter((opt) => opt.type === 'managed');
 
-  // Handle onboarding dismissal
-  const handleDismissOnboarding = async () => {
-    if (!client || !user) return;
-    setInOnboardingFlow(false);
-    try {
-      await client.service('users').patch(user.user_id, {
-        onboarding_completed: true,
-      });
-    } catch (error) {
-      showError(
-        `Failed to update onboarding status: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
-  };
-
-  // Welcome modal action handlers - open settings to relevant tab
-  const handleWelcomeAddRepo = () => {
-    setInOnboardingFlow(true);
-    setWelcomeModalOpen(false);
-    setSettingsTabToOpen('repos');
-  };
-
-  const handleWelcomeCreateWorktree = () => {
-    setInOnboardingFlow(true);
-    setWelcomeModalOpen(false);
-    setOpenNewWorktree(true);
-  };
-
-  const handleWelcomeNewSession = () => {
-    setInOnboardingFlow(true);
-    setWelcomeModalOpen(false);
-    // TODO: Should this open a new session modal instead? For now just close.
-  };
-
-  const handleWelcomeOpenApiKeys = () => {
-    setInOnboardingFlow(true);
-    setWelcomeModalOpen(false);
-    setOpenUserSettings(true); // Open user settings modal directly (has API Keys tab)
-  };
-
-  // Re-open welcome modal after completing sub-actions during onboarding
+  // Modal close handlers
   const handleSettingsClose = () => {
     setSettingsTabToOpen(null);
-    // Re-open welcome modal if still in onboarding flow
-    if (inOnboardingFlow && currentUser && !currentUser.onboarding_completed) {
-      setWelcomeModalOpen(true);
-    }
   };
 
   const handleUserSettingsClose = () => {
     setOpenUserSettings(false);
-    // Re-open welcome modal if still in onboarding flow
-    if (inOnboardingFlow && currentUser && !currentUser.onboarding_completed) {
-      setWelcomeModalOpen(true);
-    }
   };
 
   const handleNewWorktreeModalClose = () => {
     setOpenNewWorktree(false);
-    // Re-open welcome modal if still in onboarding flow
-    if (inOnboardingFlow && currentUser && !currentUser.onboarding_completed) {
-      setWelcomeModalOpen(true);
-    }
   };
 
   // Render main app
