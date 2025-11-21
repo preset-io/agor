@@ -333,6 +333,52 @@ This pattern is especially effective for:
 
 ---
 
+## Example: Parallel Test Generation
+
+A powerful way to leverage subsessions is spawning multiple agents in parallel to divide and conquer independent work. Here's a real example of generating unit tests for 5 different files simultaneously.
+
+**The Workflow:**
+
+<img
+  src="/screenshots/parallel-spawn-5-codex.png"
+  alt="Claude Code spawning 5 parallel Codex subsessions for unit test generation"
+  style={{ maxWidth: '400px' }}
+/>
+
+User provides testing guidelines and asks Claude Code to spawn 5 Codex subsessions in parallel, each responsible for writing unit tests for a specific file.
+
+<img
+  src="/screenshots/parallel-board-5-sessions.png"
+  alt="Board view showing parent session with 5 child subsessions running in parallel"
+  style={{ maxWidth: '400px' }}
+/>
+
+The worktree card shows all 6 sessions (1 parent + 5 children) with clear hierarchy - each Codex agent working independently on their assigned file.
+
+<img
+  src="/screenshots/parallel-first-callback.png"
+  alt="First callback arriving with comprehensive test results"
+  style={{ maxWidth: '400px' }}
+/>
+
+First callback arrives with detailed results - 5 focused test cases covering all scenarios. Parent reviews the quality while waiting for the other 4 subsessions to complete.
+
+**Why This Works:**
+
+- **Massive parallelization** - 5 agents working simultaneously instead of sequentially
+- **Focused context** - Each agent only sees their file + guidelines, not entire codebase
+- **Non-blocking review** - Parent can evaluate results as callbacks stream in
+- **Independent work** - No conflicts since each agent works on different files
+- **Quality orchestration** - Parent coordinates overall quality and can run final tests
+
+This pattern is especially effective for:
+- Generating tests for multiple modules
+- Parallel documentation writing
+- Multi-file refactoring tasks
+- Batch code analysis across files
+
+---
+
 ## Related Docs
 
 - [Concepts](/guide/concepts) - Understanding worktrees, sessions, and boards
