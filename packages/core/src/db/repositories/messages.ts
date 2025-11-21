@@ -74,7 +74,7 @@ export class MessagesRepository {
    * Bulk insert messages (optimized for session loading)
    */
   async createMany(messageList: Message[]): Promise<Message[]> {
-    const rows = messageList.map((m) => this.messageToRow(m));
+    const rows = messageList.map(m => this.messageToRow(m));
     const inserted = await insert(this.db, messages).values(rows).returning().all();
     return inserted.map((r: MessageRow) => this.rowToMessage(r));
   }

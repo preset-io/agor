@@ -24,7 +24,7 @@ export function useFaviconStatus(
   useEffect(() => {
     if (!currentBoardId) {
       // No board selected - restore default favicon
-      createFaviconWithDot(baseFaviconUrl, false, false, token.colorSuccessText).then((dataUrl) => {
+      createFaviconWithDot(baseFaviconUrl, false, false, token.colorSuccessText).then(dataUrl => {
         const link = document.querySelector("link[rel~='icon']") as HTMLLinkElement;
         if (link) {
           link.href = dataUrl;
@@ -35,24 +35,24 @@ export function useFaviconStatus(
 
     // Find worktrees on current board
     const worktreesOnBoard = new Set(
-      boardObjects.filter((obj) => obj.board_id === currentBoardId).map((obj) => obj.worktree_id)
+      boardObjects.filter(obj => obj.board_id === currentBoardId).map(obj => obj.worktree_id)
     );
 
     // Find sessions for those worktrees using O(1) Map lookups
     const sessionsOnBoard = Array.from(worktreesOnBoard)
-      .flatMap((worktreeId) => sessionsByWorktree.get(worktreeId) || [])
-      .filter((s) => !s.archived);
+      .flatMap(worktreeId => sessionsByWorktree.get(worktreeId) || [])
+      .filter(s => !s.archived);
 
     // Determine status: check for running and ready independently
     // Use .some() for efficient short-circuiting
-    const hasRunning = sessionsOnBoard.some((session) => session.status === SessionStatus.RUNNING);
+    const hasRunning = sessionsOnBoard.some(session => session.status === SessionStatus.RUNNING);
 
-    const hasReady = sessionsOnBoard.some((session) => session.ready_for_prompt);
+    const hasReady = sessionsOnBoard.some(session => session.ready_for_prompt);
 
     // Update favicon with appropriate dots
     // White dot (lower-left) for running, green dot (lower-right) for ready
     createFaviconWithDot(baseFaviconUrl, hasRunning, hasReady, token.colorSuccessText).then(
-      (dataUrl) => {
+      dataUrl => {
         const link = document.querySelector("link[rel~='icon']") as HTMLLinkElement;
         if (link) {
           link.href = dataUrl;

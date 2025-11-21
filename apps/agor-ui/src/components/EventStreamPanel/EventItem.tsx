@@ -125,7 +125,7 @@ const EventItemComponent = ({
   // Split event name into entity and action
   const parseEventName = (eventName: string): { entity?: string; action?: string } => {
     const actions = ['created', 'patched', 'updated', 'removed'];
-    const foundAction = actions.find((action) => eventName.includes(action));
+    const foundAction = actions.find(action => eventName.includes(action));
 
     if (foundAction) {
       // Extract entity by removing the action
@@ -158,7 +158,7 @@ const EventItemComponent = ({
   // Derive worktree from session if not directly in event data
   const derivedWorktreeId = worktreeId || session?.worktree_id;
   const worktree = derivedWorktreeId ? worktreeById.get(derivedWorktreeId) : undefined;
-  const repo = worktree ? repos.find((r) => r.repo_id === worktree.repo_id) : undefined;
+  const repo = worktree ? repos.find(r => r.repo_id === worktree.repo_id) : undefined;
   const worktreeSessions = worktree ? sessionsByWorktree.get(worktree.worktree_id) || [] : [];
 
   // Look up user if created_by is present

@@ -27,7 +27,7 @@ const gifs = [
 export function GifGallery() {
   return (
     <div className={styles.gifGrid}>
-      {gifs.map((gif) => (
+      {gifs.map(gif => (
         <GifModal key={gif.src} src={gif.src} alt={gif.alt} caption={gif.caption} />
       ))}
     </div>

@@ -301,7 +301,7 @@ describe('isDefined and isNonEmptyString integration', () => {
     ];
 
     const validNames = data
-      .map((d) => d.name)
+      .map(d => d.name)
       .filter(isDefined)
       .filter(isNonEmptyString);
 

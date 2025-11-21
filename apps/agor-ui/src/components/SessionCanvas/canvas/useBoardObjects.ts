@@ -47,13 +47,13 @@ export const useBoardObjects = ({
   const _boardSessionIds = useMemo(() => {
     if (!board) return [];
     const boardWorktreeIds = worktrees
-      .filter((w) => w.board_id === board.board_id)
-      .map((w) => w.worktree_id);
+      .filter(w => w.board_id === board.board_id)
+      .map(w => w.worktree_id);
 
     // Use O(1) Map lookups to get sessions for each worktree
     return boardWorktreeIds
-      .flatMap((worktreeId) => sessionsByWorktree.get(worktreeId) || [])
-      .map((s) => s.session_id);
+      .flatMap(worktreeId => sessionsByWorktree.get(worktreeId) || [])
+      .map(s => s.session_id);
   }, [board, worktrees, sessionsByWorktree]);
 
   /**
@@ -97,14 +97,14 @@ export const useBoardObjects = ({
       }
 
       // Optimistic removal of zone (just the zone node, worktrees remain but unpinned)
-      setNodes((nodes) => nodes.filter((n) => n.id !== objectId));
+      setNodes(nodes => nodes.filter(n => n.id !== objectId));
 
       try {
         // IMPORTANT: Unpin worktrees FIRST before deleting the zone
         // This prevents a race condition where worktrees have parentId pointing to a deleted zone
         for (const worktreeId of affectedWorktreeIds) {
           // boardObjectById is keyed by object_id, not worktree_id, so we need to find by worktree_id
-          const boardObj = findInMap(boardObjectById, (obj) => obj.worktree_id === worktreeId);
+          const boardObj = findInMap(boardObjectById, obj => obj.worktree_id === worktreeId);
           if (boardObj) {
             await client.service('board-objects').patch(boardObj.object_id, {
               zone_id: null,
@@ -246,7 +246,7 @@ export const useBoardObjects = ({
       const height = 600;
 
       // Optimistic update
-      setNodes((nodes) => [
+      setNodes(nodes => [
         ...nodes,
         {
           id: objectId,
@@ -288,7 +288,7 @@ export const useBoardObjects = ({
       } catch (error) {
         console.error('Failed to add zone node:', error);
         // Rollback
-        setNodes((nodes) => nodes.filter((n) => n.id !== objectId));
+        setNodes(nodes => nodes.filter(n => n.id !== objectId));
       }
     },
     [client, setNodes, handleUpdateObject] // Removed board dependency
@@ -306,7 +306,7 @@ export const useBoardObjects = ({
       deletedObjectsRef.current.add(objectId);
 
       // Optimistic removal
-      setNodes((nodes) => nodes.filter((n) => n.id !== objectId));
+      setNodes(nodes => nodes.filter(n => n.id !== objectId));
 
       try {
         await client.service('boards').patch(currentBoard.board_id, {

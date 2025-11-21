@@ -99,7 +99,7 @@ export function jsonExtract(db: Database, column: SQL.Aliased | SQL | any, path:
       return sql`${column}${sql.raw(`->>'${parts[0]}'`)}`;
     } else {
       // Multiple levels: column->'key1'->'key2'->>'key3'
-      const objectParts = parts.slice(0, -1).map((p) => sql.raw(`->'${p}'`));
+      const objectParts = parts.slice(0, -1).map(p => sql.raw(`->'${p}'`));
       const lastPart = parts[parts.length - 1];
       return sql`${column}${sql.join(objectParts, sql``)}${sql.raw(`->>'${lastPart}'`)}`;
     }

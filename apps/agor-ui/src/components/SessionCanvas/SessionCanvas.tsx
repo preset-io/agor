@@ -482,8 +482,8 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         };
 
         // Trigger immediate React Flow update
-        setNodes((currentNodes) =>
-          currentNodes.map((node) => {
+        setNodes(currentNodes =>
+          currentNodes.map(node => {
             if (node.id === worktreeId) {
               return {
                 ...node,
@@ -812,16 +812,16 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     useEffect(() => {
       if (isDraggingRef.current) return;
 
-      setNodes((currentNodes) => {
+      setNodes(currentNodes => {
         // Separate existing nodes by type
-        const existingZones = currentNodes.filter((n) => n.type === 'zone');
-        const existingMarkdown = currentNodes.filter((n) => n.type === 'markdown');
-        const existingCursors = currentNodes.filter((n) => n.type === 'cursor');
-        const existingComments = currentNodes.filter((n) => n.type === 'comment');
+        const existingZones = currentNodes.filter(n => n.type === 'zone');
+        const existingMarkdown = currentNodes.filter(n => n.type === 'markdown');
+        const existingCursors = currentNodes.filter(n => n.type === 'cursor');
+        const existingComments = currentNodes.filter(n => n.type === 'comment');
 
         // Update worktree nodes with preserved state
-        const updatedWorktrees = initialNodes.map((newNode) => {
-          const existingNode = currentNodes.find((n) => n.id === newNode.id);
+        const updatedWorktrees = initialNodes.map(newNode => {
+          const existingNode = currentNodes.find(n => n.id === newNode.id);
           const localPosition = localPositionsRef.current[newNode.id];
 
           // If we have a local position (user is dragging or just dragged), use it
@@ -832,7 +832,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             if (newNode.parentId) {
               // Parent could be a zone or another worktree
               const parentNode = [...initialNodes, ...existingZones].find(
-                (n) => n.id === newNode.parentId
+                n => n.id === newNode.parentId
               );
               if (parentNode) {
                 incomingAbsolutePosition = relativeToAbsolute(
@@ -859,7 +859,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             if (newNode.parentId) {
               // Parent could be a zone or another worktree
               const parentNode = [...initialNodes, ...existingZones].find(
-                (n) => n.id === newNode.parentId
+                n => n.id === newNode.parentId
               );
               if (parentNode) {
                 positionToUse = absoluteToRelative(localPosition, parentNode.position);
@@ -887,11 +887,11 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     // Helper: Partition nodes by type
     const partitionNodesByType = useCallback((nodes: Node[]) => {
       return {
-        zones: nodes.filter((n) => n.type === 'zone'),
-        markdown: nodes.filter((n) => n.type === 'markdown'),
-        worktrees: nodes.filter((n) => n.type === 'worktreeNode'),
-        comments: nodes.filter((n) => n.type === 'comment'),
-        cursors: nodes.filter((n) => n.type === 'cursor'),
+        zones: nodes.filter(n => n.type === 'zone'),
+        markdown: nodes.filter(n => n.type === 'markdown'),
+        worktrees: nodes.filter(n => n.type === 'worktreeNode'),
+        comments: nodes.filter(n => n.type === 'comment'),
+        cursors: nodes.filter(n => n.type === 'cursor'),
       };
     }, []);
 
@@ -910,21 +910,21 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
       const boardObjectNodes = getBoardObjectNodes();
 
-      setNodes((currentNodes) => {
+      setNodes(currentNodes => {
         const { worktrees, comments, cursors } = partitionNodesByType(currentNodes);
 
         // Separate zones and markdown from boardObjectNodes
         const zones = boardObjectNodes
-          .filter((n) => n.type === 'zone' && !deletedObjectsRef.current.has(n.id))
-          .map((newZone) => {
-            const existingZone = currentNodes.find((n) => n.id === newZone.id);
+          .filter(n => n.type === 'zone' && !deletedObjectsRef.current.has(n.id))
+          .map(newZone => {
+            const existingZone = currentNodes.find(n => n.id === newZone.id);
             return { ...newZone, selected: existingZone?.selected };
           });
 
         const markdown = boardObjectNodes
-          .filter((n) => n.type === 'markdown' && !deletedObjectsRef.current.has(n.id))
-          .map((newMarkdown) => {
-            const existingMarkdown = currentNodes.find((n) => n.id === newMarkdown.id);
+          .filter(n => n.type === 'markdown' && !deletedObjectsRef.current.has(n.id))
+          .map(newMarkdown => {
+            const existingMarkdown = currentNodes.find(n => n.id === newMarkdown.id);
             return { ...newMarkdown, selected: existingMarkdown?.selected };
           });
 
@@ -936,7 +936,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     useEffect(() => {
       if (isDraggingRef.current) return;
 
-      setNodes((currentNodes) => {
+      setNodes(currentNodes => {
         const { zones, markdown, worktrees, comments } = partitionNodesByType(currentNodes);
         return applyZOrder(zones, markdown, worktrees, comments, cursorNodes);
       });
@@ -946,11 +946,11 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     useEffect(() => {
       if (isDraggingRef.current) return;
 
-      setNodes((currentNodes) => {
+      setNodes(currentNodes => {
         const { zones, markdown, worktrees, cursors } = partitionNodesByType(currentNodes);
 
         // Apply local position overrides to comment nodes (to prevent flicker during drag)
-        const commentsWithLocalPositions = commentNodes.map((newNode) => {
+        const commentsWithLocalPositions = commentNodes.map(newNode => {
           const localPosition = localPositionsRef.current[newNode.id];
 
           if (localPosition) {
@@ -958,7 +958,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             // If node has parentId, position is relative to parent - must convert to absolute
             let incomingAbsolutePosition = newNode.position;
             if (newNode.parentId) {
-              const parentNode = [...worktrees, ...zones].find((n) => n.id === newNode.parentId);
+              const parentNode = [...worktrees, ...zones].find(n => n.id === newNode.parentId);
               if (parentNode) {
                 incomingAbsolutePosition = relativeToAbsolute(
                   newNode.position,
@@ -982,7 +982,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             // If node now has parentId, convert local absolute position to relative
             let positionToUse = localPosition;
             if (newNode.parentId) {
-              const parentNode = [...worktrees, ...zones].find((n) => n.id === newNode.parentId);
+              const parentNode = [...worktrees, ...zones].find(n => n.id === newNode.parentId);
               if (parentNode) {
                 positionToUse = absoluteToRelative(localPosition, parentNode.position);
               }
@@ -1011,7 +1011,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         // biome-ignore lint/suspicious/noExplicitAny: React Flow change event types are not exported
         changes.forEach((change: any) => {
           if (change.type === 'dimensions' && change.dimensions) {
-            const node = nodes.find((n) => n.id === change.id);
+            const node = nodes.find(n => n.id === change.id);
             if (node?.type === 'zone') {
               // Check if dimensions actually changed (to avoid infinite loop from React Flow emitting unchanged dimensions)
               const currentWidth = node.style?.width;
@@ -1150,7 +1150,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             const currentNodes = nodes;
 
             for (const [nodeId, position] of Object.entries(updates)) {
-              const draggedNode = currentNodes.find((n) => n.id === nodeId);
+              const draggedNode = currentNodes.find(n => n.id === nodeId);
 
               if (draggedNode?.type === 'zone') {
                 // Zone moved - update position via batchUpdateObjectPositions
@@ -1220,7 +1220,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                   : null;
 
                 if (droppedZoneId) {
-                  const zoneNode = currentNodes.find((n) => n.id === droppedZoneId);
+                  const zoneNode = currentNodes.find(n => n.id === droppedZoneId);
                   if (zoneNode) {
                     // Use the zone's current React Flow position (always absolute for zones)
                     zonePosition = { x: zoneNode.position.x, y: zoneNode.position.y };
@@ -1266,7 +1266,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                       (async () => {
                         try {
                           // Find the worktree
-                          const worktree = worktrees.find((wt) => wt.worktree_id === nodeId);
+                          const worktree = worktrees.find(wt => wt.worktree_id === nodeId);
 
                           // Render template
                           const context = {
@@ -1378,7 +1378,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
               if (parentId && parentType === 'zone') {
                 // Comment pinned to zone
-                const zoneNode = currentNodes.find((n) => n.id === `zone-${parentId}`);
+                const zoneNode = currentNodes.find(n => n.id === `zone-${parentId}`);
                 if (zoneNode) {
                   const zoneAbsPos = getNodeAbsolutePosition(zoneNode, currentNodes);
                   const relativePos = calculateStoragePosition(position, {
@@ -1403,7 +1403,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                 }
               } else if (parentId && parentType === 'worktree') {
                 // Comment pinned to worktree
-                const worktreeNode = currentNodes.find((n) => n.id === parentId);
+                const worktreeNode = currentNodes.find(n => n.id === parentId);
                 if (worktreeNode) {
                   const worktreeAbsPos = getNodeAbsolutePosition(worktreeNode, currentNodes);
                   const relativePos = calculateStoragePosition(position, {
@@ -1444,8 +1444,8 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
               // Immediately update React Flow node to reflect new parentId
               // This prevents visual glitches while waiting for WebSocket sync
-              setNodes((prevNodes) =>
-                prevNodes.map((n) => {
+              setNodes(prevNodes =>
+                prevNodes.map(n => {
                   if (n.id === `comment-${comment_id}`) {
                     // Update parentId to match new parent (or undefined if free-floating)
                     const updates: Partial<Node> = { parentId: newReactFlowParentId };
@@ -1454,7 +1454,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                     if (newReactFlowParentId !== n.parentId) {
                       if (newReactFlowParentId) {
                         // Now has parent - convert to relative position
-                        const parent = prevNodes.find((p) => p.id === newReactFlowParentId);
+                        const parent = prevNodes.find(p => p.id === newReactFlowParentId);
                         if (parent) {
                           const parentAbsPos = getNodeAbsolutePosition(parent, prevNodes);
                           const relativePos = calculateStoragePosition(position, {
@@ -1555,7 +1555,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           const defaultBackgroundColor = '#d9d9d91a'; // 10% opacity
 
           // Optimistic update
-          setNodes((nodes) => [
+          setNodes(nodes => [
             ...nodes,
             {
               id: objectId,
@@ -1609,7 +1609,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               } as any)
               .catch((error: unknown) => {
                 console.error('Failed to add zone:', error);
-                setNodes((nodes) => nodes.filter((n) => n.id !== objectId));
+                setNodes(nodes => nodes.filter(n => n.id !== objectId));
               });
           }
         }
@@ -1728,10 +1728,10 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       const position = markdownModal.position;
 
       // Optimistic update
-      setNodes((nodes) => {
+      setNodes(nodes => {
         // If editing, update existing node
         if (markdownModal.objectId) {
-          return nodes.map((n) =>
+          return nodes.map(n =>
             n.id === objectId
               ? {
                   ...n,
@@ -1799,7 +1799,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         console.error('Failed to save markdown note:', error);
         // Rollback optimistic update
         if (!markdownModal.objectId) {
-          setNodes((nodes) => nodes.filter((n) => n.id !== objectId));
+          setNodes(nodes => nodes.filter(n => n.id !== objectId));
         }
       }
 
@@ -1906,7 +1906,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             onNodeDragStop={handleNodeDragStop}
             onNodeClick={handleNodeClick}
             onPaneClick={handlePaneClick}
-            onInit={(instance) => {
+            onInit={instance => {
               reactFlowInstanceRef.current = instance;
             }}
             nodeTypes={nodeTypes}
@@ -1936,7 +1936,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             <Controls position="top-left" showInteractive={false}>
               {/* Custom toolbox buttons */}
               <ControlButton
-                onClick={(e) => {
+                onClick={e => {
                   e.stopPropagation();
                   setActiveTool('select');
                 }}
@@ -1948,7 +1948,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                 <SelectOutlined style={{ fontSize: '16px' }} />
               </ControlButton>
               <ControlButton
-                onClick={(e) => {
+                onClick={e => {
                   e.stopPropagation();
                   setActiveTool('zone');
                 }}
@@ -1960,7 +1960,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                 <BorderOutlined style={{ fontSize: '16px' }} />
               </ControlButton>
               <ControlButton
-                onClick={(e) => {
+                onClick={e => {
                   e.stopPropagation();
                   setActiveTool('comment');
                 }}
@@ -1972,7 +1972,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                 <CommentOutlined style={{ fontSize: '16px' }} />
               </ControlButton>
               <ControlButton
-                onClick={(e) => {
+                onClick={e => {
                   e.stopPropagation();
                   setActiveTool('markdown');
                 }}
@@ -1984,7 +1984,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                 <FileMarkdownOutlined style={{ fontSize: '16px' }} />
               </ControlButton>
               <ControlButton
-                onClick={(e) => {
+                onClick={e => {
                   e.stopPropagation();
                   setActiveTool(activeTool === 'eraser' ? 'select' : 'eraser');
                 }}
@@ -2000,7 +2000,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               </ControlButton>
             </Controls>
             <MiniMap
-              nodeColor={(node) => {
+              nodeColor={node => {
                 // Handle cursor nodes (show as bright color)
                 if (node.type === 'cursor') return token.colorWarning;
 
@@ -2050,8 +2050,8 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                 <Input.TextArea
                   placeholder="Add a comment..."
                   value={commentInput}
-                  onChange={(e) => setCommentInput(e.target.value)}
-                  onPressEnter={(e) => {
+                  onChange={e => setCommentInput(e.target.value)}
+                  onPressEnter={e => {
                     if (!e.shiftKey) {
                       e.preventDefault();
                       handleCreateSpatialComment();
@@ -2107,7 +2107,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             if (session) {
               try {
                 // Lookup worktree data for this session
-                const worktree = worktrees.find((wt) => wt.worktree_id === session.worktree_id);
+                const worktree = worktrees.find(wt => wt.worktree_id === session.worktree_id);
 
                 const context = {
                   session: {
@@ -2172,7 +2172,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                     }
 
                     // Lookup worktree data for this session
-                    const worktree = worktrees.find((wt) => wt.worktree_id === session.worktree_id);
+                    const worktree = worktrees.find(wt => wt.worktree_id === session.worktree_id);
 
                     // Build Handlebars context from session, board, and worktree data
                     const context = {
@@ -2312,7 +2312,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                 <Typography.Text strong>Content (Markdown supported):</Typography.Text>
                 <Input.TextArea
                   value={markdownContent}
-                  onChange={(e) => setMarkdownContent(e.target.value)}
+                  onChange={e => setMarkdownContent(e.target.value)}
                   placeholder={`# Title\n\n- Bullet point\n- Another point\n\n**Bold** and *italic*\n\n\`\`\`javascript\nconst code = "example";\n\`\`\``}
                   autoFocus
                   rows={20}
@@ -2351,7 +2351,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             open={true}
             onCancel={() => setWorktreeTriggerModal(null)}
             worktreeId={worktreeTriggerModal.worktreeId}
-            worktree={worktrees.find((wt) => wt.worktree_id === worktreeTriggerModal.worktreeId)}
+            worktree={worktrees.find(wt => wt.worktree_id === worktreeTriggerModal.worktreeId)}
             sessionsByWorktree={sessionsByWorktree}
             zoneName={worktreeTriggerModal.zoneName}
             trigger={worktreeTriggerModal.trigger}

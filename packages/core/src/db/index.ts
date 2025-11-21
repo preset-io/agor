@@ -12,6 +12,9 @@ export const hash = bcryptjs.hash;
 
 // ID utilities (re-exported from lib for convenience)
 export { formatShortId, generateId, IdResolutionError, resolveShortId } from '../lib/ids';
+
+// Slug utilities
+export { generateSlug, generateUniqueSlug, identifyUrlParam, isShortId } from '../lib/slugs';
 // Client and database
 export * from './client';
 

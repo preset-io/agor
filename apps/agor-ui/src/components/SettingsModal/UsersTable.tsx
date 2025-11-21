@@ -44,7 +44,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
   const handleCreate = () => {
     form
       .validateFields()
-      .then((values) => {
+      .then(values => {
         onCreate?.({
           email: values.email,
           password: values.password,
@@ -55,7 +55,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
         form.resetFields();
         setCreateModalOpen(false);
       })
-      .catch((error) => {
+      .catch(error => {
         // Form validation failed - Ant Design will show field errors automatically
         console.log('Form validation failed:', error);
       });

@@ -48,7 +48,7 @@ const MessageContent: React.FC<MessageContentProps> = ({ children, onCopy }) => 
     >
       <span style={{ flex: 1 }}>{children}</span>
       <CopyOutlined
-        onClick={(e) => {
+        onClick={e => {
           e.stopPropagation();
           onCopy();
         }}
@@ -59,10 +59,10 @@ const MessageContent: React.FC<MessageContentProps> = ({ children, onCopy }) => 
           transition: 'opacity 0.2s',
           fontSize: token.fontSizeSM,
         }}
-        onMouseEnter={(e) => {
+        onMouseEnter={e => {
           e.currentTarget.style.opacity = '1';
         }}
-        onMouseLeave={(e) => {
+        onMouseLeave={e => {
           e.currentTarget.style.opacity = '0.65';
         }}
         title="Copy to clipboard"

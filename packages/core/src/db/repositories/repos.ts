@@ -206,7 +206,7 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
       const fullId = await this.resolveId(id);
 
       // Use transaction to make read-merge-write atomic
-      return await this.db.transaction(async (tx) => {
+      return await this.db.transaction(async tx => {
         // STEP 1: Read current repo (within transaction)
         // biome-ignore lint/suspicious/noExplicitAny: Transaction context requires type assertion for database wrapper functions
         const currentRow = await select(tx as any)
@@ -292,7 +292,9 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
    */
   async count(): Promise<number> {
     try {
-      const result = await select(this.db, { count: sql<number>`count(*)` }).from(repos).one();
+      const result = await select(this.db, { count: sql<number>`count(*)` })
+        .from(repos)
+        .one();
 
       return result?.count ?? 0;
     } catch (error) {

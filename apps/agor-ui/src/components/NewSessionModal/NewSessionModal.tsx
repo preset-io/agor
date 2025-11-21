@@ -118,7 +118,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
   };
 
   const handleCreate = () => {
-    form.validateFields().then((values) => {
+    form.validateFields().then(values => {
       // Get user defaults for the selected agent (fallback if form fields weren't mounted)
       const agentDefaults = currentUser?.default_agentic_config?.[selectedAgent as AgenticToolName];
 
@@ -217,7 +217,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         >
           <AutocompleteTextarea
             value={form.getFieldValue('initialPrompt') || ''}
-            onChange={(value) => form.setFieldValue('initialPrompt', value)}
+            onChange={value => form.setFieldValue('initialPrompt', value)}
             placeholder="e.g., Build a JWT authentication system with secure password storage... (type @ for autocomplete)"
             autoSize={{ minRows: 4, maxRows: 8 }}
             client={client}

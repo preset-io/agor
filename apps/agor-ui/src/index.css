@@ -3,7 +3,7 @@
 /* Import Inter font from Bunny Fonts CDN (privacy-friendly, GDPR compliant) */
 /* Weights: 400 (regular), 500 (medium), 600 (semibold) */
 /* Total size: ~75KB for Latin subset, cached across sites */
-@import url("https://fonts.bunny.net/css?family=inter:400,500,600&display=swap");
+@import url('https://fonts.bunny.net/css?family=inter:400,500,600&display=swap');
 
 /* Blinking cursor animation for streaming messages */
 @keyframes blink {
@@ -25,63 +25,63 @@
 }
 
 /* Headings - reduce excessive margins from Tailwind defaults */
-[data-streamdown="heading-1"],
-[data-streamdown="heading-2"],
-[data-streamdown="heading-3"],
-[data-streamdown="heading-4"],
-[data-streamdown="heading-5"],
-[data-streamdown="heading-6"] {
+[data-streamdown='heading-1'],
+[data-streamdown='heading-2'],
+[data-streamdown='heading-3'],
+[data-streamdown='heading-4'],
+[data-streamdown='heading-5'],
+[data-streamdown='heading-6'] {
   margin-top: 1em;
   margin-bottom: 0.5em;
 }
 
 /* Links - inherit primary color from Ant Design */
-[data-streamdown="link"] {
+[data-streamdown='link'] {
   color: var(--ant-color-primary);
   text-decoration: underline;
 }
 
-[data-streamdown="link"]:hover {
+[data-streamdown='link']:hover {
   color: var(--ant-color-primary-hover);
 }
 
 /* Code blocks - use Ant Design's neutral colors */
-[data-streamdown="inline-code"] {
+[data-streamdown='inline-code'] {
   background-color: rgba(0, 0, 0, 0.06);
   padding: 0.2em 0.4em;
   border-radius: 3px;
-  font-family: "Consolas", "Monaco", "Courier New", monospace;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
 }
 
 /* Dark mode adjustments for inline code */
 @media (prefers-color-scheme: dark) {
-  [data-streamdown="inline-code"] {
+  [data-streamdown='inline-code'] {
     background-color: rgba(255, 255, 255, 0.08);
   }
 }
 
 /* Tables - match Ant Design table styling */
-[data-streamdown="table"] {
+[data-streamdown='table'] {
   border-color: var(--ant-color-border);
 }
 
-[data-streamdown="table-header"] {
+[data-streamdown='table-header'] {
   background-color: var(--ant-color-bg-container);
 }
 
-[data-streamdown="table-body"] {
+[data-streamdown='table-body'] {
   background-color: var(--ant-color-bg-layout);
 }
 
 /* Blockquotes - use Ant Design's text colors */
-[data-streamdown="blockquote"] {
+[data-streamdown='blockquote'] {
   border-left-color: var(--ant-color-border);
   color: var(--ant-color-text-secondary);
 }
 
 /* Lists - reduce spacing for better density */
-[data-streamdown="ordered-list"],
-[data-streamdown="unordered-list"] {
+[data-streamdown='ordered-list'],
+[data-streamdown='unordered-list'] {
   margin-top: 0.5em;
   margin-bottom: 0.5em;
 }
@@ -93,21 +93,21 @@
 }
 
 /* Remove padding/margin between code block header and content */
-[data-streamdown="code-block"] {
+[data-streamdown='code-block'] {
   padding-top: 0;
   margin-top: 0;
 }
 
-[data-streamdown="code-block"] pre {
+[data-streamdown='code-block'] pre {
   margin-top: 0;
   padding-top: 0;
 }
 
 /* Copy/Download button styling - override Tailwind classes */
 [data-code-block-header] button,
-[data-streamdown="mermaid-block"] button,
-[data-streamdown="table-wrapper"] button,
-[data-streamdown="image-wrapper"] button {
+[data-streamdown='mermaid-block'] button,
+[data-streamdown='table-wrapper'] button,
+[data-streamdown='image-wrapper'] button {
   /* Override Tailwind text-muted-foreground */
   color: var(--ant-color-text-secondary);
   background-color: transparent;
@@ -119,9 +119,9 @@
 }
 
 [data-code-block-header] button:hover:not(:disabled),
-[data-streamdown="mermaid-block"] button:hover:not(:disabled),
-[data-streamdown="table-wrapper"] button:hover:not(:disabled),
-[data-streamdown="image-wrapper"] button:hover:not(:disabled) {
+[data-streamdown='mermaid-block'] button:hover:not(:disabled),
+[data-streamdown='table-wrapper'] button:hover:not(:disabled),
+[data-streamdown='image-wrapper'] button:hover:not(:disabled) {
   /* Override Tailwind hover:text-foreground */
   color: var(--ant-color-text);
   background-color: var(--ant-color-fill-quaternary);
@@ -129,9 +129,9 @@
 }
 
 [data-code-block-header] button:disabled,
-[data-streamdown="mermaid-block"] button:disabled,
-[data-streamdown="table-wrapper"] button:disabled,
-[data-streamdown="image-wrapper"] button:disabled {
+[data-streamdown='mermaid-block'] button:disabled,
+[data-streamdown='table-wrapper'] button:disabled,
+[data-streamdown='image-wrapper'] button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }

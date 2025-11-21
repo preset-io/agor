@@ -112,7 +112,7 @@ export const WorktreeFormFields: React.FC<WorktreeFormFieldsProps> = ({
 
       <Form.Item name={`${fieldPrefix}refType`} label="Source Type" initialValue="branch">
         <Radio.Group
-          onChange={(e) => {
+          onChange={e => {
             setRefType(e.target.value);
             // Clear sourceBranch when switching to tag
             if (e.target.value === 'tag') {
@@ -158,7 +158,7 @@ export const WorktreeFormFields: React.FC<WorktreeFormFieldsProps> = ({
       <Form.Item>
         <Checkbox
           checked={useSameBranchName}
-          onChange={(e) => handleCheckboxChange(e.target.checked)}
+          onChange={e => handleCheckboxChange(e.target.checked)}
         >
           {refType === 'tag'
             ? 'Use worktree name as branch name (new branch from tag)'

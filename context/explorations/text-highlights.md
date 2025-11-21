@@ -90,7 +90,7 @@ interface TextWithHighlightsProps {
 <TextWithHighlights
   renderAs="markdown"
   patterns={[
-    useMentionPattern(userById),   // @mentions with UserCard popover
+    useMentionPattern(userById), // @mentions with UserCard popover
     useFilePattern(client, sessionId), // Files with FilePreview popover
   ]}
   isStreaming={isStreaming}
@@ -109,9 +109,7 @@ interface TextWithHighlightsProps {
 ### 1. User Mentions (@username)
 
 ```tsx
-export function useMentionPattern(
-  userById: Map<string, User>
-): HighlightPattern {
+export function useMentionPattern(userById: Map<string, User>): HighlightPattern {
   const { token } = theme.useToken();
 
   return {
@@ -119,9 +117,7 @@ export function useMentionPattern(
     regex: /@(?:"[^"]*"|[^\s]+)/g,
 
     render: (match: string, index: number) => {
-      const username = match.startsWith('@"')
-        ? match.slice(2, -1)
-        : match.slice(1);
+      const username = match.startsWith('@"') ? match.slice(2, -1) : match.slice(1);
 
       const user = Array.from(userById.values()).find(
         u => u.name === username || u.email.startsWith(username)
@@ -199,22 +195,22 @@ export function useFilePattern(
 
 ```tsx
 // GitHub issue numbers: #123
-useIssuePattern()
+useIssuePattern();
 
 // Git commits: abc123d
-useCommitPattern()
+useCommitPattern();
 
 // Pull requests: PR#456
-usePRPattern()
+usePRPattern();
 
 // Worktrees: wt:feature-branch
-useWorktreePattern()
+useWorktreePattern();
 
 // Task references: TASK-123
-useTaskPattern()
+useTaskPattern();
 
 // URLs with preview
-useUrlPattern()
+useUrlPattern();
 ```
 
 ---
@@ -262,10 +258,7 @@ interface FilePreviewCardProps {
   client: AgorClient | null;
 }
 
-export const FilePreviewCard: React.FC<FilePreviewCardProps> = ({
-  filename,
-  client
-}) => {
+export const FilePreviewCard: React.FC<FilePreviewCardProps> = ({ filename, client }) => {
   const [preview, setPreview] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -274,29 +267,31 @@ export const FilePreviewCard: React.FC<FilePreviewCardProps> = ({
 
     setLoading(true);
     // Fetch file preview (first 20 lines)
-    client.service('files').find({
-      query: { path: filename, limit: 20 }
-    })
+    client
+      .service('files')
+      .find({
+        query: { path: filename, limit: 20 },
+      })
       .then(result => setPreview(result.content))
       .finally(() => setLoading(false));
   }, [filename, client]);
 
   return (
     <div style={{ maxWidth: 400, maxHeight: 300 }}>
-      <div style={{ fontWeight: 600, marginBottom: 8 }}>
-        📄 {filename}
-      </div>
+      <div style={{ fontWeight: 600, marginBottom: 8 }}>📄 {filename}</div>
       {loading ? (
         <Spin size="small" />
       ) : preview ? (
-        <pre style={{
-          fontSize: 12,
-          overflow: 'auto',
-          maxHeight: 250,
-          backgroundColor: 'rgba(0,0,0,0.05)',
-          padding: 8,
-          borderRadius: 4,
-        }}>
+        <pre
+          style={{
+            fontSize: 12,
+            overflow: 'auto',
+            maxHeight: 250,
+            backgroundColor: 'rgba(0,0,0,0.05)',
+            padding: 8,
+            borderRadius: 4,
+          }}
+        >
           {preview}
         </pre>
       ) : (
@@ -314,11 +309,13 @@ export const FilePreviewCard: React.FC<FilePreviewCardProps> = ({
 ### Two-Phase Rendering
 
 **Phase 1: Parse and segment**
+
 1. Split text into segments (plain text + highlights)
 2. Track code block ranges to skip highlighting inside code
 3. Build segment array: `[{type: 'text', content: '...'}, {type: 'highlight', pattern: '...', content: '...'}]`
 
 **Phase 2: Render segments**
+
 1. For markdown: Render each segment separately through MarkdownRenderer
 2. For text: Render as React elements with styled spans
 3. Preserve markdown structure, apply highlights only to non-code content
@@ -369,6 +366,7 @@ apps/agor-ui/src/components/TextWithHighlights/
 ### Replace Usage in Components
 
 1. **MessageBlock** (`MessageBlock.tsx:485, :571`)
+
    ```tsx
    // BEFORE:
    <MarkdownRenderer content={text} inline isStreaming={isStreaming} />
@@ -398,6 +396,7 @@ apps/agor-ui/src/components/TextWithHighlights/
 ## Migration Strategy
 
 ### Phase 1: Build Foundation (Non-Breaking)
+
 1. Create `TextWithHighlights` component
 2. Create utility functions (`highlightUtils.ts`)
 3. Create preset patterns (`patterns.ts`)
@@ -405,12 +404,14 @@ apps/agor-ui/src/components/TextWithHighlights/
 5. Add Storybook stories for testing
 
 ### Phase 2: Replace MarkdownRenderer Usage
+
 1. Update `MessageBlock` to use `TextWithHighlights`
 2. Update `CollapsibleMarkdown` to use `TextWithHighlights`
 3. Update `CommentsPanel` for comment rendering
 4. Test in production with real messages
 
 ### Phase 3: Cleanup
+
 1. Remove `highlightMentionsInMarkdown` function (no longer needed)
 2. Keep `highlightMentionsInText` for textarea overlay (different use case)
 3. Update all call sites

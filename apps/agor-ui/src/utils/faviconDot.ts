@@ -64,7 +64,7 @@ export function createFaviconWithDot(
 
       resolve(canvas.toDataURL());
     };
-    img.onerror = (err) => {
+    img.onerror = err => {
       reject(err);
     };
     img.src = baseFaviconUrl;

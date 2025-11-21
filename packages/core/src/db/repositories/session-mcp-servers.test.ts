@@ -186,7 +186,7 @@ describe('SessionMCPServerRepository.addServer', () => {
 
     const servers = await repo.listServers(session.session_id);
     expect(servers).toHaveLength(3);
-    const serverIds = servers.map((s) => s.mcp_server_id);
+    const serverIds = servers.map(s => s.mcp_server_id);
     expect(serverIds).toContain(server1.mcp_server_id);
     expect(serverIds).toContain(server2.mcp_server_id);
     expect(serverIds).toContain(server3.mcp_server_id);
@@ -236,7 +236,7 @@ describe('SessionMCPServerRepository.removeServer', () => {
 
     const servers = await repo.listServers(session.session_id);
     expect(servers).toHaveLength(2);
-    const serverIds = servers.map((s) => s.mcp_server_id);
+    const serverIds = servers.map(s => s.mcp_server_id);
     expect(serverIds).toContain(server1.mcp_server_id);
     expect(serverIds).toContain(server3.mcp_server_id);
     expect(serverIds).not.toContain(server2.mcp_server_id);
@@ -341,7 +341,7 @@ describe('SessionMCPServerRepository.listServers', () => {
 
     const enabledServers = await repo.listServers(session.session_id, true);
     expect(enabledServers).toHaveLength(2);
-    const enabledIds = enabledServers.map((s) => s.mcp_server_id);
+    const enabledIds = enabledServers.map(s => s.mcp_server_id);
     expect(enabledIds).toContain(server1.mcp_server_id);
     expect(enabledIds).toContain(server3.mcp_server_id);
     expect(enabledIds).not.toContain(server2.mcp_server_id);
@@ -395,7 +395,7 @@ describe('SessionMCPServerRepository.setServers', () => {
 
     const servers = await repo.listServers(session.session_id);
     expect(servers).toHaveLength(2);
-    const serverIds = servers.map((s) => s.mcp_server_id);
+    const serverIds = servers.map(s => s.mcp_server_id);
     expect(serverIds).toContain(server2.mcp_server_id);
     expect(serverIds).toContain(server3.mcp_server_id);
     expect(serverIds).not.toContain(server1.mcp_server_id);

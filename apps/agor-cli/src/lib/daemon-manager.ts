@@ -177,7 +177,7 @@ export function readLogs(lines: number = 50): string {
   }
 
   const content = fs.readFileSync(logFile, 'utf-8');
-  const allLines = content.split('\n').filter((line) => line.trim() !== '');
+  const allLines = content.split('\n').filter(line => line.trim() !== '');
   const lastLines = allLines.slice(-lines);
 
   return lastLines.join('\n');

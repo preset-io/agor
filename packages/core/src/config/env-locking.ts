@@ -41,7 +41,7 @@ export async function withUserEnvironment<T>(
 
   // Create new lock promise
   let releaseLock: () => void;
-  const lock = new Promise<void>((resolve) => {
+  const lock = new Promise<void>(resolve => {
     releaseLock = resolve;
   });
   userEnvLocks.set(userId, lock);

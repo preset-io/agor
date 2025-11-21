@@ -80,7 +80,7 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           rules={[{ required: true }]}
           initialValue="stdio"
         >
-          <Select onChange={(value) => onTransportChange?.(value as 'stdio' | 'http' | 'sse')}>
+          <Select onChange={value => onTransportChange?.(value as 'stdio' | 'http' | 'sse')}>
             <Select.Option value="stdio">stdio (Local process)</Select.Option>
             <Select.Option value="http">HTTP</Select.Option>
             <Select.Option value="sse">SSE (Server-Sent Events)</Select.Option>
@@ -156,7 +156,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   const [transport, setTransport] = useState<'stdio' | 'http' | 'sse'>('stdio');
 
   const handleCreate = () => {
-    form.validateFields().then((values) => {
+    form.validateFields().then(values => {
       const data: CreateMCPServerInput = {
         name: values.name,
         display_name: values.display_name,
@@ -209,7 +209,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   const handleUpdate = () => {
     if (!editingServer) return;
 
-    form.validateFields().then((values) => {
+    form.validateFields().then(values => {
       const updates: UpdateMCPServerInput = {
         display_name: values.display_name,
         description: values.description,

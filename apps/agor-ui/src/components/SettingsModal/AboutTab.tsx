@@ -9,7 +9,7 @@ import { getDaemonUrl } from '../../config/daemon';
 
 // Lazy load particles
 const ParticleBackground = lazy(() =>
-  import('../LoginPage/ParticleBackground').then((module) => ({
+  import('../LoginPage/ParticleBackground').then(module => ({
     default: module.ParticleBackground,
   }))
 );
@@ -70,14 +70,14 @@ export const AboutTab: React.FC<AboutTabProps> = ({
       client
         .service('health')
         .find()
-        .then((data) => {
+        .then(data => {
           console.log('[AboutTab] Health info:', data);
           // Health endpoint returns a single object, not paginated
           const healthData = data as HealthInfo;
           console.log('[AboutTab] Database info:', healthData.database);
           setHealthInfo(healthData);
         })
-        .catch((err) => console.error('Failed to fetch health info:', err));
+        .catch(err => console.error('Failed to fetch health info:', err));
     }
   }, [client, isAdmin, connected]);
 

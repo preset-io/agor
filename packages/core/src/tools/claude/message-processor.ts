@@ -458,7 +458,7 @@ export class SDKMessageProcessor {
       const blockIndex = event.index;
 
       // Find the block that just completed
-      const completedBlock = this.state.contentBlockStack.find((b) => b.index === blockIndex);
+      const completedBlock = this.state.contentBlockStack.find(b => b.index === blockIndex);
 
       if (completedBlock?.type === 'tool_use') {
         console.debug(`🏁 Tool complete: ${completedBlock.toolName} (${completedBlock.toolUseId})`);
@@ -479,7 +479,7 @@ export class SDKMessageProcessor {
 
       // Remove from stack
       this.state.contentBlockStack = this.state.contentBlockStack.filter(
-        (b) => b.index !== blockIndex
+        b => b.index !== blockIndex
       );
     }
 
@@ -667,8 +667,8 @@ export class SDKMessageProcessor {
     }>
   ): Array<{ id: string; name: string; input: Record<string, unknown> }> {
     return contentBlocks
-      .filter((block) => block.type === 'tool_use' && block.id && block.name && block.input)
-      .map((block) => ({
+      .filter(block => block.type === 'tool_use' && block.id && block.name && block.input)
+      .map(block => ({
         id: block.id!,
         name: block.name!,
         input: block.input!,

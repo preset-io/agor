@@ -248,7 +248,7 @@ describe('env-blocklist', () => {
         'DYLD_INSERT_LIBRARIES',
         'DYLD_LIBRARY_PATH',
       ];
-      injectionVectors.forEach((vec) => {
+      injectionVectors.forEach(vec => {
         expect(isEnvVarAllowed(vec)).toBe(false);
         const reason = getEnvVarBlockReason(vec);
         const hasInjectionOrHijack =
@@ -259,7 +259,7 @@ describe('env-blocklist', () => {
 
     it('should block all system identity variables', () => {
       const systemVars = ['PATH', 'SHELL', 'HOME', 'USER', 'LOGNAME'];
-      systemVars.forEach((varName) => {
+      systemVars.forEach(varName => {
         expect(isEnvVarAllowed(varName)).toBe(false);
       });
     });

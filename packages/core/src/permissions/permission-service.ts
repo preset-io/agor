@@ -98,7 +98,7 @@ export class PermissionService {
     sessionId: SessionID,
     signal: AbortSignal
   ): Promise<PermissionDecision> {
-    return new Promise((resolve) => {
+    return new Promise(resolve => {
       // Handle cancellation
       signal.addEventListener('abort', () => {
         const pending = this.pendingRequests.get(requestId);

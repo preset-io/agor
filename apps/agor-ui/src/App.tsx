@@ -973,7 +973,143 @@ function AppContent() {
           }
         />
 
-        {/* Desktop routes */}
+        {/* Desktop routes - board with session (Django-style trailing slash) */}
+        <Route
+          path="/b/:boardParam/:sessionParam/"
+          element={
+            <>
+              <SandboxBanner />
+              <AgorApp
+                client={client}
+                user={currentUser}
+                connected={connected}
+                connecting={connecting}
+                sessionById={sessionById}
+                sessionsByWorktree={sessionsByWorktree}
+                availableAgents={AVAILABLE_AGENTS}
+                boardById={boardById}
+                boardObjectById={boardObjectById}
+                commentById={commentById}
+                repoById={repoById}
+                worktreeById={worktreeById}
+                userById={userById}
+                mcpServerById={mcpServerById}
+                sessionMcpServerIds={sessionMcpServerIds}
+                initialBoardId={Array.from(boardById.values())[0]?.board_id}
+                openSettingsTab={settingsTabToOpen}
+                onSettingsClose={handleSettingsClose}
+                openUserSettings={openUserSettings}
+                onUserSettingsClose={handleUserSettingsClose}
+                openNewWorktreeModal={openNewWorktree}
+                onNewWorktreeModalClose={handleNewWorktreeModalClose}
+                onCreateSession={handleCreateSession}
+                onForkSession={handleForkSession}
+                onSpawnSession={handleSpawnSession}
+                onSendPrompt={handleSendPrompt}
+                onUpdateSession={handleUpdateSession}
+                onDeleteSession={handleDeleteSession}
+                onCreateBoard={handleCreateBoard}
+                onUpdateBoard={handleUpdateBoard}
+                onDeleteBoard={handleDeleteBoard}
+                onCreateRepo={handleCreateRepo}
+                onCreateLocalRepo={handleCreateLocalRepo}
+                onUpdateRepo={handleUpdateRepo}
+                onDeleteRepo={handleDeleteRepo}
+                onArchiveOrDeleteWorktree={handleArchiveOrDeleteWorktree}
+                onUnarchiveWorktree={handleUnarchiveWorktree}
+                onUpdateWorktree={handleUpdateWorktree}
+                onCreateWorktree={handleCreateWorktree}
+                onStartEnvironment={handleStartEnvironment}
+                onStopEnvironment={handleStopEnvironment}
+                onCreateUser={handleCreateUser}
+                onUpdateUser={handleUpdateUser}
+                onDeleteUser={handleDeleteUser}
+                // biome-ignore lint/suspicious/noExplicitAny: CreateMCPServerInput vs Partial<MCPServer> type mismatch
+                onCreateMCPServer={handleCreateMCPServer as any}
+                onUpdateMCPServer={handleUpdateMCPServer}
+                onDeleteMCPServer={handleDeleteMCPServer}
+                onUpdateSessionMcpServers={handleUpdateSessionMcpServers}
+                onSendComment={handleSendComment}
+                onReplyComment={handleReplyComment}
+                onResolveComment={handleResolveComment}
+                onToggleReaction={handleToggleReaction}
+                onDeleteComment={handleDeleteComment}
+                onLogout={logout}
+                onRetryConnection={retryConnection}
+              />
+            </>
+          }
+        />
+
+        {/* Desktop routes - board only (Django-style trailing slash) */}
+        <Route
+          path="/b/:boardParam/"
+          element={
+            <>
+              <SandboxBanner />
+              <AgorApp
+                client={client}
+                user={currentUser}
+                connected={connected}
+                connecting={connecting}
+                sessionById={sessionById}
+                sessionsByWorktree={sessionsByWorktree}
+                availableAgents={AVAILABLE_AGENTS}
+                boardById={boardById}
+                boardObjectById={boardObjectById}
+                commentById={commentById}
+                repoById={repoById}
+                worktreeById={worktreeById}
+                userById={userById}
+                mcpServerById={mcpServerById}
+                sessionMcpServerIds={sessionMcpServerIds}
+                initialBoardId={Array.from(boardById.values())[0]?.board_id}
+                openSettingsTab={settingsTabToOpen}
+                onSettingsClose={handleSettingsClose}
+                openUserSettings={openUserSettings}
+                onUserSettingsClose={handleUserSettingsClose}
+                openNewWorktreeModal={openNewWorktree}
+                onNewWorktreeModalClose={handleNewWorktreeModalClose}
+                onCreateSession={handleCreateSession}
+                onForkSession={handleForkSession}
+                onSpawnSession={handleSpawnSession}
+                onSendPrompt={handleSendPrompt}
+                onUpdateSession={handleUpdateSession}
+                onDeleteSession={handleDeleteSession}
+                onCreateBoard={handleCreateBoard}
+                onUpdateBoard={handleUpdateBoard}
+                onDeleteBoard={handleDeleteBoard}
+                onCreateRepo={handleCreateRepo}
+                onCreateLocalRepo={handleCreateLocalRepo}
+                onUpdateRepo={handleUpdateRepo}
+                onDeleteRepo={handleDeleteRepo}
+                onArchiveOrDeleteWorktree={handleArchiveOrDeleteWorktree}
+                onUnarchiveWorktree={handleUnarchiveWorktree}
+                onUpdateWorktree={handleUpdateWorktree}
+                onCreateWorktree={handleCreateWorktree}
+                onStartEnvironment={handleStartEnvironment}
+                onStopEnvironment={handleStopEnvironment}
+                onCreateUser={handleCreateUser}
+                onUpdateUser={handleUpdateUser}
+                onDeleteUser={handleDeleteUser}
+                // biome-ignore lint/suspicious/noExplicitAny: CreateMCPServerInput vs Partial<MCPServer> type mismatch
+                onCreateMCPServer={handleCreateMCPServer as any}
+                onUpdateMCPServer={handleUpdateMCPServer}
+                onDeleteMCPServer={handleDeleteMCPServer}
+                onUpdateSessionMcpServers={handleUpdateSessionMcpServers}
+                onSendComment={handleSendComment}
+                onReplyComment={handleReplyComment}
+                onResolveComment={handleResolveComment}
+                onToggleReaction={handleToggleReaction}
+                onDeleteComment={handleDeleteComment}
+                onLogout={logout}
+                onRetryConnection={retryConnection}
+              />
+            </>
+          }
+        />
+
+        {/* Desktop routes - fallback for root path */}
         <Route
           path="/*"
           element={

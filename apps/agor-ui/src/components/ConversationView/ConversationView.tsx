@@ -240,7 +240,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
     useEffect(() => {
       if (tasks.length > 0) {
         const lastTaskId = tasks[tasks.length - 1].task_id;
-        setExpandedTaskIds((prev) => {
+        setExpandedTaskIds(prev => {
           // If no tasks expanded or last task changed, expand the last task
           if (prev.size === 0 || !prev.has(lastTaskId)) {
             // Scroll to bottom after expansion is rendered
@@ -256,7 +256,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
 
     // Handle task expand/collapse
     const handleTaskExpandChange = useCallback((taskId: string, expanded: boolean) => {
-      setExpandedTaskIds((prev) => {
+      setExpandedTaskIds(prev => {
         const next = new Set(prev);
         if (expanded) {
           next.add(taskId);
@@ -401,7 +401,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
         <GenealogyBanner />
 
         {/* Task-organized conversation */}
-        {tasks.map((task) => (
+        {tasks.map(task => (
           <TaskBlock
             key={task.task_id}
             task={task}

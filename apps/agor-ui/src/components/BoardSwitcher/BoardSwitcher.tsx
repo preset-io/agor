@@ -24,14 +24,14 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
   const { token } = useToken();
 
   // Get current board
-  const currentBoard = boards.find((b) => b.board_id === currentBoardId);
+  const currentBoard = boards.find(b => b.board_id === currentBoardId);
 
   // Count worktrees per board
   const worktreeCountByBoard = useMemo(() => {
     const counts = new Map<string, number>();
 
     // Initialize all boards with 0
-    boards.forEach((board) => {
+    boards.forEach(board => {
       counts.set(board.board_id, 0);
     });
 
@@ -47,7 +47,7 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
 
   // Build menu items
   const menuItems: MenuProps['items'] = useMemo(() => {
-    return boards.map((board) => {
+    return boards.map(board => {
       const worktreeCount = worktreeCountByBoard.get(board.board_id) || 0;
       const isActive = board.board_id === currentBoardId;
 

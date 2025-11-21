@@ -60,10 +60,10 @@ export const useEmojiAutocomplete = () => {
         const lowerQuery = query.toLowerCase();
 
         // Filter emojis by shortcode or keyword match
-        const matches = allEmojis.filter((emoji) => {
+        const matches = allEmojis.filter(emoji => {
           const shortcodeMatch = emoji.shortcode.toLowerCase().includes(lowerQuery);
           const keywordMatch =
-            emoji.keywords?.some((kw) => kw.toLowerCase().includes(lowerQuery)) || false;
+            emoji.keywords?.some(kw => kw.toLowerCase().includes(lowerQuery)) || false;
           return shortcodeMatch || keywordMatch;
         });
 

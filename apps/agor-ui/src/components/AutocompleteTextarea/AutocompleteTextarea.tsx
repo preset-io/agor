@@ -308,7 +308,7 @@ export const AutocompleteTextarea = React.forwardRef<
     React.useEffect(() => {
       if (autocompleteOptions.length > 0 && showPopover) {
         // Find first non-heading item and highlight it
-        const firstItemIndex = autocompleteOptions.findIndex((item) => !('heading' in item));
+        const firstItemIndex = autocompleteOptions.findIndex(item => !('heading' in item));
         if (firstItemIndex >= 0) {
           setHighlightedIndex(firstItemIndex);
         }
@@ -376,7 +376,7 @@ export const AutocompleteTextarea = React.forwardRef<
           // Instant emoji search (no debounce needed)
           const emojis = searchEmojis(colonTrigger.query);
           setEmojiResults(
-            emojis.slice(0, MAX_EMOJI_RESULTS).map((e) => ({
+            emojis.slice(0, MAX_EMOJI_RESULTS).map(e => ({
               emoji: e.emoji,
               shortcode: e.shortcode,
               type: 'emoji' as const,
@@ -458,7 +458,7 @@ export const AutocompleteTextarea = React.forwardRef<
             if (isPopoverOpen) {
               e.preventDefault();
               e.stopPropagation();
-              setHighlightedIndex((prev) => {
+              setHighlightedIndex(prev => {
                 // Find next non-heading item
                 let nextIndex = prev + 1;
                 while (nextIndex < autocompleteOptions.length) {
@@ -476,7 +476,7 @@ export const AutocompleteTextarea = React.forwardRef<
             if (isPopoverOpen) {
               e.preventDefault();
               e.stopPropagation();
-              setHighlightedIndex((prev) => {
+              setHighlightedIndex(prev => {
                 // Find previous non-heading item
                 let prevIndex = prev - 1;
                 while (prevIndex >= 0) {
@@ -502,7 +502,7 @@ export const AutocompleteTextarea = React.forwardRef<
                 }
               } else if (autocompleteOptions.length > 0) {
                 // If nothing highlighted, highlight first non-heading item
-                const firstItem = autocompleteOptions.find((item) => !('heading' in item));
+                const firstItem = autocompleteOptions.find(item => !('heading' in item));
                 if (firstItem) {
                   const idx = autocompleteOptions.indexOf(firstItem);
                   setHighlightedIndex(idx);
@@ -524,7 +524,7 @@ export const AutocompleteTextarea = React.forwardRef<
                 }
               } else {
                 // Nothing highlighted - select first non-heading item (like Slack)
-                const firstItem = autocompleteOptions.find((item) => !('heading' in item));
+                const firstItem = autocompleteOptions.find(item => !('heading' in item));
                 if (firstItem) {
                   handleSelect(firstItem as FileResult | UserResult | EmojiResult);
                 }
@@ -650,11 +650,11 @@ export const AutocompleteTextarea = React.forwardRef<
                   alignItems: 'center',
                   gap: token.paddingXS,
                 }}
-                onMouseEnter={(e) => {
+                onMouseEnter={e => {
                   setHighlightedIndex(idx);
                   e.currentTarget.style.backgroundColor = token.colorBgTextHover;
                 }}
-                onMouseLeave={(e) => {
+                onMouseLeave={e => {
                   setHighlightedIndex(-1);
                   e.currentTarget.style.backgroundColor = 'transparent';
                 }}
@@ -724,7 +724,7 @@ export const AutocompleteTextarea = React.forwardRef<
 
           {/* Textarea (with transparent background to show highlights) */}
           <TextArea
-            ref={(node) => {
+            ref={node => {
               let textarea: HTMLTextAreaElement | null = null;
               if (
                 node &&

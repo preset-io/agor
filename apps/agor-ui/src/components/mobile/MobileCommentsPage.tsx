@@ -73,7 +73,7 @@ export const MobileCommentsPage: React.FC<MobileCommentsPageProps> = ({
           currentUserId={currentUser?.user_id || 'anonymous'}
           boardObjects={board?.objects}
           worktreeById={worktreeById}
-          onSendComment={(content) => onSendComment(boardId, content)}
+          onSendComment={content => onSendComment(boardId, content)}
           onReplyComment={onReplyComment}
           onResolveComment={onResolveComment}
           onToggleReaction={onToggleReaction}

@@ -363,7 +363,7 @@ describe('BoardRepository.findAll', () => {
     const boards = await repo.findAll();
 
     expect(boards).toHaveLength(3);
-    expect(boards.map((b) => b.name).sort()).toEqual(['Board 1', 'Board 2', 'Board 3']);
+    expect(boards.map(b => b.name).sort()).toEqual(['Board 1', 'Board 2', 'Board 3']);
   });
 
   dbTest('should return fully populated board objects', async ({ db }) => {
@@ -471,7 +471,7 @@ describe('BoardRepository.update', () => {
     const data = createBoardData();
     const created = await repo.create(data);
 
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise(resolve => setTimeout(resolve, 10));
 
     const updated = await repo.update(data.board_id!, { name: 'Updated' });
 
@@ -593,7 +593,7 @@ describe('BoardRepository.getDefault', () => {
     expect(first.board_id).toBe(second.board_id);
 
     const allBoards = await repo.findAll();
-    const defaultBoards = allBoards.filter((b) => b.slug === 'default');
+    const defaultBoards = allBoards.filter(b => b.slug === 'default');
     expect(defaultBoards).toHaveLength(1);
   });
 });

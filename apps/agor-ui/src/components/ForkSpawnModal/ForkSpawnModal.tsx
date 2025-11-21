@@ -30,7 +30,7 @@ import type { ModelConfig } from '../ModelSelector';
 
 // Register helper to check if value is defined (not undefined)
 // This allows us to distinguish between false and undefined in templates
-Handlebars.registerHelper('isDefined', (value) => value !== undefined);
+Handlebars.registerHelper('isDefined', value => value !== undefined);
 
 // Compile template once at module load (after helper registration)
 const compiledSpawnTemplate = Handlebars.compile(spawnSubsessionTemplate);
@@ -272,7 +272,7 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
         >
           <AutocompleteTextarea
             value={form.getFieldValue('prompt') || ''}
-            onChange={(value) => form.setFieldValue('prompt', value)}
+            onChange={value => form.setFieldValue('prompt', value)}
             placeholder={
               action === 'fork'
                 ? 'Try a different approach by... (type @ for autocomplete)'
@@ -292,7 +292,7 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
             <Form.Item label="Configuration Preset">
               <Radio.Group
                 value={configPreset}
-                onChange={(e) => setConfigPreset(e.target.value)}
+                onChange={e => setConfigPreset(e.target.value)}
                 buttonStyle="solid"
               >
                 <Radio.Button value="parent">Same as Parent</Radio.Button>
@@ -305,11 +305,11 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
               <AgentSelectionGrid
                 agents={AVAILABLE_AGENTS}
                 selectedAgentId={selectedAgent}
-                onSelect={(agentId) => {
+                onSelect={agentId => {
                   setSelectedAgent(agentId as AgenticToolName);
                   form.setFieldValue('agent', agentId);
                   // Manually update formValues to trigger template re-render
-                  setFormValues((prev) => ({ ...prev, agent: agentId as AgenticToolName }));
+                  setFormValues(prev => ({ ...prev, agent: agentId as AgenticToolName }));
                 }}
                 columns={2}
               />
@@ -377,7 +377,7 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
             >
               <AutocompleteTextarea
                 value={form.getFieldValue('extraInstructions') || ''}
-                onChange={(value) => form.setFieldValue('extraInstructions', value)}
+                onChange={value => form.setFieldValue('extraInstructions', value)}
                 placeholder='e.g., "Only use safe operations", "Prioritize performance" (type @ for autocomplete)'
                 autoSize={{ minRows: 2, maxRows: 4 }}
                 client={client}

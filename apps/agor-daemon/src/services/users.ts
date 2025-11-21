@@ -80,7 +80,7 @@ export class UsersService {
       rows = await select(this.db).from(users).all();
     }
 
-    const results = rows.map((row) => this.rowToUser(row, includePassword));
+    const results = rows.map(row => this.rowToUser(row, includePassword));
 
     return {
       total: results.length,
@@ -220,7 +220,7 @@ export class UsersService {
             // Validate and encrypt
             const errors = validateEnvVar(key, value);
             if (errors.length > 0) {
-              const message = errors.map((e) => e.message).join('; ');
+              const message = errors.map(e => e.message).join('; ');
               throw new Error(`Invalid environment variable: ${message}`);
             }
 
@@ -381,7 +381,7 @@ export class UsersService {
         : undefined,
       // Return env var status (boolean), NOT actual values
       env_vars: data.env_vars
-        ? Object.fromEntries(Object.keys(data.env_vars).map((key) => [key, true]))
+        ? Object.fromEntries(Object.keys(data.env_vars).map(key => [key, true]))
         : undefined,
       // Return default agentic config
       default_agentic_config: data.default_agentic_config,
@@ -446,7 +446,7 @@ class UsersServiceWithAuth extends UsersService {
           }
         : undefined,
       env_vars: data.env_vars
-        ? Object.fromEntries(Object.keys(data.env_vars).map((key) => [key, true]))
+        ? Object.fromEntries(Object.keys(data.env_vars).map(key => [key, true]))
         : undefined,
     };
   }

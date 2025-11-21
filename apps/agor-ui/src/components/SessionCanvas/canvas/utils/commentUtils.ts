@@ -51,7 +51,7 @@ export function getZoneParentInfo(zoneId: string, board?: Board): ParentInfo {
  * // { parentId: 'wt_123', parentLabel: '🌳 feature-branch', parentColor: undefined }
  */
 export function getWorktreeParentInfo(worktreeId: string, worktrees: Worktree[]): ParentInfo {
-  const worktree = worktrees.find((w) => w.worktree_id === worktreeId);
+  const worktree = worktrees.find(w => w.worktree_id === worktreeId);
   return {
     parentId: worktreeId,
     parentLabel: worktree ? `🌳 ${worktree.name}` : undefined,

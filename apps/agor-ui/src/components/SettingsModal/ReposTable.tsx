@@ -143,7 +143,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({
   };
 
   const handleSaveRepo = () => {
-    repoForm.validateFields().then((values) => {
+    repoForm.validateFields().then(values => {
       if (isEditing && editingRepo) {
         // Update existing repo
         const updates: Partial<Repo> = {

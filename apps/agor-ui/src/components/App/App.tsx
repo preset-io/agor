@@ -21,6 +21,7 @@ import { mapToArray } from '@/utils/mapHelpers';
 import { useEventStream } from '../../hooks/useEventStream';
 import { useFaviconStatus } from '../../hooks/useFaviconStatus';
 import { usePresence } from '../../hooks/usePresence';
+import { useUrlState } from '../../hooks/useUrlState';
 import type { AgenticToolOption } from '../../types';
 import { useThemedMessage } from '../../utils/message';
 import { AppHeader } from '../AppHeader';
@@ -214,7 +215,7 @@ export const App: React.FC<AppProps> = ({
   });
 
   // Initialize current board from localStorage or fallback to first board or initialBoardId
-  const [currentBoardId, setCurrentBoardId] = useState(() => {
+  const [currentBoardId, setCurrentBoardIdInternal] = useState(() => {
     const stored = localStorage.getItem('agor:currentBoardId');
     if (stored && boardById.has(stored)) {
       return stored;
@@ -229,6 +230,25 @@ export const App: React.FC<AppProps> = ({
       localStorage.setItem('agor:currentBoardId', currentBoardId);
     }
   }, [currentBoardId]);
+
+  // URL state synchronization - bidirectional sync between URL and state
+  useUrlState({
+    currentBoardId,
+    currentSessionId: selectedSessionId,
+    boardById,
+    sessionById,
+    onBoardChange: (boardId) => {
+      setCurrentBoardIdInternal(boardId);
+    },
+    onSessionChange: (sessionId) => {
+      setSelectedSessionId(sessionId);
+    },
+  });
+
+  // Wrapper to update board ID (updates both state and URL via hook)
+  const setCurrentBoardId = useCallback((boardId: string) => {
+    setCurrentBoardIdInternal(boardId);
+  }, []);
 
   // Persist comments panel collapsed state to localStorage
   useEffect(() => {
@@ -246,7 +266,7 @@ export const App: React.FC<AppProps> = ({
       const fallback = mapToArray(boardById)[0]?.board_id || '';
       setCurrentBoardId(fallback);
     }
-  }, [boardById, currentBoardId]);
+  }, [boardById, currentBoardId, setCurrentBoardId]);
 
   // Update favicon based on session activity on current board
   useFaviconStatus(currentBoardId, sessionsByWorktree, mapToArray(boardObjectById));

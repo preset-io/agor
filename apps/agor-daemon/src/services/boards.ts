@@ -45,6 +45,13 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
   }
 
   /**
+   * Custom method: Find board by slug or ID (for URL routing)
+   */
+  async findBySlugOrId(param: string, _params?: BoardParams): Promise<Board | null> {
+    return this.boardRepo.findBySlugOrId(param);
+  }
+
+  /**
    * DEPRECATED: Add session to board
    * Use board-objects service instead
    */

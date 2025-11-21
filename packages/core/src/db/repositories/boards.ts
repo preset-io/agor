@@ -5,8 +5,9 @@
  */
 
 import type { Board, BoardObject, UUID } from '@agor/core/types';
-import { eq, like } from 'drizzle-orm';
+import { and, eq, like, ne } from 'drizzle-orm';
 import { formatShortId, generateId } from '../../lib/ids';
+import { generateSlug, identifyUrlParam } from '../../lib/slugs';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { type BoardInsert, type BoardRow, boards } from '../schema';
@@ -105,10 +106,48 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
   }
 
   /**
+   * Generate a unique slug for a board
+   */
+  private async generateUniqueSlug(name: string, excludeId?: string): Promise<string> {
+    const baseSlug = generateSlug(name);
+    if (!baseSlug) return '';
+
+    // Check if base slug is available
+    const existingQuery = excludeId
+      ? select(this.db)
+          .from(boards)
+          .where(and(eq(boards.slug, baseSlug), ne(boards.board_id, excludeId)))
+      : select(this.db).from(boards).where(eq(boards.slug, baseSlug));
+
+    const existing = await existingQuery.one();
+    if (!existing) return baseSlug;
+
+    // Find next available suffix
+    let counter = 1;
+    while (true) {
+      const candidateSlug = `${baseSlug}-${counter}`;
+      const checkQuery = excludeId
+        ? select(this.db)
+            .from(boards)
+            .where(and(eq(boards.slug, candidateSlug), ne(boards.board_id, excludeId)))
+        : select(this.db).from(boards).where(eq(boards.slug, candidateSlug));
+
+      const found = await checkQuery.one();
+      if (!found) return candidateSlug;
+      counter++;
+    }
+  }
+
+  /**
    * Create a new board
    */
   async create(data: Partial<Board>): Promise<Board> {
     try {
+      // Auto-generate slug if not provided
+      if (!data.slug && data.name) {
+        data.slug = await this.generateUniqueSlug(data.name);
+      }
+
       const insertData = this.boardToInsert(data);
       await insert(this.db, boards).values(insertData).run();
 
@@ -164,6 +203,26 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
         error
       );
     }
+  }
+
+  /**
+   * Find board by slug or ID (for URL routing)
+   *
+   * Tries slug first if it looks like a slug, otherwise treats as ID.
+   * This enables beautiful URLs like /b/my-board while still supporting /b/550e8400
+   */
+  async findBySlugOrId(param: string): Promise<Board | null> {
+    const paramType = identifyUrlParam(param);
+
+    if (paramType === 'slug') {
+      // Try as slug first
+      const bySlug = await this.findBySlug(param);
+      if (bySlug) return bySlug;
+      // Fall through to try as ID (in case someone has a numeric slug)
+    }
+
+    // Try as ID (short or full)
+    return this.findById(param);
   }
 
   /**

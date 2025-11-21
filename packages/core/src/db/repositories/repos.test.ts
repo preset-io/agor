@@ -357,7 +357,7 @@ describe('RepoRepository.findAll', () => {
     const repos = await repo.findAll();
 
     expect(repos).toHaveLength(3);
-    expect(repos.map((r) => r.slug).sort()).toEqual(['repo-1', 'repo-2', 'repo-3']);
+    expect(repos.map(r => r.slug).sort()).toEqual(['repo-1', 'repo-2', 'repo-3']);
   });
 
   dbTest('should return fully populated repo objects', async ({ db }) => {
@@ -489,7 +489,7 @@ describe('RepoRepository.update', () => {
     const created = await repo.create(data);
 
     // Wait a bit to ensure timestamp differs
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise(resolve => setTimeout(resolve, 10));
 
     const updated = await repo.update(data.repo_id, { name: 'Updated' });
 
