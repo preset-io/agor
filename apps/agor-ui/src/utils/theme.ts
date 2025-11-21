@@ -13,43 +13,40 @@ export const isDarkTheme = (token: { colorBgLayout?: string | undefined }): bool
   false;
 
 /**
- * Ensures a color has sufficient visibility by adjusting lightness while preserving hue.
- * For dark themes: increases lightness for pale colors
- * For light themes: decreases lightness for pale colors
+ * Ensures a color has sufficient visibility by adjusting brightness while preserving hue.
+ * For dark themes: increases brightness for pale colors
+ * For light themes: decreases brightness for pale colors
  *
  * @param color - Input color (any CSS color format)
  * @param isDark - Whether the current theme is dark
- * @param minLightness - Minimum lightness percentage for dark theme (0-100)
- * @param maxLightness - Maximum lightness percentage for light theme (0-100)
+ * @param minBrightness - Minimum brightness percentage for dark theme (0-100)
+ * @param maxBrightness - Maximum brightness percentage for light theme (0-100)
  * @returns Adjusted color as hex string
  */
 export const ensureColorVisible = (
   color: string,
   isDark: boolean,
-  minLightness = 50,
-  maxLightness = 50
+  minBrightness = 50,
+  maxBrightness = 50
 ): string => {
   try {
     // Clamp inputs to valid range [0, 100]
-    const clampedMin = Math.max(0, Math.min(100, minLightness));
-    const clampedMax = Math.max(0, Math.min(100, maxLightness));
+    const clampedMin = Math.max(0, Math.min(100, minBrightness));
+    const clampedMax = Math.max(0, Math.min(100, maxBrightness));
 
     const colorObj = new AggregationColor(color);
-    const hsl = colorObj.toHsl();
-
-    // Convert lightness from [0, 1] to [0, 100] for comparison
-    const lightnessPercent = hsl.l * 100;
+    const hsb = colorObj.toHsb();
 
     // For dark theme: ensure color is bright enough
-    if (isDark && lightnessPercent < clampedMin) {
-      hsl.l = clampedMin / 100;
-      return new AggregationColor(hsl).toHexString();
+    if (isDark && hsb.b < clampedMin) {
+      hsb.b = clampedMin;
+      return new AggregationColor(hsb).toHexString();
     }
 
     // For light theme: ensure color is dark enough
-    if (!isDark && lightnessPercent > clampedMax) {
-      hsl.l = clampedMax / 100;
-      return new AggregationColor(hsl).toHexString();
+    if (!isDark && hsb.b > clampedMax) {
+      hsb.b = clampedMax;
+      return new AggregationColor(hsb).toHexString();
     }
 
     // Color is already visible

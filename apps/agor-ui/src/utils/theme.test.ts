@@ -25,107 +25,107 @@ describe('isDarkTheme', () => {
 
 describe('ensureColorVisible', () => {
   describe('dark theme', () => {
-    it('increases lightness for pale colors', () => {
-      // Very pale color (lightness ~88%) should be adjusted to 50%
+    it('increases brightness for pale colors', () => {
+      // Very pale color (brightness ~88%) should be adjusted to 50%
       const result = ensureColorVisible('#e0e0e0', true, 50);
       expect(result).toMatch(/^#[0-9a-f]{6}$/i);
 
-      // Verify lightness was actually adjusted to 50%
+      // Verify brightness was actually adjusted to 50%
       const resultColor = new AggregationColor(result);
-      const resultHsl = resultColor.toHsl();
-      expect(Math.round(resultHsl.l * 100)).toBe(50);
+      const resultHsb = resultColor.toHsb();
+      expect(Math.round(resultHsb.b)).toBe(50);
     });
 
-    it('preserves hue when adjusting lightness', () => {
+    it('preserves hue when adjusting brightness', () => {
       // Pale blue should become a more saturated blue
       const paleBlue = '#d0d0ff'; // Very pale blue
       const inputColor = new AggregationColor(paleBlue);
-      const inputHsl = inputColor.toHsl();
+      const inputHsb = inputColor.toHsb();
 
       const result = ensureColorVisible(paleBlue, true, 50);
       const resultColor = new AggregationColor(result);
-      const resultHsl = resultColor.toHsl();
+      const resultHsb = resultColor.toHsb();
 
       // Hue should be preserved (blue)
-      expect(Math.round(resultHsl.h)).toBe(Math.round(inputHsl.h));
-      // Lightness should be adjusted to 50%
-      expect(Math.round(resultHsl.l * 100)).toBe(50);
+      expect(Math.round(resultHsb.h)).toBe(Math.round(inputHsb.h));
+      // Brightness should be adjusted to 50%
+      expect(Math.round(resultHsb.b)).toBe(50);
     });
 
     it('does not modify already visible colors', () => {
-      // Color with 60% lightness should not be changed (above 50% minimum)
+      // Color with 100% brightness should not be changed (above 50% minimum)
       const visibleColor = '#8080ff';
       const inputColor = new AggregationColor(visibleColor);
-      const inputHsl = inputColor.toHsl();
+      const inputHsb = inputColor.toHsb();
 
       const result = ensureColorVisible(visibleColor, true, 50);
       const resultColor = new AggregationColor(result);
-      const resultHsl = resultColor.toHsl();
+      const resultHsb = resultColor.toHsb();
 
-      // Lightness should remain unchanged (already above 50%)
-      expect(Math.round(resultHsl.l * 100)).toBe(Math.round(inputHsl.l * 100));
+      // Brightness should remain unchanged (already above 50%)
+      expect(Math.round(resultHsb.b)).toBe(Math.round(inputHsb.b));
     });
 
-    it('handles custom minimum lightness', () => {
+    it('handles custom minimum brightness', () => {
       const paleColor = '#e0e0e0';
       const result = ensureColorVisible(paleColor, true, 60);
       const resultColor = new AggregationColor(result);
-      const resultHsl = resultColor.toHsl();
+      const resultHsb = resultColor.toHsb();
 
       // Should be adjusted to custom 60% threshold
-      expect(Math.round(resultHsl.l * 100)).toBe(60);
+      expect(Math.round(resultHsb.b)).toBe(60);
     });
   });
 
   describe('light theme', () => {
-    it('decreases lightness for pale colors', () => {
-      // Very pale color (lightness ~94%) should be adjusted to 50%
+    it('decreases brightness for pale colors', () => {
+      // Very pale color (brightness ~94%) should be adjusted to 50%
       const result = ensureColorVisible('#f0f0f0', false, 50, 50);
       const resultColor = new AggregationColor(result);
-      const resultHsl = resultColor.toHsl();
+      const resultHsb = resultColor.toHsb();
 
       // Should be darkened to 50%
-      expect(Math.round(resultHsl.l * 100)).toBe(50);
+      expect(Math.round(resultHsb.b)).toBe(50);
     });
 
-    it('preserves hue when adjusting lightness', () => {
+    it('preserves hue when adjusting brightness', () => {
       // Pale yellow should become a more saturated yellow
       const paleYellow = '#ffffcc';
       const inputColor = new AggregationColor(paleYellow);
-      const inputHsl = inputColor.toHsl();
+      const inputHsb = inputColor.toHsb();
 
       const result = ensureColorVisible(paleYellow, false, 50, 50);
       const resultColor = new AggregationColor(result);
-      const resultHsl = resultColor.toHsl();
+      const resultHsb = resultColor.toHsb();
 
       // Hue should be preserved (yellow)
-      expect(Math.round(resultHsl.h)).toBe(Math.round(inputHsl.h));
-      // Lightness should be adjusted to 50%
-      expect(Math.round(resultHsl.l * 100)).toBe(50);
+      expect(Math.round(resultHsb.h)).toBe(Math.round(inputHsb.h));
+      // Brightness should be adjusted to 50%
+      expect(Math.round(resultHsb.b)).toBe(50);
     });
 
     it('does not modify already visible colors', () => {
-      // Color with 40% lightness should not be changed (below 50% maximum)
+      // Color with 40% brightness should not be changed (below 50% maximum)
       const visibleColor = '#666666';
       const inputColor = new AggregationColor(visibleColor);
-      const inputHsl = inputColor.toHsl();
+      const inputHsb = inputColor.toHsb();
 
       const result = ensureColorVisible(visibleColor, false, 50, 50);
       const resultColor = new AggregationColor(result);
-      const resultHsl = resultColor.toHsl();
+      const resultHsb = resultColor.toHsb();
 
-      // Lightness should remain unchanged (already below 50%)
-      expect(Math.round(resultHsl.l * 100)).toBe(Math.round(inputHsl.l * 100));
+      // Brightness should remain unchanged (already below 50%)
+      expect(Math.round(resultHsb.b)).toBe(Math.round(inputHsb.b));
     });
 
-    it('handles custom maximum lightness', () => {
+    it('handles custom maximum brightness', () => {
       const paleColor = '#f0f0f0';
       const result = ensureColorVisible(paleColor, false, 50, 40);
       const resultColor = new AggregationColor(result);
-      const resultHsl = resultColor.toHsl();
+      const resultHsb = resultColor.toHsb();
 
       // Should be darkened to custom 40% threshold
-      expect(Math.round(resultHsl.l * 100)).toBe(40);
+      expect(Math.round(resultHsb.b)).toBe(40);
     });
   });
 
@@ -133,19 +133,19 @@ describe('ensureColorVisible', () => {
     it('handles black color in dark theme', () => {
       const result = ensureColorVisible('#000000', true, 50);
       const resultColor = new AggregationColor(result);
-      const resultHsl = resultColor.toHsl();
+      const resultHsb = resultColor.toHsb();
 
-      // Black (0% lightness) should be brightened to 50%
-      expect(Math.round(resultHsl.l * 100)).toBe(50);
+      // Black (0% brightness) should be brightened to 50%
+      expect(Math.round(resultHsb.b)).toBe(50);
     });
 
     it('handles white color in light theme', () => {
       const result = ensureColorVisible('#ffffff', false, 50, 50);
       const resultColor = new AggregationColor(result);
-      const resultHsl = resultColor.toHsl();
+      const resultHsb = resultColor.toHsb();
 
-      // White (100% lightness) should be darkened to 50%
-      expect(Math.round(resultHsl.l * 100)).toBe(50);
+      // White (100% brightness) should be darkened to 50%
+      expect(Math.round(resultHsb.b)).toBe(50);
     });
 
     it('handles invalid color input', () => {
@@ -167,14 +167,14 @@ describe('ensureColorVisible', () => {
 
   describe('real-world zone colors', () => {
     it('ensures visibility for common pale zone borders', () => {
-      // Pale lavender (lightness ~96%)
+      // Pale lavender (brightness ~98%)
       const paleLavender = '#e6e6fa';
       const result = ensureColorVisible(paleLavender, true, 50);
       const resultColor = new AggregationColor(result);
-      const resultHsl = resultColor.toHsl();
+      const resultHsb = resultColor.toHsb();
 
-      // Should be adjusted to 50% lightness
-      expect(Math.round(resultHsl.l * 100)).toBe(50);
+      // Should be adjusted to 50% brightness
+      expect(Math.round(resultHsb.b)).toBe(50);
       expect(result.toLowerCase()).not.toBe(paleLavender.toLowerCase());
     });
 
