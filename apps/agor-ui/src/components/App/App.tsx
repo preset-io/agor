@@ -476,6 +476,10 @@ export const App: React.FC<AppProps> = ({
         }
         eventStreamEnabled={eventStreamEnabled}
         hasUserMentions={hasUserMentions}
+        boards={mapToArray(boardById)}
+        currentBoardId={currentBoardId}
+        onBoardChange={setCurrentBoardId}
+        worktreeById={worktreeById}
       />
       <Content style={{ position: 'relative', overflow: 'hidden', display: 'flex' }}>
         <CommentsPanel
