@@ -102,8 +102,17 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         modelConfig: defaults?.gemini?.modelConfig,
         mcpServerIds: defaults?.gemini?.mcpServerIds || [],
       });
+
+      // Initialize audio form with user's preferences
+      const audioPrefs = userData.preferences?.audio;
+      audioForm.setFieldsValue({
+        enabled: audioPrefs?.enabled ?? true,
+        chime: audioPrefs?.chime ?? 'bell',
+        volume: audioPrefs?.volume ?? 50,
+        minDurationSeconds: audioPrefs?.minDurationSeconds ?? 5,
+      });
     },
-    [form, claudeForm, codexForm, geminiForm]
+    [form, claudeForm, codexForm, geminiForm, audioForm]
   );
 
   // Initialize when modal opens with user data
@@ -141,6 +150,10 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
   const handleClose = () => {
     form.resetFields();
+    audioForm.resetFields();
+    claudeForm.resetFields();
+    codexForm.resetFields();
+    geminiForm.resetFields();
     setActiveTab('general');
     onClose();
   };
