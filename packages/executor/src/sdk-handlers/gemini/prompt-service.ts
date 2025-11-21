@@ -17,6 +17,7 @@ import type { Database } from '@agor/core/db';
 import type { GenAI } from '@agor/core/sdk';
 import { Gemini } from '@agor/core/sdk';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
+import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 
 type ResumedSessionData = Gemini.ResumedSessionData;
 type Part = GenAI.Part;
@@ -733,6 +734,16 @@ export class GeminiPromptService {
         for (const { server, source } of uniqueServers) {
           console.log(`   - ${server.name} (${server.transport}) [${source}]`);
 
+          let headers: Record<string, string> | undefined;
+          try {
+            headers = await resolveMCPAuthHeaders(server.auth);
+          } catch (error) {
+            console.warn(
+              `   ⚠️  Failed to resolve MCP auth headers for ${server.name}:`,
+              error instanceof Error ? error.message : String(error)
+            );
+          }
+
           // Convert Agor's MCP server format to Gemini SDK's MCPServerConfig
           if (server.transport === 'stdio') {
             mcpServersConfig[server.name] = new Gemini.MCPServerConfig(
@@ -750,7 +761,7 @@ export class GeminiPromptService {
               undefined, // cwd
               undefined, // url (websocket)
               server.url, // httpUrl
-              server.headers || {} // headers
+              headers
             );
           } else if (server.transport === 'sse') {
             // SSE transport: use url parameter (websocket/sse)
@@ -759,8 +770,14 @@ export class GeminiPromptService {
               undefined, // args
               server.env || {},
               undefined, // cwd
-              server.url // url (websocket/sse)
+              server.url, // url (websocket/sse)
+              undefined,
+              headers
             );
+          }
+
+          if (headers && server.transport !== 'stdio') {
+            console.log(`     🔐 Added Authorization header for ${server.name}`);
           }
         }
 

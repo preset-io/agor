@@ -10,6 +10,7 @@ import * as fs from 'node:fs/promises';
 import { validateDirectory } from '@agor/core';
 import { Claude } from '@agor/core/sdk';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
+import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 
 const { query } = Claude;
 type PermissionMode = Claude.PermissionMode;
@@ -582,6 +583,19 @@ export async function setupQuery(
           } else {
             // http and sse both use url
             serverConfig.url = server.url;
+          }
+
+          try {
+            const headers = await resolveMCPAuthHeaders(server.auth);
+            if (headers && server.transport !== 'stdio') {
+              serverConfig.headers = headers;
+              console.log(`     🔐 Added Authorization header for ${server.name}`);
+            }
+          } catch (error) {
+            console.warn(
+              `   ⚠️  Failed to resolve MCP auth headers for ${server.name}:`,
+              error instanceof Error ? error.message : String(error)
+            );
           }
 
           mcpConfig[server.name] = serverConfig;

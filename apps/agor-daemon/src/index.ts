@@ -967,6 +967,52 @@ async function main() {
 
   app.use('/mcp-servers', createMCPServersService(db));
 
+  // JWT test endpoint for MCP servers (server-side to avoid CORS)
+  app.use('/mcp-servers/test-jwt', {
+    async create(data: {
+      api_url: string;
+      api_token: string;
+      api_secret: string;
+      mcp_url?: string;
+    }) {
+      try {
+        // Step 1: Get JWT token
+        const response = await fetch(data.api_url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: data.api_token, secret: data.api_secret }),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          return {
+            success: false,
+            error: `JWT fetch failed: HTTP ${response.status}: ${errorText}`,
+          };
+        }
+
+        const result = (await response.json()) as {
+          access_token?: string;
+          payload?: { access_token?: string };
+        };
+        const token = result.access_token || result.payload?.access_token;
+        if (!token) {
+          return { success: false, error: 'Response missing access_token' };
+        }
+
+        return { success: true, tokenValid: true };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+  });
+
+  app.service('mcp-servers/test-jwt').hooks({
+    before: {
+      create: [requireAuth, requireMinimumRole('admin', 'test MCP server JWT auth')],
+    },
+  });
+
   // Register config service for API key management
   app.use('/config', createConfigService());
 

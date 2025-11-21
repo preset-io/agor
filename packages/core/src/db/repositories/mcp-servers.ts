@@ -60,6 +60,7 @@ export class MCPServerRepository
       args: row.data.args,
       url: row.data.url,
       env: row.data.env,
+      auth: row.data.auth,
 
       // Scope foreign keys (nullable UUID strings - DB stores null, types expect undefined)
       owner_user_id: (row.owner_user_id as UserID | null) ?? undefined,
@@ -111,6 +112,7 @@ export class MCPServerRepository
         args: data.args,
         url: data.url,
         env: data.env,
+        auth: 'auth' in data ? data.auth : undefined,
         tools: 'tools' in data ? data.tools : undefined,
         resources: 'resources' in data ? data.resources : undefined,
         prompts: 'prompts' in data ? data.prompts : undefined,

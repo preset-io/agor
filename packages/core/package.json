@@ -139,6 +139,11 @@
       "types": "./dist/sdk/index.d.ts",
       "import": "./dist/sdk/index.js",
       "require": "./dist/sdk/index.cjs"
+    },
+    "./tools/mcp/jwt-auth": {
+      "types": "./dist/tools/mcp/jwt-auth.d.ts",
+      "import": "./dist/tools/mcp/jwt-auth.js",
+      "require": "./dist/tools/mcp/jwt-auth.cjs"
     }
   },
   "scripts": {

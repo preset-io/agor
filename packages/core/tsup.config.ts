@@ -28,6 +28,7 @@ export default defineConfig({
     'callbacks/child-completion-template': 'src/callbacks/child-completion-template.ts', // Parent session callback templates
     'models/index': 'src/models/index.ts', // Model metadata (browser-safe)
     'sdk/index': 'src/sdk/index.ts', // AI SDK re-exports (Claude, Codex, Gemini, OpenCode)
+    'tools/mcp/jwt-auth': 'src/tools/mcp/jwt-auth.ts', // MCP JWT authentication utilities
   },
   format: ['cjs', 'esm'],
   dts: true,

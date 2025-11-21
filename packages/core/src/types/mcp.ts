@@ -34,6 +34,20 @@ export type MCPScope = 'global' | 'team' | 'repo' | 'session';
 export type MCPSource = 'user' | 'imported' | 'agor';
 
 /**
+ * MCP server authentication configuration
+ */
+export interface MCPAuth {
+  type: 'none' | 'bearer' | 'jwt';
+  // Bearer token
+  token?: string;
+  // JWT config
+  api_url?: string;
+  api_token?: string;
+  api_secret?: string;
+  insecure?: boolean;
+}
+
+/**
  * JSON Schema type for tool input schemas
  */
 export type JSONSchema = Record<string, unknown>;
@@ -108,6 +122,9 @@ export interface MCPServer {
   // Environment variables
   env?: Record<string, string>; // e.g., { "ALLOWED_PATHS": "/Users/me/projects" }
 
+  // Authentication (for HTTP/SSE transports)
+  auth?: MCPAuth;
+
   // Scope
   scope: MCPScope;
   owner_user_id?: UserID; // For 'global' scope
@@ -164,6 +181,7 @@ export interface CreateMCPServerInput {
   args?: string[];
   url?: string;
   env?: Record<string, string>;
+  auth?: MCPAuth;
   scope: MCPScope;
   owner_user_id?: UserID;
   team_id?: TeamID;
@@ -184,6 +202,7 @@ export interface UpdateMCPServerInput {
   args?: string[];
   url?: string;
   env?: Record<string, string>;
+  auth?: MCPAuth;
   scope?: MCPScope;
   enabled?: boolean;
 }

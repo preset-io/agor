@@ -636,6 +636,18 @@ export const mcpServers = sqliteTable(
         url?: string;
         env?: Record<string, string>;
 
+        // Authentication config (for HTTP/SSE transports)
+        auth?: {
+          type: 'none' | 'bearer' | 'jwt';
+          // Bearer token
+          token?: string;
+          // JWT config
+          api_url?: string;
+          api_token?: string;
+          api_secret?: string;
+          insecure?: boolean;
+        };
+
         // Discovered capabilities
         tools?: Array<{
           name: string;
