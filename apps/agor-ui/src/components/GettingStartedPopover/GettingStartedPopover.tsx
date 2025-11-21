@@ -12,7 +12,7 @@ import { CheckCircleOutlined, CloseCircleOutlined } from '@ant-design/icons';
 import { Button, Popover, Progress, Space, Typography } from 'antd';
 import { useEffect, useState } from 'react';
 
-const { Text, Link } = Typography;
+const { Text } = Typography;
 
 export interface GettingStartedStats {
   repoCount: number;
@@ -190,25 +190,6 @@ export const GettingStartedPopover: React.FC<GettingStartedPopoverProps> = ({
           </Space>
         </Space>
 
-        {/* Call to action if not authenticated */}
-        {!stats.hasAuthentication && (
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            Run <Text code>claude login</Text> or add API key in{' '}
-            {onOpenAuthSettings ? (
-              <Link
-                onClick={(e) => {
-                  e.preventDefault();
-                  onOpenAuthSettings();
-                }}
-              >
-                Settings → Agentic Tools
-              </Link>
-            ) : (
-              'Settings → Agentic Tools'
-            )}
-          </Text>
-        )}
-
         {/* Documentation link */}
         <div style={{ paddingTop: 8, borderTop: '1px solid rgba(255, 255, 255, 0.1)' }}>
           <Space size="small" style={{ width: '100%', justifyContent: 'space-between' }}>
@@ -222,11 +203,9 @@ export const GettingStartedPopover: React.FC<GettingStartedPopoverProps> = ({
             >
               Docs
             </Button>
-            {progressPercent === 100 && (
-              <Button type="link" size="small" onClick={handleDismiss} style={{ padding: 0 }}>
-                Dismiss
-              </Button>
-            )}
+            <Button type="link" size="small" onClick={handleDismiss} style={{ padding: 0 }}>
+              Dismiss
+            </Button>
           </Space>
         </div>
       </Space>
