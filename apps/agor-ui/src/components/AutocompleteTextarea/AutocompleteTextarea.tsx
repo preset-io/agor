@@ -1,7 +1,7 @@
 /**
  * AutocompleteTextarea
  *
- * Textarea with @ mentions autocomplete for files and users.
+ * Textarea with @ mentions autocomplete for files, folders, and users.
  * Uses Ant Design Popover for dropdown and native textarea for input.
  * Highlights @ mentions with a background overlay.
  */
@@ -23,7 +23,7 @@ const DEBOUNCE_MS = 300;
 
 interface FileResult {
   path: string;
-  type: 'file';
+  type: 'file' | 'folder';
 }
 
 interface UserResult {
@@ -267,7 +267,7 @@ export const AutocompleteTextarea = React.forwardRef<
       const options: AutocompleteResult[] = [];
 
       if (fileResults.length > 0) {
-        options.push({ heading: 'FILES' });
+        options.push({ heading: 'FILES & FOLDERS' });
         options.push(...fileResults);
       }
 
@@ -493,7 +493,9 @@ export const AutocompleteTextarea = React.forwardRef<
               );
             }
 
-            const label = 'path' in item ? item.path : `${item.name} (${item.email})`;
+            const isFile = 'path' in item;
+            const label = isFile ? item.path : `${item.name} (${item.email})`;
+            const isFolder = isFile && item.type === 'folder';
             const isHighlighted = highlightedIndex === idx;
 
             return (
@@ -508,6 +510,9 @@ export const AutocompleteTextarea = React.forwardRef<
                   lineHeight: 1.4,
                   backgroundColor: isHighlighted ? token.colorPrimaryBg : 'transparent',
                   color: isHighlighted ? token.colorPrimary : token.colorText,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: token.paddingXS,
                 }}
                 onMouseEnter={(e) => {
                   setHighlightedIndex(idx);
@@ -518,6 +523,7 @@ export const AutocompleteTextarea = React.forwardRef<
                   e.currentTarget.style.backgroundColor = 'transparent';
                 }}
               >
+                {isFolder && <span style={{ opacity: 0.6 }}>📁</span>}
                 <Text ellipsis>{label}</Text>
               </div>
             );

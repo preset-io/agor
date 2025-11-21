@@ -1,8 +1,9 @@
 /**
  * Files Service
  *
- * Provides file autocomplete search for session worktrees.
- * Uses git ls-files to search tracked files by substring match.
+ * Provides file and folder autocomplete search for session worktrees.
+ * Uses git ls-files to search tracked files and extracts folders from file paths.
+ * Results are filtered by substring match (case-insensitive).
  */
 
 import { type Database, SessionRepository, WorktreeRepository } from '@agor/core/db';
@@ -20,7 +21,7 @@ interface FileSearchQuery {
 
 interface FileResult {
   path: string;
-  type: 'file';
+  type: 'file' | 'folder';
 }
 
 /**
@@ -36,13 +37,13 @@ export class FilesService {
   }
 
   /**
-   * Search files in a session's worktree
+   * Search files and folders in a session's worktree
    *
    * Query params:
    * - sessionId: Session ID
    * - search: Search query string (case-insensitive substring match)
    *
-   * Returns array of file results, max 10 items
+   * Returns array of file and folder results (folders first), max 10 items total
    */
   async find(params: { query: FileSearchQuery }): Promise<FileResult[]> {
     const { sessionId, search } = params.query;
@@ -70,14 +71,33 @@ export class FilesService {
       const result = await git.raw(['ls-files', '-z']);
 
       // Parse null-separated file list
-      const files = result
-        .split('\0')
-        .filter((f) => f.length > 0)
-        .filter((f) => f.toLowerCase().includes(search.toLowerCase()))
-        .slice(0, MAX_FILE_RESULTS)
+      const allFiles = result.split('\0').filter((f) => f.length > 0);
+
+      // Extract unique folders from file paths
+      const foldersSet = new Set<string>();
+      allFiles.forEach((filePath) => {
+        const parts = filePath.split('/');
+        // Build up folder paths (e.g., "src", "src/components", etc.)
+        for (let i = 1; i < parts.length; i++) {
+          foldersSet.add(parts.slice(0, i).join('/'));
+        }
+      });
+
+      // Filter files and folders by search query
+      const searchLower = search.toLowerCase();
+
+      const matchingFiles = allFiles
+        .filter((f) => f.toLowerCase().includes(searchLower))
         .map((path) => ({ path, type: 'file' as const }));
 
-      return files;
+      const matchingFolders = Array.from(foldersSet)
+        .filter((f) => f.toLowerCase().includes(searchLower))
+        .map((path) => ({ path, type: 'folder' as const }));
+
+      // Combine and sort: folders first, then files
+      const combined = [...matchingFolders, ...matchingFiles].slice(0, MAX_FILE_RESULTS);
+
+      return combined;
     } catch (error) {
       // Log error but return empty array (don't block UX)
       console.error(`Error searching files for session ${sessionId}:`, error);
