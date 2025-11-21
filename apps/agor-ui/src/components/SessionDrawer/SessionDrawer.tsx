@@ -24,6 +24,8 @@ import {
   SendOutlined,
   SettingOutlined,
   StopOutlined,
+  VerticalAlignBottomOutlined,
+  VerticalAlignTopOutlined,
 } from '@ant-design/icons';
 import {
   App,
@@ -181,6 +183,7 @@ const SessionDrawer = ({
     session?.model_config?.thinkingMode || 'auto'
   );
   const [scrollToBottom, setScrollToBottom] = React.useState<(() => void) | null>(null);
+  const [scrollToTop, setScrollToTop] = React.useState<(() => void) | null>(null);
   const [isStopping, setIsStopping] = React.useState(false);
   const [queuedMessages, setQueuedMessages] = React.useState<Message[]>([]);
   const [spawnModalOpen, setSpawnModalOpen] = React.useState(false);
@@ -707,10 +710,19 @@ const SessionDrawer = ({
         },
       }}
     >
-      {/* All pills in one line */}
-      {(worktree || sessionMcpServerIds.length > 0) && (
-        <div style={{ marginBottom: token.sizeUnit }}>
-          <Space size={8} wrap>
+      {/* Header row with pills and scroll navigation */}
+      <div
+        style={{
+          marginBottom: token.sizeUnit,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: token.sizeUnit * 2,
+        }}
+      >
+        {/* Pills section (only shown if there's content) */}
+        {(worktree || sessionMcpServerIds.length > 0) && (
+          <Space size={8} wrap style={{ flex: 1 }}>
             {/* Worktree Info */}
             {worktree && repo && (
               <RepoPill
@@ -749,8 +761,31 @@ const SessionDrawer = ({
                 </Tag>
               ))}
           </Space>
-        </div>
-      )}
+        )}
+        {/* Spacer if no pills */}
+        {!(worktree || sessionMcpServerIds.length > 0) && <div style={{ flex: 1 }} />}
+        {/* Scroll Navigation Buttons - always visible */}
+        <Space size={4}>
+          <Tooltip title="Scroll to top of conversation">
+            <Button
+              type="text"
+              size="small"
+              icon={<VerticalAlignTopOutlined />}
+              onClick={() => scrollToTop?.()}
+              disabled={!scrollToTop}
+            />
+          </Tooltip>
+          <Tooltip title="Scroll to bottom of conversation">
+            <Button
+              type="text"
+              size="small"
+              icon={<VerticalAlignBottomOutlined />}
+              onClick={() => scrollToBottom?.()}
+              disabled={!scrollToBottom}
+            />
+          </Tooltip>
+        </Space>
+      </div>
 
       {/* Concepts - TODO: Re-implement with contextFiles */}
       {/* {session.contextFiles && session.contextFiles.length > 0 && (
@@ -774,7 +809,10 @@ const SessionDrawer = ({
         sessionModel={session.model_config?.model}
         userById={userById}
         currentUserId={currentUserId}
-        onScrollRef={setScrollToBottom}
+        onScrollRef={(scrollBottom, scrollTop) => {
+          setScrollToBottom(() => scrollBottom);
+          setScrollToTop(() => scrollTop);
+        }}
         onPermissionDecision={onPermissionDecision}
         worktreeName={worktree?.name}
         scheduledFromWorktree={session.scheduled_from_worktree}
