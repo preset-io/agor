@@ -8,12 +8,14 @@ export interface NewWorktreeConfig {
   repoId: string;
   name: string;
   ref: string;
+  refType?: 'branch' | 'tag';
   createBranch: boolean;
   sourceBranch: string;
   pullLatest: boolean;
   issue_url?: string;
   pull_request_url?: string;
   board_id?: string; // Board to add worktree to after creation
+  position?: { x: number; y: number }; // Position on board (defaults to center of viewport)
 }
 
 export interface NewWorktreeModalProps {
@@ -22,6 +24,7 @@ export interface NewWorktreeModalProps {
   onCreate: (config: NewWorktreeConfig) => void;
   repoById: Map<string, Repo>;
   currentBoardId?: string; // Auto-fill board if provided
+  defaultPosition?: { x: number; y: number }; // Default position on canvas (center of viewport)
 }
 
 export const NewWorktreeModal: React.FC<NewWorktreeModalProps> = ({
@@ -30,6 +33,7 @@ export const NewWorktreeModal: React.FC<NewWorktreeModalProps> = ({
   onCreate,
   repoById,
   currentBoardId,
+  defaultPosition,
 }) => {
   const [form] = Form.useForm();
   const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null);
@@ -90,16 +94,19 @@ export const NewWorktreeModal: React.FC<NewWorktreeModalProps> = ({
   const handleCreate = async () => {
     const values = await form.validateFields();
 
+    const refType = values.refType || 'branch';
     const config: NewWorktreeConfig = {
       repoId: values.repoId,
       name: values.name,
       ref: values.name, // Use worktree name as ref (branch name)
+      refType,
       createBranch: true,
       sourceBranch: values.sourceBranch || selectedRepo?.default_branch || 'main',
       pullLatest: true,
       issue_url: values.issue_url,
       pull_request_url: values.pull_request_url,
       board_id: currentBoardId, // Include board_id if provided
+      position: defaultPosition, // Include position if provided
     };
 
     // Remember last used repo

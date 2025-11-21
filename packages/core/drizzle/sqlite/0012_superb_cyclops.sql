@@ -1,0 +1,1 @@
+ALTER TABLE `worktrees` ADD `ref_type` text;

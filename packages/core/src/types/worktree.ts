@@ -79,6 +79,14 @@ export interface Worktree {
    */
   ref: string;
 
+  /**
+   * Type of ref (branch or tag)
+   *
+   * - 'branch': ref is a branch name (default)
+   * - 'tag': ref is a tag name
+   */
+  ref_type?: 'branch' | 'tag';
+
   // ===== File System =====
 
   /**

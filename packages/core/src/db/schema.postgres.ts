@@ -380,6 +380,7 @@ export const worktrees = pgTable(
     // Materialized for queries
     name: text('name').notNull(), // "feat-auth", "main"
     ref: text('ref').notNull(), // Current branch/tag/commit
+    ref_type: text('ref_type', { enum: ['branch', 'tag'] }), // Type of ref (branch or tag)
     worktree_unique_id: integer('worktree_unique_id').notNull(), // Auto-assigned sequential ID for templates
 
     // Environment configuration (static, initialized from templates, then user-editable)

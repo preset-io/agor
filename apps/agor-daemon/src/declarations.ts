@@ -93,6 +93,7 @@ export interface ReposServiceImpl extends Service<Repo, Partial<Repo>, FeathersP
     data: {
       name: string;
       ref: string;
+      refType?: 'branch' | 'tag';
       createBranch?: boolean;
       pullLatest?: boolean;
       sourceBranch?: string;
