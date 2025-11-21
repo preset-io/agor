@@ -47,6 +47,8 @@ export interface AppHeaderProps {
   worktreeCount?: number;
   hasAuthentication?: boolean;
   onDismissOnboarding?: () => void;
+  onOpenRepoSettings?: () => void;
+  onOpenNewWorktree?: () => void;
 }
 
 export const AppHeader: React.FC<AppHeaderProps> = ({
@@ -76,6 +78,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   worktreeCount = 0,
   hasAuthentication = false,
   onDismissOnboarding,
+  onOpenRepoSettings,
+  onOpenNewWorktree,
 }) => {
   const { token } = theme.useToken();
   const userEmoji = user?.emoji || '👤';
@@ -218,6 +222,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           }}
           user={user}
           onOpenSettings={() => onSettingsClick?.()}
+          onOpenRepoSettings={onOpenRepoSettings}
+          onOpenNewWorktree={onOpenNewWorktree}
           onDismiss={onDismissOnboarding}
         >
           <Tooltip title="Getting Started" placement="bottom">

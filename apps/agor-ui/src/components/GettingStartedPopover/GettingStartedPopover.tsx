@@ -10,6 +10,7 @@
 import type { User } from '@agor/core/types';
 import { CheckCircleOutlined, CloseCircleOutlined } from '@ant-design/icons';
 import { Button, Popover, Progress, Space, Typography } from 'antd';
+import { useEffect, useState } from 'react';
 
 const { Text, Link } = Typography;
 
@@ -23,6 +24,8 @@ export interface GettingStartedPopoverProps {
   stats: GettingStartedStats;
   user?: User | null;
   onOpenSettings?: () => void;
+  onOpenRepoSettings?: () => void;
+  onOpenNewWorktree?: () => void;
   onDismiss?: () => void;
   children: React.ReactNode;
 }
@@ -31,6 +34,8 @@ export const GettingStartedPopover: React.FC<GettingStartedPopoverProps> = ({
   stats,
   user,
   onOpenSettings,
+  onOpenRepoSettings,
+  onOpenNewWorktree,
   onDismiss,
   children,
 }) => {
@@ -44,10 +49,26 @@ export const GettingStartedPopover: React.FC<GettingStartedPopoverProps> = ({
 
   const progressPercent = Math.round((completedSteps / totalSteps) * 100);
 
+  // Control popover open state
+  // Open by default if onboarding not completed, close only via dismiss
+  const [open, setOpen] = useState(false);
+
+  // Open popover automatically when onboarding is not complete
+  useEffect(() => {
+    if (!user?.onboarding_completed) {
+      setOpen(true);
+    }
+  }, [user?.onboarding_completed]);
+
   // Don't show if user has dismissed onboarding
   if (user?.onboarding_completed) {
     return <>{children}</>;
   }
+
+  const handleDismiss = () => {
+    setOpen(false);
+    onDismiss?.();
+  };
 
   const content = (
     <div style={{ width: 320 }}>
@@ -68,7 +89,28 @@ export const GettingStartedPopover: React.FC<GettingStartedPopoverProps> = ({
 
         <Space direction="vertical" size="small" style={{ width: '100%' }}>
           {/* Repos configured */}
-          <Space align="start" size="small">
+          <Space
+            align="start"
+            size="small"
+            style={{
+              cursor: 'pointer',
+              padding: '4px 8px',
+              margin: '0 -8px',
+              borderRadius: 4,
+              transition: 'background-color 0.2s',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.1)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = 'transparent';
+            }}
+            onClick={() => {
+              if (onOpenRepoSettings) {
+                onOpenRepoSettings();
+              }
+            }}
+          >
             {stats.repoCount > 0 ? (
               <CheckCircleOutlined style={{ color: '#52c41a', fontSize: 16, marginTop: 2 }} />
             ) : (
@@ -80,7 +122,28 @@ export const GettingStartedPopover: React.FC<GettingStartedPopoverProps> = ({
           </Space>
 
           {/* Worktrees active */}
-          <Space align="start" size="small">
+          <Space
+            align="start"
+            size="small"
+            style={{
+              cursor: 'pointer',
+              padding: '4px 8px',
+              margin: '0 -8px',
+              borderRadius: 4,
+              transition: 'background-color 0.2s',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.1)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = 'transparent';
+            }}
+            onClick={() => {
+              if (onOpenNewWorktree) {
+                onOpenNewWorktree();
+              }
+            }}
+          >
             {stats.worktreeCount > 0 ? (
               <CheckCircleOutlined style={{ color: '#52c41a', fontSize: 16, marginTop: 2 }} />
             ) : (
@@ -94,7 +157,28 @@ export const GettingStartedPopover: React.FC<GettingStartedPopoverProps> = ({
           </Space>
 
           {/* Authentication */}
-          <Space align="start" size="small">
+          <Space
+            align="start"
+            size="small"
+            style={{
+              cursor: 'pointer',
+              padding: '4px 8px',
+              margin: '0 -8px',
+              borderRadius: 4,
+              transition: 'background-color 0.2s',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.1)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = 'transparent';
+            }}
+            onClick={() => {
+              if (onOpenSettings) {
+                onOpenSettings();
+              }
+            }}
+          >
             {stats.hasAuthentication ? (
               <CheckCircleOutlined style={{ color: '#52c41a', fontSize: 16, marginTop: 2 }} />
             ) : (
@@ -134,8 +218,8 @@ export const GettingStartedPopover: React.FC<GettingStartedPopoverProps> = ({
             >
               Go to documentation
             </Link>
-            {onDismiss && progressPercent === 100 && (
-              <Button type="link" size="small" onClick={onDismiss} style={{ padding: 0 }}>
+            {progressPercent === 100 && (
+              <Button type="link" size="small" onClick={handleDismiss} style={{ padding: 0 }}>
                 Dismiss
               </Button>
             )}
@@ -150,8 +234,14 @@ export const GettingStartedPopover: React.FC<GettingStartedPopoverProps> = ({
       content={content}
       title={null}
       trigger="click"
+      open={open}
+      onOpenChange={setOpen}
       placement="bottomRight"
       overlayStyle={{ zIndex: 1050 }}
+      overlayInnerStyle={{
+        backgroundColor: 'rgba(0, 0, 0, 0.5)',
+        backdropFilter: 'blur(8px)',
+      }}
     >
       {children}
     </Popover>

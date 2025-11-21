@@ -488,6 +488,13 @@ export const App: React.FC<AppProps> = ({
               }
             : undefined
         }
+        onOpenRepoSettings={() => {
+          setSettingsActiveTab('repos');
+          setSettingsOpen(true);
+        }}
+        onOpenNewWorktree={() => {
+          setNewWorktreeModalOpen(true);
+        }}
       />
       <Content style={{ position: 'relative', overflow: 'hidden', display: 'flex' }}>
         <CommentsPanel
