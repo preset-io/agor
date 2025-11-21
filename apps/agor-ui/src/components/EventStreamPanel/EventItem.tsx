@@ -13,10 +13,12 @@ import {
   MessageOutlined,
   ThunderboltOutlined,
   ToolOutlined,
+  UserOutlined,
 } from '@ant-design/icons';
 import { Button, Popover, Tag, Typography, theme } from 'antd';
 import React from 'react';
 import type { SocketEvent } from '../../hooks/useEventStream';
+import { UserAvatar } from '../metadata/UserAvatar';
 import { EventStreamPill, SessionMetadataCard } from '../Pill';
 import WorktreeCard from '../WorktreeCard/WorktreeCard';
 
@@ -135,7 +137,7 @@ const EventItemComponent = ({
     return { entity: eventName };
   };
 
-  // Extract session_id and worktree_id from event data
+  // Extract session_id, worktree_id, and created_by from event data
   const sessionId =
     event.data && typeof event.data === 'object' && 'session_id' in event.data
       ? (event.data.session_id as string)
@@ -146,6 +148,11 @@ const EventItemComponent = ({
       ? (event.data.worktree_id as string)
       : undefined;
 
+  const createdBy =
+    event.data && typeof event.data === 'object' && 'created_by' in event.data
+      ? (event.data.created_by as string)
+      : undefined;
+
   // Lookup full objects from maps
   const session = sessionId ? sessionById.get(sessionId) : undefined;
   // Derive worktree from session if not directly in event data
@@ -153,6 +160,9 @@ const EventItemComponent = ({
   const worktree = derivedWorktreeId ? worktreeById.get(derivedWorktreeId) : undefined;
   const repo = worktree ? repos.find((r) => r.repo_id === worktree.repo_id) : undefined;
   const worktreeSessions = worktree ? sessionsByWorktree.get(worktree.worktree_id) || [] : [];
+
+  // Look up user if created_by is present
+  const user = createdBy ? userById.get(createdBy) : undefined;
 
   // Parse event name into entity and action
   const { entity, action } = parseEventName(event.eventName);
@@ -299,6 +309,13 @@ const EventItemComponent = ({
             />
           }
         />
+      )}
+
+      {/* User pill - shows who triggered this event */}
+      {user && (
+        <Tag icon={<UserOutlined />} color="magenta" style={{ margin: 0, fontSize: 11 }}>
+          <UserAvatar user={user} showName={true} size="small" />
+        </Tag>
       )}
 
       {event.data ? (
