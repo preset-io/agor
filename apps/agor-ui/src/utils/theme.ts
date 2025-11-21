@@ -30,6 +30,10 @@ export const ensureColorVisible = (
   maxLightness = 50
 ): string => {
   try {
+    // Clamp inputs to valid range [0, 100]
+    const clampedMin = Math.max(0, Math.min(100, minLightness));
+    const clampedMax = Math.max(0, Math.min(100, maxLightness));
+
     const colorObj = new AggregationColor(color);
     const hsl = colorObj.toHsl();
 
@@ -37,14 +41,14 @@ export const ensureColorVisible = (
     const lightnessPercent = hsl.l * 100;
 
     // For dark theme: ensure color is bright enough
-    if (isDark && lightnessPercent < minLightness) {
-      hsl.l = minLightness / 100;
+    if (isDark && lightnessPercent < clampedMin) {
+      hsl.l = clampedMin / 100;
       return new AggregationColor(hsl).toHexString();
     }
 
     // For light theme: ensure color is dark enough
-    if (!isDark && lightnessPercent > maxLightness) {
-      hsl.l = maxLightness / 100;
+    if (!isDark && lightnessPercent > clampedMax) {
+      hsl.l = clampedMax / 100;
       return new AggregationColor(hsl).toHexString();
     }
 
