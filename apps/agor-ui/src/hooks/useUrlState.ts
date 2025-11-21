@@ -192,8 +192,11 @@ export function useUrlState(options: UseUrlStateOptions) {
       lastUrlSessionParamRef.current = urlSessionParam;
     }
 
-    // Skip if URL hasn't changed AND we've already successfully resolved
-    if (!urlParamsChanged && urlParamsResolvedRef.current.board) {
+    // Skip if URL hasn't changed AND we've already successfully resolved everything
+    // For board+session URLs, we need both to be resolved before stopping retries
+    const fullyResolved =
+      urlParamsResolvedRef.current.board && urlParamsResolvedRef.current.session;
+    if (!urlParamsChanged && fullyResolved) {
       return;
     }
 
@@ -207,6 +210,11 @@ export function useUrlState(options: UseUrlStateOptions) {
 
     // Only try to resolve if we have boards loaded
     if (boardById.size === 0) {
+      return;
+    }
+
+    // If we have a session param, also wait for sessions to load
+    if (urlSessionParam && sessionById.size === 0) {
       return;
     }
 
@@ -246,6 +254,7 @@ export function useUrlState(options: UseUrlStateOptions) {
     urlBoardParam,
     urlSessionParam,
     boardById.size,
+    sessionById.size,
     resolveBoardFromUrl,
     resolveSessionFromShortId,
     onBoardChange,
@@ -265,13 +274,17 @@ export function useUrlState(options: UseUrlStateOptions) {
     }
 
     // Don't overwrite URL if we're still trying to resolve incoming URL params
-    // This prevents the race where we redirect to / before boards are loaded
+    // This prevents the race where we redirect before data is loaded
+    // For board+session URLs, wait for both to be resolved
     if (urlBoardParam && !urlParamsResolvedRef.current.board) {
+      return;
+    }
+    if (urlSessionParam && !urlParamsResolvedRef.current.session) {
       return;
     }
 
     updateUrlFromState();
-  }, [boardById.size, urlBoardParam, updateUrlFromState]);
+  }, [boardById.size, urlBoardParam, urlSessionParam, updateUrlFromState]);
 
   return {
     urlBoardParam,
