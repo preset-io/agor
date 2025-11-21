@@ -14,6 +14,7 @@ import { useState } from 'react';
 import { BoardSwitcher } from '../BoardSwitcher';
 import { ConnectionStatus } from '../ConnectionStatus';
 import { Facepile } from '../Facepile';
+import { GettingStartedPopover } from '../GettingStartedPopover';
 import { ThemeSwitcher } from '../ThemeSwitcher';
 
 const { Header } = Layout;
@@ -42,6 +43,10 @@ export interface AppHeaderProps {
   currentBoardId?: string;
   onBoardChange?: (boardId: string) => void;
   worktreeById?: Map<string, Worktree>;
+  repoCount?: number;
+  worktreeCount?: number;
+  hasAuthentication?: boolean;
+  onDismissOnboarding?: () => void;
 }
 
 export const AppHeader: React.FC<AppHeaderProps> = ({
@@ -67,6 +72,10 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   currentBoardId,
   onBoardChange,
   worktreeById = new Map(),
+  repoCount = 0,
+  worktreeCount = 0,
+  hasAuthentication = false,
+  onDismissOnboarding,
 }) => {
   const { token } = theme.useToken();
   const userEmoji = user?.emoji || '👤';
@@ -201,15 +210,40 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             />
           </Tooltip>
         )}
-        <Tooltip title="Documentation" placement="bottom">
-          <Button
-            type="text"
-            icon={<QuestionCircleOutlined style={{ fontSize: token.fontSizeLG }} />}
-            href="https://agor.live/guide"
-            target="_blank"
-            rel="noopener noreferrer"
-          />
-        </Tooltip>
+        <GettingStartedPopover
+          stats={{
+            repoCount,
+            worktreeCount,
+            hasAuthentication,
+          }}
+          user={user}
+          onOpenSettings={() => onSettingsClick?.()}
+          onDismiss={onDismissOnboarding}
+        >
+          <Tooltip title="Getting Started" placement="bottom">
+            <Button
+              type="text"
+              icon={<QuestionCircleOutlined style={{ fontSize: token.fontSizeLG }} />}
+              style={{
+                position: 'relative',
+              }}
+            >
+              {user && !user.onboarding_completed && (
+                <span
+                  style={{
+                    position: 'absolute',
+                    top: 8,
+                    right: 8,
+                    width: 8,
+                    height: 8,
+                    borderRadius: '50%',
+                    backgroundColor: token.colorError,
+                  }}
+                />
+              )}
+            </Button>
+          </Tooltip>
+        </GettingStartedPopover>
         <ThemeSwitcher onOpenThemeEditor={onThemeEditorClick} />
         <Tooltip title="Settings" placement="bottom">
           <Button

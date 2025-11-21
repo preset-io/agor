@@ -186,13 +186,6 @@ export const App: React.FC<AppProps> = ({
   // Handle external user settings modal control (e.g., from onboarding "Configure API Keys")
   const effectiveUserSettingsOpen = userSettingsOpen || !!openUserSettings;
 
-  // Handle external settings tab control (e.g., from welcome modal)
-  const effectiveSettingsOpen = settingsOpen || !!openSettingsTab;
-  const effectiveSettingsTab = openSettingsTab || settingsActiveTab;
-
-  // Handle external new worktree modal control (e.g., from welcome modal)
-  const effectiveNewWorktreeModalOpen = newWorktreeModalOpen || !!openNewWorktreeModal;
-
   // Initialize comments panel state from localStorage (collapsed by default)
   const [commentsPanelCollapsed, setCommentsPanelCollapsed] = useState(() => {
     const stored = localStorage.getItem('agor:commentsPanelCollapsed');
@@ -483,6 +476,18 @@ export const App: React.FC<AppProps> = ({
         currentBoardId={currentBoardId}
         onBoardChange={setCurrentBoardId}
         worktreeById={worktreeById}
+        repoCount={repoById.size}
+        worktreeCount={worktreeById.size}
+        hasAuthentication={!!client}
+        onDismissOnboarding={
+          onUpdateUser
+            ? () => {
+                if (user) {
+                  onUpdateUser(user.user_id, { onboarding_completed: true });
+                }
+              }
+            : undefined
+        }
       />
       <Content style={{ position: 'relative', overflow: 'hidden', display: 'flex' }}>
         <CommentsPanel
@@ -636,7 +641,7 @@ export const App: React.FC<AppProps> = ({
         onViewLogs={setLogsModalWorktreeId}
       />
       <SettingsModal
-        open={effectiveSettingsOpen}
+        open={settingsOpen}
         onClose={() => {
           setSettingsOpen(false);
           onSettingsClose?.();
@@ -728,10 +733,9 @@ export const App: React.FC<AppProps> = ({
         initialCommands={terminalCommands}
       />
       <NewWorktreeModal
-        open={effectiveNewWorktreeModalOpen}
+        open={newWorktreeModalOpen}
         onClose={() => {
           setNewWorktreeModalOpen(false);
-          onNewWorktreeModalClose?.();
         }}
         onCreate={handleCreateWorktree}
         repoById={repoById}
