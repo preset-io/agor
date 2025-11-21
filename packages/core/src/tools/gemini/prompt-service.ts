@@ -135,7 +135,7 @@ export class GeminiPromptService {
         console.log(
           `🔐 [Gemini] Using task creator ${contextUserId.substring(0, 8)} for env/API keys (task: ${taskId.substring(0, 8)})`
         );
-      } catch (err) {
+      } catch (_err) {
         console.warn(
           `⚠️  [Gemini] Could not load task ${taskId.substring(0, 8)}, falling back to session owner ${contextUserId?.substring(0, 8) || 'unknown'}`
         );
@@ -547,7 +547,8 @@ export class GeminiPromptService {
     }
 
     // Use provided contextUserId (task creator) or fall back to session owner
-    const userIdForApiKey = contextUserId || (session.created_by as import('../../types').UserID | undefined);
+    const userIdForApiKey =
+      contextUserId || (session.created_by as import('../../types').UserID | undefined);
     const resolvedApiKey = await resolveApiKey('GEMINI_API_KEY', {
       userId: userIdForApiKey,
       db: this.db,

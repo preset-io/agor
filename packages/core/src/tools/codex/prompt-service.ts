@@ -457,7 +457,7 @@ export class CodexPromptService {
         console.log(
           `🔐 [Codex] Using task creator ${contextUserId.substring(0, 8)} for env/API keys (task: ${taskId.substring(0, 8)})`
         );
-      } catch (err) {
+      } catch (_err) {
         console.warn(
           `⚠️  [Codex] Could not load task ${taskId.substring(0, 8)}, falling back to session owner ${contextUserId?.substring(0, 8) || 'unknown'}`
         );
