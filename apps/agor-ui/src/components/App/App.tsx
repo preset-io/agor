@@ -186,6 +186,9 @@ export const App: React.FC<AppProps> = ({
   // Handle external user settings modal control (e.g., from onboarding "Configure API Keys")
   const effectiveUserSettingsOpen = userSettingsOpen || !!openUserSettings;
 
+  // Handle external settings tab control (e.g., from onboarding "Configure API Keys")
+  const effectiveSettingsTab = openSettingsTab || settingsActiveTab;
+
   // Initialize comments panel state from localStorage (collapsed by default)
   const [commentsPanelCollapsed, setCommentsPanelCollapsed] = useState(() => {
     const stored = localStorage.getItem('agor:commentsPanelCollapsed');
