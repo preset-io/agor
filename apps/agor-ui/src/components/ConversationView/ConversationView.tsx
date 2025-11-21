@@ -72,9 +72,9 @@ export interface ConversationViewProps {
   currentUserId?: string;
 
   /**
-   * Callback to expose scroll-to-bottom function to parent
+   * Callback to expose scroll functions to parent
    */
-  onScrollRef?: (scrollToBottom: () => void) => void;
+  onScrollRef?: (scrollToBottom: () => void, scrollToTop: () => void) => void;
 
   /**
    * Permission decision handler
@@ -160,12 +160,19 @@ export const ConversationView = React.memo<ConversationViewProps>(
       }
     }, []);
 
-    // Expose scroll function to parent
+    // Scroll to top function
+    const scrollToTop = useCallback(() => {
+      if (containerRef.current) {
+        containerRef.current.scrollTop = 0;
+      }
+    }, []);
+
+    // Expose scroll functions to parent
     useEffect(() => {
       if (onScrollRef) {
-        onScrollRef(scrollToBottom);
+        onScrollRef(scrollToBottom, scrollToTop);
       }
-    }, [onScrollRef, scrollToBottom]);
+    }, [onScrollRef, scrollToBottom, scrollToTop]);
 
     // Fetch tasks for this session
     const currentUser = currentUserId ? userById.get(currentUserId) || null : null;

@@ -70,7 +70,8 @@ export class GeminiTool implements ITool {
         mcpServerRepo,
         sessionMCPRepo,
         mcpEnabled,
-        db
+        db,
+        tasksService
       );
     }
   }

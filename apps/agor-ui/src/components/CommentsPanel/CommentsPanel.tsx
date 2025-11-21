@@ -23,7 +23,6 @@ import {
   Badge,
   Button,
   Collapse,
-  Input,
   List,
   Popover,
   Space,
@@ -36,6 +35,7 @@ import {
 import EmojiPicker, { Theme } from 'emoji-picker-react';
 import React, { useEffect, useMemo, useState } from 'react';
 import { AgorAvatar } from '../AgorAvatar';
+import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { ZONE_CONTENT_OPACITY } from '../SessionCanvas/canvas/BoardObjectNodes';
 
 const { Text, Title } = Typography;
@@ -275,6 +275,7 @@ const CommentThread: React.FC<{
   onDelete?: (commentId: string) => void;
   isHighlighted?: boolean;
   scrollRef?: React.RefObject<HTMLDivElement>;
+  client: AgorClient | null;
 }> = ({
   comment,
   replies,
@@ -286,9 +287,11 @@ const CommentThread: React.FC<{
   onDelete,
   isHighlighted,
   scrollRef,
+  client,
 }) => {
   const { token } = theme.useToken();
   const [showReplyInput, setShowReplyInput] = useState(false);
+  const [replyValue, setReplyValue] = useState('');
   const [isHovered, setIsHovered] = useState(false);
   const user = userById.get(comment.created_by);
   const isCurrentUser = comment.created_by === currentUserId;
@@ -447,17 +450,47 @@ const CommentThread: React.FC<{
 
         {/* Reply Input */}
         {showReplyInput && onReply && (
-          <div style={{ marginLeft: 32, marginTop: 4 }}>
-            <Input.Search
-              placeholder="Reply..."
-              enterButton={<SendOutlined />}
-              onSearch={(value) => {
-                if (value.trim()) {
-                  onReply(comment.comment_id, value);
+          <div
+            style={{
+              marginLeft: 32,
+              marginTop: 8,
+              display: 'flex',
+              gap: 8,
+              alignItems: 'flex-end',
+            }}
+          >
+            <div style={{ flex: 1 }}>
+              <AutocompleteTextarea
+                value={replyValue}
+                onChange={setReplyValue}
+                onKeyPress={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    if (replyValue.trim()) {
+                      onReply(comment.comment_id, replyValue);
+                      setReplyValue('');
+                      setShowReplyInput(false);
+                    }
+                  }
+                }}
+                placeholder="Reply... (type @ for autocomplete)"
+                autoSize={{ minRows: 1, maxRows: 4 }}
+                client={client}
+                sessionId={null}
+                userById={userById}
+              />
+            </div>
+            <Button
+              type="primary"
+              icon={<SendOutlined />}
+              onClick={() => {
+                if (replyValue.trim()) {
+                  onReply(comment.comment_id, replyValue);
+                  setReplyValue('');
                   setShowReplyInput(false);
                 }
               }}
-              autoFocus
+              disabled={!replyValue.trim()}
             />
           </div>
         )}
@@ -470,6 +503,7 @@ const CommentThread: React.FC<{
  * Main CommentsPanel component - permanent left sidebar with threading and reactions
  */
 export const CommentsPanel: React.FC<CommentsPanelProps> = ({
+  client,
   boardId,
   comments,
   userById,
@@ -771,6 +805,7 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
                         onDelete={onDeleteComment}
                         isHighlighted={isHighlighted}
                         scrollRef={commentRefs.current[thread.comment_id]}
+                        client={client}
                       />
                     );
                   }}
@@ -787,19 +822,41 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
           padding: 12,
           borderTop: `1px solid ${token.colorBorder}`,
           backgroundColor: token.colorBgContainer,
+          display: 'flex',
+          gap: 8,
+          alignItems: 'flex-end',
         }}
       >
-        <Input.Search
-          placeholder="Add a comment..."
-          enterButton={<SendOutlined />}
-          value={commentInputValue}
-          onChange={(e) => setCommentInputValue(e.target.value)}
-          onSearch={(value) => {
-            if (value.trim()) {
-              onSendComment(value);
+        <div style={{ flex: 1 }}>
+          <AutocompleteTextarea
+            value={commentInputValue}
+            onChange={setCommentInputValue}
+            onKeyPress={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                if (commentInputValue.trim()) {
+                  onSendComment(commentInputValue);
+                  setCommentInputValue('');
+                }
+              }
+            }}
+            placeholder="Add a comment... (type @ for autocomplete)"
+            autoSize={{ minRows: 1, maxRows: 4 }}
+            client={client}
+            sessionId={null}
+            userById={userById}
+          />
+        </div>
+        <Button
+          type="primary"
+          icon={<SendOutlined />}
+          onClick={() => {
+            if (commentInputValue.trim()) {
+              onSendComment(commentInputValue);
               setCommentInputValue('');
             }
           }}
+          disabled={!commentInputValue.trim()}
         />
       </div>
     </div>

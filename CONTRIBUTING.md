@@ -62,6 +62,8 @@ git checkout -b feat/your-feature-name
 - ESLint + Prettier (run `pnpm lint` before committing)
 - Meaningful variable names
 - Comments for non-obvious logic
+- Place all imports at the top of the file - avoid inline `import('...')` type assertions
+- Keep logging minimal and useful - avoid verbose logging that clutters output
 
 ### 3. Test Your Changes
 

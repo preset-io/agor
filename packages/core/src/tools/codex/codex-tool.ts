@@ -72,7 +72,8 @@ export class CodexTool implements ITool {
         sessionMCPServerRepo,
         worktreesRepo,
         apiKey,
-        db
+        db,
+        tasksService
       );
     }
   }
