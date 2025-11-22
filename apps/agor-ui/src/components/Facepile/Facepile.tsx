@@ -17,7 +17,11 @@ export interface FacepileProps {
   activeUsers: ActiveUser[];
   currentUserId?: string;
   maxVisible?: number;
-  onUserClick?: (userId: string, boardId?: BoardID, cursorPosition?: { x: number; y: number }) => void;
+  onUserClick?: (
+    userId: string,
+    boardId?: BoardID,
+    cursorPosition?: { x: number; y: number }
+  ) => void;
   boardById?: Map<string, Board>; // For looking up board names
   style?: CSSProperties;
 }
