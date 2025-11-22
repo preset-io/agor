@@ -33,17 +33,15 @@ export function LoginPage({ onLogin, loading = false, error }: LoginPageProps) {
   return (
     <div
       style={{
-        width: '100vw',
-        height: '100vh',
+        minHeight: '100dvh', // Dynamic viewport height for mobile
+        width: '100%',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
         background: 'linear-gradient(135deg, #0a0a0a 0%, #1a1a1a 50%, #0f1f1e 100%)',
-        padding: '24px',
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        overflow: 'hidden',
+        padding: '16px',
+        position: 'relative',
+        overflow: 'auto',
       }}
     >
       {/* Particle background */}
@@ -82,26 +80,27 @@ export function LoginPage({ onLogin, loading = false, error }: LoginPageProps) {
           boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)',
           position: 'relative',
           zIndex: 1,
+          margin: 'auto',
         }}
         variant="borderless"
       >
         {/* Header */}
-        <Space direction="vertical" size="large" style={{ width: '100%', marginBottom: 32 }}>
+        <Space direction="vertical" size="large" style={{ width: '100%', marginBottom: 24 }}>
           <div style={{ textAlign: 'center' }}>
             <img
               src={`${import.meta.env.BASE_URL}favicon.png`}
               alt="Agor Logo"
               style={{
-                width: 80,
-                height: 80,
-                marginBottom: 16,
+                width: 64,
+                height: 64,
+                marginBottom: 12,
                 objectFit: 'cover',
                 borderRadius: '50%',
                 display: 'block',
-                margin: '0 auto 16px',
+                margin: '0 auto 12px',
               }}
             />
-            <Title level={2} style={{ margin: 0 }}>
+            <Title level={2} style={{ margin: 0, marginBottom: 4 }}>
               Agor
             </Title>
             <Text type="secondary">Next-gen agent orchestration</Text>
