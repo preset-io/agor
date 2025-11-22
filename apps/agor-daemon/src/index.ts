@@ -1590,6 +1590,7 @@ async function main() {
     sessionsRepo,
     sessionMCPRepo,
     worktreesRepo, // Worktrees repo for fetching worktree paths
+    reposRepo, // Repos repo for session context
     openaiApiKey,
     app.service('messages'),
     app.service('tasks'),
@@ -1611,6 +1612,7 @@ async function main() {
     app.service('messages'),
     app.service('tasks'),
     worktreesRepo,
+    reposRepo, // Repos repo for session context
     mcpServerRepo,
     sessionMCPRepo,
     config.daemon?.mcpEnabled !== false, // Pass MCP enabled flag
