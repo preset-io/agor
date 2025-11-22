@@ -197,12 +197,14 @@ export class CodexPromptService {
     });
 
     // Create per-session CODEX_HOME (no race conditions!)
+    // Use mode 0o700 (rwx------) to prevent other users from reading session metadata
     const sessionCodexHome = path.join(os.tmpdir(), `agor-codex-${sessionId}`);
-    await fs.mkdir(sessionCodexHome, { recursive: true });
+    await fs.mkdir(sessionCodexHome, { recursive: true, mode: 0o700 });
 
     // Write session context to AGENTS.md
+    // Use mode 0o600 (rw-------) to restrict file access
     const agentsMdPath = path.join(sessionCodexHome, 'AGENTS.md');
-    await fs.writeFile(agentsMdPath, agorSystemPrompt, 'utf-8');
+    await fs.writeFile(agentsMdPath, agorSystemPrompt, { encoding: 'utf-8', mode: 0o600 });
 
     console.log(`✅ [Codex] Created per-session CODEX_HOME at ${sessionCodexHome}`);
     console.log(`   Session context will be auto-loaded with any project AGENTS.md files`);

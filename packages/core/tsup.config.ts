@@ -50,5 +50,9 @@ export default defineConfig({
     // Copy drizzle migrations folder to dist so it's available in npm package
     cpSync('drizzle', 'dist/drizzle', { recursive: true });
     console.log('✅ Copied drizzle migrations to dist/');
+
+    // Copy template files to dist so they're available at runtime
+    cpSync('src/templates/agor-system-prompt.md', 'dist/templates/agor-system-prompt.md');
+    console.log('✅ Copied agor-system-prompt.md template to dist/');
   },
 });

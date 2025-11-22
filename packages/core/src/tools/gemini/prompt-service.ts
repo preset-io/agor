@@ -651,8 +651,12 @@ export class GeminiPromptService {
     });
 
     // Write to temp file (unique per session, no races!)
+    // Use mode 0o600 (rw-------) to prevent other users from reading session metadata
     const tempSessionContextPath = path.join(os.tmpdir(), `agor-gemini-${sessionId}.md`);
-    await fs.writeFile(tempSessionContextPath, agorSystemPrompt, 'utf-8');
+    await fs.writeFile(tempSessionContextPath, agorSystemPrompt, {
+      encoding: 'utf-8',
+      mode: 0o600,
+    });
     console.log(`✅ Created Agor session context at ${tempSessionContextPath}`);
     console.log(`   Will be loaded alongside project GEMINI.md files`);
 
