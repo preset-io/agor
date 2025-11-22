@@ -27,6 +27,7 @@ import { getDaemonUrl, resolveApiKey, resolveUserEnvironment } from '../../confi
 import type { Database } from '../../db/client';
 import type { MCPServerRepository } from '../../db/repositories/mcp-servers';
 import type { MessagesRepository } from '../../db/repositories/messages';
+import type { RepoRepository } from '../../db/repositories/repos';
 import type { SessionMCPServerRepository } from '../../db/repositories/session-mcp-servers';
 import type { SessionRepository } from '../../db/repositories/sessions';
 import type { WorktreeRepository } from '../../db/repositories/worktrees';
@@ -93,6 +94,7 @@ export class GeminiPromptService {
     private sessionsRepo: SessionRepository,
     _apiKey?: string,
     private worktreesRepo?: WorktreeRepository,
+    private reposRepo?: RepoRepository,
     private mcpServerRepo?: MCPServerRepository,
     private sessionMCPRepo?: SessionMCPServerRepository,
     private mcpEnabled?: boolean,
@@ -635,16 +637,24 @@ export class GeminiPromptService {
       `🔧 [Gemini] Creating new client with approval mode: ${permissionMode || 'ask'} → ${approvalMode}`
     );
 
-    // Check for CLAUDE.md and load it as system context
-    const claudeMdPath = path.join(workingDirectory, 'CLAUDE.md');
-    let systemPrompt: string | undefined;
-    try {
-      const claudeMdContent = await fs.readFile(claudeMdPath, 'utf-8');
-      systemPrompt = `# Project Context\n\n${claudeMdContent}`;
-      console.log(`📖 Loaded CLAUDE.md from ${claudeMdPath}`);
-    } catch {
-      // CLAUDE.md doesn't exist - that's okay
-    }
+    // Inject Agor session context via temp file (no race conditions!)
+    // Gemini SDK supports geminiMdFilePaths parameter to load additional context files.
+    // We use a per-session temp file to avoid race conditions between concurrent sessions.
+    //
+    // IMPORTANT: Gemini uses GEMINI.md (not CLAUDE.md) for project instructions!
+    // User's project GEMINI.md files are still loaded hierarchically.
+    const { renderAgorSystemPrompt } = await import('../../templates/session-context.js');
+    const agorSystemPrompt = await renderAgorSystemPrompt(sessionId, {
+      sessions: this.sessionsRepo,
+      worktrees: this.worktreesRepo,
+      repos: this.reposRepo,
+    });
+
+    // Write to temp file (unique per session, no races!)
+    const tempSessionContextPath = path.join(os.tmpdir(), `agor-gemini-${sessionId}.md`);
+    await fs.writeFile(tempSessionContextPath, agorSystemPrompt, 'utf-8');
+    console.log(`✅ Created Agor session context at ${tempSessionContextPath}`);
+    console.log(`   Will be loaded alongside project GEMINI.md files`);
 
     // Fetch and configure MCP servers for this session (hierarchical scoping)
     const mcpServersConfig: Record<string, MCPServerConfig> = {};
@@ -822,8 +832,8 @@ export class GeminiPromptService {
         respectGeminiIgnore: true,
       },
       mcpServers: Object.keys(mcpServersConfig).length > 0 ? mcpServersConfig : undefined,
+      geminiMdFilePaths: [tempSessionContextPath], // Load session-specific context (no race conditions!)
       // output: { format: 'stream-json' }, // Streaming JSON events (omitting for now - may not be needed)
-      // System prompt will be added via first message if provided
     });
 
     // CRITICAL: Initialize config first to set up tool registry, etc.
@@ -868,11 +878,6 @@ export class GeminiPromptService {
         const history = convertConversationToHistory(resumedSessionData.conversation);
         client.setHistory(history);
       }
-    }
-
-    // Add system prompt as first message if CLAUDE.md exists
-    if (systemPrompt && !hasExistingHistory) {
-      // Will be added on first user message
     }
 
     // Cache client for reuse
@@ -943,6 +948,18 @@ export class GeminiPromptService {
       await client.resetChat(); // Clear history
       this.sessionClients.delete(sessionId);
       console.log(`🗑️  Closed Gemini client for session ${sessionId}`);
+    }
+
+    // Clean up temp session context file
+    const tempSessionContextPath = path.join(os.tmpdir(), `agor-gemini-${sessionId}.md`);
+    try {
+      await fs.unlink(tempSessionContextPath);
+      console.log(`🗑️  Removed temp session context file`);
+    } catch (error) {
+      // File may not exist if session never ran - that's ok
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        console.warn(`⚠️  Failed to remove temp session context file:`, error);
+      }
     }
   }
 }

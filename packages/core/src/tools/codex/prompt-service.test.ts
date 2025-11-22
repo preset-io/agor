@@ -70,6 +70,7 @@ describe('CodexPromptService - SDK Instance Caching (issue #133)', () => {
       mockSessionsRepo,
       mockSessionMCPServerRepo,
       mockWorktreesRepo,
+      undefined, // reposRepo
       'test-api-key',
       mockDb
     );
@@ -83,6 +84,7 @@ describe('CodexPromptService - SDK Instance Caching (issue #133)', () => {
       mockSessionsRepo,
       mockSessionMCPServerRepo,
       mockWorktreesRepo,
+      undefined, // reposRepo
       'test-api-key',
       mockDb
     );
@@ -106,6 +108,7 @@ describe('CodexPromptService - SDK Instance Caching (issue #133)', () => {
       mockSessionsRepo,
       mockSessionMCPServerRepo,
       mockWorktreesRepo,
+      undefined, // reposRepo
       'initial-key',
       mockDb
     );
@@ -132,6 +135,7 @@ describe('CodexPromptService - SDK Instance Caching (issue #133)', () => {
       mockSessionsRepo,
       mockSessionMCPServerRepo,
       mockWorktreesRepo,
+      undefined, // reposRepo
       undefined,
       mockDb
     );

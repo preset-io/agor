@@ -23,7 +23,7 @@ import type { MCPServersConfig, SessionID, TaskID, UserID } from '../../types';
 import type { MessagesService, SessionsService, TasksService } from './claude-tool';
 import { DEFAULT_CLAUDE_MODEL } from './models';
 import { createCanUseToolCallback } from './permissions/permission-hooks';
-import { generateSessionContext } from './session-context';
+import { renderAgorSystemPrompt } from '../../templates/session-context';
 import { detectThinkingLevel, resolveThinkingBudget } from './thinking-detector';
 
 /**
@@ -199,12 +199,19 @@ export async function setupQuery(
   // Buffer to capture stderr for better error messages
   let stderrBuffer = '';
 
+  // Render Agor system prompt with full session/worktree/repo context
+  const agorSystemPrompt = await renderAgorSystemPrompt(sessionId, {
+    sessions: deps.sessionsRepo,
+    worktrees: deps.worktreesRepo,
+    repos: deps.reposRepo,
+  });
+
   const queryOptions: Record<string, unknown> = {
     cwd,
     systemPrompt: {
       type: 'preset',
       preset: 'claude_code',
-      append: generateSessionContext(sessionId), // Append Agor session context dynamically
+      append: agorSystemPrompt, // Append rich Agor context (session, worktree, repo)
     },
     settingSources: ['user', 'project'], // Load user + project permissions, auto-loads CLAUDE.md
     model, // Use configured model or default

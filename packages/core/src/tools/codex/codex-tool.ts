@@ -10,6 +10,7 @@
 import { execSync } from 'node:child_process';
 import type { Database } from '../../db/client';
 import type { MessagesRepository } from '../../db/repositories/messages';
+import type { RepoRepository } from '../../db/repositories/repos';
 import type { SessionMCPServerRepository } from '../../db/repositories/session-mcp-servers';
 import type { SessionRepository } from '../../db/repositories/sessions';
 import type { WorktreeRepository } from '../../db/repositories/worktrees';
@@ -55,6 +56,7 @@ export class CodexTool implements ITool {
     sessionsRepo?: SessionRepository,
     sessionMCPServerRepo?: SessionMCPServerRepository,
     worktreesRepo?: WorktreeRepository,
+    reposRepo?: RepoRepository,
     apiKey?: string,
     messagesService?: MessagesService,
     tasksService?: TasksService,
@@ -71,6 +73,7 @@ export class CodexTool implements ITool {
         sessionsRepo,
         sessionMCPServerRepo,
         worktreesRepo,
+        reposRepo,
         apiKey,
         db,
         tasksService

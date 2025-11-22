@@ -47,6 +47,7 @@ describe('GeminiPromptService', () => {
       mockSessionsRepo,
       undefined,
       mockWorktreesRepo,
+      undefined, // reposRepo
       mockMCPServerRepo,
       mockSessionMCPRepo,
       false,
@@ -84,6 +85,7 @@ describe('GeminiPromptService', () => {
         mockSessionsRepo,
         undefined,
         mockWorktreesRepo,
+        undefined, // reposRepo
         mockMCPServerRepo,
         mockSessionMCPRepo,
         true,

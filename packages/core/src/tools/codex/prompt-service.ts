@@ -11,12 +11,14 @@
  */
 
 import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { type JsonMap, parse as parseToml, stringify as stringifyToml } from '@iarna/toml';
 import { Codex, type Thread, type ThreadItem } from '@openai/codex-sdk';
 import { ensureCodexHome, resolveApiKey, resolveUserEnvironment } from '../../config';
 import type { Database } from '../../db/client';
 import type { MessagesRepository } from '../../db/repositories/messages';
+import type { RepoRepository } from '../../db/repositories/repos';
 import type { SessionMCPServerRepository } from '../../db/repositories/session-mcp-servers';
 import type { SessionRepository } from '../../db/repositories/sessions';
 import type { WorktreeRepository } from '../../db/repositories/worktrees';
@@ -122,6 +124,7 @@ export class CodexPromptService {
     private sessionsRepo: SessionRepository,
     private sessionMCPServerRepo?: SessionMCPServerRepository,
     private worktreesRepo?: WorktreeRepository,
+    private reposRepo?: RepoRepository,
     apiKey?: string,
     db?: Database,
     tasksService?: { get: (id: TaskID) => Promise<{ created_by: string }> }
@@ -175,6 +178,39 @@ export class CodexPromptService {
   }
 
   /**
+   * Create per-session CODEX_HOME with Agor context
+   *
+   * Codex SDK uses $CODEX_HOME environment variable to locate config/AGENTS.md.
+   * We create a unique CODEX_HOME per session to:
+   * 1. Avoid race conditions between concurrent sessions
+   * 2. Inject rich session/worktree/repo context via AGENTS.md
+   * 3. Preserve user's project AGENTS.md files (still loaded hierarchically)
+   *
+   * Returns the per-session CODEX_HOME path.
+   */
+  private async ensureCodexSessionContext(sessionId: SessionID): Promise<string> {
+    const { renderAgorSystemPrompt } = await import('../../templates/session-context.js');
+    const agorSystemPrompt = await renderAgorSystemPrompt(sessionId, {
+      sessions: this.sessionsRepo,
+      worktrees: this.worktreesRepo,
+      repos: this.reposRepo,
+    });
+
+    // Create per-session CODEX_HOME (no race conditions!)
+    const sessionCodexHome = path.join(os.tmpdir(), `agor-codex-${sessionId}`);
+    await fs.mkdir(sessionCodexHome, { recursive: true });
+
+    // Write session context to AGENTS.md
+    const agentsMdPath = path.join(sessionCodexHome, 'AGENTS.md');
+    await fs.writeFile(agentsMdPath, agorSystemPrompt, 'utf-8');
+
+    console.log(`✅ [Codex] Created per-session CODEX_HOME at ${sessionCodexHome}`);
+    console.log(`   Session context will be auto-loaded with any project AGENTS.md files`);
+
+    return sessionCodexHome;
+  }
+
+  /**
    * Generate $CODEX_HOME/config.toml with approval_policy, network_access, and MCP servers
    *
    * NOTE: approval_policy, network_access, and MCP servers must be configured via config.toml
@@ -184,12 +220,14 @@ export class CodexPromptService {
    * @param approvalPolicy - Codex approval policy (untrusted, on-request, on-failure, never)
    * @param networkAccess - Whether to allow outbound network access in workspace-write mode
    * @param sessionId - Session ID for fetching MCP servers
+   * @param codexHome - Path to CODEX_HOME directory (per-session or global)
    * @returns Number of MCP servers configured
    */
   private async ensureCodexConfig(
     approvalPolicy: 'untrusted' | 'on-request' | 'on-failure' | 'never',
     networkAccess: boolean,
-    sessionId: SessionID
+    sessionId: SessionID,
+    codexHome: string
   ): Promise<number> {
     // Fetch MCP servers for this session (if repository is available)
     console.log(`🔍 [Codex MCP] Fetching MCP servers for session ${sessionId.substring(0, 8)}...`);
@@ -221,9 +259,7 @@ export class CodexPromptService {
     // Create hash to detect changes (include network access in hash)
     const configHash = `${approvalPolicy}:${networkAccess}:${JSON.stringify(stdioServers.map((s) => s.mcp_server_id))}`;
 
-    const codexHome = await ensureCodexHome();
-    process.env.CODEX_HOME = codexHome;
-
+    // Note: codexHome is now passed as parameter (per-session or global)
     // Skip if config and target directory haven't changed (avoid unnecessary file I/O)
     if (this.lastMCPServersHash === configHash && this.lastCodexHome === codexHome) {
       console.log(`✅ [Codex MCP] Config unchanged, skipping write`);
@@ -503,8 +539,20 @@ export class CodexPromptService {
       `   Using Codex permissions: sandboxMode=${sandboxMode}, approvalPolicy=${approvalPolicy}, networkAccess=${networkAccess}`
     );
 
+    // Create per-session CODEX_HOME with Agor context (avoids race conditions!)
+    // Returns temp directory path like /tmp/agor-codex-{sessionId}
+    const sessionCodexHome = await this.ensureCodexSessionContext(sessionId);
+
+    // Set CODEX_HOME for this session (Codex SDK will use it)
+    process.env.CODEX_HOME = sessionCodexHome;
+
     // Set approval_policy, network_access, and MCP servers in config.toml (required because they're not available in ThreadOptions)
-    const mcpServerCount = await this.ensureCodexConfig(approvalPolicy, networkAccess, sessionId);
+    const mcpServerCount = await this.ensureCodexConfig(
+      approvalPolicy,
+      networkAccess,
+      sessionId,
+      sessionCodexHome // Pass per-session CODEX_HOME
+    );
 
     const totalMcpServers = this.sessionMCPServerRepo
       ? (await this.sessionMCPServerRepo.listServers(sessionId, true)).length
@@ -518,6 +566,7 @@ export class CodexPromptService {
         `   Configured: sandboxMode=${sandboxMode}, approval_policy + ${mcpServerCount} MCP server(s) via config.toml`
       );
     }
+
 
     // Fetch worktree to get working directory
     const worktree = this.worktreesRepo
@@ -864,5 +913,27 @@ export class CodexPromptService {
     console.log(`🛑 Stop requested for Codex session ${sessionId}`);
 
     return { success: true };
+  }
+
+  /**
+   * Clean up session resources (e.g., on session close)
+   *
+   * Removes per-session CODEX_HOME directory with AGENTS.md and config.toml
+   */
+  async closeSession(sessionId: SessionID): Promise<void> {
+    // Clean up per-session CODEX_HOME directory
+    const sessionCodexHome = path.join(os.tmpdir(), `agor-codex-${sessionId}`);
+    try {
+      await fs.rm(sessionCodexHome, { recursive: true, force: true });
+      console.log(`🗑️  [Codex] Removed per-session CODEX_HOME for session ${sessionId}`);
+    } catch (error) {
+      // Directory may not exist if session never ran - that's ok
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        console.warn(`⚠️  Failed to remove per-session CODEX_HOME:`, error);
+      }
+    }
+
+    // Clean up stop flag
+    this.stopRequested.delete(sessionId);
   }
 }
