@@ -432,14 +432,6 @@ export const App: React.FC<AppProps> = ({
     .map((bo: BoardEntityObject) => worktreeById.get(bo.worktree_id))
     .filter((wt): wt is Worktree => wt !== undefined);
 
-  // Track active users via cursor presence (board-scoped for canvas)
-  const { activeUsers } = usePresence({
-    client,
-    boardId: currentBoard?.board_id as BoardID | null,
-    users: mapToArray(userById),
-    enabled: !!currentBoard && !!client,
-  });
-
   // Track global presence for navbar facepile (across all boards)
   const { activeUsers: globalActiveUsers } = usePresence({
     client,

@@ -189,7 +189,7 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
       clearInterval(cursorCleanupInterval);
       clearInterval(presenceCleanupInterval);
     };
-  }, [client, boardId, enabled]);
+  }, [client, boardId, enabled, globalPresence]);
 
   // Derive active users and remote cursors from separate maps
   // - activeUsers from presenceMap (5 minute timeout for facepile)
