@@ -862,7 +862,6 @@ export class GeminiPromptService {
     console.log('🔧 Tools initialized for Gemini client');
 
     // Check if we have existing conversation history
-    let hasExistingHistory = false;
     if (resumedSessionData) {
       // Use SDK's native resumption mechanism
       const recordingService = client.getChatRecordingService();
@@ -871,7 +870,6 @@ export class GeminiPromptService {
         console.log(
           `🔄 Resumed session from file: ${resumedSessionData.conversation.messages.length} messages`
         );
-        hasExistingHistory = true;
 
         // Also restore to client history for API continuity
         // Convert ConversationRecord messages to Content[] format

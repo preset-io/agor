@@ -15,7 +15,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { type JsonMap, parse as parseToml, stringify as stringifyToml } from '@iarna/toml';
 import { Codex, type Thread, type ThreadItem } from '@openai/codex-sdk';
-import { ensureCodexHome, resolveApiKey, resolveUserEnvironment } from '../../config';
+import { resolveApiKey, resolveUserEnvironment } from '../../config';
 import type { Database } from '../../db/client';
 import type { MessagesRepository } from '../../db/repositories/messages';
 import type { RepoRepository } from '../../db/repositories/repos';
@@ -566,7 +566,6 @@ export class CodexPromptService {
         `   Configured: sandboxMode=${sandboxMode}, approval_policy + ${mcpServerCount} MCP server(s) via config.toml`
       );
     }
-
 
     // Fetch worktree to get working directory
     const worktree = this.worktreesRepo

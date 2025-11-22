@@ -19,11 +19,11 @@ import type { SessionRepository } from '../../db/repositories/sessions';
 import type { WorktreeRepository } from '../../db/repositories/worktrees';
 import { validateDirectory } from '../../lib/validation';
 import type { PermissionService } from '../../permissions/permission-service';
+import { renderAgorSystemPrompt } from '../../templates/session-context';
 import type { MCPServersConfig, SessionID, TaskID, UserID } from '../../types';
 import type { MessagesService, SessionsService, TasksService } from './claude-tool';
 import { DEFAULT_CLAUDE_MODEL } from './models';
 import { createCanUseToolCallback } from './permissions/permission-hooks';
-import { renderAgorSystemPrompt } from '../../templates/session-context';
 import { detectThinkingLevel, resolveThinkingBudget } from './thinking-detector';
 
 /**
