@@ -122,7 +122,22 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
       if (globalPresence || event.boardId === boardId) {
         setPresenceMap((prev) => {
           const next = new Map(prev);
-          next.delete(event.userId);
+
+          // In global presence mode, only delete if the stored boardId matches the leave event
+          // This prevents removing users who switched boards but haven't moved their cursor yet
+          if (globalPresence) {
+            const existing = prev.get(event.userId);
+            if (existing && existing.boardId === event.boardId) {
+              next.delete(event.userId);
+            } else {
+              // User is on a different board now, keep them in the map
+              return prev;
+            }
+          } else {
+            // Board-scoped mode: always delete on leave
+            next.delete(event.userId);
+          }
+
           return next;
         });
       }
