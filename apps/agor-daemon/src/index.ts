@@ -1573,7 +1573,8 @@ async function main() {
     app.service('sessions'), // Sessions service for permission persistence (WebSocket broadcast)
     worktreesRepo, // Worktrees repo for fetching worktree paths
     reposRepo, // Repos repo for repo-level permissions
-    config.daemon?.mcpEnabled !== false // Pass MCP enabled flag
+    config.daemon?.mcpEnabled !== false, // Pass MCP enabled flag
+    db // Database for resolving user environment variables
   );
 
   // Handle OPENAI_API_KEY with priority: config.yaml > env var

@@ -11,6 +11,7 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { PermissionMode } from '@anthropic-ai/claude-agent-sdk';
+import type { Database } from '../../db/client';
 import type { MCPServerRepository } from '../../db/repositories/mcp-servers';
 import type { MessagesRepository } from '../../db/repositories/messages';
 import type { RepoRepository } from '../../db/repositories/repos';
@@ -92,7 +93,8 @@ export class ClaudeTool implements ITool {
     sessionsService?: SessionsService,
     worktreesRepo?: WorktreeRepository,
     reposRepo?: RepoRepository,
-    mcpEnabled?: boolean
+    mcpEnabled?: boolean,
+    db?: Database
   ) {
     if (messagesRepo && sessionsRepo) {
       this.promptService = new ClaudePromptService(
@@ -107,7 +109,8 @@ export class ClaudeTool implements ITool {
         worktreesRepo,
         reposRepo,
         messagesService,
-        mcpEnabled
+        mcpEnabled,
+        db
       );
     }
   }

@@ -6,6 +6,7 @@
  */
 
 import type { PermissionMode } from '@anthropic-ai/claude-agent-sdk/sdk';
+import type { Database } from '../../db/client';
 import type { MCPServerRepository } from '../../db/repositories/mcp-servers';
 import type { MessagesRepository } from '../../db/repositories/messages';
 import type { SessionMCPServerRepository } from '../../db/repositories/session-mcp-servers';
@@ -69,7 +70,8 @@ export class ClaudePromptService {
     private worktreesRepo?: WorktreeRepository,
     private reposRepo?: import('../../db/repositories/repos').RepoRepository,
     private messagesService?: import('./claude-tool').MessagesService, // FeathersJS Messages service for creating permission requests
-    private mcpEnabled?: boolean
+    private mcpEnabled?: boolean,
+    private db?: Database // Database for resolving user environment variables
   ) {
     // No client initialization needed - Agent SDK is stateless
   }
@@ -111,6 +113,7 @@ export class ClaudePromptService {
         messagesService: this.messagesService,
         worktreesRepo: this.worktreesRepo,
         permissionLocks: this.permissionLocks,
+        db: this.db,
       },
       {
         taskId,
@@ -249,6 +252,7 @@ export class ClaudePromptService {
         messagesService: this.messagesService,
         worktreesRepo: this.worktreesRepo,
         permissionLocks: this.permissionLocks,
+        db: this.db,
       },
       {
         taskId: undefined,
