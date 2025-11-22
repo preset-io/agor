@@ -294,7 +294,15 @@ export const ConversationView = React.memo<ConversationViewProps>(
 
     if (loading && tasks.length === 0) {
       return (
-        <div style={{ display: 'flex', justifyContent: 'center', padding: '2rem' }}>
+        <div
+          style={{
+            flex: 1,
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+            padding: '2rem',
+          }}
+        >
           <Spin />
         </div>
       );
