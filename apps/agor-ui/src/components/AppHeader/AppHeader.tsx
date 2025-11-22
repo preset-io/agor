@@ -51,7 +51,11 @@ export interface AppHeaderProps {
   onOpenAuthSettings?: () => void;
   onOpenNewWorktree?: () => void;
   boardById?: Map<string, Board>; // For looking up board names
-  onUserClick?: (userId: string, boardId?: BoardID) => void; // Navigate to user's board
+  onUserClick?: (
+    userId: string,
+    boardId?: BoardID,
+    cursorPosition?: { x: number; y: number }
+  ) => void; // Navigate to user's board
 }
 
 export const AppHeader: React.FC<AppHeaderProps> = ({

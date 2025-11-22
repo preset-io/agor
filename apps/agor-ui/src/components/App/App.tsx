@@ -535,7 +535,11 @@ export const App: React.FC<AppProps> = ({
           setNewWorktreeModalOpen(true);
         }}
         boardById={boardById}
-        onUserClick={(userId, boardId, cursor) => {
+        onUserClick={(
+          userId: string,
+          boardId?: BoardID,
+          cursor?: { x: number; y: number }
+        ) => {
           // Navigate to the user's board
           if (boardId) {
             setCurrentBoardId(boardId);
