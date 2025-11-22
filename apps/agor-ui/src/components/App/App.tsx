@@ -432,7 +432,7 @@ export const App: React.FC<AppProps> = ({
     .map((bo: BoardEntityObject) => worktreeById.get(bo.worktree_id))
     .filter((wt): wt is Worktree => wt !== undefined);
 
-  // Track active users via cursor presence
+  // Track active users via cursor presence (board-scoped for canvas)
   const { activeUsers } = usePresence({
     client,
     boardId: currentBoard?.board_id as BoardID | null,
@@ -440,18 +440,28 @@ export const App: React.FC<AppProps> = ({
     enabled: !!currentBoard && !!client,
   });
 
-  // Include current user in the facepile (always first)
-  // Filter out current user from activeUsers to avoid duplication
+  // Track global presence for navbar facepile (across all boards)
+  const { activeUsers: globalActiveUsers } = usePresence({
+    client,
+    boardId: currentBoard?.board_id as BoardID | null,
+    users: mapToArray(userById),
+    enabled: !!client,
+    globalPresence: true,
+  });
+
+  // Include current user in the global facepile (always first)
+  // Filter out current user from globalActiveUsers to avoid duplication
   const allActiveUsers = user
     ? [
         {
           user,
           lastSeen: Date.now(),
+          boardId: currentBoard?.board_id,
           cursor: undefined, // Current user doesn't have a remote cursor
         },
-        ...activeUsers.filter((activeUser) => activeUser.user.user_id !== user.user_id),
+        ...globalActiveUsers.filter((activeUser) => activeUser.user.user_id !== user.user_id),
       ]
-    : activeUsers;
+    : globalActiveUsers;
 
   // Check if current user is mentioned in active comments
   const activeComments = mapToArray(commentById).filter(
@@ -531,6 +541,15 @@ export const App: React.FC<AppProps> = ({
         }}
         onOpenNewWorktree={() => {
           setNewWorktreeModalOpen(true);
+        }}
+        boardById={boardById}
+        onUserClick={(userId, boardId, cursor) => {
+          // Navigate to the user's board
+          if (boardId) {
+            setCurrentBoardId(boardId);
+            // TODO: If cursor position is provided, we could pan to that position
+            // This would require exposing a method on SessionCanvasRef
+          }
         }}
       />
       <Content style={{ position: 'relative', overflow: 'hidden', display: 'flex' }}>

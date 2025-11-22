@@ -7,7 +7,7 @@
  * so no Map lookup is needed for this component.
  */
 
-import type { ActiveUser } from '@agor/core/types';
+import type { ActiveUser, Board, BoardID } from '@agor/core/types';
 import { Tooltip } from 'antd';
 import type { CSSProperties } from 'react';
 import { AgorAvatar } from '../AgorAvatar';
@@ -17,7 +17,8 @@ export interface FacepileProps {
   activeUsers: ActiveUser[];
   currentUserId?: string;
   maxVisible?: number;
-  onUserClick?: (userId: string, cursorPosition?: { x: number; y: number }) => void;
+  onUserClick?: (userId: string, boardId?: BoardID, cursorPosition?: { x: number; y: number }) => void;
+  boardById?: Map<string, Board>; // For looking up board names
   style?: CSSProperties;
 }
 
@@ -28,6 +29,7 @@ export const Facepile: React.FC<FacepileProps> = ({
   activeUsers,
   maxVisible = 5,
   onUserClick,
+  boardById,
   style,
 }) => {
   // Show first N users, with overflow count
@@ -40,34 +42,46 @@ export const Facepile: React.FC<FacepileProps> = ({
 
   return (
     <div className="facepile" style={style}>
-      {visibleUsers.map(({ user, cursor }) => (
-        <Tooltip
-          key={user.user_id}
-          title={
-            <div>
-              <div>{user.name || user.email}</div>
-              {cursor && (
-                <div style={{ fontSize: '11px', opacity: 0.7, marginTop: '4px' }}>
-                  Click to view position
-                </div>
-              )}
-            </div>
-          }
-        >
-          <AgorAvatar
-            style={{
-              cursor: onUserClick && cursor ? 'pointer' : 'default',
-            }}
-            onClick={() => {
-              if (onUserClick && cursor) {
-                onUserClick(user.user_id, cursor);
-              }
-            }}
+      {visibleUsers.map(({ user, cursor, boardId }) => {
+        const board = boardId && boardById ? boardById.get(boardId) : null;
+        const boardName = board?.name || 'Unknown Board';
+        const boardIcon = board?.icon || '📋';
+        const canClick = onUserClick && boardId;
+
+        return (
+          <Tooltip
+            key={user.user_id}
+            title={
+              <div>
+                <div>{user.name || user.email}</div>
+                {boardId && (
+                  <div style={{ fontSize: '11px', opacity: 0.7, marginTop: '4px' }}>
+                    {boardIcon} {boardName}
+                  </div>
+                )}
+                {canClick && (
+                  <div style={{ fontSize: '11px', opacity: 0.7, marginTop: '4px' }}>
+                    Click to go to board
+                  </div>
+                )}
+              </div>
+            }
           >
-            {user.emoji || '👤'}
-          </AgorAvatar>
-        </Tooltip>
-      ))}
+            <AgorAvatar
+              style={{
+                cursor: canClick ? 'pointer' : 'default',
+              }}
+              onClick={() => {
+                if (canClick) {
+                  onUserClick(user.user_id, boardId, cursor);
+                }
+              }}
+            >
+              {user.emoji || '👤'}
+            </AgorAvatar>
+          </Tooltip>
+        );
+      })}
 
       {overflowCount > 0 && (
         <Tooltip title={`+${overflowCount} more active users`}>

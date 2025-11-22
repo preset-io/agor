@@ -48,6 +48,7 @@ export interface RemoteCursor {
 export interface ActiveUser {
   user: User;
   lastSeen: number;
+  boardId?: BoardID; // Which board the user is currently viewing
   cursor?: {
     x: number;
     y: number;
