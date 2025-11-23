@@ -5,10 +5,15 @@
  */
 
 import type { PermissionMode, SessionID, TaskID } from '@agor/core/types';
+import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import type { ExecutorIPCServer } from '../../ipc-server.js';
 import { CodexTool } from '../../sdk-handlers/codex/index.js';
 import { DaemonClient } from '../../services/daemon-client.js';
-import { createExecutorClient, getDaemonUrl } from '../../services/feathers-client.js';
+import {
+  type AgorClient,
+  createExecutorClient,
+  getDaemonUrl,
+} from '../../services/feathers-client.js';
 import type { ExecutePromptParams, ExecutePromptResult } from '../../types.js';
 
 /**
@@ -29,12 +34,22 @@ export async function executeCodexSDK(
   // Create DaemonClient for streaming callbacks
   const daemonClient = new DaemonClient(ipcServer, session_token);
 
+  // Create Feathers-backed repositories
+  const repos = createFeathersBackedRepositories(client);
+
   try {
-    // Create Tool instance with Feathers client
-    const tool = new CodexTool({
-      app: client,
-      apiKey,
-    });
+    // Create Tool instance with repositories and services
+    const tool = new CodexTool(
+      repos.messages, // MessagesRepository
+      repos.sessions, // SessionRepository
+      repos.sessionMCP, // SessionMCPServerRepository
+      repos.worktrees, // WorktreeRepository
+      repos.repos, // RepoRepository
+      apiKey, // API key
+      repos.messagesService, // MessagesService
+      repos.tasksService, // TasksService
+      undefined // Database (not used in Feathers architecture)
+    );
 
     // Execute prompt with streaming
     const result = await tool.executePromptWithStreaming(

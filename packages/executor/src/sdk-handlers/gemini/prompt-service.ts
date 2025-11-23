@@ -13,6 +13,10 @@ import * as crypto from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { resolveApiKey, resolveUserEnvironment } from '@agor/core/config';
+import type { Database } from '@agor/core/db';
+// @ts-expect-error - templates not exported from @agor/core index
+import { renderAgorSystemPrompt } from '@agor/core/src/templates/session-context';
 import {
   AuthType,
   Config,
@@ -23,14 +27,15 @@ import {
   type ResumedSessionData,
 } from '@google/gemini-cli-core';
 import type { Part } from '@google/genai';
-import { getDaemonUrl, resolveApiKey, resolveUserEnvironment } from '../../config';
-import type { Database } from '../../db/client';
-import type { MCPServerRepository } from '../../db/repositories/mcp-servers';
-import type { MessagesRepository } from '../../db/repositories/messages';
-import type { RepoRepository } from '../../db/repositories/repos';
-import type { SessionMCPServerRepository } from '../../db/repositories/session-mcp-servers';
-import type { SessionRepository } from '../../db/repositories/sessions';
-import type { WorktreeRepository } from '../../db/repositories/worktrees';
+import { getDaemonUrl } from '../../config';
+import type {
+  MCPServerRepository,
+  MessagesRepository,
+  RepoRepository,
+  SessionMCPServerRepository,
+  SessionRepository,
+  WorktreeRepository,
+} from '../../db/feathers-repositories';
 import type { PermissionMode, SessionID, TaskID, UserID } from '../../types';
 import type { TokenUsage } from '../../types/token-usage';
 import { convertConversationToHistory } from './conversation-converter';
@@ -86,7 +91,7 @@ export type GeminiStreamEvent =
 export class GeminiPromptService {
   private sessionClients = new Map<SessionID, GeminiClient>();
   private activeControllers = new Map<SessionID, AbortController>();
-  private db?: Database;
+  private db?: Database; // Database for user env vars and API key resolution
   private tasksService?: { get: (id: TaskID) => Promise<{ created_by: string }> };
 
   constructor(
@@ -98,7 +103,7 @@ export class GeminiPromptService {
     private mcpServerRepo?: MCPServerRepository,
     private sessionMCPRepo?: SessionMCPServerRepository,
     private mcpEnabled?: boolean,
-    db?: Database,
+    db?: Database, // Database for user env vars and API key resolution
     tasksService?: { get: (id: TaskID) => Promise<{ created_by: string }> }
   ) {
     this.db = db;
@@ -643,7 +648,6 @@ export class GeminiPromptService {
     //
     // IMPORTANT: Gemini uses GEMINI.md (not CLAUDE.md) for project instructions!
     // User's project GEMINI.md files are still loaded hierarchically.
-    const { renderAgorSystemPrompt } = await import('../../templates/session-context.js');
     const agorSystemPrompt = await renderAgorSystemPrompt(sessionId, {
       sessions: this.sessionsRepo,
       worktrees: this.worktreesRepo,

@@ -9,6 +9,7 @@
 import type { AgorClient } from '@agor/core/api';
 import type {
   MCPServer,
+  MCPServerFilters,
   MCPServerID,
   Message,
   MessageID,
@@ -121,9 +122,25 @@ export class FeathersMCPServersRepository {
     }
   }
 
-  async findAll(): Promise<MCPServer[]> {
+  async findAll(filters?: MCPServerFilters): Promise<MCPServer[]> {
     const service = this.client.service('mcp-servers');
-    const result = await service.find({ query: { $limit: 1000 } });
+    const query: Record<string, unknown> = { $limit: 1000 };
+
+    // Apply filters
+    if (filters?.scope) {
+      query.scope = filters.scope;
+    }
+    if (filters?.scopeId) {
+      query.scopeId = filters.scopeId;
+    }
+    if (filters?.transport) {
+      query.transport = filters.transport;
+    }
+    if (filters?.enabled !== undefined) {
+      query.enabled = filters.enabled;
+    }
+
+    const result = await service.find({ query });
     return Array.isArray(result) ? result : result.data;
   }
 }
@@ -155,7 +172,57 @@ export class FeathersSessionMCPServersRepository {
     });
     return (Array.isArray(result) ? result : result.data) as SessionMCPServer[];
   }
+
+  /**
+   * List MCP servers for a session with optional enabled filter
+   * @param sessionId - Session ID
+   * @param enabledOnly - If true, only return enabled servers
+   * @returns Array of MCPServer objects
+   */
+  async listServers(sessionId: SessionID, enabledOnly?: boolean): Promise<MCPServer[]> {
+    // Get session-mcp-server join records
+    const query: Record<string, unknown> = {
+      session_id: sessionId,
+      $limit: 1000,
+    };
+
+    if (enabledOnly) {
+      query.enabled = true;
+    }
+
+    const sessionMCPService = this.client.service('session-mcp-servers');
+    const result = await sessionMCPService.find({ query });
+    const sessionMCPServers = (Array.isArray(result) ? result : result.data) as SessionMCPServer[];
+
+    // Get full MCPServer objects for each join record
+    const mcpServerService = this.client.service('mcp-servers');
+    const servers: MCPServer[] = [];
+
+    for (const link of sessionMCPServers) {
+      try {
+        const server = await mcpServerService.get(link.mcp_server_id);
+        servers.push(server);
+      } catch (_error) {}
+    }
+
+    return servers;
+  }
 }
+
+// ═══════════════════════════════════════════════════════════
+// Type Aliases for Backward Compatibility
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * Repository type aliases matching old architecture patterns
+ * These allow sdk-handlers to use familiar types during migration
+ */
+export type MessagesRepository = FeathersMessagesRepository;
+export type SessionRepository = FeathersSessionsRepository;
+export type WorktreeRepository = FeathersWorktreesRepository;
+export type RepoRepository = FeathersReposRepository;
+export type MCPServerRepository = FeathersMCPServersRepository;
+export type SessionMCPServerRepository = FeathersSessionMCPServersRepository;
 
 /**
  * Create all Feathers-backed repositories and services

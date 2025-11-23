@@ -3,6 +3,19 @@
  * Based on JSON-RPC 2.0 specification
  */
 
+// Re-export commonly used types from @agor/core for convenience
+export type {
+  MCPServersConfig,
+  Message,
+  MessageCreate,
+  MessageID,
+  PermissionMode,
+  SessionID,
+  TaskID,
+  UserID,
+} from '@agor/core/types';
+export { MessageRole, TaskStatus } from '@agor/core/types';
+
 // ═══════════════════════════════════════════════════════════
 // Base JSON-RPC 2.0 Types
 // ═══════════════════════════════════════════════════════════
@@ -51,7 +64,7 @@ export interface ResponseHelper {
 // Ping Handler Types (Phase 1)
 // ═══════════════════════════════════════════════════════════
 
-export type PingParams = {};
+export type PingParams = Record<string, never>;
 
 export interface PingResult {
   pong: true;

@@ -10,16 +10,16 @@
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { generateId } from '@agor/core/db';
 import type { PermissionMode } from '@anthropic-ai/claude-agent-sdk';
-import type { Database } from '../../db/client';
-import type { MCPServerRepository } from '../../db/repositories/mcp-servers';
-import type { MessagesRepository } from '../../db/repositories/messages';
-import type { RepoRepository } from '../../db/repositories/repos';
-import type { SessionMCPServerRepository } from '../../db/repositories/session-mcp-servers';
-import type { SessionRepository } from '../../db/repositories/sessions';
-import type { WorktreeRepository } from '../../db/repositories/worktrees';
-import { withSessionGuard } from '../../db/session-guard';
-import { generateId } from '../../lib/ids';
+import type {
+  MCPServerRepository,
+  MessagesRepository,
+  RepoRepository,
+  SessionMCPServerRepository,
+  SessionRepository,
+  WorktreeRepository,
+} from '../../db/feathers-repositories';
 import type { PermissionService } from '../../permissions/permission-service';
 import {
   type Message,
@@ -46,6 +46,27 @@ import type { ProcessedEvent } from './message-processor';
 import { ClaudePromptService } from './prompt-service';
 
 /**
+ * Wrapper for withSessionGuard that accepts Feathers repositories
+ * The Feathers repositories have the same interface but different type signatures
+ */
+async function withFeathersSessionGuard<T>(
+  sessionId: SessionID,
+  sessionsRepo: SessionRepository | undefined,
+  operation: () => Promise<T>
+): Promise<T | null> {
+  // Check session exists before executing operation
+  const sessionExists = await sessionsRepo?.findById(sessionId);
+  if (!sessionExists) {
+    console.warn(
+      `⚠️  Session ${sessionId.substring(0, 8)} no longer exists, skipping guarded operation`
+    );
+    return null;
+  }
+
+  return operation();
+}
+
+/**
  * Service interface for creating messages via FeathersJS
  * This ensures WebSocket events are emitted when messages are created
  */
@@ -56,14 +77,13 @@ export interface MessagesService {
 /**
  * Service interface for updating tasks via FeathersJS
  * This ensures WebSocket events are emitted when tasks are updated
+ * Note: emit() is called directly on the service in handlers (socket.io feature)
  */
 export interface TasksService {
   // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service returns dynamic task data
   get(id: string): Promise<any>;
   // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service accepts partial task updates
   patch(id: string, data: Partial<any>): Promise<any>;
-  // biome-ignore lint/suspicious/noExplicitAny: FeathersJS emit types are not strict
-  emit(event: string, data: any): void;
 }
 
 /**
@@ -93,8 +113,7 @@ export class ClaudeTool implements ITool {
     sessionsService?: SessionsService,
     worktreesRepo?: WorktreeRepository,
     reposRepo?: RepoRepository,
-    mcpEnabled?: boolean,
-    db?: Database
+    mcpEnabled?: boolean
   ) {
     if (messagesRepo && sessionsRepo) {
       this.promptService = new ClaudePromptService(
@@ -109,8 +128,7 @@ export class ClaudeTool implements ITool {
         worktreesRepo,
         reposRepo,
         messagesService,
-        mcpEnabled,
-        db
+        mcpEnabled
       );
     }
   }
@@ -280,7 +298,8 @@ export class ClaudeTool implements ITool {
       // Handle tool execution start
       if (event.type === 'tool_start') {
         if (this.tasksService && taskId) {
-          this.tasksService.emit('tool:start', {
+          // biome-ignore lint/suspicious/noExplicitAny: emit is available at runtime from socket.io
+          (this.tasksService as any).emit('tool:start', {
             task_id: taskId,
             session_id: sessionId,
             tool_use_id: event.toolUseId,
@@ -292,7 +311,8 @@ export class ClaudeTool implements ITool {
       // Handle tool execution complete
       if (event.type === 'tool_complete') {
         if (this.tasksService && taskId) {
-          this.tasksService.emit('tool:complete', {
+          // biome-ignore lint/suspicious/noExplicitAny: emit is available at runtime from socket.io
+          (this.tasksService as any).emit('tool:complete', {
             task_id: taskId,
             session_id: sessionId,
             tool_use_id: event.toolUseId,
@@ -304,7 +324,8 @@ export class ClaudeTool implements ITool {
       if (event.type === 'thinking_partial') {
         // Emit to tasks service for task-level tracking
         if (this.tasksService && taskId) {
-          this.tasksService.emit('thinking:chunk', {
+          // biome-ignore lint/suspicious/noExplicitAny: emit is available at runtime from socket.io
+          (this.tasksService as any).emit('thinking:chunk', {
             task_id: taskId,
             session_id: sessionId,
             chunk: event.thinkingChunk,
@@ -356,7 +377,7 @@ export class ClaudeTool implements ITool {
 
           // Create a NEW system message for compaction complete
           // This preserves the event stream and allows UI to aggregate
-          await withSessionGuard(sessionId, this.sessionsRepo, async () => {
+          await withFeathersSessionGuard(sessionId, this.sessionsRepo, async () => {
             const completeMessageId = generateId() as MessageID;
 
             // Start streaming event for this system message
@@ -476,7 +497,7 @@ export class ClaudeTool implements ITool {
             currentTextMessageId || currentThinkingMessageId || (generateId() as MessageID);
 
           // Create assistant message with session guard (handles deleted sessions gracefully)
-          const created = await withSessionGuard(sessionId, this.sessionsRepo, async () => {
+          const created = await withFeathersSessionGuard(sessionId, this.sessionsRepo, async () => {
             await createAssistantMessage(
               sessionId,
               assistantMessageId,
@@ -508,7 +529,7 @@ export class ClaudeTool implements ITool {
           const completeEvent = event as Extract<ProcessedEvent, { type: 'complete' }>;
 
           // Create user message with session guard (handles deleted sessions gracefully)
-          await withSessionGuard(sessionId, this.sessionsRepo, async () => {
+          await withFeathersSessionGuard(sessionId, this.sessionsRepo, async () => {
             const userMessageId = generateId() as MessageID;
             await createUserMessageFromContent(
               sessionId,
@@ -526,7 +547,7 @@ export class ClaudeTool implements ITool {
           const completeEvent = event as Extract<ProcessedEvent, { type: 'complete' }>;
 
           // Create system message with session guard (handles deleted sessions gracefully)
-          await withSessionGuard(sessionId, this.sessionsRepo, async () => {
+          await withFeathersSessionGuard(sessionId, this.sessionsRepo, async () => {
             const systemMessageId = generateId() as MessageID;
             await createSystemMessage(
               sessionId,
@@ -701,7 +722,7 @@ export class ClaudeTool implements ITool {
         const messageId = generateId() as MessageID;
 
         // Create message with session guard (handles deleted sessions gracefully)
-        const created = await withSessionGuard(sessionId, this.sessionsRepo, async () => {
+        const created = await withFeathersSessionGuard(sessionId, this.sessionsRepo, async () => {
           if (completeEvent.role === MessageRole.ASSISTANT) {
             await createAssistantMessage(
               sessionId,

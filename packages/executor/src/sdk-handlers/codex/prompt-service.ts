@@ -13,15 +13,19 @@
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { resolveApiKey, resolveUserEnvironment } from '@agor/core/config';
+import type { Database } from '@agor/core/db';
+// @ts-expect-error - templates not exported from @agor/core index
+import { renderAgorSystemPrompt } from '@agor/core/src/templates/session-context';
 import { type JsonMap, parse as parseToml, stringify as stringifyToml } from '@iarna/toml';
 import { Codex, type Thread, type ThreadItem } from '@openai/codex-sdk';
-import { resolveApiKey, resolveUserEnvironment } from '../../config';
-import type { Database } from '../../db/client';
-import type { MessagesRepository } from '../../db/repositories/messages';
-import type { RepoRepository } from '../../db/repositories/repos';
-import type { SessionMCPServerRepository } from '../../db/repositories/session-mcp-servers';
-import type { SessionRepository } from '../../db/repositories/sessions';
-import type { WorktreeRepository } from '../../db/repositories/worktrees';
+import type {
+  MessagesRepository,
+  RepoRepository,
+  SessionMCPServerRepository,
+  SessionRepository,
+  WorktreeRepository,
+} from '../../db/feathers-repositories';
 import type { PermissionMode, SessionID, TaskID, UserID } from '../../types';
 import type { TokenUsage } from '../../types/token-usage';
 import { DEFAULT_CODEX_MODEL } from './models';
@@ -115,7 +119,7 @@ export class CodexPromptService {
   private lastApiKey: string | null = null;
   private stopRequested = new Map<SessionID, boolean>();
   private apiKey: string | undefined;
-  private db?: Database;
+  private db?: Database; // Database for user env vars and API key resolution
   private lastCodexHome: string | null = null;
   private tasksService?: { get: (id: TaskID) => Promise<{ created_by: string }> };
 
@@ -126,7 +130,7 @@ export class CodexPromptService {
     private worktreesRepo?: WorktreeRepository,
     private reposRepo?: RepoRepository,
     apiKey?: string,
-    db?: Database,
+    db?: Database, // Database for user env vars and API key resolution
     tasksService?: { get: (id: TaskID) => Promise<{ created_by: string }> }
   ) {
     // Store API key for reinitializing SDK
@@ -189,7 +193,6 @@ export class CodexPromptService {
    * Returns the per-session CODEX_HOME path.
    */
   private async ensureCodexSessionContext(sessionId: SessionID): Promise<string> {
-    const { renderAgorSystemPrompt } = await import('../../templates/session-context.js');
     const agorSystemPrompt = await renderAgorSystemPrompt(sessionId, {
       sessions: this.sessionsRepo,
       worktrees: this.worktreesRepo,

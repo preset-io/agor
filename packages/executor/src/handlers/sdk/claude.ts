@@ -202,7 +202,8 @@ export async function executeClaudeCodeTask(params: {
       permissionMode as import('@anthropic-ai/claude-agent-sdk').PermissionMode | undefined,
       {
         onStreamStart: async (message_id, data) => {
-          client.service('messages').emit('streaming:start', {
+          // biome-ignore lint/suspicious/noExplicitAny: emit available at runtime from socket.io
+          (client.service('messages') as any).emit('streaming:start', {
             message_id,
             session_id: data.session_id,
             task_id: data.task_id,
@@ -211,7 +212,8 @@ export async function executeClaudeCodeTask(params: {
           });
         },
         onStreamChunk: async (message_id, text) => {
-          client.service('messages').emit('streaming:chunk', {
+          // biome-ignore lint/suspicious/noExplicitAny: emit available at runtime from socket.io
+          (client.service('messages') as any).emit('streaming:chunk', {
             message_id,
             session_id: sessionId,
             chunk: text,
@@ -219,35 +221,40 @@ export async function executeClaudeCodeTask(params: {
         },
         onStreamEnd: async (message_id) => {
           console.log(`[claude] Stream ended: ${message_id}`);
-          client.service('messages').emit('streaming:end', {
+          // biome-ignore lint/suspicious/noExplicitAny: emit available at runtime from socket.io
+          (client.service('messages') as any).emit('streaming:end', {
             message_id,
             session_id: sessionId,
           });
         },
         onStreamError: async (message_id, error) => {
           console.error(`[claude] Stream error for ${message_id}:`, error);
-          client.service('messages').emit('streaming:error', {
+          // biome-ignore lint/suspicious/noExplicitAny: emit available at runtime from socket.io
+          (client.service('messages') as any).emit('streaming:error', {
             message_id,
             session_id: sessionId,
             error: error.message,
           });
         },
         onThinkingStart: async (message_id, metadata) => {
-          client.service('messages').emit('thinking:start', {
+          // biome-ignore lint/suspicious/noExplicitAny: emit available at runtime from socket.io
+          (client.service('messages') as any).emit('thinking:start', {
             message_id,
             ...metadata,
             session_id: sessionId,
           });
         },
         onThinkingChunk: async (message_id, chunk) => {
-          client.service('messages').emit('thinking:chunk', {
+          // biome-ignore lint/suspicious/noExplicitAny: emit available at runtime from socket.io
+          (client.service('messages') as any).emit('thinking:chunk', {
             message_id,
             session_id: sessionId,
             chunk,
           });
         },
         onThinkingEnd: async (message_id) => {
-          client.service('messages').emit('thinking:end', {
+          // biome-ignore lint/suspicious/noExplicitAny: emit available at runtime from socket.io
+          (client.service('messages') as any).emit('thinking:end', {
             message_id,
             session_id: sessionId,
           });

@@ -6,12 +6,13 @@
  */
 
 import type { PermissionMode } from '@anthropic-ai/claude-agent-sdk/sdk';
-import type { Database } from '../../db/client';
-import type { MCPServerRepository } from '../../db/repositories/mcp-servers';
-import type { MessagesRepository } from '../../db/repositories/messages';
-import type { SessionMCPServerRepository } from '../../db/repositories/session-mcp-servers';
-import type { SessionRepository } from '../../db/repositories/sessions';
-import type { WorktreeRepository } from '../../db/repositories/worktrees';
+import type {
+  MCPServerRepository,
+  MessagesRepository,
+  SessionMCPServerRepository,
+  SessionRepository,
+  WorktreeRepository,
+} from '../../db/feathers-repositories';
 import type { PermissionService } from '../../permissions/permission-service';
 import type { SessionID, TaskID } from '../../types';
 import { MessageRole } from '../../types';
@@ -68,10 +69,9 @@ export class ClaudePromptService {
     private tasksService?: TasksService,
     private sessionsService?: SessionsService, // FeathersJS Sessions service for WebSocket broadcasting
     private worktreesRepo?: WorktreeRepository,
-    private reposRepo?: import('../../db/repositories/repos').RepoRepository,
+    private reposRepo?: import('../../db/feathers-repositories').RepoRepository,
     private messagesService?: import('./claude-tool').MessagesService, // FeathersJS Messages service for creating permission requests
-    private mcpEnabled?: boolean,
-    private db?: Database // Database for resolving user environment variables
+    private mcpEnabled?: boolean
   ) {
     // No client initialization needed - Agent SDK is stateless
   }
@@ -113,7 +113,6 @@ export class ClaudePromptService {
         messagesService: this.messagesService,
         worktreesRepo: this.worktreesRepo,
         permissionLocks: this.permissionLocks,
-        db: this.db,
       },
       {
         taskId,
@@ -252,7 +251,6 @@ export class ClaudePromptService {
         messagesService: this.messagesService,
         worktreesRepo: this.worktreesRepo,
         permissionLocks: this.permissionLocks,
-        db: this.db,
       },
       {
         taskId: undefined,

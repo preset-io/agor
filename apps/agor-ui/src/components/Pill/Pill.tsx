@@ -196,8 +196,10 @@ const ContextWindowPopoverContent: React.FC<{
   // Build collapsible items for advanced sections
   const advancedItems = [];
 
-  // Get normalized SDK response (computed by executor, stored in DB)
-  const normalized = taskMetadata?.normalized_sdk_response || null;
+  // Get SDK response from task metadata
+  const sdkResponse = taskMetadata?.raw_sdk_response;
+  // biome-ignore lint/suspicious/noExplicitAny: Legacy normalized_sdk_response stub for compatibility
+  const normalized: any = null;
 
   // Add per-model usage if available (Claude Code multi-model)
   // Check for modelUsage field (only Claude SDK has this)

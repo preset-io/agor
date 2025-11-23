@@ -7,19 +7,21 @@
 
 import { execSync } from 'node:child_process';
 import * as fs from 'node:fs/promises';
+import { validateDirectory } from '@agor/core';
+// @ts-expect-error - templates not exported from @agor/core index
+import { renderAgorSystemPrompt } from '@agor/core/src/templates/session-context';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { PermissionMode } from '@anthropic-ai/claude-agent-sdk/sdk';
 import { getDaemonUrl, resolveApiKey, resolveUserEnvironment } from '../../config';
-import type { Database } from '../../db/client';
-import type { MCPServerRepository } from '../../db/repositories/mcp-servers';
-import type { MessagesRepository } from '../../db/repositories/messages';
-import type { RepoRepository } from '../../db/repositories/repos';
-import type { SessionMCPServerRepository } from '../../db/repositories/session-mcp-servers';
-import type { SessionRepository } from '../../db/repositories/sessions';
-import type { WorktreeRepository } from '../../db/repositories/worktrees';
-import { validateDirectory } from '../../lib/validation';
+import type {
+  MCPServerRepository,
+  MessagesRepository,
+  RepoRepository,
+  SessionMCPServerRepository,
+  SessionRepository,
+  WorktreeRepository,
+} from '../../db/feathers-repositories';
 import type { PermissionService } from '../../permissions/permission-service';
-import { renderAgorSystemPrompt } from '../../templates/session-context';
 import type { MCPServersConfig, SessionID, TaskID, UserID } from '../../types';
 import type { MessagesService, SessionsService, TasksService } from './claude-tool';
 import { DEFAULT_CLAUDE_MODEL } from './models';
@@ -86,7 +88,6 @@ export interface QuerySetupDeps {
   worktreesRepo?: WorktreeRepository;
   permissionLocks: Map<SessionID, Promise<void>>;
   mcpEnabled?: boolean;
-  db?: Database;
 }
 
 /**
@@ -288,34 +289,29 @@ export async function setupQuery(
 
   // Add optional apiKey if provided
   // NOTE: Don't require API key - user may have used `claude login` (OAuth)
-  // Precedence: per-user key > config.yaml (UI) > process.env
-  const apiKey = await resolveApiKey('ANTHROPIC_API_KEY', {
-    userId: contextUserId,
-    db: deps.db,
-  });
+  // In executor mode, API keys are passed directly from daemon via IPC
+  // If deps.apiKey is provided, use it; otherwise rely on environment
+  const apiKey = deps.apiKey || resolveApiKey(process.env.ANTHROPIC_API_KEY || '');
   if (apiKey) {
     queryOptions.apiKey = apiKey;
   }
 
-  // Resolve user environment variables and augment process.env
-  // This allows the Claude Code subprocess to access per-user env vars
+  // Resolve user environment variables
+  // In executor mode, environment is inherited from the executor process
+  const userEnv = resolveUserEnvironment();
   const originalProcessEnv = { ...process.env };
   let userEnvCount = 0;
 
-  if (contextUserId && deps.db) {
+  if (contextUserId) {
     try {
-      const userEnv = await resolveUserEnvironment(contextUserId, deps.db);
-      // Count how many user env vars we're adding (exclude system vars)
+      // Count how many user env vars we're using (from inherited environment)
       const systemVarCount = Object.keys(originalProcessEnv).length;
-      const totalVarCount = Object.keys(userEnv).length;
+      const totalVarCount = Object.keys(userEnv.env).length;
       userEnvCount = totalVarCount - systemVarCount;
-
-      // Augment process.env with user variables (user takes precedence)
-      Object.assign(process.env, userEnv);
 
       if (userEnvCount > 0) {
         console.log(
-          `🔐 Augmented process.env with ${userEnvCount} user env vars for ${contextUserId.substring(0, 8)}`
+          `🔐 Using ${userEnvCount} environment vars for user ${contextUserId.substring(0, 8)}`
         );
       }
     } catch (err) {

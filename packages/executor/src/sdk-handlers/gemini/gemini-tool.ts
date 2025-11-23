@@ -11,14 +11,16 @@
  */
 
 import { execSync } from 'node:child_process';
-import type { Database } from '../../db/client';
-import type { MCPServerRepository } from '../../db/repositories/mcp-servers';
-import type { MessagesRepository } from '../../db/repositories/messages';
-import type { RepoRepository } from '../../db/repositories/repos';
-import type { SessionMCPServerRepository } from '../../db/repositories/session-mcp-servers';
-import type { SessionRepository } from '../../db/repositories/sessions';
-import type { WorktreeRepository } from '../../db/repositories/worktrees';
-import { generateId } from '../../lib/ids';
+import type { Database } from '@agor/core/db';
+import { generateId } from '@agor/core/db';
+import type {
+  MCPServerRepository,
+  MessagesRepository,
+  RepoRepository,
+  SessionMCPServerRepository,
+  SessionRepository,
+  WorktreeRepository,
+} from '../../db/feathers-repositories';
 import {
   type Message,
   type MessageID,
@@ -61,7 +63,7 @@ export class GeminiTool implements ITool {
     mcpServerRepo?: MCPServerRepository,
     sessionMCPRepo?: SessionMCPServerRepository,
     mcpEnabled?: boolean,
-    db?: Database
+    db?: Database // Database for user env vars and API key resolution
   ) {
     if (messagesRepo && sessionsRepo) {
       this.promptService = new GeminiPromptService(

@@ -8,13 +8,15 @@
  */
 
 import { execSync } from 'node:child_process';
-import type { Database } from '../../db/client';
-import type { MessagesRepository } from '../../db/repositories/messages';
-import type { RepoRepository } from '../../db/repositories/repos';
-import type { SessionMCPServerRepository } from '../../db/repositories/session-mcp-servers';
-import type { SessionRepository } from '../../db/repositories/sessions';
-import type { WorktreeRepository } from '../../db/repositories/worktrees';
-import { generateId } from '../../lib/ids';
+import type { Database } from '@agor/core/db';
+import { generateId } from '@agor/core/db';
+import type {
+  MessagesRepository,
+  RepoRepository,
+  SessionMCPServerRepository,
+  SessionRepository,
+  WorktreeRepository,
+} from '../../db/feathers-repositories';
 import {
   type Message,
   type MessageID,
@@ -60,7 +62,7 @@ export class CodexTool implements ITool {
     apiKey?: string,
     messagesService?: MessagesService,
     tasksService?: TasksService,
-    db?: Database
+    db?: Database // Database for user env vars and API key resolution
   ) {
     this.messagesRepo = messagesRepo;
     this.sessionsRepo = sessionsRepo;

@@ -46,9 +46,11 @@ export async function executeGeminiSDK(
       repos.messagesService, // MessagesService (for creating messages via Feathers)
       repos.tasksService, // TasksService
       repos.worktrees, // WorktreeRepository
+      repos.repos, // RepoRepository
       repos.mcpServers, // MCPServerRepository
       repos.sessionMCP, // SessionMCPServerRepository
-      true // mcpEnabled
+      true, // mcpEnabled
+      undefined // Database (not used in Feathers architecture)
     );
 
     // Execute prompt with streaming
@@ -145,9 +147,11 @@ export async function executeGeminiTask(params: {
       repos.messagesService,
       repos.tasksService,
       repos.worktrees,
+      repos.repos, // RepoRepository
       repos.mcpServers,
       repos.sessionMCP,
-      true // mcpEnabled
+      true, // mcpEnabled
+      undefined // Database (not used in Feathers architecture)
     );
 
     // Execute prompt with streaming (streaming events emitted directly via Feathers)
@@ -162,7 +166,8 @@ export async function executeGeminiTask(params: {
           data: { session_id: string; task_id?: string; role: string; timestamp: string }
         ) => {
           // Emit via Feathers WebSocket
-          client.service('messages').emit('streaming:start', {
+          // biome-ignore lint/suspicious/noExplicitAny: emit available at runtime from socket.io
+          (client.service('messages') as any).emit('streaming:start', {
             message_id,
             session_id: data.session_id,
             task_id: data.task_id,
@@ -171,7 +176,8 @@ export async function executeGeminiTask(params: {
           });
         },
         onStreamChunk: async (message_id: string, text: string) => {
-          client.service('messages').emit('streaming:chunk', {
+          // biome-ignore lint/suspicious/noExplicitAny: emit available at runtime from socket.io
+          (client.service('messages') as any).emit('streaming:chunk', {
             message_id,
             session_id: sessionId,
             chunk: text,
@@ -179,14 +185,16 @@ export async function executeGeminiTask(params: {
         },
         onStreamEnd: async (message_id: string) => {
           console.log(`[gemini] Stream ended: ${message_id}`);
-          client.service('messages').emit('streaming:end', {
+          // biome-ignore lint/suspicious/noExplicitAny: emit available at runtime from socket.io
+          (client.service('messages') as any).emit('streaming:end', {
             message_id,
             session_id: sessionId,
           });
         },
         onStreamError: async (message_id: string, error: Error) => {
           console.error(`[gemini] Stream error for ${message_id}:`, error);
-          client.service('messages').emit('streaming:error', {
+          // biome-ignore lint/suspicious/noExplicitAny: emit available at runtime from socket.io
+          (client.service('messages') as any).emit('streaming:error', {
             message_id,
             session_id: sessionId,
             error: error.message,

@@ -18,7 +18,7 @@ export async function executeOpenCodeSDK(
   apiKey: string,
   ipcServer: ExecutorIPCServer
 ): Promise<ExecutePromptResult> {
-  const { session_token, session_id, task_id, prompt, permission_mode } = params;
+  const { session_token, session_id, task_id, prompt } = params;
 
   // Connect to daemon via Feathers client
   const daemonUrl = getDaemonUrl();
@@ -29,55 +29,54 @@ export async function executeOpenCodeSDK(
   const daemonClient = new DaemonClient(ipcServer, session_token);
 
   try {
-    // Create Tool instance with Feathers client
-    const tool = new OpenCodeTool({
-      app: client,
-      apiKey,
-    });
-
-    // Execute prompt with streaming
-    const result = await tool.executePromptWithStreaming(
-      session_id as import('@agor/core/types').SessionID,
-      prompt,
-      task_id as import('@agor/core/types').TaskID | undefined,
-      permission_mode as import('@agor/core/types').PermissionMode | undefined,
+    // Create Tool instance with config
+    const tool = new OpenCodeTool(
       {
-        onStreamStart: async (message_id, data) => {
+        enabled: true,
+        serverUrl: process.env.OPENCODE_SERVER_URL || 'http://localhost:3000',
+      },
+      client.service('messages')
+    );
+
+    // Execute task (OpenCode doesn't support executePromptWithStreaming yet)
+    // TODO: Implement streaming support for OpenCode
+    const result = await tool.executeTask!(
+      session_id as string,
+      prompt,
+      task_id as string | undefined,
+      {
+        onStreamStart: async (
+          message_id: string,
+          data: { session_id: string; task_id?: string; role: string; timestamp: string }
+        ) => {
           await daemonClient.streamStart({
-            message_id,
-            session_id: data.session_id,
-            task_id: data.task_id,
+            message_id: message_id as MessageID,
+            session_id: data.session_id as SessionID,
+            task_id: data.task_id as TaskID,
             role: data.role,
             timestamp: data.timestamp,
           });
         },
-        onStreamChunk: async (message_id, text) => {
-          await daemonClient.streamChunk({ message_id, text });
+        onStreamChunk: async (message_id: string, text: string) => {
+          await daemonClient.streamChunk({ message_id: message_id as MessageID, text });
         },
-        onStreamEnd: async (message_id) => {
+        onStreamEnd: async (message_id: string) => {
           console.log(`[opencode] Stream ended: ${message_id}`);
         },
-        onStreamError: async (message_id, error) => {
+        onStreamError: async (message_id: string, error: Error) => {
           console.error(`[opencode] Stream error for ${message_id}:`, error);
         },
       }
     );
 
     console.log(
-      `[opencode] Execution completed: user=${result.userMessageId}, assistant=${result.assistantMessageIds.length} messages`
+      `[opencode] Execution completed: status=${result.status}, messages=${result.messages.length}`
     );
 
     return {
-      status: result.wasStopped ? 'cancelled' : 'completed',
-      message_count: 1 + result.assistantMessageIds.length,
-      token_usage: result.tokenUsage
-        ? {
-            input_tokens: result.tokenUsage.input_tokens ?? 0,
-            output_tokens: result.tokenUsage.output_tokens ?? 0,
-            cache_read_tokens: result.tokenUsage.cache_read_tokens,
-            cache_write_tokens: result.tokenUsage.cache_creation_tokens,
-          }
-        : undefined,
+      status: result.status,
+      message_count: result.messages.length,
+      token_usage: undefined, // OpenCode doesn't provide token usage yet
     };
   } catch (error) {
     const err = error as Error;
@@ -89,7 +88,7 @@ export async function executeOpenCodeSDK(
   }
 }
 
-import type { PermissionMode, SessionID, TaskID } from '@agor/core/types';
+import type { MessageID, PermissionMode, SessionID, TaskID } from '@agor/core/types';
 import type { AgorClient } from '../../services/feathers-client.js';
 
 /**

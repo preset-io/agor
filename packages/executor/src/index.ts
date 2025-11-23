@@ -8,7 +8,7 @@
  * 4. Exits when task completes
  */
 
-import type { SessionID, TaskID } from '@agor/core/types';
+import type { PermissionScope, SessionID, TaskID } from '@agor/core/types';
 import { globalPermissionManager } from './permissions/permission-manager.js';
 import { type AgorClient, createFeathersClient } from './services/feathers-client.js';
 
@@ -87,39 +87,48 @@ export class AgorExecutor {
     if (!this.client) return;
 
     // Listen for task_stop events
-    this.client
-      .service('sessions')
-      .on('task_stop', (data: { session_id: string; task_id: string }) => {
+    // biome-ignore lint/suspicious/noExplicitAny: Feathers types don't support custom events
+    (this.client.service('sessions') as any).on(
+      'task_stop',
+      (data: { session_id: string; task_id: string }) => {
         console.log('[executor] Received task_stop event:', data);
 
         if (data.session_id === this.config.sessionId && data.task_id === this.config.taskId) {
           console.log('[executor] Stop signal received, aborting execution');
           this.abortController.abort();
         }
-      });
+      }
+    );
 
     // Listen for permission_resolved events
-    this.client
-      .service('messages')
-      .on(
-        'permission_resolved',
-        (data: {
-          requestId: string;
-          taskId: string;
-          allow: boolean;
-          reason?: string;
-          remember?: boolean;
-          scope?: string;
-          decidedBy?: string;
-        }) => {
-          console.log('[executor] Received permission_resolved event:', data);
+    // biome-ignore lint/suspicious/noExplicitAny: Feathers types don't support custom events
+    (this.client.service('messages') as any).on(
+      'permission_resolved',
+      (data: {
+        requestId: string;
+        taskId: string;
+        allow: boolean;
+        reason?: string;
+        remember: boolean;
+        scope: string;
+        decidedBy: string;
+      }) => {
+        console.log('[executor] Received permission_resolved event:', data);
 
-          if (data.taskId === this.config.taskId) {
-            // Forward to global permission manager
-            globalPermissionManager.resolvePermission(data);
-          }
+        if (data.taskId === this.config.taskId) {
+          // Forward to global permission manager
+          globalPermissionManager.resolvePermission({
+            requestId: data.requestId,
+            taskId: data.taskId as TaskID,
+            allow: data.allow,
+            reason: data.reason,
+            remember: data.remember,
+            scope: data.scope as PermissionScope,
+            decidedBy: data.decidedBy,
+          });
         }
-      );
+      }
+    );
 
     console.log('[executor] Event listeners registered');
   }
@@ -209,11 +218,11 @@ export class AgorExecutor {
         this.abortController.abort();
       }
 
-      // Update task status to cancelled
+      // Update task status to stopped
       if (this.client) {
         try {
           await this.client.service('tasks').patch(this.config.taskId, {
-            status: 'cancelled',
+            status: 'stopped',
             completed_at: new Date().toISOString(),
           });
         } catch (error) {

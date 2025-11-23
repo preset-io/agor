@@ -11,6 +11,7 @@ import type {
   ExecutePromptParams,
   JSONRPCNotification,
   JSONRPCRequest,
+  PingParams,
   ResponseHelper,
 } from './types';
 
@@ -65,7 +66,7 @@ export class AgorExecutorLegacy {
 
       switch (method) {
         case 'ping':
-          result = await handlePing(params || {});
+          result = await handlePing((params || {}) as PingParams);
           break;
 
         case 'execute_prompt':

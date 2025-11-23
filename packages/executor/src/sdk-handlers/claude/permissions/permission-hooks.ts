@@ -9,7 +9,7 @@
 import { generateId } from '@agor/core';
 import type { Message, MessageID, SessionID, TaskID } from '@agor/core/types';
 import { MessageRole, PermissionScope, PermissionStatus, TaskStatus } from '@agor/core/types';
-import type { MessagesRepository } from '../../../db/repositories/messages.js';
+import type { MessagesRepository, SessionRepository } from '../../../db/feathers-repositories.js';
 import type { PermissionService } from '../../../permissions/permission-service.js';
 import type { MessagesService, SessionsService, TasksService } from '../claude-tool.js';
 
@@ -26,7 +26,7 @@ export function createCanUseToolCallback(
   deps: {
     permissionService: PermissionService;
     tasksService: TasksService;
-    sessionsRepo: import('../../../db/repositories/sessions').SessionRepository;
+    sessionsRepo: SessionRepository;
     messagesRepo: MessagesRepository;
     messagesService?: MessagesService;
     sessionsService?: SessionsService;

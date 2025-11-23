@@ -16,7 +16,6 @@ import { generateId } from '@agor/core';
 import type { Message, SessionID, TaskID } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
 import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response.js';
-import type { ITool } from '../base/tool.interface.js';
 import type {
   CreateSessionConfig,
   SessionHandle,
@@ -24,7 +23,8 @@ import type {
   StreamingCallbacks,
   TaskResult,
   ToolCapabilities,
-} from '../base.js';
+} from '../base/index.js';
+import type { ITool } from '../base/tool.interface.js';
 import { OpenCodeClient } from './client.js';
 
 export interface OpenCodeConfig {
