@@ -140,7 +140,6 @@ services:
       - /app/apps/agor-ui/node_modules
       - /app/apps/agor-docs/node_modules
       - /app/apps/agor-cli/node_modules
-      - /app/packages/core/dist
       # Persist entire home directory (database, config, agent auth tokens, etc.)
       - agor-home:/home/agor
       # Mount SSH keys for git authentication (dev only)
