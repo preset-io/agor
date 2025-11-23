@@ -3,10 +3,14 @@ set -e
 
 echo "🚀 Starting Agor development environment..."
 
-# Fix volume permissions FIRST (before any operations)
-# Mounted volumes may be created with wrong ownership, causing EACCES errors
-echo "🔧 Fixing volume permissions..."
-sudo chown -R agor:agor /app
+# Fix volume permissions only if needed (defensive, but usually unnecessary with anonymous volumes)
+# On most systems, Docker handles ownership correctly, but some Linux setups may need this
+if [ "$(stat -c '%U' /app)" != "agor" ]; then
+  echo "🔧 Fixing volume permissions..."
+  sudo chown -R agor:agor /app
+else
+  echo "✅ Volume permissions already correct"
+fi
 
 # Smart dependency sync: check if pnpm-lock.yaml changed
 # Anonymous volumes preserve Docker-built node_modules directly (no copy needed!)
