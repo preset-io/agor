@@ -1,0 +1,222 @@
+---
+title: 'Agor Cloud - Opening a Private Beta'
+description: 'Fully managed Agor with Unix-level isolation, analytics dashboards, policy controls, and enterprise observability. Built by the team running it for themselves at Preset.'
+date: 2025-11-23
+---
+
+# Agor Cloud - Opening a Private Beta
+
+Agor is BSL-licensed and vastly open source. You're free to run it however you want—you just can't commercialize it. It has all the building blocks for anyone without commercial intent to build next-gen, multi-agent, multiplayer servers that can really change how you build software.
+
+So why Agor Cloud?
+
+## The Gap Between "Works for Me" and "Works for Production"
+
+Here's what we learned productionizing Agor at Preset for our own use:
+
+When you're excited about shared dev environments, worktrees, and AI sessions, you quickly realize the scale of what it takes to run this safely in production:
+
+- A stateful database that needs backups and migrations
+- API keys for multiple agent providers (Claude, Gemini, Codex)
+- Prompt injection risks when agents have filesystem access
+- User isolation so one developer's session doesn't stomp another's
+- Observability across a fleet of dev environments
+- Analytics to understand usage patterns and costs
+- Policies to prevent runaway token spend
+
+**The insight:** The best people to operate any given piece of software are the people building that software.
+
+We're building Agor. We're running it in production for ourselves. And as a SaaS company offering Preset Cloud, we had all the infrastructure expertise in place to do this right—for us and for anyone else who wants it.
+
+## What Agor Cloud Offers
+
+Agor Cloud is a fully managed service, turnkey. Up in minutes, reliable, always running the latest fully secured version of Agor with all the bells and whistles.
+
+### Unix-Level User Isolation
+
+We're bringing back shared, fat servers—the right way.
+
+If you're going to share and collaborate on dev environments, there's no way around this: each user needs real isolation. Not just process separation, not just containers, but **Unix-level user isolation**.
+
+Every developer gets their own Unix user on the Agor server. Worktrees, sessions, and dev environments run as that user. Filesystem permissions enforce boundaries. No accidental cross-contamination, no leaky abstractions.
+
+This is how multi-user systems were designed to work. Agor Cloud makes it seamless.
+
+### Always Up
+
+Managing a large box running all sorts of dev environments is challenging:
+
+- Docker containers that need health checks
+- Background processes that hang
+- Disk space that fills up
+- Network ports that collide
+- SSH tunnels that disconnect
+
+Agor Cloud ensures the infrastructure stays healthy. Monitoring, auto-recovery, capacity management—handled.
+
+You focus on building. We focus on keeping the lights on.
+
+### Analytics Dashboards
+
+Want to see who's using AI? How much? Who's ramping slowly? Where the token spend is going?
+
+**Agor Cloud comes with embedded, rich, interactive reporting through Preset Portals.**
+
+Every Agor Cloud instance includes a fully-loaded Preset (managed Apache Superset) workspace. Pre-built dashboards show:
+
+- Token usage by user, worktree, and repo
+- Cost breakdown by agent type (Claude, Codex, Gemini)
+- Session duration and completion rates
+- Worktree lifecycle metrics
+- Agent performance and error rates
+
+You get full SQL access to your Agor database through Superset, so you can build custom reports for your team's workflow.
+
+All your PDLC (Product Development Life Cycle) and AI development data in one place. Explore it however you want.
+
+### Usage Policies
+
+AI is powerful. It's also expensive. You want to enable usage, but you probably want guardrails:
+
+- **Token quotas** per user or team
+- **Rate limits** to prevent chain reactions
+- **Max concurrent sessions** to manage compute load
+- **Approval workflows** for high-cost operations
+- **Spending caps** to avoid surprise bills
+
+Agor Cloud lets you configure policies that fit your team's needs. Enable the productivity boost, contain the blast radius.
+
+### CI-Ready: Agents That Don't Disappear
+
+Being able to `@claude` and `@codex` in GitHub issues and pull requests has made GitHub a better place for all of us and our agents. But there are clear limitations:
+
+**The problem with ephemeral CI agents:**
+
+- You hope the agent will one-shot the solution in CI
+- Things remain opaque—you can't see what the agent actually did
+- Sessions are ephemeral—once the job finishes, the context vanishes
+- You can't reuse the context window that was built up
+- No way to say "that was close, but can you also check X?"
+- Missing context about how the branch got built in the first place
+
+**How nice would it be if agents in CI could:**
+
+- Work with live dev environments instead of cold checkouts
+- Access the full context of how the branch was built
+- Persist their sessions so you can go in and ask for a few more things
+- Appear on your board alongside your other work, not in a black box
+
+**That's exactly what Agor Cloud enables.**
+
+With Agor Cloud, you can allow your agents in CI to benefit from everything across the Agor platform:
+
+- **See CI-triggered sessions spawn** in your Agor environment in real-time
+- **Watch agents work** with full visibility into tool use, file reads, and reasoning
+- **Resume sessions** after CI completes—"Thanks for the review, now can you fix the issues you found?"
+- **Reuse context** from the session that created the branch
+- **Connect to live dev environments** instead of starting from scratch
+- **Track genealogy** from issue → PR → review → fixes—all as a session tree
+
+Getting something like that to work securely can be quite complex—API authentication, user isolation, secret management, network access controls. Agor Cloud handles all of it.
+
+Your CI agents become first-class citizens in your Agor environment, not ephemeral scripts that run and disappear.
+
+### Full Observability
+
+If you're using Agor to spin up dev environments—likely through Docker, Kubernetes, or local processes—you need visibility into what's running and how it's performing.
+
+Agor Cloud provides:
+
+- **Multi-cast observability** - logs and metrics flow to both your tools and ours
+- **Integration with your existing stack** - StatsD, Datadog, CloudWatch, Prometheus
+- **Built-in dashboards** - CPU, memory, disk, network for every environment
+- **Alerting** - get notified when environments spike, disk space runs low, or processes hang
+
+You maintain full observability on a system that's quickly becoming critical to your PDLC. We ensure our internal monitoring doesn't interfere with yours—multi-cast means both systems see the same data stream.
+
+Agor becomes the heart of your development process. You need visibility into it just like you need visibility into production.
+
+## Who Agor Cloud Is For
+
+- **Teams that want shared dev environments** without the ops burden
+- **Engineering orgs exploring AI-assisted development** at scale
+- **Companies with security and compliance requirements** that rule out running open source locally
+- **Teams that need analytics and cost controls** around AI usage
+- **Anyone who wants Agor's capabilities** without managing infrastructure
+
+## Signing Up for the Private Beta
+
+We're scaling this aggressively but cautiously. Agor Cloud is quickly becoming critical to team productivity, so we're onboarding carefully to ensure every deployment is solid.
+
+**If you're interested in a fully-loaded, hassle-free solution for you and your team, join our private beta.**
+
+Here's how it works:
+
+1. **Fill out the interest form** - Tell us about your team and use case
+2. **Quick discovery call** - We'll chat about fit and requirements (15 minutes)
+3. **Onboarding** - Once we establish fit, you'll be set up in minutes
+4. **Trial period** - Use Agor Cloud, see if it delivers value for your workflow
+5. **Decide** - If it's solving real problems, stay on. If not, no hard feelings.
+
+We're not trying to sell you something you don't need. We're looking for teams where Agor Cloud makes a measurable difference—faster onboarding, better collaboration, cleaner development workflows, controlled AI spend.
+
+**[Join the Private Beta →](https://docs.google.com/forms/d/e/1FAIpQLSdXtZwQBHaLFa1LYHvOHXq9IUF_Qm3T12Hr6UZcMdEvjpm2PQ/viewform?usp=dialog)**
+
+## What You Get
+
+- **Dedicated Agor instance** with your team's repos and worktrees
+- **Unix-level user isolation** for secure multi-tenant development
+- **Preset Cloud workspace** with pre-built analytics dashboards
+- **Policy controls** for token quotas, rate limits, and spending caps
+- **Full observability** integrated with your existing monitoring stack
+- **Managed infrastructure** - backups, updates, monitoring, support
+- **Direct access to the team** building Agor - fast feedback loop, feature requests welcome
+
+## Pricing
+
+We're figuring this out during the private beta. Usage-based makes sense (token usage, active users, worktree count). We'll work with early customers to find a model that's fair and sustainable.
+
+For now, focus is on fit and value. Pricing comes after we've proven this solves real problems.
+
+## Why Trust Us with This?
+
+At Preset, we run Preset Cloud—a managed Apache Superset service used by thousands of teams. We know how to:
+
+- Operate multi-tenant SaaS infrastructure at scale
+- Handle security, compliance, and data isolation
+- Provide enterprise-grade observability and analytics
+- Support teams with mission-critical workflows
+
+We're building Agor Cloud because we're running Agor ourselves. The features we're adding are the ones we need. The operational experience we're developing is the same rigor we apply to Preset Cloud.
+
+You're not getting a side project. You're getting a fully supported service from a team that depends on it running flawlessly.
+
+## Open Source + Managed Service
+
+Agor remains open source (BSL). You can still run it yourself if that fits your workflow better.
+
+Agor Cloud is for teams that want the capabilities without the ops burden. No Docker config, no database migrations, no monitoring setup, no capacity planning. Just the platform, running reliably, with all the enterprise features baked in.
+
+The open source project benefits too: production learnings at Preset feed back into Agor's core. Better security, better performance, better defaults—everyone wins.
+
+## Let's Get Cooking
+
+AI-assisted development is changing how we build software. But the tooling around it—observability, cost controls, collaboration, security—hasn't caught up.
+
+Agor Cloud bridges that gap. Fully managed, secure, observable, built by the team using it every day.
+
+If that sounds like what your team needs, we'd love to talk.
+
+**[Join the Private Beta →](https://docs.google.com/forms/d/e/1FAIpQLSdXtZwQBHaLFa1LYHvOHXq9IUF_Qm3T12Hr6UZcMdEvjpm2PQ/viewform?usp=dialog)**
+
+---
+
+Questions? Reach out:
+
+- [GitHub Discussions](https://github.com/preset-io/agor/discussions)
+- [Email us](mailto:hello@agor.live)
+- [Join our Discord](https://discord.gg/agor) (coming soon)
+
+---
+
+_If you're running Agor open source and want to share your experience, we'd love to hear about it. Open a discussion or drop us a note—your feedback shapes where this goes next._
