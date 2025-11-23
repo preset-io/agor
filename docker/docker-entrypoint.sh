@@ -15,8 +15,8 @@ sudo chown -R agor:agor /app
 # This dramatically speeds up boot time (2-3s vs 60s+ for full install)
 echo "📦 Checking dependencies..."
 
-# Check if this is the first boot (node_modules volume is empty)
-if [ ! -f "/app/node_modules/.pnpm/lock.yaml" ]; then
+# Use our marker file as the definitive first-boot check (more reliable than checking for pnpm files)
+if [ ! -f "/app/node_modules/.synced-lockfile.yaml" ]; then
   echo "🆕 First boot detected - initializing node_modules from Docker cache..."
 
   # Copy pre-built node_modules from Docker image cache (much faster than pnpm install)
@@ -28,25 +28,17 @@ if [ ! -f "/app/node_modules/.pnpm/lock.yaml" ]; then
   cp -a /opt/agor-cache/ui-node_modules/. /app/apps/agor-ui/node_modules/
   cp -a /opt/agor-cache/core-node_modules/. /app/packages/core/node_modules/
 
-  # Create a marker file to track the pnpm-lock.yaml state
+  # Create marker file to track the pnpm-lock.yaml state
   cp /app/pnpm-lock.yaml /app/node_modules/.synced-lockfile.yaml
   echo "✅ Dependencies initialized from cache"
 else
   echo "♻️  Cached node_modules found - checking if sync needed..."
 
   # Check if pnpm-lock.yaml changed since last sync
-  if [ -f "/app/node_modules/.synced-lockfile.yaml" ]; then
-    if cmp -s /app/pnpm-lock.yaml /app/node_modules/.synced-lockfile.yaml; then
-      echo "✅ Dependencies up-to-date (pnpm-lock.yaml unchanged)"
-    else
-      echo "🔄 pnpm-lock.yaml changed - syncing dependencies..."
-      CI=true pnpm install --frozen-lockfile < /dev/null
-      cp /app/pnpm-lock.yaml /app/node_modules/.synced-lockfile.yaml
-      echo "✅ Dependencies synced"
-    fi
+  if cmp -s /app/pnpm-lock.yaml /app/node_modules/.synced-lockfile.yaml; then
+    echo "✅ Dependencies up-to-date (pnpm-lock.yaml unchanged)"
   else
-    # Marker file missing, sync to be safe
-    echo "⚠️  Sync marker missing - running pnpm install to be safe..."
+    echo "🔄 pnpm-lock.yaml changed - syncing dependencies..."
     CI=true pnpm install --frozen-lockfile < /dev/null
     cp /app/pnpm-lock.yaml /app/node_modules/.synced-lockfile.yaml
     echo "✅ Dependencies synced"
