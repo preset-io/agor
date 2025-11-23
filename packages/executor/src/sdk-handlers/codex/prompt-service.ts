@@ -193,9 +193,9 @@ export class CodexPromptService {
    */
   private async ensureCodexSessionContext(sessionId: SessionID): Promise<string> {
     const agorSystemPrompt = await renderAgorSystemPrompt(sessionId, {
-      sessions: this.sessionsRepo as any,
-      worktrees: this.worktreesRepo as any,
-      repos: this.reposRepo as any,
+      sessions: this.sessionsRepo,
+      worktrees: this.worktreesRepo,
+      repos: this.reposRepo,
     });
 
     // Create per-session CODEX_HOME (no race conditions!)

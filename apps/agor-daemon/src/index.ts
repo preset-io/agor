@@ -891,40 +891,8 @@ async function main() {
       timestamp: new Date().toISOString(),
     });
 
-    // ALSO send IPC request for legacy IPC executors
-    const appWithExecutor = app as unknown as {
-      executorPool?: import('./services/executor-pool').ExecutorPool;
-      sessionExecutors?: Map<string, string>;
-    };
-
-    if (appWithExecutor.executorPool && appWithExecutor.sessionExecutors) {
-      const executorId = appWithExecutor.sessionExecutors.get(sessionId);
-      if (executorId) {
-        const executor = appWithExecutor.executorPool.get(executorId);
-        if (executor) {
-          try {
-            console.log(
-              `🛑 Sending IPC stop_task to executor ${executorId.slice(0, 8)} for session ${sessionId.slice(0, 8)}`
-            );
-            await executor.client.request(
-              'stop_task',
-              {
-                session_id: sessionId,
-                task_id: data.taskId,
-              },
-              5000
-            );
-            console.log(`✅ IPC stop_task succeeded for executor ${executorId.slice(0, 8)}`);
-          } catch (error) {
-            console.error(`❌ IPC stop_task failed for executor ${executorId.slice(0, 8)}:`, error);
-            return {
-              success: false,
-              message: `Failed to send stop signal via IPC: ${error instanceof Error ? error.message : 'Unknown error'}`,
-            };
-          }
-        }
-      }
-    }
+    // NOTE: Stop is handled by the executor listening to WebSocket task:stop event
+    // No IPC needed - executor subprocess watches for status changes via WebSocket
 
     return {
       success: true,
@@ -1061,58 +1029,9 @@ async function main() {
           // Permission was resolved! Notify the executor via IPC
           console.log(`[daemon] Permission ${status} for request ${contentObj.request_id}`);
 
-          // Get the executor pool and session executors map
-          const appWithExecutor = app as unknown as {
-            executorPool?: import('./services/executor-pool').ExecutorPool;
-            sessionExecutors?: Map<string, string>;
-          };
-          const executorPool = appWithExecutor.executorPool;
-          const sessionExecutors = appWithExecutor.sessionExecutors;
-
-          if (!executorPool) {
-            console.warn('[daemon] ExecutorPool not available, cannot notify executor');
-            return context;
-          }
-
-          if (!sessionExecutors) {
-            console.warn('[daemon] sessionExecutors map not available, cannot notify executor');
-            return context;
-          }
-
-          // Find the executor for this session
-          const sessionId = message.session_id;
-          const executorId = sessionExecutors.get(sessionId);
-
-          if (!executorId) {
-            console.log('[daemon] No executor found for session, skipping IPC notification');
-            return context;
-          }
-
-          // Get the executor instance
-          const executor = executorPool.get(executorId);
-          if (!executor) {
-            console.warn(`[daemon] Executor ${executorId} not found in pool`);
-            return context;
-          }
-
-          // Build permission decision
-          const decision = {
-            requestId: contentObj.request_id as string,
-            taskId: message.task_id,
-            allow: status === 'approved',
-            reason: status === 'denied' ? 'User denied permission' : undefined,
-            remember: !!contentObj.scope,
-            scope: contentObj.scope || 'once',
-            decidedBy: contentObj.approved_by || 'unknown',
-          };
-
-          // Send IPC notification to executor
-          try {
-            executor.client.notify('permission_resolved', decision);
-            console.log(`[daemon] Sent permission_resolved notification to executor ${executorId}`);
-          } catch (error) {
-            console.error('[daemon] Failed to send permission_resolved notification:', error);
-          }
+          // NOTE: Permission decisions are handled by the executor listening to WebSocket permission events
+          // No IPC needed - executor subprocess watches for permission message updates via WebSocket
+          console.log('[daemon] Permission decision will be delivered to executor via WebSocket');
 
           return context;
         },

@@ -202,9 +202,7 @@ export async function executeToolTask(params: {
 
   // Log resolution result
   if (resolution.apiKey) {
-    console.log(
-      `[${toolName}] Using API key from ${resolution.source} level for ${apiKeyEnvVar}`
-    );
+    console.log(`[${toolName}] Using API key from ${resolution.source} level for ${apiKeyEnvVar}`);
   } else {
     console.log(
       `[${toolName}] No API key found - SDK will use native authentication (OAuth/CLI login)`

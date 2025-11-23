@@ -204,9 +204,9 @@ export async function setupQuery(
 
   // Render Agor system prompt with full session/worktree/repo context
   const agorSystemPrompt = await renderAgorSystemPrompt(sessionId, {
-    sessions: deps.sessionsRepo as any,
-    worktrees: deps.worktreesRepo as any,
-    repos: deps.reposRepo as any,
+    sessions: deps.sessionsRepo,
+    worktrees: deps.worktreesRepo,
+    repos: deps.reposRepo,
   });
 
   const queryOptions: Record<string, unknown> = {

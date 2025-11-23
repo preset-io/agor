@@ -13,7 +13,6 @@ import * as crypto from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { resolveUserEnvironment } from '@agor/core/config';
 import type { Database } from '@agor/core/db';
 import type { GenAI } from '@agor/core/sdk';
 import { Gemini } from '@agor/core/sdk';
@@ -600,9 +599,9 @@ export class GeminiPromptService {
     // IMPORTANT: Gemini uses GEMINI.md (not CLAUDE.md) for project instructions!
     // User's project GEMINI.md files are still loaded hierarchically.
     const agorSystemPrompt = await renderAgorSystemPrompt(sessionId, {
-      sessions: this.sessionsRepo as any,
-      worktrees: this.worktreesRepo as any,
-      repos: this.reposRepo as any,
+      sessions: this.sessionsRepo,
+      worktrees: this.worktreesRepo,
+      repos: this.reposRepo,
     });
 
     // Write to temp file (unique per session, no races!)

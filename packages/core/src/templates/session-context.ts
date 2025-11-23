@@ -11,11 +11,24 @@
 
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import type { RepoRepository } from '../db/repositories/repos';
-import type { SessionRepository } from '../db/repositories/sessions';
-import type { WorktreeRepository } from '../db/repositories/worktrees';
-import type { SessionID } from '../types';
+import type { Repo, Session, SessionID, UUID, Worktree, WorktreeID } from '../types';
 import { renderTemplate } from './handlebars-helpers';
+
+/**
+ * Minimal repository interfaces for session context rendering.
+ * These allow both ORM repositories and Feathers repositories to be used.
+ */
+interface SessionRepositoryLike {
+  findById(id: SessionID): Promise<Session | null>;
+}
+
+interface WorktreeRepositoryLike {
+  findById(id: WorktreeID): Promise<Worktree | null>;
+}
+
+interface RepoRepositoryLike {
+  findById(id: UUID): Promise<Repo | null>;
+}
 
 /**
  * Load Agor system prompt template from disk
@@ -38,9 +51,9 @@ export async function loadAgorSystemPromptTemplate(): Promise<string> {
 export async function buildSessionContext(
   sessionId: SessionID,
   repos: {
-    sessions: SessionRepository;
-    worktrees?: WorktreeRepository;
-    repos?: RepoRepository;
+    sessions: SessionRepositoryLike;
+    worktrees?: WorktreeRepositoryLike;
+    repos?: RepoRepositoryLike;
   }
 ): Promise<Record<string, unknown>> {
   const context: Record<string, unknown> = {};
@@ -98,9 +111,9 @@ export async function buildSessionContext(
 export async function renderAgorSystemPrompt(
   sessionId: SessionID,
   repos: {
-    sessions: SessionRepository;
-    worktrees?: WorktreeRepository;
-    repos?: RepoRepository;
+    sessions: SessionRepositoryLike;
+    worktrees?: WorktreeRepositoryLike;
+    repos?: RepoRepositoryLike;
   }
 ): Promise<string> {
   const template = await loadAgorSystemPromptTemplate();
