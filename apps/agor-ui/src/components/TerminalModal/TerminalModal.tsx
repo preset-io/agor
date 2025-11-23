@@ -1,6 +1,6 @@
 import type { AgorClient } from '@agor/core/api';
 import type { User } from '@agor/core/types';
-import { App, Modal, Switch, Tooltip } from 'antd';
+import { App, Modal } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import { Terminal } from 'xterm';
 import { WebLinksAddon } from 'xterm-addon-web-links';
@@ -87,9 +87,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
     tmuxSession?: string;
     tmuxReused?: boolean;
     worktreeName?: string;
-    tmuxRequested?: boolean;
   }>({});
-  const [useTmux, setUseTmux] = useState(true);
 
   // Check if user has admin role
   const isAdmin = user?.role === 'admin' || user?.role === 'owner';
@@ -175,12 +173,11 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
           rows: 40,
           cols: 160,
           worktreeId,
-          useTmux,
         })) as {
           terminalId: string;
           cwd: string;
-          tmuxSession?: string;
-          tmuxReused?: boolean;
+          tmuxSession: string;
+          tmuxReused: boolean;
           worktreeName?: string;
         };
 
@@ -193,13 +190,11 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
         currentTerminalId = result.terminalId;
         setTerminalId(result.terminalId);
         setIsConnected(true);
-        const tmuxActive = Boolean(result.tmuxSession);
-        transformData = tmuxActive ? expandOscHyperlinks : (value) => value;
+        transformData = expandOscHyperlinks;
         setSessionInfo({
           tmuxSession: result.tmuxSession,
           tmuxReused: result.tmuxReused,
           worktreeName: result.worktreeName,
-          tmuxRequested: useTmux,
         });
         terminal.clear();
 
@@ -254,20 +249,16 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
       setIsConnected(false);
       setSessionInfo({});
     };
-  }, [open, client, initialCommands, isAdmin, worktreeId, useTmux]);
+  }, [open, client, initialCommands, isAdmin, worktreeId]);
 
   const handleClose = () => {
     if (isConnected) {
-      // Different messaging for tmux (persistent) vs ephemeral sessions
-      const content = sessionInfo.tmuxSession
-        ? `The tmux session will continue running in the background. You can reconnect by reopening the terminal.`
-        : 'The terminal session and history will be lost. This cannot be undone.';
-
       modal.confirm({
         title: 'Close Terminal?',
-        content,
+        content:
+          'The tmux session will continue running in the background. You can reconnect by reopening the terminal.',
         okText: 'Close',
-        okType: sessionInfo.tmuxSession ? 'primary' : 'danger',
+        okType: 'primary',
         cancelText: 'Cancel',
         onOk: () => {
           onClose();
@@ -280,35 +271,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
 
   return (
     <Modal
-      title={
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 12,
-            paddingRight: 36,
-          }}
-        >
-          <div>Terminal{sessionInfo.worktreeName ? ` - ${sessionInfo.worktreeName}` : ''}</div>
-          <Tooltip
-            title={
-              isAdmin
-                ? 'Toggle tmux integration (off = launch direct shell)'
-                : 'Only admins can toggle tmux integration'
-            }
-          >
-            <Switch
-              checked={useTmux}
-              onChange={setUseTmux}
-              size="default"
-              checkedChildren="tmux"
-              unCheckedChildren="direct"
-              disabled={!isAdmin}
-            />
-          </Tooltip>
-        </div>
-      }
+      title={`Terminal${sessionInfo.worktreeName ? ` - ${sessionInfo.worktreeName}` : ''}`}
       open={open}
       onCancel={handleClose}
       footer={null}

@@ -50,6 +50,26 @@
 
 ## Installation
 
+### Requirements
+
+- **Node.js** 20.x
+- **tmux** (required for terminal management)
+
+Install tmux:
+
+```bash
+# Ubuntu/Debian
+sudo apt-get install tmux
+
+# macOS
+brew install tmux
+
+# RHEL/CentOS
+sudo yum install tmux
+```
+
+### Install Agor
+
 ```bash
 npm install -g agor-live
 ```

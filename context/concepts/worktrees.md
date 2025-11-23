@@ -368,9 +368,8 @@ POST /worktrees/:id/environment/restart
 **Tech Stack:**
 
 - xterm.js (frontend terminal emulator)
-- node-pty (backend pseudoterminal)
+- tmux (REQUIRED - for persistent sessions and terminal management)
 - Socket.io (bidirectional communication)
-- tmux (optional, for persistent sessions)
 
 **Service:** `apps/agor-daemon/src/services/terminals.ts`
 
@@ -490,7 +489,7 @@ Agor automatically detects tmux and creates a single shared session (`agor`) wit
 - ✅ Start/Stop/Restart operations
 - ✅ Health check URLs with templates
 - ✅ Port mapping display
-- ✅ Embedded terminal with node-pty
+- ✅ Embedded terminal with tmux
 - ✅ Terminal runs in worktree.path
 - ✅ Resize and cleanup support
 
