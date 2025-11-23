@@ -37,8 +37,10 @@
 # - Separate networks and containers
 # - Separate ports (using unique_id offset in .agor.yml)
 #
-# Dependencies are synced at container startup based on the mounted pnpm-lock.yaml,
-# so each worktree gets the exact dependencies it needs, even if branches differ.
+# Dependencies are smart-synced at container startup:
+# - First boot: Installs packages and caches in named volume
+# - Subsequent boots: Only reinstalls if pnpm-lock.yaml changed
+# This ensures fast boot times (~2-3s) while respecting per-branch dependencies.
 #
 # ==============================================================================
 # Database Modes
@@ -127,14 +129,14 @@ services:
     volumes:
       # Mount entire repo for hot-reload (but exclude node_modules and build outputs)
       - .:/app
-      # Exclude all node_modules directories (use container's versions synced to pnpm-lock.yaml)
-      # These anonymous volumes are project-specific (due to -p flag), so each worktree
-      # gets its own node_modules that match its pnpm-lock.yaml (synced at startup)
-      - /app/node_modules
-      - /app/apps/agor-daemon/node_modules
-      - /app/apps/agor-cli/node_modules
-      - /app/apps/agor-ui/node_modules
-      - /app/packages/core/node_modules
+      # Use named volumes for node_modules (preserves Docker-built packages between runs)
+      # These named volumes are project-specific (due to -p flag), so each worktree
+      # gets its own node_modules that persist across container restarts
+      - node_modules:/app/node_modules
+      - node_modules_daemon:/app/apps/agor-daemon/node_modules
+      - node_modules_cli:/app/apps/agor-cli/node_modules
+      - node_modules_ui:/app/apps/agor-ui/node_modules
+      - node_modules_core:/app/packages/core/node_modules
       # Exclude @agor/core build output (built fresh in container during entrypoint)
       # This prevents empty/stale host dist from overwriting container's fresh build
       - /app/packages/core/dist
@@ -182,6 +184,15 @@ volumes:
   # - Agent auth tokens
   # - Caches, etc.
   agor-home:
+
+  # Named volumes for node_modules (preserves Docker-built packages)
+  # These persist across container restarts, avoiding full reinstall on every boot
+  # Smart sync in entrypoint only runs pnpm install if pnpm-lock.yaml changed
+  node_modules:
+  node_modules_daemon:
+  node_modules_cli:
+  node_modules_ui:
+  node_modules_core:
 
   # PostgreSQL data (only created when postgres profile is active)
   postgres-data:
