@@ -133,15 +133,14 @@ export class CodexPromptService {
     db?: Database, // Database for user env vars and API key resolution
     tasksService?: { get: (id: TaskID) => Promise<{ created_by: string }> }
   ) {
-    // Store API key for reinitializing SDK
-    this.apiKey = apiKey;
+    // Store API key from base-executor (already resolved with proper precedence)
+    this.apiKey = apiKey || '';
     this.db = db;
     this.tasksService = tasksService;
-    const initialApiKey = apiKey || process.env.OPENAI_API_KEY || '';
-    this.lastApiKey = initialApiKey;
-    // Initialize Codex SDK
+    this.lastApiKey = this.apiKey;
+    // Initialize Codex SDK with resolved API key
     this.codex = new Codex.Codex({
-      apiKey: initialApiKey,
+      apiKey: this.apiKey,
     });
   }
 
@@ -154,11 +153,11 @@ export class CodexPromptService {
    */
   private reinitializeCodex(): void {
     console.log('🔄 [Codex] Reinitializing SDK to pick up config changes...');
-    const apiKey = this.apiKey || process.env.OPENAI_API_KEY || '';
+    // Use the resolved API key from base-executor (no fallback to env needed)
     this.codex = new Codex.Codex({
-      apiKey,
+      apiKey: this.apiKey,
     });
-    this.lastApiKey = apiKey;
+    this.lastApiKey = this.apiKey || null;
     console.log('✅ [Codex] SDK reinitialized');
   }
 
@@ -510,11 +509,11 @@ export class CodexPromptService {
     });
 
     let currentApiKey = '';
-    if (resolvedApiKey) {
-      process.env.OPENAI_API_KEY = resolvedApiKey;
-      currentApiKey = resolvedApiKey;
+    if (resolvedApiKey.apiKey) {
+      process.env.OPENAI_API_KEY = resolvedApiKey.apiKey;
+      currentApiKey = resolvedApiKey.apiKey;
       console.log(
-        `🔑 [Codex] Using per-user/global API key for ${contextUserId?.substring(0, 8) ?? 'unknown user'}`
+        `🔑 [Codex] Using per-user/global API key from ${resolvedApiKey.source} for ${contextUserId?.substring(0, 8) ?? 'unknown user'}`
       );
     } else {
       // Clear stale API key to ensure SDK fails if no valid key is found

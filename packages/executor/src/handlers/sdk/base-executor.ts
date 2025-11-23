@@ -118,17 +118,18 @@ export function createExecutionContext(client: AgorClient, toolName: string): Ex
 
 /**
  * Resolve API key with proper precedence:
- * 1. Per-user encrypted keys (from database)
- * 2. Global config.yaml keys
- * 3. Environment variables
+ * 1. Per-user encrypted keys (from database) - HIGHEST
+ * 2. Global config.yaml keys - MEDIUM
+ * 3. Environment variables - LOW
+ * 4. SDK native auth (OAuth, CLI login) - FALLBACK
  *
- * Returns undefined if no key found (lets SDK handle OAuth/auth errors)
+ * Returns resolution result with key, source, and useNativeAuth flag
  */
 async function resolveApiKeyForTask(
   keyName: ApiKeyName,
   client: AgorClient,
   taskId: TaskID
-): Promise<string | undefined> {
+): Promise<import('@agor/core/config').KeyResolutionResult> {
   // Get database connection
   let db: Database;
   const dbUrl = process.env.LIBSQL_URL || process.env.DATABASE_URL;
@@ -165,12 +166,12 @@ async function resolveApiKeyForTask(
   }
 
   // Resolve API key with full precedence hierarchy
-  const apiKey = await resolveApiKey(keyName, {
+  const result = await resolveApiKey(keyName, {
     userId: contextUserId,
     db,
   });
 
-  return apiKey;
+  return result;
 }
 
 /**
@@ -187,7 +188,8 @@ export async function executeToolTask(params: {
   toolName: string;
   createTool: (
     repos: ReturnType<typeof createFeathersBackedRepositories>,
-    apiKey: string
+    apiKey: string,
+    useNativeAuth: boolean
   ) => BaseTool;
 }): Promise<void> {
   const { client, sessionId, taskId, prompt, permissionMode, apiKeyEnvVar, toolName, createTool } =
@@ -195,14 +197,17 @@ export async function executeToolTask(params: {
 
   console.log(`[${toolName}] Executing task ${taskId.substring(0, 8)}...`);
 
-  // Resolve API key with proper precedence (user → config → env)
-  const apiKey = await resolveApiKeyForTask(apiKeyEnvVar as ApiKeyName, client, taskId);
+  // Resolve API key with proper precedence (user → config → env → native auth)
+  const resolution = await resolveApiKeyForTask(apiKeyEnvVar as ApiKeyName, client, taskId);
 
-  // If no API key found, log warning and let SDK handle authentication
-  // This allows OAuth flows to work properly
-  if (!apiKey) {
-    console.warn(
-      `[${toolName}] No API key found for ${apiKeyEnvVar}. SDK will handle authentication (may use OAuth).`
+  // Log resolution result
+  if (resolution.apiKey) {
+    console.log(
+      `[${toolName}] Using API key from ${resolution.source} level for ${apiKeyEnvVar}`
+    );
+  } else {
+    console.log(
+      `[${toolName}] No API key found - SDK will use native authentication (OAuth/CLI login)`
     );
   }
 
@@ -210,8 +215,8 @@ export async function executeToolTask(params: {
   const ctx = createExecutionContext(client, toolName);
 
   // Create tool instance using factory function
-  // Pass empty string if no key (SDK will handle authentication)
-  const tool = createTool(ctx.repos, apiKey || '');
+  // Pass the resolved key (or empty string) and useNativeAuth flag
+  const tool = createTool(ctx.repos, resolution.apiKey || '', resolution.useNativeAuth);
 
   try {
     // Execute prompt with streaming

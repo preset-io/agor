@@ -63,7 +63,8 @@ export class GeminiTool implements ITool {
     mcpServerRepo?: MCPServerRepository,
     sessionMCPRepo?: SessionMCPServerRepository,
     mcpEnabled?: boolean,
-    db?: Database // Database for user env vars and API key resolution
+    db?: Database, // Database for user env vars and API key resolution
+    useNativeAuth?: boolean // Flag to use OAuth when no API key
   ) {
     if (messagesRepo && sessionsRepo) {
       this.promptService = new GeminiPromptService(
@@ -76,7 +77,8 @@ export class GeminiTool implements ITool {
         sessionMCPRepo,
         mcpEnabled,
         db,
-        tasksService
+        tasksService,
+        useNativeAuth
       );
     }
   }

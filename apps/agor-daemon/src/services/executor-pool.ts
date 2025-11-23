@@ -1,6 +1,10 @@
 /**
- * ExecutorPool - Manages executor subprocess lifecycle
- * Spawns executors with Unix user impersonation (via sudo)
+ * ExecutorPool - Manages process-isolated executor subprocesses
+ *
+ * ONLY used when process isolation is enabled (AGOR_USE_EXECUTOR=true).
+ * Spawns executors with Unix user impersonation (via sudo) for security.
+ *
+ * NOTE: The main Feathers/WebSocket executor does NOT use this pool.
  */
 
 import { type ChildProcess, execSync, spawn } from 'node:child_process';
@@ -9,11 +13,11 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { ExecutorClient } from './executor-client';
 import type {
-  ExecutorIPCService,
+  ExecutorIsolationService,
   GetApiKeyParams,
   ReportMessageParams,
   RequestPermissionParams,
-} from './executor-ipc-service';
+} from './executor-isolation-service';
 
 interface SpawnExecutorOptions {
   userId?: string; // Agor user ID (for looking up Unix username)
@@ -40,7 +44,7 @@ export class ExecutorPool {
 
   constructor(
     private config: { execution?: { run_as_unix_user?: boolean; executor_unix_user?: string } },
-    private ipcService?: ExecutorIPCService
+    private isolationService?: ExecutorIsolationService
   ) {
     // Detect impersonation mode once at startup
     this.impersonationMode = this.detectImpersonationMode();
@@ -115,8 +119,8 @@ export class ExecutorPool {
     await client.connect();
 
     // Wire up IPC handlers if service provided
-    if (this.ipcService) {
-      this.setupIPCHandlers(client);
+    if (this.isolationService) {
+      this.setupIsolationHandlers(client);
     }
 
     // Create executor instance
@@ -298,33 +302,33 @@ export class ExecutorPool {
   /**
    * Setup IPC handlers for executor requests
    */
-  private setupIPCHandlers(client: ExecutorClient): void {
-    if (!this.ipcService) {
+  private setupIsolationHandlers(client: ExecutorClient): void {
+    if (!this.isolationService) {
       return;
     }
 
     // Handle get_api_key requests from executor
     client.onRequest('get_api_key', async (params) => {
-      return await this.ipcService!.handleGetApiKey(params as GetApiKeyParams);
+      return await this.isolationService!.handleGetApiKey(params as GetApiKeyParams);
     });
 
     // Handle request_permission requests from executor
     client.onRequest('request_permission', async (params) => {
-      return await this.ipcService!.handleRequestPermission(params as RequestPermissionParams);
+      return await this.isolationService!.handleRequestPermission(params as RequestPermissionParams);
     });
 
     // Handle report_message notifications from executor
     client.onNotification('report_message', async (params) => {
-      await this.ipcService!.handleReportMessage(params as ReportMessageParams);
+      await this.isolationService!.handleReportMessage(params as ReportMessageParams);
     });
 
     // Handle daemon_command notifications from executor
     client.onNotification('daemon_command', async (params) => {
-      await this.ipcService!.handleDaemonCommand(
-        params as import('./executor-ipc-service').DaemonCommandParams
+      await this.isolationService!.handleDaemonCommand(
+        params as import('./executor-isolation-service').DaemonCommandParams
       );
     });
 
-    console.log(`[ExecutorPool] IPC handlers registered`);
+    console.log(`[ExecutorPool] Process isolation handlers registered`);
   }
 }

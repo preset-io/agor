@@ -113,7 +113,8 @@ export class ClaudeTool implements ITool {
     sessionsService?: SessionsService,
     worktreesRepo?: WorktreeRepository,
     reposRepo?: RepoRepository,
-    mcpEnabled?: boolean
+    mcpEnabled?: boolean,
+    _useNativeAuth?: boolean // Claude supports `claude login` OAuth, but no special handling needed in tool
   ) {
     if (messagesRepo && sessionsRepo) {
       this.promptService = new ClaudePromptService(

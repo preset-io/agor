@@ -50,6 +50,11 @@ while [ ! -f "/app/packages/core/dist/index.js" ] || [ ! -f "/app/packages/core/
 done
 echo "✅ @agor/core build ready"
 
+# Build executor package (needed for spawning executor subprocess)
+echo "🔄 Building @agor/executor..."
+pnpm --filter @agor/executor build
+echo "✅ @agor/executor build ready"
+
 # Fix volume permissions (volumes may be created with wrong ownership)
 # Only chown .agor directory (not .ssh which is mounted read-only)
 mkdir -p /home/agor/.agor

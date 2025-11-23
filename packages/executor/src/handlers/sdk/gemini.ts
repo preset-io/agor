@@ -29,7 +29,7 @@ export async function executeGeminiTask(params: {
     ...params,
     apiKeyEnvVar: 'GEMINI_API_KEY',
     toolName: 'gemini',
-    createTool: (repos, apiKey) =>
+    createTool: (repos, apiKey, useNativeAuth) =>
       new GeminiTool(
         repos.messages,
         repos.sessions,
@@ -41,7 +41,8 @@ export async function executeGeminiTask(params: {
         repos.mcpServers,
         repos.sessionMCP,
         true, // mcpEnabled
-        undefined // Database (not used in Feathers architecture)
+        undefined, // Database (not used in Feathers architecture)
+        useNativeAuth // Flag to use OAuth when no API key
       ),
   });
 }

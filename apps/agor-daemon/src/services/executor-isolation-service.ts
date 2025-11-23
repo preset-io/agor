@@ -1,8 +1,15 @@
 /**
- * ExecutorIPCService - Handles incoming IPC requests from executors
+ * ExecutorIsolationService - Handles requests from isolated executor processes
  *
- * This service processes requests that executors make back to the daemon:
- * - get_api_key: Returns API keys just-in-time
+ * ONLY used when process isolation is enabled (AGOR_USE_EXECUTOR=true).
+ * When executors run as separate Unix user (agor_executor), they communicate
+ * with the daemon via stdio/socket for sensitive operations like API key access.
+ *
+ * NOTE: The main Feathers/WebSocket executor architecture does NOT use this service.
+ * API keys are resolved directly in base-executor.ts using resolveApiKey().
+ *
+ * This service provides:
+ * - get_api_key: Returns API keys just-in-time (LEGACY - not used in Feathers mode)
  * - request_permission: Delegates to permission service for tool approval
  * - report_message: Creates message records and broadcasts via WebSocket
  */
@@ -48,7 +55,7 @@ export interface DaemonCommandParams {
   data: unknown;
 }
 
-export class ExecutorIPCService {
+export class ExecutorIsolationService {
   private usersRepo: UsersRepository;
 
   constructor(

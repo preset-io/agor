@@ -15,19 +15,32 @@ export interface KeyResolutionContext {
 }
 
 /**
+ * Result of API key resolution
+ */
+export interface KeyResolutionResult {
+  /** Resolved API key, or undefined if not found at any level */
+  apiKey: string | undefined;
+  /** Source where the key was found */
+  source: 'user' | 'config' | 'env' | 'none';
+  /** Whether SDK should fall back to native auth (OAuth, CLI login, etc.) */
+  useNativeAuth: boolean;
+}
+
+/**
  * Resolve API key with precedence:
- * 1. Per-user key (if user authenticated and key set in database)
- * 2. Global config.yaml
- * 3. Environment variables
+ * 1. Per-user key (if user authenticated and key set in database) - HIGHEST
+ * 2. Global config.yaml - MEDIUM
+ * 3. Environment variables - LOW
+ * 4. SDK native auth (OAuth, CLI login) - FALLBACK (useNativeAuth=true)
  *
  * @param keyName - Name of the API key to resolve
  * @param context - Resolution context (user ID and database)
- * @returns Decrypted API key or undefined if not found
+ * @returns Resolution result with key, source, and native auth flag
  */
 export async function resolveApiKey(
   keyName: ApiKeyName,
   context: KeyResolutionContext = {}
-): Promise<string | undefined> {
+): Promise<KeyResolutionResult> {
   console.log(
     `🔍 [API Key Resolution] Resolving ${keyName} for user ${context.userId?.substring(0, 8) || 'none'}`
   );
@@ -51,7 +64,7 @@ export async function resolveApiKey(
             console.log(
               `   ✓ Found user-level API key for ${keyName} (user: ${context.userId.substring(0, 8)})`
             );
-            return decryptedKey;
+            return { apiKey: decryptedKey, source: 'user', useNativeAuth: false };
           } else {
             console.log(
               `   ✗ User-level API key for ${keyName} is empty (user: ${context.userId.substring(0, 8)})`
@@ -78,35 +91,46 @@ export async function resolveApiKey(
   const globalKey = getCredential(keyName);
   if (globalKey && globalKey.length > 0) {
     console.log(`   ✓ Found app-level API key for ${keyName} (from config.yaml)`);
-    return globalKey;
+    return { apiKey: globalKey, source: 'config', useNativeAuth: false };
   } else {
     console.log(`   ✗ No app-level API key for ${keyName}`);
   }
 
-  // 3. Fallback to environment variable (lowest precedence)
+  // 3. Check environment variable (third precedence)
   console.log(`   → Checking OS-level environment variables...`);
   const envKey = process.env[keyName];
   if (envKey && envKey.length > 0) {
     console.log(`   ✓ Found OS-level environment variable ${keyName}`);
-    return envKey;
+    return { apiKey: envKey, source: 'env', useNativeAuth: false };
   } else {
     console.log(`   ✗ No OS-level environment variable ${keyName}`);
   }
 
-  // No key found
-  console.log(`   ❌ No API key found for ${keyName} at any level`);
-  return undefined;
+  // 4. No key found - SDK should fall back to native auth (OAuth, CLI login, etc.)
+  console.log(`   ℹ️  No API key found for ${keyName} - SDK will use native authentication`);
+  return { apiKey: undefined, source: 'none', useNativeAuth: true };
 }
 
 /**
- * Synchronous version of resolveApiKey (only checks global + env, not per-user)
+ * Synchronous version of resolveApiKey (only checks config + env, not per-user)
  * Use this when database access is not available
+ *
+ * @param keyName - Name of the API key to resolve
+ * @returns Resolution result (cannot check user-level keys synchronously)
  */
-export function resolveApiKeySync(keyName: ApiKeyName): string | undefined {
+export function resolveApiKeySync(keyName: ApiKeyName): KeyResolutionResult {
   // Check global config.yaml
   const globalKey = getCredential(keyName);
-  if (globalKey) return globalKey;
+  if (globalKey && globalKey.length > 0) {
+    return { apiKey: globalKey, source: 'config', useNativeAuth: false };
+  }
 
-  // Fallback to environment variable
-  return process.env[keyName];
+  // Check environment variable
+  const envKey = process.env[keyName];
+  if (envKey && envKey.length > 0) {
+    return { apiKey: envKey, source: 'env', useNativeAuth: false };
+  }
+
+  // No key found - use native auth
+  return { apiKey: undefined, source: 'none', useNativeAuth: true };
 }

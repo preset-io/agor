@@ -44,7 +44,7 @@ export async function executeClaudeCodeTask(params: {
       ...params,
       apiKeyEnvVar: 'ANTHROPIC_API_KEY',
       toolName: 'claude-code',
-      createTool: (repos, apiKey) =>
+      createTool: (repos, apiKey, useNativeAuth) =>
         new ClaudeTool(
           repos.messages,
           repos.sessions,
@@ -57,7 +57,8 @@ export async function executeClaudeCodeTask(params: {
           repos.sessionsService,
           repos.worktrees,
           repos.repos,
-          true // mcpEnabled
+          true, // mcpEnabled
+          useNativeAuth // Flag for Claude CLI OAuth (`claude login`)
         ),
     });
   } finally {

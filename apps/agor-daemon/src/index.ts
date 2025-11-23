@@ -700,42 +700,43 @@ async function main() {
 
   console.log('✅ Database ready');
 
-  // Initialize executor services (Phase 4)
-  // Types imported dynamically below when enabled
+  // Initialize session token service (ALWAYS needed for Feathers/WebSocket executor)
+  const { SessionTokenService } = await import('./services/session-token-service.js');
+  const sessionTokenService = new SessionTokenService({
+    expiration_ms: config.execution?.session_token_expiration_ms || 24 * 60 * 60 * 1000,
+    max_uses: config.execution?.session_token_max_uses || -1,
+  });
+
+  // Initialize optional process isolation services (Phase 4)
+  // Only needed when running executors as separate Unix user (AGOR_USE_EXECUTOR=true)
   let executorPool: import('./services/executor-pool').ExecutorPool | null = null;
-  let sessionTokenService: import('./services/session-token-service').SessionTokenService | null =
-    null;
-  let executorIPCService: import('./services/executor-ipc-service').ExecutorIPCService | null =
+  let executorIsolationService: import('./services/executor-isolation-service').ExecutorIsolationService | null =
     null;
 
   if (config.execution?.use_executor) {
-    console.log('🔧 Initializing executor services...');
+    console.log('🔧 Initializing process isolation services (executors will run as separate user)...');
 
-    const { SessionTokenService } = await import('./services/session-token-service.js');
-    const { ExecutorIPCService } = await import('./services/executor-ipc-service.js');
+    const { ExecutorIsolationService } = await import('./services/executor-isolation-service.js');
     const { ExecutorPool } = await import('./services/executor-pool.js');
 
-    // Create session token service
-    sessionTokenService = new SessionTokenService({
-      expiration_ms: config.execution.session_token_expiration_ms || 24 * 60 * 60 * 1000,
-      max_uses: config.execution.session_token_max_uses || -1,
-    });
-
-    // Create IPC service (will be initialized with app after it's created)
-    executorIPCService = new ExecutorIPCService(app, db, sessionTokenService);
+    // Create isolation service for stdio/socket communication with isolated executors
+    executorIsolationService = new ExecutorIsolationService(app, db, sessionTokenService);
 
     // Create executor pool
-    executorPool = new ExecutorPool(config, executorIPCService);
+    executorPool = new ExecutorPool(config, executorIsolationService);
 
     // Attach to app for access from services
     // Cast to unknown first then to Record for dynamic property assignment
     const appRecord = app as unknown as Record<string, unknown>;
     appRecord.executorPool = executorPool;
-    appRecord.sessionTokenService = sessionTokenService;
-    appRecord.executorIPCService = executorIPCService;
+    appRecord.executorIsolationService = executorIsolationService;
 
-    console.log('✅ Executor services initialized');
+    console.log('✅ Process isolation services initialized (executors will run as agor_executor user)');
   }
+
+  // Always attach sessionTokenService to app (needed for Feathers/WebSocket executor)
+  const appRecord = app as unknown as Record<string, unknown>;
+  appRecord.sessionTokenService = sessionTokenService;
 
   // Register core services
   // NOTE: Pass app instance for user preferences access (needed for cross-tool spawning and ready_for_prompt updates)
@@ -797,7 +798,8 @@ async function main() {
     const { existsSync } = await import('node:fs');
     const possiblePaths = [
       path.join(dirname, '../executor/cli.js'), // Bundled in agor-live
-      path.join(dirname, '../../../packages/executor/dist/cli.js'), // Development from apps/agor-daemon/dist
+      path.join(dirname, '../../../packages/executor/bin/agor-executor'), // Development - bin script with fallback to tsx
+      path.join(dirname, '../../../packages/executor/dist/cli.js'), // Development from apps/agor-daemon/dist (if built)
     ];
 
     const executorPath = possiblePaths.find((p) => existsSync(p));
@@ -806,6 +808,8 @@ async function main() {
         `Executor binary not found. Tried:\n${possiblePaths.map((p) => `  - ${p}`).join('\n')}`
       );
     }
+
+    console.log(`[Daemon] Using executor at: ${executorPath}`);
 
     const daemonUrl = `http://localhost:${DAEMON_PORT}`;
 
@@ -832,10 +836,10 @@ async function main() {
         cwd,
         env: {
           ...process.env,
-          // Inject API key based on agentic tool
-          ...(session.agentic_tool === 'claude-code' && { ANTHROPIC_API_KEY: apiKey }),
-          ...(session.agentic_tool === 'gemini' && { GEMINI_API_KEY: apiKey }),
-          ...(session.agentic_tool === 'codex' && { OPENAI_API_KEY: apiKey }),
+          // Executor handles API key resolution with proper precedence:
+          // 1. Per-user encrypted keys (database)
+          // 2. Global config.yaml keys
+          // 3. Environment variables (inherited from process.env above)
         },
         stdio: ['ignore', 'pipe', 'pipe'], // Capture stdout/stderr
       }

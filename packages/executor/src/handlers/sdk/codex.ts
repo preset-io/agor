@@ -29,7 +29,7 @@ export async function executeCodexTask(params: {
     ...params,
     apiKeyEnvVar: 'OPENAI_API_KEY',
     toolName: 'codex',
-    createTool: (repos, apiKey) =>
+    createTool: (repos, apiKey, useNativeAuth) =>
       new CodexTool(
         repos.messages,
         repos.sessions,
@@ -39,7 +39,8 @@ export async function executeCodexTask(params: {
         apiKey,
         repos.messagesService,
         repos.tasksService,
-        undefined // Database (not used in Feathers architecture)
+        undefined, // Database (not used in Feathers architecture)
+        useNativeAuth // Flag for native auth (if applicable)
       ),
   });
 }

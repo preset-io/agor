@@ -13,7 +13,7 @@ import * as crypto from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { resolveApiKey, resolveUserEnvironment } from '@agor/core/config';
+import { resolveUserEnvironment } from '@agor/core/config';
 import type { Database } from '@agor/core/db';
 import type { GenAI } from '@agor/core/sdk';
 import { Gemini } from '@agor/core/sdk';
@@ -86,23 +86,24 @@ export type GeminiStreamEvent =
 export class GeminiPromptService {
   private sessionClients = new Map<SessionID, InstanceType<typeof Gemini.GeminiClient>>();
   private activeControllers = new Map<SessionID, AbortController>();
-  private db?: Database; // Database for user env vars and API key resolution
-  private tasksService?: { get: (id: TaskID) => Promise<{ created_by: string }> };
+  private apiKey?: string; // Resolved API key from base-executor
+  private useNativeAuth: boolean; // Whether to use OAuth (no API key found)
 
   constructor(
     _messagesRepo: MessagesRepository,
     private sessionsRepo: SessionRepository,
-    _apiKey?: string,
+    apiKey?: string,
     private worktreesRepo?: WorktreeRepository,
     private reposRepo?: RepoRepository,
     private mcpServerRepo?: MCPServerRepository,
     private sessionMCPRepo?: SessionMCPServerRepository,
     private mcpEnabled?: boolean,
-    db?: Database, // Database for user env vars and API key resolution
-    tasksService?: { get: (id: TaskID) => Promise<{ created_by: string }> }
+    _db?: Database, // No longer needed - resolution happens in base-executor
+    _tasksService?: { get: (id: TaskID) => Promise<{ created_by: string }> },
+    useNativeAuth?: boolean // Flag from base-executor indicating OAuth should be used
   ) {
-    this.db = db;
-    this.tasksService = tasksService;
+    this.apiKey = apiKey;
+    this.useNativeAuth = useNativeAuth ?? false; // Default to false if not provided
   }
 
   /**
@@ -126,22 +127,10 @@ export class GeminiPromptService {
       throw new Error(`Session ${sessionId} not found`);
     }
 
-    // Determine which user's context to use for environment variables and API keys
-    // Priority: task creator (if task exists) > session owner (fallback)
-    let contextUserId = session.created_by as UserID | undefined;
+    // Use session owner as context user (API key resolution happens in base-executor)
+    const contextUserId = session.created_by as UserID | undefined;
 
-    if (taskId && this.tasksService) {
-      try {
-        const task = await this.tasksService.get(taskId);
-        if (task?.created_by) {
-          contextUserId = task.created_by as UserID;
-        }
-      } catch (_err) {
-        // Fall back to session owner if task not found
-      }
-    }
-
-    // Get or create Gemini client for this session (passing contextUserId for API key resolution)
+    // Get or create Gemini client for this session
     const client = await this.getOrCreateClient(sessionId, permissionMode, contextUserId);
 
     const model = (session.model_config?.model as GeminiModel) || DEFAULT_GEMINI_MODEL;
@@ -165,33 +154,8 @@ export class GeminiPromptService {
         loopCount++;
         console.debug(`[Gemini Loop ${loopCount}] Starting turn with ${parts.length} parts`);
 
-        // Resolve user environment variables and augment process.env
-        // This allows the Gemini subprocess to access per-user env vars
-        const originalProcessEnv = { ...process.env };
-        let userEnvCount = 0;
-
-        if (contextUserId && this.db) {
-          try {
-            const userEnv = await resolveUserEnvironment(contextUserId, this.db);
-            // Count how many user env vars we're adding (exclude system vars)
-            const systemVarCount = Object.keys(originalProcessEnv).length;
-            const totalVarCount = Object.keys(userEnv).length;
-            userEnvCount = totalVarCount - systemVarCount;
-
-            // Augment process.env with user variables (user takes precedence)
-            Object.assign(process.env, userEnv);
-
-            if (userEnvCount > 0 && loopCount === 1) {
-              // Only log on first iteration to avoid spam
-              console.log(
-                `🔐 [Gemini] Augmented process.env with ${userEnvCount} user env vars for ${contextUserId.substring(0, 8)}`
-              );
-            }
-          } catch (err) {
-            console.error(`⚠️  [Gemini] Failed to resolve user environment:`, err);
-            // Continue without user env vars - non-fatal error
-          }
-        }
+        // Note: User environment variables and API key resolution
+        // now happen in base-executor.ts before tool creation
 
         // Stream events from Gemini SDK
         const stream = client.sendMessageStream(parts, abortController.signal, promptId);
@@ -541,26 +505,23 @@ export class GeminiPromptService {
       throw new Error(`Session ${sessionId} not found`);
     }
 
-    // Use provided contextUserId (task creator) or fall back to session owner
-    const userIdForApiKey = contextUserId || (session.created_by as UserID | undefined);
-    const resolvedApiKey = await resolveApiKey('GEMINI_API_KEY', {
-      userId: userIdForApiKey,
-      db: this.db,
-    });
-
-    // Determine auth type: OAuth if no API key, otherwise API key
+    // Use pre-resolved API key and auth type from base-executor
+    // No need to resolve again - precedence already handled (user → config → env)
     let authType: (typeof Gemini.AuthType)[keyof typeof Gemini.AuthType];
-    if (resolvedApiKey) {
-      process.env.GEMINI_API_KEY = resolvedApiKey;
+    if (this.apiKey) {
+      // API key was found at some level - use it
+      process.env.GEMINI_API_KEY = this.apiKey;
       authType = Gemini.AuthType.USE_GEMINI;
-      console.log(
-        `🔑 [Gemini] Using per-user/global API key for ${userIdForApiKey?.substring(0, 8) ?? 'unknown user'}`
-      );
-    } else {
-      // No API key found - use OAuth authentication via Gemini CLI
+      console.log('🔑 [Gemini] Using resolved API key');
+    } else if (this.useNativeAuth) {
+      // No API key found at any level - use OAuth authentication
       authType = Gemini.AuthType.LOGIN_WITH_GOOGLE;
-      console.log('🔐 [Gemini] No API key found, using OAuth authentication (Gemini CLI)');
+      console.log('🔐 [Gemini] Using OAuth authentication (Gemini CLI)');
       delete process.env.GEMINI_API_KEY;
+    } else {
+      // Fallback case (shouldn't happen if base-executor works correctly)
+      authType = Gemini.AuthType.USE_GEMINI;
+      console.warn('⚠️  [Gemini] No API key and useNativeAuth=false - SDK may fail');
     }
 
     // Map Agor permission mode to Gemini ApprovalMode
@@ -577,18 +538,12 @@ export class GeminiPromptService {
         console.log(`🔄 [Gemini] Updated approval mode for existing client: ${approvalMode}`);
       }
 
-      // For API key hot-reload: Call refreshAuth() which reads from process.env.GEMINI_API_KEY
-      // Config service updates process.env when credentials change, so this picks up new keys
-      // Note: refreshAuth() might fail if the key is invalid, but we log and continue
+      // Refresh authentication if available
+      // Use pre-resolved API key and auth type (no need to re-check process.env)
       if (config && typeof config.refreshAuth === 'function') {
         try {
-          // Re-determine auth type based on current API key state
-          const currentAuthType = process.env.GEMINI_API_KEY
-            ? Gemini.AuthType.USE_GEMINI
-            : Gemini.AuthType.LOGIN_WITH_GOOGLE;
-          await config.refreshAuth(currentAuthType);
-          const authMethod =
-            currentAuthType === Gemini.AuthType.LOGIN_WITH_GOOGLE ? 'OAuth' : 'API key';
+          await config.refreshAuth(authType);
+          const authMethod = authType === Gemini.AuthType.LOGIN_WITH_GOOGLE ? 'OAuth' : 'API key';
           console.log(`🔄 [Gemini] Refreshed authentication using ${authMethod}`);
         } catch (error) {
           // Log but don't throw - let the subsequent prompt attempt fail with a better error

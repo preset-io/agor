@@ -14,7 +14,7 @@ import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 const { query } = Claude;
 type PermissionMode = Claude.PermissionMode;
 
-import { getDaemonUrl, resolveApiKey, resolveUserEnvironment } from '../../config.js';
+import { getDaemonUrl, resolveUserEnvironment } from '../../config.js';
 import type {
   MCPServerRepository,
   MessagesRepository,
@@ -291,11 +291,10 @@ export async function setupQuery(
 
   // Add optional apiKey if provided
   // NOTE: Don't require API key - user may have used `claude login` (OAuth)
-  // In executor mode, API keys are passed directly from daemon via IPC
-  // If deps.apiKey is provided, use it; otherwise rely on environment
-  const apiKey = deps.apiKey || resolveApiKey(process.env.ANTHROPIC_API_KEY || '');
-  if (apiKey) {
-    queryOptions.apiKey = apiKey;
+  // API keys are already resolved by base-executor with proper precedence (user → config → env)
+  // If deps.apiKey is provided, use it directly (no need to check process.env)
+  if (deps.apiKey) {
+    queryOptions.apiKey = deps.apiKey;
   }
 
   // Resolve user environment variables
@@ -588,7 +587,7 @@ export async function setupQuery(
     console.error(`❌ CRITICAL: query() threw synchronous error (very unusual):`, syncError);
     console.error(`   Claude Code path: ${claudeCodePath}`);
     console.error(`   CWD: ${cwd}`);
-    console.error(`   API key set: ${apiKey ? 'YES' : 'NO'}`);
+    console.error(`   API key set: ${deps.apiKey ? 'YES' : 'NO'}`);
     console.error(`   Resume session: ${queryOptions.resume || 'none (fresh session)'}`);
     throw syncError;
   }

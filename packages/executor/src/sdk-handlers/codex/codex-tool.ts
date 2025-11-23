@@ -62,7 +62,8 @@ export class CodexTool implements ITool {
     apiKey?: string,
     messagesService?: MessagesService,
     tasksService?: TasksService,
-    db?: Database // Database for user env vars and API key resolution
+    db?: Database, // Database for user env vars and API key resolution
+    _useNativeAuth?: boolean // Codex doesn't have OAuth fallback, but accept for interface consistency
   ) {
     this.messagesRepo = messagesRepo;
     this.sessionsRepo = sessionsRepo;
