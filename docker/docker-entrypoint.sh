@@ -8,38 +8,23 @@ echo "🚀 Starting Agor development environment..."
 echo "🔧 Fixing volume permissions..."
 sudo chown -R agor:agor /app
 
-# Smart dependency sync: only reinstall if needed
-# Strategy:
-# 1. On first boot (empty volume), copy Docker-built node_modules to volume
-# 2. On subsequent boots, only run pnpm install if pnpm-lock.yaml changed
-# This dramatically speeds up boot time (2-3s vs 60s+ for full install)
+# Smart dependency sync: check if pnpm-lock.yaml changed
+# Anonymous volumes preserve Docker-built node_modules directly (no copy needed!)
+# Only run pnpm install if user modified dependencies
 echo "📦 Checking dependencies..."
 
-# Use our marker file as the definitive first-boot check (more reliable than checking for pnpm files)
+# Create marker file on first run
 if [ ! -f "/app/node_modules/.synced-lockfile.yaml" ]; then
-  echo "🆕 First boot detected - initializing node_modules from Docker cache..."
-
-  # Copy pre-built node_modules from Docker image cache
-  # The Docker build cached these at /opt/agor-cache/ during image build
-  # Only need root node_modules since pnpm uses symlinks for workspace packages
-  echo "   Copying cached dependencies (~2-3s vs ~60s for pnpm install)..."
-  cp -a /opt/agor-cache/node_modules/. /app/node_modules/
-
-  # Create marker file to track the pnpm-lock.yaml state
+  echo "✅ Using Docker-built dependencies (no copy needed)"
   cp /app/pnpm-lock.yaml /app/node_modules/.synced-lockfile.yaml
-  echo "✅ Dependencies initialized from cache"
+elif ! cmp -s /app/pnpm-lock.yaml /app/node_modules/.synced-lockfile.yaml; then
+  # Only install if lockfile changed (user added/removed dependencies)
+  echo "🔄 pnpm-lock.yaml changed - syncing dependencies..."
+  CI=true pnpm install --frozen-lockfile < /dev/null
+  cp /app/pnpm-lock.yaml /app/node_modules/.synced-lockfile.yaml
+  echo "✅ Dependencies synced"
 else
-  echo "♻️  Cached node_modules found - checking if sync needed..."
-
-  # Check if pnpm-lock.yaml changed since last sync
-  if cmp -s /app/pnpm-lock.yaml /app/node_modules/.synced-lockfile.yaml; then
-    echo "✅ Dependencies up-to-date (pnpm-lock.yaml unchanged)"
-  else
-    echo "🔄 pnpm-lock.yaml changed - syncing dependencies..."
-    CI=true pnpm install --frozen-lockfile < /dev/null
-    cp /app/pnpm-lock.yaml /app/node_modules/.synced-lockfile.yaml
-    echo "✅ Dependencies synced"
-  fi
+  echo "✅ Dependencies up-to-date"
 fi
 
 # Skip husky in Docker (git hooks run on host, not in container)

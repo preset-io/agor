@@ -129,10 +129,17 @@ services:
     volumes:
       # Mount entire repo for hot-reload (source code only)
       - .:/app
-      # Block root node_modules with named volume (shadows all nested node_modules via pnpm symlinks)
-      # This single volume preserves Docker-built packages across restarts for all workspaces
-      - node_modules:/app/node_modules
-      # Block @agor/core build output (prevents stale host dist from overwriting container's build)
+      # Use anonymous volumes to exclude node_modules and dist from the source mount
+      # This preserves the Docker-built versions (correct OS binaries, pre-built artifacts)
+      # Anonymous volumes use the container's built-in files directly - no copy needed!
+      - /app/node_modules
+      - /app/packages/core/node_modules
+      - /app/packages/executor/node_modules
+      - /app/packages/agor-live/node_modules
+      - /app/apps/agor-daemon/node_modules
+      - /app/apps/agor-ui/node_modules
+      - /app/apps/agor-docs/node_modules
+      - /app/apps/agor-cli/node_modules
       - /app/packages/core/dist
       # Persist entire home directory (database, config, agent auth tokens, etc.)
       - agor-home:/home/agor
@@ -178,12 +185,6 @@ volumes:
   # - Agent auth tokens
   # - Caches, etc.
   agor-home:
-
-  # Named volume for node_modules (preserves Docker-built packages)
-  # Single root volume shadows all nested node_modules via pnpm's symlink structure
-  # Persists across container restarts, avoiding full reinstall on every boot
-  # Smart sync in entrypoint only runs pnpm install if pnpm-lock.yaml changed
-  node_modules:
 
   # PostgreSQL data (only created when postgres profile is active)
   postgres-data:

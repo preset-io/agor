@@ -73,16 +73,9 @@ COPY packages/core/package.json ./packages/core/
 
 # Install dependencies as agor user (cached in Docker layer)
 # This creates node_modules with correct platform binaries for container
-# We'll copy these to a cache location so the entrypoint can restore them quickly
-# on first boot (when the named volume is empty), avoiding a full pnpm install.
+# Anonymous volumes will preserve these built-in node_modules at runtime (no copy needed!)
 RUN sudo chown -R agor:agor /app && \
     pnpm install --frozen-lockfile
-
-# Cache node_modules for fast first-boot restoration
-# Only need root node_modules since pnpm uses symlinks (nested node_modules are just symlinks)
-RUN sudo mkdir -p /opt/agor-cache && \
-    sudo cp -a /app/node_modules /opt/agor-cache/ && \
-    sudo chown -R agor:agor /opt/agor-cache
 
 # Copy entrypoint script
 COPY docker/docker-entrypoint.sh /usr/local/bin/
