@@ -145,18 +145,9 @@ export interface AgorCodexSettings {
 }
 
 /**
- * Execution isolation settings
+ * Execution settings
  */
 export interface AgorExecutionSettings {
-  /** Enable executor-based SDK execution (default: false) */
-  use_executor?: boolean;
-
-  /** Enable Unix user impersonation for executors (default: false) */
-  run_as_unix_user?: boolean;
-
-  /** Default Unix user for executors (default: 'agor', only used when run_as_unix_user: true) */
-  executor_unix_user?: string;
-
   /** Session token expiration in ms (default: 86400000 = 24 hours) */
   session_token_expiration_ms?: number;
 

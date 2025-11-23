@@ -707,34 +707,7 @@ async function main() {
     max_uses: config.execution?.session_token_max_uses || -1,
   });
 
-  // Initialize optional process isolation services (Phase 4)
-  // Only needed when running executors as separate Unix user (AGOR_USE_EXECUTOR=true)
-  let executorPool: import('./services/executor-pool').ExecutorPool | null = null;
-  let executorIsolationService: import('./services/executor-isolation-service').ExecutorIsolationService | null =
-    null;
-
-  if (config.execution?.use_executor) {
-    console.log('🔧 Initializing process isolation services (executors will run as separate user)...');
-
-    const { ExecutorIsolationService } = await import('./services/executor-isolation-service.js');
-    const { ExecutorPool } = await import('./services/executor-pool.js');
-
-    // Create isolation service for stdio/socket communication with isolated executors
-    executorIsolationService = new ExecutorIsolationService(app, db, sessionTokenService);
-
-    // Create executor pool
-    executorPool = new ExecutorPool(config, executorIsolationService);
-
-    // Attach to app for access from services
-    // Cast to unknown first then to Record for dynamic property assignment
-    const appRecord = app as unknown as Record<string, unknown>;
-    appRecord.executorPool = executorPool;
-    appRecord.executorIsolationService = executorIsolationService;
-
-    console.log('✅ Process isolation services initialized (executors will run as agor_executor user)');
-  }
-
-  // Always attach sessionTokenService to app (needed for Feathers/WebSocket executor)
+  // Attach sessionTokenService to app (needed for Feathers/WebSocket executor)
   const appRecord = app as unknown as Record<string, unknown>;
   appRecord.sessionTokenService = sessionTokenService;
 

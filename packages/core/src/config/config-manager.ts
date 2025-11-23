@@ -106,9 +106,6 @@ export function getDefaultConfig(): AgorConfig {
       home: '~/.agor/codex',
     },
     execution: {
-      use_executor: false, // Default: Use legacy in-process execution
-      run_as_unix_user: false, // Default: No user impersonation (run as daemon user)
-      executor_unix_user: 'agor', // Default: 'agor' user (only used when run_as_unix_user: true)
       session_token_expiration_ms: 86400000, // 24 hours
       session_token_max_uses: 1, // Single-use tokens
     },
