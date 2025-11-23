@@ -19,15 +19,11 @@ echo "📦 Checking dependencies..."
 if [ ! -f "/app/node_modules/.synced-lockfile.yaml" ]; then
   echo "🆕 First boot detected - initializing node_modules from Docker cache..."
 
-  # Copy pre-built node_modules and build artifacts from Docker image cache
+  # Copy pre-built node_modules from Docker image cache
   # The Docker build cached these at /opt/agor-cache/ during image build
-  echo "   Copying cached dependencies and build artifacts (~2-3s vs ~60s for pnpm install)..."
+  # Only need root node_modules since pnpm uses symlinks for workspace packages
+  echo "   Copying cached dependencies (~2-3s vs ~60s for pnpm install)..."
   cp -a /opt/agor-cache/node_modules/. /app/node_modules/
-  cp -a /opt/agor-cache/daemon-node_modules/. /app/apps/agor-daemon/node_modules/
-  cp -a /opt/agor-cache/cli-node_modules/. /app/apps/agor-cli/node_modules/
-  cp -a /opt/agor-cache/ui-node_modules/. /app/apps/agor-ui/node_modules/
-  cp -a /opt/agor-cache/core-node_modules/. /app/packages/core/node_modules/
-  cp -a /opt/agor-cache/core-dist/. /app/packages/core/dist/
 
   # Create marker file to track the pnpm-lock.yaml state
   cp /app/pnpm-lock.yaml /app/node_modules/.synced-lockfile.yaml

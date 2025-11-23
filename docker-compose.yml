@@ -127,18 +127,12 @@ services:
         condition: service_healthy
         required: false # Optional dependency - only needed when postgres profile is active
     volumes:
-      # Mount entire repo for hot-reload (but exclude node_modules and build outputs)
+      # Mount entire repo for hot-reload (source code only)
       - .:/app
-      # Use named volumes for node_modules (preserves Docker-built packages between runs)
-      # These named volumes are project-specific (due to -p flag), so each worktree
-      # gets its own node_modules that persist across container restarts
+      # Block root node_modules with named volume (shadows all nested node_modules via pnpm symlinks)
+      # This single volume preserves Docker-built packages across restarts for all workspaces
       - node_modules:/app/node_modules
-      - node_modules_daemon:/app/apps/agor-daemon/node_modules
-      - node_modules_cli:/app/apps/agor-cli/node_modules
-      - node_modules_ui:/app/apps/agor-ui/node_modules
-      - node_modules_core:/app/packages/core/node_modules
-      # Exclude @agor/core build output (built fresh in container during entrypoint)
-      # This prevents empty/stale host dist from overwriting container's fresh build
+      # Block @agor/core build output (prevents stale host dist from overwriting container's build)
       - /app/packages/core/dist
       # Persist entire home directory (database, config, agent auth tokens, etc.)
       - agor-home:/home/agor
@@ -185,14 +179,11 @@ volumes:
   # - Caches, etc.
   agor-home:
 
-  # Named volumes for node_modules (preserves Docker-built packages)
-  # These persist across container restarts, avoiding full reinstall on every boot
+  # Named volume for node_modules (preserves Docker-built packages)
+  # Single root volume shadows all nested node_modules via pnpm's symlink structure
+  # Persists across container restarts, avoiding full reinstall on every boot
   # Smart sync in entrypoint only runs pnpm install if pnpm-lock.yaml changed
   node_modules:
-  node_modules_daemon:
-  node_modules_cli:
-  node_modules_ui:
-  node_modules_core:
 
   # PostgreSQL data (only created when postgres profile is active)
   postgres-data:
