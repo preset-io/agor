@@ -265,6 +265,102 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
   }
 
   /**
+   * Custom method: Execute a prompt on this session
+   *
+   * Spawns an executor subprocess to run the prompt against the session.
+   * The executor connects back to daemon via Feathers/WebSocket.
+   *
+   * NOTE: The actual implementation is provided by index.ts via setExecuteHandler
+   */
+  private executeHandler?: (
+    sessionId: string,
+    data: {
+      prompt: string;
+      permissionMode?: import('@agor/core/types').PermissionMode;
+      stream?: boolean;
+    },
+    params?: SessionParams
+  ) => Promise<{
+    success: boolean;
+    taskId: string;
+    status: string;
+    streaming: boolean;
+  }>;
+
+  setExecuteHandler(
+    handler: (
+      sessionId: string,
+      data: {
+        prompt: string;
+        permissionMode?: import('@agor/core/types').PermissionMode;
+        stream?: boolean;
+      },
+      params?: SessionParams
+    ) => Promise<{
+      success: boolean;
+      taskId: string;
+      status: string;
+      streaming: boolean;
+    }>
+  ): void {
+    this.executeHandler = handler;
+  }
+
+  async executeTask(
+    id: string,
+    data: {
+      prompt: string;
+      permissionMode?: import('@agor/core/types').PermissionMode;
+      stream?: boolean;
+    },
+    params?: SessionParams
+  ): Promise<{
+    success: boolean;
+    taskId: string;
+    status: string;
+    streaming: boolean;
+  }> {
+    if (this.executeHandler) {
+      return this.executeHandler(id, data, params);
+    }
+    throw new Error('Execute handler not set - cannot execute task');
+  }
+
+  /**
+   * Custom method: Stop a running task
+   *
+   * Emits a 'task_stop' event that the executor listens for via WebSocket.
+   *
+   * NOTE: The actual implementation is provided by index.ts via setStopHandler
+   */
+  private stopHandler?: (
+    sessionId: string,
+    data: { taskId: string },
+    params?: SessionParams
+  ) => Promise<{ success: boolean; message: string }>;
+
+  setStopHandler(
+    handler: (
+      sessionId: string,
+      data: { taskId: string },
+      params?: SessionParams
+    ) => Promise<{ success: boolean; message: string }>
+  ): void {
+    this.stopHandler = handler;
+  }
+
+  async stopTask(
+    id: string,
+    data: { taskId: string },
+    params?: SessionParams
+  ): Promise<{ success: boolean; message: string }> {
+    if (this.stopHandler) {
+      return this.stopHandler(id, data, params);
+    }
+    throw new Error('Stop handler not set - cannot stop task');
+  }
+
+  /**
    * Custom method: Trigger queue processing
    *
    * Processes the next queued message for an idle session.

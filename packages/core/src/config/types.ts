@@ -145,6 +145,38 @@ export interface AgorCodexSettings {
 }
 
 /**
+ * Execution isolation settings
+ */
+export interface AgorExecutionSettings {
+  /** Enable executor-based SDK execution (default: false) */
+  use_executor?: boolean;
+
+  /** Enable Unix user impersonation for executors (default: false) */
+  run_as_unix_user?: boolean;
+
+  /** Default Unix user for executors when user not linked (e.g., 'agor_executor') */
+  executor_unix_user?: string;
+
+  /** Maximum number of concurrent executors (default: 10) */
+  max_executors?: number;
+
+  /** Idle timeout for executors in ms (default: 60000) */
+  idle_timeout_ms?: number;
+
+  /** Socket path template (default: /tmp/agor-executor-{id}.sock) */
+  socket_path_template?: string;
+
+  /** Connection timeout in ms (default: 5000) */
+  connection_timeout_ms?: number;
+
+  /** Session token expiration in ms (default: 86400000 = 24 hours) */
+  session_token_expiration_ms?: number;
+
+  /** Maximum session token uses (default: 1 = single-use) */
+  session_token_max_uses?: number;
+}
+
+/**
  * Supported credential keys (enum for type safety)
  */
 export enum CredentialKey {
@@ -192,6 +224,9 @@ export interface AgorConfig {
   /** Codex-specific configuration */
   codex?: AgorCodexSettings;
 
+  /** Execution isolation settings */
+  execution?: AgorExecutionSettings;
+
   /** Tool credentials (API keys, tokens) */
   credentials?: AgorCredentials;
 }
@@ -207,4 +242,5 @@ export type ConfigKey =
   | `database.${keyof AgorDatabaseSettings}`
   | `opencode.${keyof AgorOpenCodeSettings}`
   | `codex.${keyof AgorCodexSettings}`
+  | `execution.${keyof AgorExecutionSettings}`
   | `credentials.${keyof AgorCredentials}`;

@@ -11,9 +11,6 @@ export default defineConfig({
     'claude/index': 'src/claude/index.ts',
     'config/index': 'src/config/index.ts',
     'config/browser': 'src/config/browser.ts', // Browser-safe config utilities
-    'tools/index': 'src/tools/index.ts',
-    'tools/models': 'src/tools/models.ts', // Browser-safe model constants
-    'tools/claude/models': 'src/tools/claude/models.ts',
     'permissions/index': 'src/permissions/index.ts',
     'feathers/index': 'src/feathers/index.ts', // FeathersJS runtime re-exports
     'lib/feathers-validation': 'src/lib/feathers-validation.ts', // FeathersJS query validation schemas
@@ -24,11 +21,11 @@ export default defineConfig({
     'utils/permission-mode-mapper': 'src/utils/permission-mode-mapper.ts', // Permission mode mapping for cross-agent compatibility
     'utils/cron': 'src/utils/cron.ts', // Cron validation and parsing utilities
     'utils/context-window': 'src/utils/context-window.ts', // Context window calculation utilities
-    'utils/sdk-normalizer': 'src/utils/sdk-normalizer.ts', // SDK response normalization utilities
     'utils/path': 'src/utils/path.ts', // Path expansion utilities (tilde to home directory)
     'utils/logger': 'src/utils/logger.ts', // Console monkey-patch for log level filtering
     'seed/index': 'src/seed/index.ts', // Development database seeding
     'callbacks/child-completion-template': 'src/callbacks/child-completion-template.ts', // Parent session callback templates
+    'models/index': 'src/models/index.ts', // Model metadata (browser-safe)
   },
   format: ['cjs', 'esm'],
   dts: true,

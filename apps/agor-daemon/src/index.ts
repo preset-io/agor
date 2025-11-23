@@ -60,6 +60,7 @@ import {
   select,
   sessionMcpServers,
   TaskRepository,
+  UsersRepository,
   WorktreeRepository,
 } from '@agor/core/db';
 import {
@@ -88,14 +89,14 @@ import {
 } from '@agor/core/lib/feathers-validation';
 import { type PermissionDecision, PermissionService } from '@agor/core/permissions';
 import { registerHandlebarsHelpers } from '@agor/core/templates/handlebars-helpers';
-import { ClaudeTool, CodexTool, GeminiTool, OpenCodeTool } from '@agor/core/tools';
+// NOTE: Tools moved to executor package - use executor for SDK execution
+// import { ClaudeTool, CodexTool, GeminiTool, OpenCodeTool } from '@agor/core/tools';
 import type {
   AuthenticatedParams,
   Id,
   Message,
   Paginated,
   Params,
-  RawSdkResponse,
   Session,
   SessionID,
   Task,
@@ -103,9 +104,6 @@ import type {
 } from '@agor/core/types';
 import { SessionStatus, TaskStatus } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
-// Import Claude SDK's PermissionMode type for ClaudeTool method signatures
-// (Agor's PermissionMode is a superset of all tool permission modes)
-import type { PermissionMode as ClaudePermissionMode } from '@anthropic-ai/claude-agent-sdk';
 import { validateQuery } from '@feathersjs/schema';
 
 /**
@@ -216,6 +214,51 @@ export function initializeGeminiApiKey(
   }
 
   return geminiApiKey;
+}
+
+/**
+ * Resolve API key for a given agentic tool
+ * Priority: user-specific encrypted key > environment variable
+ */
+async function resolveApiKey(
+  db: Awaited<ReturnType<typeof createDatabaseAsync>>,
+  agenticTool: string,
+  user: { user_id: string } | undefined
+): Promise<string> {
+  // Map tool name to credential key
+  const credentialMap: Record<
+    string,
+    { env: string; provider: 'anthropic' | 'openai' | 'gemini' }
+  > = {
+    'claude-code': { env: 'ANTHROPIC_API_KEY', provider: 'anthropic' },
+    codex: { env: 'OPENAI_API_KEY', provider: 'openai' },
+    gemini: { env: 'GEMINI_API_KEY', provider: 'gemini' },
+    opencode: { env: 'OPENAI_API_KEY', provider: 'openai' },
+  };
+
+  const credential = credentialMap[agenticTool];
+  if (!credential) {
+    throw new Error(`Unknown agentic tool: ${agenticTool}`);
+  }
+
+  // Try user-specific encrypted key first (if user is authenticated)
+  if (user) {
+    const usersRepo = new UsersRepository(db);
+    const userApiKey = await usersRepo.getApiKey(user.user_id, credential.provider);
+    if (userApiKey) {
+      return userApiKey;
+    }
+  }
+
+  // Fallback to environment variable
+  const envApiKey = process.env[credential.env];
+  if (envApiKey) {
+    return envApiKey;
+  }
+
+  throw new Error(
+    `No API key found for ${agenticTool}. Set ${credential.env} environment variable or configure user API key.`
+  );
 }
 
 // Main async function
@@ -703,10 +746,203 @@ async function main() {
 
   console.log('✅ Database ready');
 
+  // Initialize executor services (Phase 4)
+  // Types imported dynamically below when enabled
+  let executorPool: import('./services/executor-pool').ExecutorPool | null = null;
+  let sessionTokenService: import('./services/session-token-service').SessionTokenService | null =
+    null;
+  let executorIPCService: import('./services/executor-ipc-service').ExecutorIPCService | null =
+    null;
+
+  if (config.execution?.use_executor) {
+    console.log('🔧 Initializing executor services...');
+
+    const { SessionTokenService } = await import('./services/session-token-service.js');
+    const { ExecutorIPCService } = await import('./services/executor-ipc-service.js');
+    const { ExecutorPool } = await import('./services/executor-pool.js');
+
+    // Create session token service
+    sessionTokenService = new SessionTokenService({
+      expiration_ms: config.execution.session_token_expiration_ms || 24 * 60 * 60 * 1000,
+      max_uses: config.execution.session_token_max_uses || -1,
+    });
+
+    // Create IPC service (will be initialized with app after it's created)
+    executorIPCService = new ExecutorIPCService(app, db, sessionTokenService);
+
+    // Create executor pool
+    executorPool = new ExecutorPool(config, executorIPCService);
+
+    // Attach to app for access from services
+    // Cast to unknown first then to Record for dynamic property assignment
+    const appRecord = app as unknown as Record<string, unknown>;
+    appRecord.executorPool = executorPool;
+    appRecord.sessionTokenService = sessionTokenService;
+    appRecord.executorIPCService = executorIPCService;
+
+    console.log('✅ Executor services initialized');
+  }
+
   // Register core services
   // NOTE: Pass app instance for user preferences access (needed for cross-tool spawning and ready_for_prompt updates)
   const sessionsService = createSessionsService(db, app) as unknown as SessionsServiceImpl;
-  app.use('/sessions', sessionsService);
+  app.use('/sessions', sessionsService, {
+    events: ['task_stop'], // Custom event for stopping tasks via WebSocket
+  });
+
+  // Wire up custom session methods for Feathers/WebSocket executor architecture
+  sessionsService.setExecuteHandler(async (sessionId, data, params) => {
+    // Import spawn and path utilities
+    const { spawn } = await import('node:child_process');
+    const path = await import('node:path');
+
+    // Get session and validate
+    const session = await sessionsService.get(sessionId, params);
+    if (!session) {
+      throw new Error(`Session ${sessionId} not found`);
+    }
+
+    // Generate session token for executor authentication
+    const appWithExecutor = app as unknown as {
+      sessionTokenService?: import('./services/session-token-service').SessionTokenService;
+    };
+    if (!appWithExecutor.sessionTokenService) {
+      throw new Error('Session token service not initialized');
+    }
+    const sessionToken = await appWithExecutor.sessionTokenService.generateToken(
+      sessionId,
+      (params as AuthenticatedParams).user?.user_id || 'anonymous'
+    );
+
+    // Use the task ID provided by caller (task already created by prompt endpoint)
+    const taskId = data.taskId;
+
+    // Resolve API key for the session's agentic tool
+    const apiKey = await resolveApiKey(
+      db,
+      session.agentic_tool,
+      (params as AuthenticatedParams).user
+    );
+
+    // Get worktree path
+    let cwd = process.cwd();
+    if (session.worktree_id) {
+      try {
+        const worktree = await app.service('worktrees').get(session.worktree_id, params);
+        cwd = worktree.path;
+      } catch (error) {
+        console.warn(`Could not get worktree path for ${session.worktree_id}:`, error);
+      }
+    }
+
+    // Spawn executor process with Feathers/WebSocket mode
+    const executorPath = path.join(__dirname, '../../executor/dist/cli.js');
+    const daemonUrl = `http://localhost:${DAEMON_PORT}`;
+
+    const executorProcess = spawn(
+      'node',
+      [
+        executorPath,
+        '--session-token',
+        sessionToken,
+        '--session-id',
+        sessionId,
+        '--task-id',
+        taskId,
+        '--prompt',
+        data.prompt,
+        '--tool',
+        session.agentic_tool,
+        '--permission-mode',
+        data.permissionMode || 'default',
+        '--daemon-url',
+        daemonUrl,
+      ],
+      {
+        cwd,
+        env: {
+          ...process.env,
+          // Inject API key based on agentic tool
+          ...(session.agentic_tool === 'claude-code' && { ANTHROPIC_API_KEY: apiKey }),
+          ...(session.agentic_tool === 'gemini' && { GEMINI_API_KEY: apiKey }),
+          ...(session.agentic_tool === 'codex' && { OPENAI_API_KEY: apiKey }),
+        },
+        stdio: ['ignore', 'pipe', 'pipe'], // Capture stdout/stderr
+      }
+    );
+
+    // Log executor output
+    executorProcess.stdout?.on('data', (data) => {
+      console.log(`[Executor ${sessionId.slice(0, 8)}] ${data.toString().trim()}`);
+    });
+
+    executorProcess.stderr?.on('data', (data) => {
+      console.error(`[Executor ${sessionId.slice(0, 8)}] ${data.toString().trim()}`);
+    });
+
+    executorProcess.on('exit', (code) => {
+      console.log(`[Executor ${sessionId.slice(0, 8)}] Exited with code ${code}`);
+      // Revoke session token after executor exits
+      appWithExecutor.sessionTokenService?.revokeToken(sessionToken);
+    });
+
+    return {
+      success: true,
+      taskId: taskId,
+      status: 'running',
+      streaming: data.stream !== false,
+    };
+  });
+
+  sessionsService.setStopHandler(async (sessionId, data, _params) => {
+    // Emit task_stop event for Feathers/WebSocket executors
+    app.service('sessions').emit('task_stop', {
+      session_id: sessionId,
+      task_id: data.taskId,
+      timestamp: new Date().toISOString(),
+    });
+
+    // ALSO send IPC request for legacy IPC executors
+    const appWithExecutor = app as unknown as {
+      executorPool?: import('./services/executor-pool').ExecutorPool;
+      sessionExecutors?: Map<string, string>;
+    };
+
+    if (appWithExecutor.executorPool && appWithExecutor.sessionExecutors) {
+      const executorId = appWithExecutor.sessionExecutors.get(sessionId);
+      if (executorId) {
+        const executor = appWithExecutor.executorPool.get(executorId);
+        if (executor) {
+          try {
+            console.log(
+              `🛑 Sending IPC stop_task to executor ${executorId.slice(0, 8)} for session ${sessionId.slice(0, 8)}`
+            );
+            await executor.client.request(
+              'stop_task',
+              {
+                session_id: sessionId,
+                task_id: data.taskId,
+              },
+              5000
+            );
+            console.log(`✅ IPC stop_task succeeded for executor ${executorId.slice(0, 8)}`);
+          } catch (error) {
+            console.error(`❌ IPC stop_task failed for executor ${executorId.slice(0, 8)}:`, error);
+            return {
+              success: false,
+              message: `Failed to send stop signal via IPC: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            };
+          }
+        }
+      }
+    }
+
+    return {
+      success: true,
+      message: 'Stop signal sent to executor',
+    };
+  });
+
   app.use('/tasks', createTasksService(db, app));
   app.use('/leaderboard', createLeaderboardService(db));
   const messagesService = createMessagesService(db) as unknown as MessagesServiceImpl;
@@ -721,6 +957,7 @@ async function main() {
       'thinking:start',
       'thinking:chunk',
       'thinking:end',
+      'permission_resolved', // Permission approval/denial notification for executors
     ],
     docs: {
       description: 'Conversation messages within AI agent sessions',
@@ -809,8 +1046,89 @@ async function main() {
       patch: [requireMinimumRole('member', 'update messages')],
       remove: [requireMinimumRole('member', 'delete messages')],
     },
-    // No custom 'after' hooks needed - FeathersJS automatically emits 'removed' event
-    // with the full message object (including status, session_id, etc.)
+    after: {
+      patch: [
+        async (context) => {
+          // Detect permission resolution and notify executor via IPC
+          const message = context.result as import('@agor/core/types').Message;
+
+          // Only process permission_request messages
+          if (message.type !== 'permission_request') {
+            return context;
+          }
+
+          // Check if the message content has approval status
+          const content = message.content;
+          if (typeof content !== 'object' || !content || Array.isArray(content)) {
+            return context;
+          }
+
+          const contentObj = content as unknown as Record<string, unknown>;
+          const status = contentObj.status;
+          if (status !== 'approved' && status !== 'denied') {
+            return context;
+          }
+
+          // Permission was resolved! Notify the executor via IPC
+          console.log(`[daemon] Permission ${status} for request ${contentObj.request_id}`);
+
+          // Get the executor pool and session executors map
+          const appWithExecutor = app as unknown as {
+            executorPool?: import('./services/executor-pool').ExecutorPool;
+            sessionExecutors?: Map<string, string>;
+          };
+          const executorPool = appWithExecutor.executorPool;
+          const sessionExecutors = appWithExecutor.sessionExecutors;
+
+          if (!executorPool) {
+            console.warn('[daemon] ExecutorPool not available, cannot notify executor');
+            return context;
+          }
+
+          if (!sessionExecutors) {
+            console.warn('[daemon] sessionExecutors map not available, cannot notify executor');
+            return context;
+          }
+
+          // Find the executor for this session
+          const sessionId = message.session_id;
+          const executorId = sessionExecutors.get(sessionId);
+
+          if (!executorId) {
+            console.log('[daemon] No executor found for session, skipping IPC notification');
+            return context;
+          }
+
+          // Get the executor instance
+          const executor = executorPool.get(executorId);
+          if (!executor) {
+            console.warn(`[daemon] Executor ${executorId} not found in pool`);
+            return context;
+          }
+
+          // Build permission decision
+          const decision = {
+            requestId: contentObj.request_id as string,
+            taskId: message.task_id,
+            allow: status === 'approved',
+            reason: status === 'denied' ? 'User denied permission' : undefined,
+            remember: !!contentObj.scope,
+            scope: contentObj.scope || 'once',
+            decidedBy: contentObj.approved_by || 'unknown',
+          };
+
+          // Send IPC notification to executor
+          try {
+            executor.client.notify('permission_resolved', decision);
+            console.log(`[daemon] Sent permission_resolved notification to executor ${executorId}`);
+          } catch (error) {
+            console.error('[daemon] Failed to send permission_resolved notification:', error);
+          }
+
+          return context;
+        },
+      ],
+    },
   });
 
   app.service('board-objects').hooks({
@@ -1106,57 +1424,7 @@ async function main() {
 
           return context;
         },
-        // Create OpenCode session if agentic_tool is 'opencode'
-        async (context) => {
-          const session = context.result as Session;
-
-          if (session.agentic_tool === 'opencode') {
-            try {
-              const model = session.model_config?.model;
-              const provider = session.model_config?.provider;
-              console.log(
-                `🔧 [OpenCode] Creating OpenCode session for Agor session ${session.session_id.substring(0, 8)} with model: ${model || 'default'} provider: ${provider || 'default'}...`
-              );
-
-              // Create OpenCode session via OpenCodeTool
-              const sessionWithRepo = session as Session & {
-                repo?: { repo_slug?: string; cwd?: string };
-              };
-              const ocSession = await opencodeTool.createSession?.({
-                title: session.title || 'Agor Session',
-                projectName: sessionWithRepo.repo?.repo_slug || 'default',
-                workingDirectory: sessionWithRepo.repo?.cwd,
-                model: model,
-                provider: provider,
-              });
-
-              if (ocSession?.sessionId) {
-                console.log(`✅ [OpenCode] Created OpenCode session: ${ocSession.sessionId}`);
-
-                // Map Agor session ID to OpenCode session ID
-                opencodeTool.setSessionContext(session.session_id, ocSession.sessionId);
-                console.log(
-                  `🗺️  [OpenCode] Mapped Agor session ${session.session_id.substring(0, 8)} → OpenCode session ${ocSession.sessionId}`
-                );
-
-                // Store OpenCode session ID in Agor session metadata
-                await app.service('sessions').patch(session.session_id, {
-                  sdk_session_id: ocSession.sessionId,
-                });
-
-                console.log(`💾 [OpenCode] Stored OpenCode session ID in Agor session metadata`);
-
-                // Update context.result to include the OpenCode session ID
-                context.result = { ...session, sdk_session_id: ocSession.sessionId };
-              }
-            } catch (error) {
-              console.error('⚠️  [OpenCode] Failed to create OpenCode session:', error);
-              // Don't fail Agor session creation if OpenCode session creation fails
-            }
-          }
-
-          return context;
-        },
+        // TODO: OpenCode session creation moved to executor - implement via IPC if needed
       ],
     },
   });
@@ -1310,12 +1578,17 @@ async function main() {
 
   // Configure authentication options BEFORE creating service
   // Note: jwtSecret is initialized earlier (before Socket.io config)
+  const authStrategiesArray = ['jwt', 'local', 'anonymous'];
+  if (sessionTokenService) {
+    authStrategiesArray.push('session-token');
+  }
+
   app.set('authentication', {
     secret: jwtSecret,
     entity: 'user',
     entityId: 'user_id',
     service: 'users',
-    authStrategies: ['jwt', 'local', 'anonymous'],
+    authStrategies: authStrategiesArray,
     jwtOptions: {
       header: { typ: 'access' },
       audience: 'https://agor.dev',
@@ -1332,6 +1605,10 @@ async function main() {
   // Configure authentication
   const authentication = new AuthenticationService(app);
 
+  // Register authentication strategies
+  // NOTE: We no longer need a custom session-token strategy!
+  // Session tokens are now JWTs, so they work with the standard JWT strategy.
+  // This eliminates all the complexity of custom strategies and socket storage.
   authentication.register('jwt', new JWTStrategy());
   authentication.register('local', new LocalStrategy());
   authentication.register('anonymous', new AnonymousStrategy());
@@ -1379,6 +1656,12 @@ async function main() {
   process.once('beforeExit', () => clearInterval(rateLimitCleanupInterval));
 
   app.use('/authentication', authentication);
+
+  // Initialize SessionTokenService with JWT secret (needed for JWT generation)
+  if (sessionTokenService) {
+    sessionTokenService.setJwtSecret(jwtSecret);
+    console.log('✅ SessionTokenService initialized with JWT secret (will generate JWTs)');
+  }
 
   // Configure docs for authentication service (override global security requirement)
   // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service type not fully typed
@@ -1429,6 +1712,14 @@ async function main() {
       create: [
         // biome-ignore lint/suspicious/noExplicitAny: FeathersJS context type not fully typed
         async (context: any) => {
+          // Debug: Log authentication result
+          console.log('✅ Authentication succeeded:', {
+            strategy: context.result?.authentication?.strategy,
+            hasUser: !!context.result?.user,
+            user_id: context.result?.user?.user_id,
+            hasAccessToken: !!context.result?.accessToken,
+          });
+
           // Only add refresh token for non-anonymous authentication
           if (context.result?.user && context.result.user.user_id !== 'anonymous') {
             // Generate refresh token (30 days)
@@ -1543,12 +1834,12 @@ async function main() {
   };
 
   // Initialize repositories for ClaudeTool
-  const messagesRepo = new MessagesRepository(db);
-  const sessionsRepo = new SessionRepository(db);
-  const sessionMCPRepo = new SessionMCPServerRepository(db);
-  const mcpServerRepo = new MCPServerRepository(db);
-  const worktreesRepo = new WorktreeRepository(db);
-  const reposRepo = new RepoRepository(db);
+  const _messagesRepo = new MessagesRepository(db);
+  const _sessionsRepo = new SessionRepository(db);
+  const _sessionMCPRepo = new SessionMCPServerRepository(db);
+  const _mcpServerRepo = new MCPServerRepository(db);
+  const _worktreesRepo = new WorktreeRepository(db);
+  const _reposRepo = new RepoRepository(db);
   const _tasksRepo = new TaskRepository(db);
 
   // Initialize PermissionService for UI-based permission prompts
@@ -1558,6 +1849,9 @@ async function main() {
     app.service('sessions').emit(event, data);
   });
 
+  // NOTE: Direct tool execution path disabled - all SDK execution now goes through executor
+  // Tools moved to @agor/executor package for isolation
+  /*
   // Initialize ClaudeTool with repositories, API key, AND app-level service instances
   // CRITICAL: Must use app.service() to ensure WebSocket events are emitted
   // Using raw repository instances bypasses Feathers event publishing
@@ -1642,6 +1936,7 @@ async function main() {
       }
     });
   }
+  */
 
   // Configure custom route for bulk message creation
   app.use('/messages/bulk', {
@@ -1742,27 +2037,6 @@ async function main() {
     }
   }
 
-  /**
-   * Helper: Check if an entity still exists
-   */
-  async function entityExists<T>(
-    service: { get: (id: string) => Promise<T> },
-    id: string
-  ): Promise<T | null> {
-    try {
-      return await service.get(id);
-    } catch (error) {
-      // Handle NotFoundError or legacy error messages
-      if (
-        error instanceof NotFoundError ||
-        (error instanceof Error && error.message.includes('No record found'))
-      ) {
-        return null;
-      }
-      throw error;
-    }
-  }
-
   app.use('/sessions/:id/prompt', {
     async create(
       data: {
@@ -1845,8 +2119,8 @@ async function main() {
 
       // Create streaming callbacks for real-time UI updates
       // Custom events are registered via app.use('/messages', service, { events: [...] })
-      const streamingCallbacks: import('@agor/core/tools').StreamingCallbacks = {
-        onStreamStart: (messageId, metadata) => {
+      const _streamingCallbacks = {
+        onStreamStart: (messageId: string, metadata: Record<string, unknown>) => {
           console.debug(
             `📡 [${new Date().toISOString()}] Streaming start: ${messageId.substring(0, 8)}`
           );
@@ -1855,14 +2129,14 @@ async function main() {
             ...metadata,
           });
         },
-        onStreamChunk: (messageId, chunk) => {
+        onStreamChunk: (messageId: string, chunk: string) => {
           app.service('messages').emit('streaming:chunk', {
             message_id: messageId,
             session_id: id,
             chunk,
           });
         },
-        onStreamEnd: (messageId) => {
+        onStreamEnd: (messageId: string) => {
           console.debug(
             `📡 [${new Date().toISOString()}] Streaming end: ${messageId.substring(0, 8)}`
           );
@@ -1871,7 +2145,7 @@ async function main() {
             session_id: id,
           });
         },
-        onStreamError: (messageId, error) => {
+        onStreamError: (messageId: string, error: Error) => {
           console.error(`❌ Streaming error for message ${messageId.substring(0, 8)}:`, error);
           app.service('messages').emit('streaming:error', {
             message_id: messageId,
@@ -1879,7 +2153,7 @@ async function main() {
             error: error.message,
           });
         },
-        onThinkingStart: (messageId, metadata) => {
+        onThinkingStart: (messageId: string, metadata: Record<string, unknown>) => {
           console.debug(
             `📡 [${new Date().toISOString()}] Thinking start: ${messageId.substring(0, 8)}`
           );
@@ -1888,14 +2162,14 @@ async function main() {
             ...metadata,
           });
         },
-        onThinkingChunk: (messageId, chunk) => {
+        onThinkingChunk: (messageId: string, chunk: string) => {
           app.service('messages').emit('thinking:chunk', {
             message_id: messageId,
             session_id: id,
             chunk,
           });
         },
-        onThinkingEnd: (messageId) => {
+        onThinkingEnd: (messageId: string) => {
           console.debug(
             `📡 [${new Date().toISOString()}] Thinking end: ${messageId.substring(0, 8)}`
           );
@@ -1910,442 +2184,38 @@ async function main() {
       // Use setImmediate to break out of FeathersJS request scope
       // This ensures WebSocket events flush immediately, not batched with request
       const useStreaming = data.stream !== false; // Default to true
-      setImmediate(() => {
-        // Route to appropriate tool based on session agent
-        let executeMethod: Promise<{
-          userMessageId: import('@agor/core/types').MessageID;
-          assistantMessageIds: import('@agor/core/types').MessageID[];
-          rawSdkResponse?: unknown; // Raw SDK event (unmutated)
-        }>;
 
-        if (session.agentic_tool === 'codex') {
-          // Use CodexTool for Codex sessions
-          executeMethod = useStreaming
-            ? codexTool.executePromptWithStreaming(
-                id as SessionID,
-                data.prompt,
-                task.task_id,
-                data.permissionMode,
-                streamingCallbacks
-              )
-            : codexTool.executePrompt(
-                id as SessionID,
-                data.prompt,
-                task.task_id,
-                data.permissionMode
-              );
-        } else if (session.agentic_tool === 'gemini') {
-          // Use GeminiTool for Gemini sessions
-          executeMethod = useStreaming
-            ? geminiTool.executePromptWithStreaming(
-                id as SessionID,
-                data.prompt,
-                task.task_id,
-                data.permissionMode,
-                streamingCallbacks
-              )
-            : geminiTool.executePrompt(
-                id as SessionID,
-                data.prompt,
-                task.task_id,
-                data.permissionMode
-              );
-        } else if (session.agentic_tool === 'opencode') {
-          // Use OpenCodeTool for OpenCode sessions
-          // OpenCode doesn't support executePromptWithStreaming, so always use executeTask
-          console.log('[Daemon] Routing to OpenCodeTool.executeTask');
+      // FEATHERS/WEBSOCKET MODE: Route through new executor architecture
+      // Call the executeTask handler which spawns the executor process
+      setImmediate(async () => {
+        try {
+          console.log(`🚀 [Daemon] Routing ${session.agentic_tool} to Feathers/WebSocket executor`);
 
-          // Extract model, provider, and OpenCode session ID from session
-          const model = session.model_config?.model;
-          const provider = session.model_config?.provider;
-          const opencodeSessionId = (session as { sdk_session_id?: string }).sdk_session_id;
-
-          console.log(
-            '[Daemon] Using Agor session ID:',
+          await sessionsService.executeTask(
             id,
-            'with model:',
-            model,
-            'provider:',
-            provider,
-            'OpenCode session:',
-            opencodeSessionId
+            {
+              taskId: task.task_id,
+              prompt: data.prompt,
+              permissionMode: data.permissionMode,
+              stream: useStreaming,
+            },
+            params
           );
-
-          // Store session context in OpenCodeTool before calling executeTask
-          if (opencodeSessionId) {
-            opencodeTool.setSessionContext(id as SessionID, opencodeSessionId, model, provider);
-          }
-
-          executeMethod = (
-            opencodeTool.executeTask?.(
-              id as SessionID,
-              data.prompt,
-              task.task_id,
-              useStreaming ? streamingCallbacks : undefined
-            ) || Promise.reject(new Error('OpenCode executeTask not available'))
-          ).then((result) => {
-            console.log('[Daemon] OpenCodeTool.executeTask completed:', result);
-            return {
-              userMessageId: `user-${task.task_id}` as import('@agor/core/types').MessageID,
-              assistantMessageIds: [],
-              rawSdkResponse: undefined,
-            };
-          });
-        } else {
-          // Use ClaudeTool for Claude Code sessions (default)
-          executeMethod = useStreaming
-            ? claudeTool.executePromptWithStreaming(
-                id as SessionID,
-                data.prompt,
-                task.task_id,
-                data.permissionMode as ClaudePermissionMode | undefined,
-                streamingCallbacks
-              )
-            : claudeTool.executePrompt(
-                id as SessionID,
-                data.prompt,
-                task.task_id,
-                data.permissionMode as ClaudePermissionMode | undefined
-              );
+        } catch (error) {
+          console.error(`❌ [Daemon] Executor execution failed:`, error);
+          // Update task to failed status
+          await safePatch(
+            'tasks',
+            task.task_id,
+            {
+              status: TaskStatus.FAILED,
+              completed_at: new Date().toISOString(),
+            },
+            'Task',
+            params
+          );
+          await app.service('sessions').patch(id, { status: SessionStatus.IDLE }, params);
         }
-
-        executeMethod
-          .then(async (result) => {
-            try {
-              // PHASE 3: Mark task as completed and update message count
-              // (Messages already created with task_id, no need to patch)
-              const endTimestamp = new Date().toISOString();
-              const totalMessages = 1 + result.assistantMessageIds.length; // user + assistants
-
-              // Check if execution was stopped early (Codex/Gemini specific)
-              // If wasStopped is true, the stop handler will set session to IDLE
-              // Skip normal completion to avoid race condition
-              if ('wasStopped' in result && result.wasStopped) {
-                console.log(
-                  `⏭️  Task ${task.task_id.substring(0, 8)} was stopped - skipping normal completion (stop handler will update session)`
-                );
-                return;
-              }
-
-              // Check if task still exists and get current status
-              const currentTask = await entityExists(tasksService, task.task_id);
-              if (!currentTask) {
-                console.log(
-                  `⚠️  Task ${task.task_id.substring(0, 8)} was deleted mid-execution - aborting completion`
-                );
-                return;
-              }
-
-              // Don't overwrite terminal states
-              if (
-                currentTask.status === TaskStatus.FAILED ||
-                currentTask.status === TaskStatus.AWAITING_PERMISSION ||
-                currentTask.status === TaskStatus.STOPPING ||
-                currentTask.status === TaskStatus.STOPPED
-              ) {
-                console.log(
-                  `⚠️  Task ${task.task_id} already in terminal state: ${currentTask.status} - not marking as completed`
-                );
-
-                // Still update message range for completeness
-                await safePatch(
-                  'tasks',
-                  task.task_id,
-                  {
-                    message_range: {
-                      start_index: messageStartIndex,
-                      end_index: messageStartIndex + totalMessages - 1,
-                      start_timestamp: startTimestamp,
-                      end_timestamp: endTimestamp,
-                    },
-                  },
-                  'Task',
-                  params
-                );
-              } else {
-                // Safe to mark as completed
-
-                // Store raw SDK response - single source of truth for token accounting
-                // No 'tool' discriminator - use session.agentic_tool to determine SDK type
-                const rawSdkResponse: RawSdkResponse | undefined = result?.rawSdkResponse;
-
-                // Calculate tool_use_count from all messages in this task
-                let toolUseCount = 0;
-                try {
-                  const taskMessagesResult = (await messagesService.find({
-                    query: { task_id: task.task_id, $limit: 10000 },
-                  })) as Message[] | Paginated<Message>;
-                  const taskMessages: Message[] = isPaginated(taskMessagesResult)
-                    ? taskMessagesResult.data
-                    : taskMessagesResult;
-                  toolUseCount = taskMessages.reduce(
-                    (sum: number, msg: Message) => sum + (msg.tool_uses?.length || 0),
-                    0
-                  );
-                } catch (err) {
-                  console.warn(
-                    `⚠️  Failed to calculate tool_use_count for task ${task.task_id}:`,
-                    err
-                  );
-                  // Continue with toolUseCount = 0
-                }
-
-                // Capture git state at task end for transition tracking
-                let gitStateAtEnd = 'unknown';
-                if (session.worktree_id) {
-                  try {
-                    const worktree = await worktreesService.get(session.worktree_id, params);
-                    gitStateAtEnd = await getGitState(worktree.path);
-                  } catch (error) {
-                    console.warn(
-                      `Failed to get end git state for worktree ${session.worktree_id}:`,
-                      error
-                    );
-                  }
-                }
-
-                console.log(
-                  `📝 [Completion] Updating task ${task.task_id.substring(0, 8)} to COMPLETED...`
-                );
-                const updated = await safePatch(
-                  'tasks',
-                  task.task_id,
-                  {
-                    status: TaskStatus.COMPLETED,
-                    message_range: {
-                      start_index: messageStartIndex,
-                      end_index: messageStartIndex + totalMessages - 1,
-                      start_timestamp: startTimestamp,
-                      end_timestamp: endTimestamp,
-                    },
-                    tool_use_count: toolUseCount,
-                    // Save execution metadata from result
-                    duration_ms:
-                      'durationMs' in result
-                        ? (result.durationMs as number | undefined)
-                        : undefined,
-                    agent_session_id:
-                      'agentSessionId' in result
-                        ? (result.agentSessionId as string | undefined)
-                        : undefined,
-                    model: 'model' in result ? (result.model as string | undefined) : undefined,
-
-                    // Store raw SDK response - single source of truth
-                    raw_sdk_response: rawSdkResponse,
-
-                    // Compute and store context window (cumulative tokens)
-                    // Must be computed BEFORE patching so it's included in the same DB write
-                    // Pass rawSdkResponse directly - each tool handles it appropriately:
-                    // - Codex/Gemini: extract cumulative tokens from current response
-                    // - Claude Code: sum previous tasks + current task
-                    computed_context_window: await (async () => {
-                      try {
-                        if (!rawSdkResponse) return undefined;
-
-                        if (session.agentic_tool === 'claude-code') {
-                          // Claude Code: computeContextWindow handles everything (previous + current)
-                          const total =
-                            (await claudeTool.computeContextWindow?.(
-                              session.session_id,
-                              task.task_id,
-                              rawSdkResponse
-                            )) || 0;
-                          return total;
-                        }
-
-                        if (session.agentic_tool === 'codex') {
-                          // Codex: SDK provides cumulative tokens, just extract from response
-                          const total =
-                            (await codexTool.computeContextWindow?.(
-                              session.session_id,
-                              task.task_id,
-                              rawSdkResponse
-                            )) || 0;
-                          return total;
-                        }
-
-                        if (session.agentic_tool === 'gemini') {
-                          // Gemini: SDK provides cumulative tokens, just extract from response
-                          const total =
-                            (await geminiTool.computeContextWindow?.(
-                              session.session_id,
-                              task.task_id,
-                              rawSdkResponse
-                            )) || 0;
-                          return total;
-                        }
-
-                        return undefined;
-                      } catch (error) {
-                        console.error(
-                          `❌ Failed to compute context window for task ${task.task_id}:`,
-                          error
-                        );
-                        return undefined;
-                      }
-                    })(),
-
-                    // Git state transition tracking
-                    git_state: {
-                      ...task.git_state,
-                      sha_at_end: gitStateAtEnd,
-                    },
-                  },
-                  'Task',
-                  params
-                );
-
-                if (updated) {
-                  console.log(
-                    `✅ [Completion] Task ${task.task_id.substring(0, 8)} marked as COMPLETED`
-                  );
-                } else {
-                  console.warn(
-                    `⚠️  [Completion] Task ${task.task_id.substring(0, 8)} update returned false (may have been deleted)`
-                  );
-                }
-              }
-
-              // Token accounting is handled via raw_sdk_response and normalizers
-
-              console.log(
-                `📝 [Completion] Updating session ${id.substring(0, 8)} to IDLE with ready_for_prompt=true...`
-              );
-              const sessionUpdated = await safePatch(
-                'sessions',
-                id,
-                {
-                  message_count: session.message_count + totalMessages,
-                  status: SessionStatus.IDLE,
-                  ready_for_prompt: true, // Set atomically with status to avoid race condition
-                  // Token accounting handled via normalizeRawSdkResponse() - no session-level storage needed
-                },
-                'Session',
-                params
-              );
-
-              if (sessionUpdated) {
-                console.log(`✅ [Completion] Session ${id.substring(0, 8)} marked as IDLE`);
-              } else {
-                console.warn(
-                  `⚠️  [Completion] Session ${id.substring(0, 8)} update returned false (may have been deleted)`
-                );
-              }
-
-              // Check for queued messages and auto-process next one
-              // NOTE: Only process queue if task completed successfully
-              // If task failed, stop queue to prevent cascading failures
-              setImmediate(async () => {
-                try {
-                  // Check if the task completed successfully
-                  const completedTask = await tasksService.get(task.task_id, params);
-                  if (completedTask.status === TaskStatus.COMPLETED) {
-                    await processNextQueuedMessage(id as SessionID, params);
-                  } else {
-                    console.log(
-                      `⚠️  Task ${task.task_id.substring(0, 8)} failed - halting queue processing for session ${id.substring(0, 8)}`
-                    );
-                  }
-                } catch (error) {
-                  // Handle task deletion mid-execution (e.g., worktree deleted during execution)
-                  // This can happen when:
-                  // 1. User deletes worktree while session is running
-                  // 2. Database cascade: worktree → session → task (all deleted)
-                  // 3. Task completion tries to check status but task is gone
-                  if (error instanceof NotFoundError) {
-                    console.log(
-                      `⚠️  Task ${task.task_id.substring(0, 8)} was deleted mid-execution (likely worktree deleted) - skipping queue processing`
-                    );
-                    return;
-                  }
-                  console.error(`❌ Error processing queued message for session ${id}:`, error);
-                }
-              });
-            } catch (error) {
-              console.error(`❌ Error completing task ${task.task_id}:`, error);
-              // Try to mark task as failed (may also fail if deleted)
-              await safePatch('tasks', task.task_id, { status: TaskStatus.FAILED }, 'Task', params);
-            }
-          })
-          .catch(async (error) => {
-            console.error(`❌ Error executing prompt for task ${task.task_id}:`, error);
-
-            // Check if error might be due to stale/invalid Agent SDK resume session
-            // Only clear sdk_session_id if we're confident the session is stale, not just any error
-            const errorMessage =
-              error.message || (typeof error === 'string' ? error : JSON.stringify(error, null, 2));
-            const isExitCode1 = errorMessage.includes('Claude Code process exited with code 1');
-            const hasResumeSession = !!session.sdk_session_id;
-
-            // Check if this is specifically a stale Claude Code session error
-            const isStaleSession =
-              errorMessage.includes('No conversation found with session ID') ||
-              errorMessage.includes('session does not exist');
-
-            // Additional heuristics to detect config issues (vs stale session):
-            // - Error mentions missing directory/file (config issue)
-            // - Error mentions permission denied (permission issue)
-            // - Error mentions API key (auth issue)
-            const isLikelyConfigIssue =
-              (errorMessage.includes('does not exist') &&
-                !errorMessage.includes('conversation') &&
-                !errorMessage.includes('session')) ||
-              errorMessage.includes('not a directory') ||
-              errorMessage.includes('Permission denied') ||
-              errorMessage.includes('ENOENT') ||
-              errorMessage.includes('API key');
-
-            if (isStaleSession && hasResumeSession) {
-              // Explicit stale session error - clear and let user retry
-              console.warn(
-                `⚠️  Stale Claude Code session detected: ${session.sdk_session_id?.substring(0, 8)}`
-              );
-              console.warn(`   Clearing session ID - next prompt will start fresh`);
-
-              await safePatch('sessions', id, { sdk_session_id: undefined }, 'Session', params);
-            } else if (isExitCode1 && hasResumeSession && !isLikelyConfigIssue) {
-              // Generic exit code 1 with resume session (not explicitly stale)
-              console.warn(
-                `⚠️  Unexpected exit code 1 with resume session ${session.sdk_session_id?.substring(0, 8)}`
-              );
-              console.warn(
-                `   Session should have been validated before SDK call - clearing as safety measure`
-              );
-
-              await safePatch('sessions', id, { sdk_session_id: undefined }, 'Session', params);
-            } else if (isExitCode1 && hasResumeSession && isLikelyConfigIssue) {
-              console.error(`❌ Exit code 1 due to configuration issue:`);
-              console.error(`   ${errorMessage.substring(0, 200)}`);
-              console.error(`   NOT clearing resume session - fix the configuration issue above`);
-            } else if (isExitCode1 && !hasResumeSession) {
-              console.error(`❌ Exit code 1 on fresh session (no resume):`);
-              console.error(`   ${errorMessage.substring(0, 200)}`);
-              console.error(`   Check: CWD exists, Claude Code installed, API key valid`);
-            }
-
-            // Mark task as failed with error message and set session back to idle
-            await safePatch(
-              'tasks',
-              task.task_id,
-              {
-                status: TaskStatus.FAILED,
-                report: errorMessage, // Save error message so UI can display it
-              },
-              'Task',
-              params
-            );
-
-            await safePatch(
-              'sessions',
-              id,
-              {
-                status: SessionStatus.IDLE,
-                ready_for_prompt: true, // Set atomically with status to avoid race condition
-              },
-              'Session',
-              params
-            );
-          });
       });
 
       // Return immediately with task ID - don't wait for Claude to finish!
@@ -2413,34 +2283,39 @@ async function main() {
         }
       }
 
-      // PHASE 2: Route to appropriate tool based on session agent and call stopTask
-      let result: {
-        success: boolean;
-        partialResult?: Partial<{ taskId: string; status: 'completed' | 'failed' | 'cancelled' }>;
-        reason?: string;
-      };
+      // PHASE 2: Call stopTask handler (for both legacy IPC and new Feathers/WebSocket modes)
+      let result: { success: boolean; reason?: string; message?: string };
 
-      if (session.agentic_tool === 'codex') {
-        result = (await codexTool.stopTask?.(id)) || {
-          success: false,
-          reason: 'stopTask not implemented',
-        };
-      } else if (session.agentic_tool === 'gemini') {
-        result = (await geminiTool.stopTask?.(id)) || {
-          success: false,
-          reason: 'stopTask not implemented',
-        };
-      } else if (session.agentic_tool === 'opencode') {
-        // OpenCode doesn't support stopTask
+      if (runningTasksArray.length > 0) {
+        const latestTask = runningTasksArray[runningTasksArray.length - 1];
+
+        try {
+          // Call the stopTask handler (works for both IPC and WebSocket modes)
+          const stopResult = await sessionsService.stopTask(
+            id,
+            {
+              taskId: latestTask.task_id,
+            },
+            params
+          );
+
+          result = {
+            success: stopResult.success,
+            message: stopResult.message,
+          };
+
+          console.log(`🛑 Stop task result: ${stopResult.message}`);
+        } catch (error) {
+          console.error(`Failed to call stopTask:`, error);
+          result = {
+            success: false,
+            reason: `Failed to stop task: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          };
+        }
+      } else {
         result = {
           success: false,
-          reason: 'stopTask not implemented for OpenCode',
-        };
-      } else {
-        // Claude Code (default)
-        result = (await claudeTool.stopTask?.(id)) || {
-          success: false,
-          reason: 'stopTask not implemented',
+          reason: 'No running tasks found',
         };
       }
 
@@ -2643,8 +2518,50 @@ async function main() {
       if (!data.requestId) throw new Error('requestId required');
       if (typeof data.allow !== 'boolean') throw new Error('allow field required');
 
-      // Resolve the pending permission request
+      // Find the permission request message
+      const messagesService = app.service('messages');
+      const messages = await messagesService.find({
+        query: {
+          session_id: id,
+          type: 'permission_request',
+          $limit: 100, // Get recent permission requests
+        },
+      });
+
+      const messageList = isPaginated(messages) ? messages.data : messages;
+      const permissionMessage = messageList.find((msg: Message) => {
+        const content = msg.content as unknown as Record<string, unknown>;
+        return content?.request_id === data.requestId;
+      });
+
+      if (!permissionMessage) {
+        throw new Error(`Permission request ${data.requestId} not found`);
+      }
+
+      // Update the message to mark it as approved/denied
+      // This triggers the messages.patch hook which notifies the executor via IPC (legacy mode)
+      await messagesService.patch(permissionMessage.message_id, {
+        content: {
+          ...(permissionMessage.content as object),
+          status: data.allow ? 'approved' : 'denied',
+          scope: data.scope,
+          approved_by: data.decidedBy,
+          approved_at: new Date().toISOString(),
+        },
+      });
+
+      // Also resolve the in-memory permission request (for direct tool execution)
       permissionService.resolvePermission(data);
+
+      // Emit permission_resolved event for Feathers/WebSocket executor architecture
+      const content = permissionMessage.content as unknown as Record<string, unknown>;
+      app.service('messages').emit('permission_resolved', {
+        request_id: data.requestId,
+        task_id: content.task_id,
+        session_id: id,
+        approved: data.allow,
+        scope: data.scope,
+      });
 
       return { success: true };
     },

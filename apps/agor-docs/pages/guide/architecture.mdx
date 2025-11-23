@@ -9,6 +9,10 @@ Agor is a **multi-client agent orchestration platform** with real-time collabora
 
 ## System Architecture
 
+### Current Architecture (Executor Isolation)
+
+Agor uses the **Executor Isolation** model, which separates privileged daemon operations from untrusted SDK/CLI execution contexts for enhanced security. The executor runs as a specialized subprocess that communicates with the daemon via session token authentication.
+
 ```mermaid
 graph TB
     subgraph Clients
@@ -18,18 +22,36 @@ graph TB
 
     Client["<b>Feathers Client</b><br/>REST + WebSocket"]
 
-    subgraph "Agor Daemon"
+    subgraph "Agor Daemon (Trusted Zone)"
         Feathers["<b>FeathersJS Server</b>"]
         MCP["<b>MCP HTTP Endpoint</b><br/>POST /mcp?sessionToken=..."]
         Services["<b>Services</b><br/>Sessions, Tasks, Messages<br/>Boards, Worktrees, Repos<br/>Users, MCP, Context, Health"]
-        AgentSDKs["<b>Agent SDKs</b><br/>Claude, Codex, Gemini"]
+        ExecutorPool["<b>Executor Pool</b><br/>Spawn & manage executors"]
+        IPCService["<b>IPC Service</b><br/>Unix socket server"]
         ORM["<b>Drizzle ORM</b><br/>Type-safe queries"]
     end
 
+    subgraph "Executor Processes (Sandboxed)"
+        Executor1["<b>Executor (agor_alice)</b><br/>Unix user: agor_alice"]
+        Executor2["<b>Executor (agor_bob)</b><br/>Unix user: agor_bob"]
+
+        subgraph "Executor1 Scope"
+            SDK1["<b>Agent SDK</b><br/>Claude/Codex/Gemini"]
+            Terminal1["<b>Terminal (PTY)</b><br/>bash/zsh"]
+            MCPServers1["<b>MCP Servers</b><br/>Child processes"]
+        end
+
+        subgraph "Executor2 Scope"
+            SDK2["<b>Agent SDK</b><br/>Claude/Codex/Gemini"]
+            Terminal2["<b>Terminal (PTY)</b><br/>bash/zsh"]
+            MCPServers2["<b>MCP Servers</b><br/>Child processes"]
+        end
+    end
+
     subgraph Storage
-        DB[("<b>LibSQL Database</b><br/>~/.agor/agor.db")]
+        DB[("<b>LibSQL Database</b><br/>~/.agor/agor.db<br/>🔒 Daemon access only")]
         Git["<b>Git Worktrees</b><br/>~/.agor/worktrees/"]
-        Config["<b>Config</b><br/>~/.agor/config.yaml"]
+        Config["<b>Config</b><br/>~/.agor/config.yaml<br/>🔒 Daemon access only"]
     end
 
     CLI --> Client
@@ -40,13 +62,69 @@ graph TB
     Feathers --> MCP
     MCP --> Services
     Services --> ORM
-    Services --> AgentSDKs
-    AgentSDKs -.->|JSON-RPC 2.0| MCP
+    Services --> ExecutorPool
+
+    ExecutorPool -.->|"spawn (sudo -u)"| Executor1
+    ExecutorPool -.->|"spawn (sudo -u)"| Executor2
+
+    IPCService <-->|"JSON-RPC 2.0<br/>Unix Socket"| Executor1
+    IPCService <-->|"JSON-RPC 2.0<br/>Unix Socket"| Executor2
+
+    Executor1 --> SDK1
+    Executor1 --> Terminal1
+    Executor1 --> MCPServers1
+
+    Executor2 --> SDK2
+    Executor2 --> Terminal2
+    Executor2 --> MCPServers2
 
     ORM --> DB
     Services --> Git
     Services --> Config
+
+    SDK1 -.->|"request API key<br/>(just-in-time)"| IPCService
+    SDK2 -.->|"request API key<br/>(just-in-time)"| IPCService
+
+    style Executor1 fill:#fff4e6
+    style Executor2 fill:#fff4e6
+    style DB fill:#ffe6e6
+    style Config fill:#ffe6e6
 ```
+
+**Key Security Improvements:**
+
+- **Process Separation** - Executors run as separate processes with different Unix users
+- **Session Token Authentication** - Executors authenticate with daemon using opaque UUID tokens (not JWTs), validated by custom Feathers strategy
+- **Feathers Client Communication** - Executors use authenticated Feathers client for all database/service operations (no direct database access)
+- **No Database Access** - Executors never receive database credentials or direct database connections
+- **Just-in-Time API Keys** - Executors request API keys per-call via IPC (not in environment)
+- **Unix User Isolation** - Each executor runs as `agor_alice`, `agor_bob`, etc. (file permission boundaries)
+- **IPC Audit Trail** - All daemon↔executor communication logged
+- **Credential Isolation** - SSH keys, GitHub tokens isolated by Unix user (`~/.ssh/` ownership)
+
+**Implementation Details:**
+
+- All Agent SDKs (Claude, Codex, Gemini) run exclusively in executor processes
+- Executor uses `@agor/core/api` Feathers client with session token authentication
+- Custom `SessionTokenStrategy` in daemon validates tokens via `SessionTokenService`
+- Session tokens are opaque UUIDs (not JWTs) with 24-hour expiration
+- IPC communication via Unix sockets using JSON-RPC 2.0 protocol
+- Daemon routes all SDK operations through ExecutorPool service
+
+For detailed design documentation, see `context/explorations/executor-isolation.md`.
+
+### Legacy Architecture (Unified Process Model)
+
+Prior to executor isolation, Agor ran all SDK operations directly within the daemon process. This simplified architecture had Agent SDKs as direct dependencies of the daemon, with tools executing in the same process as database operations and service logic.
+
+**Why we moved away:**
+
+- Security concerns with untrusted SDK code having database access
+- Difficulty isolating credentials and API keys
+- No process-level separation between trusted daemon and untrusted execution
+- All sessions shared the same execution environment
+
+The unified model is no longer used in current Agor releases.
 
 ## Technology Stack
 
@@ -372,11 +450,21 @@ Every session requires a worktree (foreign key constraint):
 
 ## Authentication
 
-Three authentication strategies:
+Four authentication strategies:
 
 1. **Anonymous** (default) - No auth required for local development
-2. **Local** (email/password) - JWT-based authentication
-3. **JWT** - Token refresh and validation
+2. **Local** (email/password) - JWT-based authentication for user login
+3. **JWT** - Token refresh and validation for user sessions
+4. **Session Token** - Opaque UUID tokens for executor-to-daemon authentication
+
+**Session Token Strategy Details:**
+
+- Used exclusively by executor processes to authenticate with daemon
+- Tokens are opaque UUIDs (not JWTs) generated by `SessionTokenService`
+- 24-hour expiration with automatic cleanup
+- Validated via custom `SessionTokenStrategy` in FeathersJS authentication
+- Scoped to the user who created the session
+- Never exposed to untrusted execution contexts
 
 All strategies use FeathersJS authentication with configurable storage.
 

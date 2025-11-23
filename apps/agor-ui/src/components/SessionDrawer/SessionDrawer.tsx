@@ -13,7 +13,8 @@ import type {
   Worktree,
 } from '@agor/core/types';
 import { SessionStatus, TaskStatus } from '@agor/core/types';
-import { normalizeRawSdkResponse } from '@agor/core/utils/sdk-normalizer';
+// TODO: Move normalization to DB or daemon API
+// import { normalizeRawSdkResponse } from '@agor/core/utils/sdk-normalizer';
 import {
   ApiOutlined,
   BranchesOutlined,
@@ -261,20 +262,20 @@ const SessionDrawer = ({
       return { total: 0, input: 0, output: 0, cacheRead: 0, cacheCreation: 0, cost: 0 };
     }
 
+    // Aggregate token usage from normalized_sdk_response (computed by executor, stored in DB)
     return tasks.reduce(
       (acc, task) => {
-        if (!task.raw_sdk_response) return acc;
+        if (!task.normalized_sdk_response) return acc;
 
-        // Normalize SDK response to get consistent token counts
-        const normalized = normalizeRawSdkResponse(task.raw_sdk_response, session.agentic_tool);
+        const { tokenUsage, costUsd } = task.normalized_sdk_response;
 
         return {
-          total: acc.total + normalized.tokenUsage.totalTokens,
-          input: acc.input + normalized.tokenUsage.inputTokens,
-          output: acc.output + normalized.tokenUsage.outputTokens,
-          cacheRead: acc.cacheRead + normalized.tokenUsage.cacheReadTokens,
-          cacheCreation: acc.cacheCreation + normalized.tokenUsage.cacheCreationTokens,
-          cost: acc.cost + (normalized.costUsd || 0),
+          total: acc.total + tokenUsage.totalTokens,
+          input: acc.input + tokenUsage.inputTokens,
+          output: acc.output + tokenUsage.outputTokens,
+          cacheRead: acc.cacheRead + (tokenUsage.cacheReadTokens || 0),
+          cacheCreation: acc.cacheCreation + (tokenUsage.cacheCreationTokens || 0),
+          cost: acc.cost + (costUsd || 0),
         };
       },
       { total: 0, input: 0, output: 0, cacheRead: 0, cacheCreation: 0, cost: 0 }
@@ -288,15 +289,15 @@ const SessionDrawer = ({
     // Find most recent task with computed context window
     for (let i = tasks.length - 1; i >= 0; i--) {
       const task = tasks[i];
-      if (task.computed_context_window !== undefined && task.raw_sdk_response) {
-        // Get context window limit from normalizer
-        const normalized = normalizeRawSdkResponse(task.raw_sdk_response, session.agentic_tool);
+      if (task.computed_context_window !== undefined && task.normalized_sdk_response) {
+        // Get context window limit from normalized SDK response
+        const { contextWindowLimit } = task.normalized_sdk_response;
 
         // Show pill even without limit (will display as "?")
         if (task.computed_context_window > 0) {
           return {
             used: task.computed_context_window, // Use stored computed value
-            limit: normalized.contextWindowLimit || 0, // Allow 0 limit
+            limit: contextWindowLimit || 0, // Allow 0 limit
             taskMetadata: {
               model: task.model,
               duration_ms: task.duration_ms,

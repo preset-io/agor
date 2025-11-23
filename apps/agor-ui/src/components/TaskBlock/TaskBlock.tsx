@@ -23,7 +23,8 @@ import {
   TaskStatus,
   type User,
 } from '@agor/core/types';
-import { normalizeRawSdkResponse } from '@agor/core/utils/sdk-normalizer';
+// TODO: Move normalization to DB or daemon API
+// import { normalizeRawSdkResponse } from '@agor/core/utils/sdk-normalizer';
 import {
   DownOutlined,
   FileTextOutlined,
@@ -391,12 +392,8 @@ export const TaskBlock = React.memo<TaskBlockProps>(
         ? task.tool_use_count
         : messages.reduce((sum, msg) => sum + (msg.tool_uses?.length || 0), 0);
 
-    // Normalize raw SDK response to get computed values
-    const sdkResponse = task.raw_sdk_response;
-    const normalized =
-      sdkResponse && agentic_tool
-        ? normalizeRawSdkResponse(sdkResponse, agentic_tool as AgenticToolName)
-        : null;
+    // Get normalized SDK response (computed by executor, stored in DB)
+    const normalized = task.normalized_sdk_response || null;
 
     // Use computed context window from database (already summed across tasks since last compaction)
     // If undefined, it means the backend computation failed or hasn't run yet

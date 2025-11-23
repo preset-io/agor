@@ -1,7 +1,6 @@
 // src/types/task.ts
 import type { SessionID, TaskID } from './id';
 import type { ReportPath, ReportTemplate } from './report';
-import type { RawSdkResponse } from './sdk-response';
 
 export const TaskStatus = {
   CREATED: 'created',
@@ -63,7 +62,22 @@ export interface Task {
   // Stores the unmutated SDK event (turn.completed for Codex, Finished for Gemini, etc.)
   // Access token usage, context window, costs, etc. via normalizers
   // Optional to support legacy tasks that don't have this field
-  raw_sdk_response?: RawSdkResponse;
+  raw_sdk_response?: unknown; // Raw SDK response stored as JSON
+
+  // Normalized SDK response - computed from raw_sdk_response by executor
+  // Stored here so UI doesn't need SDK-specific normalization logic
+  // Will be empty for legacy tasks (pre-normalization)
+  normalized_sdk_response?: {
+    tokenUsage: {
+      inputTokens: number;
+      outputTokens: number;
+      totalTokens: number;
+      cacheReadTokens?: number; // Claude-specific: prompt caching reads
+      cacheCreationTokens?: number; // Claude-specific: prompt caching writes
+    };
+    contextWindowLimit?: number; // Model's max context window (e.g., 200k for Claude)
+    costUsd?: number; // Estimated cost in USD (if pricing available)
+  };
 
   // Computed context window - cumulative token usage for this session
   // Calculated by tool.computeContextWindow() and stored for efficient access

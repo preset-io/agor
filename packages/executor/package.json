@@ -1,0 +1,37 @@
+{
+  "name": "@agor/executor",
+  "version": "0.1.0",
+  "description": "Agor executor process - isolated execution environment",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "agor-executor": "./bin/agor-executor"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest"
+  },
+  "dependencies": {
+    "@agor/core": "workspace:*",
+    "@anthropic-ai/claude-agent-sdk": "^0.1.47",
+    "@feathersjs/authentication-client": "^5.0.37",
+    "@feathersjs/feathers": "^5.0.37",
+    "@google/gemini-cli-core": "^0.15.1",
+    "@google/genai": "^1.26.0",
+    "@homebridge/node-pty-prebuilt-multiarch": "^0.11.0",
+    "@iarna/toml": "^2.2.5",
+    "@openai/codex-sdk": "^0.63.0",
+    "@opencode-ai/sdk": "^1.0.65"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^1.0.0"
+  },
+  "files": [
+    "dist",
+    "bin"
+  ]
+}

@@ -58,6 +58,51 @@ export interface SessionsServiceImpl extends Service<Session, Partial<Session>, 
     ) => Promise<void>
   ): void;
   triggerQueueProcessing(id: string, params?: FeathersParams): Promise<void>;
+  // Feathers/WebSocket executor architecture handlers
+  setExecuteHandler(
+    handler: (
+      sessionId: string,
+      data: {
+        taskId: string;
+        prompt: string;
+        permissionMode?: import('@agor/core/types').PermissionMode;
+        stream?: boolean;
+      },
+      params?: FeathersParams
+    ) => Promise<{
+      success: boolean;
+      taskId: string;
+      status: string;
+      streaming: boolean;
+    }>
+  ): void;
+  executeTask(
+    id: string,
+    data: {
+      taskId: string;
+      prompt: string;
+      permissionMode?: import('@agor/core/types').PermissionMode;
+      stream?: boolean;
+    },
+    params?: FeathersParams
+  ): Promise<{
+    success: boolean;
+    taskId: string;
+    status: string;
+    streaming: boolean;
+  }>;
+  setStopHandler(
+    handler: (
+      sessionId: string,
+      data: { taskId: string },
+      params?: FeathersParams
+    ) => Promise<{ success: boolean; message: string }>
+  ): void;
+  stopTask(
+    id: string,
+    data: { taskId: string },
+    params?: FeathersParams
+  ): Promise<{ success: boolean; message: string }>;
   // Event emitter methods (FeathersJS EventEmitter interface - any[] for event args flexibility)
   // biome-ignore lint/suspicious/noExplicitAny: FeathersJS event handlers accept variable arguments
   on(event: string, handler: (...args: any[]) => void): this;

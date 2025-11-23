@@ -44,6 +44,30 @@ sudo chown -R agor:agor /home/agor/.agor
 echo "📦 Initializing Agor environment..."
 pnpm agor init --skip-if-exists --set-config --daemon-port "${DAEMON_PORT:-3030}" --daemon-host localhost
 
+# Configure executor isolation if enabled
+if [ "$AGOR_USE_EXECUTOR" = "true" ]; then
+  echo "🔒 Enabling executor isolation mode..."
+  echo "   User: ${AGOR_EXECUTOR_USERNAME:-agor_executor}"
+  echo "   Impersonation: ${AGOR_EXECUTOR_IMPERSONATION:-sudo}"
+
+  # Remove old executor config if it exists (in case field names changed)
+  if grep -q "^execution:" /home/agor/.agor/config.yaml 2>/dev/null; then
+    echo "   Removing old executor config..."
+    sed -i '/^execution:/,/^[a-z_]*:/{ /^execution:/d; /^  /d; }' /home/agor/.agor/config.yaml
+  fi
+
+  # Add executor config to ~/.agor/config.yaml
+  cat >> /home/agor/.agor/config.yaml <<EOF
+execution:
+  use_executor: true
+  run_as_unix_user: true
+  executor_unix_user: ${AGOR_EXECUTOR_USERNAME:-agor_executor}
+  session_token_expiration_ms: 86400000
+  session_token_max_uses: -1
+EOF
+  echo "✅ Executor isolation configured"
+fi
+
 # Always create/update admin user (safe: only upserts)
 echo "👤 Ensuring default admin user exists..."
 pnpm --filter @agor/cli exec tsx bin/dev.ts user create-admin --force

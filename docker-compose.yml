@@ -19,8 +19,12 @@
 # PostgreSQL (optional - for multi-user or production-like setup):
 #   docker compose --profile postgres up
 #
+# Executor isolation (test process-level security):
+#   AGOR_USE_EXECUTOR=true docker compose up
+#
 # Or set in .env file:
 #   COMPOSE_PROFILES=postgres
+#   AGOR_USE_EXECUTOR=true
 #   docker compose up
 #
 # ==============================================================================
@@ -59,11 +63,16 @@
 #   cp .env.example .env
 #
 # Key environment variables:
-#   AGOR_DB_DIALECT      - 'sqlite' (default) or 'postgresql'
-#   DATABASE_URL         - Full PostgreSQL connection URL (when using PostgreSQL)
-#   POSTGRES_DB          - Database name (default: agor)
-#   POSTGRES_USER        - Database user (default: agor)
-#   POSTGRES_PASSWORD    - Database password (default: agor_dev_secret)
+#   AGOR_DB_DIALECT              - 'sqlite' (default) or 'postgresql'
+#   DATABASE_URL                 - Full PostgreSQL connection URL (when using PostgreSQL)
+#   POSTGRES_DB                  - Database name (default: agor)
+#   POSTGRES_USER                - Database user (default: agor)
+#   POSTGRES_PASSWORD            - Database password (default: agor_dev_secret)
+#
+# Executor isolation (security feature):
+#   AGOR_USE_EXECUTOR            - Enable executor isolation (default: false)
+#   AGOR_EXECUTOR_IMPERSONATION  - Impersonation mode: 'sudo' or 'disabled' (default: sudo)
+#   AGOR_EXECUTOR_USERNAME       - Unix user for executors (default: agor_executor)
 #
 # ==============================================================================
 
@@ -105,6 +114,12 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+
+      # Executor isolation mode (set AGOR_USE_EXECUTOR=true to enable)
+      # When enabled, SDK execution runs in isolated subprocess as agor_executor user
+      - AGOR_USE_EXECUTOR=${AGOR_USE_EXECUTOR:-false}
+      - AGOR_EXECUTOR_IMPERSONATION=${AGOR_EXECUTOR_IMPERSONATION:-sudo}
+      - AGOR_EXECUTOR_USERNAME=${AGOR_EXECUTOR_USERNAME:-agor_executor}
     depends_on:
       postgres:
         condition: service_healthy

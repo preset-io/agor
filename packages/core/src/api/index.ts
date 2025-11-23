@@ -390,3 +390,10 @@ export async function isDaemonRunning(url: string = DEFAULT_DAEMON_URL): Promise
     return false;
   }
 }
+
+/**
+ * Re-export Feathers authentication client for use in executor
+ * This allows the executor to import authentication client through @agor/core
+ * instead of having it as a direct dependency
+ */
+export { default as authenticationClient } from '@feathersjs/authentication-client';

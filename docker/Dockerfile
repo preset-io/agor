@@ -37,14 +37,21 @@ RUN npm install -g \
   @google/gemini-cli@0.15.1 \
   @openai/codex@0.58.0
 
-# Create non-root 'agor' user
+# Create non-root 'agor' user (main application user)
 RUN useradd -m -s /bin/bash agor && \
-    # Grant passwordless sudo for fixing volume permissions
+    # Grant passwordless sudo for fixing volume permissions and executor spawning
     echo "agor ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/agor && \
     chmod 0440 /etc/sudoers.d/agor && \
     # Create .agor directory for database and config (will be mounted as volume)
     mkdir -p /home/agor/.agor && \
     chown -R agor:agor /home/agor
+
+# Create 'agor_executor' user (unprivileged user for isolated SDK execution)
+# This user has no sudo privileges and limited permissions
+RUN useradd -m -s /bin/bash agor_executor && \
+    # Create home directory with restricted permissions
+    mkdir -p /home/agor_executor/.agor && \
+    chown -R agor_executor:agor_executor /home/agor_executor
 
 # Set working directory
 WORKDIR /app
