@@ -65,9 +65,18 @@ sudo chown -R agor:agor /home/agor/.agor
 echo "📦 Initializing Agor environment..."
 pnpm agor init --skip-if-exists --set-config --daemon-port "${DAEMON_PORT:-3030}" --daemon-host localhost
 
-# Note: Executor isolation config (AGOR_USE_EXECUTOR) was removed as the
-# Unix socket IPC mode was never implemented. Agor always uses direct subprocess
-# execution for SDK handlers.
+# Configure executor Unix user isolation if enabled
+if [ "$AGOR_USE_EXECUTOR" = "true" ]; then
+  echo "🔒 Enabling executor Unix user isolation..."
+  echo "   Executor will run as: ${AGOR_EXECUTOR_USERNAME:-agor_executor}"
+
+  # Add executor config to ~/.agor/config.yaml
+  cat >> /home/agor/.agor/config.yaml <<EOF
+execution:
+  executor_unix_user: ${AGOR_EXECUTOR_USERNAME:-agor_executor}
+EOF
+  echo "✅ Executor Unix user configured"
+fi
 
 # Always create/update admin user (safe: only upserts)
 echo "👤 Ensuring default admin user exists..."

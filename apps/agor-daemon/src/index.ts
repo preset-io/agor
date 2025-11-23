@@ -786,37 +786,58 @@ async function main() {
 
     const daemonUrl = `http://localhost:${DAEMON_PORT}`;
 
-    const executorProcess = spawn(
-      'node',
-      [
-        executorPath,
-        '--session-token',
-        sessionToken,
-        '--session-id',
-        sessionId,
-        '--task-id',
-        taskId,
-        '--prompt',
-        data.prompt,
-        '--tool',
-        session.agentic_tool,
-        '--permission-mode',
-        data.permissionMode || 'default',
-        '--daemon-url',
-        daemonUrl,
-      ],
-      {
-        cwd,
-        env: {
-          ...process.env,
-          // Executor handles API key resolution with proper precedence:
-          // 1. Per-user encrypted keys (database)
-          // 2. Global config.yaml keys
-          // 3. Environment variables (inherited from process.env above)
-        },
-        stdio: ['ignore', 'pipe', 'pipe'], // Capture stdout/stderr
-      }
-    );
+    // Build spawn command with optional Unix user impersonation
+    const executorUnixUser = config.execution?.executor_unix_user;
+    const nodeArgs = [
+      executorPath,
+      '--session-token',
+      sessionToken,
+      '--session-id',
+      sessionId,
+      '--task-id',
+      taskId,
+      '--prompt',
+      data.prompt,
+      '--tool',
+      session.agentic_tool,
+      '--permission-mode',
+      data.permissionMode || 'default',
+      '--daemon-url',
+      daemonUrl,
+    ];
+
+    let spawnCommand: string;
+    let spawnArgs: string[];
+
+    if (executorUnixUser) {
+      // Run as different Unix user via sudo
+      spawnCommand = 'sudo';
+      spawnArgs = [
+        '-n', // Non-interactive (fail if password required)
+        '-u',
+        executorUnixUser,
+        'node',
+        ...nodeArgs,
+      ];
+      console.log(`[Daemon] Spawning executor as Unix user: ${executorUnixUser}`);
+    } else {
+      // Run as current user
+      spawnCommand = 'node';
+      spawnArgs = nodeArgs;
+      console.log(`[Daemon] Spawning executor as current user (no impersonation)`);
+    }
+
+    const executorProcess = spawn(spawnCommand, spawnArgs, {
+      cwd,
+      env: {
+        ...process.env,
+        // Executor handles API key resolution with proper precedence:
+        // 1. Per-user encrypted keys (database)
+        // 2. Global config.yaml keys
+        // 3. Environment variables (inherited from process.env above)
+      },
+      stdio: ['ignore', 'pipe', 'pipe'], // Capture stdout/stderr
+    });
 
     // Log executor output
     executorProcess.stdout?.on('data', (data) => {
