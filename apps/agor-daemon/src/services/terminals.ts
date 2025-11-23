@@ -12,16 +12,18 @@
  * - Persistent sessions via tmux
  */
 
-import { type ChildProcess, execSync, spawn } from 'node:child_process';
+import { execSync } from 'node:child_process';
 import os from 'node:os';
 import { resolveUserEnvironment } from '@agor/core/config';
 import { type Database, WorktreeRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { AuthenticatedParams, UserID, WorktreeID } from '@agor/core/types';
+import type { IPty } from '@homebridge/node-pty-prebuilt-multiarch';
+import * as pty from '@homebridge/node-pty-prebuilt-multiarch';
 
 interface TerminalSession {
   terminalId: string;
-  process: ChildProcess;
+  pty: IPty;
   shell: string;
   cwd: string;
   userId?: UserID; // User context for env resolution
@@ -322,6 +324,10 @@ export class TerminalsService {
       env = { ...env, ...userEnv };
     }
 
+    // Strip TMUX env vars to prevent nested sessions
+    delete env.TMUX;
+    delete env.TMUX_PANE;
+
     // Ensure terminal capabilities advertised to downstream processes
     if (!env.TERM) {
       env.TERM = 'xterm-256color';
@@ -348,17 +354,19 @@ export class TerminalsService {
       env.LC_CTYPE = env.LANG;
     }
 
-    // Spawn tmux process with stdio: 'pipe' to capture output
-    const tmuxProcess = spawn('tmux', shellArgs, {
+    // Spawn PTY process with tmux (ALWAYS uses tmux now)
+    const ptyProcess = pty.spawn('tmux', shellArgs, {
+      name: 'xterm-256color',
+      cols: data.cols || 80,
+      rows: data.rows || 30,
       cwd,
       env,
-      stdio: ['pipe', 'pipe', 'pipe'],
     });
 
     // Store session
     this.sessions.set(terminalId, {
       terminalId,
-      process: tmuxProcess,
+      pty: ptyProcess,
       shell: 'tmux',
       cwd,
       userId: resolvedUserId,
@@ -367,29 +375,21 @@ export class TerminalsService {
       createdAt: new Date(),
     });
 
-    // Handle stdout - broadcast to WebSocket clients
-    tmuxProcess.stdout?.on('data', (chunk: Buffer) => {
+    // Handle PTY output - broadcast to WebSocket clients
+    ptyProcess.onData((data) => {
       this.app.service('terminals').emit('data', {
         terminalId,
-        data: chunk.toString('utf-8'),
+        data,
       });
     });
 
-    // Handle stderr - broadcast to WebSocket clients
-    tmuxProcess.stderr?.on('data', (chunk: Buffer) => {
-      this.app.service('terminals').emit('data', {
-        terminalId,
-        data: chunk.toString('utf-8'),
-      });
-    });
-
-    // Handle process exit
-    tmuxProcess.on('exit', (code) => {
-      console.log(`Terminal ${terminalId} exited with code ${code}`);
+    // Handle PTY exit
+    ptyProcess.onExit(({ exitCode }) => {
+      console.log(`Terminal ${terminalId} exited with code ${exitCode}`);
       this.sessions.delete(terminalId);
       this.app.service('terminals').emit('exit', {
         terminalId,
-        exitCode: code ?? 0,
+        exitCode,
       });
     });
 
@@ -433,19 +433,12 @@ export class TerminalsService {
     }
 
     if (data.input !== undefined) {
-      session.process.stdin?.write(data.input);
+      session.pty.write(data.input);
     }
 
     if (data.resize) {
-      // Send resize command to tmux
-      try {
-        execSync(
-          `tmux resize-window -t ${session.tmuxSession} -x ${data.resize.cols} -y ${data.resize.rows}`,
-          { stdio: 'pipe' }
-        );
-      } catch (error) {
-        console.warn(`Failed to resize tmux window: ${error}`);
-      }
+      // Use PTY resize method (non-blocking)
+      session.pty.resize(data.resize.cols, data.resize.rows);
     }
   }
 
@@ -458,7 +451,7 @@ export class TerminalsService {
       throw new Error(`Terminal ${id} not found`);
     }
 
-    session.process.kill();
+    session.pty.kill();
     this.sessions.delete(id);
 
     return { terminalId: id };
@@ -469,7 +462,7 @@ export class TerminalsService {
    */
   cleanup(): void {
     for (const session of this.sessions.values()) {
-      session.process.kill();
+      session.pty.kill();
     }
     this.sessions.clear();
   }

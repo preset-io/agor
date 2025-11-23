@@ -53,7 +53,7 @@
 ### Requirements
 
 - **Node.js** 20.x
-- **tmux** (required for terminal management)
+- **tmux** ≥ 2.6 (required - daemon will not start without it)
 
 Install tmux:
 
@@ -73,6 +73,8 @@ sudo yum install tmux
 ```bash
 npm install -g agor-live
 ```
+
+**Note:** Agor requires tmux for persistent terminal sessions. The daemon will fail to start with a helpful error message if tmux is not installed.
 
 ## Quick Start
 
