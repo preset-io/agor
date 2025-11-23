@@ -4,7 +4,7 @@
  * Executes prompts using Google Gemini SDK with Feathers client connection to daemon
  */
 
-import type { PermissionMode, SessionID, TaskID } from '@agor/core/types';
+import type { MessageID, PermissionMode, SessionID, TaskID } from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import type { ExecutorIPCServer } from '../../ipc-server.js';
 import { GeminiTool } from '../../sdk-handlers/gemini/index.js';
@@ -63,15 +63,15 @@ export async function executeGeminiSDK(
           data: { session_id: string; task_id?: string; role: string; timestamp: string }
         ) => {
           await daemonClient.streamStart({
-            message_id: message_id as any,
-            session_id: data.session_id as any,
-            task_id: data.task_id as any,
-            role: data.role as any,
+            message_id: message_id as MessageID,
+            session_id: data.session_id as SessionID,
+            task_id: data.task_id as TaskID | undefined,
+            role: data.role,
             timestamp: data.timestamp,
           });
         },
         onStreamChunk: async (message_id: string, text: string) => {
-          await daemonClient.streamChunk({ message_id: message_id as any, text });
+          await daemonClient.streamChunk({ message_id: message_id as MessageID, text });
         },
         onStreamEnd: async (message_id: string) => {
           console.log(`[gemini] Stream ended: ${message_id}`);

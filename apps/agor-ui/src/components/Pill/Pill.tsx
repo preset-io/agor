@@ -1,4 +1,4 @@
-import type { AgenticToolName, SessionStatus, TaskStatus } from '@agor/core/types';
+import type { SessionStatus, TaskStatus } from '@agor/core/types';
 // TODO: Move normalization to DB or daemon API
 // import { normalizeRawSdkResponse } from '@agor/core/utils/sdk-normalizer';
 import {

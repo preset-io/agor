@@ -171,9 +171,9 @@ export function createFeathersBackedRepositories(client: AgorClient) {
     sessionMCP: new FeathersSessionMCPServersRepository(client),
 
     // Services (direct Feathers service access)
-    // Cast to 'any' to allow SDK handlers to use their own interface definitions
-    messagesService: client.service('messages') as any,
-    tasksService: client.service('tasks') as any,
-    sessionsService: client.service('sessions') as any,
+    // SDK handlers can use these services directly with proper typing
+    messagesService: client.service('messages'),
+    tasksService: client.service('tasks'),
+    sessionsService: client.service('sessions'),
   };
 }

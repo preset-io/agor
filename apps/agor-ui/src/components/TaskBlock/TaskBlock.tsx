@@ -11,7 +11,6 @@
 
 import type { AgorClient } from '@agor/core/api';
 import {
-  type AgenticToolName,
   type Message,
   type MessageID,
   MessageRole,
