@@ -2,8 +2,8 @@ import type { AgorClient } from '@agor/core/api';
 import type { Worktree } from '@agor/core/types';
 import { ReloadOutlined } from '@ant-design/icons';
 import Ansi from 'ansi-to-react';
-import { Alert, Button, Modal, Space, Typography, theme } from 'antd';
-import { useCallback, useEffect, useState } from 'react';
+import { Alert, Button, Checkbox, Modal, Space, Typography, theme } from 'antd';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 const { Text } = Typography;
 
@@ -30,29 +30,48 @@ export const EnvironmentLogsModal: React.FC<EnvironmentLogsModalProps> = ({
   const { token } = theme.useToken();
   const [logs, setLogs] = useState<LogsResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const logsContainerRef = useRef<HTMLDivElement>(null);
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  const fetchLogs = useCallback(async () => {
-    if (!client) return;
+  const fetchLogs = useCallback(
+    async (shouldAutoScroll = false) => {
+      if (!client) return;
 
-    setLoading(true);
-    try {
-      // Call the custom logs endpoint using Feathers client with query params
-      const data = (await client.service('worktrees/logs').find({
-        query: {
-          worktree_id: worktree.worktree_id,
-        },
-      })) as unknown as LogsResponse;
-      setLogs(data);
-    } catch (error: unknown) {
-      setLogs({
-        logs: '',
-        timestamp: new Date().toISOString(),
-        error: error instanceof Error ? error.message : 'Failed to fetch logs',
-      });
-    } finally {
-      setLoading(false);
-    }
-  }, [client, worktree.worktree_id]);
+      // Check if user is scrolled to bottom before fetching
+      const container = logsContainerRef.current;
+      const isAtBottom =
+        container &&
+        Math.abs(container.scrollHeight - container.scrollTop - container.clientHeight) < 10;
+
+      setLoading(true);
+      try {
+        // Call the custom logs endpoint using Feathers client with query params
+        const data = (await client.service('worktrees/logs').find({
+          query: {
+            worktree_id: worktree.worktree_id,
+          },
+        })) as unknown as LogsResponse;
+        setLogs(data);
+
+        // Auto-scroll to bottom if shouldAutoScroll is true AND user was already at bottom
+        if (shouldAutoScroll && (isAtBottom || !logs)) {
+          setTimeout(() => {
+            container?.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+          }, 100);
+        }
+      } catch (error: unknown) {
+        setLogs({
+          logs: '',
+          timestamp: new Date().toISOString(),
+          error: error instanceof Error ? error.message : 'Failed to fetch logs',
+        });
+      } finally {
+        setLoading(false);
+      }
+    },
+    [client, worktree.worktree_id, logs]
+  );
 
   // Fetch logs when modal opens
   useEffect(() => {
@@ -62,6 +81,30 @@ export const EnvironmentLogsModal: React.FC<EnvironmentLogsModalProps> = ({
       setLogs(null); // Clear logs when modal closes
     }
   }, [open, fetchLogs]);
+
+  // Auto-refresh interval
+  useEffect(() => {
+    // Clear any existing interval
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+
+    // Set up new interval if auto-refresh is enabled and modal is open
+    if (autoRefresh && open) {
+      intervalRef.current = setInterval(() => {
+        fetchLogs(true); // true = enable auto-scroll
+      }, 3000); // 3 seconds
+    }
+
+    // Cleanup on unmount or when dependencies change
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+    };
+  }, [autoRefresh, open, fetchLogs]);
 
   const formatTimestamp = (timestamp: string) => {
     const date = new Date(timestamp);
@@ -73,9 +116,22 @@ export const EnvironmentLogsModal: React.FC<EnvironmentLogsModalProps> = ({
       title={`Environment Logs - ${worktree.name}`}
       open={open}
       onCancel={onClose}
-      width={800}
+      width={900}
+      style={{ top: 20 }}
       footer={[
-        <Button key="refresh" icon={<ReloadOutlined />} onClick={fetchLogs} loading={loading}>
+        <Checkbox
+          key="auto-refresh"
+          checked={autoRefresh}
+          onChange={(e) => setAutoRefresh(e.target.checked)}
+        >
+          Auto-refresh
+        </Checkbox>,
+        <Button
+          key="refresh"
+          icon={<ReloadOutlined />}
+          onClick={() => fetchLogs()}
+          loading={loading}
+        >
           Refresh
         </Button>,
         <Button key="close" onClick={onClose}>
@@ -124,12 +180,13 @@ export const EnvironmentLogsModal: React.FC<EnvironmentLogsModalProps> = ({
         {/* Logs display */}
         {logs && !logs.error && (
           <div
+            ref={logsContainerRef}
             style={{
               backgroundColor: '#000',
               border: `1px solid ${token.colorBorder}`,
               borderRadius: token.borderRadius,
               padding: 16,
-              maxHeight: '60vh',
+              height: '80vh',
               overflowY: 'auto',
               fontFamily: 'monospace',
               fontSize: 12,
@@ -149,6 +206,10 @@ export const EnvironmentLogsModal: React.FC<EnvironmentLogsModalProps> = ({
               textAlign: 'center',
               padding: 40,
               color: token.colorTextSecondary,
+              height: '80vh',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
             }}
           >
             Loading logs...
