@@ -2102,6 +2102,7 @@ async function main() {
         {
           tasks: [...session.tasks, task.task_id],
           status: SessionStatus.RUNNING,
+          ready_for_prompt: false, // Clear ready flag when execution starts
         },
         params
       );
