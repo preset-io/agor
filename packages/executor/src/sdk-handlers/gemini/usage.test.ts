@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { extractGeminiTokenUsage } from './usage';
+import { extractGeminiTokenUsage } from './usage.js';
 
 describe('extractGeminiTokenUsage', () => {
   it('should extract token usage from Gemini usageMetadata', () => {

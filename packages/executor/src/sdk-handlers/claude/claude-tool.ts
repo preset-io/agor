@@ -19,8 +19,8 @@ import type {
   SessionMCPServerRepository,
   SessionRepository,
   WorktreeRepository,
-} from '../../db/feathers-repositories';
-import type { PermissionService } from '../../permissions/permission-service';
+} from '../../db/feathers-repositories.js';
+import type { PermissionService } from '../../permissions/permission-service.js';
 import {
   type Message,
   type MessageID,
@@ -28,22 +28,22 @@ import {
   type SessionID,
   type TaskID,
   TaskStatus,
-} from '../../types';
-import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response';
+} from '../../types.js';
+import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response.js';
 // Removed import of calculateModelContextWindowUsage - inlined instead
-import type { TokenUsage } from '../../types/token-usage';
-import type { ImportOptions, ITool, SessionData, ToolCapabilities } from '../base';
-import { loadClaudeSession } from './import/load-session';
-import { transcriptsToMessages } from './import/message-converter';
+import type { TokenUsage } from '../../types/token-usage.js';
+import type { ImportOptions, ITool, SessionData, ToolCapabilities } from '../base/index.js';
+import { loadClaudeSession } from './import/load-session.js';
+import { transcriptsToMessages } from './import/message-converter.js';
 import {
   createAssistantMessage,
   createSystemMessage,
   createUserMessage,
   createUserMessageFromContent,
   extractTokenUsage,
-} from './message-builder';
-import type { ProcessedEvent } from './message-processor';
-import { ClaudePromptService } from './prompt-service';
+} from './message-builder.js';
+import type { ProcessedEvent } from './message-processor.js';
+import { ClaudePromptService } from './prompt-service.js';
 
 /**
  * Wrapper for withSessionGuard that accepts Feathers repositories

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { convertConversationToHistory } from './conversation-converter';
+import { convertConversationToHistory } from './conversation-converter.js';
 
 describe('convertConversationToHistory', () => {
   describe('Basic Conversions', () => {

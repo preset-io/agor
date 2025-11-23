@@ -839,7 +839,21 @@ async function main() {
     // Spawn executor process with Feathers/WebSocket mode
     const dirname =
       typeof __dirname !== 'undefined' ? __dirname : path.dirname(fileURLToPath(import.meta.url));
-    const executorPath = path.join(dirname, '../../executor/dist/cli.js');
+
+    // Try multiple possible paths for executor (development vs bundled)
+    const { existsSync } = await import('node:fs');
+    const possiblePaths = [
+      path.join(dirname, '../executor/cli.js'),           // Bundled in agor-live
+      path.join(dirname, '../../executor/dist/cli.js'),   // Development from apps/agor-daemon
+    ];
+
+    const executorPath = possiblePaths.find(p => existsSync(p));
+    if (!executorPath) {
+      throw new Error(
+        `Executor binary not found. Tried:\n${possiblePaths.map(p => `  - ${p}`).join('\n')}`
+      );
+    }
+
     const daemonUrl = `http://localhost:${DAEMON_PORT}`;
 
     const executorProcess = spawn(
@@ -883,8 +897,27 @@ async function main() {
       console.error(`[Executor ${sessionId.slice(0, 8)}] ${data.toString().trim()}`);
     });
 
-    executorProcess.on('exit', (code) => {
+    executorProcess.on('exit', async (code) => {
       console.log(`[Executor ${sessionId.slice(0, 8)}] Exited with code ${code}`);
+
+      // Update session status back to IDLE when executor completes
+      // This handles successful completion - error cases are handled in the catch block at line 2234
+      if (code === 0) {
+        try {
+          await app.service('sessions').patch(
+            sessionId,
+            {
+              status: SessionStatus.IDLE,
+              ready_for_prompt: true,
+            },
+            params
+          );
+          console.log(`✅ [Executor] Session ${sessionId.slice(0, 8)} status updated to IDLE after successful completion`);
+        } catch (error) {
+          console.error(`❌ [Executor] Failed to update session status to IDLE:`, error);
+        }
+      }
+
       // Revoke session token after executor exits
       appWithExecutor.sessionTokenService?.revokeToken(sessionToken);
     });

@@ -8,11 +8,10 @@
 import { execSync } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import { validateDirectory } from '@agor/core';
-// @ts-expect-error - templates not exported from @agor/core index
-import { renderAgorSystemPrompt } from '@agor/core/src/templates/session-context';
+import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { PermissionMode } from '@anthropic-ai/claude-agent-sdk/sdk';
-import { getDaemonUrl, resolveApiKey, resolveUserEnvironment } from '../../config';
+import { getDaemonUrl, resolveApiKey, resolveUserEnvironment } from '../../config.js';
 import type {
   MCPServerRepository,
   MessagesRepository,
@@ -20,13 +19,13 @@ import type {
   SessionMCPServerRepository,
   SessionRepository,
   WorktreeRepository,
-} from '../../db/feathers-repositories';
-import type { PermissionService } from '../../permissions/permission-service';
-import type { MCPServersConfig, SessionID, TaskID, UserID } from '../../types';
-import type { MessagesService, SessionsService, TasksService } from './claude-tool';
-import { DEFAULT_CLAUDE_MODEL } from './models';
-import { createCanUseToolCallback } from './permissions/permission-hooks';
-import { detectThinkingLevel, resolveThinkingBudget } from './thinking-detector';
+} from '../../db/feathers-repositories.js';
+import type { PermissionService } from '../../permissions/permission-service.js';
+import type { MCPServersConfig, SessionID, TaskID, UserID } from '../../types.js';
+import type { MessagesService, SessionsService, TasksService } from './claude-tool.js';
+import { DEFAULT_CLAUDE_MODEL } from './models.js';
+import { createCanUseToolCallback } from './permissions/permission-hooks.js';
+import { detectThinkingLevel, resolveThinkingBudget } from './thinking-detector.js';
 
 /**
  * Get path to Claude Code executable
@@ -202,9 +201,9 @@ export async function setupQuery(
 
   // Render Agor system prompt with full session/worktree/repo context
   const agorSystemPrompt = await renderAgorSystemPrompt(sessionId, {
-    sessions: deps.sessionsRepo,
-    worktrees: deps.worktreesRepo,
-    repos: deps.reposRepo,
+    sessions: deps.sessionsRepo as any,
+    worktrees: deps.worktreesRepo as any,
+    repos: deps.reposRepo as any,
   });
 
   const queryOptions: Record<string, unknown> = {

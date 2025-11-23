@@ -15,8 +15,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { resolveApiKey, resolveUserEnvironment } from '@agor/core/config';
 import type { Database } from '@agor/core/db';
-// @ts-expect-error - templates not exported from @agor/core index
-import { renderAgorSystemPrompt } from '@agor/core/src/templates/session-context';
+import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 import {
   AuthType,
   Config,
@@ -27,7 +26,7 @@ import {
   type ResumedSessionData,
 } from '@google/gemini-cli-core';
 import type { Part } from '@google/genai';
-import { getDaemonUrl } from '../../config';
+import { getDaemonUrl } from '../../config.js';
 import type {
   MCPServerRepository,
   MessagesRepository,
@@ -35,13 +34,13 @@ import type {
   SessionMCPServerRepository,
   SessionRepository,
   WorktreeRepository,
-} from '../../db/feathers-repositories';
-import type { PermissionMode, SessionID, TaskID, UserID } from '../../types';
-import type { TokenUsage } from '../../types/token-usage';
-import { convertConversationToHistory } from './conversation-converter';
-import { DEFAULT_GEMINI_MODEL, type GeminiModel } from './models';
-import { mapPermissionMode } from './permission-mapper';
-import { extractGeminiTokenUsage } from './usage';
+} from '../../db/feathers-repositories.js';
+import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
+import type { TokenUsage } from '../../types/token-usage.js';
+import { convertConversationToHistory } from './conversation-converter.js';
+import { DEFAULT_GEMINI_MODEL, type GeminiModel } from './models.js';
+import { mapPermissionMode } from './permission-mapper.js';
+import { extractGeminiTokenUsage } from './usage.js';
 
 /**
  * GeminiClient with internal config property exposed
@@ -649,9 +648,9 @@ export class GeminiPromptService {
     // IMPORTANT: Gemini uses GEMINI.md (not CLAUDE.md) for project instructions!
     // User's project GEMINI.md files are still loaded hierarchically.
     const agorSystemPrompt = await renderAgorSystemPrompt(sessionId, {
-      sessions: this.sessionsRepo,
-      worktrees: this.worktreesRepo,
-      repos: this.reposRepo,
+      sessions: this.sessionsRepo as any,
+      worktrees: this.worktreesRepo as any,
+      repos: this.reposRepo as any,
     });
 
     // Write to temp file (unique per session, no races!)

@@ -75,6 +75,11 @@
       "import": "./dist/templates/handlebars-helpers.js",
       "require": "./dist/templates/handlebars-helpers.cjs"
     },
+    "./templates/session-context": {
+      "types": "./dist/templates/session-context.d.ts",
+      "import": "./dist/templates/session-context.js",
+      "require": "./dist/templates/session-context.cjs"
+    },
     "./environment/variable-resolver": {
       "types": "./dist/environment/variable-resolver.d.ts",
       "import": "./dist/environment/variable-resolver.js",

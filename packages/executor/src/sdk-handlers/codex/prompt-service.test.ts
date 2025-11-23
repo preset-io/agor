@@ -5,7 +5,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { CodexPromptService } from './prompt-service';
+import { CodexPromptService } from './prompt-service.js';
 
 // Track how many Codex instances were created (module-level state)
 let mockInstanceCount = 0;

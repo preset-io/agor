@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { extractCodexTokenUsage } from './usage';
+import { extractCodexTokenUsage } from './usage.js';
 
 describe('extractCodexTokenUsage', () => {
   it('returns undefined for non-object payloads', () => {

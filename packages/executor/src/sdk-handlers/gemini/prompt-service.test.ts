@@ -6,7 +6,7 @@ import type { SessionRepository } from '@agor/core/db/repositories/sessions';
 import type { WorktreeRepository } from '@agor/core/db/repositories/worktrees';
 import type { SessionID } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { GeminiPromptService } from './prompt-service';
+import { GeminiPromptService } from './prompt-service.js';
 
 describe('GeminiPromptService', () => {
   let service: GeminiPromptService;

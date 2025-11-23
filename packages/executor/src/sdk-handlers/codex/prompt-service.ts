@@ -15,8 +15,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { resolveApiKey, resolveUserEnvironment } from '@agor/core/config';
 import type { Database } from '@agor/core/db';
-// @ts-expect-error - templates not exported from @agor/core index
-import { renderAgorSystemPrompt } from '@agor/core/src/templates/session-context';
+import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 import { type JsonMap, parse as parseToml, stringify as stringifyToml } from '@iarna/toml';
 import { Codex, type Thread, type ThreadItem } from '@openai/codex-sdk';
 import type {
@@ -25,11 +24,11 @@ import type {
   SessionMCPServerRepository,
   SessionRepository,
   WorktreeRepository,
-} from '../../db/feathers-repositories';
-import type { PermissionMode, SessionID, TaskID, UserID } from '../../types';
-import type { TokenUsage } from '../../types/token-usage';
-import { DEFAULT_CODEX_MODEL } from './models';
-import { extractCodexTokenUsage } from './usage';
+} from '../../db/feathers-repositories.js';
+import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
+import type { TokenUsage } from '../../types/token-usage.js';
+import { DEFAULT_CODEX_MODEL } from './models.js';
+import { extractCodexTokenUsage } from './usage.js';
 
 export interface CodexPromptResult {
   /** Complete assistant response from Codex */
@@ -194,9 +193,9 @@ export class CodexPromptService {
    */
   private async ensureCodexSessionContext(sessionId: SessionID): Promise<string> {
     const agorSystemPrompt = await renderAgorSystemPrompt(sessionId, {
-      sessions: this.sessionsRepo,
-      worktrees: this.worktreesRepo,
-      repos: this.reposRepo,
+      sessions: this.sessionsRepo as any,
+      worktrees: this.worktreesRepo as any,
+      repos: this.reposRepo as any,
     });
 
     // Create per-session CODEX_HOME (no race conditions!)

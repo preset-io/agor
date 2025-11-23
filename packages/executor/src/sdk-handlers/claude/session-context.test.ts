@@ -7,7 +7,7 @@ import {
   appendSessionContextToCLAUDEmd,
   generateSessionContext,
   removeSessionContextFromCLAUDEmd,
-} from './session-context';
+} from './session-context.js';
 
 describe('generateSessionContext', () => {
   it('should generate context with full and short IDs', () => {

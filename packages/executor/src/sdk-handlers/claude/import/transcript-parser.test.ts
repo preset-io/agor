@@ -10,7 +10,7 @@ import {
   loadSessionTranscript,
   parseTranscript,
   type TranscriptMessage,
-} from './transcript-parser';
+} from './transcript-parser.js';
 
 // ============================================================================
 // Test Helpers - Inline transcript message builders

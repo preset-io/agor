@@ -15,6 +15,7 @@ export default defineConfig({
     'feathers/index': 'src/feathers/index.ts', // FeathersJS runtime re-exports
     'lib/feathers-validation': 'src/lib/feathers-validation.ts', // FeathersJS query validation schemas
     'templates/handlebars-helpers': 'src/templates/handlebars-helpers.ts', // Handlebars helpers
+    'templates/session-context': 'src/templates/session-context.ts', // Agor system prompt rendering
     'environment/variable-resolver': 'src/environment/variable-resolver.ts', // Environment variable resolution
     'utils/errors': 'src/utils/errors.ts', // Error handling and formatting utilities
     'utils/url': 'src/utils/url.ts', // Shared URL validation helpers

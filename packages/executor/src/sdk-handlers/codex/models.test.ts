@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getCodexContextWindowLimit } from './models';
+import { getCodexContextWindowLimit } from './models.js';
 
 describe('getCodexContextWindowLimit', () => {
   const defaultLimit = getCodexContextWindowLimit();

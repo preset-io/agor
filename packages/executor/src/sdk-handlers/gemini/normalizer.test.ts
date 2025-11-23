@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { GeminiSdkResponse } from '../../types/sdk-response';
-import * as modelsModule from './models';
-import { DEFAULT_GEMINI_MODEL, getGeminiContextWindowLimit } from './models';
-import { GeminiNormalizer } from './normalizer';
+import type { GeminiSdkResponse } from '../../types/sdk-response.js';
+import * as modelsModule from './models.js';
+import { DEFAULT_GEMINI_MODEL, getGeminiContextWindowLimit } from './models.js';
+import { GeminiNormalizer } from './normalizer.js';
 
 describe('GeminiNormalizer', () => {
   const normalizer = new GeminiNormalizer();

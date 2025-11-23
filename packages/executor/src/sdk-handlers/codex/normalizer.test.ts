@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { CodexSdkResponse } from '../../types/sdk-response';
-import * as models from './models';
-import { CodexNormalizer } from './normalizer';
+import type { CodexSdkResponse } from '../../types/sdk-response.js';
+import * as models from './models.js';
+import { CodexNormalizer } from './normalizer.js';
 
 function buildTurnCompletedEvent(overrides: Partial<CodexSdkResponse> = {}): CodexSdkResponse {
   return {

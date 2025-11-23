@@ -13,7 +13,7 @@ import type {
   JSONRPCRequest,
   PingParams,
   ResponseHelper,
-} from './types';
+} from './types.js';
 
 /**
  * LEGACY: IPC-based executor (will be removed after migration)

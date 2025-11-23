@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { GEMINI_CONTEXT_LIMITS, type GeminiModel, getGeminiContextWindowLimit } from './models';
+import { GEMINI_CONTEXT_LIMITS, type GeminiModel, getGeminiContextWindowLimit } from './models.js';
 
 describe('getGeminiContextWindowLimit', () => {
   const knownModels: GeminiModel[] = [

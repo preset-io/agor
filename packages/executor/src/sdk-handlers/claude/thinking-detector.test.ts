@@ -4,7 +4,7 @@ import {
   resolveThinkingBudget,
   THINKING_BUDGETS,
   type ThinkingLevel,
-} from './thinking-detector';
+} from './thinking-detector.js';
 
 describe('detectThinkingLevel', () => {
   describe('ultrathink level (31,999 tokens)', () => {

@@ -108,7 +108,8 @@ export async function executeCodexSDK(
 
 /**
  * Execute Codex task (new Feathers/WebSocket architecture)
- * TODO: Implement full Codex execution with streaming
+ *
+ * Used by ephemeral executor - no IPC, direct Feathers client passed in
  */
 export async function executeCodexTask(params: {
   client: AgorClient;
@@ -118,5 +119,25 @@ export async function executeCodexTask(params: {
   permissionMode?: PermissionMode;
   abortController: AbortController;
 }): Promise<void> {
-  throw new Error('Codex task execution not yet implemented in new architecture');
+  // Import base executor helper
+  const { executeToolTask } = await import('./base-executor.js');
+
+  // Execute using base helper with Codex-specific factory
+  await executeToolTask({
+    ...params,
+    apiKeyEnvVar: 'OPENAI_API_KEY',
+    toolName: 'codex',
+    createTool: (repos, apiKey) =>
+      new CodexTool(
+        repos.messages,
+        repos.sessions,
+        repos.sessionMCP,
+        repos.worktrees,
+        repos.repos,
+        apiKey,
+        repos.messagesService,
+        repos.tasksService,
+        undefined // Database (not used in Feathers architecture)
+      ),
+  });
 }
