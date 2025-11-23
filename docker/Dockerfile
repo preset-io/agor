@@ -76,13 +76,25 @@ COPY packages/core/package.json ./packages/core/
 # We'll copy these to a cache location so the entrypoint can restore them quickly
 # on first boot (when the named volume is empty), avoiding a full pnpm install.
 RUN sudo chown -R agor:agor /app && \
-    pnpm install --frozen-lockfile && \
-    sudo mkdir -p /opt/agor-cache && \
+    pnpm install --frozen-lockfile
+
+# Pre-build @agor/core to speed up dev mode startup
+# When tsup --watch starts, it will see existing dist/ and do incremental rebuild
+# instead of full build, saving ~5-10 seconds on first boot
+COPY packages/core/src /app/packages/core/src
+COPY packages/core/tsup.config.ts /app/packages/core/
+COPY packages/core/drizzle /app/packages/core/drizzle
+RUN sudo chown -R agor:agor /app/packages/core && \
+    pnpm --filter @agor/core build
+
+# Cache node_modules and build artifacts for fast first-boot restoration
+RUN sudo mkdir -p /opt/agor-cache && \
     sudo cp -a /app/node_modules /opt/agor-cache/ && \
     sudo cp -a /app/apps/agor-daemon/node_modules /opt/agor-cache/daemon-node_modules && \
     sudo cp -a /app/apps/agor-cli/node_modules /opt/agor-cache/cli-node_modules && \
     sudo cp -a /app/apps/agor-ui/node_modules /opt/agor-cache/ui-node_modules && \
     sudo cp -a /app/packages/core/node_modules /opt/agor-cache/core-node_modules && \
+    sudo cp -a /app/packages/core/dist /opt/agor-cache/core-dist && \
     sudo chown -R agor:agor /opt/agor-cache
 
 # Copy entrypoint script
