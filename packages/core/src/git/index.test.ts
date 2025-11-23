@@ -706,44 +706,32 @@ describe('createWorktree', () => {
 
   it('should only fetch tags when refType is tag', async () => {
     // This test verifies the optimization: when refType is 'branch', we don't fetch tags
-    // The implementation uses: const fetchArgs = refType === 'tag' ? ['origin', '--tags'] : ['origin'];
-    // Since we can't easily mock in ESM, we verify via code review that the logic exists
 
-    await createTestRepo(repoDir);
-    const git = simpleGit(repoDir);
+    // Create a remote repo with a tag
+    const remoteDir = path.join(tempDir, 'remote');
+    await createTestRepo(remoteDir);
+    const remoteGit = simpleGit(remoteDir);
+    await remoteGit.tag(['v1.0.0']);
 
-    // Create a tag
-    await git.tag(['v1.0.0']);
+    // Clone the remote to create a local repo (fresh clone without tags by default)
+    const localDir = path.join(tempDir, 'local');
+    await remoteGit.clone(remoteDir, localDir);
 
-    // Test 1: Create worktree with refType='branch'
-    // This should use fetch(['origin']) without --tags
     await createWorktree(
-      repoDir,
-      path.join(tempDir, 'worktree-branch'),
-      'branch-test',
-      true,
-      false, // pullLatest=false to skip actual fetch
-      undefined,
-      undefined,
-      'branch'
-    );
-
-    expect(await isGitRepo(path.join(tempDir, 'worktree-branch'))).toBe(true);
-
-    // Test 2: Create worktree with refType='tag'
-    // This should use fetch(['origin', '--tags']) when pullLatest=true
-    await createWorktree(
-      repoDir,
+      localDir,
       path.join(tempDir, 'worktree-tag'),
       'tag-branch',
       true,
-      false, // pullLatest=false to skip actual fetch
+      true,
       'v1.0.0',
       undefined,
       'tag'
     );
 
     expect(await isGitRepo(path.join(tempDir, 'worktree-tag'))).toBe(true);
+    const wtGit = simpleGit(path.join(tempDir, 'worktree-tag'));
+    const tags = await wtGit.tags();
+    expect(tags.all).toContain('v1.0.0');
   });
 });
 

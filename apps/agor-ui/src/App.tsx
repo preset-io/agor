@@ -370,6 +370,7 @@ function AppContent() {
         const newWorktree = await handleCreateWorktree(config.newWorktree.repoId, {
           name: config.newWorktree.name,
           ref: config.newWorktree.ref,
+          refType: config.newWorktree.refType,
           createBranch: config.newWorktree.createBranch,
           sourceBranch: config.newWorktree.sourceBranch,
           pullLatest: config.newWorktree.pullLatest,
