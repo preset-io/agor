@@ -43,7 +43,7 @@ export const EventStreamPanel: React.FC<EventStreamPanelProps> = ({
   onToggleCollapse,
   events,
   onClear,
-  width = 600,
+  width = 700,
   worktreeById,
   sessionById,
   sessionsByWorktree,

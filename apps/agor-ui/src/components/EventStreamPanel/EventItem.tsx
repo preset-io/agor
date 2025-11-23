@@ -196,6 +196,7 @@ const EventItemComponent = ({
         borderBottom: `1px solid ${token.colorBorderSecondary}`,
         background: token.colorBgContainer,
         display: 'flex',
+        flexWrap: 'wrap',
         alignItems: 'center',
         gap: 8,
         fontSize: 12,
