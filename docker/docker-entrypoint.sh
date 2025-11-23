@@ -17,16 +17,20 @@ echo "📦 Checking dependencies..."
 
 # Check if this is the first boot (node_modules volume is empty)
 if [ ! -f "/app/node_modules/.pnpm/lock.yaml" ]; then
-  echo "🆕 First boot detected - initializing node_modules from Docker image..."
+  echo "🆕 First boot detected - initializing node_modules from Docker cache..."
 
-  # The Docker build created node_modules, but they're hidden by the empty volume mount
-  # We need to run pnpm install once to populate the volume with the correct packages
-  echo "   Running initial pnpm install (this will be cached for future boots)..."
-  CI=true pnpm install --frozen-lockfile < /dev/null
+  # Copy pre-built node_modules from Docker image cache (much faster than pnpm install)
+  # The Docker build cached these at /opt/agor-cache/ during image build
+  echo "   Copying cached dependencies (~2-3s vs ~60s for pnpm install)..."
+  cp -a /opt/agor-cache/node_modules/. /app/node_modules/
+  cp -a /opt/agor-cache/daemon-node_modules/. /app/apps/agor-daemon/node_modules/
+  cp -a /opt/agor-cache/cli-node_modules/. /app/apps/agor-cli/node_modules/
+  cp -a /opt/agor-cache/ui-node_modules/. /app/apps/agor-ui/node_modules/
+  cp -a /opt/agor-cache/core-node_modules/. /app/packages/core/node_modules/
 
   # Create a marker file to track the pnpm-lock.yaml state
   cp /app/pnpm-lock.yaml /app/node_modules/.synced-lockfile.yaml
-  echo "✅ Dependencies initialized and cached"
+  echo "✅ Dependencies initialized from cache"
 else
   echo "♻️  Cached node_modules found - checking if sync needed..."
 
@@ -49,9 +53,10 @@ else
   fi
 fi
 
-# Initialize husky git hooks (required for git commit hooks)
-echo "🎣 Initializing git hooks..."
-pnpm husky install
+# Skip husky in Docker (git hooks run on host, not in container)
+# Also avoids "fatal: not a git repository" error with worktrees where .git is a file, not a directory
+# If you need hooks in the container, run `pnpm husky install` manually after startup
+echo "⏭️  Skipping husky install (git hooks run on host, not in container)"
 
 # Start @agor/core in watch mode FIRST (for hot-reload during development)
 # We start this early and wait for initial build before running CLI commands
