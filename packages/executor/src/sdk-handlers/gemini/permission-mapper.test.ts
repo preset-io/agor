@@ -1,5 +1,8 @@
+import { Gemini } from '@agor/core/sdk';
 import type { PermissionMode } from '@agor/core/types';
-import { ApprovalMode } from '@google/gemini-cli-core';
+
+const { ApprovalMode } = Gemini;
+
 import { describe, expect, it } from 'vitest';
 import { mapPermissionMode } from './permission-mapper.js';
 

@@ -28,8 +28,13 @@ export async function resolveApiKey(
   keyName: ApiKeyName,
   context: KeyResolutionContext = {}
 ): Promise<string | undefined> {
+  console.log(
+    `🔍 [API Key Resolution] Resolving ${keyName} for user ${context.userId?.substring(0, 8) || 'none'}`
+  );
+
   // 1. Check per-user key (highest precedence)
   if (context.userId && context.db) {
+    console.log(`   → Checking user-level configuration...`);
     try {
       const row = await select(context.db)
         .from(users)
@@ -42,33 +47,54 @@ export async function resolveApiKey(
 
         if (encryptedKey) {
           const decryptedKey = decryptApiKey(encryptedKey);
-          console.log(
-            `🔑 Using per-user API key for ${keyName} (user: ${context.userId.substring(0, 8)})`
-          );
-          return decryptedKey;
+          if (decryptedKey && decryptedKey.length > 0) {
+            console.log(
+              `   ✓ Found user-level API key for ${keyName} (user: ${context.userId.substring(0, 8)})`
+            );
+            return decryptedKey;
+          } else {
+            console.log(
+              `   ✗ User-level API key for ${keyName} is empty (user: ${context.userId.substring(0, 8)})`
+            );
+          }
+        } else {
+          console.log(`   ✗ No user-level API key for ${keyName}`);
         }
+      } else {
+        console.log(`   ✗ User record not found`);
       }
     } catch (err) {
-      console.error(`Failed to resolve per-user key for ${keyName}:`, err);
+      console.error(`   ✗ Failed to check user-level key:`, err);
       // Fall through to global/env fallback
     }
+  } else if (!context.userId) {
+    console.log(`   → Skipping user-level check (no user ID provided)`);
+  } else if (!context.db) {
+    console.log(`   → Skipping user-level check (no database connection)`);
   }
 
   // 2. Check global config.yaml (second precedence)
+  console.log(`   → Checking app-level configuration (config.yaml)...`);
   const globalKey = getCredential(keyName);
-  if (globalKey) {
-    console.log(`🔑 Using global API key for ${keyName} (from config.yaml)`);
+  if (globalKey && globalKey.length > 0) {
+    console.log(`   ✓ Found app-level API key for ${keyName} (from config.yaml)`);
     return globalKey;
+  } else {
+    console.log(`   ✗ No app-level API key for ${keyName}`);
   }
 
   // 3. Fallback to environment variable (lowest precedence)
+  console.log(`   → Checking OS-level environment variables...`);
   const envKey = process.env[keyName];
-  if (envKey) {
-    console.log(`🔑 Using environment variable for ${keyName}`);
+  if (envKey && envKey.length > 0) {
+    console.log(`   ✓ Found OS-level environment variable ${keyName}`);
     return envKey;
+  } else {
+    console.log(`   ✗ No OS-level environment variable ${keyName}`);
   }
 
   // No key found
+  console.log(`   ❌ No API key found for ${keyName} at any level`);
   return undefined;
 }
 

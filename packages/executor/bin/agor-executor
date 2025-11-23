@@ -2,56 +2,32 @@
 
 /**
  * Agor Executor - Standalone executable
- * Spawned by daemon to execute agent SDKs and terminals in isolated context
+ * Spawned by daemon to execute agent SDKs in isolated context
+ *
+ * This bin script delegates to cli.js which handles all argument parsing
+ * and supports the Feathers/WebSocket architecture.
  */
 
-const { parseArgs } = require('node:util');
 const path = require('node:path');
 
-// Parse command-line arguments
-const { values } = parseArgs({
-  options: {
-    socket: {
-      type: 'string',
-      short: 's',
-    },
-  },
-  allowPositionals: false,
-});
+// Delegate to cli.js which handles all modes and arguments
+// Try dist/cli.js first (production), fall back to src/cli.ts (development)
+const distPath = path.join(__dirname, '..', 'dist', 'cli.js');
+const srcPath = path.join(__dirname, '..', 'src', 'cli.ts');
 
-if (!values.socket) {
-  console.error('Usage: agor-executor --socket <socket-path>');
-  console.error('');
-  console.error('Options:');
-  console.error('  --socket, -s  Path to Unix socket for IPC');
-  process.exit(1);
-}
-
-// Import and start executor
-// Note: In development, this uses ts-node or tsx
-// In production, this uses compiled JavaScript from dist/
-const distPath = path.join(__dirname, '..', 'dist', 'index.js');
-const srcPath = path.join(__dirname, '..', 'src', 'index.ts');
-
-let AgorExecutor;
 try {
   // Try to load compiled version first
-  ({ AgorExecutor } = require(distPath));
+  require(distPath);
 } catch {
   // Fall back to TypeScript (development)
   try {
     require('tsx/cjs');
-    ({ AgorExecutor } = require(srcPath));
-  } catch {
-    console.error('ERROR: Could not load executor');
+    require(srcPath);
+  } catch (error) {
+    console.error('ERROR: Could not load executor CLI');
     console.error('Run "pnpm build" in packages/executor first');
+    console.error('');
+    console.error('Details:', error);
     process.exit(1);
   }
 }
-
-// Start executor
-const executor = new AgorExecutor(values.socket);
-executor.start().catch((error) => {
-  console.error('[executor] Fatal error:', error);
-  process.exit(1);
-});

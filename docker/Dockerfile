@@ -70,6 +70,7 @@ COPY apps/agor-daemon/package.json ./apps/agor-daemon/
 COPY apps/agor-cli/package.json ./apps/agor-cli/
 COPY apps/agor-ui/package.json ./apps/agor-ui/
 COPY packages/core/package.json ./packages/core/
+COPY packages/executor/package.json ./packages/executor/
 
 # Install dependencies as agor user (cached in Docker layer)
 # This creates node_modules with correct platform binaries for container

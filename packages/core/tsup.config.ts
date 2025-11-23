@@ -27,6 +27,7 @@ export default defineConfig({
     'seed/index': 'src/seed/index.ts', // Development database seeding
     'callbacks/child-completion-template': 'src/callbacks/child-completion-template.ts', // Parent session callback templates
     'models/index': 'src/models/index.ts', // Model metadata (browser-safe)
+    'sdk/index': 'src/sdk/index.ts', // AI SDK re-exports (Claude, Codex, Gemini, OpenCode)
   },
   format: ['cjs', 'esm'],
   dts: true,
@@ -38,6 +39,8 @@ export default defineConfig({
     '@anthropic-ai/claude-agent-sdk',
     '@openai/codex-sdk',
     '@google/gemini-cli-core',
+    '@google/genai',
+    '@opencode-ai/sdk',
     'node:fs',
     'node:fs/promises',
     'node:path',

@@ -9,7 +9,7 @@
  * - Extract primary model and costs
  */
 
-import type { SDKResultMessage } from '@anthropic-ai/claude-agent-sdk/sdk';
+import type { SDKResultMessage } from '@agor/core/sdk';
 import type { INormalizer, NormalizedSdkData } from '../base/normalizer.interface.js';
 
 export class ClaudeCodeNormalizer implements INormalizer<SDKResultMessage> {

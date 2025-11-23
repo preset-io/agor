@@ -2,20 +2,21 @@
  * Permission Service (Executor Version)
  *
  * Handles async permission requests from Claude Agent SDK PreToolUse hooks.
- * Unlike the daemon version, this emits events via IPC to daemon for WebSocket broadcasting.
+ * Emits events via Feathers WebSocket to daemon for broadcasting to UI clients.
  *
- * ## Flow in Executor Isolation:
+ * ## Flow in Feathers/WebSocket Architecture:
  *
  * 1. PreToolUse hook fires → PermissionService.emitRequest()
- * 2. Event sent via IPC to daemon → Daemon broadcasts WebSocket to UI clients
+ * 2. Event sent via Feathers WebSocket to daemon → Daemon broadcasts to UI clients
  * 3. Task/session updated via Feathers client (awaiting_permission)
  * 4. PermissionService.waitForDecision() creates Promise that pauses SDK
- * 5. UI decides → daemon receives decision → IPC notification to executor
- * 6. Executor's IPC server calls PermissionService.resolvePermission()
+ * 5. UI decides → daemon receives decision → WebSocket notification to executor
+ * 6. Executor receives permission_resolved event → calls PermissionService.resolvePermission()
  * 7. Promise resolves → SDK resumes execution
  */
 
 import type { SessionID, TaskID } from '@agor/core/types';
+import { PermissionScope } from '@agor/core/types';
 
 export interface PermissionRequest {
   requestId: string;
@@ -27,14 +28,6 @@ export interface PermissionRequest {
   timestamp: string;
 }
 
-export enum PermissionScope {
-  ONCE = 'once',
-  SESSION = 'session',
-  PROJECT = 'project',
-  USER = 'user',
-  LOCAL = 'local',
-}
-
 export interface PermissionDecision {
   requestId: string;
   taskId: TaskID;
@@ -44,6 +37,9 @@ export interface PermissionDecision {
   scope: PermissionScope;
   decidedBy: string; // userId
 }
+
+// Re-export for convenience
+export { PermissionScope };
 
 /**
  * Executor version of PermissionService

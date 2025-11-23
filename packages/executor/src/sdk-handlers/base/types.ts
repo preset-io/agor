@@ -5,7 +5,7 @@
  * Not to be confused with AI agents (internal personas)
  */
 
-import type { Message, MessageID, MessageRole, SessionID, TaskID } from '@agor/core/types';
+import type { Message, MessageID, SessionID, TaskID } from '@agor/core/types';
 
 /**
  * Supported tool types
@@ -39,10 +39,10 @@ export interface StreamingCallbacks {
     metadata: {
       session_id: SessionID;
       task_id?: TaskID;
-      role: MessageRole.ASSISTANT;
+      role: string;
       timestamp: string;
     }
-  ): void;
+  ): Promise<void>;
 
   /**
    * Called for each chunk of streamed content
@@ -53,7 +53,7 @@ export interface StreamingCallbacks {
    * @param messageId - Message being streamed
    * @param chunk - Text chunk (3-10 words recommended)
    */
-  onStreamChunk(messageId: MessageID, chunk: string): void;
+  onStreamChunk(messageId: MessageID, chunk: string): Promise<void>;
 
   /**
    * Called when streaming completes successfully
@@ -63,7 +63,7 @@ export interface StreamingCallbacks {
    *
    * @param messageId - Message that finished streaming
    */
-  onStreamEnd(messageId: MessageID): void;
+  onStreamEnd(messageId: MessageID): Promise<void>;
 
   /**
    * Called if streaming encounters an error
@@ -71,22 +71,20 @@ export interface StreamingCallbacks {
    * @param messageId - Message that failed
    * @param error - Error that occurred
    */
-  onStreamError(messageId: MessageID, error: Error): void;
+  onStreamError(messageId: MessageID, error: Error): Promise<void>;
 
   /**
    * Called when thinking block streaming starts (optional)
    *
    * @param messageId - Message ID for the thinking block
-   * @param metadata - Initial metadata (session_id, task_id, etc.)
+   * @param metadata - Initial metadata (budget, etc.)
    */
   onThinkingStart?(
     messageId: MessageID,
     metadata: {
-      session_id: SessionID;
-      task_id?: TaskID;
-      timestamp: string;
+      budget?: number;
     }
-  ): void;
+  ): Promise<void>;
 
   /**
    * Called for each chunk of thinking content (optional)
@@ -94,14 +92,14 @@ export interface StreamingCallbacks {
    * @param messageId - Message ID for the thinking block
    * @param chunk - Thinking text chunk
    */
-  onThinkingChunk?(messageId: MessageID, chunk: string): void;
+  onThinkingChunk?(messageId: MessageID, chunk: string): Promise<void>;
 
   /**
    * Called when thinking block completes (optional)
    *
    * @param messageId - Message ID for the thinking block
    */
-  onThinkingEnd?(messageId: MessageID): void;
+  onThinkingEnd?(messageId: MessageID): Promise<void>;
 }
 
 /**

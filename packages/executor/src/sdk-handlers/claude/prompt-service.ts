@@ -5,7 +5,7 @@
  * Automatically loads CLAUDE.md and uses preset system prompts matching Claude Code CLI.
  */
 
-import type { PermissionMode } from '@anthropic-ai/claude-agent-sdk/sdk';
+import type { PermissionMode } from '@agor/core/sdk';
 import type {
   MCPServerRepository,
   MessagesRepository,

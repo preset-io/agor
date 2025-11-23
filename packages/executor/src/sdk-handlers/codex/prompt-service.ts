@@ -15,9 +15,10 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { resolveApiKey, resolveUserEnvironment } from '@agor/core/config';
 import type { Database } from '@agor/core/db';
+import type { Thread, ThreadItem } from '@agor/core/sdk';
+import { Codex } from '@agor/core/sdk';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 import { type JsonMap, parse as parseToml, stringify as stringifyToml } from '@iarna/toml';
-import { Codex, type Thread, type ThreadItem } from '@openai/codex-sdk';
 import type {
   MessagesRepository,
   RepoRepository,
@@ -25,8 +26,8 @@ import type {
   SessionRepository,
   WorktreeRepository,
 } from '../../db/feathers-repositories.js';
-import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
 import type { TokenUsage } from '../../types/token-usage.js';
+import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
 import { DEFAULT_CODEX_MODEL } from './models.js';
 import { extractCodexTokenUsage } from './usage.js';
 
@@ -113,7 +114,7 @@ export type CodexStreamEvent =
     };
 
 export class CodexPromptService {
-  private codex: Codex;
+  private codex: InstanceType<typeof Codex.Codex>;
   private lastMCPServersHash: string | null = null;
   private lastApiKey: string | null = null;
   private stopRequested = new Map<SessionID, boolean>();
@@ -139,7 +140,7 @@ export class CodexPromptService {
     const initialApiKey = apiKey || process.env.OPENAI_API_KEY || '';
     this.lastApiKey = initialApiKey;
     // Initialize Codex SDK
-    this.codex = new Codex({
+    this.codex = new Codex.Codex({
       apiKey: initialApiKey,
     });
   }
@@ -154,7 +155,7 @@ export class CodexPromptService {
   private reinitializeCodex(): void {
     console.log('🔄 [Codex] Reinitializing SDK to pick up config changes...');
     const apiKey = this.apiKey || process.env.OPENAI_API_KEY || '';
-    this.codex = new Codex({
+    this.codex = new Codex.Codex({
       apiKey,
     });
     this.lastApiKey = apiKey;
@@ -172,7 +173,7 @@ export class CodexPromptService {
     // Only recreate if API key changed (prevents memory leak - issue #133)
     if (this.lastApiKey !== currentApiKey) {
       console.log('🔄 [Codex] API key changed, reinitializing SDK...');
-      this.codex = new Codex({
+      this.codex = new Codex.Codex({
         apiKey: currentApiKey,
       });
       this.lastApiKey = currentApiKey;

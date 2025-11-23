@@ -8,9 +8,12 @@
 import { execSync } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import { validateDirectory } from '@agor/core';
+import { Claude } from '@agor/core/sdk';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
-import { query } from '@anthropic-ai/claude-agent-sdk';
-import type { PermissionMode } from '@anthropic-ai/claude-agent-sdk/sdk';
+
+const { query } = Claude;
+type PermissionMode = Claude.PermissionMode;
+
 import { getDaemonUrl, resolveApiKey, resolveUserEnvironment } from '../../config.js';
 import type {
   MCPServerRepository,

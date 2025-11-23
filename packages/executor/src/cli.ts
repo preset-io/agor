@@ -13,12 +13,6 @@ async function main() {
   // Parse command-line arguments
   const { values } = parseArgs({
     options: {
-      // Legacy IPC mode (will be removed)
-      socket: {
-        type: 'string',
-        short: 's',
-      },
-      // New Feathers/WebSocket mode
       'session-token': {
         type: 'string',
       },
@@ -44,26 +38,14 @@ async function main() {
     allowPositionals: false,
   });
 
-  // Check if running in legacy IPC mode or new Feathers mode
-  const isLegacyMode = !!values.socket;
-  const isFeathersMode = !!(
-    values['session-token'] &&
-    values['session-id'] &&
-    values['task-id'] &&
-    values.prompt &&
-    values.tool
-  );
-
-  if (isLegacyMode) {
-    // Legacy IPC mode (will be removed after migration)
-    console.log('[executor] Running in LEGACY IPC mode');
-    const { AgorExecutorLegacy } = await import('./index-legacy.js');
-    const executor = new AgorExecutorLegacy(values.socket as string);
-    await executor.start();
-    return;
-  }
-
-  if (!isFeathersMode) {
+  // Validate required arguments
+  if (
+    !values['session-token'] ||
+    !values['session-id'] ||
+    !values['task-id'] ||
+    !values.prompt ||
+    !values.tool
+  ) {
     console.error('Usage: agor-executor [OPTIONS]');
     console.error('');
     console.error('Required options:');
@@ -78,17 +60,16 @@ async function main() {
     console.error(
       '  --daemon-url <url>       Daemon WebSocket URL (default: http://localhost:3030)'
     );
-    console.error('');
-    console.error('Legacy IPC mode (deprecated):');
-    console.error('  --socket, -s <path>      Path to Unix socket for IPC');
     process.exit(1);
   }
 
-  // Validate tool
-  const validTools = ['claude-code', 'gemini', 'codex', 'opencode'];
-  if (!validTools.includes(values.tool as string)) {
+  // Validate tool using registry
+  const { ToolRegistry, initializeToolRegistry } = await import('./handlers/sdk/tool-registry.js');
+  await initializeToolRegistry();
+
+  if (!ToolRegistry.has(values.tool as string)) {
     console.error(`Invalid tool: ${values.tool}`);
-    console.error(`Valid tools: ${validTools.join(', ')}`);
+    console.error(`Valid tools: ${ToolRegistry.getAll().join(', ')}`);
     process.exit(1);
   }
 

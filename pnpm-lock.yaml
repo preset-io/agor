@@ -8,10 +8,15 @@ overrides:
   '@esbuild-kit/core-utils>esbuild': 0.25.4
   glob: ^11.1.0
   npm-run-path: ^5.3.0
+  zod: ^3.25.0
 
 importers:
 
   .:
+    dependencies:
+      agor-live:
+        specifier: ^0.8.7
+        version: 0.8.7(@opentelemetry/api@1.9.0)(@types/node@24.10.0)(typescript@5.9.3)(zod@4.1.12)
     devDependencies:
       '@biomejs/biome':
         specifier: ^2.2.6
@@ -86,9 +91,6 @@ importers:
       '@agor/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@feathersjs/schema':
-        specifier: ^5.0.37
-        version: 5.0.37(typescript@5.9.3)
       '@homebridge/node-pty-prebuilt-multiarch':
         specifier: ^0.13.1
         version: 0.13.1
@@ -98,9 +100,6 @@ importers:
       cors:
         specifier: ^2.8.5
         version: 2.8.5
-      cron-parser:
-        specifier: ^5.4.0
-        version: 5.4.0
       dotenv:
         specifier: ^17.2.3
         version: 17.2.3
@@ -482,6 +481,9 @@ importers:
 
   packages/core:
     dependencies:
+      '@anthropic-ai/claude-agent-sdk':
+        specifier: ^0.1.47
+        version: 0.1.47(zod@4.1.12)
       '@feathersjs/authentication':
         specifier: ^5.0.37
         version: 5.0.37(typescript@5.9.3)
@@ -515,12 +517,24 @@ importers:
       '@feathersjs/typebox':
         specifier: ^5.0.37
         version: 5.0.37(typescript@5.9.3)
+      '@google/gemini-cli-core':
+        specifier: ^0.15.1
+        version: 0.15.1(@opentelemetry/core@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/resources@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-metrics@2.0.1(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.0.1(@opentelemetry/api@1.9.0))
+      '@google/genai':
+        specifier: ^1.26.0
+        version: 1.29.0(@modelcontextprotocol/sdk@1.21.0)
       '@iarna/toml':
         specifier: ^2.2.5
         version: 2.2.5
       '@libsql/client':
         specifier: ^0.15.15
         version: 0.15.15
+      '@openai/codex-sdk':
+        specifier: ^0.63.0
+        version: 0.63.0
+      '@opencode-ai/sdk':
+        specifier: ^1.0.65
+        version: 1.0.65
       bcryptjs:
         specifier: ^2.4.3
         version: 2.4.3
@@ -588,43 +602,19 @@ importers:
       '@agor/core':
         specifier: workspace:*
         version: link:../core
-      '@anthropic-ai/claude-agent-sdk':
-        specifier: ^0.1.47
-        version: 0.1.47(zod@4.1.12)
-      '@feathersjs/authentication-client':
-        specifier: ^5.0.37
-        version: 5.0.37(typescript@5.9.3)
-      '@feathersjs/feathers':
-        specifier: ^5.0.37
-        version: 5.0.37
-      '@google/gemini-cli-core':
-        specifier: ^0.15.1
-        version: 0.15.1(@opentelemetry/core@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/resources@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-metrics@2.0.1(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.0.1(@opentelemetry/api@1.9.0))
-      '@google/genai':
-        specifier: ^1.26.0
-        version: 1.29.0(@modelcontextprotocol/sdk@1.21.0)
-      '@homebridge/node-pty-prebuilt-multiarch':
-        specifier: ^0.11.0
-        version: 0.11.14
       '@iarna/toml':
         specifier: ^2.2.5
         version: 2.2.5
-      '@openai/codex-sdk':
-        specifier: ^0.63.0
-        version: 0.63.0
-      '@opencode-ai/sdk':
-        specifier: ^1.0.65
-        version: 1.0.65
     devDependencies:
       '@types/node':
-        specifier: ^20.0.0
-        version: 20.19.24
+        specifier: ^22.19.0
+        version: 22.19.0
       typescript:
         specifier: ^5.0.0
         version: 5.9.3
       vitest:
         specifier: ^1.0.0
-        version: 1.6.1(@types/node@20.19.24)(jsdom@27.1.0)
+        version: 1.6.1(@types/node@22.19.0)(jsdom@27.1.0)
 
 packages:
 
@@ -699,19 +689,19 @@ packages:
     resolution: {integrity: sha512-lo1tqxCr2vygagFp6kUMHKSN6AAWlULCskwGKtLB/JcIXy/8H8GsLSKX54anTsvc9mBbCR8wWASdFmiiL9NSKA==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
-      zod: ^3.24.1
+      zod: ^3.25.0
 
   '@anthropic-ai/claude-agent-sdk@0.1.42':
     resolution: {integrity: sha512-snz2CTHKxkk4rqgvi2D4oMgITXpgmghWC4XvFXcuYjSxgLCBmvDW9TjBk6MTv0apC5fwW4kLE4ydamkBs+BdPg==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
-      zod: ^3.24.1
+      zod: ^3.25.0
 
   '@anthropic-ai/claude-agent-sdk@0.1.47':
     resolution: {integrity: sha512-0LAXuqp2AsvJcvrpVrJKANbmkqp3ZMpEfm03vRL6DrLc8JIQ5n25aCagIBDMwIVJscDwjd9cn4uAHvdI2PMLvw==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
-      zod: ^3.24.1
+      zod: ^3.25.0
 
   '@asamuzakjp/css-color@4.0.5':
     resolution: {integrity: sha512-lMrXidNhPGsDjytDy11Vwlb6OIGrT3CmLg3VWNFyWkLWtijKl7xjvForlh8vuj0SHGjgl4qZEQzUmYTeQA2JFQ==}
@@ -1739,9 +1729,6 @@ packages:
     peerDependencies:
       react: ^18 || ^19 || ^19.0.0-rc
       react-dom: ^18 || ^19 || ^19.0.0-rc
-
-  '@homebridge/node-pty-prebuilt-multiarch@0.11.14':
-    resolution: {integrity: sha512-fuiq5kb4i0Ao0BTf7O6kvtwUhCCCJHLhWLWaaUaLuniDGS4xmj+gxvkidJpxYVT/zTXdbcLuCY44UnoWC7xODg==}
 
   '@homebridge/node-pty-prebuilt-multiarch@0.13.1':
     resolution: {integrity: sha512-ccQ60nMcbEGrQh0U9E6x0ajW9qJNeazpcM/9CH6J8leyNtJgb+gu24WTBAfBUVeO486ZhscnaxLEITI2HXwhow==}
@@ -3929,6 +3916,11 @@ packages:
     resolution: {integrity: sha512-MnA+YT8fwfJPgBx3m60MNqakm30XOkyIoH1y6huTQvC0PwZG7ki8NacLBcrPbNoo8vEZy7Jpuk7+jMO+CUovTQ==}
     engines: {node: '>= 14'}
 
+  agor-live@0.8.7:
+    resolution: {integrity: sha512-SpIJlcTT+H91idqGEvaMIJjAjXrDA35gedkTRJT0erQ6Zd+JMHaRWxkMAxwYET1KmoozF/JoTiHzkBLHk1NVAw==}
+    engines: {node: '>=20.0.0 <21.0.0'}
+    hasBin: true
+
   ajv-formats@3.0.1:
     resolution: {integrity: sha512-8iUql50EUR+uUcdRQ3HDqa6EVyo3docL8g5WJ3FNcWmu62IbkGUue/pEyLBW8VGKKucTPgqeks4fIU1DA4yowQ==}
     peerDependencies:
@@ -5930,7 +5922,6 @@ packages:
 
   libsql@0.5.22:
     resolution: {integrity: sha512-NscWthMQt7fpU8lqd7LXMvT9pi+KhhmTHAJWUB/Lj6MWa0MKFv0F2V4C6WKKpjCVZl0VwcDz4nOI3CyaT1DDiA==}
-    cpu: [x64, arm64, wasm32, arm]
     os: [darwin, linux, win32]
 
   lilconfig@3.1.3:
@@ -8570,13 +8561,13 @@ packages:
   zod-to-json-schema@3.24.6:
     resolution: {integrity: sha512-h/z3PKvcTcTetyjl1fkj79MHNEjm+HpD6NXheWjzOekY7kV+lwDYnHw+ivHkijnCSMz1yJaWBD9vu/Fcmk+vEg==}
     peerDependencies:
-      zod: ^3.24.1
+      zod: ^3.25.0
 
   zod-validation-error@3.5.4:
     resolution: {integrity: sha512-+hEiRIiPobgyuFlEojnqjJnhFvg4r/i3cqgcm67eehZf/WBaK3g6cD02YU9mtdVxZjv8CzCA9n/Rhrs3yAAvAw==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
-      zod: ^3.24.4
+      zod: ^3.25.0
 
   zod@3.25.76:
     resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
@@ -10091,11 +10082,6 @@ snapshots:
       react: 18.3.1
       react-dom: 18.3.1(react@18.3.1)
       use-sync-external-store: 1.6.0(react@18.3.1)
-
-  '@homebridge/node-pty-prebuilt-multiarch@0.11.14':
-    dependencies:
-      nan: 2.23.1
-      prebuild-install: 7.1.3
 
   '@homebridge/node-pty-prebuilt-multiarch@0.13.1':
     dependencies:
@@ -12313,7 +12299,7 @@ snapshots:
 
   '@types/cors@2.8.19':
     dependencies:
-      '@types/node': 22.19.0
+      '@types/node': 24.10.0
 
   '@types/d3-array@3.2.2': {}
 
@@ -12505,7 +12491,7 @@ snapshots:
   '@types/jsonwebtoken@9.0.10':
     dependencies:
       '@types/ms': 2.1.0
-      '@types/node': 22.19.0
+      '@types/node': 24.10.0
 
   '@types/katex@0.16.7': {}
 
@@ -12816,6 +12802,96 @@ snapshots:
       - supports-color
 
   agent-base@7.1.4: {}
+
+  agor-live@0.8.7(@opentelemetry/api@1.9.0)(@types/node@24.10.0)(typescript@5.9.3)(zod@4.1.12):
+    dependencies:
+      '@anthropic-ai/claude-agent-sdk': 0.1.47(zod@4.1.12)
+      '@feathersjs/authentication': 5.0.37(typescript@5.9.3)
+      '@feathersjs/authentication-client': 5.0.37(typescript@5.9.3)
+      '@feathersjs/authentication-local': 5.0.37(typescript@5.9.3)
+      '@feathersjs/errors': 5.0.37
+      '@feathersjs/express': 5.0.37(typescript@5.9.3)
+      '@feathersjs/feathers': 5.0.37
+      '@feathersjs/rest-client': 5.0.37
+      '@feathersjs/schema': 5.0.37(typescript@5.9.3)
+      '@feathersjs/socketio': 5.0.37
+      '@feathersjs/socketio-client': 5.0.37
+      '@feathersjs/typebox': 5.0.37(typescript@5.9.3)
+      '@google/gemini-cli-core': 0.15.1(@opentelemetry/core@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/resources@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-metrics@2.0.1(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.0.1(@opentelemetry/api@1.9.0))
+      '@google/genai': 1.29.0(@modelcontextprotocol/sdk@1.21.0)
+      '@homebridge/node-pty-prebuilt-multiarch': 0.13.1
+      '@iarna/toml': 2.2.5
+      '@libsql/client': 0.15.15
+      '@modelcontextprotocol/sdk': 1.21.0
+      '@oclif/core': 4.8.0
+      '@oclif/plugin-help': 6.2.35
+      '@openai/codex-sdk': 0.58.0
+      '@opencode-ai/sdk': 1.0.65
+      bcryptjs: 2.4.3
+      chalk: 5.6.2
+      cli-table3: 0.6.5
+      compression: 1.8.1
+      cors: 2.8.5
+      cron-parser: 5.4.0
+      cronstrue: 3.9.0
+      dotenv: 17.2.3
+      drizzle-orm: 0.44.7(@libsql/client@0.15.15)(@opentelemetry/api@1.9.0)(postgres@3.4.7)
+      express: 5.1.0
+      express-static-gzip: 3.0.0
+      feathers-swagger: 3.0.0
+      handlebars: 4.7.8
+      inquirer: 12.10.0(@types/node@24.10.0)
+      js-yaml: 4.1.1
+      jsonwebtoken: 9.0.2
+      postgres: 3.4.7
+      simple-git: 3.30.0
+      socket.io: 4.8.1
+      socket.io-client: 4.8.1
+      swagger-ui-dist: 5.30.2
+      uuid: 13.0.0
+      uuidv7: 1.0.2
+    transitivePeerDependencies:
+      - '@aws-sdk/client-rds-data'
+      - '@cfworker/json-schema'
+      - '@cloudflare/workers-types'
+      - '@electric-sql/pglite'
+      - '@libsql/client-wasm'
+      - '@neondatabase/serverless'
+      - '@op-engineering/op-sqlite'
+      - '@opentelemetry/api'
+      - '@opentelemetry/core'
+      - '@opentelemetry/resources'
+      - '@opentelemetry/sdk-metrics'
+      - '@opentelemetry/sdk-trace-base'
+      - '@planetscale/database'
+      - '@prisma/client'
+      - '@tidbcloud/serverless'
+      - '@types/better-sqlite3'
+      - '@types/emscripten'
+      - '@types/node'
+      - '@types/pg'
+      - '@types/sql.js'
+      - '@upstash/redis'
+      - '@vercel/postgres'
+      - '@xata.io/client'
+      - better-sqlite3
+      - bufferutil
+      - bun-types
+      - encoding
+      - expo-sqlite
+      - gel
+      - knex
+      - kysely
+      - mysql2
+      - pg
+      - prisma
+      - sql.js
+      - sqlite3
+      - supports-color
+      - tree-sitter
+      - typescript
+      - utf-8-validate
+      - zod
 
   ajv-formats@3.0.1(ajv@8.17.1):
     optionalDependencies:
@@ -15147,7 +15223,7 @@ snapshots:
       smol-toml: 1.4.2
       strip-json-comments: 5.0.2
       typescript: 5.9.3
-      zod: 4.1.12
+      zod: 3.25.76
 
   kolorist@1.8.0: {}
 
@@ -15939,7 +16015,8 @@ snapshots:
       object-assign: 4.1.1
       thenify-all: 1.6.0
 
-  nan@2.23.1: {}
+  nan@2.23.1:
+    optional: true
 
   nano-spawn@2.0.0: {}
 
@@ -18161,13 +18238,13 @@ snapshots:
       '@types/unist': 3.0.3
       vfile-message: 4.0.3
 
-  vite-node@1.6.1(@types/node@20.19.24):
+  vite-node@1.6.1(@types/node@22.19.0):
     dependencies:
       cac: 6.7.14
       debug: 4.4.3(supports-color@8.1.1)
       pathe: 1.1.2
       picocolors: 1.1.1
-      vite: 5.4.21(@types/node@20.19.24)
+      vite: 5.4.21(@types/node@22.19.0)
     transitivePeerDependencies:
       - '@types/node'
       - less
@@ -18230,13 +18307,13 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  vite@5.4.21(@types/node@20.19.24):
+  vite@5.4.21(@types/node@22.19.0):
     dependencies:
       esbuild: 0.21.5
       postcss: 8.5.6
       rollup: 4.52.5
     optionalDependencies:
-      '@types/node': 20.19.24
+      '@types/node': 22.19.0
       fsevents: 2.3.3
 
   vite@7.2.0(@types/node@22.19.0)(jiti@2.6.1)(tsx@4.20.6)(yaml@2.8.1):
@@ -18269,7 +18346,7 @@ snapshots:
       tsx: 4.20.6
       yaml: 2.8.1
 
-  vitest@1.6.1(@types/node@20.19.24)(jsdom@27.1.0):
+  vitest@1.6.1(@types/node@22.19.0)(jsdom@27.1.0):
     dependencies:
       '@vitest/expect': 1.6.1
       '@vitest/runner': 1.6.1
@@ -18288,11 +18365,11 @@ snapshots:
       strip-literal: 2.1.1
       tinybench: 2.9.0
       tinypool: 0.8.4
-      vite: 5.4.21(@types/node@20.19.24)
-      vite-node: 1.6.1(@types/node@20.19.24)
+      vite: 5.4.21(@types/node@22.19.0)
+      vite-node: 1.6.1(@types/node@22.19.0)
       why-is-node-running: 2.3.0
     optionalDependencies:
-      '@types/node': 20.19.24
+      '@types/node': 22.19.0
       jsdom: 27.1.0
     transitivePeerDependencies:
       - less

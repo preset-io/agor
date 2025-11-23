@@ -1,99 +1,24 @@
 /**
  * OpenCode SDK Handler
  *
- * Executes prompts using OpenCode SDK with Feathers client connection to daemon
+ * Executes prompts using OpenCode SDK with Feathers/WebSocket architecture
+ *
+ * Note: OpenCode has a different interface than Claude/Codex/Gemini:
+ * - Uses executeTask() instead of executePromptWithStreaming()
+ * - Requires session creation and context setup
+ * - Different return type (TaskResult vs execution result)
  */
 
-import type { ExecutorIPCServer } from '../../ipc-server.js';
+import type { PermissionMode, SessionID, TaskID } from '@agor/core/types';
+import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import { OpenCodeTool } from '../../sdk-handlers/opencode/index.js';
-import { DaemonClient } from '../../services/daemon-client.js';
-import { createExecutorClient, getDaemonUrl } from '../../services/feathers-client.js';
-import type { ExecutePromptParams, ExecutePromptResult } from '../../types.js';
-
-/**
- * Execute OpenCode prompt using Feathers client
- */
-export async function executeOpenCodeSDK(
-  params: ExecutePromptParams,
-  apiKey: string,
-  ipcServer: ExecutorIPCServer
-): Promise<ExecutePromptResult> {
-  const { session_token, session_id, task_id, prompt } = params;
-
-  // Connect to daemon via Feathers client
-  const daemonUrl = getDaemonUrl();
-  console.log(`[opencode] Connecting to daemon at ${daemonUrl}...`);
-  const client = await createExecutorClient(daemonUrl, session_token);
-
-  // Create DaemonClient for streaming callbacks
-  const daemonClient = new DaemonClient(ipcServer, session_token);
-
-  try {
-    // Create Tool instance with config
-    const tool = new OpenCodeTool(
-      {
-        enabled: true,
-        serverUrl: process.env.OPENCODE_SERVER_URL || 'http://localhost:3000',
-      },
-      client.service('messages')
-    );
-
-    // Execute task (OpenCode doesn't support executePromptWithStreaming yet)
-    // TODO: Implement streaming support for OpenCode
-    const result = await tool.executeTask!(
-      session_id as string,
-      prompt,
-      task_id as string | undefined,
-      {
-        onStreamStart: async (
-          message_id: string,
-          data: { session_id: string; task_id?: string; role: string; timestamp: string }
-        ) => {
-          await daemonClient.streamStart({
-            message_id: message_id as MessageID,
-            session_id: data.session_id as SessionID,
-            task_id: data.task_id as TaskID,
-            role: data.role,
-            timestamp: data.timestamp,
-          });
-        },
-        onStreamChunk: async (message_id: string, text: string) => {
-          await daemonClient.streamChunk({ message_id: message_id as MessageID, text });
-        },
-        onStreamEnd: async (message_id: string) => {
-          console.log(`[opencode] Stream ended: ${message_id}`);
-        },
-        onStreamError: async (message_id: string, error: Error) => {
-          console.error(`[opencode] Stream error for ${message_id}:`, error);
-        },
-      }
-    );
-
-    console.log(
-      `[opencode] Execution completed: status=${result.status}, messages=${result.messages.length}`
-    );
-
-    return {
-      status: result.status,
-      message_count: result.messages.length,
-      token_usage: undefined, // OpenCode doesn't provide token usage yet
-    };
-  } catch (error) {
-    const err = error as Error;
-    console.error('[opencode] Execution failed:', err);
-    throw err;
-  } finally {
-    // Close client connection
-    client.io.close();
-  }
-}
-
-import type { MessageID, PermissionMode, SessionID, TaskID } from '@agor/core/types';
 import type { AgorClient } from '../../services/feathers-client.js';
+import { createStreamingCallbacks } from './base-executor.js';
 
 /**
- * Execute OpenCode task (new Feathers/WebSocket architecture)
- * TODO: Implement full OpenCode execution with streaming
+ * Execute OpenCode task (Feathers/WebSocket architecture)
+ *
+ * Used by ephemeral executor - direct Feathers client passed in
  */
 export async function executeOpenCodeTask(params: {
   client: AgorClient;
@@ -103,5 +28,60 @@ export async function executeOpenCodeTask(params: {
   permissionMode?: PermissionMode;
   abortController: AbortController;
 }): Promise<void> {
-  throw new Error('OpenCode task execution not yet implemented in new architecture');
+  const { client, sessionId, taskId, prompt } = params;
+
+  console.log(`[opencode] Executing task ${taskId.substring(0, 8)}...`);
+
+  try {
+    // Create execution context (similar to other handlers)
+    const repos = createFeathersBackedRepositories(client);
+    const callbacks = createStreamingCallbacks(client, 'opencode');
+
+    // Get OpenCode server URL from environment
+    const serverUrl = process.env.OPENCODE_SERVER_URL || 'http://localhost:3000';
+
+    // Create Tool instance with config
+    const tool = new OpenCodeTool(
+      {
+        enabled: true,
+        serverUrl,
+      },
+      repos.messagesService
+    );
+
+    // Create OpenCode session (required for OpenCode)
+    const sessionHandle = await tool.createSession?.({
+      title: `Task ${taskId.substring(0, 8)}`,
+      projectName: 'agor',
+    });
+
+    if (!sessionHandle) {
+      throw new Error('Failed to create OpenCode session');
+    }
+
+    // Set session context (OpenCode-specific requirement)
+    tool.setSessionContext(sessionId, sessionHandle.sessionId);
+
+    // Execute task using OpenCode's executeTask interface
+    const result = await tool.executeTask?.(sessionId, prompt, taskId, callbacks);
+
+    console.log(`[opencode] Execution completed: status=${result?.status}`);
+
+    // Update task status to completed
+    await client.service('tasks').patch(taskId, {
+      status: result?.status === 'completed' ? 'completed' : 'failed',
+      completed_at: new Date().toISOString(),
+    });
+  } catch (error) {
+    const err = error as Error;
+    console.error('[opencode] Execution failed:', err);
+
+    // Update task status to failed
+    await client.service('tasks').patch(taskId, {
+      status: 'failed',
+      completed_at: new Date().toISOString(),
+    });
+
+    throw err;
+  }
 }

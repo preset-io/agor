@@ -11,7 +11,7 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { generateId } from '@agor/core/db';
-import type { PermissionMode } from '@anthropic-ai/claude-agent-sdk';
+import type { PermissionMode } from '@agor/core/sdk';
 import type {
   MCPServerRepository,
   MessagesRepository,
@@ -21,6 +21,9 @@ import type {
   WorktreeRepository,
 } from '../../db/feathers-repositories.js';
 import type { PermissionService } from '../../permissions/permission-service.js';
+import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response.js';
+// Removed import of calculateModelContextWindowUsage - inlined instead
+import type { TokenUsage } from '../../types/token-usage.js';
 import {
   type Message,
   type MessageID,
@@ -29,9 +32,6 @@ import {
   type TaskID,
   TaskStatus,
 } from '../../types.js';
-import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response.js';
-// Removed import of calculateModelContextWindowUsage - inlined instead
-import type { TokenUsage } from '../../types/token-usage.js';
 import type { ImportOptions, ITool, SessionData, ToolCapabilities } from '../base/index.js';
 import { loadClaudeSession } from './import/load-session.js';
 import { transcriptsToMessages } from './import/message-converter.js';
@@ -215,7 +215,7 @@ export class ClaudeTool implements ITool {
     contextWindowLimit?: number;
     model?: string;
     modelUsage?: unknown;
-    rawSdkResponse?: import('@anthropic-ai/claude-agent-sdk/sdk').SDKResultMessage;
+    rawSdkResponse?: import('@agor/core/sdk').SDKResultMessage;
   }> {
     if (!this.promptService || !this.messagesRepo) {
       throw new Error('ClaudeTool not initialized with repositories for live execution');
@@ -276,7 +276,7 @@ export class ClaudeTool implements ITool {
     let contextWindow: number | undefined;
     let contextWindowLimit: number | undefined;
     let modelUsage: unknown | undefined;
-    let rawSdkResponse: import('@anthropic-ai/claude-agent-sdk/sdk').SDKResultMessage | undefined;
+    let rawSdkResponse: import('@agor/core/sdk').SDKResultMessage | undefined;
 
     for await (const event of this.promptService.promptSessionStreaming(
       sessionId,
@@ -343,10 +343,9 @@ export class ClaudeTool implements ITool {
             console.debug(`⏱️ [SDK] TTFB (thinking): ${ttfb}ms`);
 
             if (streamingCallbacks.onThinkingStart) {
+              // Note: budget is extracted from thinking block if available
               streamingCallbacks.onThinkingStart(currentThinkingMessageId, {
-                session_id: sessionId,
-                task_id: taskId,
-                timestamp: new Date().toISOString(),
+                budget: undefined, // TODO: Extract from SDK if available
               });
             }
           }
@@ -641,7 +640,7 @@ export class ClaudeTool implements ITool {
     contextWindowLimit?: number;
     model?: string;
     modelUsage?: unknown;
-    rawSdkResponse?: import('@anthropic-ai/claude-agent-sdk/sdk').SDKResultMessage;
+    rawSdkResponse?: import('@agor/core/sdk').SDKResultMessage;
   }> {
     if (!this.promptService || !this.messagesRepo) {
       throw new Error('ClaudeTool not initialized with repositories for live execution');
@@ -673,7 +672,7 @@ export class ClaudeTool implements ITool {
     let contextWindow: number | undefined;
     let contextWindowLimit: number | undefined;
     let modelUsage: unknown | undefined;
-    let rawSdkResponse: import('@anthropic-ai/claude-agent-sdk/sdk').SDKResultMessage | undefined;
+    let rawSdkResponse: import('@agor/core/sdk').SDKResultMessage | undefined;
 
     for await (const event of this.promptService.promptSessionStreaming(
       sessionId,

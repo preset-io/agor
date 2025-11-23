@@ -11,8 +11,6 @@
  * - Yield structured events for database persistence
  */
 
-import type { SessionID } from '@agor/core/types';
-import { MessageRole } from '@agor/core/types';
 import type {
   SDKAssistantMessage,
   SDKCompactBoundaryMessage,
@@ -22,7 +20,9 @@ import type {
   SDKSystemMessage,
   SDKUserMessage,
   SDKUserMessageReplay,
-} from '@anthropic-ai/claude-agent-sdk/sdk';
+} from '@agor/core/sdk';
+import type { SessionID } from '@agor/core/types';
+import { MessageRole } from '@agor/core/types';
 
 /**
  * Content block interface for SDK messages

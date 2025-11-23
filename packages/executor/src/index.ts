@@ -145,63 +145,21 @@ export class AgorExecutor {
 
     console.log(`[executor] Executing task with ${this.config.tool}...`);
 
-    // Import and execute the appropriate SDK handler
-    switch (this.config.tool) {
-      case 'claude-code': {
-        const { executeClaudeCodeTask } = await import('./handlers/sdk/claude.js');
-        await executeClaudeCodeTask({
-          client: this.client,
-          sessionId: this.config.sessionId as SessionID,
-          taskId: this.config.taskId as TaskID,
-          prompt: this.config.prompt,
-          permissionMode: this.config.permissionMode,
-          abortController: this.abortController,
-        });
-        break;
-      }
+    // Import and initialize tool registry
+    const { ToolRegistry, initializeToolRegistry } = await import(
+      './handlers/sdk/tool-registry.js'
+    );
+    await initializeToolRegistry();
 
-      case 'gemini': {
-        const { executeGeminiTask } = await import('./handlers/sdk/gemini.js');
-        await executeGeminiTask({
-          client: this.client,
-          sessionId: this.config.sessionId as SessionID,
-          taskId: this.config.taskId as TaskID,
-          prompt: this.config.prompt,
-          permissionMode: this.config.permissionMode,
-          abortController: this.abortController,
-        });
-        break;
-      }
-
-      case 'codex': {
-        const { executeCodexTask } = await import('./handlers/sdk/codex.js');
-        await executeCodexTask({
-          client: this.client,
-          sessionId: this.config.sessionId as SessionID,
-          taskId: this.config.taskId as TaskID,
-          prompt: this.config.prompt,
-          permissionMode: this.config.permissionMode,
-          abortController: this.abortController,
-        });
-        break;
-      }
-
-      case 'opencode': {
-        const { executeOpenCodeTask } = await import('./handlers/sdk/opencode.js');
-        await executeOpenCodeTask({
-          client: this.client,
-          sessionId: this.config.sessionId as SessionID,
-          taskId: this.config.taskId as TaskID,
-          prompt: this.config.prompt,
-          permissionMode: this.config.permissionMode,
-          abortController: this.abortController,
-        });
-        break;
-      }
-
-      default:
-        throw new Error(`Unknown tool: ${this.config.tool}`);
-    }
+    // Execute using registry
+    await ToolRegistry.execute(this.config.tool, {
+      client: this.client,
+      sessionId: this.config.sessionId as SessionID,
+      taskId: this.config.taskId as TaskID,
+      prompt: this.config.prompt,
+      permissionMode: this.config.permissionMode,
+      abortController: this.abortController,
+    });
 
     this.isRunning = false;
   }
@@ -274,8 +232,5 @@ export class AgorExecutor {
   }
 }
 
-// Re-export legacy executor for backward compatibility
-export { AgorExecutorLegacy } from './index-legacy.js';
-export { ExecutorIPCServer } from './ipc-server.js';
 // Re-export types and utilities
 export * from './types.js';

@@ -140,6 +140,9 @@ services:
       - /app/apps/agor-ui/node_modules
       - /app/apps/agor-docs/node_modules
       - /app/apps/agor-cli/node_modules
+      # Note: We DO NOT exclude dist directories - they should be shared between host and container
+      # The entrypoint script runs `sudo chown -R agor:agor /app` to fix permissions on startup
+      # This ensures build outputs from container watch mode are accessible on host
       # Persist entire home directory (database, config, agent auth tokens, etc.)
       - agor-home:/home/agor
       # Mount SSH keys for git authentication (dev only)

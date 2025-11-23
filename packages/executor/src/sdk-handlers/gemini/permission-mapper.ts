@@ -2,8 +2,8 @@
  * Permission Mode Mapper - Pure utility for mapping Agor permission modes to Gemini ApprovalMode
  */
 
+import { Gemini } from '@agor/core/sdk';
 import type { PermissionMode } from '@agor/core/types';
-import { ApprovalMode } from '@google/gemini-cli-core';
 
 /**
  * Map Agor permission mode to Gemini ApprovalMode
@@ -23,23 +23,25 @@ import { ApprovalMode } from '@google/gemini-cli-core';
  * @param permissionMode - Agor permission mode
  * @returns Gemini ApprovalMode
  */
-export function mapPermissionMode(permissionMode: PermissionMode): ApprovalMode {
+export function mapPermissionMode(
+  permissionMode: PermissionMode
+): (typeof Gemini.ApprovalMode)[keyof typeof Gemini.ApprovalMode] {
   switch (permissionMode) {
     case 'default':
     case 'ask':
-      return ApprovalMode.DEFAULT; // Prompt for each tool use
+      return Gemini.ApprovalMode.DEFAULT; // Prompt for each tool use
 
     case 'acceptEdits':
     case 'auto':
       // TEMPORARY: Map to YOLO since AUTO_EDIT blocks shell commands in non-interactive mode
       // TODO: Implement proper approval handling for AUTO_EDIT mode
-      return ApprovalMode.YOLO; // Auto-approve all operations (was: AUTO_EDIT)
+      return Gemini.ApprovalMode.YOLO; // Auto-approve all operations (was: AUTO_EDIT)
 
     case 'bypassPermissions':
     case 'allow-all':
-      return ApprovalMode.YOLO; // Auto-approve all operations
+      return Gemini.ApprovalMode.YOLO; // Auto-approve all operations
 
     default:
-      return ApprovalMode.DEFAULT;
+      return Gemini.ApprovalMode.DEFAULT;
   }
 }

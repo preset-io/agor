@@ -27,6 +27,8 @@ export { default as feathersExpress, errorHandler, rest } from '@feathersjs/expr
 export type { Application, Service, ServiceMethods } from '@feathersjs/feathers';
 // Core Feathers
 export { feathers } from '@feathersjs/feathers';
+// Schema validation
+export { validateQuery } from '@feathersjs/schema';
 // Socket.io Integration
 export { default as socketio } from '@feathersjs/socketio';
 // Client (these are already exported from @agor/core/api)

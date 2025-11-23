@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { existsSync, mkdirSync, symlinkSync, unlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, symlinkSync, unlinkSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import chalk from 'chalk';
@@ -21,12 +21,18 @@ try {
     mkdirSync(nodeModulesAgor, { recursive: true });
   }
 
-  // Remove existing symlink if it exists
+  // Remove existing symlink/directory if it exists
   if (existsSync(coreSymlink)) {
     try {
       unlinkSync(coreSymlink);
     } catch (_err) {
-      // Ignore errors if it's not a symlink
+      // If unlinkSync fails (e.g., it's a directory, not a symlink), try rmSync
+      try {
+        rmSync(coreSymlink, { recursive: true, force: true });
+      } catch (_rmErr) {
+        // If we can't remove it, skip symlink creation - the imports field will handle it
+        throw new Error(`EEXIST: file already exists, symlink '${coreTarget}' -> '${coreSymlink}'`);
+      }
     }
   }
 

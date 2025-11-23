@@ -15,17 +15,13 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { resolveApiKey, resolveUserEnvironment } from '@agor/core/config';
 import type { Database } from '@agor/core/db';
+import type { GenAI } from '@agor/core/sdk';
+import { Gemini } from '@agor/core/sdk';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
-import {
-  AuthType,
-  Config,
-  executeToolCall,
-  GeminiClient,
-  GeminiEventType,
-  MCPServerConfig,
-  type ResumedSessionData,
-} from '@google/gemini-cli-core';
-import type { Part } from '@google/genai';
+
+type ResumedSessionData = Gemini.ResumedSessionData;
+type Part = GenAI.Part;
+
 import { getDaemonUrl } from '../../config.js';
 import type {
   MCPServerRepository,
@@ -35,8 +31,8 @@ import type {
   SessionRepository,
   WorktreeRepository,
 } from '../../db/feathers-repositories.js';
-import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
 import type { TokenUsage } from '../../types/token-usage.js';
+import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
 import { convertConversationToHistory } from './conversation-converter.js';
 import { DEFAULT_GEMINI_MODEL, type GeminiModel } from './models.js';
 import { mapPermissionMode } from './permission-mapper.js';
@@ -48,7 +44,7 @@ import { extractGeminiTokenUsage } from './usage.js';
  * Note: config is private in GeminiClient, so we use unknown cast
  */
 interface GeminiClientWithConfig {
-  config: Config;
+  config: InstanceType<typeof Gemini.Config>;
 }
 
 /**
@@ -88,7 +84,7 @@ export type GeminiStreamEvent =
     };
 
 export class GeminiPromptService {
-  private sessionClients = new Map<SessionID, GeminiClient>();
+  private sessionClients = new Map<SessionID, InstanceType<typeof Gemini.GeminiClient>>();
   private activeControllers = new Map<SessionID, AbortController>();
   private db?: Database; // Database for user env vars and API key resolution
   private tasksService?: { get: (id: TaskID) => Promise<{ created_by: string }> };
@@ -220,7 +216,7 @@ export class GeminiPromptService {
 
           // Handle different event types from Gemini SDK
           switch (event.type) {
-            case GeminiEventType.Content: {
+            case Gemini.GeminiEventType.Content: {
               // Text chunk from model - stream it immediately!
               const textChunk = event.value || '';
               fullTextContent += textChunk;
@@ -234,7 +230,7 @@ export class GeminiPromptService {
               break;
             }
 
-            case GeminiEventType.ToolCallRequest: {
+            case Gemini.GeminiEventType.ToolCallRequest: {
               // Agent wants to call a tool
               let { name, args, callId } = event.value;
 
@@ -271,7 +267,7 @@ export class GeminiPromptService {
               break;
             }
 
-            case GeminiEventType.ToolCallResponse: {
+            case Gemini.GeminiEventType.ToolCallResponse: {
               // Tool execution completed
               const toolResponse = event.value as unknown as Record<string, unknown>;
 
@@ -283,7 +279,7 @@ export class GeminiPromptService {
               break;
             }
 
-            case GeminiEventType.Finished: {
+            case Gemini.GeminiEventType.Finished: {
               // Turn complete - yield final message (if we have any content)
               console.debug(
                 `[Gemini Turn Finished] Text: ${fullTextContent.length} chars, Tools: ${toolUses.length}`
@@ -339,7 +335,7 @@ export class GeminiPromptService {
               break;
             }
 
-            case GeminiEventType.Error: {
+            case Gemini.GeminiEventType.Error: {
               // Error occurred during execution
               const errorValue = 'value' in event ? event.value : 'Unknown error';
               console.error(`Gemini SDK error: ${JSON.stringify(errorValue)}`);
@@ -364,14 +360,14 @@ export class GeminiPromptService {
               throw new Error(`Gemini execution failed: ${errorMessage}`);
             }
 
-            case GeminiEventType.Thought: {
+            case Gemini.GeminiEventType.Thought: {
               // Agent thinking/reasoning (could stream to UI in future)
               const thoughtValue = 'value' in event ? event.value : '';
               console.debug(`[Gemini Thought] ${thoughtValue}`);
               break;
             }
 
-            case GeminiEventType.ToolCallConfirmation: {
+            case Gemini.GeminiEventType.ToolCallConfirmation: {
               // User approval needed (should be handled by ApprovalMode config)
               console.warn(
                 '[Gemini] Tool call needs confirmation - this should not happen in AUTO_EDIT/YOLO mode!'
@@ -414,7 +410,7 @@ export class GeminiPromptService {
             );
 
             // Use SDK's executeToolCall function instead of manually calling tool.execute()
-            const response = await executeToolCall(
+            const response = await Gemini.executeToolCall(
               config,
               {
                 callId: toolCall.callId,
@@ -537,7 +533,7 @@ export class GeminiPromptService {
     sessionId: SessionID,
     permissionMode?: PermissionMode,
     contextUserId?: import('../../types').UserID
-  ): Promise<GeminiClient> {
+  ): Promise<InstanceType<typeof Gemini.GeminiClient>> {
     // Resolve per-user API key FIRST, before checking for existing client
     // This ensures we use the correct key even when reusing a cached client
     const session = await this.sessionsRepo.findById(sessionId);
@@ -553,16 +549,16 @@ export class GeminiPromptService {
     });
 
     // Determine auth type: OAuth if no API key, otherwise API key
-    let authType: AuthType;
+    let authType: (typeof Gemini.AuthType)[keyof typeof Gemini.AuthType];
     if (resolvedApiKey) {
       process.env.GEMINI_API_KEY = resolvedApiKey;
-      authType = AuthType.USE_GEMINI;
+      authType = Gemini.AuthType.USE_GEMINI;
       console.log(
         `🔑 [Gemini] Using per-user/global API key for ${userIdForApiKey?.substring(0, 8) ?? 'unknown user'}`
       );
     } else {
       // No API key found - use OAuth authentication via Gemini CLI
-      authType = AuthType.LOGIN_WITH_GOOGLE;
+      authType = Gemini.AuthType.LOGIN_WITH_GOOGLE;
       console.log('🔐 [Gemini] No API key found, using OAuth authentication (Gemini CLI)');
       delete process.env.GEMINI_API_KEY;
     }
@@ -588,10 +584,11 @@ export class GeminiPromptService {
         try {
           // Re-determine auth type based on current API key state
           const currentAuthType = process.env.GEMINI_API_KEY
-            ? AuthType.USE_GEMINI
-            : AuthType.LOGIN_WITH_GOOGLE;
+            ? Gemini.AuthType.USE_GEMINI
+            : Gemini.AuthType.LOGIN_WITH_GOOGLE;
           await config.refreshAuth(currentAuthType);
-          const authMethod = currentAuthType === AuthType.LOGIN_WITH_GOOGLE ? 'OAuth' : 'API key';
+          const authMethod =
+            currentAuthType === Gemini.AuthType.LOGIN_WITH_GOOGLE ? 'OAuth' : 'API key';
           console.log(`🔄 [Gemini] Refreshed authentication using ${authMethod}`);
         } catch (error) {
           // Log but don't throw - let the subsequent prompt attempt fail with a better error
@@ -664,7 +661,7 @@ export class GeminiPromptService {
     console.log(`   Will be loaded alongside project GEMINI.md files`);
 
     // Fetch and configure MCP servers for this session (hierarchical scoping)
-    const mcpServersConfig: Record<string, MCPServerConfig> = {};
+    const mcpServersConfig: Record<string, InstanceType<typeof Gemini.MCPServerConfig>> = {};
 
     // Configure Agor MCP server (self-access to daemon) - only if MCP is enabled
     if (this.mcpEnabled !== false) {
@@ -680,7 +677,7 @@ export class GeminiPromptService {
 
         console.log(`🔌 Configuring Agor MCP server (self-access to daemon)`);
         // Use httpUrl parameter for HTTP transport
-        mcpServersConfig.agor = new MCPServerConfig(
+        mcpServersConfig.agor = new Gemini.MCPServerConfig(
           undefined, // command
           undefined, // args
           {}, // env
@@ -770,7 +767,7 @@ export class GeminiPromptService {
 
           // Convert Agor's MCP server format to Gemini SDK's MCPServerConfig
           if (server.transport === 'stdio') {
-            mcpServersConfig[server.name] = new MCPServerConfig(
+            mcpServersConfig[server.name] = new Gemini.MCPServerConfig(
               server.command,
               server.args || [],
               server.env || {},
@@ -778,7 +775,7 @@ export class GeminiPromptService {
             );
           } else if (server.transport === 'http') {
             // HTTP transport: use httpUrl parameter
-            mcpServersConfig[server.name] = new MCPServerConfig(
+            mcpServersConfig[server.name] = new Gemini.MCPServerConfig(
               undefined, // command
               undefined, // args
               server.env || {},
@@ -789,7 +786,7 @@ export class GeminiPromptService {
             );
           } else if (server.transport === 'sse') {
             // SSE transport: use url parameter (websocket/sse)
-            mcpServersConfig[server.name] = new MCPServerConfig(
+            mcpServersConfig[server.name] = new Gemini.MCPServerConfig(
               undefined, // command
               undefined, // args
               server.env || {},
@@ -824,7 +821,7 @@ export class GeminiPromptService {
     }
 
     // Create SDK config
-    const config = new Config({
+    const config = new Gemini.Config({
       sessionId, // Use Agor session ID
       targetDir: workingDirectory,
       cwd: workingDirectory,
@@ -853,15 +850,39 @@ export class GeminiPromptService {
     // Use authType determined above (OAuth or API key)
     // The SDK will look for GEMINI_API_KEY environment variable (if using API key)
     // or use OAuth credentials from ~/.gemini/oauth_creds.json (if using OAuth)
-    await config.refreshAuth(authType);
-    const authMethod = authType === AuthType.LOGIN_WITH_GOOGLE ? 'OAuth' : 'API key';
-    console.log(`🔐 [Gemini] Authenticated using ${authMethod}`);
+
+    // Wrap auth in a timeout to prevent hanging on OAuth prompts
+    const AUTH_TIMEOUT_MS = 10000; // 10 seconds
+    try {
+      await Promise.race([
+        config.refreshAuth(authType),
+        new Promise((_, reject) =>
+          setTimeout(
+            () =>
+              reject(
+                new Error(
+                  'Authentication timeout. If using OAuth, please set GEMINI_API_KEY instead or run `gemini login` outside of Agor to authenticate.'
+                )
+              ),
+            AUTH_TIMEOUT_MS
+          )
+        ),
+      ]);
+      const authMethod = authType === Gemini.AuthType.LOGIN_WITH_GOOGLE ? 'OAuth' : 'API key';
+      console.log(`🔐 [Gemini] Authenticated using ${authMethod}`);
+    } catch (error) {
+      const err = error as Error;
+      console.error(`❌ [Gemini] Authentication failed:`, err.message);
+      throw new Error(
+        `Gemini authentication failed: ${err.message}. Please configure GEMINI_API_KEY or run 'gemini login' to authenticate with OAuth.`
+      );
+    }
 
     // Try to load existing session file from SDK's filesystem storage
     const resumedSessionData = await this.loadSessionFile(sessionId, workingDirectory);
 
     // Create client (config must be initialized and authenticated first!)
-    const client = new GeminiClient(config);
+    const client = new Gemini.GeminiClient(config);
     await client.initialize();
 
     // CRITICAL: Set tools for the client (this triggers MCP tool discovery and registration)
@@ -905,7 +926,10 @@ export class GeminiPromptService {
    * The SDK's ChatRecordingService automatically persists to filesystem,
    * so we just log for debugging purposes.
    */
-  private async updateSessionHistory(sessionId: SessionID, client: GeminiClient): Promise<void> {
+  private async updateSessionHistory(
+    sessionId: SessionID,
+    client: InstanceType<typeof Gemini.GeminiClient>
+  ): Promise<void> {
     const history = client.getHistory();
     const recordingService = client.getChatRecordingService();
 

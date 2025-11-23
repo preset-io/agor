@@ -56,7 +56,19 @@
     "overrides": {
       "@esbuild-kit/core-utils>esbuild": "0.25.4",
       "glob": "^11.1.0",
-      "npm-run-path": "^5.3.0"
+      "npm-run-path": "^5.3.0",
+      "zod": "^3.25.0"
+    },
+    "peerDependencyRules": {
+      "ignoreMissing": [
+        "@opentelemetry/core",
+        "@opentelemetry/resources",
+        "@opentelemetry/sdk-metrics",
+        "@opentelemetry/sdk-trace-base"
+      ],
+      "allowedVersions": {
+        "zod": "*"
+      }
     }
   },
   "dependencies": {
