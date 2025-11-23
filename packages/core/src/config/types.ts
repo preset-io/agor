@@ -157,22 +157,10 @@ export interface AgorExecutionSettings {
   /** Default Unix user for executors (default: 'agor', only used when run_as_unix_user: true) */
   executor_unix_user?: string;
 
-  /** Maximum number of concurrent executors (default: 10) */
-  max_executors?: number;
-
-  /** Idle timeout for executors in ms (default: 60000) */
-  idle_timeout_ms?: number;
-
-  /** Socket path template (default: /tmp/agor-executor-{id}.sock) */
-  socket_path_template?: string;
-
-  /** Connection timeout in ms (default: 5000) */
-  connection_timeout_ms?: number;
-
   /** Session token expiration in ms (default: 86400000 = 24 hours) */
   session_token_expiration_ms?: number;
 
-  /** Maximum session token uses (default: 1 = single-use) */
+  /** Maximum session token uses (default: 1 = single-use, -1 = unlimited) */
   session_token_max_uses?: number;
 }
 
