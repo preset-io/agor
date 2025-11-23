@@ -795,6 +795,7 @@ async function main() {
     // Import spawn and path utilities
     const { spawn } = await import('node:child_process');
     const path = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
 
     // Get session and validate
     const session = await sessionsService.get(sessionId, params);

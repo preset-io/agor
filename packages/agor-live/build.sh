@@ -45,6 +45,12 @@ echo "⚙️  Building Daemon..."
 cd "$REPO_ROOT/apps/agor-daemon"
 pnpm build
 
+# Build Executor
+echo ""
+echo "🔧 Building Executor..."
+cd "$REPO_ROOT/packages/executor"
+pnpm build
+
 # Build UI
 echo ""
 echo "🎨 Building UI..."
@@ -85,6 +91,11 @@ echo "  → Copying daemon..."
 mkdir -p "$SCRIPT_DIR/dist/daemon"
 cp -r "$REPO_ROOT/apps/agor-daemon/dist/"* "$SCRIPT_DIR/dist/daemon/"
 
+# Copy Executor
+echo "  → Copying executor..."
+mkdir -p "$SCRIPT_DIR/dist/executor"
+cp -r "$REPO_ROOT/packages/executor/dist/"* "$SCRIPT_DIR/dist/executor/"
+
 # Copy UI
 echo "  → Copying UI..."
 mkdir -p "$SCRIPT_DIR/dist/ui"
@@ -102,10 +113,11 @@ echo ""
 echo "📊 Package size:"
 du -sh "$SCRIPT_DIR/dist" | awk '{print "  Total: " $1}'
 echo ""
-du -sh "$SCRIPT_DIR/dist/core" | awk '{print "  Core:   " $1}'
-du -sh "$SCRIPT_DIR/dist/cli" | awk '{print "  CLI:    " $1}'
-du -sh "$SCRIPT_DIR/dist/daemon" | awk '{print "  Daemon: " $1}'
-du -sh "$SCRIPT_DIR/dist/ui" | awk '{print "  UI:     " $1}'
+du -sh "$SCRIPT_DIR/dist/core" | awk '{print "  Core:     " $1}'
+du -sh "$SCRIPT_DIR/dist/cli" | awk '{print "  CLI:      " $1}'
+du -sh "$SCRIPT_DIR/dist/daemon" | awk '{print "  Daemon:   " $1}'
+du -sh "$SCRIPT_DIR/dist/executor" | awk '{print "  Executor: " $1}'
+du -sh "$SCRIPT_DIR/dist/ui" | awk '{print "  UI:       " $1}'
 
 echo ""
 echo "✅ Build complete!"
