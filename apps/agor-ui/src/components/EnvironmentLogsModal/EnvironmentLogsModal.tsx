@@ -32,10 +32,11 @@ export const EnvironmentLogsModal: React.FC<EnvironmentLogsModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const logsContainerRef = useRef<HTMLDivElement>(null);
-  const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const logsRef = useRef<LogsResponse | null>(null);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchLogs = useCallback(
-    async (shouldAutoScroll = false) => {
+    async (shouldAutoScroll = false, isManualRefresh = false) => {
       if (!client) return;
 
       // Check if user is scrolled to bottom before fetching
@@ -44,7 +45,11 @@ export const EnvironmentLogsModal: React.FC<EnvironmentLogsModalProps> = ({
         container &&
         Math.abs(container.scrollHeight - container.scrollTop - container.clientHeight) < 10;
 
-      setLoading(true);
+      // Only show loading spinner for manual refreshes
+      if (isManualRefresh) {
+        setLoading(true);
+      }
+
       try {
         // Call the custom logs endpoint using Feathers client with query params
         const data = (await client.service('worktrees/logs').find({
@@ -53,32 +58,39 @@ export const EnvironmentLogsModal: React.FC<EnvironmentLogsModalProps> = ({
           },
         })) as unknown as LogsResponse;
         setLogs(data);
+        logsRef.current = data;
 
-        // Auto-scroll to bottom if shouldAutoScroll is true AND user was already at bottom
-        if (shouldAutoScroll && (isAtBottom || !logs)) {
+        // Auto-scroll to bottom if shouldAutoScroll is true AND (user was already at bottom OR first load)
+        const hadLogs = !!logsRef.current;
+        if (shouldAutoScroll && (isAtBottom || !hadLogs)) {
           setTimeout(() => {
             container?.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
           }, 100);
         }
       } catch (error: unknown) {
-        setLogs({
+        const errorData = {
           logs: '',
           timestamp: new Date().toISOString(),
           error: error instanceof Error ? error.message : 'Failed to fetch logs',
-        });
+        };
+        setLogs(errorData);
+        logsRef.current = errorData;
       } finally {
-        setLoading(false);
+        if (isManualRefresh) {
+          setLoading(false);
+        }
       }
     },
-    [client, worktree.worktree_id, logs]
+    [client, worktree.worktree_id]
   );
 
   // Fetch logs when modal opens
   useEffect(() => {
     if (open) {
-      fetchLogs();
+      fetchLogs(true, true); // Auto-scroll on initial load, show loading spinner
     } else {
       setLogs(null); // Clear logs when modal closes
+      logsRef.current = null;
     }
   }, [open, fetchLogs]);
 
@@ -129,7 +141,7 @@ export const EnvironmentLogsModal: React.FC<EnvironmentLogsModalProps> = ({
         <Button
           key="refresh"
           icon={<ReloadOutlined />}
-          onClick={() => fetchLogs()}
+          onClick={() => fetchLogs(false, true)}
           loading={loading}
         >
           Refresh
