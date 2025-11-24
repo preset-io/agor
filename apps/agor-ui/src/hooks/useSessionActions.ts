@@ -112,9 +112,12 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
       })) as Session;
 
       // Send the prompt to the forked session to actually execute it
-      await client.service(`sessions/${forkedSession.session_id}/prompt`).create({
-        prompt,
-      });
+      // Skip if prompt is empty (allows forking without initial prompt)
+      if (prompt.trim()) {
+        await client.service(`sessions/${forkedSession.session_id}/prompt`).create({
+          prompt,
+        });
+      }
 
       return forkedSession;
     } catch (err) {
