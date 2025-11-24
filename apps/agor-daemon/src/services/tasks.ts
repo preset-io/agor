@@ -105,10 +105,14 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     // NOTE: create() always returns a single Task (not an array) in practice
     if (data.status === TaskStatus.RUNNING && !Array.isArray(result) && this.app) {
       try {
-        await this.app.service('sessions').patch(result.session_id, {
-          status: 'running',
-          ready_for_prompt: false,
-        });
+        await this.app.service('sessions').patch(
+          result.session_id,
+          {
+            status: 'running',
+            ready_for_prompt: false,
+          },
+          params
+        );
 
         console.log(
           `✅ [TasksService] Session ${result.session_id.substring(0, 8)} status updated to RUNNING (task ${result.task_id.substring(0, 8)} created)`
@@ -145,17 +149,21 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         try {
           // ATOMICALLY update session status to IDLE and set ready_for_prompt
           // This ensures WebSocket events are emitted immediately via FeathersJS service layer
-          await this.app.service('sessions').patch(task.session_id, {
-            status: 'idle',
-            ready_for_prompt: true,
-          });
+          await this.app.service('sessions').patch(
+            task.session_id,
+            {
+              status: 'idle',
+              ready_for_prompt: true,
+            },
+            params
+          );
 
           console.log(
             `✅ [TasksService] Session ${task.session_id.substring(0, 8)} status updated to IDLE (task ${task.task_id.substring(0, 8)} ${data.status})`
           );
 
           // Check if session has parent and queue callback
-          const session = await this.app.service('sessions').get(task.session_id);
+          const session = await this.app.service('sessions').get(task.session_id, params);
           if (session.genealogy?.parent_session_id) {
             await this.queueParentCallback(task, session, params);
           }
@@ -181,7 +189,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
     try {
       // Get parent session to check callback config
-      const parentSession = await this.app.service('sessions').get(parentSessionId);
+      const parentSession = await this.app.service('sessions').get(parentSessionId, params);
 
       // Check callback config - child overrides take precedence over parent defaults
       const callbackEnabled =
@@ -219,6 +227,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
           // Query messages service for last assistant message in this task
           const messagesService = this.app.service('messages');
           const messages = await messagesService.find({
+            ...params,
             query: {
               session_id: childSession.session_id,
               task_id: task.task_id,
@@ -355,9 +364,13 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     // Set the session's ready_for_prompt flag to true when task completes successfully
     if (completedTask.session_id && this.app) {
       try {
-        await this.app.service('sessions').patch(completedTask.session_id, {
-          ready_for_prompt: true,
-        });
+        await this.app.service('sessions').patch(
+          completedTask.session_id,
+          {
+            ready_for_prompt: true,
+          },
+          params
+        );
       } catch (error) {
         console.error('❌ Failed to set ready_for_prompt flag:', error);
       }
