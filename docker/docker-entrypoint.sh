@@ -44,8 +44,13 @@ CORE_PID=$!
 
 # Wait for initial watch build to complete
 # tsup --watch does a full build on startup, then watches for changes
+# We need to wait for both .js files AND .d.ts files to avoid TypeScript race conditions
 echo "⏳ Waiting for @agor/core initial build..."
 while [ ! -f "/app/packages/core/dist/index.js" ] || [ ! -f "/app/packages/core/dist/utils/logger.js" ]; do
+  sleep 0.1
+done
+echo "⏳ Waiting for @agor/core type definitions..."
+while [ ! -f "/app/packages/core/dist/api/index.d.ts" ]; do
   sleep 0.1
 done
 echo "✅ @agor/core build ready"
