@@ -511,6 +511,9 @@ export const users = sqliteTable(
       .notNull()
       .default('member'),
 
+    // Unix username for process impersonation (optional, app-enforced uniqueness)
+    unix_username: text('unix_username'),
+
     // Onboarding state
     onboarding_completed: t.bool('onboarding_completed').notNull().default(false),
 

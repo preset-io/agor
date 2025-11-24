@@ -226,6 +226,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <UsersTable
                 userById={userById}
                 mcpServerById={mcpServerById}
+                currentUser={currentUser}
                 onCreate={onCreateUser}
                 onUpdate={onUpdateUser}
                 onDelete={onDeleteUser}

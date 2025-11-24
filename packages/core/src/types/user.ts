@@ -98,19 +98,27 @@ export interface UserPreferences {
 }
 
 /**
- * User type - Authentication and authorization
+ * Base user fields shared across User, CreateUserInput, and UpdateUserInput
  */
-export interface User {
-  user_id: UserID;
+export interface BaseUserFields {
   email: string;
   name?: string;
-  emoji?: string; // User emoji for visual identity (like boards)
+  emoji?: string;
   role: UserRole;
+}
+
+/**
+ * User type - Authentication and authorization
+ */
+export interface User extends BaseUserFields {
+  user_id: UserID;
   avatar?: string;
   preferences?: UserPreferences;
   onboarding_completed: boolean;
   created_at: Date;
   updated_at?: Date;
+  // Unix username for process impersonation (optional, unique, admin-managed)
+  unix_username?: string;
   // API key status (boolean only, never exposes actual keys)
   api_keys?: {
     ANTHROPIC_API_KEY?: boolean; // true = key is set, false/undefined = not set
@@ -126,26 +134,21 @@ export interface User {
 /**
  * Create user input (password required, not stored in User type)
  */
-export interface CreateUserInput {
+export interface CreateUserInput extends Partial<BaseUserFields> {
   email: string;
   password: string;
-  name?: string;
-  emoji?: string;
-  role?: UserRole;
+  unix_username?: string;
 }
 
 /**
  * Update user input
  */
-export interface UpdateUserInput {
-  email?: string;
+export interface UpdateUserInput extends Partial<BaseUserFields> {
   password?: string;
-  name?: string;
-  emoji?: string;
-  role?: UserRole;
   avatar?: string;
   preferences?: UserPreferences;
   onboarding_completed?: boolean;
+  unix_username?: string;
   // API keys for update (accepts plaintext, encrypted before storage)
   api_keys?: {
     ANTHROPIC_API_KEY?: string | null; // string = set key, null = clear key

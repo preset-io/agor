@@ -37,6 +37,7 @@ export class UsersRepository implements BaseRepository<User, Partial<User>> {
       name: row.name ?? undefined,
       emoji: row.emoji ?? undefined,
       role: row.role,
+      unix_username: row.unix_username ?? undefined,
       onboarding_completed: row.onboarding_completed,
       avatar: row.data.avatar,
       preferences: row.data.preferences as User['preferences'],
@@ -81,6 +82,7 @@ export class UsersRepository implements BaseRepository<User, Partial<User>> {
       name: user.name ?? null,
       emoji: user.emoji ?? null,
       role: user.role ?? 'member',
+      unix_username: user.unix_username ?? null,
       onboarding_completed: user.onboarding_completed ?? false,
       data: {
         avatar: user.avatar,
@@ -124,9 +126,43 @@ export class UsersRepository implements BaseRepository<User, Partial<User>> {
   }
 
   /**
+   * Check if unix_username is already taken by another user
+   */
+  private async isUnixUsernameTaken(
+    unixUsername: string,
+    excludeUserId?: string
+  ): Promise<boolean> {
+    const result = await select(this.db)
+      .from(users)
+      .where(eq(users.unix_username, unixUsername))
+      .get();
+
+    if (!result) {
+      return false;
+    }
+
+    // If excluding a user ID (for updates), check if it's a different user
+    if (excludeUserId && result.user_id === excludeUserId) {
+      return false;
+    }
+
+    return true;
+  }
+
+  /**
    * Create a new user
    */
   async create(data: Partial<User>): Promise<User> {
+    // Validate unix_username uniqueness if provided
+    if (data.unix_username) {
+      const isTaken = await this.isUnixUsernameTaken(data.unix_username);
+      if (isTaken) {
+        throw new RepositoryError(
+          `Unix username "${data.unix_username}" is already in use by another user`
+        );
+      }
+    }
+
     const insertData = this.userToInsert(data);
 
     await insert(this.db, users).values(insertData).run();
@@ -197,6 +233,16 @@ export class UsersRepository implements BaseRepository<User, Partial<User>> {
     const current = await this.findById(fullId);
     if (!current) {
       throw new EntityNotFoundError('User', id);
+    }
+
+    // Validate unix_username uniqueness if being changed
+    if (updates.unix_username && updates.unix_username !== current.unix_username) {
+      const isTaken = await this.isUnixUsernameTaken(updates.unix_username, fullId);
+      if (isTaken) {
+        throw new RepositoryError(
+          `Unix username "${updates.unix_username}" is already in use by another user`
+        );
+      }
     }
 
     // Merge updates

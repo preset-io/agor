@@ -31,6 +31,7 @@ interface CreateUserData {
   name?: string;
   emoji?: string;
   role?: 'owner' | 'admin' | 'member' | 'viewer';
+  unix_username?: string;
 }
 
 /**
@@ -42,6 +43,7 @@ interface UpdateUserData {
   name?: string;
   emoji?: string;
   role?: 'owner' | 'admin' | 'member' | 'viewer';
+  unix_username?: string;
   avatar?: string;
   preferences?: Record<string, unknown>;
   onboarding_completed?: boolean;
@@ -132,6 +134,7 @@ export class UsersService {
         name: data.name,
         emoji: data.emoji || defaultEmoji,
         role,
+        unix_username: data.unix_username,
         created_at: now,
         updated_at: now,
         data: {
@@ -161,6 +164,7 @@ export class UsersService {
     if (data.name) updates.name = data.name;
     if (data.emoji !== undefined) updates.emoji = data.emoji;
     if (data.role) updates.role = data.role;
+    if (data.unix_username !== undefined) updates.unix_username = data.unix_username;
     if (data.onboarding_completed !== undefined)
       updates.onboarding_completed = data.onboarding_completed;
 
@@ -366,6 +370,7 @@ export class UsersService {
       name: row.name ?? undefined,
       emoji: row.emoji ?? undefined,
       role: row.role as 'owner' | 'admin' | 'member' | 'viewer',
+      unix_username: row.unix_username ?? undefined,
       avatar: data.avatar,
       preferences: data.preferences,
       onboarding_completed: !!row.onboarding_completed,

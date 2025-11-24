@@ -1188,12 +1188,19 @@ async function main() {
           const params = context.params as AuthenticatedParams;
           const userId = context.id as string;
 
-          // Admins can patch any user
+          // Field-level restriction: only admins can modify unix_username
+          if (!Array.isArray(context.data) && context.data?.unix_username !== undefined) {
+            if (!params.user || params.user.role !== 'admin') {
+              throw new Forbidden('Only admins can modify unix_username');
+            }
+          }
+
+          // General authorization: admins can patch any user
           if (params.user && params.user.role === 'admin') {
             return context;
           }
 
-          // Any authenticated user can update their own profile
+          // Any authenticated user can update their own profile (except unix_username, checked above)
           if (params.user && params.user.user_id === userId) {
             return context;
           }

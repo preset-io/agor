@@ -25,6 +25,7 @@ export interface UserSettingsModalProps {
   onClose: () => void;
   user: User | null;
   mcpServerById: Map<string, MCPServer>;
+  currentUser?: User | null;
   onUpdate?: (userId: string, updates: UpdateUserInput) => void;
 }
 
@@ -33,6 +34,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   onClose,
   user,
   mcpServerById,
+  currentUser,
   onUpdate,
 }) => {
   const [form] = Form.useForm();
@@ -75,6 +77,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         name: userData.name,
         emoji: userData.emoji,
         role: userData.role,
+        unix_username: userData.unix_username,
         eventStreamEnabled: userData.preferences?.eventStream?.enabled ?? true,
       });
 
@@ -162,7 +165,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     if (!user) return;
 
     form
-      .validateFields(['email', 'name', 'emoji', 'role'])
+      .validateFields(['email', 'name', 'emoji', 'role', 'unix_username'])
       .then(() => {
         const values = form.getFieldsValue();
         const updates: UpdateUserInput = {
@@ -170,6 +173,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           name: values.name,
           emoji: values.emoji,
           role: values.role,
+          unix_username: values.unix_username,
           preferences: {
             ...user.preferences,
             eventStream: {
@@ -440,6 +444,29 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                   ]}
                 >
                   <Input placeholder="user@example.com" />
+                </Form.Item>
+
+                <Form.Item
+                  label="Unix Username"
+                  name="unix_username"
+                  help={
+                    currentUser?.role === 'admin'
+                      ? 'Unix user for process impersonation (alphanumeric, hyphens, underscores only)'
+                      : 'Maintained by administrators'
+                  }
+                  rules={[
+                    {
+                      pattern: /^[a-z0-9_-]+$/,
+                      message: 'Only lowercase letters, numbers, hyphens, and underscores allowed',
+                    },
+                    { max: 32, message: 'Unix username must be 32 characters or less' },
+                  ]}
+                >
+                  <Input
+                    placeholder="johnsmith"
+                    maxLength={32}
+                    disabled={currentUser?.role !== 'admin'}
+                  />
                 </Form.Item>
 
                 <Form.Item

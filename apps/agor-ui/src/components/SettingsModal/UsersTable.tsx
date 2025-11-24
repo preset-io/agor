@@ -21,6 +21,7 @@ import { UserSettingsModal } from './UserSettingsModal';
 interface UsersTableProps {
   userById: Map<string, User>;
   mcpServerById: Map<string, MCPServer>;
+  currentUser?: User | null;
   onCreate?: (data: CreateUserInput) => void;
   onUpdate?: (userId: string, updates: UpdateUserInput) => void;
   onDelete?: (userId: string) => void;
@@ -29,6 +30,7 @@ interface UsersTableProps {
 export const UsersTable: React.FC<UsersTableProps> = ({
   userById,
   mcpServerById,
+  currentUser,
   onCreate,
   onUpdate,
   onDelete,
@@ -51,6 +53,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
           name: values.name,
           emoji: values.emoji || '👤',
           role: values.role || 'member',
+          unix_username: values.unix_username,
         });
         form.resetFields();
         setCreateModalOpen(false);
@@ -195,6 +198,21 @@ export const UsersTable: React.FC<UsersTableProps> = ({
           </Form.Item>
 
           <Form.Item
+            label="Unix Username"
+            name="unix_username"
+            help="Optional. Unix user for process impersonation (alphanumeric, hyphens, underscores only)"
+            rules={[
+              {
+                pattern: /^[a-z0-9_-]+$/,
+                message: 'Only lowercase letters, numbers, hyphens, and underscores allowed',
+              },
+              { max: 32, message: 'Unix username must be 32 characters or less' },
+            ]}
+          >
+            <Input placeholder="johnsmith" maxLength={32} />
+          </Form.Item>
+
+          <Form.Item
             label="Password"
             name="password"
             rules={[
@@ -227,6 +245,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
         onClose={() => setEditingUser(null)}
         user={editingUser}
         mcpServerById={mcpServerById}
+        currentUser={currentUser}
         onUpdate={onUpdate}
       />
     </div>
