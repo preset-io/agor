@@ -200,7 +200,9 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
     try {
       // Get parent session to check callback config
-      const parentSession = await this.app.service('sessions').get(parentSessionId, params);
+      // NOTE: DO NOT pass params here - params are from child session context (executor),
+      // but we need to access parent session without child's authentication constraints
+      const parentSession = await this.app.service('sessions').get(parentSessionId);
 
       // Check callback config - child overrides take precedence over parent defaults
       const callbackEnabled =
@@ -320,9 +322,11 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       // If parent is idle, trigger queue processing immediately
       if (parentSession.status === 'idle') {
         // Trigger queue processing via custom method
+        // NOTE: DO NOT pass params here - params are from child session context (executor),
+        // but queue processing should run in parent session context
         // biome-ignore lint/suspicious/noExplicitAny: Service type casting required for custom method access
         const sessionsService = this.app.service('sessions') as any;
-        await sessionsService.triggerQueueProcessing(parentSessionId, params);
+        await sessionsService.triggerQueueProcessing(parentSessionId);
       }
     } catch (error) {
       console.error(
