@@ -851,21 +851,30 @@ async function main() {
     executorProcess.on('exit', async (code) => {
       console.log(`[Executor ${sessionId.slice(0, 8)}] Exited with code ${code}`);
 
-      // Update session status back to IDLE when executor completes
-      // This handles successful completion - error cases are handled in the catch block at line 2234
+      // Safety net: Update session status back to IDLE when executor completes
+      // The primary session status update happens in TasksService.patch() when task status changes
+      // This is a fallback in case the task status update didn't trigger session status change
       if (code === 0) {
         try {
-          await app.service('sessions').patch(
-            sessionId,
-            {
-              status: SessionStatus.IDLE,
-              ready_for_prompt: true,
-            },
-            params
-          );
-          console.log(
-            `✅ [Executor] Session ${sessionId.slice(0, 8)} status updated to IDLE after successful completion`
-          );
+          // Check if session is still in RUNNING state before updating
+          const currentSession = await app.service('sessions').get(sessionId, params);
+          if (currentSession.status === SessionStatus.RUNNING) {
+            await app.service('sessions').patch(
+              sessionId,
+              {
+                status: SessionStatus.IDLE,
+                ready_for_prompt: true,
+              },
+              params
+            );
+            console.log(
+              `✅ [Executor] Session ${sessionId.slice(0, 8)} status updated to IDLE after executor exit (fallback)`
+            );
+          } else {
+            console.log(
+              `ℹ️  [Executor] Session ${sessionId.slice(0, 8)} already in ${currentSession.status} state, skipping IDLE update`
+            );
+          }
         } catch (error) {
           console.error(`❌ [Executor] Failed to update session status to IDLE:`, error);
         }
@@ -2011,6 +2020,10 @@ async function main() {
       );
 
       // Update session with new task immediately and set status to running
+      // NOTE: We manually set session status to RUNNING here because the task was CREATED
+      // with RUNNING status (not patched). The TasksService.patch() hook only fires on updates.
+      // When the task is later patched to COMPLETED/FAILED/STOPPED, the hook will atomically
+      // set the session back to IDLE.
       console.log(
         `🔄 [Prompt] Setting session ${id.substring(0, 8)} to RUNNING (was: ${session.status})`
       );
