@@ -33,6 +33,16 @@ export interface BaseTool {
     };
     wasStopped?: boolean;
   }>;
+
+  // Optional stopTask method for tools that support interruption
+  stopTask?(
+    sessionId: string,
+    taskId?: string
+  ): Promise<{
+    success: boolean;
+    partialResult?: Partial<{ taskId: string; status: 'completed' | 'failed' | 'cancelled' }>;
+    reason?: string;
+  }>;
 }
 
 /**
@@ -216,6 +226,28 @@ export async function executeToolTask(params: {
   // Pass the resolved key (or empty string) and useNativeAuth flag
   const tool = createTool(ctx.repos, resolution.apiKey || '', resolution.useNativeAuth);
 
+  // Wire up abort signal to tool's stopTask method
+  const abortHandler = async () => {
+    console.log(`[${toolName}] Abort signal received, calling tool.stopTask()...`);
+    if (tool.stopTask) {
+      try {
+        const stopResult = await tool.stopTask(sessionId, taskId);
+        if (stopResult.success) {
+          console.log(`[${toolName}] Tool stopped successfully`);
+        } else {
+          console.warn(`[${toolName}] Tool stop failed: ${stopResult.reason}`);
+        }
+      } catch (error) {
+        console.error(`[${toolName}] Error calling stopTask:`, error);
+      }
+    } else {
+      console.warn(`[${toolName}] Tool does not implement stopTask method`);
+    }
+  };
+
+  // Listen for abort signal
+  params.abortController.signal.addEventListener('abort', abortHandler);
+
   try {
     // Execute prompt with streaming
     const result = await tool.executePromptWithStreaming(
@@ -246,5 +278,8 @@ export async function executeToolTask(params: {
     });
 
     throw err;
+  } finally {
+    // Clean up abort listener
+    params.abortController.signal.removeEventListener('abort', abortHandler);
   }
 }
