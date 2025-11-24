@@ -7,28 +7,29 @@
  * Features:
  * - Full terminal emulation (vim, nano, htop, etc.)
  * - Job control (Ctrl+C, Ctrl+Z)
- * - Terminal resizing via Zellij CLI actions
+ * - Terminal resizing via node-pty
  * - ANSI colors and escape codes
  * - Persistent sessions via Zellij (survive daemon restarts)
  * - One session per user, one tab per worktree
  *
  * Architecture:
- * - No node-pty dependency (Zellij manages PTYs internally)
- * - Direct child_process.spawn() for Zellij
+ * - node-pty for PTY allocation (Zellij requires TTY)
+ * - Zellij for session/tab multiplexing
  * - Zellij CLI actions for tab/session management
  * - xterm.js frontend for rendering
  */
 
-import { type ChildProcess, execSync, spawn } from 'node:child_process';
+import { execSync } from 'node:child_process';
 import os from 'node:os';
 import { resolveUserEnvironment } from '@agor/core/config';
 import { type Database, WorktreeRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { AuthenticatedParams, UserID, WorktreeID } from '@agor/core/types';
+import * as pty from '@homebridge/node-pty-prebuilt-multiarch';
 
 interface TerminalSession {
   terminalId: string;
-  process: ChildProcess;
+  pty: pty.IPty;
   shell: string;
   cwd: string;
   userId?: UserID; // User context for env resolution
@@ -242,20 +243,21 @@ export class TerminalsService {
       env.LC_CTYPE = env.LANG;
     }
 
-    // Spawn Zellij process directly (no node-pty!)
-    // Zellij manages PTY internally, we just need stdin/stdout pipes
+    // Spawn Zellij process via node-pty (provides required PTY)
     const zellijArgs = ['attach', zellijSession, '--create'];
 
-    const zellijProcess = spawn('zellij', zellijArgs, {
+    const ptyProcess = pty.spawn('zellij', zellijArgs, {
+      name: 'xterm-256color',
+      cols: data.cols || 80,
+      rows: data.rows || 30,
       cwd,
       env,
-      stdio: ['pipe', 'pipe', 'pipe'], // stdin, stdout, stderr
     });
 
     // Store session
     this.sessions.set(terminalId, {
       terminalId,
-      process: zellijProcess,
+      pty: ptyProcess,
       shell: 'zellij',
       cwd,
       userId: resolvedUserId,
@@ -266,36 +268,21 @@ export class TerminalsService {
       createdAt: new Date(),
     });
 
-    // Handle stdout - broadcast to WebSocket clients
-    zellijProcess.stdout?.on('data', (chunk) => {
+    // Handle PTY output
+    ptyProcess.onData((data) => {
       this.app.service('terminals').emit('data', {
         terminalId,
-        data: chunk.toString(),
+        data,
       });
     });
 
-    // Handle stderr (Zellij warnings, errors)
-    zellijProcess.stderr?.on('data', (chunk) => {
-      console.warn(`[Zellij stderr ${terminalId}]:`, chunk.toString());
-    });
-
-    // Handle process exit
-    zellijProcess.on('exit', (code) => {
-      console.log(`Terminal ${terminalId} exited with code ${code}`);
+    // Handle PTY exit
+    ptyProcess.onExit(({ exitCode }) => {
+      console.log(`Terminal ${terminalId} exited with code ${exitCode}`);
       this.sessions.delete(terminalId);
       this.app.service('terminals').emit('exit', {
         terminalId,
-        exitCode: code ?? 0,
-      });
-    });
-
-    // Handle process errors
-    zellijProcess.on('error', (error) => {
-      console.error(`Terminal ${terminalId} error:`, error);
-      this.sessions.delete(terminalId);
-      this.app.service('terminals').emit('exit', {
-        terminalId,
-        exitCode: 1,
+        exitCode,
       });
     });
 
@@ -345,7 +332,7 @@ export class TerminalsService {
     return {
       terminalId: session.terminalId,
       cwd: session.cwd,
-      alive: session.process.exitCode === null,
+      alive: true, // PTY doesn't expose exitCode directly
     };
   }
 
@@ -370,8 +357,8 @@ export class TerminalsService {
     }
 
     if (data.input !== undefined) {
-      // Write input directly to Zellij stdin
-      session.process.stdin?.write(data.input);
+      // Write input to PTY
+      session.pty.write(data.input);
     }
 
     if (data.resize) {
@@ -379,16 +366,8 @@ export class TerminalsService {
       session.cols = data.resize.cols;
       session.rows = data.resize.rows;
 
-      // Use Zellij CLI action to resize terminal
-      // Note: This may not work perfectly for all cases, but it's better than nothing
-      try {
-        runZellijAction(
-          session.zellijSession,
-          `resize --width ${data.resize.cols} --height ${data.resize.rows}`
-        );
-      } catch (error) {
-        console.warn(`Failed to resize terminal ${id}:`, error);
-      }
+      // Resize PTY (this sends SIGWINCH to Zellij)
+      session.pty.resize(data.resize.cols, data.resize.rows);
     }
   }
 
@@ -401,8 +380,8 @@ export class TerminalsService {
       throw new Error(`Terminal ${id} not found`);
     }
 
-    // Kill the Zellij process
-    session.process.kill('SIGTERM');
+    // Kill the PTY process
+    session.pty.kill('SIGTERM');
     this.sessions.delete(id);
 
     return { terminalId: id };
@@ -413,7 +392,7 @@ export class TerminalsService {
    */
   cleanup(): void {
     for (const session of this.sessions.values()) {
-      session.process.kill('SIGTERM');
+      session.pty.kill('SIGTERM');
     }
     this.sessions.clear();
   }
