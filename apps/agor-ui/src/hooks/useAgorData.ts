@@ -233,6 +233,12 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       });
     };
     const handleSessionPatched = (session: Session) => {
+      console.log(`🔄 [useAgorData] Session patched:`, {
+        session_id: session.session_id.substring(0, 8),
+        status: session.status,
+        ready_for_prompt: session.ready_for_prompt,
+      });
+
       // Track old worktree_id for migration detection
       let oldWorktreeId: string | null = null;
 
@@ -277,18 +283,44 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
           const newSessions = prev.get(newWorktreeId) || [];
           next.set(newWorktreeId, [...newSessions, session]);
 
+          console.log(
+            `🔄 [useAgorData] sessionsByWorktree updated (MIGRATED) for worktree ${newWorktreeId.substring(0, 8)}`
+          );
           return next;
         }
 
         // Session not found in this worktree and didn't migrate (shouldn't happen, but be safe)
-        if (index === -1) return prev;
+        if (index === -1) {
+          console.log(
+            `⚠️ [useAgorData] Session ${session.session_id.substring(0, 8)} not found in worktree ${newWorktreeId.substring(0, 8)}, skipping sessionsByWorktree update`
+          );
+          return prev;
+        }
 
         // Check if session actually changed (reference equality is sufficient for socket updates)
-        if (worktreeSessions[index] === session) return prev;
+        if (worktreeSessions[index] === session) {
+          console.log(
+            `🔄 [useAgorData] Session ${session.session_id.substring(0, 8)} reference unchanged, skipping sessionsByWorktree update`
+          );
+          return prev;
+        }
 
         // Create new array with updated session (in-place update)
         const updatedSessions = [...worktreeSessions];
         updatedSessions[index] = session;
+
+        const oldArrayRef = worktreeSessions;
+        const newArrayRef = updatedSessions;
+        console.log(
+          `🔄 [useAgorData] sessionsByWorktree updated for worktree ${newWorktreeId.substring(0, 8)}`,
+          {
+            arrayRefChanged: oldArrayRef !== newArrayRef,
+            oldLength: oldArrayRef.length,
+            newLength: newArrayRef.length,
+            sessionIndex: index,
+            sessionStatus: session.status,
+          }
+        );
 
         // Only create new Map with updated worktree entry
         const next = new Map(prev);

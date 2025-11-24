@@ -393,10 +393,24 @@ export class GeminiPromptService {
               typeof response === 'object' && response && 'output' in response
                 ? response.output
                 : response;
+
+            // Sanitize response to remove circular references (common with file system tools)
+            // JSON.parse(JSON.stringify()) handles circular refs by throwing, so catch and stringify
+            let sanitizedOutput = responseOutput;
+            try {
+              sanitizedOutput = JSON.parse(JSON.stringify(responseOutput));
+            } catch (_circularError) {
+              // If circular reference detected, convert to string
+              console.warn(
+                `[Gemini Loop] Tool ${toolCall.name} response has circular reference, converting to string`
+              );
+              sanitizedOutput = String(responseOutput);
+            }
+
             functionResponseParts.push({
               functionResponse: {
                 name: toolCall.name,
-                response: responseOutput,
+                response: sanitizedOutput,
               },
             } as Part);
           } catch (error) {

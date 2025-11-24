@@ -1219,6 +1219,12 @@ async function main() {
   // All services have requireAuth hooks, so only authenticated users can access them
   // This means any connection that successfully calls a service is authenticated
   app.publish((data, context) => {
+    console.log(`📡 [Publish] ${context.path} ${context.method}`, {
+      id: context.id,
+      hasData: !!data,
+      dataKeys: data ? Object.keys(data).join(',') : 'none',
+      channelCount: app.channel('everybody').length,
+    });
     // Broadcast to all connected clients (they're all authenticated due to requireAuth)
     return app.channel('everybody');
   });
@@ -2117,13 +2123,15 @@ async function main() {
             params
           );
 
-          // CRITICAL: Update session back to idle after successful execution
+          // NOTE: Session status is automatically updated to IDLE by TasksService.patch() hook
+          // when the task status changes to a terminal state (COMPLETED, FAILED, STOPPED).
+          // DO NOT manually update session status here - it causes the session to go idle
+          // immediately after spawning the executor, before the task actually starts running.
           console.log(
-            `✅ [Daemon] Execution completed, setting session ${id.substring(0, 8)} to idle`
+            `✅ [Daemon] Executor spawned for session ${id.substring(0, 8)}, waiting for task completion`
           );
-          await app.service('sessions').patch(id, { status: SessionStatus.IDLE }, params);
         } catch (error) {
-          console.error(`❌ [Daemon] Executor execution failed:`, error);
+          console.error(`❌ [Daemon] Executor spawn failed:`, error);
           // Update task to failed status
           await safePatch(
             'tasks',
@@ -2135,11 +2143,9 @@ async function main() {
             'Task',
             params
           );
-          // Update session back to idle after failed execution
-          console.log(
-            `❌ [Daemon] Execution failed, setting session ${id.substring(0, 8)} to idle`
-          );
-          await app.service('sessions').patch(id, { status: SessionStatus.IDLE }, params);
+          // Session status will be automatically updated to IDLE by TasksService.patch() hook
+          // when the task status is updated to FAILED above
+          console.log(`❌ [Daemon] Executor spawn failed for session ${id.substring(0, 8)}`);
         }
       });
 

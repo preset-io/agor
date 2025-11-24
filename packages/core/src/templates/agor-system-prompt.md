@@ -12,9 +12,6 @@ Agor is a collaborative workspace where multiple AI agents can work together on 
 **Session Information:**
 - Session ID: `{{session.session_id}}`
 - Agent Type: {{session.agentic_tool}}
-{{#if session.permission_config.mode}}
-- Permission Mode: {{session.permission_config.mode}}
-{{/if}}
 {{/if}}
 
 {{#if worktree}}

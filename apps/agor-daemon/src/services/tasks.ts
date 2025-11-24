@@ -99,13 +99,23 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
    * Override create to atomically update session status when task is created with RUNNING status
    */
   async create(data: Partial<Task>, params?: TaskParams): Promise<Task | Task[]> {
+    console.log(
+      `🔍 [TasksService.create] Called with status: ${data.status}, TaskStatus.RUNNING: ${TaskStatus.RUNNING}`
+    );
     const result = await super.create(data, params);
+    console.log(
+      `🔍 [TasksService.create] Result is array: ${Array.isArray(result)}, this.app exists: ${!!this.app}`
+    );
 
     // If task is created with RUNNING status, atomically update session status to RUNNING
     // NOTE: create() always returns a single Task (not an array) in practice
     if (data.status === TaskStatus.RUNNING && !Array.isArray(result) && this.app) {
+      console.log(`🔍 [TasksService.create] ENTERING session status update block`);
+      console.log(
+        `🔍 [TasksService.create] About to patch session ${result.session_id.substring(0, 8)}`
+      );
       try {
-        await this.app.service('sessions').patch(
+        const patchResult = await this.app.service('sessions').patch(
           result.session_id,
           {
             status: 'running',
@@ -115,7 +125,8 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         );
 
         console.log(
-          `✅ [TasksService] Session ${result.session_id.substring(0, 8)} status updated to RUNNING (task ${result.task_id.substring(0, 8)} created)`
+          `✅ [TasksService] Session ${result.session_id.substring(0, 8)} status updated to RUNNING (task ${result.task_id.substring(0, 8)} created)`,
+          `Patch result status: ${patchResult.status}`
         );
       } catch (error) {
         console.error('❌ [TasksService] Failed to update session status to RUNNING:', error);
