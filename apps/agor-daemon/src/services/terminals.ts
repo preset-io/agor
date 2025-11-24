@@ -23,7 +23,7 @@ import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { loadConfig, resolveUserEnvironment } from '@agor/core/config';
+import { AGOR_INTERNAL_ENV_VARS, loadConfig, resolveUserEnvironment } from '@agor/core/config';
 import { type Database, formatShortId, WorktreeRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { AuthenticatedParams, UserID, WorktreeID } from '@agor/core/types';
@@ -262,6 +262,11 @@ export class TerminalsService {
         `🔐 Loaded ${Object.keys(userEnv).length} env vars for user ${resolvedUserId.substring(0, 8)}`
       );
       env = { ...env, ...userEnv };
+    }
+
+    // Filter out Agor-internal environment variables (NODE_ENV, AGOR_*, etc.)
+    for (const internalVar of AGOR_INTERNAL_ENV_VARS) {
+      delete env[internalVar];
     }
 
     // Strip Zellij env vars to prevent nested sessions
