@@ -17,16 +17,15 @@ import {
   PermissionStatus,
   type User,
 } from '@agor/core/types';
-import { CopyOutlined, RobotOutlined } from '@ant-design/icons';
+import { RobotOutlined } from '@ant-design/icons';
 import { Bubble } from '@ant-design/x';
 import { Tooltip, theme } from 'antd';
 
 import type React from 'react';
-import { useState } from 'react';
-import { useCopyToClipboard } from '../../utils/clipboard';
 import { formatTimestampWithRelative } from '../../utils/time';
 import { AgorAvatar } from '../AgorAvatar';
 import { CollapsibleMarkdown } from '../CollapsibleText/CollapsibleMarkdown';
+import { CopyableContent } from '../CopyableContent';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { PermissionRequestBlock } from '../PermissionRequestBlock';
 import { ThinkingBlock } from '../ThinkingBlock';
@@ -79,63 +78,6 @@ interface MessageBlockProps {
     scope: PermissionScope
   ) => void;
 }
-
-/**
- * Content wrapper that adds copy-to-clipboard functionality inside the bubble
- */
-interface BubbleContentWithCopyProps {
-  textContent: string; // The actual text being displayed in the bubble
-  children: React.ReactNode;
-}
-
-const BubbleContentWithCopy: React.FC<BubbleContentWithCopyProps> = ({ textContent, children }) => {
-  const [isHovered, setIsHovered] = useState(false);
-  const [copied, copy] = useCopyToClipboard();
-  const { token } = theme.useToken();
-
-  const handleCopy = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    copy(textContent);
-  };
-
-  return (
-    <div
-      style={{ position: 'relative' }}
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
-    >
-      {children}
-      {isHovered && (
-        <Tooltip title={copied ? 'Copied!' : 'Copy message'}>
-          <CopyOutlined
-            onClick={handleCopy}
-            style={{
-              position: 'absolute',
-              top: -(token.sizeUnit * 2),
-              right: -(token.sizeUnit * 2),
-              cursor: 'pointer',
-              fontSize: token.fontSizeSM,
-              color: copied ? token.colorSuccess : token.colorTextSecondary,
-              padding: token.sizeXXS,
-              transition: 'all 0.2s',
-              zIndex: 1,
-            }}
-            onMouseEnter={(e) => {
-              if (!copied) {
-                e.currentTarget.style.color = token.colorPrimary;
-              }
-            }}
-            onMouseLeave={(e) => {
-              if (!copied) {
-                e.currentTarget.style.color = token.colorTextSecondary;
-              }
-            }}
-          />
-        </Tooltip>
-      )}
-    </div>
-  );
-};
 
 /**
  * Check if this is a Task tool prompt message (agent-generated, appears as user message)
@@ -458,7 +400,10 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
                 loading={isLoading}
                 typing={shouldUseTyping ? { step: 5, interval: 20 } : false}
                 content={
-                  <BubbleContentWithCopy textContent={textBeforeTools.join('\n\n')}>
+                  <CopyableContent
+                    textContent={textBeforeTools.join('\n\n')}
+                    copyTooltip="Copy message"
+                  >
                     <div
                       style={{
                         wordWrap: 'break-word',
@@ -488,7 +433,7 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
                         );
                       })}
                     </div>
-                  </BubbleContentWithCopy>
+                  </CopyableContent>
                 }
                 variant={isUser || isCallback ? 'filled' : 'outlined'}
                 styles={{
@@ -553,7 +498,10 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
                 loading={isLoading}
                 typing={shouldUseTyping ? { step: 5, interval: 20 } : false}
                 content={
-                  <BubbleContentWithCopy textContent={textAfterTools.join('\n\n')}>
+                  <CopyableContent
+                    textContent={textAfterTools.join('\n\n')}
+                    copyTooltip="Copy message"
+                  >
                     <div style={{ wordWrap: 'break-word' }}>
                       {(() => {
                         const combinedText = textAfterTools.join('\n\n');
@@ -576,7 +524,7 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
                         );
                       })()}
                     </div>
-                  </BubbleContentWithCopy>
+                  </CopyableContent>
                 }
                 variant={isCallback ? 'filled' : 'outlined'}
                 styles={

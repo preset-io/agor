@@ -41,6 +41,7 @@ import { Popover, Space, Spin, Tag, Tooltip, Typography, theme } from 'antd';
 import React, { useMemo, useState } from 'react';
 import { copyToClipboard } from '../../utils/clipboard';
 import { CollapsibleText } from '../CollapsibleText';
+import { CopyableContent } from '../CopyableContent';
 import { ToolUseRenderer } from '../ToolUseRenderer';
 
 interface ToolUseBlock {
@@ -436,23 +437,30 @@ export const AgentChain = React.memo<AgentChainProps>(({ messages }) => {
         );
       } else if (toolUse.name === 'Bash' && toolUse.input.command) {
         // Show Bash command as a code block (not ellipsis, allows wrapping)
+        const commandText = String(toolUse.input.command);
         detailsLine = (
-          <pre
-            style={{
-              margin: 0,
-              padding: `${token.sizeXXS}px ${token.sizeXS}px`,
-              background: token.colorBgLayout,
-              borderRadius: token.borderRadiusSM,
-              fontSize: token.fontSizeSM,
-              fontFamily: 'Monaco, Menlo, Ubuntu Mono, Consolas, source-code-pro, monospace',
-              color: token.colorTextSecondary,
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-all',
-              maxWidth: '100%',
-            }}
+          <CopyableContent
+            textContent={commandText}
+            copyTooltip="Copy command"
+            copyButtonOffset={{ top: token.sizeXXS, right: token.sizeXXS }}
           >
-            {String(toolUse.input.command)}
-          </pre>
+            <pre
+              style={{
+                margin: 0,
+                padding: `${token.sizeXXS}px ${token.sizeXS}px`,
+                background: token.colorBgLayout,
+                borderRadius: token.borderRadiusSM,
+                fontSize: token.fontSizeSM,
+                fontFamily: 'Monaco, Menlo, Ubuntu Mono, Consolas, source-code-pro, monospace',
+                color: token.colorTextSecondary,
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-all',
+                maxWidth: '100%',
+              }}
+            >
+              {commandText}
+            </pre>
+          </CopyableContent>
         );
       }
 
