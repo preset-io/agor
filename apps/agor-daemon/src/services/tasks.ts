@@ -96,10 +96,38 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   }
 
   /**
+   * Override create to atomically update session status when task is created with RUNNING status
+   */
+  async create(data: Partial<Task>, params?: TaskParams): Promise<Task | Task[]> {
+    const result = await super.create(data, params);
+
+    // If task is created with RUNNING status, atomically update session status to RUNNING
+    // NOTE: create() always returns a single Task (not an array) in practice
+    if (data.status === TaskStatus.RUNNING && !Array.isArray(result) && this.app) {
+      try {
+        await this.app.service('sessions').patch(result.session_id, {
+          status: 'running',
+          ready_for_prompt: false,
+        });
+
+        console.log(
+          `✅ [TasksService] Session ${result.session_id.substring(0, 8)} status updated to RUNNING (task ${result.task_id.substring(0, 8)} created)`
+        );
+      } catch (error) {
+        console.error('❌ [TasksService] Failed to update session status to RUNNING:', error);
+      }
+    }
+
+    return result;
+  }
+
+  /**
    * Override patch to detect task completion and:
    * 1. Atomically update session status to IDLE when task reaches terminal state
    * 2. Set ready_for_prompt flag
    * 3. Queue callback to parent session (if exists)
+   *
+   * NOTE: Tasks are only ever patched one at a time (never in bulk), so we don't need to loop.
    */
   async patch(id: string, data: Partial<Task>, params?: TaskParams): Promise<Task | Task[]> {
     const result = await super.patch(id, data, params);
@@ -110,56 +138,29 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       data.status === TaskStatus.FAILED ||
       data.status === TaskStatus.STOPPED
     ) {
-      // Handle both single task and array of tasks
-      const tasks = Array.isArray(result) ? result : [result];
+      // Since tasks are patched one at a time, result is always a single Task (not an array)
+      const task = result as Task;
 
-      for (const task of tasks) {
-        if (task.session_id && this.app) {
-          try {
-            // ATOMICALLY update session status to IDLE and set ready_for_prompt
-            // This ensures WebSocket events are emitted immediately via FeathersJS service layer
-            await this.app.service('sessions').patch(task.session_id, {
-              status: 'idle',
-              ready_for_prompt: true,
-            });
+      if (task.session_id && this.app) {
+        try {
+          // ATOMICALLY update session status to IDLE and set ready_for_prompt
+          // This ensures WebSocket events are emitted immediately via FeathersJS service layer
+          await this.app.service('sessions').patch(task.session_id, {
+            status: 'idle',
+            ready_for_prompt: true,
+          });
 
-            console.log(
-              `✅ [TasksService] Session ${task.session_id.substring(0, 8)} status updated to IDLE (task ${task.task_id.substring(0, 8)} ${data.status})`
-            );
+          console.log(
+            `✅ [TasksService] Session ${task.session_id.substring(0, 8)} status updated to IDLE (task ${task.task_id.substring(0, 8)} ${data.status})`
+          );
 
-            // Check if session has parent and queue callback
-            const session = await this.app.service('sessions').get(task.session_id);
-            if (session.genealogy?.parent_session_id) {
-              await this.queueParentCallback(task, session, params);
-            }
-          } catch (error) {
-            console.error('❌ [TasksService] Failed to process task completion:', error);
+          // Check if session has parent and queue callback
+          const session = await this.app.service('sessions').get(task.session_id);
+          if (session.genealogy?.parent_session_id) {
+            await this.queueParentCallback(task, session, params);
           }
-        }
-      }
-    }
-
-    // If task is being marked as running, atomically update session status to RUNNING
-    if (data.status === TaskStatus.RUNNING) {
-      // Handle both single task and array of tasks
-      const tasks = Array.isArray(result) ? result : [result];
-
-      for (const task of tasks) {
-        if (task.session_id && this.app) {
-          try {
-            // ATOMICALLY update session status to RUNNING
-            // This ensures WebSocket events are emitted immediately via FeathersJS service layer
-            await this.app.service('sessions').patch(task.session_id, {
-              status: 'running',
-              ready_for_prompt: false,
-            });
-
-            console.log(
-              `✅ [TasksService] Session ${task.session_id.substring(0, 8)} status updated to RUNNING (task ${task.task_id.substring(0, 8)})`
-            );
-          } catch (error) {
-            console.error('❌ [TasksService] Failed to update session status to RUNNING:', error);
-          }
+        } catch (error) {
+          console.error('❌ [TasksService] Failed to process task completion:', error);
         }
       }
     }

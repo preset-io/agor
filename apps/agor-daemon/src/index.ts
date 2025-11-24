@@ -2019,22 +2019,15 @@ async function main() {
         params
       );
 
-      // Update session with new task immediately and set status to running
-      // NOTE: We manually set session status to RUNNING here because the task was CREATED
-      // with RUNNING status (not patched). The TasksService.patch() hook only fires on updates.
-      // When the task is later patched to COMPLETED/FAILED/STOPPED, the hook will atomically
-      // set the session back to IDLE.
-      console.log(
-        `🔄 [Prompt] Setting session ${id.substring(0, 8)} to RUNNING (was: ${session.status})`
-      );
+      // Update session with new task
+      // NOTE: Session status is automatically updated to RUNNING by TasksService.create() hook
+      // when a task is created with RUNNING status. This ensures atomic updates and WebSocket events.
       // IMPORTANT: Use app.service() instead of sessionsService to go through
       // FeathersJS service layer and trigger app.publish() for WebSocket events
       await app.service('sessions').patch(
         id,
         {
           tasks: [...session.tasks, task.task_id],
-          status: SessionStatus.RUNNING,
-          ready_for_prompt: false, // Clear ready flag when execution starts
         },
         params
       );
