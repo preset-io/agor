@@ -67,6 +67,9 @@ default_shell "bash"
 // Terminal colors support
 on_force_close "quit"
 
+// Disable startup tips/welcome message
+startup_tips false
+
 // UI font settings (not used by xterm.js but good for direct access)
 ui {
     pane_frames {

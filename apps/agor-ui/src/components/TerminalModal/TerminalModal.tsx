@@ -151,11 +151,31 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
           },
         },
         theme: {
-          background: '#000000',
-          foreground: '#ffffff',
-          cursor: '#ffffff',
-          cyan: '#2e9a92', // Agor teal - used for ANSI color code 36
-          brightCyan: '#3db5ab', // Lighter teal for bright cyan - used for ANSI code 96
+          // Ant Design dark theme colors
+          background: '#141414', // colorBgContainer
+          foreground: '#ffffff', // colorText
+          cursor: '#2e9a92', // Agor teal
+          cursorAccent: '#141414',
+
+          // ANSI colors matching Ant Design palette
+          black: '#000000',
+          red: '#ff4d4f', // colorError
+          green: '#52c41a', // colorSuccess
+          yellow: '#faad14', // colorWarning
+          blue: '#1890ff', // colorInfo
+          magenta: '#eb2f96',
+          cyan: '#2e9a92', // Agor teal (colorPrimary)
+          white: '#f0f0f0',
+
+          // Bright colors
+          brightBlack: '#8c8c8c', // colorTextSecondary
+          brightRed: '#ff7875',
+          brightGreen: '#95de64',
+          brightYellow: '#ffc53d',
+          brightBlue: '#40a9ff',
+          brightMagenta: '#f759ab',
+          brightCyan: '#3db5ab', // Lighter teal
+          brightWhite: '#ffffff',
         },
       });
 
