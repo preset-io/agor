@@ -63,12 +63,14 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
   const [form] = Form.useForm();
   const [selectedAgent, setSelectedAgent] = useState<string>('claude-code');
   const [isFormValid, setIsFormValid] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
 
   // Reset form when modal opens, using user defaults if available
   useEffect(() => {
     if (!open) return;
 
     setSelectedAgent('claude-code');
+    setIsCreating(false); // Reset creating state when modal opens
 
     // Get default config for the selected agent
     const agentDefaults = currentUser?.default_agentic_config?.['claude-code'];
@@ -119,6 +121,9 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
 
   const handleCreate = () => {
     form.validateFields().then((values) => {
+      // Prevent duplicate submissions
+      setIsCreating(true);
+
       // Get user defaults for the selected agent (fallback if form fields weren't mounted)
       const agentDefaults = currentUser?.default_agentic_config?.[selectedAgent as AgenticToolName];
 
@@ -150,6 +155,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
       }
 
       onCreate(config);
+      // Note: isCreating will be reset when modal reopens via useEffect
     });
   };
 
@@ -168,7 +174,8 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
       cancelText="Cancel"
       width={700}
       okButtonProps={{
-        disabled: !isFormValid,
+        disabled: !isFormValid || isCreating,
+        loading: isCreating,
       }}
     >
       <Form
