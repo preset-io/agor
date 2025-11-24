@@ -20,8 +20,10 @@
  */
 
 import { execSync } from 'node:child_process';
+import fs from 'node:fs';
 import os from 'node:os';
-import { resolveUserEnvironment } from '@agor/core/config';
+import path from 'node:path';
+import { loadConfig, resolveUserEnvironment } from '@agor/core/config';
 import { type Database, WorktreeRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { AuthenticatedParams, UserID, WorktreeID } from '@agor/core/types';
@@ -38,6 +40,7 @@ interface TerminalSession {
   cols: number;
   rows: number;
   createdAt: Date;
+  env: Record<string, string>; // User environment variables
 }
 
 interface CreateTerminalData {
@@ -63,6 +66,44 @@ function isZellijAvailable(): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * Write user environment variables to a shell script
+ * This allows shells spawned in Zellij tabs to source the env vars
+ */
+function writeEnvFile(userId: UserID | undefined, env: Record<string, string>): string | null {
+  if (!userId) return null;
+
+  try {
+    const tmpDir = os.tmpdir();
+    const envFile = path.join(tmpDir, `agor-env-${userId.substring(0, 8)}.sh`);
+
+    // Build shell script to export env vars
+    const exportLines = Object.entries(env)
+      .filter(([key]) => {
+        // Skip system/shell env vars that shouldn't be overridden
+        const skipKeys = ['PATH', 'HOME', 'USER', 'SHELL', 'PWD', 'OLDPWD', 'TERM', 'COLORTERM'];
+        return !skipKeys.includes(key);
+      })
+      .map(([key, value]) => {
+        // Escape single quotes in value
+        const escapedValue = value.replace(/'/g, "'\\''");
+        return `export ${key}='${escapedValue}'`;
+      });
+
+    const scriptContent = `#!/bin/sh
+# Agor user environment variables
+# Auto-generated - do not edit manually
+${exportLines.join('\n')}
+`;
+
+    fs.writeFileSync(envFile, scriptContent, { mode: 0o600 });
+    return envFile;
+  } catch (error) {
+    console.warn('Failed to write user env file:', error);
+    return null;
   }
 }
 
@@ -214,8 +255,9 @@ export class TerminalsService {
 
     // Resolve environment with user env vars if userId provided
     let env: Record<string, string> = { ...(process.env as Record<string, string>) };
+    let userEnv: Record<string, string> = {};
     if (resolvedUserId) {
-      const userEnv = await resolveUserEnvironment(resolvedUserId, this.db);
+      userEnv = await resolveUserEnvironment(resolvedUserId, this.db);
       console.log(
         `🔐 Loaded ${Object.keys(userEnv).length} env vars for user ${resolvedUserId.substring(0, 8)}`
       );
@@ -243,18 +285,67 @@ export class TerminalsService {
       env.LC_CTYPE = env.LANG;
     }
 
-    // Spawn Zellij process via node-pty (provides required PTY)
-    const zellijArgs = ['attach', zellijSession, '--create'];
+    // Write user env vars to file for sourcing in new shells (only custom vars, not system)
+    const envFile = writeEnvFile(resolvedUserId, userEnv);
+    if (envFile && resolvedUserId) {
+      console.log(
+        `📝 Wrote user env file: ${envFile} (${Object.keys(userEnv).length} custom vars for user ${resolvedUserId.substring(0, 8)})`
+      );
+    }
 
-    const ptyProcess = pty.spawn('zellij', zellijArgs, {
-      name: 'xterm-256color',
-      cols: data.cols || 80,
-      rows: data.rows || 30,
-      cwd,
-      env,
-    });
+    // Check if executor impersonation is configured
+    const config = await loadConfig();
+    const executorUser = config.execution?.executor_unix_user;
 
-    // Store session
+    let ptyProcess: pty.IPty;
+
+    if (executorUser) {
+      // Executor impersonation enabled - run Zellij as executor user via sudo
+      const executorHome = `/home/${executorUser}`;
+      const configPath = path.join(executorHome, '.config', 'zellij', 'config.kdl');
+
+      console.log(`🔐 Running terminal as executor user: ${executorUser} (impersonation enabled)`);
+
+      const sudoArgs = [
+        '-u',
+        executorUser,
+        'zellij',
+        '--config',
+        configPath,
+        'attach',
+        zellijSession,
+        '--create',
+      ];
+
+      ptyProcess = pty.spawn('sudo', sudoArgs, {
+        name: 'xterm-256color',
+        cols: data.cols || 80,
+        rows: data.rows || 30,
+        cwd,
+        env: {
+          ...env,
+          HOME: executorHome,
+          USER: executorUser,
+        },
+      });
+    } else {
+      // No executor impersonation - run Zellij as daemon user
+      const configPath = path.join(os.homedir(), '.config', 'zellij', 'config.kdl');
+
+      console.log(`🔓 Running terminal as daemon user (no impersonation)`);
+
+      const zellijArgs = ['--config', configPath, 'attach', zellijSession, '--create'];
+
+      ptyProcess = pty.spawn('zellij', zellijArgs, {
+        name: 'xterm-256color',
+        cols: data.cols || 80,
+        rows: data.rows || 30,
+        cwd,
+        env,
+      });
+    }
+
+    // Store session (including env for future tab creation)
     this.sessions.set(terminalId, {
       terminalId,
       pty: ptyProcess,
@@ -266,6 +357,7 @@ export class TerminalsService {
       cols: data.cols || 80,
       rows: data.rows || 30,
       createdAt: new Date(),
+      env,
     });
 
     // Handle PTY output
@@ -298,49 +390,26 @@ export class TerminalsService {
             runZellijAction(zellijSession, `write-chars "cd ${cwd}"`);
             runZellijAction(zellijSession, 'write 10'); // Enter key (char code 10)
           }
-          // Show welcome message for new session
-          runZellijAction(zellijSession, 'write-chars "clear"');
-          runZellijAction(zellijSession, 'write 10');
-          runZellijAction(
-            zellijSession,
-            `write-chars "echo -e '\\033[36m╔══════════════════════════════════════════════╗\\033[0m'"`
-          );
-          runZellijAction(zellijSession, 'write 10');
-          runZellijAction(
-            zellijSession,
-            `write-chars "echo -e '\\033[36m║\\033[0m  Welcome to \\033[1;36mAgor Terminal\\033[0m               \\033[36m║\\033[0m'"`
-          );
-          runZellijAction(zellijSession, 'write 10');
-          runZellijAction(
-            zellijSession,
-            `write-chars "echo -e '\\033[36m║\\033[0m  Powered by Zellij & xterm.js            \\033[36m║\\033[0m'"`
-          );
-          runZellijAction(zellijSession, 'write 10');
-          runZellijAction(
-            zellijSession,
-            `write-chars "echo -e '\\033[36m╚══════════════════════════════════════════════╝\\033[0m'"`
-          );
-          runZellijAction(zellijSession, 'write 10');
-          runZellijAction(zellijSession, 'write-chars "echo"');
-          runZellijAction(zellijSession, 'write 10');
-          if (worktreeName) {
-            runZellijAction(
-              zellijSession,
-              `write-chars "echo -e '\\033[2mWorktree: \\033[0;36m${worktreeName}\\033[0m'"`
-            );
+          // Show welcome message for new session (simplified to reduce blocking)
+          // Source user env file if it exists
+          if (envFile) {
+            runZellijAction(zellijSession, `write-chars "source ${envFile} 2>/dev/null || true"`);
             runZellijAction(zellijSession, 'write 10');
           }
-          runZellijAction(
-            zellijSession,
-            `write-chars "echo -e '\\033[2mDirectory: ${cwd}\\033[0m'"`
-          );
-          runZellijAction(zellijSession, 'write 10');
-          runZellijAction(zellijSession, 'write-chars "echo"');
-          runZellijAction(zellijSession, 'write 10');
         } else if (needsTabCreation) {
           // Create new tab for this worktree
           runZellijAction(zellijSession, `new-tab --name "${tabName}" --cwd "${cwd}"`);
           runZellijAction(zellijSession, `go-to-tab-name "${tabName}"`);
+          // Source user env file in new tab if it exists
+          if (envFile) {
+            setTimeout(() => {
+              runZellijAction(
+                zellijSession,
+                `write-chars "[ -f ${envFile} ] && source ${envFile}"`
+              );
+              runZellijAction(zellijSession, 'write 10');
+            }, 200);
+          }
         } else if (needsTabSwitch) {
           // Switch to existing tab
           runZellijAction(zellijSession, `go-to-tab-name "${tabName}"`);

@@ -70,12 +70,14 @@ if [ "$AGOR_USE_EXECUTOR" = "true" ]; then
   echo "🔒 Enabling executor Unix user isolation..."
   echo "   Executor will run as: ${AGOR_EXECUTOR_USERNAME:-agor_executor}"
 
-  # Add executor config to ~/.agor/config.yaml
-  cat >> /home/agor/.agor/config.yaml <<EOF
-execution:
-  executor_unix_user: ${AGOR_EXECUTOR_USERNAME:-agor_executor}
-EOF
-  echo "✅ Executor Unix user configured"
+  # Add executor_unix_user to existing execution section (only if not already present)
+  if ! grep -q "executor_unix_user" /home/agor/.agor/config.yaml 2>/dev/null; then
+    # Use sed to add executor_unix_user under the existing execution: section
+    sed -i '/^execution:/a\  executor_unix_user: agor_executor' /home/agor/.agor/config.yaml
+    echo "✅ Executor Unix user configured"
+  else
+    echo "✅ Executor Unix user already configured"
+  fi
 fi
 
 # Always create/update admin user (safe: only upserts)
