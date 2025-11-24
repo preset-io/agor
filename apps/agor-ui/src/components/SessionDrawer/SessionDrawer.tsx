@@ -464,27 +464,32 @@ const SessionDrawer = ({
   };
 
   const handleFork = () => {
-    if (inputValue.trim()) {
-      onFork?.(inputValue);
-      // Clear input and draft after forking
-      setInputValue('');
-      draftsRef.current.delete(session.session_id);
-    }
+    // Allow forking with or without input
+    // If no input, fork with empty prompt (duplicates session state)
+    onFork?.(inputValue.trim());
+    // Clear input and draft after forking
+    setInputValue('');
+    draftsRef.current.delete(session.session_id);
   };
 
   const handleSubsession = () => {
-    if (inputValue.trim()) {
-      // Generate meta-prompt using the template
-      const metaPrompt = compiledSpawnSubsessionTemplate({
-        userPrompt: inputValue,
-      });
-
-      // Send meta-prompt to the PARENT session (agent will use MCP tool)
-      onSendPrompt?.(metaPrompt, permissionMode);
-      // Clear input and draft after subsession
-      setInputValue('');
-      draftsRef.current.delete(session.session_id);
+    // Allow spawning with or without input
+    // If no input, open advanced spawn modal for configuration
+    if (!inputValue.trim()) {
+      setSpawnModalOpen(true);
+      return;
     }
+
+    // Generate meta-prompt using the template
+    const metaPrompt = compiledSpawnSubsessionTemplate({
+      userPrompt: inputValue,
+    });
+
+    // Send meta-prompt to the PARENT session (agent will use MCP tool)
+    onSendPrompt?.(metaPrompt, permissionMode);
+    // Clear input and draft after subsession
+    setInputValue('');
+    draftsRef.current.delete(session.session_id);
   };
 
   const handleSpawnModalConfirm = async (config: string | Partial<SpawnConfig>) => {
@@ -1073,21 +1078,21 @@ const SessionDrawer = ({
                   <Button
                     icon={<SettingOutlined />}
                     onClick={() => setSpawnModalOpen(true)}
-                    disabled={connectionDisabled || isRunning || !inputValue.trim()}
+                    disabled={connectionDisabled || isRunning}
                   />
                 </Tooltip>
                 <Tooltip title={isRunning ? 'Session is running...' : 'Fork Session'}>
                   <Button
                     icon={<ForkOutlined />}
                     onClick={handleFork}
-                    disabled={connectionDisabled || isRunning || !inputValue.trim()}
+                    disabled={connectionDisabled || isRunning}
                   />
                 </Tooltip>
                 <Tooltip title={isRunning ? 'Session is running...' : 'Spawn Subsession'}>
                   <Button
                     icon={<BranchesOutlined />}
                     onClick={handleSubsession}
-                    disabled={connectionDisabled || isRunning || !inputValue.trim()}
+                    disabled={connectionDisabled || isRunning}
                   />
                 </Tooltip>
                 <Tooltip title={isRunning ? 'Queue Message' : 'Send Prompt'}>
