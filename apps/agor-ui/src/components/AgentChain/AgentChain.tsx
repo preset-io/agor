@@ -396,10 +396,10 @@ export const AgentChain = React.memo<AgentChainProps>(({ messages }) => {
       // Build title with inline command/pattern for Bash, Grep, Glob
       let titleContent: React.ReactNode;
       if (toolUse.name === 'Bash' && toolUse.input.command) {
+        // For Bash, just show the tool name (command will be shown as description)
         titleContent = (
-          <span style={{ cursor: 'help' }}>
-            <strong>Bash: </strong>
-            <Typography.Text code>{String(toolUse.input.command)}</Typography.Text>
+          <span>
+            <strong>Bash</strong>
           </span>
         );
       } else if (toolUse.name === 'Grep' && toolUse.input.pattern) {
@@ -426,23 +426,71 @@ export const AgentChain = React.memo<AgentChainProps>(({ messages }) => {
         );
       }
 
-      // Additional details line for file operations
-      let detailsLine: string | null = null;
+      // Additional details line for file operations and Bash commands
+      let detailsLine: React.ReactNode | null = null;
       if (['Read', 'Write', 'Edit'].includes(toolUse.name) && toolUse.input.file_path) {
-        detailsLine = String(toolUse.input.file_path);
+        detailsLine = (
+          <Typography.Text code type="secondary" ellipsis>
+            {String(toolUse.input.file_path)}
+          </Typography.Text>
+        );
+      } else if (toolUse.name === 'Bash' && toolUse.input.command) {
+        // Show Bash command as a code block (not ellipsis, allows wrapping)
+        detailsLine = (
+          <pre
+            style={{
+              margin: 0,
+              padding: `${token.sizeXXS}px ${token.sizeXS}px`,
+              background: token.colorBgLayout,
+              borderRadius: token.borderRadiusSM,
+              fontSize: token.fontSizeSM,
+              fontFamily: 'Monaco, Menlo, Ubuntu Mono, Consolas, source-code-pro, monospace',
+              color: token.colorTextSecondary,
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-all',
+              maxWidth: '100%',
+            }}
+          >
+            {String(toolUse.input.command)}
+          </pre>
+        );
+      }
+
+      // Build tooltip content - for Bash, include metadata like timeout, background, description
+      let finalTooltipContent: React.ReactNode = tooltipContent;
+      if (toolUse.name === 'Bash') {
+        const bashMetadata: string[] = [];
+        if (toolUse.input.description) {
+          bashMetadata.push(`Description: ${toolUse.input.description}`);
+        }
+        if (toolUse.input.timeout) {
+          bashMetadata.push(`Timeout: ${toolUse.input.timeout}ms`);
+        }
+        if (toolUse.input.run_in_background) {
+          bashMetadata.push('Running in background');
+        }
+
+        if (bashMetadata.length > 0) {
+          finalTooltipContent = (
+            <div>
+              <div style={{ marginBottom: 8, fontSize: 12, color: token.colorTextSecondary }}>
+                {bashMetadata.map((meta) => (
+                  <div key={meta}>{meta}</div>
+                ))}
+              </div>
+              {tooltipContent}
+            </div>
+          );
+        }
       }
 
       return {
         title: (
-          <Tooltip title={tooltipContent} placement="right" mouseEnterDelay={0.3}>
+          <Tooltip title={finalTooltipContent} placement="right" mouseEnterDelay={0.3}>
             {titleContent}
           </Tooltip>
         ),
-        description: detailsLine ? (
-          <Typography.Text code type="secondary" ellipsis>
-            {detailsLine}
-          </Typography.Text>
-        ) : undefined,
+        description: detailsLine,
         status,
         icon,
         // Only include content if we have a tool result
