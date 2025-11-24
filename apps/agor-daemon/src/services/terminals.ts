@@ -286,7 +286,7 @@ export class TerminalsService {
       });
     });
 
-    // After Zellij starts, perform tab management
+    // After Zellij starts, perform tab management and show welcome message
     // Wait briefly for Zellij to initialize
     setTimeout(() => {
       try {
@@ -298,6 +298,45 @@ export class TerminalsService {
             runZellijAction(zellijSession, `write-chars "cd ${cwd}"`);
             runZellijAction(zellijSession, 'write 10'); // Enter key (char code 10)
           }
+          // Show welcome message for new session
+          runZellijAction(zellijSession, 'write-chars "clear"');
+          runZellijAction(zellijSession, 'write 10');
+          runZellijAction(
+            zellijSession,
+            `write-chars "echo -e '\\033[36m╔══════════════════════════════════════════════╗\\033[0m'"`
+          );
+          runZellijAction(zellijSession, 'write 10');
+          runZellijAction(
+            zellijSession,
+            `write-chars "echo -e '\\033[36m║\\033[0m  Welcome to \\033[1;36mAgor Terminal\\033[0m               \\033[36m║\\033[0m'"`
+          );
+          runZellijAction(zellijSession, 'write 10');
+          runZellijAction(
+            zellijSession,
+            `write-chars "echo -e '\\033[36m║\\033[0m  Powered by Zellij & xterm.js            \\033[36m║\\033[0m'"`
+          );
+          runZellijAction(zellijSession, 'write 10');
+          runZellijAction(
+            zellijSession,
+            `write-chars "echo -e '\\033[36m╚══════════════════════════════════════════════╝\\033[0m'"`
+          );
+          runZellijAction(zellijSession, 'write 10');
+          runZellijAction(zellijSession, 'write-chars "echo"');
+          runZellijAction(zellijSession, 'write 10');
+          if (worktreeName) {
+            runZellijAction(
+              zellijSession,
+              `write-chars "echo -e '\\033[2mWorktree: \\033[0;36m${worktreeName}\\033[0m'"`
+            );
+            runZellijAction(zellijSession, 'write 10');
+          }
+          runZellijAction(
+            zellijSession,
+            `write-chars "echo -e '\\033[2mDirectory: ${cwd}\\033[0m'"`
+          );
+          runZellijAction(zellijSession, 'write 10');
+          runZellijAction(zellijSession, 'write-chars "echo"');
+          runZellijAction(zellijSession, 'write 10');
         } else if (needsTabCreation) {
           // Create new tab for this worktree
           runZellijAction(zellijSession, `new-tab --name "${tabName}" --cwd "${cwd}"`);

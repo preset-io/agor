@@ -1,22 +1,35 @@
 // Agor Default Zellij Configuration
 // Optimized for embedded terminal usage with xterm.js frontend
 
-// Use custom Agor theme with teal accent
+// Use custom Agor theme matching Ant Design dark theme
 theme "agor"
 
 themes {
     agor {
-        fg "#ffffff"
-        bg "#000000"
+        // Base colors matching Ant Design dark theme
+        fg "#ffffff"           // Primary text (colorText)
+        bg "#141414"           // Background (colorBgContainer in dark mode)
+
+        // ANSI colors with Agor teal accent
         black "#000000"
-        red "#ff5555"
-        green "#50fa7b"
-        yellow "#f1fa8c"
-        blue "#bd93f9"
-        magenta "#ff79c6"
-        cyan "#2e9a92"       // Agor teal
-        white "#f8f8f2"
-        orange "#ffb86c"
+        red "#ff4d4f"          // Ant Design colorError
+        green "#52c41a"        // Ant Design colorSuccess
+        yellow "#faad14"       // Ant Design colorWarning
+        blue "#1890ff"         // Ant Design colorInfo (blue variant)
+        magenta "#eb2f96"      // Ant Design magenta
+        cyan "#2e9a92"         // Agor teal (colorPrimary)
+        white "#f0f0f0"        // Light text
+        orange "#fa8c16"       // Ant Design orange
+
+        // Additional Zellij-specific colors
+        gray "#8c8c8c"         // Secondary text (colorTextSecondary)
+        purple "#722ed1"       // Ant Design purple
+        gold "#faad14"         // Ant Design gold
+        lime "#a0d911"         // Ant Design lime
+        green_light "#95de64"  // Lighter green
+        green_dark "#389e0d"   // Darker green
+        red_light "#ff7875"    // Lighter red
+        red_dark "#cf1322"     // Darker red
     }
 }
 
