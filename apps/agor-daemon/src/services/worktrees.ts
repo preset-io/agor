@@ -212,7 +212,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     // Then remove from filesystem (slower operation, happens in background)
     if (deleteFromFilesystem) {
       // Note: We don't await this - it happens asynchronously after DB deletion
-      const repo = (await this.app.service('repos').get(worktree.repo_id)) as Repo;
+      const repo = (await this.app.service('repos').get(worktree.repo_id, params)) as Repo;
       console.log(`🗑️  Removing worktree from filesystem: ${worktree.path}`);
       removeWorktree(repo.local_path, worktree.path)
         .then(() => {
@@ -282,7 +282,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     } else if (filesystemAction === 'deleted') {
       console.log(`🗑️  Deleting worktree from filesystem: ${worktree.path}`);
       try {
-        const repo = (await this.app.service('repos').get(worktree.repo_id)) as Repo;
+        const repo = (await this.app.service('repos').get(worktree.repo_id, params)) as Repo;
         await removeWorktree(repo.local_path, worktree.path);
         console.log(`✅ Deleted worktree from filesystem: ${worktree.name}`);
       } catch (error) {
@@ -316,6 +316,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       // Archive all sessions in this worktree
       const sessionsService = this.app.service('sessions');
       const sessionsResult = await sessionsService.find({
+        ...params,
         query: { worktree_id: id, $limit: 1000 },
         paginate: false,
       });
@@ -378,6 +379,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     // Unarchive all sessions that were archived due to worktree archival
     const sessionsService = this.app.service('sessions');
     const sessionsResult = await sessionsService.find({
+      ...params,
       query: {
         worktree_id: id,
         archived: true,
@@ -734,7 +736,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
    */
   async checkHealth(id: WorktreeID, params?: WorktreeParams): Promise<Worktree> {
     const worktree = await this.get(id, params);
-    const _repo = (await this.app.service('repos').get(worktree.repo_id)) as Repo;
+    const _repo = (await this.app.service('repos').get(worktree.repo_id, params)) as Repo;
 
     // Only check health for 'running' or 'starting' status
     const currentStatus = worktree.environment_instance?.status;

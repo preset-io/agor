@@ -309,6 +309,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
 
     const worktreesService = this.app.service('worktrees');
     const worktreesResult = await worktreesService.find({
+      ...params,
       query: { $limit: 1000 },
       paginate: false,
     });
@@ -401,11 +402,14 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
 
       const finalPosition = data.position || fallbackPosition;
 
-      await boardObjectsService.create({
-        board_id: data.boardId,
-        worktree_id: worktree.worktree_id,
-        position: finalPosition,
-      });
+      await boardObjectsService.create(
+        {
+          board_id: data.boardId,
+          worktree_id: worktree.worktree_id,
+          position: finalPosition,
+        },
+        params
+      );
     }
 
     return worktree;

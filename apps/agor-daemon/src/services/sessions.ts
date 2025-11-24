@@ -131,7 +131,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
       const userId = parent.created_by;
       if (userId && this.app) {
         try {
-          const user = await this.app.service('users').get(userId);
+          const user = await this.app.service('users').get(userId, params);
           const toolDefaults = user?.default_agentic_config?.[targetTool];
 
           if (toolDefaults) {
