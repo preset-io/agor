@@ -497,8 +497,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                   label="Role"
                   name="role"
                   rules={[{ required: true, message: 'Please select a role' }]}
+                  help={currentUser?.role !== 'admin' ? 'Maintained by administrators' : undefined}
                 >
-                  <Select>
+                  <Select disabled={currentUser?.role !== 'admin'}>
                     <Select.Option value="owner">Owner</Select.Option>
                     <Select.Option value="admin">Admin</Select.Option>
                     <Select.Option value="member">Member</Select.Option>

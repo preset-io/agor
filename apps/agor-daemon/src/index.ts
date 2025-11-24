@@ -1188,10 +1188,17 @@ async function main() {
           const params = context.params as AuthenticatedParams;
           const userId = context.id as string;
 
-          // Field-level restriction: only admins can modify unix_username
-          if (!Array.isArray(context.data) && context.data?.unix_username !== undefined) {
-            if (!params.user || params.user.role !== 'admin') {
-              throw new Forbidden('Only admins can modify unix_username');
+          // Field-level restrictions: only admins can modify unix_username and role
+          if (!Array.isArray(context.data)) {
+            if (context.data?.unix_username !== undefined) {
+              if (!params.user || params.user.role !== 'admin') {
+                throw new Forbidden('Only admins can modify unix_username');
+              }
+            }
+            if (context.data?.role !== undefined) {
+              if (!params.user || params.user.role !== 'admin') {
+                throw new Forbidden('Only admins can modify user roles');
+              }
             }
           }
 
@@ -1200,7 +1207,7 @@ async function main() {
             return context;
           }
 
-          // Any authenticated user can update their own profile (except unix_username, checked above)
+          // Any authenticated user can update their own profile (except unix_username and role, checked above)
           if (params.user && params.user.user_id === userId) {
             return context;
           }
