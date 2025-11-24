@@ -2949,6 +2949,10 @@ async function main() {
             // biome-ignore lint/suspicious/noExplicitAny: FeathersJS request params are untyped
             role: (params as any)?.user?.role,
           },
+          encryption: {
+            enabled: !!process.env.AGOR_MASTER_SECRET,
+            method: process.env.AGOR_MASTER_SECRET ? 'AES-256-GCM' : null,
+          },
           mcp: {
             enabled: config.daemon?.mcpEnabled !== false,
           },

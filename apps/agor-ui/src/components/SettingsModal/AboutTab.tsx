@@ -38,6 +38,10 @@ interface HealthInfo {
     requireAuth: boolean;
     allowAnonymous: boolean;
   };
+  encryption?: {
+    enabled: boolean;
+    method: string | null;
+  };
 }
 
 export const AboutTab: React.FC<AboutTabProps> = ({
@@ -112,6 +116,17 @@ export const AboutTab: React.FC<AboutTabProps> = ({
               )}
               {healthInfo?.version && (
                 <Descriptions.Item label="Version">{healthInfo.version}</Descriptions.Item>
+              )}
+              {healthInfo?.encryption && (
+                <Descriptions.Item label="Encryption">
+                  {healthInfo.encryption.enabled ? (
+                    <span style={{ color: '#52c41a' }}>
+                      🔐 Enabled ({healthInfo.encryption.method})
+                    </span>
+                  ) : (
+                    <span style={{ color: '#faad14' }}>🔓 Disabled</span>
+                  )}
+                </Descriptions.Item>
               )}
             </Descriptions>
           </Card>
