@@ -70,6 +70,9 @@ on_force_close "quit"
 // Disable startup tips/welcome message
 startup_tips false
 
+// Disable release notes banner on first run of new version
+show_release_notes false
+
 // UI font settings (not used by xterm.js but good for direct access)
 ui {
     pane_frames {
