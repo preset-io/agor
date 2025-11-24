@@ -182,19 +182,12 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
       terminal.open(terminalDivRef.current!);
       terminalRef.current = terminal;
 
-      // Load Web Links addon for clickable URLs with custom handler
-      const webLinksAddon = new WebLinksAddon(
-        (event, uri) => {
-          console.log('[Terminal] Link clicked:', uri);
-          window.open(uri, '_blank', 'noopener,noreferrer');
-        },
-        {
-          // Require Cmd+Click (Mac) or Ctrl+Click (Win/Linux) to avoid conflicts with Zellij mouse mode
-          willLinkActivate: (event: MouseEvent) => {
-            return event.type === 'click' && (event.metaKey || event.ctrlKey);
-          },
-        }
-      );
+      // Load Web Links addon for clickable URLs
+      // Double-click to open (default behavior to avoid conflicts with Zellij mouse mode)
+      const webLinksAddon = new WebLinksAddon((event, uri) => {
+        console.log('[Terminal] Link clicked:', uri);
+        window.open(uri, '_blank', 'noopener,noreferrer');
+      });
       terminal.loadAddon(webLinksAddon);
 
       terminal.writeln('🚀 Connecting to shell...');
