@@ -2486,13 +2486,17 @@ async function main() {
       permissionService.resolvePermission(data);
 
       // Emit permission_resolved event for Feathers/WebSocket executor architecture
+      // IMPORTANT: Use camelCase property names to match executor's expectations
       const content = permissionMessage.content as unknown as Record<string, unknown>;
       app.service('messages').emit('permission_resolved', {
-        request_id: data.requestId,
-        task_id: content.task_id,
-        session_id: id,
-        approved: data.allow,
+        requestId: data.requestId, // camelCase
+        taskId: content.task_id as string, // camelCase
+        sessionId: id, // camelCase (for consistency, though not used by executor)
+        allow: data.allow, // Correct property name (not "approved")
+        reason: data.reason,
+        remember: data.remember,
         scope: data.scope,
+        decidedBy: data.decidedBy,
       });
 
       return { success: true };

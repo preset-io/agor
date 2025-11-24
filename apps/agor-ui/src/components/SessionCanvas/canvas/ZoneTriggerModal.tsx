@@ -264,19 +264,20 @@ export const ZoneTriggerModal = ({
       // Reuse existing session
       const formValues = form.getFieldsValue();
 
-      // For 'prompt' action on reuse: just send the prompt (form shows current config for reference)
-      // For 'fork'/'spawn': include agent config (will be used in future backend updates)
+      // IMPORTANT: Always include permissionMode for all actions
+      // The backend executor needs this to override the session's default permission mode
       const params: Parameters<typeof onExecute>[0] = {
         sessionId: selectedSessionId,
         action: selectedAction,
         renderedTemplate: editableTemplate,
+        // Use form value, or fallback to session's current mode
+        permissionMode: formValues.permissionMode || selectedSession?.permission_config?.mode,
       };
 
       if (selectedAction === 'fork' || selectedAction === 'spawn') {
-        // Include config for fork/spawn (eventual support for changing config)
+        // Include additional config for fork/spawn (eventual support for changing config)
         params.agent = formValues.agent || selectedSession?.agentic_tool;
         params.modelConfig = formValues.modelConfig;
-        params.permissionMode = formValues.permissionMode;
         params.mcpServerIds = formValues.mcpServerIds;
       }
 
