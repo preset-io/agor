@@ -60,6 +60,7 @@ import {
   select,
   sessionMcpServers,
   TaskRepository,
+  UsersRepository,
   WorktreeRepository,
 } from '@agor/core/db';
 import {
@@ -156,6 +157,7 @@ interface RouteParams extends Params {
     messageId?: string;
     mcpId?: string;
   };
+  user?: User;
 }
 
 /**
@@ -2334,9 +2336,12 @@ async function main() {
 
       const _session = await sessionsService.get(sessionId, params);
 
-      // Create queued message
+      // Create queued message with user context preserved in metadata
+      // This ensures the message will be processed with the same authentication context
       const messageRepo = new MessagesRepository(db);
-      const queuedMessage = await messageRepo.createQueued(sessionId as SessionID, data.prompt);
+      const queuedMessage = await messageRepo.createQueued(sessionId as SessionID, data.prompt, {
+        queued_by_user_id: params.user?.user_id,
+      });
 
       console.log(
         `📬 Queued message for session ${sessionId.substring(0, 8)} at position ${queuedMessage.queue_position}`
@@ -2371,6 +2376,9 @@ async function main() {
   /**
    * Process the next queued message for a session
    * Called automatically after task completion when session becomes idle
+   *
+   * NOTE: params argument may be empty when called from callback-triggered queue processing.
+   * We reconstruct the original user's authentication context from message metadata.
    */
   async function processNextQueuedMessage(
     sessionId: SessionID,
@@ -2385,8 +2393,28 @@ async function main() {
       return;
     }
 
+    // Reconstruct authentication context from message metadata
+    // If the message was queued by a specific user, use their context
+    // Otherwise fall back to provided params (may be empty for callback-triggered queues)
+    const userId = nextMessage.metadata?.queued_by_user_id as string | undefined;
+    const userRepo = new UsersRepository(db);
+    const queuedByUser = userId ? await userRepo.findById(userId) : undefined;
+
+    // Reconstruct params with user context
+    const messageParams: RouteParams = queuedByUser
+      ? ({
+          ...params,
+          user: queuedByUser,
+        } as RouteParams)
+      : params;
+
+    console.log(
+      `📬 Processing queued message ${nextMessage.message_id.substring(0, 8)} ` +
+        `with user context: ${queuedByUser ? queuedByUser.user_id.substring(0, 8) : 'none'}`
+    );
+
     // Re-fetch session to ensure it's still idle and not awaiting permission
-    const session = await sessionsService.get(sessionId, params);
+    const session = await sessionsService.get(sessionId, messageParams);
 
     if (session.status !== SessionStatus.IDLE) {
       console.log(
@@ -2406,7 +2434,7 @@ async function main() {
     // Verify message still exists (user might have deleted it while we were checking)
     const messagesService = app.service('messages') as unknown as MessagesServiceImpl;
     try {
-      const stillExists = await messagesService.get(nextMessage.message_id, params);
+      const stillExists = await messagesService.get(nextMessage.message_id, messageParams);
       if (!stillExists || stillExists.status !== 'queued') {
         console.log(
           `⚠️  Queued message ${nextMessage.message_id.substring(0, 8)} was deleted or modified, skipping`
@@ -2422,10 +2450,12 @@ async function main() {
 
     // Delete the queued message (execution will create new messages)
     // Use the service so the after.remove hook fires and emits the dequeued event
-    await messagesService.remove(nextMessage.message_id, params);
+    await messagesService.remove(nextMessage.message_id, messageParams);
 
     // Trigger prompt execution via existing endpoint
     // This creates task, user message, executes agent, etc.
+    // IMPORTANT: Use messageParams (reconstructed from queued message metadata)
+    // to preserve the original user's authentication context
     const promptService = app.service('/sessions/:id/prompt') as {
       create: (data: { prompt: string; stream?: boolean }, params: RouteParams) => Promise<unknown>;
     };
@@ -2436,7 +2466,7 @@ async function main() {
         stream: true,
       },
       {
-        ...params,
+        ...messageParams,
         route: { id: sessionId },
       }
     );
