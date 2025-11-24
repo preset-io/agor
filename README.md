@@ -53,19 +53,19 @@
 ### Requirements
 
 - **Node.js** 20.x
-- **tmux** ≥ 2.6 (required - daemon will not start without it)
+- **Zellij** ≥ 0.40 (required - daemon will not start without it)
 
-Install tmux:
+Install Zellij:
 
 ```bash
 # Ubuntu/Debian
-sudo apt-get install tmux
+curl -L https://github.com/zellij-org/zellij/releases/latest/download/zellij-x86_64-unknown-linux-musl.tar.gz | sudo tar -xz -C /usr/local/bin
 
 # macOS
-brew install tmux
+brew install zellij
 
 # RHEL/CentOS
-sudo yum install tmux
+curl -L https://github.com/zellij-org/zellij/releases/latest/download/zellij-x86_64-unknown-linux-musl.tar.gz | sudo tar -xz -C /usr/local/bin
 ```
 
 ### Install Agor
@@ -74,7 +74,7 @@ sudo yum install tmux
 npm install -g agor-live
 ```
 
-**Note:** Agor requires tmux for persistent terminal sessions. The daemon will fail to start with a helpful error message if tmux is not installed.
+**Note:** Agor requires Zellij for persistent terminal sessions. The daemon will fail to start with a helpful error message if Zellij is not installed.
 
 ## Quick Start
 

@@ -26,11 +26,22 @@ echo "🔧 Installing system dependencies..."
 sudo $PKG_MGR install -y \
     git \
     curl \
-    tmux \
     vim \
     sqlite \
     tar \
     gzip
+
+# Install Zellij (terminal multiplexer)
+echo "💻 Installing Zellij..."
+if ! command -v zellij &> /dev/null; then
+    ZELLIJ_VERSION=0.43.1
+    curl -L "https://github.com/zellij-org/zellij/releases/download/v${ZELLIJ_VERSION}/zellij-x86_64-unknown-linux-musl.tar.gz" | \
+        sudo tar -xz -C /usr/local/bin
+    sudo chmod +x /usr/local/bin/zellij
+    echo "✓ Zellij $(zellij --version) installed"
+else
+    echo "✓ Zellij already installed"
+fi
 
 # Install Node.js 20.x (LTS) from NodeSource
 echo "📦 Installing Node.js 20.x..."

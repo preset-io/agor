@@ -18,9 +18,16 @@ RUN apt-get update && apt-get install -y \
   git \
   curl \
   sudo \
-  tmux \
   vim \
   && rm -rf /var/lib/apt/lists/*
+
+# Install Zellij (terminal multiplexer)
+# Pinned to v0.43.1 for reproducibility
+RUN ZELLIJ_VERSION=0.43.1 && \
+  curl -L "https://github.com/zellij-org/zellij/releases/download/v${ZELLIJ_VERSION}/zellij-x86_64-unknown-linux-musl.tar.gz" | \
+  tar -xz -C /usr/local/bin && \
+  chmod +x /usr/local/bin/zellij && \
+  zellij --version
 
 # Install GitHub CLI (gh) - download pre-built binary
 RUN curl -fsSL "$(curl -s https://api.github.com/repos/cli/cli/releases/latest | grep 'browser_download_url.*linux_amd64.tar.gz"' | cut -d'"' -f4)" | \
@@ -52,6 +59,16 @@ RUN useradd -m -s /bin/bash agor_executor && \
     # Create home directory with restricted permissions
     mkdir -p /home/agor_executor/.agor && \
     chown -R agor_executor:agor_executor /home/agor_executor
+
+# Copy Zellij config for both users
+COPY docker/zellij-config.kdl /tmp/zellij-config.kdl
+RUN mkdir -p /home/agor/.config/zellij && \
+    mkdir -p /home/agor_executor/.config/zellij && \
+    cp /tmp/zellij-config.kdl /home/agor/.config/zellij/config.kdl && \
+    cp /tmp/zellij-config.kdl /home/agor_executor/.config/zellij/config.kdl && \
+    chown -R agor:agor /home/agor/.config && \
+    chown -R agor_executor:agor_executor /home/agor_executor/.config && \
+    rm /tmp/zellij-config.kdl
 
 # Set working directory
 WORKDIR /app

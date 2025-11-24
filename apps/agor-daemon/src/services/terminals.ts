@@ -1,34 +1,41 @@
 /**
  * Terminals Service
  *
- * Manages tmux-based terminal sessions for web-based terminal access.
- * REQUIRES tmux to be installed on the system.
+ * Manages Zellij-based terminal sessions for web-based terminal access.
+ * REQUIRES Zellij to be installed on the system.
  *
  * Features:
  * - Full terminal emulation (vim, nano, htop, etc.)
  * - Job control (Ctrl+C, Ctrl+Z)
- * - Terminal resizing
+ * - Terminal resizing via Zellij CLI actions
  * - ANSI colors and escape codes
- * - Persistent sessions via tmux
+ * - Persistent sessions via Zellij (survive daemon restarts)
+ * - One session per user, one tab per worktree
+ *
+ * Architecture:
+ * - No node-pty dependency (Zellij manages PTYs internally)
+ * - Direct child_process.spawn() for Zellij
+ * - Zellij CLI actions for tab/session management
+ * - xterm.js frontend for rendering
  */
 
-import { execSync } from 'node:child_process';
+import { type ChildProcess, execSync, spawn } from 'node:child_process';
 import os from 'node:os';
 import { resolveUserEnvironment } from '@agor/core/config';
 import { type Database, WorktreeRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { AuthenticatedParams, UserID, WorktreeID } from '@agor/core/types';
-import type { IPty } from '@homebridge/node-pty-prebuilt-multiarch';
-import * as pty from '@homebridge/node-pty-prebuilt-multiarch';
 
 interface TerminalSession {
   terminalId: string;
-  pty: IPty;
+  process: ChildProcess;
   shell: string;
   cwd: string;
   userId?: UserID; // User context for env resolution
-  worktreeId?: WorktreeID; // Worktree context for tmux session naming
-  tmuxSession: string; // Tmux session name (always required)
+  worktreeId?: WorktreeID; // Worktree context for Zellij session naming
+  zellijSession: string; // Zellij session name (always required)
+  cols: number;
+  rows: number;
   createdAt: Date;
 }
 
@@ -38,7 +45,7 @@ interface CreateTerminalData {
   rows?: number;
   cols?: number;
   userId?: UserID; // User context for env resolution
-  worktreeId?: WorktreeID; // Worktree context for tmux integration
+  worktreeId?: WorktreeID; // Worktree context for Zellij integration
 }
 
 interface ResizeTerminalData {
@@ -47,11 +54,11 @@ interface ResizeTerminalData {
 }
 
 /**
- * Check if tmux is installed
+ * Check if Zellij is installed
  */
-function isTmuxAvailable(): boolean {
+function isZellijAvailable(): boolean {
   try {
-    execSync('which tmux', { stdio: 'pipe' });
+    execSync('which zellij', { stdio: 'pipe' });
     return true;
   } catch {
     return false;
@@ -59,103 +66,60 @@ function isTmuxAvailable(): boolean {
 }
 
 /**
- * Check if a tmux session exists
+ * Check if a Zellij session exists
  */
-function tmuxSessionExists(sessionName: string): boolean {
+function zellijSessionExists(sessionName: string): boolean {
   try {
-    execSync(`tmux has-session -t "${sessionName}" 2>/dev/null`, { stdio: 'pipe' });
-    return true;
+    const output = execSync('zellij list-sessions 2>/dev/null', {
+      encoding: 'utf-8',
+      stdio: 'pipe',
+    });
+    return output.includes(sessionName);
   } catch {
     return false;
   }
 }
 
 /**
- * Find a tmux window by name in a session
- * Returns the window index if found, null otherwise
+ * Run a Zellij CLI action on a specific session
  */
-function findTmuxWindow(sessionName: string, windowName: string): number | null {
+function runZellijAction(sessionName: string, action: string): void {
   try {
-    // List windows in session and grep for the window name
-    const output = execSync(
-      `tmux list-windows -t "${sessionName}" -F "#{window_index}:#{window_name}" 2>/dev/null`,
-      { encoding: 'utf-8' }
-    );
+    execSync(`zellij --session "${sessionName}" action ${action}`, { stdio: 'pipe' });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`⚠️ Failed to run Zellij action on ${sessionName}: ${action}\n${message}`);
+  }
+}
 
-    for (const line of output.trim().split('\n')) {
-      const [index, name] = line.split(':');
-      if (name === windowName) {
-        return parseInt(index, 10);
-      }
+/**
+ * Get list of tab names in a Zellij session
+ * Returns array of tab names, or empty array if session doesn't exist
+ */
+function getZellijTabs(sessionName: string): string[] {
+  try {
+    // Use zellij action to dump layout, then parse tab names
+    // This is hacky but works - alternative is to maintain our own state
+    const output = execSync(`zellij --session "${sessionName}" action dump-layout 2>/dev/null`, {
+      encoding: 'utf-8',
+      stdio: 'pipe',
+    });
+
+    // Parse tab names from layout dump (this is brittle, but functional)
+    // Layout format includes: name: "tab-name"
+    const tabMatches = output.matchAll(/name:\s*"([^"]+)"/g);
+    const tabs: string[] = [];
+    for (const match of tabMatches) {
+      if (match[1]) tabs.push(match[1]);
     }
-    return null;
+    return tabs;
   } catch {
-    return null;
+    return [];
   }
 }
 
 /**
- * Ensure tmux session is configured to pass OSC hyperlinks and other rich output.
- */
-function configureTmuxSession(sessionName: string): void {
-  try {
-    execSync(`tmux set-option -t "${sessionName}" -g allow-passthrough on`, { stdio: 'pipe' });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.warn(
-      `⚠️ Failed to enable tmux allow-passthrough for session ${sessionName}: ${message}`
-    );
-  }
-
-  try {
-    execSync(`tmux set-option -t "${sessionName}" -g default-terminal 'tmux-256color'`, {
-      stdio: 'pipe',
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.warn(`⚠️ Failed to set tmux default-terminal for ${sessionName}: ${message}`);
-  }
-
-  try {
-    execSync(`tmux set-option -ga terminal-features 'xterm*:allow-passthrough'`, { stdio: 'pipe' });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.warn(`⚠️ Failed to advertise tmux allow-passthrough feature: ${message}`);
-  }
-
-  try {
-    execSync(`tmux set-option -ga terminal-features 'tmux-256color:hyperlinks,RGB,extkeys'`, {
-      stdio: 'pipe',
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.warn(`⚠️ Failed to advertise tmux tmux-256color features: ${message}`);
-  }
-
-  try {
-    execSync(`tmux set-option -ga terminal-features 'xterm*:hyperlinks'`, { stdio: 'pipe' });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.warn(`⚠️ Failed to enable tmux hyperlink feature: ${message}`);
-  }
-
-  try {
-    execSync(`tmux set-option -as terminal-overrides ',*:allow-passthrough'`, { stdio: 'pipe' });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.warn(`⚠️ Failed to configure tmux allow-passthrough override: ${message}`);
-  }
-
-  try {
-    execSync(`tmux set-option -as terminal-overrides ',*:hyperlinks'`, { stdio: 'pipe' });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.warn(`⚠️ Failed to configure tmux hyperlink override: ${message}`);
-  }
-}
-
-/**
- * Terminals service - manages tmux sessions
+ * Terminals service - manages Zellij sessions
  */
 export class TerminalsService {
   private sessions = new Map<string, TerminalSession>();
@@ -166,19 +130,19 @@ export class TerminalsService {
     this.app = app;
     this.db = db;
 
-    // Verify tmux is available - fail hard if not
-    if (!isTmuxAvailable()) {
+    // Verify Zellij is available - fail hard if not
+    if (!isZellijAvailable()) {
       throw new Error(
-        '❌ tmux is not installed or not available in PATH.\n' +
-          'Agor requires tmux for terminal management.\n' +
-          'Please install tmux:\n' +
-          '  - Ubuntu/Debian: sudo apt-get install tmux\n' +
-          '  - macOS: brew install tmux\n' +
-          '  - RHEL/CentOS: sudo yum install tmux'
+        '❌ Zellij is not installed or not available in PATH.\n' +
+          'Agor requires Zellij for terminal management.\n' +
+          'Please install Zellij:\n' +
+          '  - Ubuntu/Debian: curl -L https://github.com/zellij-org/zellij/releases/latest/download/zellij-x86_64-unknown-linux-musl.tar.gz | tar -xz -C /usr/local/bin\n' +
+          '  - macOS: brew install zellij\n' +
+          '  - See: https://zellij.dev/documentation/installation'
       );
     }
 
-    console.log('\x1b[36m✅ tmux detected\x1b[0m - persistent terminal sessions enabled');
+    console.log('\x1b[36m✅ Zellij detected\x1b[0m - persistent terminal sessions enabled');
   }
 
   /**
@@ -190,8 +154,8 @@ export class TerminalsService {
   ): Promise<{
     terminalId: string;
     cwd: string;
-    tmuxSession: string;
-    tmuxReused: boolean;
+    zellijSession: string;
+    zellijReused: boolean;
     worktreeName?: string;
   }> {
     const terminalId = `term-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -217,100 +181,33 @@ export class TerminalsService {
       }
     }
 
-    // Use single shared tmux session with one window per worktree
-    const tmuxSession = `agor-${userSessionSuffix}`;
-    const sessionExists = tmuxSessionExists(tmuxSession);
-    const windowName = worktreeName || 'unnamed';
-    let tmuxReused = false;
-    let shellArgs: string[];
+    // Use single shared Zellij session with one tab per worktree
+    const zellijSession = `agor-${userSessionSuffix}`;
+    const sessionExists = zellijSessionExists(zellijSession);
+    const tabName = worktreeName || 'terminal';
+    let zellijReused = false;
+    let needsTabCreation = false;
+    let needsTabSwitch = false;
 
     if (sessionExists) {
-      configureTmuxSession(tmuxSession);
-      // Session exists - check if this worktree has a window
-      const windowIndex = findTmuxWindow(tmuxSession, windowName);
+      // Session exists - check if this worktree has a tab
+      const existingTabs = getZellijTabs(zellijSession);
+      const tabExists = existingTabs.includes(tabName);
 
-      if (windowIndex !== null) {
-        // Window exists - attach and select it
-        shellArgs = ['attach-session', '-t', `${tmuxSession}:${windowIndex}`];
-        tmuxReused = true;
-        console.log(
-          `\x1b[36m🔗 Reusing tmux window:\x1b[0m ${tmuxSession}:${windowIndex} (${windowName})`
-        );
+      if (tabExists) {
+        // Tab exists - we'll switch to it after attach
+        zellijReused = true;
+        needsTabSwitch = true;
+        console.log(`\x1b[36m🔗 Reusing Zellij tab:\x1b[0m ${zellijSession} → ${tabName}`);
       } else {
-        // Window doesn't exist - attach and create new window
-        shellArgs = [
-          'attach-session',
-          '-t',
-          tmuxSession,
-          ';',
-          'new-window',
-          '-n',
-          windowName,
-          '-c',
-          cwd,
-        ];
-        tmuxReused = false;
-        console.log(
-          `\x1b[36m🪟 Creating new window in tmux session:\x1b[0m ${tmuxSession} (${windowName})`
-        );
+        // Tab doesn't exist - we'll create it after attach
+        needsTabCreation = true;
+        console.log(`\x1b[36m📑 Creating new tab in Zellij:\x1b[0m ${zellijSession} → ${tabName}`);
       }
     } else {
-      // Session doesn't exist - create it with first window and set theme inline
-      shellArgs = [
-        'new-session',
-        '-s',
-        tmuxSession,
-        '-n',
-        windowName,
-        '-c',
-        cwd,
-        ';',
-        'set-option',
-        '-t',
-        tmuxSession,
-        'default-terminal',
-        'tmux-256color',
-        ';',
-        'set-option',
-        '-t',
-        tmuxSession,
-        'status-style',
-        'bg=#2e9a92,fg=#000000',
-        ';',
-        'set-option',
-        '-t',
-        tmuxSession,
-        'allow-passthrough',
-        'on',
-        ';',
-        'set-option',
-        '-ga',
-        'terminal-features',
-        'xterm*:hyperlinks',
-        ';',
-        'set-option',
-        '-ga',
-        'terminal-features',
-        'tmux-256color:hyperlinks,RGB,extkeys',
-        ';',
-        'set-option',
-        '-ga',
-        'terminal-features',
-        'xterm*:allow-passthrough',
-        ';',
-        'set-option',
-        '-as',
-        'terminal-overrides',
-        ',*:allow-passthrough',
-        ';',
-        'set-option',
-        '-as',
-        'terminal-overrides',
-        ',*:hyperlinks',
-      ];
-      tmuxReused = false;
+      // Session doesn't exist - will be created with first tab
       console.log(
-        `\x1b[36m🚀 Creating tmux session:\x1b[0m ${tmuxSession} with window (${windowName}) + teal theme`
+        `\x1b[36m🚀 Creating Zellij session:\x1b[0m ${zellijSession} with tab ${tabName}`
       );
     }
 
@@ -324,9 +221,9 @@ export class TerminalsService {
       env = { ...env, ...userEnv };
     }
 
-    // Strip TMUX env vars to prevent nested sessions
-    delete env.TMUX;
-    delete env.TMUX_PANE;
+    // Strip Zellij env vars to prevent nested sessions
+    delete env.ZELLIJ;
+    delete env.ZELLIJ_SESSION_NAME;
 
     // Ensure terminal capabilities advertised to downstream processes
     if (!env.TERM) {
@@ -334,15 +231,6 @@ export class TerminalsService {
     }
     if (!env.COLORTERM) {
       env.COLORTERM = 'truecolor';
-    }
-    if (!env.ENABLE_HYPERLINKS) {
-      env.ENABLE_HYPERLINKS = '1';
-    }
-    if (!env.RICH_FORCE_COLOR) {
-      env.RICH_FORCE_COLOR = '1';
-    }
-    if (!env.RICH_FORCE_HYPERLINK) {
-      env.RICH_FORCE_HYPERLINK = '1';
     }
     if (!env.LANG) {
       env.LANG = 'C.UTF-8';
@@ -354,46 +242,95 @@ export class TerminalsService {
       env.LC_CTYPE = env.LANG;
     }
 
-    // Spawn PTY process with tmux (ALWAYS uses tmux now)
-    const ptyProcess = pty.spawn('tmux', shellArgs, {
-      name: 'xterm-256color',
-      cols: data.cols || 80,
-      rows: data.rows || 30,
+    // Spawn Zellij process directly (no node-pty!)
+    // Zellij manages PTY internally, we just need stdin/stdout pipes
+    const zellijArgs = ['attach', zellijSession, '--create'];
+
+    const zellijProcess = spawn('zellij', zellijArgs, {
       cwd,
       env,
+      stdio: ['pipe', 'pipe', 'pipe'], // stdin, stdout, stderr
     });
 
     // Store session
     this.sessions.set(terminalId, {
       terminalId,
-      pty: ptyProcess,
-      shell: 'tmux',
+      process: zellijProcess,
+      shell: 'zellij',
       cwd,
       userId: resolvedUserId,
       worktreeId: data.worktreeId,
-      tmuxSession,
+      zellijSession,
+      cols: data.cols || 80,
+      rows: data.rows || 30,
       createdAt: new Date(),
     });
 
-    // Handle PTY output - broadcast to WebSocket clients
-    ptyProcess.onData((data) => {
+    // Handle stdout - broadcast to WebSocket clients
+    zellijProcess.stdout?.on('data', (chunk) => {
       this.app.service('terminals').emit('data', {
         terminalId,
-        data,
+        data: chunk.toString(),
       });
     });
 
-    // Handle PTY exit
-    ptyProcess.onExit(({ exitCode }) => {
-      console.log(`Terminal ${terminalId} exited with code ${exitCode}`);
+    // Handle stderr (Zellij warnings, errors)
+    zellijProcess.stderr?.on('data', (chunk) => {
+      console.warn(`[Zellij stderr ${terminalId}]:`, chunk.toString());
+    });
+
+    // Handle process exit
+    zellijProcess.on('exit', (code) => {
+      console.log(`Terminal ${terminalId} exited with code ${code}`);
       this.sessions.delete(terminalId);
       this.app.service('terminals').emit('exit', {
         terminalId,
-        exitCode,
+        exitCode: code ?? 0,
       });
     });
 
-    return { terminalId, cwd, tmuxSession, tmuxReused, worktreeName };
+    // Handle process errors
+    zellijProcess.on('error', (error) => {
+      console.error(`Terminal ${terminalId} error:`, error);
+      this.sessions.delete(terminalId);
+      this.app.service('terminals').emit('exit', {
+        terminalId,
+        exitCode: 1,
+      });
+    });
+
+    // After Zellij starts, perform tab management
+    // Wait briefly for Zellij to initialize
+    setTimeout(() => {
+      try {
+        if (!sessionExists) {
+          // First time creating session - rename first tab
+          runZellijAction(zellijSession, `rename-tab "${tabName}"`);
+          // Change to worktree directory
+          if (cwd !== os.homedir()) {
+            runZellijAction(zellijSession, `write-chars "cd ${cwd}"`);
+            runZellijAction(zellijSession, 'write 10'); // Enter key (char code 10)
+          }
+        } else if (needsTabCreation) {
+          // Create new tab for this worktree
+          runZellijAction(zellijSession, `new-tab --name "${tabName}" --cwd "${cwd}"`);
+          runZellijAction(zellijSession, `go-to-tab-name "${tabName}"`);
+        } else if (needsTabSwitch) {
+          // Switch to existing tab
+          runZellijAction(zellijSession, `go-to-tab-name "${tabName}"`);
+        }
+
+        // Set initial terminal size
+        runZellijAction(
+          zellijSession,
+          `resize --width ${data.cols || 80} --height ${data.rows || 30}`
+        );
+      } catch (error) {
+        console.warn('Failed to configure Zellij tab:', error);
+      }
+    }, 500);
+
+    return { terminalId, cwd, zellijSession, zellijReused, worktreeName };
   }
 
   /**
@@ -408,7 +345,7 @@ export class TerminalsService {
     return {
       terminalId: session.terminalId,
       cwd: session.cwd,
-      alive: true,
+      alive: session.process.exitCode === null,
     };
   }
 
@@ -433,12 +370,25 @@ export class TerminalsService {
     }
 
     if (data.input !== undefined) {
-      session.pty.write(data.input);
+      // Write input directly to Zellij stdin
+      session.process.stdin?.write(data.input);
     }
 
     if (data.resize) {
-      // Use PTY resize method (non-blocking)
-      session.pty.resize(data.resize.cols, data.resize.rows);
+      // Update stored dimensions
+      session.cols = data.resize.cols;
+      session.rows = data.resize.rows;
+
+      // Use Zellij CLI action to resize terminal
+      // Note: This may not work perfectly for all cases, but it's better than nothing
+      try {
+        runZellijAction(
+          session.zellijSession,
+          `resize --width ${data.resize.cols} --height ${data.resize.rows}`
+        );
+      } catch (error) {
+        console.warn(`Failed to resize terminal ${id}:`, error);
+      }
     }
   }
 
@@ -451,7 +401,8 @@ export class TerminalsService {
       throw new Error(`Terminal ${id} not found`);
     }
 
-    session.pty.kill();
+    // Kill the Zellij process
+    session.process.kill('SIGTERM');
     this.sessions.delete(id);
 
     return { terminalId: id };
@@ -462,7 +413,7 @@ export class TerminalsService {
    */
   cleanup(): void {
     for (const session of this.sessions.values()) {
-      session.pty.kill();
+      session.process.kill('SIGTERM');
     }
     this.sessions.clear();
   }

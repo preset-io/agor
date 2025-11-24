@@ -91,9 +91,6 @@ importers:
       '@agor/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@homebridge/node-pty-prebuilt-multiarch':
-        specifier: ^0.13.1
-        version: 0.13.1
       compression:
         specifier: ^1.8.1
         version: 1.8.1

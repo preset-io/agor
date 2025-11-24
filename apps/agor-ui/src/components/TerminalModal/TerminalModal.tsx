@@ -66,7 +66,7 @@ export interface TerminalModalProps {
   onClose: () => void;
   client: AgorClient | null;
   user?: User | null;
-  worktreeId?: string; // Worktree context for tmux integration
+  worktreeId?: string; // Worktree context for Zellij integration
   initialCommands?: string[]; // Commands to execute after connection
 }
 
@@ -84,8 +84,8 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
   const [_terminalId, setTerminalId] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [sessionInfo, setSessionInfo] = useState<{
-    tmuxSession?: string;
-    tmuxReused?: boolean;
+    zellijSession?: string;
+    zellijReused?: boolean;
     worktreeName?: string;
   }>({});
 
@@ -176,8 +176,8 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
         })) as {
           terminalId: string;
           cwd: string;
-          tmuxSession: string;
-          tmuxReused: boolean;
+          zellijSession: string;
+          zellijReused: boolean;
           worktreeName?: string;
         };
 
@@ -192,8 +192,8 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
         setIsConnected(true);
         transformData = expandOscHyperlinks;
         setSessionInfo({
-          tmuxSession: result.tmuxSession,
-          tmuxReused: result.tmuxReused,
+          zellijSession: result.zellijSession,
+          zellijReused: result.zellijReused,
           worktreeName: result.worktreeName,
         });
         terminal.clear();
@@ -256,7 +256,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
       modal.confirm({
         title: 'Close Terminal?',
         content:
-          'The tmux session will continue running in the background. You can reconnect by reopening the terminal.',
+          'The Zellij session will continue running in the background. You can reconnect by reopening the terminal.',
         okText: 'Close',
         okType: 'primary',
         cancelText: 'Cancel',

@@ -1,0 +1,74 @@
+// Agor Default Zellij Configuration
+// Optimized for embedded terminal usage with xterm.js frontend
+
+// Use custom Agor theme with teal accent
+theme "agor"
+
+themes {
+    agor {
+        fg "#ffffff"
+        bg "#000000"
+        black "#000000"
+        red "#ff5555"
+        green "#50fa7b"
+        yellow "#f1fa8c"
+        blue "#bd93f9"
+        magenta "#ff79c6"
+        cyan "#2e9a92"       // Agor teal
+        white "#f8f8f2"
+        orange "#ffb86c"
+    }
+}
+
+// Disable pane frames for cleaner embedded look
+pane_frames false
+
+// Enable mouse support
+mouse_mode true
+
+// Copy to clipboard on selection
+copy_on_select true
+
+// Clipboard management
+copy_command "pbcopy"  // macOS - will be ignored on Linux
+copy_clipboard "primary"
+
+// Scrollback buffer (10,000 lines)
+scroll_buffer_size 10000
+
+// Simplified UI (no extra decorations)
+simplified_ui false
+
+// Default layout - single pane
+default_layout "compact"
+
+// Session serialization for persistence
+session_serialization true
+
+// Auto-layout on creation
+auto_layout true
+
+// Prefer default shell
+default_shell "bash"
+
+// Terminal colors support
+on_force_close "quit"
+
+// UI font settings (not used by xterm.js but good for direct access)
+ui {
+    pane_frames {
+        rounded_corners false
+    }
+}
+
+// Keybindings - minimal to avoid conflicts with xterm.js
+keybinds {
+    normal {
+        // Disable default keybindings that might conflict
+        // We'll manage tabs programmatically via CLI actions
+    }
+
+    locked {
+        // Locked mode - pass all keys through to shell
+    }
+}
