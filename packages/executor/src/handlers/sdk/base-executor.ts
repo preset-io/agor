@@ -36,8 +36,8 @@ export interface BaseTool {
 
   // Optional stopTask method for tools that support interruption
   stopTask?(
-    sessionId: string,
-    taskId?: string
+    sessionId: SessionID,
+    taskId?: TaskID
   ): Promise<{
     success: boolean;
     partialResult?: Partial<{ taskId: string; status: 'completed' | 'failed' | 'cancelled' }>;
@@ -244,6 +244,11 @@ export async function executeToolTask(params: {
       console.warn(`[${toolName}] Tool does not implement stopTask method`);
     }
   };
+
+  // Handle race condition: if signal is already aborted, call handler immediately
+  if (params.abortController.signal.aborted) {
+    await abortHandler();
+  }
 
   // Listen for abort signal
   params.abortController.signal.addEventListener('abort', abortHandler);
