@@ -67,8 +67,9 @@ pnpm agor init --skip-if-exists --set-config --daemon-port "${DAEMON_PORT:-3030}
 
 # Run database migrations (idempotent: safe to run on every start)
 # This ensures schema is up-to-date even when using existing database volumes
+# Use --yes to skip confirmation prompt in non-interactive Docker environment
 echo "🔄 Running database migrations..."
-pnpm agor db migrate
+pnpm agor db migrate --yes
 
 # Configure executor Unix user isolation if enabled
 if [ "$AGOR_USE_EXECUTOR" = "true" ]; then

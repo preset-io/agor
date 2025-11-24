@@ -4,7 +4,7 @@
 
 import { checkMigrationStatus, createDatabase, runMigrations } from '@agor/core/db';
 import { expandPath, extractDbFilePath } from '@agor/core/utils/path';
-import { Command } from '@oclif/core';
+import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
 
 export default class DbMigrate extends Command {
@@ -12,8 +12,16 @@ export default class DbMigrate extends Command {
 
   static examples = ['<%= config.bin %> <%= command.id %>'];
 
+  static flags = {
+    yes: Flags.boolean({
+      char: 'y',
+      description: 'Skip confirmation prompt (for non-interactive environments)',
+      default: false,
+    }),
+  };
+
   async run(): Promise<void> {
-    await this.parse(DbMigrate);
+    const { flags } = await this.parse(DbMigrate);
 
     try {
       // Determine database URL (same logic as daemon)
@@ -52,27 +60,34 @@ export default class DbMigrate extends Command {
       this.log(`Run this command to create a backup:`);
       this.log(chalk.cyan(`  cp ${dbFilePath} ${dbFilePath}.backup-$(date +%s)`));
       this.log('');
-      this.log('Press Ctrl+C to cancel, or any key to continue...');
-      this.log('');
 
-      // Wait for user confirmation (only in TTY mode)
-      if (process.stdin.isTTY) {
-        await new Promise<void>((resolve) => {
-          process.stdin.once('data', () => resolve());
-          process.stdin.setRawMode(true);
-          process.stdin.resume();
-        });
+      // Skip confirmation if --yes flag is set
+      if (!flags.yes) {
+        this.log('Press Ctrl+C to cancel, or any key to continue...');
+        this.log('');
 
-        // Restore terminal
-        process.stdin.setRawMode(false);
-        process.stdin.pause();
+        // Wait for user confirmation (only in TTY mode)
+        if (process.stdin.isTTY) {
+          await new Promise<void>((resolve) => {
+            process.stdin.once('data', () => resolve());
+            process.stdin.setRawMode(true);
+            process.stdin.resume();
+          });
+
+          // Restore terminal
+          process.stdin.setRawMode(false);
+          process.stdin.pause();
+        } else {
+          // In non-TTY mode, wait for a newline
+          await new Promise<void>((resolve) => {
+            process.stdin.once('data', () => resolve());
+            process.stdin.resume();
+          });
+          process.stdin.pause();
+        }
       } else {
-        // In non-TTY mode, wait for a newline
-        await new Promise<void>((resolve) => {
-          process.stdin.once('data', () => resolve());
-          process.stdin.resume();
-        });
-        process.stdin.pause();
+        this.log(chalk.dim('(Skipping confirmation due to --yes flag)'));
+        this.log('');
       }
 
       this.log(chalk.bold('🔄 Running migrations...'));

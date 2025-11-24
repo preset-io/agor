@@ -22,6 +22,13 @@
       "when": 1763608073556,
       "tag": "0002_greedy_rawhide_kid",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1763955809018,
+      "tag": "0003_dazzling_silver_centurion",
+      "breakpoints": true
     }
   ]
 }

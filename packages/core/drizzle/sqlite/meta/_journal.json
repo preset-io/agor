@@ -78,6 +78,13 @@
       "when": 1763608073117,
       "tag": "0012_superb_cyclops",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1763955808642,
+      "tag": "0013_sturdy_spot",
+      "breakpoints": true
     }
   ]
 }
