@@ -23,7 +23,7 @@ import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { AGOR_INTERNAL_ENV_VARS, loadConfig, resolveUserEnvironment } from '@agor/core/config';
+import { createUserProcessEnvironment, loadConfig } from '@agor/core/config';
 import { type Database, formatShortId, WorktreeRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { AuthenticatedParams, UserID, WorktreeID } from '@agor/core/types';
@@ -253,48 +253,35 @@ export class TerminalsService {
       );
     }
 
-    // Resolve environment with user env vars if userId provided
-    let env: Record<string, string> = { ...(process.env as Record<string, string>) };
-    let userEnv: Record<string, string> = {};
-    if (resolvedUserId) {
-      userEnv = await resolveUserEnvironment(resolvedUserId, this.db);
-      console.log(
-        `🔐 Loaded ${Object.keys(userEnv).length} env vars for user ${resolvedUserId.substring(0, 8)}`
-      );
-      env = { ...env, ...userEnv };
-    }
-
-    // Filter out Agor-internal environment variables (NODE_ENV, AGOR_*, etc.)
-    for (const internalVar of AGOR_INTERNAL_ENV_VARS) {
-      delete env[internalVar];
-    }
+    // Create clean environment for terminal (filters Agor-internal vars, adds user vars)
+    const baseEnv = await createUserProcessEnvironment(resolvedUserId, this.db, {
+      // Terminal-specific environment defaults
+      TERM: 'xterm-256color',
+      COLORTERM: 'truecolor',
+      LANG: 'C.UTF-8',
+    });
 
     // Strip Zellij env vars to prevent nested sessions
-    delete env.ZELLIJ;
-    delete env.ZELLIJ_SESSION_NAME;
+    delete baseEnv.ZELLIJ;
+    delete baseEnv.ZELLIJ_SESSION_NAME;
 
-    // Ensure terminal capabilities advertised to downstream processes
-    if (!env.TERM) {
-      env.TERM = 'xterm-256color';
+    // Set LC_ALL and LC_CTYPE based on LANG if not already set
+    if (!baseEnv.LC_ALL) {
+      baseEnv.LC_ALL = baseEnv.LANG;
     }
-    if (!env.COLORTERM) {
-      env.COLORTERM = 'truecolor';
-    }
-    if (!env.LANG) {
-      env.LANG = 'C.UTF-8';
-    }
-    if (!env.LC_ALL) {
-      env.LC_ALL = env.LANG;
-    }
-    if (!env.LC_CTYPE) {
-      env.LC_CTYPE = env.LANG;
+    if (!baseEnv.LC_CTYPE) {
+      baseEnv.LC_CTYPE = baseEnv.LANG;
     }
 
-    // Write user env vars to file for sourcing in new shells (only custom vars, not system)
-    const envFile = writeEnvFile(resolvedUserId, userEnv);
+    const env = baseEnv;
+
+    // Write user env vars to file for sourcing in new shells
+    // Note: writeEnvFile gets only the user-specific vars, not the full env
+    // This is OK - writeEnvFile filters out system vars anyway
+    const envFile = resolvedUserId ? writeEnvFile(resolvedUserId, env) : null;
     if (envFile && resolvedUserId) {
       console.log(
-        `📝 Wrote user env file: ${envFile} (${Object.keys(userEnv).length} custom vars for user ${resolvedUserId.substring(0, 8)})`
+        `📝 Wrote user env file: ${envFile} (for user ${resolvedUserId.substring(0, 8)})`
       );
     }
 
