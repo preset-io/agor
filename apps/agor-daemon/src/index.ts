@@ -1365,6 +1365,34 @@ async function main() {
         },
         // TODO: OpenCode session creation moved to executor - implement via IPC if needed
       ],
+      patch: [
+        async (context) => {
+          // Automatically process queued messages when session becomes IDLE
+          // This ensures queued messages are processed regardless of how the session became IDLE
+          const session = Array.isArray(context.result) ? context.result[0] : context.result;
+
+          if (session && session.status === 'idle' && session.ready_for_prompt) {
+            // Use setImmediate to avoid blocking the patch response
+            setImmediate(async () => {
+              try {
+                console.log(
+                  `🔄 [SessionsService.after.patch] Session ${session.session_id.substring(0, 8)} became IDLE, checking for queued messages...`
+                );
+
+                await sessionsService.triggerQueueProcessing(session.session_id, context.params);
+              } catch (error) {
+                console.error(
+                  `❌ [SessionsService.after.patch] Failed to process queue for session ${session.session_id.substring(0, 8)}:`,
+                  error
+                );
+                // Don't throw - queue processing failure shouldn't break session patches
+              }
+            });
+          }
+
+          return context;
+        },
+      ],
     },
   });
 
