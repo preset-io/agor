@@ -15,8 +15,11 @@ export interface ClaudeModel {
 /**
  * Available Claude model aliases (API-provided, auto-update to latest versions)
  *
+ * Models are listed with newest first in each family.
+ * For details, see: https://docs.anthropic.com/en/docs/about-claude/models
+ *
  * Note: Anthropic's naming is inconsistent:
- * - Newer models (Claude 4.x) use version-based aliases: claude-sonnet-4-5, claude-opus-4-1
+ * - Newer models (Claude 4.x) use version-based aliases: claude-sonnet-4-5, claude-opus-4-5
  * - Older models (Claude 3.x) use -latest suffix: claude-3-7-sonnet-latest
  */
 export const AVAILABLE_CLAUDE_MODEL_ALIASES: ClaudeModel[] = [
@@ -24,37 +27,43 @@ export const AVAILABLE_CLAUDE_MODEL_ALIASES: ClaudeModel[] = [
     id: 'claude-sonnet-4-5',
     displayName: 'Claude Sonnet 4.5',
     family: 'claude-4',
-    description: 'Best for coding (latest)',
+    description: 'Best for coding',
+  },
+  {
+    id: 'claude-opus-4-5',
+    displayName: 'Claude Opus 4.5',
+    family: 'claude-4',
+    description: 'Most capable model',
   },
   {
     id: 'claude-opus-4-1',
     displayName: 'Claude Opus 4.1',
     family: 'claude-4',
-    description: 'Most capable model (latest)',
+    description: 'High-performance reasoning',
   },
   {
     id: 'claude-sonnet-4-0',
     displayName: 'Claude Sonnet 4.0',
     family: 'claude-4',
-    description: 'Sonnet 4.0 (previous)',
+    description: 'Balanced performance',
   },
   {
     id: 'claude-3-7-sonnet-latest',
     displayName: 'Claude 3.7 Sonnet',
     family: 'claude-3.7',
-    description: 'Fast & balanced',
+    description: 'Fast and balanced',
   },
   {
     id: 'claude-haiku-4-5',
     displayName: 'Claude Haiku 4.5',
     family: 'claude-4',
-    description: 'Fastest (latest)',
+    description: 'Fastest response',
   },
   {
     id: 'claude-3-5-haiku-latest',
     displayName: 'Claude 3.5 Haiku',
     family: 'claude-3.5',
-    description: 'Fastest (previous)',
+    description: 'Fast and efficient',
   },
 ];
 
