@@ -1944,6 +1944,12 @@ async function main() {
     },
   });
 
+  app.service('/sessions/:id/fork').hooks({
+    before: {
+      create: [requireAuth, requireMinimumRole('member', 'fork sessions')],
+    },
+  });
+
   app.use('/sessions/:id/spawn', {
     async create(data: Partial<import('@agor/core/types').SpawnConfig>, params: RouteParams) {
       ensureMinimumRole(params, 'member', 'spawn sessions');
@@ -1967,6 +1973,12 @@ async function main() {
     },
   });
 
+  app.service('/sessions/:id/spawn').hooks({
+    before: {
+      create: [requireAuth, requireMinimumRole('member', 'spawn sessions')],
+    },
+  });
+
   // Feathers custom route handler with find method
   app.use('/sessions/:id/genealogy', {
     async find(_data: unknown, params: RouteParams) {
@@ -1977,6 +1989,12 @@ async function main() {
     },
     // biome-ignore lint/suspicious/noExplicitAny: FeathersJS route handler type mismatch with Express RouteParams
   } as any);
+
+  app.service('/sessions/:id/genealogy').hooks({
+    before: {
+      find: [requireAuth, requireMinimumRole('member', 'view session genealogy')],
+    },
+  });
 
   /**
    * Helper: Safely patch an entity, returning false if it was deleted mid-execution
@@ -2209,6 +2227,12 @@ async function main() {
     },
   });
 
+  app.service('/sessions/:id/prompt').hooks({
+    before: {
+      create: [requireAuth, requireMinimumRole('member', 'execute prompts')],
+    },
+  });
+
   // Stop execution endpoint
   app.use('/sessions/:id/stop', {
     async create(_data: unknown, params: RouteParams) {
@@ -2352,6 +2376,12 @@ async function main() {
     },
   });
 
+  app.service('/sessions/:id/stop').hooks({
+    before: {
+      create: [requireAuth, requireMinimumRole('member', 'stop sessions')],
+    },
+  });
+
   /**
    * POST /sessions/:id/messages/queue
    * GET /sessions/:id/messages/queue
@@ -2406,6 +2436,13 @@ async function main() {
     },
     // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
   } as any);
+
+  app.service('/sessions/:id/messages/queue').hooks({
+    before: {
+      create: [requireAuth, requireMinimumRole('member', 'queue messages')],
+      find: [requireAuth, requireMinimumRole('member', 'view queue')],
+    },
+  });
 
   /**
    * Process the next queued message for a session
@@ -2932,6 +2969,146 @@ async function main() {
     },
     // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
   } as any);
+
+  // Configure authentication hooks for all remaining custom routes
+  app.service('/sessions/:id/permission-decision').hooks({
+    before: {
+      create: [requireAuth, requireMinimumRole('member', 'respond to permission requests')],
+    },
+  });
+
+  app.service('/sessions/:id/mcp-servers').hooks({
+    before: {
+      get: [requireAuth, requireMinimumRole('member', 'view session MCP servers')],
+    },
+  });
+
+  app.service('/sessions/:id/mcp-servers/:mcpId').hooks({
+    before: {
+      create: [requireAuth, requireMinimumRole('member', 'modify session MCP servers')],
+      remove: [requireAuth, requireMinimumRole('member', 'modify session MCP servers')],
+    },
+  });
+
+  app.service('/tasks/bulk').hooks({
+    before: {
+      create: [requireAuth, requireMinimumRole('member', 'create tasks')],
+    },
+  });
+
+  app.service('/tasks/:id/complete').hooks({
+    before: {
+      create: [requireAuth, requireMinimumRole('member', 'complete tasks')],
+    },
+  });
+
+  app.service('/tasks/:id/fail').hooks({
+    before: {
+      create: [requireAuth, requireMinimumRole('member', 'fail tasks')],
+    },
+  });
+
+  app.service('/repos/local').hooks({
+    before: {
+      create: [requireAuth, requireMinimumRole('member', 'add local repositories')],
+    },
+  });
+
+  app.service('/repos/clone').hooks({
+    before: {
+      create: [requireAuth, requireMinimumRole('member', 'clone repositories')],
+    },
+  });
+
+  app.service('/repos/:id/worktrees').hooks({
+    before: {
+      get: [requireAuth, requireMinimumRole('member', 'list worktrees')],
+    },
+  });
+
+  app.service('/repos/:id/worktrees/:name').hooks({
+    before: {
+      remove: [requireAuth, requireMinimumRole('member', 'remove worktrees')],
+    },
+  });
+
+  app.service('/repos/:id/import-agor-yml').hooks({
+    before: {
+      create: [requireAuth, requireMinimumRole('member', 'import .agor.yml')],
+    },
+  });
+
+  app.service('/repos/:id/export-agor-yml').hooks({
+    before: {
+      get: [requireAuth, requireMinimumRole('member', 'export .agor.yml')],
+    },
+  });
+
+  app.service('/board-comments/:id/toggle-reaction').hooks({
+    before: {
+      create: [requireAuth, requireMinimumRole('member', 'react to board comments')],
+    },
+  });
+
+  app.service('/board-comments/:id/reply').hooks({
+    before: {
+      create: [requireAuth, requireMinimumRole('member', 'reply to board comments')],
+    },
+  });
+
+  app.service('/boards/:id/sessions').hooks({
+    before: {
+      create: [requireAuth, requireMinimumRole('member', 'modify board sessions')],
+    },
+  });
+
+  app.service('/worktrees/:id/start').hooks({
+    before: {
+      create: [requireAuth, requireMinimumRole('admin', 'start worktree environments')],
+    },
+  });
+
+  app.service('/worktrees/:id/stop').hooks({
+    before: {
+      create: [requireAuth, requireMinimumRole('admin', 'stop worktree environments')],
+    },
+  });
+
+  app.service('/worktrees/:id/restart').hooks({
+    before: {
+      create: [requireAuth, requireMinimumRole('admin', 'restart worktree environments')],
+    },
+  });
+
+  app.service('/worktrees/:id/health').hooks({
+    before: {
+      find: [requireAuth, requireMinimumRole('member', 'check worktree health')],
+    },
+  });
+
+  app.service('/worktrees/:id/archive-or-delete').hooks({
+    before: {
+      create: [requireAuth, requireMinimumRole('admin', 'archive or delete worktrees')],
+    },
+  });
+
+  app.service('/worktrees/:id/unarchive').hooks({
+    before: {
+      create: [requireAuth, requireMinimumRole('admin', 'unarchive worktrees')],
+    },
+  });
+
+  app.service('/worktrees/logs').hooks({
+    before: {
+      find: [requireAuth, requireMinimumRole('member', 'view worktree logs')],
+    },
+  });
+
+  app.service('/messages/bulk').hooks({
+    before: {
+      create: [requireAuth, requireMinimumRole('member', 'create messages')],
+    },
+  });
 
   // Note: Sessions are no longer directly on boards (worktree-only architecture).
   // Sessions are accessed through worktree cards. No cleanup needed on session deletion.
