@@ -1,18 +1,7 @@
 import type { Repo } from '@agor/core/types';
 import { DeleteOutlined, EditOutlined, FolderOutlined, PlusOutlined } from '@ant-design/icons';
 import type { RadioChangeEvent } from 'antd';
-import {
-  Button,
-  Card,
-  Empty,
-  Form,
-  Input,
-  Modal,
-  Radio,
-  Space,
-  Tag,
-  Typography,
-} from 'antd';
+import { Button, Card, Empty, Form, Input, Modal, Radio, Space, Tag, Typography } from 'antd';
 import { useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
 
@@ -439,10 +428,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({
 
             {repoToDelete.repo_type === 'local' ? (
               // For local repos, only show database removal option
-              <Card
-                style={{ marginBottom: 8 }}
-                styles={{ body: { padding: 16 } }}
-              >
+              <Card style={{ marginBottom: 8 }} styles={{ body: { padding: 16 } }}>
                 <Space direction="vertical" size={8} style={{ width: '100%' }}>
                   <Typography.Text strong>Remove from Agor</Typography.Text>
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -462,10 +448,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({
             ) : (
               // For remote repos, show both options
               <>
-                <Card
-                  style={{ marginBottom: 8 }}
-                  styles={{ body: { padding: 16 } }}
-                >
+                <Card style={{ marginBottom: 8 }} styles={{ body: { padding: 16 } }}>
                   <Space direction="vertical" size={8} style={{ width: '100%' }}>
                     <Typography.Text strong>Remove from Agor (Keep Files)</Typography.Text>
                     <Typography.Text type="secondary" style={{ fontSize: 12 }}>

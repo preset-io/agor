@@ -654,15 +654,11 @@ function AppContent() {
 
       // Check for partial deletion (some files deleted, some failed)
       if (errorMessage.includes('Partial deletion occurred:')) {
-        showError(
-          `⚠️ PARTIAL DELETION: Some files were permanently deleted. ${errorMessage}`
-        );
+        showError(`⚠️ PARTIAL DELETION: Some files were permanently deleted. ${errorMessage}`);
       }
       // Check for complete failure (no files deleted)
       else if (errorMessage.includes('No files were deleted')) {
-        showError(
-          `Deletion failed, but no files were removed. ${errorMessage}`
-        );
+        showError(`Deletion failed, but no files were removed. ${errorMessage}`);
       }
       // Generic failure
       else {
