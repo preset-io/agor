@@ -1137,6 +1137,12 @@ async function main() {
     },
   });
 
+  app.service('files').hooks({
+    before: {
+      all: [requireAuth, requireMinimumRole('member', 'search files')],
+    },
+  });
+
   app.service('terminals').hooks({
     before: {
       all: [requireAuth, requireMinimumRole('admin', 'access terminals')],

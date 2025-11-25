@@ -512,4 +512,25 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
       );
     });
   });
+
+  describe('Files Service - Authentication Required', () => {
+    it('GET /files rejects unauthenticated requests', async () => {
+      const app = feathers();
+
+      const filesService = {
+        async find() {
+          return [];
+        },
+      };
+
+      app.use('/files', filesService);
+      app.service('/files').hooks({
+        before: {
+          find: [mockRequireAuth, mockRequireMinimumRole('member', 'search files')],
+        },
+      });
+
+      await expect(app.service('/files').find({})).rejects.toThrow('No authentication provided');
+    });
+  });
 });
