@@ -28,13 +28,13 @@
 # ==============================================================================
 #
 # The -p (project name) flag creates completely isolated environments:
-# - Separate Docker image per worktree (image tag includes project name)
-# - Separate volumes (node_modules, database, config)
+# - SHARED Docker image (all projects use agor-dev:latest - saves disk space!)
+# - Separate volumes (node_modules, database, config) - isolated per project
 # - Separate networks and containers
 # - Separate ports (using unique_id offset in .agor.yml)
 #
 # Dependencies are smart-synced at container startup:
-# - First boot: Installs packages and caches in named volume
+# - First boot: Uses Docker-built node_modules from shared image
 # - Subsequent boots: Only reinstalls if pnpm-lock.yaml changed
 # This ensures fast boot times (~2-3s) while respecting per-branch dependencies.
 #
@@ -72,7 +72,10 @@
 
 services:
   agor-dev:
-    image: ${COMPOSE_PROJECT_NAME:-agor}-agor-dev
+    # Use fixed image name - all projects share the same base image
+    # Only volumes are isolated per project (via -p flag)
+    # This saves disk space and build time!
+    image: agor-dev:latest
     build:
       context: .
       dockerfile: docker/Dockerfile
@@ -121,19 +124,13 @@ services:
     volumes:
       # Mount entire repo for hot-reload (source code only)
       - .:/app
-      # Use anonymous volumes to exclude node_modules and dist from the source mount
-      # This preserves the Docker-built versions (correct OS binaries, pre-built artifacts)
-      # Anonymous volumes use the container's built-in files directly - no copy needed!
-      - /app/node_modules
-      - /app/packages/core/node_modules
-      - /app/packages/executor/node_modules
-      - /app/packages/agor-live/node_modules
-      - /app/apps/agor-daemon/node_modules
-      - /app/apps/agor-ui/node_modules
-      - /app/apps/agor-docs/node_modules
-      - /app/apps/agor-cli/node_modules
+      # Preserve Docker-built node_modules (with correct platform binaries)
+      # pnpm workspaces use a single shared store in /app/node_modules/.pnpm/
+      # Package-level node_modules are just symlinks, so we only need ONE volume!
+      # Named volume prevents bloat (reused across container recreations)
+      - node-modules:/app/node_modules
       # Note: We DO NOT exclude dist directories - they should be shared between host and container
-      # The entrypoint script runs `sudo chown -R agor:agor /app` to fix permissions on startup
+      # The entrypoint script fixes permissions only for dist/ directories (surgical, not recursive)
       # This ensures build outputs from container watch mode are accessible on host
       # Persist entire home directory (database, config, agent auth tokens, etc.)
       - agor-home:/home/agor
@@ -179,6 +176,12 @@ volumes:
   # - Agent auth tokens
   # - Caches, etc.
   agor-home:
+
+  # Node modules volume - unique per docker-compose project (via -p flag)
+  # pnpm workspaces share a single store in /app/node_modules/.pnpm/
+  # Package-level node_modules are just symlinks, so we only need ONE volume!
+  # This is reused across container recreations, preventing volume bloat
+  node-modules:
 
   # PostgreSQL data (only created when postgres profile is active)
   postgres-data:

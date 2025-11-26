@@ -3,32 +3,37 @@ set -e
 
 echo "🚀 Starting Agor development environment..."
 
-# Fix volume permissions only if needed (defensive, but usually unnecessary with anonymous volumes)
-# On most systems, Docker handles ownership correctly, but some Linux setups may need this
-if [ "$(stat -c '%U' /app)" != "agor" ]; then
-  echo "🔧 Fixing volume permissions..."
-  sudo chown -R agor:agor /app
-else
-  echo "✅ Volume permissions already correct"
-fi
+# Fix permissions for build output directories only (not the entire /app tree!)
+# The bind mount (.:/app) is read-only for most files - we only need write access to dist/
+# This avoids expensive chown -R on node_modules volume (1700+ packages!)
+echo "🔧 Ensuring write access to build output directories..."
+sudo chown -R agor:agor /app/packages/*/dist /app/apps/*/dist 2>/dev/null || true
+echo "✅ Build directories writable"
 
-# Smart dependency sync: check if pnpm-lock.yaml changed
-# Anonymous volumes preserve Docker-built node_modules directly (no copy needed!)
-# Only run pnpm install if user modified dependencies
-echo "📦 Checking dependencies..."
+# Smart dependency sync: recreate workspace symlinks
+# The named volume preserves /app/node_modules/.pnpm/ (dependency store)
+# BUT the bind mount (.:/app) provides package.json files from host
+# So we need to run pnpm install to recreate workspace symlinks in packages/*/node_modules/
+echo "📦 Syncing workspace dependencies..."
 
-# Create marker file on first run
+# Check if we need to reinstall (lockfile changed)
 if [ ! -f "/app/node_modules/.synced-lockfile.yaml" ]; then
-  echo "✅ Using Docker-built dependencies (no copy needed)"
+  # First run or volume was cleared
+  echo "🔄 Installing dependencies and creating workspace symlinks..."
+  CI=true pnpm install --frozen-lockfile < /dev/null
   cp /app/pnpm-lock.yaml /app/node_modules/.synced-lockfile.yaml
+  echo "✅ Dependencies installed"
 elif ! cmp -s /app/pnpm-lock.yaml /app/node_modules/.synced-lockfile.yaml; then
-  # Only install if lockfile changed (user added/removed dependencies)
-  echo "🔄 pnpm-lock.yaml changed - syncing dependencies..."
+  # Lockfile changed - full reinstall
+  echo "🔄 pnpm-lock.yaml changed - reinstalling dependencies..."
   CI=true pnpm install --frozen-lockfile < /dev/null
   cp /app/pnpm-lock.yaml /app/node_modules/.synced-lockfile.yaml
   echo "✅ Dependencies synced"
 else
-  echo "✅ Dependencies up-to-date"
+  # Lockfile unchanged - just recreate workspace symlinks (fast ~1s)
+  echo "🔗 Recreating workspace symlinks (lockfile unchanged)..."
+  CI=true pnpm install --frozen-lockfile --offline < /dev/null
+  echo "✅ Workspace symlinks ready"
 fi
 
 # Skip husky in Docker (git hooks run on host, not in container)
