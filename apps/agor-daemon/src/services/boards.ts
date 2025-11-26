@@ -141,7 +141,13 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     const userId = params?.user?.user_id || 'anonymous';
     this.boardRepo.validateBoardBlob(blob);
     const data = this.buildBoardDataFromBlob(blob, userId);
-    return super.create(data, this.withServerProvider(params)) as Promise<Board>;
+    const board = (await super.create(data, this.withServerProvider(params))) as Board;
+
+    // Explicitly emit created event for WebSocket subscribers
+    // Custom methods don't automatically trigger FeathersJS event publishing
+    this.emit?.('created', board, params);
+
+    return board;
   }
 
   /**
@@ -200,7 +206,16 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     const resolvedBoardId = await this.resolveBoardId(boardIdentifier);
     const blob = await this.boardRepo.toBlob(resolvedBoardId);
     const boardData = this.buildBoardDataFromBlob(blob, userId, name);
-    return super.create(boardData, this.withServerProvider(params)) as Promise<Board>;
+    const clonedBoard = (await super.create(
+      boardData,
+      this.withServerProvider(params)
+    )) as Board;
+
+    // Explicitly emit created event for WebSocket subscribers
+    // Custom methods don't automatically trigger FeathersJS event publishing
+    this.emit?.('created', clonedBoard, params);
+
+    return clonedBoard;
   }
 
   private async resolveBoardId(
