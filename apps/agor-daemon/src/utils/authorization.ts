@@ -103,8 +103,10 @@ export function registerAuthenticatedRoute(
   app.use(path, service);
 
   // Build hooks object
-  const hooks: Record<string, Array<(context: HookContext) => HookContext | Promise<HookContext>>> =
-    {};
+  const hooks: Record<
+    string,
+    Array<(context: HookContext) => HookContext | Promise<HookContext>>
+  > = {};
 
   for (const [method, config] of Object.entries(authConfig)) {
     hooks[method] = [requireAuth, requireMinimumRole(config.role, config.action)];

@@ -2131,192 +2131,194 @@ async function main() {
         },
         params: RouteParams
       ) {
-      console.log(`📨 [Daemon] Prompt request for session ${params.route?.id?.substring(0, 8)}`);
-      console.log(`   Permission mode: ${data.permissionMode || 'not specified'}`);
-      console.log(`   Streaming: ${data.stream !== false}`);
+        console.log(`📨 [Daemon] Prompt request for session ${params.route?.id?.substring(0, 8)}`);
+        console.log(`   Permission mode: ${data.permissionMode || 'not specified'}`);
+        console.log(`   Streaming: ${data.stream !== false}`);
 
-      const id = params.route?.id;
-      if (!id) throw new Error('Session ID required');
-      if (!data.prompt) throw new Error('Prompt required');
+        const id = params.route?.id;
+        if (!id) throw new Error('Session ID required');
+        if (!data.prompt) throw new Error('Prompt required');
 
-      // Get session to find current message count
-      const session = await sessionsService.get(id, params);
-      console.log(`   Session agent: ${session.agentic_tool}`);
-      console.log(
-        `   Session permission_config.mode: ${session.permission_config?.mode || 'not set'}`
-      );
-      const messageStartIndex = session.message_count;
-      const startTimestamp = new Date().toISOString();
+        // Get session to find current message count
+        const session = await sessionsService.get(id, params);
+        console.log(`   Session agent: ${session.agentic_tool}`);
+        console.log(
+          `   Session permission_config.mode: ${session.permission_config?.mode || 'not set'}`
+        );
+        const messageStartIndex = session.message_count;
+        const startTimestamp = new Date().toISOString();
 
-      // Get current git state from session's working directory
-      const { getGitState, getCurrentBranch } = await import('@agor/core/git');
-      let gitStateAtStart = 'unknown';
-      let refAtStart = 'unknown'; // Default to 'unknown' if we can't get branch
-      if (session.worktree_id) {
-        try {
-          const worktreesService = app.service('worktrees');
-          const worktree = await worktreesService.get(session.worktree_id, params);
-          gitStateAtStart = await getGitState(worktree.path);
-          refAtStart = await getCurrentBranch(worktree.path);
-        } catch (error) {
-          console.warn(`Failed to get git state for worktree ${session.worktree_id}:`, error);
+        // Get current git state from session's working directory
+        const { getGitState, getCurrentBranch } = await import('@agor/core/git');
+        let gitStateAtStart = 'unknown';
+        let refAtStart = 'unknown'; // Default to 'unknown' if we can't get branch
+        if (session.worktree_id) {
+          try {
+            const worktreesService = app.service('worktrees');
+            const worktree = await worktreesService.get(session.worktree_id, params);
+            gitStateAtStart = await getGitState(worktree.path);
+            refAtStart = await getCurrentBranch(worktree.path);
+          } catch (error) {
+            console.warn(`Failed to get git state for worktree ${session.worktree_id}:`, error);
+          }
         }
-      }
 
-      // PHASE 1: Create task immediately with 'running' status (UI shows task instantly)
-      const task = await tasksService.create(
-        {
-          session_id: id as SessionID,
-          status: TaskStatus.RUNNING, // Start as running, will be updated to completed
-          started_at: new Date().toISOString(), // Set start time in UTC
-          description: data.prompt.substring(0, 120),
-          full_prompt: data.prompt,
-          message_range: {
-            start_index: messageStartIndex,
-            end_index: messageStartIndex + 1, // Will be updated after messages created
-            start_timestamp: startTimestamp,
-            end_timestamp: startTimestamp, // Will be updated when complete
-          },
-          tool_use_count: 0, // Will be updated after assistant message
-          git_state: {
-            ref_at_start: refAtStart, // Now always a string (never undefined)
-            sha_at_start: gitStateAtStart,
-          },
-        },
-        params
-      );
-
-      // Update session with new task
-      // NOTE: Session status is automatically updated to RUNNING by TasksService.create() hook
-      // when a task is created with RUNNING status. This ensures atomic updates and WebSocket events.
-      // IMPORTANT: Use app.service() instead of sessionsService to go through
-      // FeathersJS service layer and trigger app.publish() for WebSocket events
-      await app.service('sessions').patch(
-        id,
-        {
-          tasks: [...session.tasks, task.task_id],
-        },
-        params
-      );
-
-      // Create streaming callbacks for real-time UI updates
-      // Custom events are registered via app.use('/messages', service, { events: [...] })
-      const _streamingCallbacks = {
-        onStreamStart: (messageId: string, metadata: Record<string, unknown>) => {
-          console.debug(
-            `📡 [${new Date().toISOString()}] Streaming start: ${messageId.substring(0, 8)}`
-          );
-          app.service('messages').emit('streaming:start', {
-            message_id: messageId,
-            ...metadata,
-          });
-        },
-        onStreamChunk: (messageId: string, chunk: string) => {
-          app.service('messages').emit('streaming:chunk', {
-            message_id: messageId,
-            session_id: id,
-            chunk,
-          });
-        },
-        onStreamEnd: (messageId: string) => {
-          console.debug(
-            `📡 [${new Date().toISOString()}] Streaming end: ${messageId.substring(0, 8)}`
-          );
-          app.service('messages').emit('streaming:end', {
-            message_id: messageId,
-            session_id: id,
-          });
-        },
-        onStreamError: (messageId: string, error: Error) => {
-          console.error(`❌ Streaming error for message ${messageId.substring(0, 8)}:`, error);
-          app.service('messages').emit('streaming:error', {
-            message_id: messageId,
-            session_id: id,
-            error: error.message,
-          });
-        },
-        onThinkingStart: (messageId: string, metadata: Record<string, unknown>) => {
-          console.debug(
-            `📡 [${new Date().toISOString()}] Thinking start: ${messageId.substring(0, 8)}`
-          );
-          app.service('messages').emit('thinking:start', {
-            message_id: messageId,
-            ...metadata,
-          });
-        },
-        onThinkingChunk: (messageId: string, chunk: string) => {
-          app.service('messages').emit('thinking:chunk', {
-            message_id: messageId,
-            session_id: id,
-            chunk,
-          });
-        },
-        onThinkingEnd: (messageId: string) => {
-          console.debug(
-            `📡 [${new Date().toISOString()}] Thinking end: ${messageId.substring(0, 8)}`
-          );
-          app.service('messages').emit('thinking:end', {
-            message_id: messageId,
-            session_id: id,
-          });
-        },
-      };
-
-      // PHASE 2: Execute prompt in background (COMPLETELY DETACHED from HTTP request context)
-      // Use setImmediate to break out of FeathersJS request scope
-      // This ensures WebSocket events flush immediately, not batched with request
-      const useStreaming = data.stream !== false; // Default to true
-
-      // FEATHERS/WEBSOCKET MODE: Route through new executor architecture
-      // Call the executeTask handler which spawns the executor process
-      setImmediate(async () => {
-        try {
-          console.log(`🚀 [Daemon] Routing ${session.agentic_tool} to Feathers/WebSocket executor`);
-
-          await sessionsService.executeTask(
-            id,
-            {
-              taskId: task.task_id,
-              prompt: data.prompt,
-              permissionMode: data.permissionMode,
-              stream: useStreaming,
+        // PHASE 1: Create task immediately with 'running' status (UI shows task instantly)
+        const task = await tasksService.create(
+          {
+            session_id: id as SessionID,
+            status: TaskStatus.RUNNING, // Start as running, will be updated to completed
+            started_at: new Date().toISOString(), // Set start time in UTC
+            description: data.prompt.substring(0, 120),
+            full_prompt: data.prompt,
+            message_range: {
+              start_index: messageStartIndex,
+              end_index: messageStartIndex + 1, // Will be updated after messages created
+              start_timestamp: startTimestamp,
+              end_timestamp: startTimestamp, // Will be updated when complete
             },
-            params
-          );
-
-          // NOTE: Session status is automatically updated to IDLE by TasksService.patch() hook
-          // when the task status changes to a terminal state (COMPLETED, FAILED, STOPPED).
-          // DO NOT manually update session status here - it causes the session to go idle
-          // immediately after spawning the executor, before the task actually starts running.
-          console.log(
-            `✅ [Daemon] Executor spawned for session ${id.substring(0, 8)}, waiting for task completion`
-          );
-        } catch (error) {
-          console.error(`❌ [Daemon] Executor spawn failed:`, error);
-          // Update task to failed status
-          await safePatch(
-            'tasks',
-            task.task_id,
-            {
-              status: TaskStatus.FAILED,
-              completed_at: new Date().toISOString(),
+            tool_use_count: 0, // Will be updated after assistant message
+            git_state: {
+              ref_at_start: refAtStart, // Now always a string (never undefined)
+              sha_at_start: gitStateAtStart,
             },
-            'Task',
-            params
-          );
-          // Session status will be automatically updated to IDLE by TasksService.patch() hook
-          // when the task status is updated to FAILED above
-          console.log(`❌ [Daemon] Executor spawn failed for session ${id.substring(0, 8)}`);
-        }
-      });
+          },
+          params
+        );
 
-      // Return immediately with task ID - don't wait for Claude to finish!
-      return {
-        success: true,
-        taskId: task.task_id,
-        status: TaskStatus.RUNNING,
-        streaming: useStreaming, // Inform client whether streaming is enabled
-      };
+        // Update session with new task
+        // NOTE: Session status is automatically updated to RUNNING by TasksService.create() hook
+        // when a task is created with RUNNING status. This ensures atomic updates and WebSocket events.
+        // IMPORTANT: Use app.service() instead of sessionsService to go through
+        // FeathersJS service layer and trigger app.publish() for WebSocket events
+        await app.service('sessions').patch(
+          id,
+          {
+            tasks: [...session.tasks, task.task_id],
+          },
+          params
+        );
+
+        // Create streaming callbacks for real-time UI updates
+        // Custom events are registered via app.use('/messages', service, { events: [...] })
+        const _streamingCallbacks = {
+          onStreamStart: (messageId: string, metadata: Record<string, unknown>) => {
+            console.debug(
+              `📡 [${new Date().toISOString()}] Streaming start: ${messageId.substring(0, 8)}`
+            );
+            app.service('messages').emit('streaming:start', {
+              message_id: messageId,
+              ...metadata,
+            });
+          },
+          onStreamChunk: (messageId: string, chunk: string) => {
+            app.service('messages').emit('streaming:chunk', {
+              message_id: messageId,
+              session_id: id,
+              chunk,
+            });
+          },
+          onStreamEnd: (messageId: string) => {
+            console.debug(
+              `📡 [${new Date().toISOString()}] Streaming end: ${messageId.substring(0, 8)}`
+            );
+            app.service('messages').emit('streaming:end', {
+              message_id: messageId,
+              session_id: id,
+            });
+          },
+          onStreamError: (messageId: string, error: Error) => {
+            console.error(`❌ Streaming error for message ${messageId.substring(0, 8)}:`, error);
+            app.service('messages').emit('streaming:error', {
+              message_id: messageId,
+              session_id: id,
+              error: error.message,
+            });
+          },
+          onThinkingStart: (messageId: string, metadata: Record<string, unknown>) => {
+            console.debug(
+              `📡 [${new Date().toISOString()}] Thinking start: ${messageId.substring(0, 8)}`
+            );
+            app.service('messages').emit('thinking:start', {
+              message_id: messageId,
+              ...metadata,
+            });
+          },
+          onThinkingChunk: (messageId: string, chunk: string) => {
+            app.service('messages').emit('thinking:chunk', {
+              message_id: messageId,
+              session_id: id,
+              chunk,
+            });
+          },
+          onThinkingEnd: (messageId: string) => {
+            console.debug(
+              `📡 [${new Date().toISOString()}] Thinking end: ${messageId.substring(0, 8)}`
+            );
+            app.service('messages').emit('thinking:end', {
+              message_id: messageId,
+              session_id: id,
+            });
+          },
+        };
+
+        // PHASE 2: Execute prompt in background (COMPLETELY DETACHED from HTTP request context)
+        // Use setImmediate to break out of FeathersJS request scope
+        // This ensures WebSocket events flush immediately, not batched with request
+        const useStreaming = data.stream !== false; // Default to true
+
+        // FEATHERS/WEBSOCKET MODE: Route through new executor architecture
+        // Call the executeTask handler which spawns the executor process
+        setImmediate(async () => {
+          try {
+            console.log(
+              `🚀 [Daemon] Routing ${session.agentic_tool} to Feathers/WebSocket executor`
+            );
+
+            await sessionsService.executeTask(
+              id,
+              {
+                taskId: task.task_id,
+                prompt: data.prompt,
+                permissionMode: data.permissionMode,
+                stream: useStreaming,
+              },
+              params
+            );
+
+            // NOTE: Session status is automatically updated to IDLE by TasksService.patch() hook
+            // when the task status changes to a terminal state (COMPLETED, FAILED, STOPPED).
+            // DO NOT manually update session status here - it causes the session to go idle
+            // immediately after spawning the executor, before the task actually starts running.
+            console.log(
+              `✅ [Daemon] Executor spawned for session ${id.substring(0, 8)}, waiting for task completion`
+            );
+          } catch (error) {
+            console.error(`❌ [Daemon] Executor spawn failed:`, error);
+            // Update task to failed status
+            await safePatch(
+              'tasks',
+              task.task_id,
+              {
+                status: TaskStatus.FAILED,
+                completed_at: new Date().toISOString(),
+              },
+              'Task',
+              params
+            );
+            // Session status will be automatically updated to IDLE by TasksService.patch() hook
+            // when the task status is updated to FAILED above
+            console.log(`❌ [Daemon] Executor spawn failed for session ${id.substring(0, 8)}`);
+          }
+        });
+
+        // Return immediately with task ID - don't wait for Claude to finish!
+        return {
+          success: true,
+          taskId: task.task_id,
+          status: TaskStatus.RUNNING,
+          streaming: useStreaming, // Inform client whether streaming is enabled
+        };
       },
     },
     {
@@ -2331,142 +2333,142 @@ async function main() {
     '/sessions/:id/stop',
     {
       async create(_data: unknown, params: RouteParams) {
-      const id = params.route?.id;
-      if (!id) throw new Error('Session ID required');
+        const id = params.route?.id;
+        if (!id) throw new Error('Session ID required');
 
-      console.log(`🛑 [Daemon] Stop request for session ${id.substring(0, 8)}`);
+        console.log(`🛑 [Daemon] Stop request for session ${id.substring(0, 8)}`);
 
-      // Get session to find which tool to use
-      const session = await sessionsService.get(id, params);
+        // Get session to find which tool to use
+        const session = await sessionsService.get(id, params);
 
-      // Check if session is actually running
-      if (session.status !== SessionStatus.RUNNING) {
-        return {
-          success: false,
-          reason: `Session is not running (status: ${session.status})`,
-        };
-      }
-
-      // Find the currently running task(s)
-      // Use find query instead of mapping over all tasks for better performance
-      const runningTasks = await tasksService.find({
-        query: {
-          session_id: id,
-          status: { $in: [TaskStatus.RUNNING, TaskStatus.AWAITING_PERMISSION] },
-          $limit: 10,
-        },
-      });
-
-      // Extract data array if paginated
-      // Note: FeathersJS Service.find() can return T | T[] | Paginated<Task> depending on query params
-      // We cast to the expected union type since we know we're querying for multiple results
-      const findResult = runningTasks as Task[] | Paginated<Task>;
-      const runningTasksArray = isPaginated(findResult) ? findResult.data : findResult;
-
-      // PHASE 1: Immediately update status to 'stopping' (UI feedback before SDK call)
-      if (runningTasksArray.length > 0) {
-        const latestTask = runningTasksArray[runningTasksArray.length - 1];
-
-        try {
-          await Promise.race([
-            tasksService.patch(latestTask.task_id, {
-              status: TaskStatus.STOPPING,
-            }),
-            new Promise((_, reject) =>
-              setTimeout(() => reject(new Error('Task patch timeout')), 5000)
-            ),
-          ]);
-        } catch (error) {
-          console.error(`Failed to update task to stopping:`, error);
-          // Continue anyway, we'll still try to stop the SDK
+        // Check if session is actually running
+        if (session.status !== SessionStatus.RUNNING) {
+          return {
+            success: false,
+            reason: `Session is not running (status: ${session.status})`,
+          };
         }
-      }
 
-      // PHASE 2: Call stopTask handler (for both legacy IPC and new Feathers/WebSocket modes)
-      let result: { success: boolean; reason?: string; message?: string };
+        // Find the currently running task(s)
+        // Use find query instead of mapping over all tasks for better performance
+        const runningTasks = await tasksService.find({
+          query: {
+            session_id: id,
+            status: { $in: [TaskStatus.RUNNING, TaskStatus.AWAITING_PERMISSION] },
+            $limit: 10,
+          },
+        });
 
-      if (runningTasksArray.length > 0) {
-        const latestTask = runningTasksArray[runningTasksArray.length - 1];
+        // Extract data array if paginated
+        // Note: FeathersJS Service.find() can return T | T[] | Paginated<Task> depending on query params
+        // We cast to the expected union type since we know we're querying for multiple results
+        const findResult = runningTasks as Task[] | Paginated<Task>;
+        const runningTasksArray = isPaginated(findResult) ? findResult.data : findResult;
 
-        try {
-          // Call the stopTask handler (works for both IPC and WebSocket modes)
-          const stopResult = await sessionsService.stopTask(
+        // PHASE 1: Immediately update status to 'stopping' (UI feedback before SDK call)
+        if (runningTasksArray.length > 0) {
+          const latestTask = runningTasksArray[runningTasksArray.length - 1];
+
+          try {
+            await Promise.race([
+              tasksService.patch(latestTask.task_id, {
+                status: TaskStatus.STOPPING,
+              }),
+              new Promise((_, reject) =>
+                setTimeout(() => reject(new Error('Task patch timeout')), 5000)
+              ),
+            ]);
+          } catch (error) {
+            console.error(`Failed to update task to stopping:`, error);
+            // Continue anyway, we'll still try to stop the SDK
+          }
+        }
+
+        // PHASE 2: Call stopTask handler (for both legacy IPC and new Feathers/WebSocket modes)
+        let result: { success: boolean; reason?: string; message?: string };
+
+        if (runningTasksArray.length > 0) {
+          const latestTask = runningTasksArray[runningTasksArray.length - 1];
+
+          try {
+            // Call the stopTask handler (works for both IPC and WebSocket modes)
+            const stopResult = await sessionsService.stopTask(
+              id,
+              {
+                taskId: latestTask.task_id,
+              },
+              params
+            );
+
+            result = {
+              success: stopResult.success,
+              message: stopResult.message,
+            };
+
+            console.log(`🛑 Stop task result: ${stopResult.message}`);
+          } catch (error) {
+            console.error(`Failed to call stopTask:`, error);
+            result = {
+              success: false,
+              reason: `Failed to stop task: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            };
+          }
+        } else {
+          result = {
+            success: false,
+            reason: 'No running tasks found',
+          };
+        }
+
+        // PHASE 3: Update final status based on stop result
+        if (result.success) {
+          // Update session status back to idle
+          // IMPORTANT: Use app.service() instead of sessionsService to go through
+          // FeathersJS service layer and trigger app.publish() for WebSocket events
+          await app.service('sessions').patch(
             id,
             {
-              taskId: latestTask.task_id,
+              status: SessionStatus.IDLE,
+              ready_for_prompt: true, // Set atomically with status
             },
             params
           );
 
-          result = {
-            success: stopResult.success,
-            message: stopResult.message,
-          };
+          // Update task status to 'stopped'
+          if (runningTasksArray.length > 0) {
+            const latestTask = runningTasksArray[runningTasksArray.length - 1];
+            await tasksService.patch(latestTask.task_id, {
+              status: TaskStatus.STOPPED,
+              message_range: {
+                ...latestTask.message_range,
+                end_timestamp: new Date().toISOString(),
+              },
+            });
+            console.log(`✅ Task ${latestTask.task_id.substring(0, 8)} stopped`);
+          }
 
-          console.log(`🛑 Stop task result: ${stopResult.message}`);
-        } catch (error) {
-          console.error(`Failed to call stopTask:`, error);
-          result = {
-            success: false,
-            reason: `Failed to stop task: ${error instanceof Error ? error.message : 'Unknown error'}`,
-          };
-        }
-      } else {
-        result = {
-          success: false,
-          reason: 'No running tasks found',
-        };
-      }
-
-      // PHASE 3: Update final status based on stop result
-      if (result.success) {
-        // Update session status back to idle
-        // IMPORTANT: Use app.service() instead of sessionsService to go through
-        // FeathersJS service layer and trigger app.publish() for WebSocket events
-        await app.service('sessions').patch(
-          id,
-          {
-            status: SessionStatus.IDLE,
-            ready_for_prompt: true, // Set atomically with status
-          },
-          params
-        );
-
-        // Update task status to 'stopped'
-        if (runningTasksArray.length > 0) {
-          const latestTask = runningTasksArray[runningTasksArray.length - 1];
-          await tasksService.patch(latestTask.task_id, {
-            status: TaskStatus.STOPPED,
-            message_range: {
-              ...latestTask.message_range,
-              end_timestamp: new Date().toISOString(),
-            },
-          });
-          console.log(`✅ Task ${latestTask.task_id.substring(0, 8)} stopped`);
+          // PHASE 4: Process next queued message if any
+          // This ensures queued messages aren't stuck when stopping
+          try {
+            await processNextQueuedMessage(id as SessionID, params);
+          } catch (error) {
+            console.error(
+              `⚠️  Failed to process queued message after stop for session ${id.substring(0, 8)}:`,
+              error
+            );
+            // Don't fail the stop request if queue processing fails
+          }
+        } else {
+          // Stop failed, revert to running
+          if (runningTasksArray.length > 0) {
+            const latestTask = runningTasksArray[runningTasksArray.length - 1];
+            await tasksService.patch(latestTask.task_id, {
+              status: TaskStatus.RUNNING, // Revert to running
+            });
+          }
         }
 
-        // PHASE 4: Process next queued message if any
-        // This ensures queued messages aren't stuck when stopping
-        try {
-          await processNextQueuedMessage(id as SessionID, params);
-        } catch (error) {
-          console.error(
-            `⚠️  Failed to process queued message after stop for session ${id.substring(0, 8)}:`,
-            error
-          );
-          // Don't fail the stop request if queue processing fails
-        }
-      } else {
-        // Stop failed, revert to running
-        if (runningTasksArray.length > 0) {
-          const latestTask = runningTasksArray[runningTasksArray.length - 1];
-          await tasksService.patch(latestTask.task_id, {
-            status: TaskStatus.RUNNING, // Revert to running
-          });
-        }
-      }
-
-      return result;
+        return result;
       },
     },
     {
@@ -2653,60 +2655,60 @@ async function main() {
     {
       async create(data: PermissionDecision, params: RouteParams) {
         const id = params.route?.id;
-      if (!id) throw new Error('Session ID required');
-      if (!data.requestId) throw new Error('requestId required');
-      if (typeof data.allow !== 'boolean') throw new Error('allow field required');
+        if (!id) throw new Error('Session ID required');
+        if (!data.requestId) throw new Error('requestId required');
+        if (typeof data.allow !== 'boolean') throw new Error('allow field required');
 
-      // Find the permission request message
-      const messagesService = app.service('messages');
-      const messages = await messagesService.find({
-        query: {
-          session_id: id,
-          type: 'permission_request',
-          $limit: 100, // Get recent permission requests
-        },
-      });
+        // Find the permission request message
+        const messagesService = app.service('messages');
+        const messages = await messagesService.find({
+          query: {
+            session_id: id,
+            type: 'permission_request',
+            $limit: 100, // Get recent permission requests
+          },
+        });
 
-      const messageList = isPaginated(messages) ? messages.data : messages;
-      const permissionMessage = messageList.find((msg: Message) => {
-        const content = msg.content as unknown as Record<string, unknown>;
-        return content?.request_id === data.requestId;
-      });
+        const messageList = isPaginated(messages) ? messages.data : messages;
+        const permissionMessage = messageList.find((msg: Message) => {
+          const content = msg.content as unknown as Record<string, unknown>;
+          return content?.request_id === data.requestId;
+        });
 
-      if (!permissionMessage) {
-        throw new Error(`Permission request ${data.requestId} not found`);
-      }
+        if (!permissionMessage) {
+          throw new Error(`Permission request ${data.requestId} not found`);
+        }
 
-      // Update the message to mark it as approved/denied
-      // This triggers the messages.patch hook which notifies the executor via IPC (legacy mode)
-      await messagesService.patch(permissionMessage.message_id, {
-        content: {
-          ...(permissionMessage.content as object),
-          status: data.allow ? 'approved' : 'denied',
+        // Update the message to mark it as approved/denied
+        // This triggers the messages.patch hook which notifies the executor via IPC (legacy mode)
+        await messagesService.patch(permissionMessage.message_id, {
+          content: {
+            ...(permissionMessage.content as object),
+            status: data.allow ? 'approved' : 'denied',
+            scope: data.scope,
+            approved_by: data.decidedBy,
+            approved_at: new Date().toISOString(),
+          },
+        });
+
+        // Also resolve the in-memory permission request (for direct tool execution)
+        permissionService.resolvePermission(data);
+
+        // Emit permission_resolved event for Feathers/WebSocket executor architecture
+        // IMPORTANT: Use camelCase property names to match executor's expectations
+        const content = permissionMessage.content as unknown as Record<string, unknown>;
+        app.service('messages').emit('permission_resolved', {
+          requestId: data.requestId, // camelCase
+          taskId: content.task_id as string, // camelCase
+          sessionId: id, // camelCase (for consistency, though not used by executor)
+          allow: data.allow, // Correct property name (not "approved")
+          reason: data.reason,
+          remember: data.remember,
           scope: data.scope,
-          approved_by: data.decidedBy,
-          approved_at: new Date().toISOString(),
-        },
-      });
+          decidedBy: data.decidedBy,
+        });
 
-      // Also resolve the in-memory permission request (for direct tool execution)
-      permissionService.resolvePermission(data);
-
-      // Emit permission_resolved event for Feathers/WebSocket executor architecture
-      // IMPORTANT: Use camelCase property names to match executor's expectations
-      const content = permissionMessage.content as unknown as Record<string, unknown>;
-      app.service('messages').emit('permission_resolved', {
-        requestId: data.requestId, // camelCase
-        taskId: content.task_id as string, // camelCase
-        sessionId: id, // camelCase (for consistency, though not used by executor)
-        allow: data.allow, // Correct property name (not "approved")
-        reason: data.reason,
-        remember: data.remember,
-        scope: data.scope,
-        decidedBy: data.decidedBy,
-      });
-
-      return { success: true };
+        return { success: true };
       },
     },
     {
@@ -2789,7 +2791,10 @@ async function main() {
     app,
     '/repos/clone',
     {
-      async create(data: { url: string; name?: string; destination?: string }, params: RouteParams) {
+      async create(
+        data: { url: string; name?: string; destination?: string },
+        params: RouteParams
+      ) {
         return reposService.cloneRepository(data, params);
       },
     },
@@ -2953,7 +2958,10 @@ async function main() {
       async create(_data: unknown, params: RouteParams) {
         const id = params.route?.id;
         if (!id) throw new Error('Worktree ID required');
-        return worktreesService.startEnvironment(id as import('@agor/core/types').WorktreeID, params);
+        return worktreesService.startEnvironment(
+          id as import('@agor/core/types').WorktreeID,
+          params
+        );
       },
     },
     {
@@ -2970,7 +2978,10 @@ async function main() {
       async create(_data: unknown, params: RouteParams) {
         const id = params.route?.id;
         if (!id) throw new Error('Worktree ID required');
-        return worktreesService.stopEnvironment(id as import('@agor/core/types').WorktreeID, params);
+        return worktreesService.stopEnvironment(
+          id as import('@agor/core/types').WorktreeID,
+          params
+        );
       },
     },
     {

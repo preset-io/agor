@@ -234,13 +234,6 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     return board.board_id;
   }
 
-  private withServerProvider(params?: BoardParams): BoardParams {
-    return {
-      ...(params ?? {}),
-      provider: params?.provider ?? 'server',
-    } as BoardParams;
-  }
-
   private buildBoardDataFromBlob(
     blob: BoardExportBlob,
     userId: string,
