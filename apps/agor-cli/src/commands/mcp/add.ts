@@ -44,15 +44,12 @@ export default class McpAdd extends BaseCommand {
     }),
     scope: Flags.string({
       char: 's',
-      description: 'Server scope',
-      options: ['global', 'team', 'repo', 'session'],
+      description: 'Server scope (global = user-level, session = session-specific)',
+      options: ['global', 'session'],
       default: 'global',
     }),
     'session-id': Flags.string({
       description: 'Session ID (required if scope=session)',
-    }),
-    'repo-id': Flags.string({
-      description: 'Repo ID (required if scope=repo)',
     }),
     'display-name': Flags.string({
       char: 'd',
@@ -86,10 +83,6 @@ export default class McpAdd extends BaseCommand {
     // Validate scope-specific flags
     if (flags.scope === 'session' && !flags['session-id']) {
       this.error('--session-id is required when scope=session');
-    }
-
-    if (flags.scope === 'repo' && !flags['repo-id']) {
-      this.error('--repo-id is required when scope=repo');
     }
 
     const client = await this.connectToDaemon();
@@ -131,7 +124,6 @@ export default class McpAdd extends BaseCommand {
 
       // Add scope-specific IDs
       if (flags['session-id']) data.session_id = flags['session-id'];
-      if (flags['repo-id']) data.repo_id = flags['repo-id'];
 
       // Call daemon API
       const server = (await client.service('mcp-servers').create(data)) as MCPServer;

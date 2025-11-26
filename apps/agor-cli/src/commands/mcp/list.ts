@@ -20,8 +20,8 @@ export default class McpList extends BaseCommand {
   static override flags = {
     scope: Flags.string({
       char: 's',
-      description: 'Filter by scope (global, team, repo, session)',
-      options: ['global', 'team', 'repo', 'session'],
+      description: 'Filter by scope (global = user-level, session = session-specific)',
+      options: ['global', 'session'],
     }),
     transport: Flags.string({
       char: 't',

@@ -1378,31 +1378,11 @@ async function main() {
           });
           console.log(`💾 Stored MCP token in session record`);
 
-          // Auto-attach global MCP servers to this session
-          try {
-            const { MCPServerRepository } = await import('@agor/core/db');
-            const { SessionMCPServerRepository } = await import('@agor/core/db');
-            const mcpServerRepo = new MCPServerRepository(db);
-            const sessionMcpServerRepo = new SessionMCPServerRepository(db);
-
-            const globalServers = await mcpServerRepo.findAll({ scope: 'global', enabled: true });
-
-            if (globalServers.length > 0) {
-              console.log(
-                `🔗 [Session MCP] Auto-attaching ${globalServers.length} global MCP server(s) to session ${session.session_id.substring(0, 8)}...`
-              );
-
-              for (const server of globalServers) {
-                await sessionMcpServerRepo.addServer(session.session_id, server.mcp_server_id);
-                console.log(`   ✅ Attached global MCP server: ${server.name}`);
-              }
-            } else {
-              console.log(`📭 [Session MCP] No global MCP servers to attach`);
-            }
-          } catch (error) {
-            console.error('⚠️  Failed to auto-attach global MCP servers:', error);
-            // Don't fail session creation if MCP attachment fails
-          }
+          // Note: We no longer auto-attach global MCP servers to sessions.
+          // Instead, the hierarchical fallback in getMcpServersForSession() will
+          // automatically provide the session owner's global servers when no
+          // session-specific servers are assigned. This avoids polluting the
+          // session_mcp_servers junction table and ensures proper isolation.
 
           // Update context.result to include the token
           context.result = { ...session, mcp_token: mcpToken };

@@ -9,10 +9,11 @@
  * - Hierarchical Mode: Session has NO assigned servers → fall back to global servers
  */
 
-import type { MCPServer, SessionID } from '@agor/core/types';
+import type { MCPServer, SessionID, UserID } from '@agor/core/types';
 import type {
   MCPServerRepository,
   SessionMCPServerRepository,
+  SessionRepository,
 } from '../../db/feathers-repositories.js';
 
 /**
@@ -27,6 +28,7 @@ export interface MCPServerWithSource {
  * Dependencies required for MCP server resolution
  */
 export interface MCPResolutionDeps {
+  sessionRepo?: SessionRepository;
   sessionMCPRepo?: SessionMCPServerRepository;
   mcpServerRepo?: MCPServerRepository;
 }
@@ -59,12 +61,21 @@ export async function getMcpServersForSession(
   const servers: MCPServerWithSource[] = [];
 
   // Early return if dependencies not available
-  if (!deps.sessionMCPRepo || !deps.mcpServerRepo) {
+  if (!deps.sessionRepo || !deps.sessionMCPRepo || !deps.mcpServerRepo) {
     console.warn('⚠️  MCP repository dependencies not available - skipping MCP configuration');
     return servers;
   }
 
   try {
+    // Fetch session to get owner (created_by)
+    const session = await deps.sessionRepo.get(sessionId);
+    if (!session) {
+      console.error(`❌ Session ${sessionId} not found`);
+      return servers;
+    }
+
+    const ownerId = session.created_by as UserID;
+
     // Check if session has explicitly assigned MCP servers (via junction table)
     const sessionServers = await deps.sessionMCPRepo.listServers(sessionId, true); // enabledOnly
 
@@ -84,13 +95,16 @@ export async function getMcpServersForSession(
     else {
       console.log('🔌 Fetching global MCP servers (hierarchical mode)...');
 
-      // Get all global servers for the current user
+      // Get global servers ONLY for the session owner (not all users!)
       const globalServers = await deps.mcpServerRepo.findAll({
         scope: 'global',
+        scopeId: ownerId,
         enabled: true,
       });
 
-      console.log(`   📍 Global scope: ${globalServers?.length ?? 0} server(s)`);
+      console.log(
+        `   📍 Global scope (owner: ${ownerId.substring(0, 8)}): ${globalServers?.length ?? 0} server(s)`
+      );
 
       for (const server of globalServers ?? []) {
         servers.push({

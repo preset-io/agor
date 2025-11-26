@@ -475,6 +475,7 @@ export async function setupQuery(
     try {
       // Use shared MCP scoping utility (isolated vs hierarchical mode)
       const serversWithSource = await getMcpServersForSession(sessionId, {
+        sessionRepo: deps.sessionRepo,
         sessionMCPRepo: deps.sessionMCPRepo,
         mcpServerRepo: deps.mcpServerRepo,
       });
