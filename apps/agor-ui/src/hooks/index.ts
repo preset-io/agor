@@ -3,6 +3,7 @@ export * from './useAgorData';
 export * from './useAuth';
 export * from './useAuthConfig';
 export * from './useBoardActions';
+export * from './useLocalStorage';
 export * from './useMessages';
 export * from './useSessionActions';
 export * from './useStreamingMessages';

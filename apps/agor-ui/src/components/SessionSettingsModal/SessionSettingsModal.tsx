@@ -20,7 +20,7 @@ export interface SessionSettingsModalProps {
 /**
  * Session Settings Modal
  *
- * Unified settings modal for sessions (used from both SessionCard and SessionDrawer)
+ * Unified settings modal for sessions (used from both SessionCard and SessionPanel)
  * Allows editing:
  * - Session title
  * - Claude model configuration

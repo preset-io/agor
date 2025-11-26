@@ -1,5 +1,5 @@
 import { PlusOutlined } from '@ant-design/icons';
-import { FloatButton } from 'antd';
+import { Button, Tooltip } from 'antd';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 
 export interface NewSessionButtonProps {
@@ -16,13 +16,24 @@ export const NewSessionButton: React.FC<NewSessionButtonProps> = ({ onClick, has
       : 'Create a repository first';
 
   return (
-    <FloatButton
-      icon={<PlusOutlined />}
-      type="primary"
-      onClick={onClick}
-      tooltip={tooltip}
-      disabled={connectionDisabled}
-      style={{ right: 24, top: 80 }}
-    />
+    <Tooltip title={tooltip} placement="left">
+      <Button
+        type="primary"
+        shape="circle"
+        size="large"
+        icon={<PlusOutlined style={{ fontSize: 20 }} />}
+        onClick={onClick}
+        disabled={connectionDisabled}
+        style={{
+          position: 'absolute',
+          right: 24,
+          top: 80,
+          width: 56,
+          height: 56,
+          boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
+          zIndex: 100,
+        }}
+      />
+    </Tooltip>
   );
 };

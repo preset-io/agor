@@ -138,7 +138,7 @@ export const EventStreamPanel: React.FC<EventStreamPanelProps> = ({
   return (
     <div
       style={{
-        width,
+        width: '100%',
         height: '100%',
         backgroundColor: token.colorBgContainer,
         borderLeft: `1px solid ${token.colorBorder}`,
