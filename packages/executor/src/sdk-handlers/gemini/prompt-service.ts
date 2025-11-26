@@ -672,7 +672,7 @@ export class GeminiPromptService {
       try {
         // Use shared MCP scoping utility (isolated vs hierarchical mode)
         const serversWithSource = await getMcpServersForSession(sessionId, {
-          sessionRepo: this.sessionRepo,
+          sessionsRepo: this.sessionsRepo,
           sessionMCPRepo: this.sessionMCPRepo,
           mcpServerRepo: this.mcpServerRepo,
         });

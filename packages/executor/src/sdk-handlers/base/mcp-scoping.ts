@@ -11,9 +11,9 @@
 
 import type { MCPServer, SessionID, UserID } from '@agor/core/types';
 import type {
+  FeathersSessionsRepository,
   MCPServerRepository,
   SessionMCPServerRepository,
-  SessionRepository,
 } from '../../db/feathers-repositories.js';
 
 /**
@@ -28,7 +28,7 @@ export interface MCPServerWithSource {
  * Dependencies required for MCP server resolution
  */
 export interface MCPResolutionDeps {
-  sessionRepo?: SessionRepository;
+  sessionsRepo?: FeathersSessionsRepository;
   sessionMCPRepo?: SessionMCPServerRepository;
   mcpServerRepo?: MCPServerRepository;
 }
@@ -61,14 +61,14 @@ export async function getMcpServersForSession(
   const servers: MCPServerWithSource[] = [];
 
   // Early return if dependencies not available
-  if (!deps.sessionRepo || !deps.sessionMCPRepo || !deps.mcpServerRepo) {
+  if (!deps.sessionsRepo || !deps.sessionMCPRepo || !deps.mcpServerRepo) {
     console.warn('⚠️  MCP repository dependencies not available - skipping MCP configuration');
     return servers;
   }
 
   try {
     // Fetch session to get owner (created_by)
-    const session = await deps.sessionRepo.get(sessionId);
+    const session = await deps.sessionsRepo.findById(sessionId);
     if (!session) {
       console.error(`❌ Session ${sessionId} not found`);
       return servers;
