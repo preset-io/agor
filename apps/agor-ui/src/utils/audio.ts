@@ -19,16 +19,15 @@ const CHIME_SOUND_FILES: Record<ChimeSound, string> = {
  * Returns an absolute URL to avoid issues with Audio() constructor in some environments.
  */
 function getChimeAssetPath(chime: ChimeSound): string | null {
-  // Handle legacy or invalid chime names
+  // Handle legacy or invalid chime names (silently migrate)
   let validChime = chime;
   if (chime === 'bell' || chime === 'default') {
     validChime = 'notification-bell' as ChimeSound;
-    console.warn(`Legacy chime "${chime}" mapped to "notification-bell"`);
   }
 
   const filename = CHIME_SOUND_FILES[validChime];
   if (!filename) {
-    console.warn(`Unknown chime sound: ${chime}, falling back to gentle-chime`);
+    // Fallback to default chime if unknown
     validChime = 'gentle-chime';
   }
 
@@ -88,8 +87,12 @@ export function initializeAudioOnInteraction(): void {
  */
 export function checkAudioPermission(): Promise<boolean> {
   return new Promise((resolve) => {
-    // Try to create a silent audio element
-    const audio = new Audio();
+    // Use a silent data URI to avoid "no supported source" errors
+    // This is a minimal valid audio file that won't make any sound
+    const silentDataUri =
+      'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAADhAC7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAA4T0rBiNAAAAAAD/+xDEAAPAAAGkAAAAIAAANIAAAARMQU1FMy4xMDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD/+xDEDwPAAAGkAAAAIAAANIAAAARMQU1FMy4xMDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD/+xDEHwPAAAGkAAAAIAAANIAAAARMQU1FMy4xMDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==';
+
+    const audio = new Audio(silentDataUri);
     audio.volume = 0;
 
     const testPlay = audio.play();
@@ -100,8 +103,14 @@ export function checkAudioPermission(): Promise<boolean> {
           audio.pause();
           resolve(false); // Audio allowed (NOT blocked)
         })
-        .catch(() => {
-          resolve(true); // Audio blocked
+        .catch((error) => {
+          // Only treat NotAllowedError as a permission block
+          // NotSupportedError or other errors should not be treated as blocked
+          if (error instanceof Error && error.name === 'NotAllowedError') {
+            resolve(true); // Audio blocked by autoplay policy
+          } else {
+            resolve(false); // Other errors, assume audio is allowed
+          }
         });
     } else {
       // Old browsers without promise-based play()
@@ -191,20 +200,20 @@ export async function playTaskCompletionChime(
   } catch (error) {
     // Browser blocked autoplay or audio file not found
     // This is expected behavior if user hasn't interacted with the page yet
+    // Swallow the error to prevent unhandled promise rejections
     if (error instanceof Error) {
       const errorName = error.name;
       if (errorName === 'NotAllowedError') {
-        console.warn(
-          '🔇 Audio chime blocked by browser autoplay policy. Please interact with the page first.'
+        console.debug(
+          '🔇 Audio chime blocked by browser autoplay policy. User needs to interact with the page first.'
         );
-        // Return a special error that can be caught by callers if needed
-        throw new Error('AUTOPLAY_BLOCKED');
       } else if (errorName === 'NotSupportedError') {
-        console.error('🔇 Audio format not supported:', chimePath);
+        console.warn('🔇 Audio format not supported:', chimePath);
       } else {
         console.debug('Could not play task completion chime:', error);
       }
     }
+    // Don't rethrow - just silently fail so we don't spam the console
   }
 }
 
