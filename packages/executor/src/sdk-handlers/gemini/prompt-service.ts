@@ -33,6 +33,7 @@ import type {
 } from '../../db/feathers-repositories.js';
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
+import { getMcpServersForSession } from '../base/mcp-scoping.js';
 import { convertConversationToHistory } from './conversation-converter.js';
 import { DEFAULT_GEMINI_MODEL, type GeminiModel } from './models.js';
 import { mapPermissionMode } from './permission-mapper.js';
@@ -669,71 +670,14 @@ export class GeminiPromptService {
     // Fetch user-configured MCP servers
     if (this.sessionMCPRepo && this.mcpServerRepo) {
       try {
-        const allServers: Array<{
-          // biome-ignore lint/suspicious/noExplicitAny: MCPServer type from database
-          server: any;
-          source: string;
-        }> = [];
-
-        // 1. Global servers (always included)
-        console.log('🔌 Fetching MCP servers with hierarchical scoping...');
-        const globalServers = await this.mcpServerRepo.findAll({
-          scope: 'global',
-          enabled: true,
+        // Use shared MCP scoping utility (isolated vs hierarchical mode)
+        const serversWithSource = await getMcpServersForSession(sessionId, {
+          sessionMCPRepo: this.sessionMCPRepo,
+          mcpServerRepo: this.mcpServerRepo,
         });
-        console.log(`   📍 Global scope: ${globalServers?.length ?? 0} server(s)`);
-        for (const server of globalServers ?? []) {
-          allServers.push({ server, source: 'global' });
-        }
 
-        // 2. Repo-scoped servers (if session has a worktree)
-        let repoId: string | undefined;
-        if (session.worktree_id && this.worktreesRepo) {
-          const worktree = await this.worktreesRepo.findById(session.worktree_id);
-          repoId = worktree?.repo_id;
-        }
-        if (repoId) {
-          const repoServers = await this.mcpServerRepo.findAll({
-            scope: 'repo',
-            scopeId: repoId,
-            enabled: true,
-          });
-          console.log(`   📍 Repo scope: ${repoServers?.length ?? 0} server(s)`);
-          for (const server of repoServers ?? []) {
-            allServers.push({ server, source: 'repo' });
-          }
-        }
-
-        // 3. Session-specific servers (from join table)
-        const sessionServers = await this.sessionMCPRepo.listServers(sessionId, true); // enabledOnly
-        console.log(`   📍 Session scope: ${sessionServers.length} server(s)`);
-        for (const server of sessionServers) {
-          allServers.push({ server, source: 'session' });
-        }
-
-        // 4. Deduplicate by server ID (later scopes override earlier ones)
-        // This means: session > repo > global
-        const serverMap = new Map<
-          string,
-          {
-            // biome-ignore lint/suspicious/noExplicitAny: MCPServer type from database
-            server: any;
-            source: string;
-          }
-        >();
-        for (const item of allServers) {
-          serverMap.set(item.server.mcp_server_id, item);
-        }
-        const uniqueServers = Array.from(serverMap.values());
-
-        console.log(
-          `   ✅ Total: ${uniqueServers.length} unique MCP server(s) after deduplication`
-        );
-
-        // 5. Convert to Gemini SDK format
-        for (const { server, source } of uniqueServers) {
-          console.log(`   - ${server.name} (${server.transport}) [${source}]`);
-
+        // Convert to Gemini SDK format
+        for (const { server } of serversWithSource) {
           let headers: Record<string, string> | undefined;
           try {
             headers = await resolveMCPAuthHeaders(server.auth);

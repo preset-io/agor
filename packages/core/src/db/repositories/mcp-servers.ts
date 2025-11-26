@@ -10,8 +10,6 @@ import type {
   MCPServer,
   MCPServerFilters,
   MCPServerID,
-  SessionID,
-  TeamID,
   UpdateMCPServerInput,
   UserID,
   UUID,
@@ -62,11 +60,8 @@ export class MCPServerRepository
       env: row.data.env,
       auth: row.data.auth,
 
-      // Scope foreign keys (nullable UUID strings - DB stores null, types expect undefined)
+      // Scope foreign key (nullable UUID string - DB stores null, type expects undefined)
       owner_user_id: (row.owner_user_id as UserID | null) ?? undefined,
-      team_id: (row.team_id as TeamID | null) ?? undefined,
-      repo_id: (row.repo_id as UUID | null) ?? undefined,
-      session_id: (row.session_id as SessionID | null) ?? undefined,
 
       // Capabilities
       tools: row.data.tools,
@@ -97,11 +92,8 @@ export class MCPServerRepository
       enabled: data.enabled ?? true,
       source: data.source ?? 'user',
 
-      // Scope foreign keys
+      // Scope foreign key (only for global scope)
       owner_user_id: data.owner_user_id ?? null,
-      team_id: data.team_id ?? null,
-      repo_id: data.repo_id ?? null,
-      session_id: data.session_id ?? null,
 
       // JSON blob
       data: {
@@ -220,13 +212,8 @@ export class MCPServerRepository
         // Match against the appropriate scope foreign key
         if (filters.scope === 'global') {
           conditions.push(eq(mcpServers.owner_user_id, filters.scopeId));
-        } else if (filters.scope === 'team') {
-          conditions.push(eq(mcpServers.team_id, filters.scopeId));
-        } else if (filters.scope === 'repo') {
-          conditions.push(eq(mcpServers.repo_id, filters.scopeId));
-        } else if (filters.scope === 'session') {
-          conditions.push(eq(mcpServers.session_id, filters.scopeId));
         }
+        // For session scope: use session_mcp_servers junction table (not handled here)
       }
 
       if (filters?.transport) {

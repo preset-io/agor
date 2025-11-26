@@ -5,7 +5,7 @@
  * scope filtering, and comprehensive JSON field handling.
  */
 
-import type { MCPServer, MCPServerID, TeamID, UserID } from '@agor/core/types';
+import type { MCPServer, MCPServerID, UserID } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
 import { dbTest } from '../test-helpers';

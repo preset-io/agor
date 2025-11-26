@@ -26,6 +26,7 @@ import type {
 } from '../../db/feathers-repositories.js';
 import type { PermissionService } from '../../permissions/permission-service.js';
 import type { MCPServersConfig, SessionID, TaskID, UserID } from '../../types.js';
+import { getMcpServersForSession } from '../base/mcp-scoping.js';
 import type { MessagesService, SessionsService, TasksService } from './claude-tool.js';
 import { DEFAULT_CLAUDE_MODEL } from './models.js';
 import { createCanUseToolCallback } from './permissions/permission-hooks.js';
@@ -469,107 +470,21 @@ export async function setupQuery(
     console.log(`🔒 Agor MCP server disabled - skipping MCP configuration`);
   }
 
-  // Fetch and configure MCP servers for this session (hierarchical scoping)
+  // Fetch and configure MCP servers for this session
   if (deps.sessionMCPRepo && deps.mcpServerRepo) {
     try {
-      const allServers: Array<{
-        // biome-ignore lint/suspicious/noExplicitAny: MCPServer type from multiple sources
-        server: any;
-        source: string;
-      }> = [];
+      // Use shared MCP scoping utility (isolated vs hierarchical mode)
+      const serversWithSource = await getMcpServersForSession(sessionId, {
+        sessionMCPRepo: deps.sessionMCPRepo,
+        mcpServerRepo: deps.mcpServerRepo,
+      });
 
-      // Check if session has explicitly configured MCP servers
-      // biome-ignore lint/suspicious/noExplicitAny: MCPServer type from repository
-      let sessionServers: any[] = [];
-      if (session && deps.sessionMCPRepo) {
-        sessionServers = await deps.sessionMCPRepo!.listServers(sessionId, true); // enabledOnly
-      }
-
-      // If session has explicit MCP servers, use ONLY those (no hierarchical inheritance)
-      // This allows sessions to have isolated MCP configurations
-      if (sessionServers.length > 0) {
-        console.log('🔌 Using session-specific MCP servers (isolated mode)...');
-        console.log(`   📍 Session scope: ${sessionServers.length} server(s)`);
-        for (const server of sessionServers) {
-          allServers.push({ server, source: 'session' });
-        }
-      } else {
-        // Session has no explicit MCP servers - fall back to hierarchical scoping
-        console.log('🔌 Fetching MCP servers with hierarchical scoping...');
-
-        // 1. Global servers
-        const globalServers = await deps.mcpServerRepo?.findAll({
-          scope: 'global',
-          enabled: true,
-        });
-        console.log(`   📍 Global scope: ${globalServers?.length ?? 0} server(s)`);
-        for (const server of globalServers ?? []) {
-          allServers.push({ server, source: 'global' });
-        }
-
-        // 2. Repo-scoped servers (if session has a worktree)
-        // Get repo_id from the worktree
-        let repoId: string | undefined;
-        // Note: session is guaranteed non-null due to check at line 331-332
-        // Using non-null assertions due to TypeScript's control flow analysis limitations with class properties
-        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-        const worktreeId = session!.worktree_id;
-        if (worktreeId && deps.worktreesRepo) {
-          // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-          const worktree = await deps.worktreesRepo!.findById(worktreeId);
-          repoId = worktree?.repo_id;
-        }
-        if (repoId) {
-          const repoServers = await deps.mcpServerRepo?.findAll({
-            scope: 'repo',
-            scopeId: repoId,
-            enabled: true,
-          });
-          console.log(`   📍 Repo scope: ${repoServers?.length ?? 0} server(s)`);
-          for (const server of repoServers ?? []) {
-            allServers.push({ server, source: 'repo' });
-          }
-        }
-
-        // 3. Team-scoped servers (if session has a team - future feature)
-        // if (session.team_id) {
-        //   const teamServers = await deps.mcpServerRepo.findAll({
-        //     scope: 'team',
-        //     scopeId: session.team_id,
-        //     enabled: true,
-        //   });
-        //   console.log(`   📍 Team scope: ${teamServers.length} server(s)`);
-        //   for (const server of teamServers) {
-        //     allServers.push({ server, source: 'team' });
-        //   }
-        // }
-      }
-
-      // 5. Deduplicate by server ID (later scopes override earlier ones)
-      // This means: session > team > repo > global
-      const serverMap = new Map<
-        string,
-        {
-          // biome-ignore lint/suspicious/noExplicitAny: MCPServer type from multiple sources
-          server: any;
-          source: string;
-        }
-      >();
-      for (const item of allServers) {
-        serverMap.set(item.server.mcp_server_id, item);
-      }
-      const uniqueServers = Array.from(serverMap.values());
-
-      console.log(`   ✅ Total: ${uniqueServers.length} unique MCP server(s) after deduplication`);
-
-      if (uniqueServers.length > 0) {
+      if (serversWithSource.length > 0) {
         // Convert to SDK format
         const mcpConfig: MCPServersConfig = {};
         const allowedTools: string[] = [];
 
-        for (const { server, source } of uniqueServers) {
-          console.log(`   - ${server.name} (${server.transport}) [${source}]`);
-
+        for (const { server } of serversWithSource) {
           // Build server config (convert 'transport' field to 'type' for Claude Code)
           const serverConfig: Record<string, unknown> = {
             type: server.transport,

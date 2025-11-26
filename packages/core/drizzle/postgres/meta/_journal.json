@@ -29,6 +29,13 @@
       "when": 1763955809018,
       "tag": "0003_dazzling_silver_centurion",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1764126342190,
+      "tag": "0004_nervous_imperial_guard",
+      "breakpoints": true
     }
   ]
 }

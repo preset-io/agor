@@ -612,19 +612,14 @@ export const mcpServers = pgTable(
       enum: ['stdio', 'http', 'sse'],
     }).notNull(),
     scope: text('scope', {
-      enum: ['global', 'team', 'repo', 'session'],
+      enum: ['global', 'session'],
     }).notNull(),
     enabled: t.bool('enabled').notNull().default(true),
 
-    // Scope foreign keys (materialized for indexes)
+    // Scope foreign key
+    // For 'global' scope: which user owns this server
+    // For 'session' scope: use session_mcp_servers junction table (many-to-many)
     owner_user_id: varchar('owner_user_id', { length: 36 }),
-    team_id: varchar('team_id', { length: 36 }),
-    repo_id: varchar('repo_id', { length: 36 }).references(() => repos.repo_id, {
-      onDelete: 'cascade',
-    }),
-    session_id: varchar('session_id', { length: 36 }).references(() => sessions.session_id, {
-      onDelete: 'cascade',
-    }),
 
     // Source tracking (materialized for queries)
     source: text('source', {
@@ -684,9 +679,6 @@ export const mcpServers = pgTable(
     nameIdx: index('mcp_servers_name_idx').on(table.name),
     scopeIdx: index('mcp_servers_scope_idx').on(table.scope),
     ownerIdx: index('mcp_servers_owner_idx').on(table.owner_user_id),
-    teamIdx: index('mcp_servers_team_idx').on(table.team_id),
-    repoIdx: index('mcp_servers_repo_idx').on(table.repo_id),
-    sessionIdx: index('mcp_servers_session_idx').on(table.session_id),
     enabledIdx: index('mcp_servers_enabled_idx').on(table.enabled),
   })
 );

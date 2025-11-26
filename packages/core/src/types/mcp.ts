@@ -14,19 +14,16 @@ import type { SessionID, UserID, UUID } from './id';
 export type MCPServerID = UUID & { readonly __brand: 'MCPServerID' };
 
 /**
- * Team ID (branded UUID) - for future multi-tenant support
- */
-export type TeamID = UUID & { readonly __brand: 'TeamID' };
-
-/**
  * MCP transport types
  */
 export type MCPTransport = 'stdio' | 'http' | 'sse';
 
 /**
  * MCP server scope levels
+ * - global: User's personal MCP servers (available to all sessions)
+ * - session: MCP servers assigned to specific sessions via junction table
  */
-export type MCPScope = 'global' | 'team' | 'repo' | 'session';
+export type MCPScope = 'global' | 'session';
 
 /**
  * MCP server source types
@@ -127,10 +124,7 @@ export interface MCPServer {
 
   // Scope
   scope: MCPScope;
-  owner_user_id?: UserID; // For 'global' scope
-  team_id?: TeamID; // For 'team' scope
-  repo_id?: UUID; // For 'repo' scope (Repo uses UUID, not RepoID)
-  session_id?: SessionID; // For 'session' scope
+  owner_user_id?: UserID; // For 'global' scope (which user owns this server)
 
   // Metadata
   source: MCPSource;
@@ -183,10 +177,7 @@ export interface CreateMCPServerInput {
   env?: Record<string, string>;
   auth?: MCPAuth;
   scope: MCPScope;
-  owner_user_id?: UserID;
-  team_id?: TeamID;
-  repo_id?: UUID;
-  session_id?: SessionID;
+  owner_user_id?: UserID; // For 'global' scope (which user owns this server)
   source?: MCPSource;
   import_path?: string;
   enabled?: boolean;

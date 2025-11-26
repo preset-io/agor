@@ -90,16 +90,16 @@
 [data-code-block-header] {
   background-color: var(--ant-color-bg-container);
   border-bottom: 1px solid var(--ant-color-border);
-  padding-top: 0 !important;
-  padding-bottom: 0 !important;
-  border-top-left-radius: 0 !important;
-  border-top-right-radius: 0 !important;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
 }
 
 /* Remove rounded corners from code block wrapper that contains the header */
 [data-streamdown="code-block"] {
-  border-top-left-radius: 0 !important;
-  border-top-right-radius: 0 !important;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
 }
 
 /* Remove padding/margin between code block header and content */
@@ -217,8 +217,8 @@
 
 /* Override rounded-xl for code block containers to keep top corners square */
 [data-code-block-container].rounded-xl {
-  border-top-left-radius: 0 !important;
-  border-top-right-radius: 0 !important;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
 }
 
 .px-1\.5 {
