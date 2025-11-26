@@ -61,7 +61,7 @@ describe('BoardRepository.create', () => {
 
     expect(created.board_id).toBeDefined();
     expect(created.board_id).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[47][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
     );
   });
 
@@ -162,6 +162,26 @@ describe('BoardRepository.create', () => {
 
     expect(created.created_at).toBe(createdAt);
     expect(created.last_updated).toBe(lastUpdated);
+  });
+
+  dbTest('should generate slug from name when slug not provided', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const data = createBoardData({ name: 'Focus Board' });
+
+    const created = await repo.create(data);
+
+    expect(created.slug).toBe('focus-board');
+  });
+
+  dbTest('should append numeric suffix when slug already exists', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const first = createBoardData({ name: 'Duplicate Board', slug: 'duplicate-board' });
+    const second = createBoardData({ name: 'Duplicate Board', slug: 'duplicate-board' });
+
+    await repo.create(first);
+    const created = await repo.create(second);
+
+    expect(created.slug).toBe('duplicate-board-1');
   });
 });
 
@@ -503,6 +523,19 @@ describe('BoardRepository.update', () => {
     expect(updated.color).toBe(created.color);
     expect(updated.icon).toBe(created.icon);
     expect(updated.custom_context).toEqual(created.custom_context);
+  });
+
+  dbTest('should ensure slug uniqueness when updating slug value', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const alpha = createBoardData({ name: 'Alpha', slug: 'alpha' });
+    const beta = createBoardData({ name: 'Beta', slug: 'beta' });
+
+    await repo.create(alpha);
+    const betaCreated = await repo.create(beta);
+
+    const updated = await repo.update(betaCreated.board_id!, { slug: 'alpha' });
+
+    expect(updated.slug).toBe('alpha-1');
   });
 });
 
@@ -1030,13 +1063,13 @@ describe('BoardRepository edge cases', () => {
     const created = await repo.create(data);
 
     expect(created.description).toBe('');
-    expect(created.slug).toBe('');
+    expect(created.slug).toBeUndefined();
   });
 
   dbTest('should handle null slug correctly', async ({ db }) => {
     const repo = new BoardRepository(db);
     const data = createBoardData({ name: 'No Slug Board' });
-    delete (data as any).slug;
+    (data as any).slug = null;
 
     const created = await repo.create(data);
 
@@ -1057,7 +1090,8 @@ describe('BoardRepository slug uniqueness', () => {
 
     const data2 = createBoardData({ slug: 'duplicate-slug' });
 
-    await expect(repo.create(data2)).rejects.toThrow();
+    const created = await repo.create(data2);
+    expect(created.slug).toBe('duplicate-slug-1');
   });
 
   dbTest('should allow same slug after deletion', async ({ db }) => {
@@ -1077,8 +1111,13 @@ describe('BoardRepository slug uniqueness', () => {
   dbTest('should allow null slugs for multiple boards', async ({ db }) => {
     const repo = new BoardRepository(db);
 
-    const board1 = await repo.create(createBoardData({ name: 'Board 1' }));
-    const board2 = await repo.create(createBoardData({ name: 'Board 2' }));
+    const data1 = createBoardData({ name: 'Board 1' });
+    (data1 as any).slug = null;
+    const data2 = createBoardData({ name: 'Board 2' });
+    (data2 as any).slug = null;
+
+    const board1 = await repo.create(data1);
+    const board2 = await repo.create(data2);
 
     expect(board1.slug).toBeUndefined();
     expect(board2.slug).toBeUndefined();

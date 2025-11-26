@@ -43,6 +43,7 @@ export interface ToolConfig {
  * Tool registry - centralized configuration for all tools
  */
 export class ToolRegistry {
+  // biome-ignore lint/correctness/noUnusedPrivateClassMembers: referenced via static helper methods
   private static tools: Map<Tool, ToolConfig> = new Map();
 
   /**

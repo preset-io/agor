@@ -565,6 +565,11 @@ function AppContent() {
 
   // Handle board CRUD
   const handleCreateBoard = async (board: Partial<Board>) => {
+    if (board.board_id) {
+      // Board already exists (clone/import already persisted it)
+      return;
+    }
+
     const created = await createBoard(board);
     if (created) {
       showSuccess('Board created successfully!');

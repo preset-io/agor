@@ -153,15 +153,27 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
    */
   async create(data: Partial<Board>): Promise<Board> {
     try {
-      // Auto-generate slug if not provided
-      if (!data.slug && data.name) {
-        const generatedSlug = await this.generateUniqueSlug(data.name);
-        // Only set slug if we got a non-empty result
-        // Empty string means name has no alphanumeric chars - store as null
-        data.slug = generatedSlug || undefined;
+      const boardId = data.board_id ?? generateId();
+      let finalSlug: string | undefined;
+
+      if (data.slug === null) {
+        finalSlug = undefined;
+      } else {
+        const slugSource = data.slug ?? data.name ?? 'board';
+        if (slugSource) {
+          const uniqueSlug = await this.generateUniqueSlug(slugSource);
+          if (uniqueSlug) {
+            finalSlug = uniqueSlug;
+          }
+        }
       }
 
-      const insertData = this.boardToInsert(data);
+      const insertData = this.boardToInsert({
+        ...data,
+        board_id: boardId,
+        slug: finalSlug,
+      });
+
       await insert(this.db, boards).values(insertData).run();
 
       const row = await select(this.db)
@@ -263,7 +275,24 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
         throw new EntityNotFoundError('Board', id);
       }
 
-      const merged = { ...current, ...updates };
+      const slugUpdateProvided = Object.prototype.hasOwnProperty.call(updates, 'slug');
+      let nextSlug: string | undefined = current.slug;
+
+      if (slugUpdateProvided) {
+        const slugValue = updates.slug;
+        if (!slugValue) {
+          nextSlug = undefined;
+        } else {
+          const uniqueSlug = await this.generateUniqueSlug(slugValue, fullId);
+          nextSlug = uniqueSlug || undefined;
+        }
+      }
+
+      const merged = {
+        ...current,
+        ...updates,
+        ...(slugUpdateProvided ? { slug: nextSlug } : {}),
+      };
       const insertData = this.boardToInsert(merged);
 
       await update(this.db, boards)
@@ -501,16 +530,9 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
     // Validate blob structure
     this.validateBoardBlob(blob);
 
-    // Ensure unique slug (append -copy, -copy-2, etc.)
-    let slug = blob.slug;
-    if (slug) {
-      slug = await this.getUniqueSlug(slug);
-    }
-
-    // Create new board with fresh IDs
     return this.create({
       name: blob.name,
-      slug,
+      slug: blob.slug ?? blob.name,
       description: blob.description,
       icon: blob.icon,
       color: blob.color,
@@ -542,9 +564,18 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
    * Import board from YAML string
    */
   async fromYaml(yamlContent: string, userId: string): Promise<Board> {
+    const blob = this.parseYamlToBlob(yamlContent);
+    return this.fromBlob(blob, userId);
+  }
+
+  /**
+   * Parse YAML string into a validated BoardExportBlob without creating a board
+   */
+  parseYamlToBlob(yamlContent: string): BoardExportBlob {
     try {
       const blob = yaml.load(yamlContent) as BoardExportBlob;
-      return this.fromBlob(blob, userId);
+      this.validateBoardBlob(blob);
+      return blob;
     } catch (error) {
       throw new RepositoryError(
         `Failed to parse YAML: ${error instanceof Error ? error.message : String(error)}`,
@@ -560,21 +591,23 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
    */
   async clone(boardId: string, newName: string, userId: string): Promise<Board> {
     const blob = await this.toBlob(boardId);
-    blob.name = newName;
-
-    // Generate slug from name if original had slug
-    if (blob.slug) {
-      blob.slug = this.slugify(newName);
-      blob.slug = await this.getUniqueSlug(blob.slug);
-    }
-
-    return this.fromBlob(blob, userId);
+    return this.create({
+      name: newName,
+      slug: newName,
+      description: blob.description,
+      icon: blob.icon,
+      color: blob.color,
+      background_color: blob.background_color,
+      objects: blob.objects,
+      custom_context: blob.custom_context,
+      created_by: userId,
+    });
   }
 
   /**
    * Validate board export blob structure
    */
-  private validateBoardBlob(blob: unknown): asserts blob is BoardExportBlob {
+  public validateBoardBlob(blob: unknown): asserts blob is BoardExportBlob {
     if (!blob || typeof blob !== 'object') {
       throw new RepositoryError('Invalid board export: must be an object');
     }
@@ -619,30 +652,5 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
         throw new RepositoryError('Invalid custom_context: must be valid JSON');
       }
     }
-  }
-
-  /**
-   * Get unique slug by appending -copy, -copy-2, etc.
-   */
-  private async getUniqueSlug(baseSlug: string): Promise<string> {
-    let slug = baseSlug;
-    let counter = 1;
-
-    while (await this.findBySlug(slug)) {
-      slug = `${baseSlug}-copy${counter > 1 ? `-${counter}` : ''}`;
-      counter++;
-    }
-
-    return slug;
-  }
-
-  /**
-   * Convert name to URL-friendly slug
-   */
-  private slugify(name: string): string {
-    return name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-|-$/g, '');
   }
 }

@@ -196,6 +196,7 @@ export class SessionTokenService {
   /**
    * Start periodic cleanup timer
    */
+  // biome-ignore lint/correctness/noUnusedPrivateClassMembers: invoked from constructor
   private startCleanupTimer(): void {
     // Clean up every hour
     setInterval(

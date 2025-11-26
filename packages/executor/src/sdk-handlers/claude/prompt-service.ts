@@ -44,9 +44,11 @@ export interface PromptResult {
 
 export class ClaudePromptService {
   /** Enable token-level streaming from Claude Agent SDK */
+  // biome-ignore lint/correctness/noUnusedPrivateClassMembers: toggled in future when streaming support lands
   private static readonly ENABLE_TOKEN_STREAMING = true;
 
   /** Idle timeout for SDK event loop - throws error if no messages received for this duration */
+  // biome-ignore lint/correctness/noUnusedPrivateClassMembers: reserved for future SDK config toggles
   private static readonly IDLE_TIMEOUT_MS = 300000; // 5 minutes
 
   /** Store active Query objects per session for interruption */

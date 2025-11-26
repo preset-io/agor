@@ -49,7 +49,7 @@ export default class BoardImport extends BaseCommand {
         board = await boardsService.fromBlob(blob);
       } catch {
         // If JSON parse fails, treat as YAML
-        board = await boardsService.fromYaml(content);
+        board = await boardsService.fromYaml({ yaml: content });
       }
 
       this.log(`Board imported: ${board.name} (${board.board_id})`);

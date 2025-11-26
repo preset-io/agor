@@ -33,6 +33,7 @@ export class HealthMonitor {
   /**
    * Set up WebSocket listeners for worktree changes
    */
+  // biome-ignore lint/correctness/noUnusedPrivateClassMembers: invoked from constructor
   private setupWorktreeListeners() {
     const worktreesService = this.app.service('worktrees');
 

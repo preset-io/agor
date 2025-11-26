@@ -43,10 +43,10 @@ export default class BoardExport extends BaseCommand {
       // Export based on format
       let content: string;
       if (format === 'json') {
-        const blob = await boardsService.toBlob(board);
+        const blob = await boardsService.toBlob({ id: board });
         content = JSON.stringify(blob, null, 2);
       } else {
-        content = await boardsService.toYaml(board);
+        content = await boardsService.toYaml({ id: board });
       }
 
       // Output to file or stdout

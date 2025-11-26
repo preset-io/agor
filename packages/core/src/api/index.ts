@@ -31,6 +31,12 @@ import { DAEMON } from '../config/constants';
 const DEFAULT_DAEMON_URL = `http://${DAEMON.DEFAULT_HOST}:${DAEMON.DEFAULT_PORT}`;
 
 /**
+ * Symbol used to mark the boards service after custom helpers have been attached.
+ * Using a symbol avoids clashing with existing service properties.
+ */
+const BOARDS_SERVICE_EXTENDED = Symbol('agor.boardsServiceExtended');
+
+/**
  * Service interfaces for type safety
  */
 export interface ServiceTypes {
@@ -162,7 +168,10 @@ export interface BoardsService extends AgorService<Board> {
   /**
    * Export board to a portable JSON blob
    */
-  toBlob(boardId: string, params?: Params): Promise<BoardExportBlob>;
+  toBlob(
+    data: { id?: string; boardId?: string } | string,
+    params?: Params
+  ): Promise<BoardExportBlob>;
 
   /**
    * Import board from a JSON blob
@@ -172,17 +181,21 @@ export interface BoardsService extends AgorService<Board> {
   /**
    * Export board to YAML string
    */
-  toYaml(boardId: string, params?: Params): Promise<string>;
+  toYaml(data: { id?: string; boardId?: string } | string, params?: Params): Promise<string>;
 
   /**
    * Import board from YAML string
    */
-  fromYaml(yamlContent: string, params?: Params): Promise<Board>;
+  fromYaml(data: { yaml?: string; content?: string } | string, params?: Params): Promise<Board>;
 
   /**
    * Clone an existing board with a new name
    */
-  clone(boardId: string, newName: string, params?: Params): Promise<Board>;
+  clone(
+    data: { id?: string; boardId?: string; name?: string } | string,
+    newName?: string,
+    params?: Params
+  ): Promise<Board>;
 }
 
 /**
@@ -300,6 +313,121 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   reAuthenticate(force?: boolean): Promise<AuthenticationResult>;
 }
 
+type BoardsServiceInternal = AgorService<Board> &
+  Partial<BoardsService> & {
+    [BOARDS_SERVICE_EXTENDED]?: boolean;
+  };
+
+function extendBoardsService(client: AgorClient): void {
+  const boardsService = client.service('boards') as BoardsServiceInternal & {
+    methods?: (names: string[]) => unknown;
+  };
+
+  if (boardsService[BOARDS_SERVICE_EXTENDED]) {
+    return;
+  }
+
+  const registerMethods = (service: BoardsServiceInternal) => {
+    const methodsFn = (
+      service as unknown as {
+        methods?: (...names: string[]) => unknown;
+      }
+    ).methods;
+
+    if (typeof methodsFn === 'function') {
+      methodsFn.call(service, 'toBlob', 'fromBlob', 'toYaml', 'fromYaml', 'clone');
+    }
+  };
+
+  registerMethods(boardsService);
+
+  const rawToBlob = (
+    boardsService as unknown as {
+      toBlob?: (data: unknown, params?: Params) => Promise<BoardExportBlob>;
+    }
+  ).toBlob?.bind(boardsService);
+
+  if (rawToBlob) {
+    boardsService.toBlob = (data: { id?: string; boardId?: string } | string, params?: Params) => {
+      if (typeof data === 'string') {
+        return rawToBlob({ boardId: data }, params);
+      }
+      return rawToBlob(data, params);
+    };
+  }
+
+  const rawFromBlob = (
+    boardsService as unknown as {
+      fromBlob?: (data: BoardExportBlob, params?: Params) => Promise<Board>;
+    }
+  ).fromBlob?.bind(boardsService);
+
+  if (rawFromBlob) {
+    boardsService.fromBlob = (blob: BoardExportBlob, params?: Params) => rawFromBlob(blob, params);
+  }
+
+  const rawToYaml = (
+    boardsService as unknown as {
+      toYaml?: (data: unknown, params?: Params) => Promise<string>;
+    }
+  ).toYaml?.bind(boardsService);
+
+  if (rawToYaml) {
+    boardsService.toYaml = (data: { id?: string; boardId?: string } | string, params?: Params) => {
+      if (typeof data === 'string') {
+        return rawToYaml({ boardId: data }, params);
+      }
+      return rawToYaml(data, params);
+    };
+  }
+
+  const rawFromYaml = (
+    boardsService as unknown as {
+      fromYaml?: (data: unknown, params?: Params) => Promise<Board>;
+    }
+  ).fromYaml?.bind(boardsService);
+
+  if (rawFromYaml) {
+    boardsService.fromYaml = (
+      data: { yaml?: string; content?: string } | string,
+      params?: Params
+    ) => {
+      if (typeof data === 'string') {
+        return rawFromYaml({ yaml: data }, params);
+      }
+      return rawFromYaml(data, params);
+    };
+  }
+
+  const rawClone = (
+    boardsService as unknown as {
+      clone?: (data: unknown, params?: Params) => Promise<Board>;
+    }
+  ).clone?.bind(boardsService);
+
+  if (rawClone) {
+    boardsService.clone = (
+      data: { id?: string; boardId?: string; name?: string } | string,
+      newNameOrParams?: string | Params,
+      maybeParams?: Params
+    ) => {
+      if (typeof data === 'string') {
+        if (typeof newNameOrParams !== 'string') {
+          throw new Error('Board name required');
+        }
+        return rawClone({ boardId: data, name: newNameOrParams }, maybeParams);
+      }
+
+      const params =
+        (typeof newNameOrParams === 'object' ? (newNameOrParams as Params) : undefined) ??
+        maybeParams;
+      return rawClone(data, params);
+    };
+  }
+
+  boardsService[BOARDS_SERVICE_EXTENDED] = true;
+}
+
 /**
  * Create Feathers client connected to agor-daemon
  *
@@ -333,6 +461,8 @@ export async function createRestClient(url: string = DEFAULT_DAEMON_URL): Promis
     io: { opts: {} },
     // biome-ignore lint/suspicious/noExplicitAny: Dummy socket for REST-only mode
   } as any;
+
+  extendBoardsService(client);
 
   return client;
 }
@@ -403,6 +533,8 @@ export function createClient(
 
   client.configure(authentication({ storage }));
   client.io = socket;
+
+  extendBoardsService(client);
 
   return client;
 }

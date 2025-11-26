@@ -125,7 +125,12 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
   /**
    * Export board to blob (JSON)
    */
-  async toBlob(boardId: string, _params?: BoardParams): Promise<BoardExportBlob> {
+  async toBlob(
+    data: { boardId?: string; id?: string } | string,
+    _params?: BoardParams
+  ): Promise<BoardExportBlob> {
+    const boardId = typeof data === 'string' ? data : (data.boardId ?? data.id);
+    if (!boardId) throw new Error('Board ID required');
     return this.boardRepo.toBlob(boardId);
   }
 
@@ -134,30 +139,96 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
    */
   async fromBlob(blob: BoardExportBlob, params?: BoardParams): Promise<Board> {
     const userId = params?.user?.user_id || 'anonymous';
-    return this.boardRepo.fromBlob(blob, userId);
+    this.boardRepo.validateBoardBlob(blob);
+    const data = this.buildBoardDataFromBlob(blob, userId);
+    return super.create(data, this.withServerProvider(params)) as Promise<Board>;
   }
 
   /**
    * Export board to YAML string
    */
-  async toYaml(boardId: string, _params?: BoardParams): Promise<string> {
+  async toYaml(
+    data: { boardId?: string; id?: string } | string,
+    _params?: BoardParams
+  ): Promise<string> {
+    const boardId = typeof data === 'string' ? data : (data.boardId ?? data.id);
+    if (!boardId) throw new Error('Board ID required');
     return this.boardRepo.toYaml(boardId);
   }
 
   /**
    * Import board from YAML string
    */
-  async fromYaml(yamlContent: string, params?: BoardParams): Promise<Board> {
-    const userId = params?.user?.user_id || 'anonymous';
-    return this.boardRepo.fromYaml(yamlContent, userId);
+  async fromYaml(
+    data: { yaml?: string; content?: string } | string,
+    params?: BoardParams
+  ): Promise<Board> {
+    const yamlContent = typeof data === 'string' ? data : (data.yaml ?? data.content);
+    if (!yamlContent) throw new Error('YAML content required');
+    const blob = this.boardRepo.parseYamlToBlob(yamlContent);
+    return this.fromBlob(blob, params);
   }
 
   /**
    * Clone board (create copy with new ID)
    */
-  async clone(boardId: string, newName: string, params?: BoardParams): Promise<Board> {
+  async clone(
+    data: { boardId?: string; id?: string; name?: string } | string,
+    newNameOrParams?: string | BoardParams,
+    maybeParams?: BoardParams
+  ): Promise<Board> {
+    let boardId: string | undefined;
+    let name: string | undefined;
+    let params: BoardParams | undefined;
+
+    if (typeof data === 'string') {
+      boardId = data;
+      if (typeof newNameOrParams !== 'string') {
+        throw new Error('Board name required');
+      }
+      name = newNameOrParams;
+      params = maybeParams;
+    } else {
+      boardId = data.boardId ?? data.id;
+      name = data.name;
+      params = (newNameOrParams as BoardParams | undefined) ?? maybeParams;
+    }
+
+    if (!boardId) throw new Error('Board ID required');
+    if (!name) throw new Error('Board name required');
+
     const userId = params?.user?.user_id || 'anonymous';
-    return this.boardRepo.clone(boardId, newName, userId);
+    const blob = await this.boardRepo.toBlob(boardId);
+    const boardData = this.buildBoardDataFromBlob(blob, userId, name);
+    return super.create(boardData, this.withServerProvider(params)) as Promise<Board>;
+  }
+
+  private withServerProvider(params?: BoardParams): BoardParams {
+    return {
+      ...(params ?? {}),
+      provider: params?.provider ?? 'server',
+    } as BoardParams;
+  }
+
+  private buildBoardDataFromBlob(
+    blob: BoardExportBlob,
+    userId: string,
+    nameOverride?: string
+  ): Partial<Board> {
+    const name = nameOverride ?? blob.name;
+    const slug = nameOverride ? nameOverride : (blob.slug ?? blob.name);
+
+    return {
+      name,
+      slug,
+      description: blob.description,
+      icon: blob.icon,
+      color: blob.color,
+      background_color: blob.background_color,
+      objects: blob.objects,
+      custom_context: blob.custom_context,
+      created_by: userId,
+    };
   }
 }
 

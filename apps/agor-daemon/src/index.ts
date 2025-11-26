@@ -94,6 +94,8 @@ import { registerHandlebarsHelpers } from '@agor/core/templates/handlebars-helpe
 // import { ClaudeTool, CodexTool, GeminiTool, OpenCodeTool } from '@agor/core/tools';
 import type {
   AuthenticatedParams,
+  Board,
+  HookContext,
   Id,
   Message,
   Paginated,
@@ -950,58 +952,21 @@ async function main() {
     // biome-ignore lint/suspicious/noExplicitAny: feathers-swagger docs option not typed in FeathersJS
   } as any);
 
-  app.use('/boards', createBoardsService(db));
-
-  // Board custom methods (export/import/clone)
-  // Get the boards service instance for custom routes
-  const getBoardsService = () => app.service('boards') as unknown as BoardsServiceImpl;
-
-  app.use('/boards/:id/toYaml', {
-    async find(_data: unknown, params: RouteParams) {
-      ensureMinimumRole(params, 'member', 'export boards');
-      const id = params.route?.id;
-      if (!id) throw new Error('Board ID required');
-      return getBoardsService().toYaml(id, params);
-    },
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers parametrized custom route requires any cast
-  } as any);
-
-  app.use('/boards/:id/toBlob', {
-    async find(_data: unknown, params: RouteParams) {
-      ensureMinimumRole(params, 'member', 'export boards');
-      const id = params.route?.id;
-      if (!id) throw new Error('Board ID required');
-      return getBoardsService().toBlob(id, params);
-    },
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers parametrized custom route requires any cast
-  } as any);
-
-  app.use('/boards/fromYaml', {
-    async create(data: { yaml: string }, params: RouteParams) {
-      ensureMinimumRole(params, 'member', 'import boards');
-      if (!data.yaml) throw new Error('YAML content required');
-      return getBoardsService().fromYaml(data.yaml, params);
-    },
+  app.use('/boards', createBoardsService(db), {
+    methods: [
+      'find',
+      'get',
+      'create',
+      'update',
+      'patch',
+      'remove',
+      'toBlob',
+      'fromBlob',
+      'toYaml',
+      'fromYaml',
+      'clone',
+    ],
   });
-
-  app.use('/boards/fromBlob', {
-    async create(data: unknown, params: RouteParams) {
-      ensureMinimumRole(params, 'member', 'import boards');
-      // biome-ignore lint/suspicious/noExplicitAny: BoardExportBlob type is complex, cast for simplicity
-      return getBoardsService().fromBlob(data as any, params);
-    },
-  });
-
-  app.use('/boards/:id/clone', {
-    async create(data: { name: string }, params: RouteParams) {
-      ensureMinimumRole(params, 'member', 'clone boards');
-      const id = params.route?.id;
-      if (!id) throw new Error('Board ID required');
-      if (!data.name) throw new Error('Board name required');
-      return getBoardsService().clone(id, data.name, params);
-    },
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers parametrized custom route requires any cast
-  } as any);
 
   // Register board-objects service (positioned entities on boards)
   app.use('/board-objects', createBoardObjectsService(db));
@@ -1113,7 +1078,7 @@ async function main() {
     },
     after: {
       patch: [
-        async (context) => {
+        async (context: HookContext<Board>) => {
           // Detect permission resolution and notify executor via IPC
           const message = context.result as import('@agor/core/types').Message;
 
@@ -1276,7 +1241,7 @@ async function main() {
         },
       ],
       create: [
-        async (context) => {
+        async (context: HookContext<Board>) => {
           const params = context.params as AuthenticatedParams;
 
           if (!params.provider) {
@@ -1366,11 +1331,11 @@ async function main() {
           );
 
           if (Array.isArray(context.data)) {
-            context.data.forEach((item) => {
-              if (!item.created_by) (item as Record<string, unknown>).created_by = userId;
+            context.data.forEach((item: Record<string, unknown>) => {
+              if (!item['created_by']) item['created_by'] = userId;
             });
-          } else if (context.data && !context.data.created_by) {
-            (context.data as Record<string, unknown>).created_by = userId;
+          } else if (context.data && !(context.data as Record<string, unknown>)['created_by']) {
+            (context.data as Record<string, unknown>)['created_by'] = userId;
           }
 
           // Populate repo field from worktree_id
@@ -1545,7 +1510,7 @@ async function main() {
       ],
       create: [
         requireMinimumRole('member', 'create boards'),
-        async (context) => {
+        async (context: HookContext<Board>) => {
           // Inject user_id if authenticated, otherwise use 'anonymous'
           const userId =
             (context.params as { user?: { user_id: string; email: string } }).user?.user_id ||
@@ -1563,7 +1528,7 @@ async function main() {
       ],
       patch: [
         requireMinimumRole('member', 'update boards'),
-        async (context) => {
+        async (context: HookContext<Board>) => {
           // Handle atomic board object operations via _action parameter
           const contextData = context.data || {};
           const { _action, objectId, objectData, objects, deleteAssociatedSessions } =
@@ -1637,8 +1602,14 @@ async function main() {
         },
       ],
       remove: [requireMinimumRole('member', 'delete boards')],
+      toBlob: [requireMinimumRole('member', 'export boards')],
+      toYaml: [requireMinimumRole('member', 'export boards')],
+      fromBlob: [requireMinimumRole('member', 'import boards')],
+      fromYaml: [requireMinimumRole('member', 'import boards')],
+      clone: [requireMinimumRole('member', 'clone boards')],
     },
-  });
+    // biome-ignore lint/suspicious/noExplicitAny: Custom service methods not in default hook map
+  } as any);
 
   // Configure authentication options BEFORE creating service
   // Note: jwtSecret is initialized earlier (before Socket.io config)

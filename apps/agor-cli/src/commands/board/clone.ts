@@ -29,7 +29,7 @@ export default class BoardClone extends BaseCommand {
     try {
       const boardsService = client.service('boards');
 
-      const clonedBoard = await boardsService.clone(board, name);
+      const clonedBoard = await boardsService.clone({ id: board, name });
 
       this.log(`Board cloned: ${clonedBoard.name} (${clonedBoard.board_id})`);
     } catch (error) {

@@ -250,7 +250,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
         // Call service method directly
         const boardsService = client.service('boards');
         return boardsService
-          .clone(board.board_id, newName)
+          .clone({ id: board.board_id, name: newName })
           .then((clonedBoard) => {
             showSuccess(`Board cloned: ${clonedBoard.name}`);
             // Trigger parent refresh by calling onCreate
@@ -273,7 +273,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
     try {
       // Call service method directly
       const boardsService = client.service('boards');
-      const yaml = await boardsService.toYaml(board.board_id);
+      const yaml = await boardsService.toYaml({ id: board.board_id });
 
       // Trigger download
       const blob = new Blob([yaml], { type: 'text/yaml' });
@@ -317,7 +317,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
         board = await boardsService.fromBlob(JSON.parse(content));
       } else {
         // Import from YAML
-        board = await boardsService.fromYaml(content);
+        board = await boardsService.fromYaml({ yaml: content });
       }
 
       showSuccess(`Board imported: ${board.name}`);
