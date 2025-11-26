@@ -275,7 +275,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
         throw new EntityNotFoundError('Board', id);
       }
 
-      const slugUpdateProvided = Object.prototype.hasOwnProperty.call(updates, 'slug');
+      const slugUpdateProvided = Object.hasOwn(updates, 'slug');
       let nextSlug: string | undefined = current.slug;
 
       if (slugUpdateProvided) {

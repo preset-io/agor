@@ -201,7 +201,10 @@ export const App: React.FC<AppProps> = ({
   });
 
   // Session panel size persistence (percentage of available width)
-  const [sessionPanelSize, setSessionPanelSize] = useLocalStorage<number>('agor:sessionPanelSize', 50);
+  const [sessionPanelSize, setSessionPanelSize] = useLocalStorage<number>(
+    'agor:sessionPanelSize',
+    50
+  );
 
   // Comment highlight state (hover and sticky selection)
   const [hoveredCommentId, setHoveredCommentId] = useState<string | null>(null);
@@ -597,10 +600,7 @@ export const App: React.FC<AppProps> = ({
             }
           }}
         >
-          <Panel
-            defaultSize={selectedSessionId ? 100 - sessionPanelSize : 100}
-            minSize={20}
-          >
+          <Panel defaultSize={selectedSessionId ? 100 - sessionPanelSize : 100} minSize={20}>
             <div style={{ position: 'relative', overflow: 'hidden', height: '100%' }}>
               <SessionCanvas
                 board={currentBoard || null}
@@ -667,10 +667,12 @@ export const App: React.FC<AppProps> = ({
                   transition: 'background 0.2s',
                 }}
                 onMouseEnter={(e) => {
-                  e.currentTarget.style.background = 'var(--ant-color-primary)';
+                  (e.currentTarget as unknown as HTMLDivElement).style.background =
+                    'var(--ant-color-primary)';
                 }}
                 onMouseLeave={(e) => {
-                  e.currentTarget.style.background = 'var(--ant-color-border-secondary)';
+                  (e.currentTarget as unknown as HTMLDivElement).style.background =
+                    'var(--ant-color-border-secondary)';
                 }}
               />
               <Panel defaultSize={sessionPanelSize} minSize={25} maxSize={75}>

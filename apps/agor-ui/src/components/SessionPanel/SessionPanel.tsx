@@ -23,16 +23,7 @@ import {
   SettingOutlined,
   StopOutlined,
 } from '@ant-design/icons';
-import {
-  App,
-  Badge,
-  Button,
-  Space,
-  Spin,
-  Tooltip,
-  Typography,
-  theme,
-} from 'antd';
+import { App, Badge, Button, Space, Spin, Tooltip, Typography, theme } from 'antd';
 import React from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useTasks } from '../../hooks/useTasks';
@@ -40,6 +31,7 @@ import spawnSubsessionTemplate from '../../templates/spawn_subsession.hbs?raw';
 import { getContextWindowGradient } from '../../utils/contextWindow';
 import { compileTemplate } from '../../utils/templates';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
+import { CreatedByTag } from '../metadata';
 import { PermissionModeSelector } from '../PermissionModeSelector';
 import {
   ContextWindowPill,
@@ -50,7 +42,6 @@ import {
 } from '../Pill';
 import { ThinkingModeSelector } from '../ThinkingModeSelector';
 import { ToolIcon } from '../ToolIcon';
-import { CreatedByTag } from '../metadata';
 import { SessionPanelContent } from './SessionPanelContent';
 
 // Re-export PermissionMode from SDK for convenience
@@ -657,11 +648,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             <Space.Compact>
               <Tooltip
                 title={
-                  isStopping
-                    ? 'Stopping...'
-                    : isRunning
-                      ? 'Stop Execution'
-                      : 'No active execution'
+                  isStopping ? 'Stopping...' : isRunning ? 'Stop Execution' : 'No active execution'
                 }
               >
                 <Button
@@ -744,7 +731,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                   }}
                 >
                   {(() => {
-                    const displayText = session.title || session.description || session.agentic_tool;
+                    const displayText =
+                      session.title || session.description || session.agentic_tool;
                     if (
                       !session.title &&
                       session.description &&

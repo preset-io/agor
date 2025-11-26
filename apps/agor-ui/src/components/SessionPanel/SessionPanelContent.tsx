@@ -1,10 +1,7 @@
 import type { AgorClient } from '@agor/core/api';
 import type {
-  CodexApprovalPolicy,
-  CodexSandboxMode,
   MCPServer,
   Message,
-  PermissionMode,
   PermissionScope,
   Repo,
   Session,
@@ -12,30 +9,19 @@ import type {
   User,
   Worktree,
 } from '@agor/core/types';
-import { SessionStatus, TaskStatus } from '@agor/core/types';
 import {
   ApiOutlined,
-  CodeOutlined,
   CopyOutlined,
   DeleteOutlined,
-  SettingOutlined,
   VerticalAlignBottomOutlined,
   VerticalAlignTopOutlined,
 } from '@ant-design/icons';
 import { App, Button, Divider, Space, Tag, Tooltip, Typography, theme } from 'antd';
-import React from 'react';
-import { AutocompleteTextarea } from '../AutocompleteTextarea';
+import type React from 'react';
 import { ConversationView } from '../ConversationView';
 import { EnvironmentPill } from '../EnvironmentPill';
 import { ForkSpawnModal } from '../ForkSpawnModal';
-import { ContextWindowPill, IssuePill, MessageCountPill, PullRequestPill, RepoPill } from '../Pill';
-import spawnSubsessionTemplate from '../../templates/spawn_subsession.hbs?raw';
-import { compileTemplate } from '../../utils/templates';
-
-// Compile the spawn subsession template once at module level
-const compiledSpawnSubsessionTemplate = compileTemplate<{ userPrompt: string }>(
-  spawnSubsessionTemplate
-);
+import { IssuePill, PullRequestPill, RepoPill } from '../Pill';
 
 export interface SessionPanelContentProps {
   client: AgorClient | null;
