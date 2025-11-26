@@ -7,7 +7,8 @@
 
 import { type ApiKeyName, resolveApiKey } from '@agor/core/config';
 import { createDatabase, createLocalDatabase, type Database } from '@agor/core/db';
-import type { MessageID, PermissionMode, SessionID, TaskID, UserID } from '@agor/core/types';
+import { getCurrentSha } from '@agor/core/git';
+import type { MessageID, PermissionMode, SessionID, Task, TaskID, UserID } from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
 import type { AgorClient } from '../../services/feathers-client.js';
@@ -124,6 +125,41 @@ export function createExecutionContext(client: AgorClient, toolName: string): Ex
     repos: createFeathersBackedRepositories(client),
     callbacks: createStreamingCallbacks(client, toolName),
   };
+}
+
+/**
+ * Capture git SHA at task end
+ *
+ * Fetches the worktree path from the session and captures the current git SHA.
+ * Returns the SHA or undefined if it cannot be determined.
+ */
+async function captureGitShaAtTaskEnd(
+  client: AgorClient,
+  sessionId: SessionID
+): Promise<string | undefined> {
+  try {
+    // Get session to find worktree
+    const session = await client.service('sessions').get(sessionId);
+    if (!session.worktree_id) {
+      console.warn('[Git SHA Capture] Session has no worktree_id');
+      return undefined;
+    }
+
+    // Get worktree to find path
+    const worktree = await client.service('worktrees').get(session.worktree_id);
+    if (!worktree.path) {
+      console.warn('[Git SHA Capture] Worktree has no path');
+      return undefined;
+    }
+
+    // Get current git SHA
+    const sha = await getCurrentSha(worktree.path);
+    console.log(`[Git SHA Capture] Captured SHA at task end: ${sha.substring(0, 8)}`);
+    return sha;
+  } catch (error) {
+    console.warn('[Git SHA Capture] Failed to capture git SHA at task end:', error);
+    return undefined;
+  }
 }
 
 /**
@@ -267,20 +303,50 @@ export async function executeToolTask(params: {
       `[${toolName}] Execution completed: user=${result.userMessageId}, assistant=${result.assistantMessageIds.length} messages`
     );
 
-    // Update task status to completed
-    await client.service('tasks').patch(taskId, {
+    // Capture git SHA at task end
+    const shaAtEnd = await captureGitShaAtTaskEnd(client, sessionId);
+
+    // Build patch data
+    const patchData: Partial<Task> = {
       status: result.wasStopped ? 'stopped' : 'completed',
       completed_at: new Date().toISOString(),
-    });
+    };
+
+    // Add git_state if we captured a SHA
+    // Note: This will be deep-merged with existing git_state by the repository layer
+    if (shaAtEnd) {
+      // @ts-expect-error - Partial update of nested git_state object is handled by repository deep merge
+      patchData.git_state = {
+        sha_at_end: shaAtEnd,
+      };
+    }
+
+    // Update task status to completed with git SHA
+    await client.service('tasks').patch(taskId, patchData);
   } catch (error) {
     const err = error as Error;
     console.error(`[${toolName}] Execution failed:`, err);
 
-    // Update task status to failed
-    await client.service('tasks').patch(taskId, {
+    // Capture git SHA at task end (even for failed tasks)
+    const shaAtEnd = await captureGitShaAtTaskEnd(client, sessionId);
+
+    // Build patch data
+    const patchData: Partial<Task> = {
       status: 'failed',
       completed_at: new Date().toISOString(),
-    });
+    };
+
+    // Add git_state if we captured a SHA
+    // Note: This will be deep-merged with existing git_state by the repository layer
+    if (shaAtEnd) {
+      // @ts-expect-error - Partial update of nested git_state object is handled by repository deep merge
+      patchData.git_state = {
+        sha_at_end: shaAtEnd,
+      };
+    }
+
+    // Update task status to failed with git SHA
+    await client.service('tasks').patch(taskId, patchData);
 
     throw err;
   } finally {
