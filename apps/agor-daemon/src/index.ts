@@ -148,7 +148,11 @@ import { TerminalsService } from './services/terminals';
 import { createUsersService } from './services/users';
 import { createWorktreesService } from './services/worktrees';
 import { AnonymousStrategy } from './strategies/anonymous';
-import { ensureMinimumRole, requireMinimumRole } from './utils/authorization';
+import {
+  ensureMinimumRole,
+  registerAuthenticatedRoute,
+  requireMinimumRole,
+} from './utils/authorization';
 
 /**
  * Extended Params with route ID parameter
@@ -1961,89 +1965,99 @@ async function main() {
   */
 
   // Configure custom route for bulk message creation
-  app.use('/messages/bulk', {
-    async create(data: unknown, params: RouteParams) {
-      ensureMinimumRole(params, 'member', 'create messages');
-      // Type assertion safe: repository validates message structure
-      return messagesService.createMany(data as Message[]);
+  registerAuthenticatedRoute(
+    app,
+    '/messages/bulk',
+    {
+      async create(data: unknown, params: RouteParams) {
+        // Type assertion safe: repository validates message structure
+        return messagesService.createMany(data as Message[]);
+      },
     },
-  });
+    {
+      create: { role: 'member', action: 'create messages' },
+    },
+    requireAuth
+  );
 
   // Configure custom methods for sessions service (using sessionsService from line 700)
-  app.use('/sessions/:id/fork', {
-    async create(data: { prompt: string; task_id?: string }, params: RouteParams) {
-      ensureMinimumRole(params, 'member', 'fork sessions');
-      const id = params.route?.id;
-      if (!id) throw new Error('Session ID required');
-      console.log(`🔀 Forking session: ${id.substring(0, 8)}`);
-      const forkedSession = await sessionsService.fork(id, data, params);
-      console.log(`✅ Fork created: ${forkedSession.session_id.substring(0, 8)}`);
+  registerAuthenticatedRoute(
+    app,
+    '/sessions/:id/fork',
+    {
+      async create(data: { prompt: string; task_id?: string }, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Session ID required');
+        console.log(`🔀 Forking session: ${id.substring(0, 8)}`);
+        const forkedSession = await sessionsService.fork(id, data, params);
+        console.log(`✅ Fork created: ${forkedSession.session_id.substring(0, 8)}`);
 
-      // Manually broadcast the event to all connected clients
-      // Internal service calls don't trigger automatic event publishing even with provider param
-      console.log('📡 [FORK] Manually broadcasting created event to all clients');
+        // Manually broadcast the event to all connected clients
+        // Internal service calls don't trigger automatic event publishing even with provider param
+        console.log('📡 [FORK] Manually broadcasting created event to all clients');
 
-      // Manually publish to Socket.io using app.io
-      // Note: We only emit to Socket.io, not the service, to avoid duplicate events
-      if (app.io) {
-        app.io.emit('sessions created', forkedSession);
-      }
+        // Manually publish to Socket.io using app.io
+        // Note: We only emit to Socket.io, not the service, to avoid duplicate events
+        if (app.io) {
+          app.io.emit('sessions created', forkedSession);
+        }
 
-      return forkedSession;
+        return forkedSession;
+      },
     },
-  });
-
-  app.service('/sessions/:id/fork').hooks({
-    before: {
-      create: [requireAuth, requireMinimumRole('member', 'fork sessions')],
+    {
+      create: { role: 'member', action: 'fork sessions' },
     },
-  });
+    requireAuth
+  );
 
-  app.use('/sessions/:id/spawn', {
-    async create(data: Partial<import('@agor/core/types').SpawnConfig>, params: RouteParams) {
-      ensureMinimumRole(params, 'member', 'spawn sessions');
-      const id = params.route?.id;
-      if (!id) throw new Error('Session ID required');
-      console.log(`🌱 Spawning session from: ${id.substring(0, 8)}`);
-      const spawnedSession = await sessionsService.spawn(id, data, params);
-      console.log(`✅ Spawn created: ${spawnedSession.session_id.substring(0, 8)}`);
+  registerAuthenticatedRoute(
+    app,
+    '/sessions/:id/spawn',
+    {
+      async create(data: Partial<import('@agor/core/types').SpawnConfig>, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Session ID required');
+        console.log(`🌱 Spawning session from: ${id.substring(0, 8)}`);
+        const spawnedSession = await sessionsService.spawn(id, data, params);
+        console.log(`✅ Spawn created: ${spawnedSession.session_id.substring(0, 8)}`);
 
-      // Manually broadcast the event to all connected clients
-      // Internal service calls don't trigger automatic event publishing even with provider param
-      console.log('📡 [SPAWN] Manually broadcasting created event to all clients');
+        // Manually broadcast the event to all connected clients
+        // Internal service calls don't trigger automatic event publishing even with provider param
+        console.log('📡 [SPAWN] Manually broadcasting created event to all clients');
 
-      // Manually publish to Socket.io using app.io
-      // Note: We only emit to Socket.io, not the service, to avoid duplicate events
-      if (app.io) {
-        app.io.emit('sessions created', spawnedSession);
-      }
+        // Manually publish to Socket.io using app.io
+        // Note: We only emit to Socket.io, not the service, to avoid duplicate events
+        if (app.io) {
+          app.io.emit('sessions created', spawnedSession);
+        }
 
-      return spawnedSession;
+        return spawnedSession;
+      },
     },
-  });
-
-  app.service('/sessions/:id/spawn').hooks({
-    before: {
-      create: [requireAuth, requireMinimumRole('member', 'spawn sessions')],
+    {
+      create: { role: 'member', action: 'spawn sessions' },
     },
-  });
+    requireAuth
+  );
 
   // Feathers custom route handler with find method
-  app.use('/sessions/:id/genealogy', {
-    async find(_data: unknown, params: RouteParams) {
-      ensureMinimumRole(params, 'member', 'view session genealogy');
-      const id = params.route?.id;
-      if (!id) throw new Error('Session ID required');
-      return sessionsService.getGenealogy(id, params);
+  registerAuthenticatedRoute(
+    app,
+    '/sessions/:id/genealogy',
+    {
+      async find(_data: unknown, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Session ID required');
+        return sessionsService.getGenealogy(id, params);
+      },
+      // biome-ignore lint/suspicious/noExplicitAny: FeathersJS route handler type mismatch with Express RouteParams
+    } as any,
+    {
+      find: { role: 'member', action: 'view session genealogy' },
     },
-    // biome-ignore lint/suspicious/noExplicitAny: FeathersJS route handler type mismatch with Express RouteParams
-  } as any);
-
-  app.service('/sessions/:id/genealogy').hooks({
-    before: {
-      find: [requireAuth, requireMinimumRole('member', 'view session genealogy')],
-    },
-  });
+    requireAuth
+  );
 
   /**
    * Helper: Safely patch an entity, returning false if it was deleted mid-execution
@@ -2077,16 +2091,18 @@ async function main() {
     }
   }
 
-  app.use('/sessions/:id/prompt', {
-    async create(
-      data: {
-        prompt: string;
-        permissionMode?: import('@agor/core/types').PermissionMode;
-        stream?: boolean;
-      },
-      params: RouteParams
-    ) {
-      ensureMinimumRole(params, 'member', 'execute prompts');
+  registerAuthenticatedRoute(
+    app,
+    '/sessions/:id/prompt',
+    {
+      async create(
+        data: {
+          prompt: string;
+          permissionMode?: import('@agor/core/types').PermissionMode;
+          stream?: boolean;
+        },
+        params: RouteParams
+      ) {
       console.log(`📨 [Daemon] Prompt request for session ${params.route?.id?.substring(0, 8)}`);
       console.log(`   Permission mode: ${data.permissionMode || 'not specified'}`);
       console.log(`   Streaming: ${data.stream !== false}`);
@@ -2273,19 +2289,20 @@ async function main() {
         status: TaskStatus.RUNNING,
         streaming: useStreaming, // Inform client whether streaming is enabled
       };
+      },
     },
-  });
-
-  app.service('/sessions/:id/prompt').hooks({
-    before: {
-      create: [requireAuth, requireMinimumRole('member', 'execute prompts')],
+    {
+      create: { role: 'member', action: 'execute prompts' },
     },
-  });
+    requireAuth
+  );
 
   // Stop execution endpoint
-  app.use('/sessions/:id/stop', {
-    async create(_data: unknown, params: RouteParams) {
-      ensureMinimumRole(params, 'member', 'stop sessions');
+  registerAuthenticatedRoute(
+    app,
+    '/sessions/:id/stop',
+    {
+      async create(_data: unknown, params: RouteParams) {
       const id = params.route?.id;
       if (!id) throw new Error('Session ID required');
 
@@ -2422,14 +2439,13 @@ async function main() {
       }
 
       return result;
+      },
     },
-  });
-
-  app.service('/sessions/:id/stop').hooks({
-    before: {
-      create: [requireAuth, requireMinimumRole('member', 'stop sessions')],
+    {
+      create: { role: 'member', action: 'stop sessions' },
     },
-  });
+    requireAuth
+  );
 
   /**
    * POST /sessions/:id/messages/queue
@@ -2439,59 +2455,57 @@ async function main() {
    * NOTE: Queue deletion is handled via messages service directly (client.service('messages').remove(id))
    * This keeps the client simple and avoids FeathersJS nested route issues
    */
-  app.use('/sessions/:id/messages/queue', {
-    async create(data: { prompt: string }, params: RouteParams) {
-      ensureMinimumRole(params, 'member', 'queue messages');
+  registerAuthenticatedRoute(
+    app,
+    '/sessions/:id/messages/queue',
+    {
+      async create(data: { prompt: string }, params: RouteParams) {
+        const sessionId = params.route?.id;
+        if (!sessionId) throw new Error('Session ID required');
+        if (!data.prompt) throw new Error('Prompt required');
 
-      const sessionId = params.route?.id;
-      if (!sessionId) throw new Error('Session ID required');
-      if (!data.prompt) throw new Error('Prompt required');
+        const _session = await sessionsService.get(sessionId, params);
 
-      const _session = await sessionsService.get(sessionId, params);
+        // Create queued message with user context preserved in metadata
+        // This ensures the message will be processed with the same authentication context
+        const messageRepo = new MessagesRepository(db);
+        const queuedMessage = await messageRepo.createQueued(sessionId as SessionID, data.prompt, {
+          queued_by_user_id: params.user?.user_id,
+        });
 
-      // Create queued message with user context preserved in metadata
-      // This ensures the message will be processed with the same authentication context
-      const messageRepo = new MessagesRepository(db);
-      const queuedMessage = await messageRepo.createQueued(sessionId as SessionID, data.prompt, {
-        queued_by_user_id: params.user?.user_id,
-      });
+        console.log(
+          `📬 Queued message for session ${sessionId.substring(0, 8)} at position ${queuedMessage.queue_position}`
+        );
 
-      console.log(
-        `📬 Queued message for session ${sessionId.substring(0, 8)} at position ${queuedMessage.queue_position}`
-      );
+        // Emit event for real-time UI updates
+        app.service('messages').emit('queued', queuedMessage);
 
-      // Emit event for real-time UI updates
-      app.service('messages').emit('queued', queuedMessage);
+        return {
+          success: true,
+          message: queuedMessage,
+        };
+      },
 
-      return {
-        success: true,
-        message: queuedMessage,
-      };
+      async find(params: RouteParams) {
+        const sessionId = params.route?.id;
+        if (!sessionId) throw new Error('Session ID required');
+
+        const messageRepo = new MessagesRepository(db);
+        const queued = await messageRepo.findQueued(sessionId as SessionID);
+
+        return {
+          total: queued.length,
+          data: queued,
+        };
+      },
+      // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
+    } as any,
+    {
+      create: { role: 'member', action: 'queue messages' },
+      find: { role: 'member', action: 'view queue' },
     },
-
-    async find(params: RouteParams) {
-      ensureMinimumRole(params, 'member', 'view queue');
-
-      const sessionId = params.route?.id;
-      if (!sessionId) throw new Error('Session ID required');
-
-      const messageRepo = new MessagesRepository(db);
-      const queued = await messageRepo.findQueued(sessionId as SessionID);
-
-      return {
-        total: queued.length,
-        data: queued,
-      };
-    },
-    // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
-  } as any);
-
-  app.service('/sessions/:id/messages/queue').hooks({
-    before: {
-      create: [requireAuth, requireMinimumRole('member', 'queue messages')],
-      find: [requireAuth, requireMinimumRole('member', 'view queue')],
-    },
-  });
+    requireAuth
+  );
 
   /**
    * Process the next queued message for a session
@@ -2605,10 +2619,12 @@ async function main() {
   });
 
   // Permission decision endpoint
-  app.use('/sessions/:id/permission-decision', {
-    async create(data: PermissionDecision, params: RouteParams) {
-      ensureMinimumRole(params, 'member', 'respond to permission requests');
-      const id = params.route?.id;
+  registerAuthenticatedRoute(
+    app,
+    '/sessions/:id/permission-decision',
+    {
+      async create(data: PermissionDecision, params: RouteParams) {
+        const id = params.route?.id;
       if (!id) throw new Error('Session ID required');
       if (!data.requestId) throw new Error('requestId required');
       if (typeof data.allow !== 'boolean') throw new Error('allow field required');
@@ -2663,110 +2679,180 @@ async function main() {
       });
 
       return { success: true };
+      },
     },
-  });
+    {
+      create: { role: 'member', action: 'respond to permission requests' },
+    },
+    requireAuth
+  );
 
   // Configure custom methods for tasks service
   const tasksService = app.service('tasks') as unknown as TasksServiceImpl;
 
   // Configure custom route for bulk task creation
-  app.use('/tasks/bulk', {
-    async create(data: unknown, params: RouteParams) {
-      ensureMinimumRole(params, 'member', 'create tasks');
-      return tasksService.createMany(data as Partial<Task>[]);
+  registerAuthenticatedRoute(
+    app,
+    '/tasks/bulk',
+    {
+      async create(data: unknown, params: RouteParams) {
+        return tasksService.createMany(data as Partial<Task>[]);
+      },
     },
-  });
+    {
+      create: { role: 'member', action: 'create tasks' },
+    },
+    requireAuth
+  );
 
-  app.use('/tasks/:id/complete', {
-    async create(
-      data: { git_state?: { sha_at_end?: string; commit_message?: string } },
-      params: RouteParams
-    ) {
-      ensureMinimumRole(params, 'member', 'complete tasks');
-      const id = params.route?.id;
-      if (!id) throw new Error('Task ID required');
-      return tasksService.complete(id, data, params);
+  registerAuthenticatedRoute(
+    app,
+    '/tasks/:id/complete',
+    {
+      async create(
+        data: { git_state?: { sha_at_end?: string; commit_message?: string } },
+        params: RouteParams
+      ) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Task ID required');
+        return tasksService.complete(id, data, params);
+      },
     },
-  });
+    {
+      create: { role: 'member', action: 'complete tasks' },
+    },
+    requireAuth
+  );
 
-  app.use('/tasks/:id/fail', {
-    async create(data: { error?: string }, params: RouteParams) {
-      ensureMinimumRole(params, 'member', 'fail tasks');
-      const id = params.route?.id;
-      if (!id) throw new Error('Task ID required');
-      return tasksService.fail(id, data, params);
+  registerAuthenticatedRoute(
+    app,
+    '/tasks/:id/fail',
+    {
+      async create(data: { error?: string }, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Task ID required');
+        return tasksService.fail(id, data, params);
+      },
     },
-  });
+    {
+      create: { role: 'member', action: 'fail tasks' },
+    },
+    requireAuth
+  );
 
   // Configure custom methods for repos service
   const reposService = app.service('repos') as unknown as ReposServiceImpl;
-  app.use('/repos/local', {
-    async create(data: { path: string; slug?: string }, params: RouteParams) {
-      ensureMinimumRole(params, 'member', 'add local repositories');
-      return reposService.addLocalRepository(data, params);
-    },
-  });
-  app.use('/repos/clone', {
-    async create(data: { url: string; name?: string; destination?: string }, params: RouteParams) {
-      ensureMinimumRole(params, 'member', 'clone repositories');
-      return reposService.cloneRepository(data, params);
-    },
-  });
 
-  app.use('/repos/:id/worktrees', {
-    async create(
-      data: {
-        name: string;
-        ref: string;
-        createBranch?: boolean;
-        refType?: 'branch' | 'tag';
-        pullLatest?: boolean;
-        sourceBranch?: string;
-        issue_url?: string;
-        pull_request_url?: string;
-        boardId?: string;
+  registerAuthenticatedRoute(
+    app,
+    '/repos/local',
+    {
+      async create(data: { path: string; slug?: string }, params: RouteParams) {
+        return reposService.addLocalRepository(data, params);
       },
-      params: RouteParams
-    ) {
-      ensureMinimumRole(params, 'member', 'create worktrees');
-      const id = params.route?.id;
-      if (!id) throw new Error('Repo ID required');
-      return reposService.createWorktree(
-        id,
-        { ...data, refType: data.refType ?? 'branch' },
-        params
-      );
     },
-  });
+    {
+      create: { role: 'member', action: 'add local repositories' },
+    },
+    requireAuth
+  );
 
-  app.use('/repos/:id/worktrees/:name', {
-    async remove(_id: unknown, params: RouteParams & { route?: { name?: string } }) {
-      ensureMinimumRole(params, 'member', 'remove worktrees');
-      const id = params.route?.id;
-      const name = params.route?.name;
-      if (!id) throw new Error('Repo ID required');
-      if (!name) throw new Error('Worktree name required');
-      return reposService.removeWorktree(id, name, params);
+  registerAuthenticatedRoute(
+    app,
+    '/repos/clone',
+    {
+      async create(data: { url: string; name?: string; destination?: string }, params: RouteParams) {
+        return reposService.cloneRepository(data, params);
+      },
     },
-  });
+    {
+      create: { role: 'member', action: 'clone repositories' },
+    },
+    requireAuth
+  );
 
-  app.use('/repos/:id/import-agor-yml', {
-    async create(_data: unknown, params: RouteParams) {
-      ensureMinimumRole(params, 'member', 'import .agor.yml');
-      const id = params.route?.id;
-      if (!id) throw new Error('Repo ID required');
-      return reposService.importFromAgorYml(id, {}, params);
+  registerAuthenticatedRoute(
+    app,
+    '/repos/:id/worktrees',
+    {
+      async create(
+        data: {
+          name: string;
+          ref: string;
+          createBranch?: boolean;
+          refType?: 'branch' | 'tag';
+          pullLatest?: boolean;
+          sourceBranch?: string;
+          issue_url?: string;
+          pull_request_url?: string;
+          boardId?: string;
+        },
+        params: RouteParams
+      ) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Repo ID required');
+        return reposService.createWorktree(
+          id,
+          { ...data, refType: data.refType ?? 'branch' },
+          params
+        );
+      },
     },
-  });
+    {
+      create: { role: 'member', action: 'create worktrees' },
+    },
+    requireAuth
+  );
 
-  app.use('/repos/:id/export-agor-yml', {
-    async create(_data: unknown, params: RouteParams) {
-      ensureMinimumRole(params, 'member', 'export .agor.yml');
-      const id = params.route?.id;
-      if (!id) throw new Error('Repo ID required');
-      return reposService.exportToAgorYml(id, {}, params);
+  registerAuthenticatedRoute(
+    app,
+    '/repos/:id/worktrees/:name',
+    {
+      async remove(_id: unknown, params: RouteParams & { route?: { name?: string } }) {
+        const id = params.route?.id;
+        const name = params.route?.name;
+        if (!id) throw new Error('Repo ID required');
+        if (!name) throw new Error('Worktree name required');
+        return reposService.removeWorktree(id, name, params);
+      },
     },
-  });
+    {
+      remove: { role: 'member', action: 'remove worktrees' },
+    },
+    requireAuth
+  );
+
+  registerAuthenticatedRoute(
+    app,
+    '/repos/:id/import-agor-yml',
+    {
+      async create(_data: unknown, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Repo ID required');
+        return reposService.importFromAgorYml(id, {}, params);
+      },
+    },
+    {
+      create: { role: 'member', action: 'import .agor.yml' },
+    },
+    requireAuth
+  );
+
+  registerAuthenticatedRoute(
+    app,
+    '/repos/:id/export-agor-yml',
+    {
+      async create(_data: unknown, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Repo ID required');
+        return reposService.exportToAgorYml(id, {}, params);
+      },
+    },
+    {
+      create: { role: 'member', action: 'export .agor.yml' },
+    },
+    requireAuth
+  );
 
   // Configure custom methods for board-comments service (Phase 2: Threading + Reactions)
   const boardCommentsService = app.service('board-comments') as unknown as {
@@ -2783,34 +2869,48 @@ async function main() {
   };
 
   // POST /board-comments/:id/toggle-reaction - Toggle emoji reaction on comment
-  app.use('/board-comments/:id/toggle-reaction', {
-    async create(data: { user_id: string; emoji: string }, params: RouteParams) {
-      ensureMinimumRole(params, 'member', 'react to board comments');
-      const id = params.route?.id;
-      if (!id) throw new Error('Comment ID required');
-      if (!data.user_id) throw new Error('user_id required');
-      if (!data.emoji) throw new Error('emoji required');
-      const updated = await boardCommentsService.toggleReaction(id, data, params);
-      // Manually emit patched event for real-time updates
-      app.service('board-comments').emit('patched', updated);
-      return updated;
+  registerAuthenticatedRoute(
+    app,
+    '/board-comments/:id/toggle-reaction',
+    {
+      async create(data: { user_id: string; emoji: string }, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Comment ID required');
+        if (!data.user_id) throw new Error('user_id required');
+        if (!data.emoji) throw new Error('emoji required');
+        const updated = await boardCommentsService.toggleReaction(id, data, params);
+        // Manually emit patched event for real-time updates
+        app.service('board-comments').emit('patched', updated);
+        return updated;
+      },
     },
-  });
+    {
+      create: { role: 'member', action: 'react to board comments' },
+    },
+    requireAuth
+  );
 
   // POST /board-comments/:id/reply - Create a reply to a comment thread
-  app.use('/board-comments/:id/reply', {
-    async create(data: Partial<import('@agor/core/types').BoardComment>, params: RouteParams) {
-      ensureMinimumRole(params, 'member', 'reply to board comments');
-      const id = params.route?.id;
-      if (!id) throw new Error('Comment ID required');
-      if (!data.content) throw new Error('content required');
-      if (!data.created_by) throw new Error('created_by required');
-      const reply = await boardCommentsService.createReply(id, data, params);
-      // Manually emit created event for real-time updates
-      app.service('board-comments').emit('created', reply);
-      return reply;
+  registerAuthenticatedRoute(
+    app,
+    '/board-comments/:id/reply',
+    {
+      async create(data: Partial<import('@agor/core/types').BoardComment>, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Comment ID required');
+        if (!data.content) throw new Error('content required');
+        if (!data.created_by) throw new Error('created_by required');
+        const reply = await boardCommentsService.createReply(id, data, params);
+        // Manually emit created event for real-time updates
+        app.service('board-comments').emit('created', reply);
+        return reply;
+      },
     },
-  });
+    {
+      create: { role: 'member', action: 'reply to board comments' },
+    },
+    requireAuth
+  );
 
   // Configure custom methods for worktrees service (environment management)
   const worktreesService = app.service(
@@ -2818,346 +2918,276 @@ async function main() {
   ) as unknown as import('./declarations').WorktreesServiceImpl;
 
   // POST /worktrees/:id/start - Start environment
-  app.use('/worktrees/:id/start', {
-    async create(_data: unknown, params: RouteParams) {
-      ensureMinimumRole(params, 'admin', 'start worktree environments');
-      const id = params.route?.id;
-      if (!id) throw new Error('Worktree ID required');
-      return worktreesService.startEnvironment(id as import('@agor/core/types').WorktreeID, params);
+  registerAuthenticatedRoute(
+    app,
+    '/worktrees/:id/start',
+    {
+      async create(_data: unknown, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Worktree ID required');
+        return worktreesService.startEnvironment(id as import('@agor/core/types').WorktreeID, params);
+      },
     },
-  });
+    {
+      create: { role: 'admin', action: 'start worktree environments' },
+    },
+    requireAuth
+  );
 
   // POST /worktrees/:id/stop - Stop environment
-  app.use('/worktrees/:id/stop', {
-    async create(_data: unknown, params: RouteParams) {
-      ensureMinimumRole(params, 'admin', 'stop worktree environments');
-      const id = params.route?.id;
-      if (!id) throw new Error('Worktree ID required');
-      return worktreesService.stopEnvironment(id as import('@agor/core/types').WorktreeID, params);
+  registerAuthenticatedRoute(
+    app,
+    '/worktrees/:id/stop',
+    {
+      async create(_data: unknown, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Worktree ID required');
+        return worktreesService.stopEnvironment(id as import('@agor/core/types').WorktreeID, params);
+      },
     },
-  });
+    {
+      create: { role: 'admin', action: 'stop worktree environments' },
+    },
+    requireAuth
+  );
 
   // POST /worktrees/:id/restart - Restart environment
-  app.use('/worktrees/:id/restart', {
-    async create(_data: unknown, params: RouteParams) {
-      ensureMinimumRole(params, 'admin', 'restart worktree environments');
-      const id = params.route?.id;
-      if (!id) throw new Error('Worktree ID required');
-      return worktreesService.restartEnvironment(
-        id as import('@agor/core/types').WorktreeID,
-        params
-      );
+  registerAuthenticatedRoute(
+    app,
+    '/worktrees/:id/restart',
+    {
+      async create(_data: unknown, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Worktree ID required');
+        return worktreesService.restartEnvironment(
+          id as import('@agor/core/types').WorktreeID,
+          params
+        );
+      },
     },
-  });
+    {
+      create: { role: 'admin', action: 'restart worktree environments' },
+    },
+    requireAuth
+  );
 
   // GET /worktrees/:id/health - Check environment health
-  app.use('/worktrees/:id/health', {
-    async find(_data: unknown, params: RouteParams) {
-      ensureMinimumRole(params, 'member', 'check worktree health');
-      const id = params.route?.id;
-      if (!id) throw new Error('Worktree ID required');
-      return worktreesService.checkHealth(id as import('@agor/core/types').WorktreeID, params);
+  registerAuthenticatedRoute(
+    app,
+    '/worktrees/:id/health',
+    {
+      async find(_data: unknown, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Worktree ID required');
+        return worktreesService.checkHealth(id as import('@agor/core/types').WorktreeID, params);
+      },
+      // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
+    } as any,
+    {
+      find: { role: 'member', action: 'check worktree health' },
     },
-    // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
-  } as any);
+    requireAuth
+  );
 
   // POST /worktrees/:id/archive-or-delete - Archive or delete worktree
-  app.use('/worktrees/:id/archive-or-delete', {
-    async create(data: unknown, params: RouteParams) {
-      ensureMinimumRole(params, 'admin', 'archive or delete worktrees');
-      const id = params.route?.id;
-      if (!id) throw new Error('Worktree ID required');
-      const options = data as {
-        metadataAction: 'archive' | 'delete';
-        filesystemAction: 'preserved' | 'cleaned' | 'deleted';
-      };
-      return worktreesService.archiveOrDelete(
-        id as import('@agor/core/types').WorktreeID,
-        options,
-        params
-      );
+  registerAuthenticatedRoute(
+    app,
+    '/worktrees/:id/archive-or-delete',
+    {
+      async create(data: unknown, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Worktree ID required');
+        const options = data as {
+          metadataAction: 'archive' | 'delete';
+          filesystemAction: 'preserved' | 'cleaned' | 'deleted';
+        };
+        return worktreesService.archiveOrDelete(
+          id as import('@agor/core/types').WorktreeID,
+          options,
+          params
+        );
+      },
+      // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
+    } as any,
+    {
+      create: { role: 'admin', action: 'archive or delete worktrees' },
     },
-    // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
-  } as any);
+    requireAuth
+  );
 
   // POST /worktrees/:id/unarchive - Unarchive worktree
-  app.use('/worktrees/:id/unarchive', {
-    async create(data: unknown, params: RouteParams) {
-      ensureMinimumRole(params, 'admin', 'unarchive worktrees');
-      const id = params.route?.id;
-      if (!id) throw new Error('Worktree ID required');
-      const options = data as { boardId?: import('@agor/core/types').BoardID };
-      return worktreesService.unarchive(
-        id as import('@agor/core/types').WorktreeID,
-        options,
-        params
-      );
+  registerAuthenticatedRoute(
+    app,
+    '/worktrees/:id/unarchive',
+    {
+      async create(data: unknown, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Worktree ID required');
+        const options = data as { boardId?: import('@agor/core/types').BoardID };
+        return worktreesService.unarchive(
+          id as import('@agor/core/types').WorktreeID,
+          options,
+          params
+        );
+      },
+      // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
+    } as any,
+    {
+      create: { role: 'admin', action: 'unarchive worktrees' },
     },
-    // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
-  } as any);
+    requireAuth
+  );
 
   // GET /worktrees/logs?worktree_id=xxx - Get environment logs
-  app.use('/worktrees/logs', {
-    async find(params: Params) {
-      console.log('📋 Logs endpoint called');
+  registerAuthenticatedRoute(
+    app,
+    '/worktrees/logs',
+    {
+      async find(params: Params) {
+        console.log('📋 Logs endpoint called');
 
-      ensureMinimumRole(params || {}, 'member', 'view worktree logs');
+        // Extract worktree ID from query params
+        const id = params?.query?.worktree_id;
 
-      // Extract worktree ID from query params
-      const id = params?.query?.worktree_id;
+        if (!id) {
+          console.error('❌ No worktree_id in query params');
+          throw new Error('worktree_id query parameter required');
+        }
 
-      if (!id) {
-        console.error('❌ No worktree_id in query params');
-        throw new Error('worktree_id query parameter required');
-      }
-
-      console.log('✅ Found worktree ID:', id);
-      return worktreesService.getLogs(id as import('@agor/core/types').WorktreeID, params);
+        console.log('✅ Found worktree ID:', id);
+        return worktreesService.getLogs(id as import('@agor/core/types').WorktreeID, params);
+      },
+      // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
+    } as any,
+    {
+      find: { role: 'member', action: 'view worktree logs' },
     },
-    // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
-  } as any);
+    requireAuth
+  );
 
   // Configure custom methods for boards service
   const boardsService = app.service('boards') as unknown as BoardsServiceImpl;
-  app.use('/boards/:id/sessions', {
-    async create(data: { sessionId: string }, params: RouteParams) {
-      ensureMinimumRole(params, 'member', 'modify board sessions');
-      const id = params.route?.id;
-      if (!id) throw new Error('Board ID required');
-      if (!data.sessionId) throw new Error('Session ID required');
-      return boardsService.addSession(id, data.sessionId, params);
+
+  registerAuthenticatedRoute(
+    app,
+    '/boards/:id/sessions',
+    {
+      async create(data: { sessionId: string }, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Board ID required');
+        if (!data.sessionId) throw new Error('Session ID required');
+        return boardsService.addSession(id, data.sessionId, params);
+      },
     },
-  });
+    {
+      create: { role: 'member', action: 'modify board sessions' },
+    },
+    requireAuth
+  );
 
   // Configure custom routes for session-MCP relationships
   // (sessionMCPServersService already created above for top-level service)
 
   // GET /sessions/:id/mcp-servers - List MCP servers for a session
-  app.use('/sessions/:id/mcp-servers', {
-    async find(_data: unknown, params: RouteParams) {
-      ensureMinimumRole(params, 'member', 'view session MCP servers');
-      const id = params.route?.id;
-      if (!id) throw new Error('Session ID required');
-      const enabledOnly =
-        params.query?.enabledOnly === 'true' || params.query?.enabledOnly === true;
-      return sessionMCPServersService.listServers(
-        id as import('@agor/core/types').SessionID,
-        enabledOnly,
-        params
-      );
+  registerAuthenticatedRoute(
+    app,
+    '/sessions/:id/mcp-servers',
+    {
+      async find(_data: unknown, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Session ID required');
+        const enabledOnly =
+          params.query?.enabledOnly === 'true' || params.query?.enabledOnly === true;
+        return sessionMCPServersService.listServers(
+          id as import('@agor/core/types').SessionID,
+          enabledOnly,
+          params
+        );
+      },
+      // POST /sessions/:id/mcp-servers - Add MCP server to session
+      async create(data: { mcpServerId: string }, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Session ID required');
+        if (!data.mcpServerId) throw new Error('MCP Server ID required');
+
+        await sessionMCPServersService.addServer(
+          id as import('@agor/core/types').SessionID,
+          data.mcpServerId as import('@agor/core/types').MCPServerID,
+          params
+        );
+
+        // Emit created event for WebSocket subscribers
+        const relationship = {
+          session_id: id,
+          mcp_server_id: data.mcpServerId,
+          enabled: true,
+          added_at: new Date(),
+        };
+        app.service('session-mcp-servers').emit('created', relationship);
+
+        return relationship;
+      },
+      // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
+    } as any,
+    {
+      find: { role: 'member', action: 'view session MCP servers' },
+      create: { role: 'member', action: 'modify session MCP servers' },
     },
-    // POST /sessions/:id/mcp-servers - Add MCP server to session
-    async create(data: { mcpServerId: string }, params: RouteParams) {
-      ensureMinimumRole(params, 'member', 'modify session MCP servers');
-      const id = params.route?.id;
-      if (!id) throw new Error('Session ID required');
-      if (!data.mcpServerId) throw new Error('MCP Server ID required');
-
-      await sessionMCPServersService.addServer(
-        id as import('@agor/core/types').SessionID,
-        data.mcpServerId as import('@agor/core/types').MCPServerID,
-        params
-      );
-
-      // Emit created event for WebSocket subscribers
-      const relationship = {
-        session_id: id,
-        mcp_server_id: data.mcpServerId,
-        enabled: true,
-        added_at: new Date(),
-      };
-      app.service('session-mcp-servers').emit('created', relationship);
-
-      return relationship;
-    },
-    // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
-  } as any);
+    requireAuth
+  );
 
   // DELETE /sessions/:id/mcp-servers/:mcpId - Remove MCP server from session
-  app.use('/sessions/:id/mcp-servers/:mcpId', {
-    async remove(_id: unknown, params: RouteParams & { route?: { mcpId?: string } }) {
-      ensureMinimumRole(params, 'member', 'modify session MCP servers');
-      const id = params.route?.id;
-      const mcpId = params.route?.mcpId;
-      if (!id) throw new Error('Session ID required');
-      if (!mcpId) throw new Error('MCP Server ID required');
+  registerAuthenticatedRoute(
+    app,
+    '/sessions/:id/mcp-servers/:mcpId',
+    {
+      async remove(_id: unknown, params: RouteParams & { route?: { mcpId?: string } }) {
+        const id = params.route?.id;
+        const mcpId = params.route?.mcpId;
+        if (!id) throw new Error('Session ID required');
+        if (!mcpId) throw new Error('MCP Server ID required');
 
-      await sessionMCPServersService.removeServer(
-        id as import('@agor/core/types').SessionID,
-        mcpId as import('@agor/core/types').MCPServerID,
-        params
-      );
+        await sessionMCPServersService.removeServer(
+          id as import('@agor/core/types').SessionID,
+          mcpId as import('@agor/core/types').MCPServerID,
+          params
+        );
 
-      // Emit removed event for WebSocket subscribers
-      const relationship = {
-        session_id: id,
-        mcp_server_id: mcpId,
-      };
-      app.service('session-mcp-servers').emit('removed', relationship);
+        // Emit removed event for WebSocket subscribers
+        const relationship = {
+          session_id: id,
+          mcp_server_id: mcpId,
+        };
+        app.service('session-mcp-servers').emit('removed', relationship);
 
-      return relationship;
+        return relationship;
+      },
+      // PATCH /sessions/:id/mcp-servers/:mcpId - Toggle MCP server enabled state
+      async patch(
+        _id: unknown,
+        data: { enabled: boolean },
+        params: RouteParams & { route?: { mcpId?: string } }
+      ) {
+        const id = params.route?.id;
+        const mcpId = params.route?.mcpId;
+        if (!id) throw new Error('Session ID required');
+        if (!mcpId) throw new Error('MCP Server ID required');
+        if (typeof data.enabled !== 'boolean') throw new Error('enabled field required');
+        return sessionMCPServersService.toggleServer(
+          id as import('@agor/core/types').SessionID,
+          mcpId as import('@agor/core/types').MCPServerID,
+          data.enabled,
+          params
+        );
+      },
+      // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
+    } as any,
+    {
+      remove: { role: 'member', action: 'modify session MCP servers' },
+      patch: { role: 'member', action: 'modify session MCP servers' },
     },
-    // PATCH /sessions/:id/mcp-servers/:mcpId - Toggle MCP server enabled state
-    async patch(
-      _id: unknown,
-      data: { enabled: boolean },
-      params: RouteParams & { route?: { mcpId?: string } }
-    ) {
-      ensureMinimumRole(params, 'member', 'modify session MCP servers');
-      const id = params.route?.id;
-      const mcpId = params.route?.mcpId;
-      if (!id) throw new Error('Session ID required');
-      if (!mcpId) throw new Error('MCP Server ID required');
-      if (typeof data.enabled !== 'boolean') throw new Error('enabled field required');
-      return sessionMCPServersService.toggleServer(
-        id as import('@agor/core/types').SessionID,
-        mcpId as import('@agor/core/types').MCPServerID,
-        data.enabled,
-        params
-      );
-    },
-    // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
-  } as any);
-
-  // Configure authentication hooks for all remaining custom routes
-  app.service('/sessions/:id/permission-decision').hooks({
-    before: {
-      create: [requireAuth, requireMinimumRole('member', 'respond to permission requests')],
-    },
-  });
-
-  app.service('/sessions/:id/mcp-servers').hooks({
-    before: {
-      get: [requireAuth, requireMinimumRole('member', 'view session MCP servers')],
-    },
-  });
-
-  app.service('/sessions/:id/mcp-servers/:mcpId').hooks({
-    before: {
-      create: [requireAuth, requireMinimumRole('member', 'modify session MCP servers')],
-      remove: [requireAuth, requireMinimumRole('member', 'modify session MCP servers')],
-    },
-  });
-
-  app.service('/tasks/bulk').hooks({
-    before: {
-      create: [requireAuth, requireMinimumRole('member', 'create tasks')],
-    },
-  });
-
-  app.service('/tasks/:id/complete').hooks({
-    before: {
-      create: [requireAuth, requireMinimumRole('member', 'complete tasks')],
-    },
-  });
-
-  app.service('/tasks/:id/fail').hooks({
-    before: {
-      create: [requireAuth, requireMinimumRole('member', 'fail tasks')],
-    },
-  });
-
-  app.service('/repos/local').hooks({
-    before: {
-      create: [requireAuth, requireMinimumRole('member', 'add local repositories')],
-    },
-  });
-
-  app.service('/repos/clone').hooks({
-    before: {
-      create: [requireAuth, requireMinimumRole('member', 'clone repositories')],
-    },
-  });
-
-  app.service('/repos/:id/worktrees').hooks({
-    before: {
-      get: [requireAuth, requireMinimumRole('member', 'list worktrees')],
-    },
-  });
-
-  app.service('/repos/:id/worktrees/:name').hooks({
-    before: {
-      remove: [requireAuth, requireMinimumRole('member', 'remove worktrees')],
-    },
-  });
-
-  app.service('/repos/:id/import-agor-yml').hooks({
-    before: {
-      create: [requireAuth, requireMinimumRole('member', 'import .agor.yml')],
-    },
-  });
-
-  app.service('/repos/:id/export-agor-yml').hooks({
-    before: {
-      get: [requireAuth, requireMinimumRole('member', 'export .agor.yml')],
-    },
-  });
-
-  app.service('/board-comments/:id/toggle-reaction').hooks({
-    before: {
-      create: [requireAuth, requireMinimumRole('member', 'react to board comments')],
-    },
-  });
-
-  app.service('/board-comments/:id/reply').hooks({
-    before: {
-      create: [requireAuth, requireMinimumRole('member', 'reply to board comments')],
-    },
-  });
-
-  app.service('/boards/:id/sessions').hooks({
-    before: {
-      create: [requireAuth, requireMinimumRole('member', 'modify board sessions')],
-    },
-  });
-
-  app.service('/worktrees/:id/start').hooks({
-    before: {
-      create: [requireAuth, requireMinimumRole('admin', 'start worktree environments')],
-    },
-  });
-
-  app.service('/worktrees/:id/stop').hooks({
-    before: {
-      create: [requireAuth, requireMinimumRole('admin', 'stop worktree environments')],
-    },
-  });
-
-  app.service('/worktrees/:id/restart').hooks({
-    before: {
-      create: [requireAuth, requireMinimumRole('admin', 'restart worktree environments')],
-    },
-  });
-
-  app.service('/worktrees/:id/health').hooks({
-    before: {
-      find: [requireAuth, requireMinimumRole('member', 'check worktree health')],
-    },
-  });
-
-  app.service('/worktrees/:id/archive-or-delete').hooks({
-    before: {
-      create: [requireAuth, requireMinimumRole('admin', 'archive or delete worktrees')],
-    },
-  });
-
-  app.service('/worktrees/:id/unarchive').hooks({
-    before: {
-      create: [requireAuth, requireMinimumRole('admin', 'unarchive worktrees')],
-    },
-  });
-
-  app.service('/worktrees/logs').hooks({
-    before: {
-      find: [requireAuth, requireMinimumRole('member', 'view worktree logs')],
-    },
-  });
-
-  app.service('/messages/bulk').hooks({
-    before: {
-      create: [requireAuth, requireMinimumRole('member', 'create messages')],
-    },
-  });
+    requireAuth
+  );
 
   // Note: Sessions are no longer directly on boards (worktree-only architecture).
   // Sessions are accessed through worktree cards. No cleanup needed on session deletion.
