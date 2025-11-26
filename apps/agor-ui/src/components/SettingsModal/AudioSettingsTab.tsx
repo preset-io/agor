@@ -3,8 +3,9 @@
  */
 
 import type { User } from '@agor/core/types';
-import { PlayCircleOutlined, SoundOutlined } from '@ant-design/icons';
+import { InfoCircleOutlined, PlayCircleOutlined, SoundOutlined } from '@ant-design/icons';
 import {
+  Alert,
   Button,
   Card,
   Col,
@@ -19,8 +20,9 @@ import {
   Switch,
   Typography,
 } from 'antd';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
+  checkAudioPermission,
   DEFAULT_AUDIO_PREFERENCES,
   getAvailableChimes,
   getChimeDisplayName,
@@ -36,29 +38,50 @@ interface AudioSettingsTabProps {
 
 export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({ user, form }) => {
   const [isPlaying, setIsPlaying] = useState(false);
+  const [audioBlocked, setAudioBlocked] = useState<boolean | null>(null);
+  const [showPermissionAlert, setShowPermissionAlert] = useState(false);
 
   // Get current audio preferences or use defaults
   const audioPrefs = user?.preferences?.audio || DEFAULT_AUDIO_PREFERENCES;
+
+  // Check audio permission on mount
+  useEffect(() => {
+    checkAudioPermission().then(setAudioBlocked);
+  }, []);
 
   const handlePreview = async () => {
     const chime = form.getFieldValue('chime');
     const volume = form.getFieldValue('volume');
 
     setIsPlaying(true);
+    setShowPermissionAlert(false);
     try {
       await previewChimeSound(chime, volume);
+      // If preview works, update permission status
+      setAudioBlocked(false);
     } catch (_error) {
-      message.error('Failed to play preview. Check browser permissions.');
+      setAudioBlocked(true);
+      setShowPermissionAlert(true);
+      message.error('Audio blocked by browser. See instructions below to enable.');
     } finally {
       // Reset after a short delay (chimes are ~1-2 seconds)
       setTimeout(() => setIsPlaying(false), 2000);
     }
   };
 
-  const handleEnableToggle = (enabled: boolean) => {
+  const handleEnableToggle = async (enabled: boolean) => {
     if (enabled) {
-      // When enabling, show a message about browser permissions
-      message.info('Audio notifications enabled. Use the preview button to test.');
+      // Check permission when enabling
+      const blocked = await checkAudioPermission();
+      setAudioBlocked(blocked);
+      if (blocked) {
+        setShowPermissionAlert(true);
+        message.warning('Audio may be blocked. Click Preview to test and grant permissions.');
+      } else {
+        message.info('Audio notifications enabled. Use the preview button to test.');
+      }
+    } else {
+      setShowPermissionAlert(false);
     }
   };
 
@@ -72,6 +95,48 @@ export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({ user, form }
           Play a sound when agent tasks finish executing. Perfect for long-running tasks!
         </Paragraph>
       </div>
+
+      {/* Browser Permission Alert */}
+      {showPermissionAlert && audioBlocked && (
+        <Alert
+          type="warning"
+          showIcon
+          icon={<InfoCircleOutlined />}
+          message="Browser Audio Permissions Required"
+          description={
+            <div>
+              <p style={{ marginBottom: 8 }}>
+                Your browser is blocking audio playback. To enable chimes:
+              </p>
+              <ol style={{ marginLeft: 16, marginBottom: 8 }}>
+                <li>
+                  Click the <strong>lock icon</strong> (🔒) or <strong>site info icon</strong> in
+                  your browser's address bar
+                </li>
+                <li>
+                  Find <strong>"Sound"</strong> or <strong>"Autoplay"</strong> permissions
+                </li>
+                <li>
+                  Change the setting to <strong>"Allow"</strong>
+                </li>
+                <li>Refresh the page and click the Preview button again</li>
+              </ol>
+              <p style={{ marginBottom: 0, fontSize: '0.9em', opacity: 0.8 }}>
+                <strong>Chrome/Edge:</strong> Click lock icon → Site settings → Sound → Allow
+                <br />
+                <strong>Firefox:</strong> Click lock icon → Permissions → Autoplay → Allow Audio and
+                Video
+                <br />
+                <strong>Safari:</strong> Safari → Settings for this Website → Auto-Play → Allow All
+                Auto-Play
+              </p>
+            </div>
+          }
+          closable
+          onClose={() => setShowPermissionAlert(false)}
+          style={{ marginBottom: 16 }}
+        />
+      )}
 
       <Form
         form={form}

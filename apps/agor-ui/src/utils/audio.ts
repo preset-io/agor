@@ -16,17 +16,34 @@ const CHIME_SOUND_FILES: Record<ChimeSound, string> = {
 
 /**
  * Resolve the full URL for a chime asset, respecting Vite's base path in prod.
+ * Returns an absolute URL to avoid issues with Audio() constructor in some environments.
  */
 function getChimeAssetPath(chime: ChimeSound): string | null {
-  const filename = CHIME_SOUND_FILES[chime];
-  if (!filename) {
-    return null;
+  // Handle legacy or invalid chime names
+  let validChime = chime;
+  if (chime === 'bell' || chime === 'default') {
+    validChime = 'notification-bell' as ChimeSound;
+    console.warn(`Legacy chime "${chime}" mapped to "notification-bell"`);
   }
 
+  const filename = CHIME_SOUND_FILES[validChime];
+  if (!filename) {
+    console.warn(`Unknown chime sound: ${chime}, falling back to gentle-chime`);
+    validChime = 'gentle-chime';
+  }
+
+  const finalFilename = CHIME_SOUND_FILES[validChime];
   const baseUrl = import.meta.env?.BASE_URL ?? '/';
   const normalizedBase = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
+  const relativePath = `${normalizedBase}/sounds/${finalFilename}`;
 
-  return `${normalizedBase}/sounds/${filename}`;
+  // Convert to absolute URL to ensure Audio() can load it properly
+  // This handles both localhost and hosted environments
+  if (typeof window !== 'undefined') {
+    return new URL(relativePath, window.location.origin).href;
+  }
+
+  return relativePath;
 }
 
 /**
@@ -38,6 +55,60 @@ export const DEFAULT_AUDIO_PREFERENCES: AudioPreferences = {
   volume: 0.5,
   minDurationSeconds: 5,
 };
+
+/**
+ * Track if user has interacted with the page (required for autoplay in some browsers)
+ */
+let hasUserInteracted = false;
+
+/**
+ * Initialize audio context on first user interaction
+ * This helps bypass browser autoplay restrictions
+ */
+export function initializeAudioOnInteraction(): void {
+  if (hasUserInteracted) return;
+
+  const handleInteraction = () => {
+    hasUserInteracted = true;
+    // Remove listeners after first interaction
+    document.removeEventListener('click', handleInteraction);
+    document.removeEventListener('keydown', handleInteraction);
+    document.removeEventListener('touchstart', handleInteraction);
+  };
+
+  // Listen for any user interaction
+  document.addEventListener('click', handleInteraction, { once: true });
+  document.addEventListener('keydown', handleInteraction, { once: true });
+  document.addEventListener('touchstart', handleInteraction, { once: true });
+}
+
+/**
+ * Check if audio is likely to be blocked by browser autoplay policy
+ * @returns Promise<boolean> - true if audio is BLOCKED, false if audio is ALLOWED
+ */
+export function checkAudioPermission(): Promise<boolean> {
+  return new Promise((resolve) => {
+    // Try to create a silent audio element
+    const audio = new Audio();
+    audio.volume = 0;
+
+    const testPlay = audio.play();
+
+    if (testPlay !== undefined) {
+      testPlay
+        .then(() => {
+          audio.pause();
+          resolve(false); // Audio allowed (NOT blocked)
+        })
+        .catch(() => {
+          resolve(true); // Audio blocked
+        });
+    } else {
+      // Old browsers without promise-based play()
+      resolve(false); // Assume allowed
+    }
+  });
+}
 
 /**
  * Check if a task meets the minimum duration threshold
@@ -112,11 +183,28 @@ export async function playTaskCompletionChime(
     audio.volume = Math.max(0, Math.min(1, prefs.volume)); // Clamp between 0-1
 
     // Play the chime
-    await audio.play();
+    const playPromise = audio.play();
+
+    if (playPromise !== undefined) {
+      await playPromise;
+    }
   } catch (error) {
     // Browser blocked autoplay or audio file not found
     // This is expected behavior if user hasn't interacted with the page yet
-    console.debug('Could not play task completion chime:', error);
+    if (error instanceof Error) {
+      const errorName = error.name;
+      if (errorName === 'NotAllowedError') {
+        console.warn(
+          '🔇 Audio chime blocked by browser autoplay policy. Please interact with the page first.'
+        );
+        // Return a special error that can be caught by callers if needed
+        throw new Error('AUTOPLAY_BLOCKED');
+      } else if (errorName === 'NotSupportedError') {
+        console.error('🔇 Audio format not supported:', chimePath);
+      } else {
+        console.debug('Could not play task completion chime:', error);
+      }
+    }
   }
 }
 

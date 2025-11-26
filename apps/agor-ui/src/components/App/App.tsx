@@ -23,6 +23,7 @@ import { useFaviconStatus } from '../../hooks/useFaviconStatus';
 import { usePresence } from '../../hooks/usePresence';
 import { useUrlState } from '../../hooks/useUrlState';
 import type { AgenticToolOption } from '../../types';
+import { initializeAudioOnInteraction } from '../../utils/audio';
 import { useThemedMessage } from '../../utils/message';
 import { AppHeader } from '../AppHeader';
 import { CommentsPanel } from '../CommentsPanel';
@@ -231,6 +232,11 @@ export const App: React.FC<AppProps> = ({
       localStorage.setItem('agor:currentBoardId', currentBoardId);
     }
   }, [currentBoardId]);
+
+  // Initialize audio on first user interaction (for browser autoplay policy)
+  useEffect(() => {
+    initializeAudioOnInteraction();
+  }, []);
 
   // URL state synchronization - bidirectional sync between URL and state
   useUrlState({

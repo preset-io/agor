@@ -6,6 +6,7 @@ import {
   MenuOutlined,
   QuestionCircleOutlined,
   SettingOutlined,
+  SoundOutlined,
   UserOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
@@ -95,6 +96,9 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   const userEmoji = user?.emoji || '👤';
   const [userDropdownOpen, setUserDropdownOpen] = useState(false);
 
+  // Check if audio notifications are enabled
+  const audioEnabled = user?.preferences?.audio?.enabled ?? false;
+
   const userMenuItems: MenuProps['items'] = [
     {
       key: 'user-info',
@@ -114,7 +118,16 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     },
     {
       key: 'user-settings',
-      label: 'User Settings',
+      label: (
+        <Space>
+          <span>User Settings</span>
+          {audioEnabled && (
+            <Tooltip title="Audio notifications enabled">
+              <SoundOutlined style={{ color: token.colorSuccess, fontSize: 12 }} />
+            </Tooltip>
+          )}
+        </Space>
+      ),
       icon: <UserOutlined />,
       onClick: () => {
         setUserDropdownOpen(false);
