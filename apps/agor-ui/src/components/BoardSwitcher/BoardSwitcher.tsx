@@ -47,7 +47,12 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
 
   // Build menu items
   const menuItems: MenuProps['items'] = useMemo(() => {
-    return boards.map((board) => {
+    // Sort boards alphabetically by name
+    const sortedBoards = [...boards].sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+    );
+
+    return sortedBoards.map((board) => {
       const worktreeCount = worktreeCountByBoard.get(board.board_id) || 0;
       const isActive = board.board_id === currentBoardId;
 
