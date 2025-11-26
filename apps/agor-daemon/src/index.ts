@@ -18,7 +18,7 @@ patchConsole();
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadConfig, type UnknownJson } from '@agor/core/config';
+import { createUserProcessEnvironment, loadConfig, type UnknownJson } from '@agor/core/config';
 
 let DAEMON_VERSION = '0.0.0';
 try {
@@ -831,15 +831,16 @@ async function main() {
       console.log(`[Daemon] Spawning executor as current user (no impersonation)`);
     }
 
+    // Resolve user environment variables (includes user's encrypted env vars like GITHUB_TOKEN)
+    // Use the authenticated user (whoever is executing the command), not session creator
+    const userId = (params as AuthenticatedParams).user?.user_id as
+      | import('@agor/core/types').UserID
+      | undefined;
+    const executorEnv = await createUserProcessEnvironment(userId, db);
+
     const executorProcess = spawn(spawnCommand, spawnArgs, {
       cwd,
-      env: {
-        ...process.env,
-        // Executor handles API key resolution with proper precedence:
-        // 1. Per-user encrypted keys (database)
-        // 2. Global config.yaml keys
-        // 3. Environment variables (inherited from process.env above)
-      },
+      env: executorEnv,
       stdio: ['ignore', 'pipe', 'pipe'], // Capture stdout/stderr
     });
 
