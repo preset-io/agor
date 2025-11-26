@@ -141,11 +141,12 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     const userId = params?.user?.user_id || 'anonymous';
     this.boardRepo.validateBoardBlob(blob);
     const data = this.buildBoardDataFromBlob(blob, userId);
-    const board = (await super.create(data, this.withServerProvider(params))) as Board;
 
-    // Explicitly emit created event for WebSocket subscribers
-    // Custom methods don't automatically trigger FeathersJS event publishing
-    this.emit?.('created', board, params);
+    // Create board through repository (not super.create to avoid double-emit issues)
+    const board = await this.boardRepo.create(data);
+
+    // Note: Events must be emitted by the caller using app.service('boards').emit()
+    // this.emit() doesn't work reliably in custom methods due to execution context
 
     return board;
   }
@@ -206,14 +207,12 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     const resolvedBoardId = await this.resolveBoardId(boardIdentifier);
     const blob = await this.boardRepo.toBlob(resolvedBoardId);
     const boardData = this.buildBoardDataFromBlob(blob, userId, name);
-    const clonedBoard = (await super.create(
-      boardData,
-      this.withServerProvider(params)
-    )) as Board;
+    // Create board through repository (not super.create to avoid double-emit issues)
+    const clonedBoard = await this.boardRepo.create(boardData);
 
-    // Explicitly emit created event for WebSocket subscribers
-    // Custom methods don't automatically trigger FeathersJS event publishing
-    this.emit?.('created', clonedBoard, params);
+    // Note: Events must be emitted by the caller using app.service('boards').emit()
+    // this.emit() doesn't work reliably in custom methods due to execution context
+    // See: apps/agor-daemon/src/index.ts for examples of manual emission
 
     return clonedBoard;
   }

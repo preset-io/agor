@@ -49,15 +49,13 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     const blob = await this.boardRepo.toBlob(resolvedBoardId);
     const boardData = this.buildBoardDataFromBlob(blob, userId, name);
 
-    // Create via super method
-    const clonedBoard = await super.create(
-      boardData,
-      this.withServerProvider(params)
-    ) as Board;
+    // ⚠️ CRITICAL: Call repository directly, NOT super.create()
+    // Custom methods should create via repository to avoid event emission issues
+    const clonedBoard = await this.boardRepo.create(boardData);
 
-    // ⚠️ CRITICAL: Explicitly emit event for WebSocket subscribers
-    // Custom methods don't automatically trigger FeathersJS event publishing
-    this.emit?.('created', clonedBoard, params);
+    // Note: Events must be emitted by the caller using app.service('boards').emit()
+    // this.emit() doesn't work reliably in custom methods due to execution context
+    // See index.ts for after hooks that handle event broadcasting
 
     return clonedBoard;
   }
@@ -69,10 +67,13 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     const userId = params?.user?.user_id || 'anonymous';
     this.boardRepo.validateBoardBlob(blob);
     const data = this.buildBoardDataFromBlob(blob, userId);
-    const board = await super.create(data, this.withServerProvider(params)) as Board;
 
-    // ⚠️ CRITICAL: Explicitly emit event
-    this.emit?.('created', board, params);
+    // ⚠️ CRITICAL: Call repository directly, NOT super.create()
+    const board = await this.boardRepo.create(data);
+
+    // Note: Events must be emitted by the caller using app.service('boards').emit()
+    // this.emit() doesn't work reliably in custom methods due to execution context
+    // See index.ts for after hooks that handle event broadcasting
 
     return board;
   }
@@ -102,7 +103,7 @@ app.use('/boards', createBoardsService(db), {
 });
 ```
 
-### 3. Add authentication hooks
+### 3. Add authentication and event emission hooks
 
 ```typescript
 app.service('boards').hooks({
@@ -112,8 +113,28 @@ app.service('boards').hooks({
     patch: [requireMinimumRole('member', 'update boards')],
     remove: [requireMinimumRole('admin', 'delete boards')],
     // Hooks apply to custom methods too!
-    clone: [requireAuth, requireMinimumRole('member', 'clone boards')],
-    fromBlob: [requireAuth, requireMinimumRole('member', 'import boards')],
+    clone: [requireMinimumRole('member', 'clone boards')],
+    fromBlob: [requireMinimumRole('member', 'import boards')],
+  },
+  after: {
+    // ⚠️ CRITICAL: Explicitly emit events for WebSocket broadcasting
+    // Custom methods that create/update resources need explicit event emission
+    clone: [
+      async (context: HookContext<Board>) => {
+        if (context.result) {
+          app.service('boards').emit('created', context.result);
+        }
+        return context;
+      }
+    ],
+    fromBlob: [
+      async (context: HookContext<Board>) => {
+        if (context.result) {
+          app.service('boards').emit('created', context.result);
+        }
+        return context;
+      }
+    ],
   },
 });
 ```
@@ -179,9 +200,16 @@ registerAuthenticatedRoute(
 **Custom service methods that internally call CRUD operations don't automatically broadcast WebSocket events.**
 
 ```typescript
-// ❌ BROKEN - Event emitted but not published to WebSocket clients
+// ❌ BROKEN - Event not published to WebSocket clients
 async clone(data, params) {
   return super.create(data, params);  // Event emitted by DrizzleService but not published
+}
+
+// ❌ ALSO BROKEN - this.emit() doesn't work reliably in custom methods
+async clone(data, params) {
+  const result = await super.create(data, params);
+  this.emit?.('created', result, params);  // ❌ Doesn't trigger app.publish()
+  return result;
 }
 ```
 
@@ -192,46 +220,64 @@ FeathersJS event publishing flow:
 ```
 Direct call:    client.service().create()  → hooks → service → emit → app.publish() ✅
 Custom method:  client.service().clone()   → hooks → super.create() → emit → ❌ STOPS
+Custom method:  client.service().clone()   → this.emit() → ❌ STOPS (no app.publish())
 ```
 
-The `super.create()` DOES emit via `this.emit()`, but FeathersJS only auto-publishes events from **top-level service method invocations**, not internal super calls.
+**Key insight**: FeathersJS only auto-publishes events from **top-level service method invocations**. Both `super.create()` internal calls and `this.emit()` in custom methods don't trigger the `app.publish()` system.
 
-### The Fix
+### The Correct Fix (2-Part Pattern)
 
-**Always explicitly emit events after calling super methods:**
+#### Part 1: Service Method - Call Repository Directly
 
 ```typescript
-// ✅ CORRECT - Explicitly emit for WebSocket broadcasting
-async clone(data, params) {
-  const result = await super.create(data, params);
+// ✅ CORRECT - Call repository directly, don't use super.create()
+export class BoardsService extends DrizzleService {
+  async clone(data, params) {
+    // Business logic
+    const boardData = this.buildBoardDataFromBlob(blob, userId, name);
 
-  // Explicitly emit event for WebSocket subscribers
-  // Custom methods don't automatically trigger FeathersJS event publishing
-  this.emit?.('created', result, params);
+    // Call repository directly (NOT super.create)
+    const result = await this.boardRepo.create(boardData);
 
-  return result;
+    // Note: Events will be emitted by after hooks in index.ts
+    return result;
+  }
 }
 ```
+
+#### Part 2: After Hook - Emit with app.service().emit()
+
+```typescript
+// ✅ CORRECT - Emit from hooks using app.service().emit()
+app.service('boards').hooks({
+  before: {
+    clone: [requireMinimumRole('member', 'clone boards')],
+  },
+  after: {
+    clone: [
+      async (context: HookContext<Board>) => {
+        if (context.result) {
+          // This DOES trigger app.publish()
+          app.service('boards').emit('created', context.result);
+        }
+        return context;
+      }
+    ],
+  },
+});
+```
+
+### Why This Pattern Works
+
+1. **Repository call** - Bypasses the double-emit issue from `super.create()`
+2. **Hook-based emission** - `app.service().emit()` from hooks DOES trigger `app.publish()`
+3. **Execution context** - Hooks have proper context for FeathersJS publishing system
 
 **Event types to emit:**
-- `created` - After `super.create()`
-- `patched` - After `super.patch()`
-- `updated` - After `super.update()`
-- `removed` - After `super.remove()`
-
-### Alternative: Direct Repository Access
-
-```typescript
-async customMethod(data, params) {
-  // Skip super, call repository directly
-  const result = await this.repository.create(data);
-
-  // Emit event for WebSocket broadcasting
-  this.emit?.('created', result, params);
-
-  return result;
-}
-```
+- `created` - After repository `create()`
+- `patched` - After repository `patch()`
+- `updated` - After repository `update()`
+- `removed` - After repository `remove()`
 
 ---
 
@@ -278,10 +324,9 @@ registerAuthenticatedRoute(
 
 **What they do right:**
 - ✅ Registered in `methods` array
-- ✅ Call `super.create()` for CRUD operations
-- ✅ Explicitly emit events after super calls
-- ✅ Use `this.withServerProvider(params)` to ensure provider is set
-- ✅ Have authentication hooks
+- ✅ Call repository directly (not `super.create()`)
+- ✅ Have `after` hooks in index.ts that emit events via `app.service().emit()`
+- ✅ Have authentication hooks (`before` hooks with `requireMinimumRole`)
 
 ### ✅ Custom Routes (DRY Pattern)
 
@@ -321,12 +366,27 @@ Does your method operate on the service's primary resource?
 
 ## Common Pitfalls
 
-### ❌ Forgetting to emit events
+### ❌ Forgetting to emit events in after hooks
 
 ```typescript
+// ❌ BAD - No after hook to emit events
 async clone(data, params) {
-  return super.create(data, params);  // WebSocket clients won't see this!
+  return this.boardRepo.create(data);  // WebSocket clients won't see this!
 }
+
+// ✅ GOOD - Add after hook in index.ts
+app.service('boards').hooks({
+  after: {
+    clone: [
+      async (context) => {
+        if (context.result) {
+          app.service('boards').emit('created', context.result);
+        }
+        return context;
+      }
+    ],
+  },
+});
 ```
 
 ### ❌ Not registering method in methods array
@@ -364,13 +424,11 @@ registerAuthenticatedRoute(
 
 ```typescript
 describe('BoardsService.clone', () => {
-  it('should clone a board and emit created event', async () => {
-    const emitSpy = jest.fn();
-    service.emit = emitSpy;
-
+  it('should clone a board via repository', async () => {
     const cloned = await service.clone({ id: 'board-1', name: 'Clone' });
 
-    expect(emitSpy).toHaveBeenCalledWith('created', cloned, expect.any(Object));
+    expect(cloned.name).toBe('Clone');
+    expect(cloned.board_id).toBeDefined();
   });
 });
 ```
@@ -407,7 +465,7 @@ export class SessionsService extends DrizzleService {
   async fork(sessionId: string, data: ForkData, params?: SessionParams) {
     // Move route handler logic here
     const result = await this.repository.fork(sessionId, data);
-    this.emit?.('created', result, params);
+    // Note: Events will be emitted by after hooks in index.ts
     return result;
   }
 }
@@ -421,12 +479,22 @@ app.use('/sessions', sessionsService, {
 });
 ```
 
-### 3. Add hooks
+### 3. Add hooks for authentication and event emission
 
 ```typescript
 app.service('sessions').hooks({
   before: {
     fork: [requireAuth, requireMinimumRole('member', 'fork sessions')],
+  },
+  after: {
+    fork: [
+      async (context: HookContext) => {
+        if (context.result) {
+          app.service('sessions').emit('created', context.result);
+        }
+        return context;
+      }
+    ],
   },
 });
 ```
@@ -449,7 +517,8 @@ await client.service('sessions').fork(sessionId, { prompt });
 
 - **Prefer service methods** for new features when possible (more Feathers-idiomatic)
 - **Use custom routes** when you need complex path parameters or RESTful structure
-- **Always emit events** after calling super methods in custom service methods
+- **Call repository directly** in custom service methods (not `super.create()`)
+- **Emit events in after hooks** using `app.service().emit()` (not `this.emit()`)
 - **Use helpers** like `registerAuthenticatedRoute()` to reduce boilerplate
 - **Test WebSocket broadcasting** to ensure events reach clients
 

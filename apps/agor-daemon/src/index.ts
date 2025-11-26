@@ -1599,6 +1599,34 @@ async function main() {
       fromYaml: [requireMinimumRole('member', 'import boards')],
       clone: [requireMinimumRole('member', 'clone boards')],
     },
+    after: {
+      // Emit created events for custom methods that create boards
+      // Custom methods don't automatically trigger app.publish(), so we emit manually
+      clone: [
+        async (context: HookContext<Board>) => {
+          if (context.result) {
+            app.service('boards').emit('created', context.result);
+          }
+          return context;
+        },
+      ],
+      fromBlob: [
+        async (context: HookContext<Board>) => {
+          if (context.result) {
+            app.service('boards').emit('created', context.result);
+          }
+          return context;
+        },
+      ],
+      fromYaml: [
+        async (context: HookContext<Board>) => {
+          if (context.result) {
+            app.service('boards').emit('created', context.result);
+          }
+          return context;
+        },
+      ],
+    },
     // biome-ignore lint/suspicious/noExplicitAny: Custom service methods not in default hook map
   } as any);
 
