@@ -18,11 +18,13 @@ const CHIME_SOUND_FILES: Record<ChimeSound, string> = {
  * Resolve the full URL for a chime asset, respecting Vite's base path in prod.
  * Returns an absolute URL to avoid issues with Audio() constructor in some environments.
  */
-function getChimeAssetPath(chime: ChimeSound): string | null {
+function getChimeAssetPath(chime: ChimeSound | string): string | null {
   // Handle legacy or invalid chime names (silently migrate)
-  let validChime = chime;
+  let validChime: ChimeSound = chime as ChimeSound;
+
+  // Check for legacy names that might be stored in user preferences
   if (chime === 'bell' || chime === 'default') {
-    validChime = 'notification-bell' as ChimeSound;
+    validChime = 'notification-bell';
   }
 
   const filename = CHIME_SOUND_FILES[validChime];
