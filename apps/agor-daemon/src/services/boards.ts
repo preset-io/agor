@@ -13,6 +13,7 @@ import type {
   BoardObject,
   QueryParams,
 } from '@agor/core/types';
+import { NotFoundError } from '@agor/core/utils/errors';
 import { DrizzleService } from '../adapters/drizzle';
 
 /**
@@ -126,11 +127,10 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
    * Export board to blob (JSON)
    */
   async toBlob(
-    data: { boardId?: string; id?: string } | string,
+    data: { boardId?: string; id?: string; slug?: string } | string,
     _params?: BoardParams
   ): Promise<BoardExportBlob> {
-    const boardId = typeof data === 'string' ? data : (data.boardId ?? data.id);
-    if (!boardId) throw new Error('Board ID required');
+    const boardId = await this.resolveBoardId(data);
     return this.boardRepo.toBlob(boardId);
   }
 
@@ -148,11 +148,10 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
    * Export board to YAML string
    */
   async toYaml(
-    data: { boardId?: string; id?: string } | string,
+    data: { boardId?: string; id?: string; slug?: string } | string,
     _params?: BoardParams
   ): Promise<string> {
-    const boardId = typeof data === 'string' ? data : (data.boardId ?? data.id);
-    if (!boardId) throw new Error('Board ID required');
+    const boardId = await this.resolveBoardId(data);
     return this.boardRepo.toYaml(boardId);
   }
 
@@ -173,34 +172,52 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
    * Clone board (create copy with new ID)
    */
   async clone(
-    data: { boardId?: string; id?: string; name?: string } | string,
+    data: { boardId?: string; id?: string; name?: string; slug?: string } | string,
     newNameOrParams?: string | BoardParams,
     maybeParams?: BoardParams
   ): Promise<Board> {
-    let boardId: string | undefined;
+    let boardIdentifier: string | undefined;
     let name: string | undefined;
     let params: BoardParams | undefined;
 
     if (typeof data === 'string') {
-      boardId = data;
+      boardIdentifier = data;
       if (typeof newNameOrParams !== 'string') {
         throw new Error('Board name required');
       }
       name = newNameOrParams;
       params = maybeParams;
     } else {
-      boardId = data.boardId ?? data.id;
+      boardIdentifier = data.boardId ?? data.id ?? data.slug;
       name = data.name;
       params = (newNameOrParams as BoardParams | undefined) ?? maybeParams;
     }
 
-    if (!boardId) throw new Error('Board ID required');
+    if (!boardIdentifier) throw new Error('Board ID or slug required');
     if (!name) throw new Error('Board name required');
 
     const userId = params?.user?.user_id || 'anonymous';
-    const blob = await this.boardRepo.toBlob(boardId);
+    const resolvedBoardId = await this.resolveBoardId(boardIdentifier);
+    const blob = await this.boardRepo.toBlob(resolvedBoardId);
     const boardData = this.buildBoardDataFromBlob(blob, userId, name);
     return super.create(boardData, this.withServerProvider(params)) as Promise<Board>;
+  }
+
+  private async resolveBoardId(
+    data: { boardId?: string; id?: string; slug?: string } | string
+  ): Promise<string> {
+    const identifier = typeof data === 'string' ? data : (data.boardId ?? data.id ?? data.slug);
+
+    if (!identifier) {
+      throw new Error('Board ID or slug required');
+    }
+
+    const board = await this.boardRepo.findBySlugOrId(identifier);
+    if (!board) {
+      throw new NotFoundError('Board', identifier);
+    }
+
+    return board.board_id;
   }
 
   private withServerProvider(params?: BoardParams): BoardParams {

@@ -30,6 +30,20 @@ describe('BoardsService - Custom Methods', () => {
     expect(blob.icon).toBe('🧪');
   });
 
+  dbTest('toBlob should accept slug identifiers', async ({ db }) => {
+    const service = new BoardsService(db);
+
+    await service.create({
+      name: 'Slug Export Board',
+      slug: 'slug-export',
+    });
+
+    const blob = await service.toBlob('slug-export');
+
+    expect(blob.name).toBe('Slug Export Board');
+    expect(blob.slug).toBe('slug-export');
+  });
+
   dbTest('fromBlob should import board from JSON blob', async ({ db }) => {
     const service = new BoardsService(db);
 
@@ -113,6 +127,20 @@ describe('BoardsService - Custom Methods', () => {
     expect(cloned.board_id).not.toBe(original.board_id);
     expect(cloned.icon).toBe(original.icon);
     expect(cloned.description).toBe(original.description);
+  });
+
+  dbTest('clone should accept slug identifiers', async ({ db }) => {
+    const service = new BoardsService(db);
+
+    await service.create({
+      name: 'Slug Clone Source',
+      slug: 'slug-source',
+    });
+
+    const cloned = await service.clone('slug-source', 'Slug Clone Target');
+
+    expect(cloned.name).toBe('Slug Clone Target');
+    expect(cloned.slug).toBe('slug-clone-target');
   });
 
   dbTest('should have all custom methods defined', async ({ db }) => {

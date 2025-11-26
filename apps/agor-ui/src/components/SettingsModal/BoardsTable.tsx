@@ -444,16 +444,17 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
         okText="Create"
       >
         <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
-          <Form.Item
-            label="Name"
-            rules={[{ required: true, message: 'Please enter a board name' }]}
-            style={{ marginBottom: 24 }}
-          >
+          <Form.Item label="Name" style={{ marginBottom: 24 }}>
             <Flex gap={8}>
               <Form.Item name="icon" noStyle>
                 <FormEmojiPickerInput form={form} fieldName="icon" defaultEmoji="📋" />
               </Form.Item>
-              <Form.Item name="name" noStyle style={{ flex: 1 }}>
+              <Form.Item
+                name="name"
+                noStyle
+                style={{ flex: 1 }}
+                rules={[{ required: true, message: 'Please enter a board name' }]}
+              >
                 <Input placeholder="My Board" style={{ flex: 1 }} />
               </Form.Item>
             </Flex>
@@ -542,16 +543,17 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
         okText="Save"
       >
         <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
-          <Form.Item
-            label="Name"
-            rules={[{ required: true, message: 'Please enter a board name' }]}
-            style={{ marginBottom: 24 }}
-          >
+          <Form.Item label="Name" style={{ marginBottom: 24 }}>
             <Flex gap={8}>
               <Form.Item name="icon" noStyle>
                 <FormEmojiPickerInput form={form} fieldName="icon" defaultEmoji="📋" />
               </Form.Item>
-              <Form.Item name="name" noStyle style={{ flex: 1 }}>
+              <Form.Item
+                name="name"
+                noStyle
+                style={{ flex: 1 }}
+                rules={[{ required: true, message: 'Please enter a board name' }]}
+              >
                 <Input placeholder="My Board" style={{ flex: 1 }} />
               </Form.Item>
             </Flex>
