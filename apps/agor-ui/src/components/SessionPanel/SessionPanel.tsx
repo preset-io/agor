@@ -21,6 +21,7 @@ import {
 } from '@ant-design/icons';
 import { App, Badge, Button, Space, Spin, Tooltip, Typography, theme } from 'antd';
 import React from 'react';
+import { getDaemonUrl } from '../../config/daemon';
 import { useAppActions } from '../../contexts/AppActionsContext';
 import { useAppData } from '../../contexts/AppDataContext';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
@@ -29,6 +30,7 @@ import spawnSubsessionTemplate from '../../templates/spawn_subsession.hbs?raw';
 import { getContextWindowGradient } from '../../utils/contextWindow';
 import { compileTemplate } from '../../utils/templates';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
+import { FileUpload, FileUploadButton } from '../FileUpload';
 import { CreatedByTag } from '../metadata';
 import { PermissionModeSelector } from '../PermissionModeSelector';
 import {
@@ -135,6 +137,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const [isStopping, setIsStopping] = React.useState(false);
   const [queuedMessages, setQueuedMessages] = React.useState<Message[]>([]);
   const [spawnModalOpen, setSpawnModalOpen] = React.useState(false);
+  const [uploadModalOpen, setUploadModalOpen] = React.useState(false);
 
   const currentUser = currentUserId ? userById.get(currentUserId) || null : null;
   const { tasks } = useTasks(client, session?.session_id || null, currentUser, open);
@@ -551,6 +554,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           client={client}
           sessionId={session?.session_id || null}
           userById={userById}
+          onFilesDrop={(files) => {
+            // Open upload modal with the dropped files
+            // For now, just open the modal (we could enhance FileUpload to accept initial files)
+            setUploadModalOpen(true);
+          }}
         />
         <div
           style={{
@@ -657,6 +665,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                   icon={<BranchesOutlined />}
                   onClick={handleSubsession}
                   disabled={connectionDisabled || isRunning}
+                />
+              </Tooltip>
+              <Tooltip title="Upload Files">
+                <FileUploadButton
+                  onClick={() => setUploadModalOpen(true)}
+                  disabled={connectionDisabled}
                 />
               </Tooltip>
               <Tooltip title={isRunning ? 'Queue Message' : 'Send Prompt'}>
@@ -805,6 +819,28 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           inputValue={inputValue}
           isOpen={open}
         />
+
+        {/* File upload modal */}
+        {session && (
+          <FileUpload
+            sessionId={session.session_id}
+            daemonUrl={getDaemonUrl()}
+            open={uploadModalOpen}
+            onClose={() => setUploadModalOpen(false)}
+            onUploadComplete={(files) => {
+              console.log('Files uploaded:', files);
+              message.success(`Uploaded ${files.length} file(s)`);
+            }}
+            onInsertMention={(filepath) => {
+              // Insert @filepath mention into the textarea
+              setInputValue((prev) => {
+                const trimmed = prev.trim();
+                const separator = trimmed ? ' ' : '';
+                return `${trimmed}${separator}@${filepath}`;
+              });
+            }}
+          />
+        )}
       </div>
     </div>
   );

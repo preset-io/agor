@@ -56,6 +56,7 @@ interface AutocompleteTextareaProps {
     minRows?: number;
     maxRows?: number;
   };
+  onFilesDrop?: (files: File[]) => void;
 }
 
 /**
@@ -159,6 +160,7 @@ export const AutocompleteTextarea = React.forwardRef<
       sessionId,
       userById,
       autoSize,
+      onFilesDrop,
     },
     ref
   ) => {
@@ -166,6 +168,7 @@ export const AutocompleteTextarea = React.forwardRef<
     const textareaRef = useRef<{ current: HTMLTextAreaElement | null }>({ current: null });
     const popoverContentRef = useRef<HTMLDivElement>(null);
     const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+    const [isDragOver, setIsDragOver] = useState(false);
     const { searchEmojis } = useEmojiAutocomplete();
 
     // Autocomplete state
@@ -554,6 +557,44 @@ export const AutocompleteTextarea = React.forwardRef<
     );
 
     /**
+     * Drag and drop handlers
+     */
+    const handleDragOver = useCallback(
+      (e: React.DragEvent) => {
+        if (!onFilesDrop) return;
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragOver(true);
+      },
+      [onFilesDrop]
+    );
+
+    const handleDragLeave = useCallback(
+      (e: React.DragEvent) => {
+        if (!onFilesDrop) return;
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragOver(false);
+      },
+      [onFilesDrop]
+    );
+
+    const handleDrop = useCallback(
+      (e: React.DragEvent) => {
+        if (!onFilesDrop) return;
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragOver(false);
+
+        const files = Array.from(e.dataTransfer.files);
+        if (files.length > 0) {
+          onFilesDrop(files);
+        }
+      },
+      [onFilesDrop]
+    );
+
+    /**
      * Render popover content
      */
     const popoverContent = (
@@ -686,7 +727,37 @@ export const AutocompleteTextarea = React.forwardRef<
         placement="bottomLeft"
         overlayStyle={{ paddingTop: 4 }}
       >
-        <div style={{ position: 'relative', width: '100%' }}>
+        <div
+          style={{ position: 'relative', width: '100%' }}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+        >
+          {/* Drag-over overlay */}
+          {isDragOver && (
+            <div
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                backgroundColor: `${token.colorPrimary}10`,
+                border: `2px dashed ${token.colorPrimary}`,
+                borderRadius: token.borderRadius,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: 10,
+                pointerEvents: 'none',
+              }}
+            >
+              <Text strong style={{ color: token.colorPrimary }}>
+                Drop files here to upload
+              </Text>
+            </div>
+          )}
+
           {/* Highlighting overlay (behind textarea) */}
           {hasHighlights && (
             <div

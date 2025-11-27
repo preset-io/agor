@@ -153,6 +153,7 @@ import {
   registerAuthenticatedRoute,
   requireMinimumRole,
 } from './utils/authorization';
+import { createUploadMiddleware } from './utils/upload';
 
 /**
  * Extended Params with route ID parameter
@@ -2390,6 +2391,100 @@ async function main() {
       create: { role: 'member', action: 'execute prompts' },
     },
     requireAuth
+  );
+
+  // File upload endpoint
+  // POST /sessions/:id/upload - Upload files to session's worktree
+  // This uses Express middleware directly because multer needs to process files before Feathers
+  const sessionRepo = new SessionRepository(db);
+  const worktreeRepo = new WorktreeRepository(db);
+  const uploadMiddleware = createUploadMiddleware(sessionRepo, worktreeRepo);
+
+  // Add Express route directly for file upload (multer needs raw Express req/res)
+  // biome-ignore lint/suspicious/noExplicitAny: Express 5 + multer type compatibility
+  const uploadHandler: any = async (req: any, res: any, next: any) => {
+    try {
+      const { sessionId } = req.params;
+      const { destination, notifyAgent, message } = req.body;
+      const files = req.files as Express.Multer.File[];
+
+      // Ensure user is authenticated and has member role
+      const params = req.feathers as AuthenticatedParams;
+      ensureMinimumRole(params, 'member', 'upload files');
+
+      console.log(`📎 [Daemon] File upload request for session ${sessionId.substring(0, 8)}`);
+      console.log(`   Destination: ${destination || 'worktree'}`);
+      console.log(`   Notify agent: ${notifyAgent === 'true' || notifyAgent === true}`);
+
+      if (!files || files.length === 0) {
+        return res.status(400).json({ error: 'No files uploaded' });
+      }
+
+      const uploadedFiles = files.map((f) => ({
+        filename: f.originalname,
+        path: f.path,
+        size: f.size,
+        mimeType: f.mimetype,
+      }));
+
+      console.log(`   Uploaded ${uploadedFiles.length} file(s):`);
+      uploadedFiles.forEach((f) => {
+        console.log(`     - ${f.filename} (${(f.size / 1024).toFixed(2)} KB)`);
+      });
+
+      // If notifyAgent is true, send a prompt to the agent
+      if ((notifyAgent === 'true' || notifyAgent === true) && message) {
+        const session = await sessionsService.get(sessionId, params);
+
+        // Get worktree to make paths relative
+        let worktree: Awaited<ReturnType<typeof worktreeRepo.findById>> | undefined;
+        if (session.worktree_id) {
+          worktree = await worktreeRepo.findById(session.worktree_id);
+        }
+
+        // Replace {filepath} placeholder with actual paths
+        const filePaths = uploadedFiles
+          .map((f) => {
+            // Make path relative to worktree if possible
+            if (worktree && f.path.startsWith(worktree.path)) {
+              return f.path.substring(worktree.path.length + 1); // +1 for the leading slash
+            }
+            return f.path;
+          })
+          .join(', ');
+
+        const promptText = message.replace(/\{filepath\}/g, filePaths);
+
+        console.log(`   Sending prompt to agent: ${promptText.substring(0, 100)}...`);
+
+        // Use the same prompt service that the UI uses
+        const promptService = app.service('/sessions/:id/prompt');
+
+        // biome-ignore lint/suspicious/noExplicitAny: Express 5 + FeathersJS type mismatch
+        const promptParams: any = {
+          route: { id: sessionId },
+          user: params.user,
+          provider: params.provider,
+        };
+        await promptService.create({ prompt: promptText }, promptParams);
+      }
+
+      res.json({
+        success: true,
+        files: uploadedFiles,
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  app.post(
+    '/sessions/:sessionId/upload',
+    // biome-ignore lint/suspicious/noExplicitAny: Express 5 + FeathersJS type mismatch
+    authenticate('jwt', 'anonymous') as any,
+    // biome-ignore lint/suspicious/noExplicitAny: Express 5 + multer type compatibility
+    uploadMiddleware.array('files', 10) as any,
+    uploadHandler
   );
 
   // Stop execution endpoint
