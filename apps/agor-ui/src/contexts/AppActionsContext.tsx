@@ -26,6 +26,7 @@ export interface AppActionsContextValue {
   // Worktree/Environment actions
   onStartEnvironment?: (worktreeId: string) => void;
   onStopEnvironment?: (worktreeId: string) => void;
+  onNukeEnvironment?: (worktreeId: string) => void;
   onViewLogs?: (worktreeId: string) => void;
 
   // Navigation/UI actions

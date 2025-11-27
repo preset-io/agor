@@ -322,6 +322,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     const worktreeUniqueId = autoAssignWorktreeUniqueId(existingWorktrees);
     let start_command: string | undefined;
     let stop_command: string | undefined;
+    let nuke_command: string | undefined;
     let health_check_url: string | undefined;
     let app_url: string | undefined;
     let logs_command: string | undefined;
@@ -355,6 +356,10 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         ? safeRenderTemplate(repo.environment_config.down_command, 'stop_command')
         : undefined;
 
+      nuke_command = repo.environment_config.nuke_command
+        ? safeRenderTemplate(repo.environment_config.nuke_command, 'nuke_command')
+        : undefined;
+
       health_check_url = repo.environment_config.health_check?.url_template
         ? safeRenderTemplate(repo.environment_config.health_check.url_template, 'health_check_url')
         : undefined;
@@ -380,6 +385,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         worktree_unique_id: worktreeUniqueId,
         start_command,
         stop_command,
+        nuke_command,
         health_check_url,
         app_url,
         logs_command,

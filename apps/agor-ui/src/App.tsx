@@ -797,6 +797,20 @@ function AppContent() {
     }
   };
 
+  const handleNukeEnvironment = async (worktreeId: string) => {
+    if (!client) return;
+    try {
+      showLoading('Nuking environment...', { key: 'nuke-env' });
+      await client.service(`worktrees/${worktreeId}/nuke`).create({});
+      showSuccess('Environment nuked successfully!', { key: 'nuke-env' });
+    } catch (error) {
+      showError(
+        `Failed to nuke environment: ${error instanceof Error ? error.message : String(error)}`,
+        { key: 'nuke-env' }
+      );
+    }
+  };
+
   // Handle MCP server CRUD
   const handleCreateMCPServer = async (data: CreateMCPServerInput) => {
     if (!client) return;
@@ -1044,6 +1058,7 @@ function AppContent() {
                 onCreateWorktree={handleCreateWorktree}
                 onStartEnvironment={handleStartEnvironment}
                 onStopEnvironment={handleStopEnvironment}
+                onNukeEnvironment={handleNukeEnvironment}
                 onCreateUser={handleCreateUser}
                 onUpdateUser={handleUpdateUser}
                 onDeleteUser={handleDeleteUser}
@@ -1112,6 +1127,7 @@ function AppContent() {
                 onCreateWorktree={handleCreateWorktree}
                 onStartEnvironment={handleStartEnvironment}
                 onStopEnvironment={handleStopEnvironment}
+                onNukeEnvironment={handleNukeEnvironment}
                 onCreateUser={handleCreateUser}
                 onUpdateUser={handleUpdateUser}
                 onDeleteUser={handleDeleteUser}
@@ -1180,6 +1196,7 @@ function AppContent() {
                 onCreateWorktree={handleCreateWorktree}
                 onStartEnvironment={handleStartEnvironment}
                 onStopEnvironment={handleStopEnvironment}
+                onNukeEnvironment={handleNukeEnvironment}
                 onCreateUser={handleCreateUser}
                 onUpdateUser={handleUpdateUser}
                 onDeleteUser={handleDeleteUser}
