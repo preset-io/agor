@@ -73,13 +73,16 @@ const getTriggerQuery = (
     return null;
   }
 
-  // Check if trigger is at start or after whitespace
-  const charBeforeTrigger = lastTriggerIndex > 0 ? textBeforeCursor[lastTriggerIndex - 1] : ' ';
-  const isValidTrigger =
-    charBeforeTrigger === ' ' || charBeforeTrigger === '\n' || lastTriggerIndex === 0;
+  // For @ mentions, require whitespace before trigger to avoid matching email addresses
+  // For : emojis, allow consecutive emojis without spaces (e.g., :smile::heart::fire:)
+  if (trigger === '@') {
+    const charBeforeTrigger = lastTriggerIndex > 0 ? textBeforeCursor[lastTriggerIndex - 1] : ' ';
+    const isValidTrigger =
+      charBeforeTrigger === ' ' || charBeforeTrigger === '\n' || lastTriggerIndex === 0;
 
-  if (!isValidTrigger) {
-    return null;
+    if (!isValidTrigger) {
+      return null;
+    }
   }
 
   const query = textBeforeCursor.substring(lastTriggerIndex + 1);
@@ -252,12 +255,20 @@ export const AutocompleteTextarea = React.forwardRef<
      */
     const filterUsers = useCallback(
       (searchQuery: string): UserResult[] => {
+        const allUsers = mapToArray(userById);
+
+        // If no query, show all users (up to MAX_USER_RESULTS)
         if (!searchQuery.trim()) {
-          return [];
+          return allUsers.slice(0, MAX_USER_RESULTS).map((u: User) => ({
+            name: u.name || u.email,
+            email: u.email,
+            type: 'user' as const,
+          }));
         }
 
+        // Otherwise filter by query
         const lowercaseQuery = searchQuery.toLowerCase();
-        return mapToArray(userById)
+        return allUsers
           .filter(
             (u: User) =>
               u.name?.toLowerCase().includes(lowercaseQuery) ||

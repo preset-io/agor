@@ -56,6 +56,7 @@ import { useCursorTracking } from '../../hooks/useCursorTracking';
 import { usePresence } from '../../hooks/usePresence';
 import type { AgenticToolOption } from '../../types';
 import { isDarkTheme } from '../../utils/theme';
+import { AutocompleteTextarea } from '../AutocompleteTextarea/AutocompleteTextarea';
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
 import SessionCard from '../SessionCard';
 import WorktreeCard from '../WorktreeCard';
@@ -1923,7 +1924,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             // Also allow click-drag to pan since selection box isn't useful here
             // Disable all panning when actively drawing a zone to prevent interference
             panOnScroll={activeTool === 'select' && !drawingZone}
-            panOnDrag={drawingZone ? false : true} // Always allow drag to pan (left mouse in select, any in other modes)
+            panOnDrag={!drawingZone} // Always allow drag to pan (left mouse in select, any in other modes)
             selectionOnDrag={false} // Disable selection box - not useful for worktree cards
             className={`tool-mode-${activeTool}`}
             // Disable React Flow's default keyboard shortcuts to prevent conflicts
@@ -2052,20 +2053,25 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             open={true}
             content={
               <div style={{ width: 300 }}>
-                <Input.TextArea
-                  placeholder="Add a comment..."
-                  value={commentInput}
-                  onChange={(e) => setCommentInput(e.target.value)}
-                  onPressEnter={(e) => {
-                    if (!e.shiftKey) {
-                      e.preventDefault();
-                      handleCreateSpatialComment();
-                    }
-                  }}
-                  autoFocus
-                  rows={3}
-                  style={{ marginBottom: 8 }}
-                />
+                <div style={{ marginBottom: 8 }}>
+                  <AutocompleteTextarea
+                    placeholder="Add a comment... (type @ for users, : for emojis)"
+                    value={commentInput}
+                    onChange={setCommentInput}
+                    onKeyPress={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        if (commentInput.trim()) {
+                          handleCreateSpatialComment();
+                        }
+                      }
+                    }}
+                    autoSize={{ minRows: 3, maxRows: 6 }}
+                    client={client}
+                    sessionId={null}
+                    userById={userById}
+                  />
+                </div>
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
                   <Button
                     onClick={() => {
