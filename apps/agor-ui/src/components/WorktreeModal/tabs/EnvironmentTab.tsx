@@ -479,7 +479,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
 
     try {
       await client.service(`repos/${repo.repo_id}/export-agor-yml`).create({});
-      message.success('Exported environment configuration to .agor.yml in repository root');
+      message.success('Environment configuration exported to .agor.yml');
     } catch (error) {
       message.error(error instanceof Error ? error.message : 'Failed to export .agor.yml');
     }
