@@ -52,11 +52,15 @@ export async function resolveUserEnvironment(
       };
 
       // Decrypt and merge user environment variables (e.g., GITHUB_TOKEN)
+      // Only override if the decrypted value is non-empty
       const encryptedVars = data.env_vars;
       if (encryptedVars) {
         for (const [key, encryptedValue] of Object.entries(encryptedVars)) {
           try {
-            env[key] = decryptApiKey(encryptedValue);
+            const decryptedValue = decryptApiKey(encryptedValue);
+            if (decryptedValue && decryptedValue.trim() !== '') {
+              env[key] = decryptedValue;
+            }
           } catch (err) {
             console.error(`Failed to decrypt env var ${key} for user ${userId}:`, err);
           }
@@ -64,11 +68,15 @@ export async function resolveUserEnvironment(
       }
 
       // Decrypt and merge user API keys (e.g., OPENAI_API_KEY, ANTHROPIC_API_KEY)
+      // Only override if the decrypted value is non-empty
       const encryptedApiKeys = data.api_keys;
       if (encryptedApiKeys) {
         for (const [key, encryptedValue] of Object.entries(encryptedApiKeys)) {
           try {
-            env[key] = decryptApiKey(encryptedValue);
+            const decryptedValue = decryptApiKey(encryptedValue);
+            if (decryptedValue && decryptedValue.trim() !== '') {
+              env[key] = decryptedValue;
+            }
           } catch (err) {
             console.error(`Failed to decrypt API key ${key} for user ${userId}:`, err);
           }
@@ -133,14 +141,24 @@ export async function createUserProcessEnvironment(
   }
 
   // Resolve and merge user environment variables (if userId provided)
+  // Only override if values are non-empty
   if (userId && db) {
     const userEnv = await resolveUserEnvironment(userId, db);
-    Object.assign(env, userEnv);
+    for (const [key, value] of Object.entries(userEnv)) {
+      if (value && value.trim() !== '') {
+        env[key] = value;
+      }
+    }
   }
 
   // Merge additional environment variables (highest priority)
+  // Only override if values are non-empty
   if (additionalEnv) {
-    Object.assign(env, additionalEnv);
+    for (const [key, value] of Object.entries(additionalEnv)) {
+      if (value && value.trim() !== '') {
+        env[key] = value;
+      }
+    }
   }
 
   return env;
