@@ -454,8 +454,8 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
       const updated = (await client
         .service(`repos/${repo.repo_id}/import-agor-yml`)
         .create({})) as Repo;
-      message.success('Imported environment configuration from .agor.yml');
 
+      // Note: onUpdateRepo already shows a success toast, so we don't show another one here
       // Update local state
       if (updated.environment_config) {
         setUpCommand(updated.environment_config.up_command || '');
