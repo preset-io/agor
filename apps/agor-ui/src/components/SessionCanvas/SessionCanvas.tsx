@@ -553,9 +553,9 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           // Set dimensions for collision detection (matches WorktreeCard size)
           width: 500,
           height: 200, // Approximate height, will be measured by React Flow
-          // Constrain to parent zone if pinned (zone_id already has 'zone-' prefix)
+          // Set parentId for visual nesting but allow dragging outside zone
           parentId: zoneId,
-          extent: zoneId ? ('parent' as const) : undefined,
+          extent: undefined, // No movement restriction - can drag anywhere
           data: {
             worktree,
             repo,
