@@ -36,8 +36,9 @@ themes {
 // Disable pane frames for cleaner embedded look
 pane_frames false
 
-// Enable mouse support
-mouse_mode true
+// Disable mouse support to allow terminal copy/paste
+// When enabled, mouse mode interferes with text selection and copy/paste in the browser
+mouse_mode false
 
 // Copy to clipboard on selection
 copy_on_select true
