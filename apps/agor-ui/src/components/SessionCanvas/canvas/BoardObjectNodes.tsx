@@ -608,7 +608,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
             position: 'relative',
             width: '100%',
             // Reserve space for scaled label (base font size / zoom)
-            minHeight: `${24 * scale}px`,
+            minHeight: `${token.fontSize * scale}px`,
           }}
           onDoubleClick={() => setIsEditingLabel(true)}
         >
@@ -623,7 +623,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
               className="nodrag" // Prevent node drag when typing
               style={{
                 margin: 0,
-                fontSize: '24px',
+                fontSize: token.fontSize,
                 fontWeight: 600,
                 border: 'none',
                 outline: 'none',
@@ -640,7 +640,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
             <h3
               style={{
                 margin: 0,
-                fontSize: '24px',
+                fontSize: token.fontSize,
                 fontWeight: 600,
                 color: textColor,
                 // Apply inverse scale to maintain constant visual size (Figma-style)
@@ -661,7 +661,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
           <div
             style={{
               marginTop: `${8 * scale}px`,
-              fontSize: '12px',
+              fontSize: token.fontSizeSM,
               fontWeight: 500,
               color: textColor,
               textTransform: 'uppercase',
