@@ -41,7 +41,7 @@ import {
   Typography,
   theme,
 } from 'antd';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useCopyToClipboard } from '../../../utils/clipboard';
 import {
   getEnvironmentState,
@@ -149,14 +149,23 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   const [processInfo, setProcessInfo] = useState(worktree.environment_instance?.process);
   const [logsModalOpen, setLogsModalOpen] = useState(false);
 
+  // Track previous worktree reference to detect actual prop changes (not just editing flag changes)
+  const prevWorktreeRef = useRef(worktree);
+
   // Sync state when worktree prop changes
   useEffect(() => {
+    // Always sync environment_instance fields (these update frequently)
     setEnvStatus(worktree.environment_instance?.status || 'stopped');
     setLastHealthCheck(worktree.environment_instance?.last_health_check);
     setProcessInfo(worktree.environment_instance?.process);
 
-    // Sync static environment config fields (only when not editing)
-    if (!isEditingUrls) {
+    // Check if worktree prop actually changed (not just editing flags)
+    const worktreeChanged = prevWorktreeRef.current !== worktree;
+    prevWorktreeRef.current = worktree;
+
+    // Sync static environment config fields (only when not editing AND worktree prop changed)
+    // This prevents overwriting with stale values when isEditingUrls flips but worktree hasn't updated yet
+    if (!isEditingUrls && worktreeChanged) {
       setStaticStartCommand(worktree.start_command || '');
       setStaticStopCommand(worktree.stop_command || '');
       setStaticNukeCommand(worktree.nuke_command || '');
@@ -165,8 +174,8 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
       setStaticLogsCommand(worktree.logs_command || '');
     }
 
-    // Sync custom context (only when not editing)
-    if (!isEditingContext) {
+    // Sync custom context (only when not editing AND worktree prop changed)
+    if (!isEditingContext && worktreeChanged) {
       setCustomContextJson(JSON.stringify(worktree.custom_context || {}, null, 2));
     }
   }, [worktree, isEditingUrls, isEditingContext]);
@@ -1210,6 +1219,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                       onClick={() => {
                         setStaticStartCommand(worktree.start_command || '');
                         setStaticStopCommand(worktree.stop_command || '');
+                        setStaticNukeCommand(worktree.nuke_command || '');
                         setStaticHealthCheckUrl(worktree.health_check_url || '');
                         setStaticAppUrl(worktree.app_url || '');
                         setStaticLogsCommand(worktree.logs_command || '');
