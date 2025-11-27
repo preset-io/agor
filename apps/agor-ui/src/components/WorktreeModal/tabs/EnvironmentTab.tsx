@@ -154,7 +154,22 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     setEnvStatus(worktree.environment_instance?.status || 'stopped');
     setLastHealthCheck(worktree.environment_instance?.last_health_check);
     setProcessInfo(worktree.environment_instance?.process);
-  }, [worktree]);
+
+    // Sync static environment config fields (only when not editing)
+    if (!isEditingUrls) {
+      setStaticStartCommand(worktree.start_command || '');
+      setStaticStopCommand(worktree.stop_command || '');
+      setStaticNukeCommand(worktree.nuke_command || '');
+      setStaticHealthCheckUrl(worktree.health_check_url || '');
+      setStaticAppUrl(worktree.app_url || '');
+      setStaticLogsCommand(worktree.logs_command || '');
+    }
+
+    // Sync custom context (only when not editing)
+    if (!isEditingContext) {
+      setCustomContextJson(JSON.stringify(worktree.custom_context || {}, null, 2));
+    }
+  }, [worktree, isEditingUrls, isEditingContext]);
 
   // WebSocket listener for real-time environment updates
   useEffect(() => {
@@ -291,7 +306,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
       }
     };
 
-    // Render all 5 fields from templates
+    // Render all 6 fields from templates
     const updates: Partial<Worktree> = {};
 
     if (repo.environment_config.up_command) {
@@ -334,16 +349,9 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     }
 
     // Update worktree with regenerated values
+    // Note: onUpdateWorktree already shows a success toast, so we don't show another one here
+    // Local state will be updated automatically via useEffect when the worktree prop changes
     onUpdateWorktree(worktree.worktree_id, updates);
-
-    // Update local state
-    if (updates.start_command !== undefined) setStaticStartCommand(updates.start_command);
-    if (updates.stop_command !== undefined) setStaticStopCommand(updates.stop_command);
-    if (updates.health_check_url !== undefined) setStaticHealthCheckUrl(updates.health_check_url);
-    if (updates.app_url !== undefined) setStaticAppUrl(updates.app_url);
-    if (updates.logs_command !== undefined) setStaticLogsCommand(updates.logs_command);
-
-    message.success('Environment configuration regenerated from templates');
   };
 
   // Check if template has unsaved changes
