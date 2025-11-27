@@ -34,6 +34,7 @@ export const AGOR_INTERNAL_ENV_VARS = new Set([
 
 /**
  * Resolve user environment variables (decrypted from database, no system env vars)
+ * Includes both env_vars and api_keys from user data
  */
 export async function resolveUserEnvironment(
   userId: UserID,
@@ -45,15 +46,31 @@ export async function resolveUserEnvironment(
     const row = await select(db).from(users).where(eq(users.user_id, userId)).one();
 
     if (row) {
-      const data = row.data as { env_vars?: Record<string, string> };
-      const encryptedVars = data.env_vars;
+      const data = row.data as {
+        env_vars?: Record<string, string>;
+        api_keys?: Record<string, string>;
+      };
 
+      // Decrypt and merge user environment variables (e.g., GITHUB_TOKEN)
+      const encryptedVars = data.env_vars;
       if (encryptedVars) {
         for (const [key, encryptedValue] of Object.entries(encryptedVars)) {
           try {
             env[key] = decryptApiKey(encryptedValue);
           } catch (err) {
             console.error(`Failed to decrypt env var ${key} for user ${userId}:`, err);
+          }
+        }
+      }
+
+      // Decrypt and merge user API keys (e.g., OPENAI_API_KEY, ANTHROPIC_API_KEY)
+      const encryptedApiKeys = data.api_keys;
+      if (encryptedApiKeys) {
+        for (const [key, encryptedValue] of Object.entries(encryptedApiKeys)) {
+          try {
+            env[key] = decryptApiKey(encryptedValue);
+          } catch (err) {
+            console.error(`Failed to decrypt API key ${key} for user ${userId}:`, err);
           }
         }
       }
