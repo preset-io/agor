@@ -29,14 +29,14 @@
 #
 # The -p (project name) flag creates completely isolated environments:
 # - SHARED Docker image (all projects use agor-dev:latest - saves disk space!)
-# - Separate volumes (node_modules, database, config) - isolated per project
+# - Separate volumes (database, config) - isolated per project
 # - Separate networks and containers
 # - Separate ports (using unique_id offset in .agor.yml)
 #
-# Dependencies are smart-synced at container startup:
-# - First boot: Uses Docker-built node_modules from shared image
-# - Subsequent boots: Only reinstalls if pnpm-lock.yaml changed
-# This ensures fast boot times (~2-3s) while respecting per-branch dependencies.
+# Dependencies are baked into the Docker image:
+# - node_modules preserved via anonymous volumes (shadows bind mount)
+# - No pnpm install at runtime - instant container startup!
+# - Rebuild image when pnpm-lock.yaml changes: docker compose up --build
 #
 # ==============================================================================
 # Database Modes
@@ -124,14 +124,17 @@ services:
     volumes:
       # Mount entire repo for hot-reload (source code only)
       - .:/app
-      # Preserve Docker-built node_modules (with correct platform binaries)
-      # pnpm workspaces use a single shared store in /app/node_modules/.pnpm/
-      # Package-level node_modules are just symlinks, so we only need ONE volume!
-      # Named volume prevents bloat (reused across container recreations)
-      - node-modules:/app/node_modules
-      # Note: We DO NOT exclude dist directories - they should be shared between host and container
-      # The entrypoint script fixes permissions only for dist/ directories (surgical, not recursive)
-      # This ensures build outputs from container watch mode are accessible on host
+      # Anonymous volume shadows bind mount, preserving Docker-built node_modules
+      # This uses the node_modules from the IMAGE (with correct platform binaries)
+      # No pnpm install needed at runtime - deps are baked into the image!
+      # pnpm workspace symlinks (packages/*/node_modules) point into this directory
+      - /app/node_modules
+      # Shadow package-level node_modules too (they contain symlinks into root)
+      - /app/packages/core/node_modules
+      - /app/packages/executor/node_modules
+      - /app/apps/agor-daemon/node_modules
+      - /app/apps/agor-cli/node_modules
+      - /app/apps/agor-ui/node_modules
       # Persist entire home directory (database, config, agent auth tokens, etc.)
       - agor-home:/home/agor
       # Mount SSH keys for git authentication (dev only)
@@ -176,12 +179,6 @@ volumes:
   # - Agent auth tokens
   # - Caches, etc.
   agor-home:
-
-  # Node modules volume - unique per docker-compose project (via -p flag)
-  # pnpm workspaces share a single store in /app/node_modules/.pnpm/
-  # Package-level node_modules are just symlinks, so we only need ONE volume!
-  # This is reused across container recreations, preventing volume bloat
-  node-modules:
 
   # PostgreSQL data (only created when postgres profile is active)
   postgres-data:

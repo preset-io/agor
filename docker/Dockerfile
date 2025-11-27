@@ -91,7 +91,7 @@ COPY packages/executor/package.json ./packages/executor/
 
 # Install dependencies as agor user (cached in Docker layer)
 # This creates node_modules with correct platform binaries for container
-# A named volume will preserve these built-in node_modules at runtime (no copy needed!)
+# An anonymous volume at /app/node_modules shadows the bind mount, preserving these deps
 RUN sudo chown -R agor:agor /app && \
     pnpm install --frozen-lockfile
 
