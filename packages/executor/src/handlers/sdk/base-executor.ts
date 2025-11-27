@@ -59,11 +59,17 @@ export interface ExecutionContext {
  * Create streaming callbacks that emit events directly via Feathers WebSocket
  */
 export function createStreamingCallbacks(client: AgorClient, toolName: string): StreamingCallbacks {
+  // Track session_id from first onStreamStart call to include in subsequent events
+  let currentSessionId: SessionID | undefined;
+
   return {
     onStreamStart: async (message_id, data) => {
+      // Capture session_id for use in chunk/end events
+      currentSessionId = data.session_id;
+
       // Emit via Feathers WebSocket
       // biome-ignore lint/suspicious/noExplicitAny: Feathers service types don't include emit method
-      (client.service('messages') as any).emit('stream:start', {
+      (client.service('messages') as any).emit('streaming:start', {
         message_id,
         session_id: data.session_id,
         task_id: data.task_id,
@@ -71,25 +77,28 @@ export function createStreamingCallbacks(client: AgorClient, toolName: string): 
         timestamp: data.timestamp,
       });
     },
-    onStreamChunk: async (message_id, text) => {
+    onStreamChunk: async (message_id, chunk) => {
       // biome-ignore lint/suspicious/noExplicitAny: Feathers service types don't include emit method
-      (client.service('messages') as any).emit('stream:chunk', {
+      (client.service('messages') as any).emit('streaming:chunk', {
         message_id,
-        text,
+        session_id: currentSessionId,
+        chunk,
       });
     },
     onStreamEnd: async (message_id) => {
       console.log(`[${toolName}] Stream ended: ${message_id}`);
       // biome-ignore lint/suspicious/noExplicitAny: Feathers service types don't include emit method
-      (client.service('messages') as any).emit('stream:end', {
+      (client.service('messages') as any).emit('streaming:end', {
         message_id,
+        session_id: currentSessionId,
       });
     },
     onStreamError: async (message_id, error) => {
       console.error(`[${toolName}] Stream error for ${message_id}:`, error);
       // biome-ignore lint/suspicious/noExplicitAny: Feathers service types don't include emit method
-      (client.service('messages') as any).emit('stream:error', {
+      (client.service('messages') as any).emit('streaming:error', {
         message_id,
+        session_id: currentSessionId,
         error: error.message,
       });
     },
@@ -97,13 +106,15 @@ export function createStreamingCallbacks(client: AgorClient, toolName: string): 
       // biome-ignore lint/suspicious/noExplicitAny: Feathers service types don't include emit method
       (client.service('messages') as any).emit('thinking:start', {
         message_id,
-        metadata,
+        session_id: currentSessionId,
+        ...metadata,
       });
     },
     onThinkingChunk: async (message_id, chunk) => {
       // biome-ignore lint/suspicious/noExplicitAny: Feathers service types don't include emit method
       (client.service('messages') as any).emit('thinking:chunk', {
         message_id,
+        session_id: currentSessionId,
         chunk,
       });
     },
@@ -111,6 +122,7 @@ export function createStreamingCallbacks(client: AgorClient, toolName: string): 
       // biome-ignore lint/suspicious/noExplicitAny: Feathers service types don't include emit method
       (client.service('messages') as any).emit('thinking:end', {
         message_id,
+        session_id: currentSessionId,
       });
     },
   };
