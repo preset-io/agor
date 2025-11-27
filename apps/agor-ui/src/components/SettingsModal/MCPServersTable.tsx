@@ -460,7 +460,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       const updatedServer = mcpServerById.get(editingServer.mcp_server_id);
       if (updatedServer && updatedServer !== editingServer) {
         console.log('[MCP] Server updated via WebSocket, refreshing edit modal', {
-          serverId: editingServer.mcp_server_id.substring(0, 8),
+          serverId: String(editingServer.mcp_server_id).substring(0, 8),
           toolCount: updatedServer.tools?.length || 0,
         });
         setEditingServer(updatedServer);
@@ -580,7 +580,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   const handleEdit = async (server: MCPServer) => {
     console.log('[MCP] handleEdit called with server:', {
       name: server.name,
-      mcp_server_id: server.mcp_server_id.substring(0, 8),
+      mcp_server_id: String(server.mcp_server_id).substring(0, 8),
       tools: server.tools,
       toolCount: server.tools?.length || 0,
     });

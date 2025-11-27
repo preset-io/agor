@@ -1149,10 +1149,34 @@ async function main() {
             );
           });
 
+          interface MCPListResult<T> {
+            [key: string]: T[];
+          }
+
+          type ToolsResult = MCPListResult<{
+            name: string;
+            description?: string;
+            inputSchema?: Record<string, unknown>;
+          }>;
+          type ResourcesResult = MCPListResult<{
+            uri: string;
+            name: string;
+            mimeType?: string;
+          }>;
+          type PromptsResult = MCPListResult<{
+            name: string;
+            description?: string;
+            arguments?: Array<{
+              name: string;
+              description?: string;
+              required?: boolean;
+            }>;
+          }>;
+
           const [toolsResult, resourcesResult, promptsResult] = (await Promise.race([
             Promise.all([client.listTools(), client.listResources(), client.listPrompts()]),
             listTimeout,
-          ])) as [any, any, any];
+          ])) as [ToolsResult, ResourcesResult, PromptsResult];
 
           console.log('[MCP Discovery] Found', toolsResult.tools.length, 'tools');
           console.log('[MCP Discovery] Found', resourcesResult.resources.length, 'resources');
@@ -1160,20 +1184,20 @@ async function main() {
 
           // Update server with discovered capabilities
           await mcpServerRepo.update(data.mcp_server_id, {
-            tools: toolsResult.tools.map((t: any) => ({
+            tools: toolsResult.tools.map((t) => ({
               name: t.name,
               description: t.description || '',
               input_schema: t.inputSchema,
             })),
-            resources: resourcesResult.resources.map((r: any) => ({
+            resources: resourcesResult.resources.map((r) => ({
               uri: r.uri,
               name: r.name,
               mimeType: r.mimeType,
             })),
-            prompts: promptsResult.prompts.map((p: any) => ({
+            prompts: promptsResult.prompts.map((p) => ({
               name: p.name,
               description: p.description || '',
-              arguments: p.arguments?.map((a: any) => ({
+              arguments: p.arguments?.map((a) => ({
                 name: a.name,
                 description: a.description || '',
                 required: a.required,
