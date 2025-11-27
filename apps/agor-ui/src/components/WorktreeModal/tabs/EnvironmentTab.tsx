@@ -33,7 +33,6 @@ import {
   Descriptions,
   Input,
   Modal,
-  message,
   Space,
   Spin,
   Tag,
@@ -47,6 +46,7 @@ import {
   getEnvironmentState,
   getEnvironmentStateDescription,
 } from '../../../utils/environmentState';
+import { useThemedMessage } from '../../../utils/message';
 import { EnvironmentLogsModal } from '../../EnvironmentLogsModal';
 
 const { Paragraph } = Typography;
@@ -107,6 +107,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   onUpdateWorktree,
 }) => {
   const { token } = theme.useToken();
+  const { showSuccess, showError, showWarning } = useThemedMessage();
   const hasEnvironmentConfig = !!repo.environment_config;
 
   // Repository template state (editable)
@@ -209,9 +210,9 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     setIsStarting(true);
     try {
       await client.service(`worktrees/${worktree.worktree_id}/start`).create({});
-      message.success('Environment started successfully');
+      showSuccess('Environment started successfully');
     } catch (error) {
-      message.error(error instanceof Error ? error.message : 'Failed to start environment');
+      showError(error instanceof Error ? error.message : 'Failed to start environment');
     } finally {
       setIsStarting(false);
     }
@@ -222,9 +223,9 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     setIsStopping(true);
     try {
       await client.service(`worktrees/${worktree.worktree_id}/stop`).create({});
-      message.success('Environment stopped successfully');
+      showSuccess('Environment stopped successfully');
     } catch (error) {
-      message.error(error instanceof Error ? error.message : 'Failed to stop environment');
+      showError(error instanceof Error ? error.message : 'Failed to stop environment');
     } finally {
       setIsStopping(false);
     }
@@ -235,9 +236,9 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     setIsRestarting(true);
     try {
       await client.service(`worktrees/${worktree.worktree_id}/restart`).create({});
-      message.success('Environment restarted successfully');
+      showSuccess('Environment restarted successfully');
     } catch (error) {
-      message.error(error instanceof Error ? error.message : 'Failed to restart environment');
+      showError(error instanceof Error ? error.message : 'Failed to restart environment');
     } finally {
       setIsRestarting(false);
     }
@@ -266,9 +267,9 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
         setIsNuking(true);
         try {
           await client.service(`worktrees/${worktree.worktree_id}/nuke`).create({});
-          message.success('Environment nuked successfully');
+          showSuccess('Environment nuked successfully');
         } catch (error) {
-          message.error(error instanceof Error ? error.message : 'Failed to nuke environment');
+          showError(error instanceof Error ? error.message : 'Failed to nuke environment');
         } finally {
           setIsNuking(false);
         }
@@ -279,7 +280,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   // Regenerate static environment config from repo templates
   const handleRegenerateFromTemplate = async () => {
     if (!client || !onUpdateWorktree || !repo.environment_config) {
-      message.warning('No repository environment configuration to regenerate from');
+      showWarning('No repository environment configuration to regenerate from');
       return;
     }
 
@@ -308,7 +309,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
       try {
         return renderTemplate(template, context);
       } catch (error) {
-        message.error(
+        showError(
           `Failed to render ${fieldName}: ${error instanceof Error ? error.message : 'Unknown error'}`
         );
         return null;
@@ -469,7 +470,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
       // Notify parent
       onUpdateRepo(repo.repo_id, { environment_config: updated.environment_config });
     } catch (error) {
-      message.error(error instanceof Error ? error.message : 'Failed to import .agor.yml');
+      showError(error instanceof Error ? error.message : 'Failed to import .agor.yml');
     }
   };
 
@@ -479,9 +480,9 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
 
     try {
       await client.service(`repos/${repo.repo_id}/export-agor-yml`).create({});
-      message.success('Environment configuration exported to .agor.yml');
+      showSuccess('Environment configuration exported to .agor.yml');
     } catch (error) {
-      message.error(error instanceof Error ? error.message : 'Failed to export .agor.yml');
+      showError(error instanceof Error ? error.message : 'Failed to export .agor.yml');
     }
   };
 
