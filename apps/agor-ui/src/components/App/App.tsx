@@ -605,52 +605,11 @@ export const App: React.FC<AppProps> = ({
               onLayout={(sizes) => {
                 // Save left panel size when user resizes (only when panel is open)
                 if (!commentsPanelCollapsed && sizes.length >= 2) {
-                  setCommentsPanelSize(sizes[0]);
+                  // Comments panel is now the second panel (index 1)
+                  setCommentsPanelSize(sizes[1]);
                 }
               }}
             >
-              {!commentsPanelCollapsed && (
-                <>
-                  <Panel defaultSize={commentsPanelSize} minSize={15} maxSize={40}>
-                    <CommentsPanel
-                      client={client}
-                      boardId={currentBoardId || ''}
-                      comments={mapToArray(commentById).filter(
-                        (c: BoardComment) => c.board_id === currentBoardId
-                      )}
-                      userById={userById}
-                      currentUserId={user?.user_id || 'anonymous'}
-                      boardObjects={currentBoard?.objects}
-                      worktreeById={worktreeById}
-                      collapsed={commentsPanelCollapsed}
-                      onToggleCollapse={() => setCommentsPanelCollapsed(!commentsPanelCollapsed)}
-                      onSendComment={(content) => onSendComment?.(currentBoardId || '', content)}
-                      onReplyComment={onReplyComment}
-                      onResolveComment={onResolveComment}
-                      onToggleReaction={onToggleReaction}
-                      onDeleteComment={onDeleteComment}
-                      hoveredCommentId={hoveredCommentId}
-                      selectedCommentId={selectedCommentId}
-                    />
-                  </Panel>
-                  <PanelResizeHandle
-                    style={{
-                      width: '4px',
-                      background: 'var(--ant-color-border-secondary)',
-                      cursor: 'col-resize',
-                      transition: 'background 0.2s',
-                    }}
-                    onMouseEnter={(e) => {
-                      (e.currentTarget as unknown as HTMLDivElement).style.background =
-                        'var(--ant-color-primary)';
-                    }}
-                    onMouseLeave={(e) => {
-                      (e.currentTarget as unknown as HTMLDivElement).style.background =
-                        'var(--ant-color-border-secondary)';
-                    }}
-                  />
-                </>
-              )}
               <Panel
                 defaultSize={commentsPanelCollapsed ? 100 : 100 - commentsPanelSize}
                 minSize={40}
@@ -783,6 +742,48 @@ export const App: React.FC<AppProps> = ({
                   )}
                 </PanelGroup>
               </Panel>
+              {!commentsPanelCollapsed && (
+                <>
+                  <PanelResizeHandle
+                    style={{
+                      width: '4px',
+                      background: 'var(--ant-color-border-secondary)',
+                      cursor: 'col-resize',
+                      transition: 'background 0.2s',
+                    }}
+                    onMouseEnter={(e) => {
+                      (e.currentTarget as unknown as HTMLDivElement).style.background =
+                        'var(--ant-color-primary)';
+                    }}
+                    onMouseLeave={(e) => {
+                      (e.currentTarget as unknown as HTMLDivElement).style.background =
+                        'var(--ant-color-border-secondary)';
+                    }}
+                  />
+                  <Panel defaultSize={commentsPanelSize} minSize={15} maxSize={40}>
+                    <CommentsPanel
+                      client={client}
+                      boardId={currentBoardId || ''}
+                      comments={mapToArray(commentById).filter(
+                        (c: BoardComment) => c.board_id === currentBoardId
+                      )}
+                      userById={userById}
+                      currentUserId={user?.user_id || 'anonymous'}
+                      boardObjects={currentBoard?.objects}
+                      worktreeById={worktreeById}
+                      collapsed={commentsPanelCollapsed}
+                      onToggleCollapse={() => setCommentsPanelCollapsed(!commentsPanelCollapsed)}
+                      onSendComment={(content) => onSendComment?.(currentBoardId || '', content)}
+                      onReplyComment={onReplyComment}
+                      onResolveComment={onResolveComment}
+                      onToggleReaction={onToggleReaction}
+                      onDeleteComment={onDeleteComment}
+                      hoveredCommentId={hoveredCommentId}
+                      selectedCommentId={selectedCommentId}
+                    />
+                  </Panel>
+                </>
+              )}
             </PanelGroup>
           </Content>
           {newSessionWorktreeId && (
