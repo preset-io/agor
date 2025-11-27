@@ -144,6 +144,11 @@
       "types": "./dist/tools/mcp/jwt-auth.d.ts",
       "import": "./dist/tools/mcp/jwt-auth.js",
       "require": "./dist/tools/mcp/jwt-auth.cjs"
+    },
+    "./unix": {
+      "types": "./dist/unix/index.d.ts",
+      "import": "./dist/unix/index.js",
+      "require": "./dist/unix/index.cjs"
     }
   },
   "scripts": {

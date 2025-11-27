@@ -20,6 +20,7 @@ import {
   integer,
   jsonb,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   varchar,
@@ -413,6 +414,21 @@ export const worktrees = pgTable(
       enum: ['preserved', 'cleaned', 'deleted'],
     }),
 
+    // RBAC: App-layer permissions (rbac.md)
+    others_can: text('others_can', {
+      enum: ['view', 'prompt', 'all'],
+    })
+      .$type<'view' | 'prompt' | 'all'>()
+      .default('view'),
+
+    // RBAC: OS-layer permissions (unix-user-modes.md)
+    unix_group: text('unix_group'), // e.g., 'agor_wt_abc123'
+    others_fs_access: text('others_fs_access', {
+      enum: ['none', 'read', 'write'],
+    })
+      .$type<'none' | 'read' | 'write'>()
+      .default('read'),
+
     // JSON blob for everything else
     data: t
       .json<unknown>('data')
@@ -491,6 +507,28 @@ export const worktrees = pgTable(
       table.board_id,
       table.schedule_enabled
     ),
+  })
+);
+
+/**
+ * Worktree Owners - RBAC junction table
+ *
+ * Many-to-many relationship between users and worktrees.
+ * Owners have implicit 'all' permission regardless of others_can setting.
+ */
+export const worktreeOwners = pgTable(
+  'worktree_owners',
+  {
+    worktree_id: varchar('worktree_id', { length: 36 })
+      .notNull()
+      .references(() => worktrees.worktree_id, { onDelete: 'cascade' }),
+    user_id: varchar('user_id', { length: 36 })
+      .notNull()
+      .references(() => users.user_id, { onDelete: 'cascade' }),
+    created_at: t.timestamp('created_at').defaultNow(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.worktree_id, table.user_id] }),
   })
 );
 

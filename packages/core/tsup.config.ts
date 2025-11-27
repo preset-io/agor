@@ -29,6 +29,7 @@ export default defineConfig({
     'models/index': 'src/models/index.ts', // Model metadata (browser-safe)
     'sdk/index': 'src/sdk/index.ts', // AI SDK re-exports (Claude, Codex, Gemini, OpenCode)
     'tools/mcp/jwt-auth': 'src/tools/mcp/jwt-auth.ts', // MCP JWT authentication utilities
+    'unix/index': 'src/unix/index.ts', // Unix group management utilities for worktree isolation
   },
   format: ['cjs', 'esm'],
   dts: true,

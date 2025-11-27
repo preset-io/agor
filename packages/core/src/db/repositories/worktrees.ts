@@ -5,11 +5,11 @@
  */
 
 import type { UUID, Worktree, WorktreeID } from '@agor/core/types';
-import { and, eq, like, sql } from 'drizzle-orm';
+import { and, eq, inArray, like, sql } from 'drizzle-orm';
 import { formatShortId, generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
-import { type WorktreeInsert, type WorktreeRow, worktrees } from '../schema';
+import { type WorktreeInsert, type WorktreeRow, worktreeOwners, worktrees } from '../schema';
 import { AmbiguousIdError, type BaseRepository, EntityNotFoundError } from './base';
 import { deepMerge } from './merge-utils';
 
@@ -248,5 +248,136 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
       .one();
 
     return row ? this.rowToWorktree(row) : null;
+  }
+
+  // ===== RBAC: Ownership Management =====
+
+  /**
+   * Check if a user is an owner of a worktree
+   *
+   * @param worktreeId - Worktree ID (full UUID)
+   * @param userId - User ID to check
+   * @returns true if user is an owner
+   */
+  async isOwner(worktreeId: WorktreeID, userId: UUID): Promise<boolean> {
+    const row = await select(this.db)
+      .from(worktreeOwners)
+      .where(and(eq(worktreeOwners.worktree_id, worktreeId), eq(worktreeOwners.user_id, userId)))
+      .one();
+
+    return row != null; // Use != to check for both null and undefined
+  }
+
+  /**
+   * Get all owners of a worktree
+   *
+   * @param worktreeId - Worktree ID (full UUID or short ID)
+   * @returns Array of user IDs
+   */
+  async getOwners(worktreeId: string): Promise<UUID[]> {
+    // Resolve short ID to full ID
+    const worktree = await this.findById(worktreeId);
+    if (!worktree) {
+      throw new EntityNotFoundError('Worktree', worktreeId);
+    }
+
+    const rows = await select(this.db)
+      .from(worktreeOwners)
+      .where(eq(worktreeOwners.worktree_id, worktree.worktree_id))
+      .all();
+
+    return rows.map((row: { user_id: string }) => row.user_id as UUID);
+  }
+
+  /**
+   * Add an owner to a worktree
+   *
+   * Idempotent - does nothing if user is already an owner.
+   *
+   * @param worktreeId - Worktree ID (full UUID or short ID)
+   * @param userId - User ID to add
+   */
+  async addOwner(worktreeId: string, userId: UUID): Promise<void> {
+    // Resolve short ID to full ID
+    const worktree = await this.findById(worktreeId);
+    if (!worktree) {
+      throw new EntityNotFoundError('Worktree', worktreeId);
+    }
+
+    // Check if already an owner (idempotent)
+    const isExisting = await this.isOwner(worktree.worktree_id, userId);
+    if (isExisting) {
+      return; // Already an owner, nothing to do
+    }
+
+    // Add ownership
+    await insert(this.db, worktreeOwners)
+      .values({
+        worktree_id: worktree.worktree_id,
+        user_id: userId,
+        created_at: new Date(), // Explicitly set timestamp (migration has wrong default)
+      })
+      .run();
+  }
+
+  /**
+   * Remove an owner from a worktree
+   *
+   * Idempotent - does nothing if user is not an owner.
+   *
+   * @param worktreeId - Worktree ID (full UUID or short ID)
+   * @param userId - User ID to remove
+   */
+  async removeOwner(worktreeId: string, userId: UUID): Promise<void> {
+    // Resolve short ID to full ID
+    const worktree = await this.findById(worktreeId);
+    if (!worktree) {
+      throw new EntityNotFoundError('Worktree', worktreeId);
+    }
+
+    // Remove ownership (idempotent - will do nothing if not an owner)
+    await deleteFrom(this.db, worktreeOwners)
+      .where(
+        and(
+          eq(worktreeOwners.worktree_id, worktree.worktree_id),
+          eq(worktreeOwners.user_id, userId)
+        )
+      )
+      .run();
+  }
+
+  /**
+   * Bulk-load ownership for multiple worktrees
+   *
+   * Returns a Map of worktree_id -> user_ids[] for efficient lookups.
+   * Used to avoid N+1 queries when checking ownership for multiple worktrees.
+   *
+   * @param worktreeIds - Array of worktree IDs (full UUIDs)
+   * @returns Map of worktree_id -> array of owner user_ids
+   */
+  async bulkLoadOwners(worktreeIds: WorktreeID[]): Promise<Map<WorktreeID, UUID[]>> {
+    if (worktreeIds.length === 0) {
+      return new Map();
+    }
+
+    // Query all owners for the given worktrees using inArray
+    const rows = await select(this.db)
+      .from(worktreeOwners)
+      .where(inArray(worktreeOwners.worktree_id, worktreeIds))
+      .all();
+
+    // Group by worktree_id
+    const ownersByWorktree = new Map<WorktreeID, UUID[]>();
+    for (const row of rows) {
+      const wtId = row.worktree_id as WorktreeID;
+      const userId = row.user_id as UUID;
+
+      if (!ownersByWorktree.has(wtId)) {
+        ownersByWorktree.set(wtId, []);
+      }
+      ownersByWorktree.get(wtId)!.push(userId);
+    }
+
+    return ownersByWorktree;
   }
 }

@@ -5,6 +5,7 @@ import type {
   MCPServer,
   Repo,
   Session,
+  User,
   Worktree,
 } from '@agor/core/types';
 import { Modal, Tabs } from 'antd';
@@ -25,6 +26,7 @@ export interface WorktreeModalProps {
   boardObjects?: BoardEntityObject[];
   mcpServerById?: Map<string, MCPServer>;
   client: AgorClient | null;
+  currentUser?: User | null; // Current user for RBAC
   onUpdateWorktree?: (worktreeId: string, updates: WorktreeUpdate) => void;
   onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
   onArchiveOrDelete?: (
@@ -47,6 +49,7 @@ export const WorktreeModal: React.FC<WorktreeModalProps> = ({
   boardObjects = [],
   mcpServerById = new Map(),
   client,
+  currentUser,
   onUpdateWorktree,
   onUpdateRepo,
   onArchiveOrDelete,
@@ -83,6 +86,8 @@ export const WorktreeModal: React.FC<WorktreeModalProps> = ({
                 repo={repo}
                 sessions={sessions}
                 boards={mapToArray(boardById)}
+                client={client}
+                currentUser={currentUser}
                 onUpdate={onUpdateWorktree}
                 onArchiveOrDelete={onArchiveOrDelete}
                 onClose={onClose}

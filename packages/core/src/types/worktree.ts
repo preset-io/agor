@@ -299,7 +299,46 @@ export interface Worktree {
    * - 'deleted': Entire worktree directory deleted from disk
    */
   filesystem_status?: 'preserved' | 'cleaned' | 'deleted';
+
+  // ===== RBAC: App-layer permissions (rbac.md) =====
+
+  /**
+   * Permission level for non-owners
+   *
+   * - 'view': Can read worktrees/sessions/tasks/messages
+   * - 'prompt': View + can create tasks/messages (run agents)
+   * - 'all': Full control (create/patch/delete sessions)
+   *
+   * Note: Owners always have 'all' permission regardless of this setting.
+   */
+  others_can?: 'view' | 'prompt' | 'all';
+
+  // ===== RBAC: OS-layer permissions (unix-user-modes.md) =====
+
+  /**
+   * Unix group for this worktree (if Unix modes enabled)
+   *
+   * Format: 'agor_wt_<short-id>'
+   * Owners are added to this group for filesystem access.
+   */
+  unix_group?: string;
+
+  /**
+   * Filesystem access level for non-owners
+   *
+   * - 'none': No filesystem access (permission denied)
+   * - 'read': Can read files (chmod 2755)
+   * - 'write': Can read and write files (chmod 2777)
+   *
+   * This controls OS-level permissions independent of app-layer 'others_can'.
+   */
+  others_fs_access?: 'none' | 'read' | 'write';
 }
+
+/**
+ * Permission level type (for app-layer RBAC)
+ */
+export type WorktreePermissionLevel = 'view' | 'prompt' | 'all';
 
 /**
  * Worktree schedule configuration

@@ -1,10 +1,10 @@
 # Worktree-Centric RBAC
 
-**Status:** 🔬 Exploration  
-**Scope:** Application-level authorization (FeathersJS services + socket events)  
-**Last Updated:** 2025-01-??
+**Status:** 🔬 Exploration
+**Scope:** Application-level authorization (FeathersJS services + socket events)
+**Last Updated:** 2025-01-23
 
-> This document focuses on Agor’s app-layer RBAC for worktrees and the sessions that belong to them. For OS-level isolation plans (per-user Unix accounts, sudo impersonation, credential segregation) see `@context/explorations/unix-user-integration.md`.
+> This document focuses on Agor's app-layer RBAC for worktrees and the sessions that belong to them. For the unified OS-level + app-level design (Unix users, groups, modes), see `@context/explorations/unix-user-modes.md`.
 
 ---
 
@@ -48,11 +48,25 @@ Out of scope: filesystem isolation, true “private” worktrees, network/mac-le
 
 `none` is intentionally omitted to avoid a silent UX that pretends privacy while events still broadcast over shared sockets. If true privacy is needed later, we’ll revisit channel scoping once Unix-level isolation exists.
 
-### Session Inheritance
+### Session Ownership (CRITICAL)
 
-- Every session belongs to exactly one worktree.
-- Permission checks should **never** inspect sessions independently: they should always resolve the worktree first, then apply the same decision to the session.
-- Derived rules: If you can `prompt` on a worktree you can create tasks/messages in any of its sessions; if you can `view` a worktree you can read all of its sessions/tasks/messages; deleting/patching sessions is treated as `all`.
+**Key insight:** Sessions are **immutable to their creator**.
+
+- `session.created_by` is set on creation and NEVER changes
+- Session creator determines execution context (Unix user, credentials, ~/.claude/ state)
+- When Bob prompts Alice's session:
+  - **App-layer:** Task creator is Bob (`task.created_by = Bob`)
+  - **OS-layer:** Execution runs as Alice (`session.created_by = Alice`)
+  - Alice's credentials, SSH keys, Claude SDK state are used
+
+**Permission inheritance from worktree:**
+
+- Every session belongs to exactly one worktree
+- Permission checks resolve the worktree first, then apply to the session
+- Derived rules:
+  - `view` on worktree → can read sessions/tasks/messages
+  - `prompt` on worktree → can create tasks/messages in existing sessions
+  - `all` on worktree → can create new sessions, delete sessions
 
 ---
 
@@ -99,16 +113,27 @@ By forcing _every_ code path through these hooks, we ensure consistent RBAC acro
 1. **Drizzle migration**
 
    ```sql
+   -- App-layer permissions
    ALTER TABLE worktrees ADD COLUMN others_can TEXT NOT NULL DEFAULT 'view';
 
+   -- OS-layer permissions (see unix-user-modes.md)
+   ALTER TABLE worktrees ADD COLUMN unix_group TEXT NULL;
+   ALTER TABLE worktrees ADD COLUMN others_fs_access TEXT NOT NULL DEFAULT 'read';
+
+   -- Ownership (many-to-many)
    CREATE TABLE worktree_owners (
      worktree_id TEXT NOT NULL REFERENCES worktrees(worktree_id) ON DELETE CASCADE,
      user_id TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
      PRIMARY KEY (worktree_id, user_id)
    );
+
+   -- Ensure sessions are immutably bound to creator
+   -- (created_by already exists, just document it's immutable)
    ```
 
 2. Repository helpers for adding/removing owners and fetching ownership lists in bulk (to avoid N+1 lookups inside hooks).
+
+3. **Critical constraint:** `sessions.created_by` is immutable (enforce in app code, not DB for flexibility)
 
 ---
 
@@ -135,7 +160,9 @@ By forcing _every_ code path through these hooks, we ensure consistent RBAC acro
    - Ensure MCP tools (which call services internally) inherit the same enforcement.
 
 6. **Unix Integration Alignment**
-   - When `unix-user-integration` ships, revisit “none/private” mode knowing sockets and filesystem can be isolated for real.
+   - Integrate with worktree Unix groups (see `unix-user-modes.md`)
+   - Add owner management also updates Unix group membership
+   - Changing `others_fs_access` updates filesystem permissions (chmod)
 
 ---
 
@@ -154,15 +181,28 @@ By forcing _every_ code path through these hooks, we ensure consistent RBAC acro
 ## Open Questions
 
 1. Do we need an audit log for owner changes and permission escalations?
-2. Should “prompt” cover only task/message creation, or also session creation under an existing worktree?
+   - **Likely yes** - important for compliance, debugging
+   - Could be simple table: `worktree_audit_log` with actor, action, timestamp
+
+2. Should "prompt" cover only task/message creation, or also session creation?
+   - **Both** - if you can prompt a worktree, you can create sessions in it
+   - But session execution runs as the session creator (not the worktree owner)
+
 3. How do we expose ownership via CLI/API for automation without overcomplicating the UI?
-4. At what point do we introduce per-worktree socket channels to support a future `none/private` mode once Unix-level isolation exists?
+   - CLI: `agor worktree owners <worktree>`, `agor worktree add-owner <worktree> <email>`
+   - API: `PATCH /worktrees/:id/owners` with `{ add: [userId], remove: [userId] }`
+   - UI: Simple owner list with add/remove buttons
+
+4. ~~At what point do we introduce per-worktree socket channels?~~
+   - **Not needed yet** - app-layer hooks + OS-layer groups provide sufficient isolation
+   - Revisit if we need true "invisible" worktrees (not just restricted access)
 
 ---
 
 ## References
 
-- `@context/explorations/unix-user-integration.md` — OS-level isolation plan (sudo impersonation).
-- `apps/agor-daemon/src/utils/authorization.ts` — existing role helpers to extend.
-- `apps/agor-daemon/src/index.ts` — service hook registrations and socket setup.
-- `context/concepts/architecture.md` — rationale for always using service layer so hooks (and future RBAC) apply everywhere.
+- `@context/explorations/unix-user-modes.md` — **Unified design** covering Unix modes, worktree groups, session immutability
+- `@context/explorations/unix-user-integration.md` — Original sudo impersonation exploration (superseded by unix-user-modes.md)
+- `apps/agor-daemon/src/utils/authorization.ts` — existing role helpers to extend
+- `apps/agor-daemon/src/index.ts` — service hook registrations and socket setup
+- `context/concepts/architecture.md` — rationale for always using service layer so hooks (and future RBAC) apply everywhere

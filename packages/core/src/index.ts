@@ -11,4 +11,5 @@ export * from './git/index.js';
 export * from './lib/validation.js';
 // Re-export everything from submodules
 export * from './types/index.js';
+export * from './unix/index.js';
 export * from './utils/logger.js';

@@ -148,6 +148,7 @@ import { createSessionsService } from './services/sessions';
 import { createTasksService } from './services/tasks';
 import { TerminalsService } from './services/terminals';
 import { createUsersService } from './services/users';
+import { setupWorktreeOwnersService } from './services/worktree-owners.js';
 import { createWorktreesService } from './services/worktrees';
 import { AnonymousStrategy } from './strategies/anonymous';
 import {
@@ -156,6 +157,16 @@ import {
   requireMinimumRole,
 } from './utils/authorization';
 import { createUploadMiddleware } from './utils/upload';
+import {
+  ensureCanCreateSession,
+  ensureCanPrompt,
+  ensureCanView,
+  ensureSessionImmutability,
+  ensureWorktreePermission,
+  filterWorktreesByPermission,
+  loadSessionWorktree,
+  loadWorktree,
+} from './utils/worktree-authorization';
 
 /**
  * Extended Params with route ID parameter
@@ -980,6 +991,7 @@ async function main() {
       },
     },
     // biome-ignore lint/suspicious/noExplicitAny: feathers-swagger docs option not typed in FeathersJS
+    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
   } as any);
 
   app.use('/boards', createBoardsService(db), {
@@ -1007,6 +1019,27 @@ async function main() {
   // Register worktrees service first (repos service needs to access it)
   // NOTE: Pass app instance for environment management (needs to access repos service)
   app.use('/worktrees', createWorktreesService(db, app));
+
+  // Register worktree-owners nested route services for RBAC owner management
+  // Check if services exist first (for watch mode hot reload)
+  if (!app.services['worktrees/:id/owners'] && !app.services['worktrees/:id/owners/:userId']) {
+    const worktreeRepo = new WorktreeRepository(db);
+    setupWorktreeOwnersService(app, worktreeRepo);
+  }
+
+  // Initialize Unix integration service for worktree isolation
+  // This service manages Unix groups and filesystem permissions for RBAC
+  const { UnixIntegrationService } = await import('./services/unix-integration.js');
+  const unixIntegrationService = new UnixIntegrationService(db, {
+    enabled:
+      config.execution?.unix_user_mode !== 'simple' &&
+      config.execution?.unix_user_mode !== undefined,
+    cliPath: 'agor',
+    useSudo: true,
+  });
+  console.log(
+    `[Unix Integration] ${unixIntegrationService.isEnabled() ? 'Enabled' : 'Disabled'} (mode: ${config.execution?.unix_user_mode || 'simple'})`
+  );
 
   // Register repos service (accesses worktrees via app.service('worktrees'))
   app.use('/repos', createReposService(db, app));
@@ -1317,9 +1350,25 @@ async function main() {
   app.service('messages').hooks({
     before: {
       all: [requireAuth],
-      create: [requireMinimumRole('member', 'create messages')],
-      patch: [requireMinimumRole('member', 'update messages')],
-      remove: [requireMinimumRole('member', 'delete messages')],
+      get: [
+        loadSessionWorktree(sessionsService, worktreeRepository),
+        ensureCanView(), // Require 'view' permission
+      ],
+      create: [
+        requireMinimumRole('member', 'create messages'),
+        loadSessionWorktree(sessionsService, worktreeRepository),
+        ensureCanPrompt(), // Require 'prompt' permission to create messages
+      ],
+      patch: [
+        requireMinimumRole('member', 'update messages'),
+        loadSessionWorktree(sessionsService, worktreeRepository),
+        ensureCanPrompt(), // Require 'prompt' permission to update messages
+      ],
+      remove: [
+        requireMinimumRole('member', 'delete messages'),
+        loadSessionWorktree(sessionsService, worktreeRepository),
+        ensureCanPrompt(), // Require 'prompt' permission to delete messages
+      ],
     },
     after: {
       patch: [
@@ -1361,10 +1410,14 @@ async function main() {
     before: {
       all: [
         // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type compatibility
+        // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
         (validateQuery as any)(boardObjectQueryValidator),
         ...getReadAuthHooks(),
         ...(allowAnonymous ? [] : [requireMinimumRole('member', 'manage board objects')]),
       ],
+      // Board objects reference worktrees - check permissions based on referenced worktree
+      // TODO: Implement worktree-level permission checks for board objects
+      // For now, keep existing role-based authorization
     },
   });
 
@@ -1372,12 +1425,16 @@ async function main() {
     before: {
       all: [
         // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type compatibility
+        // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
         (validateQuery as any)(boardCommentQueryValidator),
         ...getReadAuthHooks(),
       ],
       create: [requireMinimumRole('member', 'create board comments')],
       patch: [requireMinimumRole('member', 'update board comments')],
       remove: [requireMinimumRole('member', 'delete board comments')],
+      // Board comments are scoped to worktrees - check permissions based on parent board object
+      // TODO: Implement worktree-level permission checks for board comments
+      // For now, keep existing role-based authorization
     },
   });
 
@@ -1385,6 +1442,7 @@ async function main() {
     before: {
       all: [
         // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type compatibility
+        // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
         (validateQuery as any)(repoQueryValidator),
         ...getReadAuthHooks(),
         ...(allowAnonymous ? [] : [requireMinimumRole('member', 'access repositories')]),
@@ -1399,13 +1457,72 @@ async function main() {
     before: {
       all: [
         // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type compatibility
+        // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
         (validateQuery as any)(worktreeQueryValidator),
         ...getReadAuthHooks(),
         ...(allowAnonymous ? [] : [requireMinimumRole('member', 'access worktrees')]),
       ],
+      get: [
+        loadWorktree(worktreeRepository),
+        ensureCanView(), // Require 'view' permission to read worktree
+      ],
       create: [requireMinimumRole('member', 'create worktrees')],
-      patch: [requireMinimumRole('member', 'update worktrees')],
-      remove: [requireMinimumRole('member', 'delete worktrees')],
+      patch: [
+        loadWorktree(worktreeRepository),
+        ensureWorktreePermission('all', 'update worktrees'), // Require 'all' permission to update
+      ],
+      remove: [
+        loadWorktree(worktreeRepository),
+        ensureWorktreePermission('all', 'delete worktrees'), // Require 'all' permission to delete
+      ],
+    },
+    after: {
+      find: [filterWorktreesByPermission(worktreeRepository)], // Filter results by permission
+      create: [
+        async (context) => {
+          // RBAC + Unix Integration: Create Unix group and add initial owner
+          const worktree = context.result as import('@agor/core/types').Worktree;
+          const creatorId = worktree.created_by;
+
+          // Add creator as initial owner
+          await worktreeRepository.addOwner(
+            worktree.worktree_id,
+            creatorId as import('@agor/core/types').UUID
+          );
+          console.log(
+            `[RBAC] Added creator ${creatorId.substring(0, 8)} as owner of worktree ${worktree.worktree_id.substring(0, 8)}`
+          );
+
+          // Unix Integration: Create group and add creator
+          try {
+            await unixIntegrationService.createWorktreeGroup(worktree.worktree_id);
+            await unixIntegrationService.addUserToWorktreeGroup(
+              worktree.worktree_id,
+              creatorId as import('@agor/core/types').UUID
+            );
+          } catch (error) {
+            console.error('[Unix Integration] Failed to setup worktree group:', error);
+            // Continue - app-layer RBAC is still functional
+          }
+
+          return context;
+        },
+      ],
+      remove: [
+        async (context) => {
+          // Unix Integration: Delete Unix group when worktree is deleted
+          const worktreeId = context.id as import('@agor/core/types').WorktreeID;
+
+          try {
+            await unixIntegrationService.deleteWorktreeGroup(worktreeId);
+          } catch (error) {
+            console.error('[Unix Integration] Failed to delete worktree group:', error);
+            // Continue - worktree is already deleted from database
+          }
+
+          return context;
+        },
+      ],
     },
   });
 
@@ -1413,6 +1530,7 @@ async function main() {
     before: {
       all: [
         // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type compatibility
+        // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
         (validateQuery as any)(mcpServerQueryValidator),
         ...getReadAuthHooks(),
       ],
@@ -1460,6 +1578,7 @@ async function main() {
     before: {
       all: [
         // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type compatibility
+        // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
         (validateQuery as any)(userQueryValidator),
       ],
       find: [
@@ -1567,11 +1686,47 @@ async function main() {
     before: {
       all: [
         // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type compatibility
+        // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
         (validateQuery as any)(sessionQueryValidator),
         ...getReadAuthHooks(),
       ],
+      get: [
+        // Load session's worktree and check permissions
+        loadSessionWorktree(sessionsService, worktreeRepository),
+        ensureCanView(), // Require 'view' permission on worktree
+      ],
       create: [
         requireMinimumRole('member', 'create sessions'),
+        // Check worktree permission BEFORE injecting created_by (need worktree_id)
+        async (context) => {
+          // RBAC: Ensure user can create sessions in this worktree ('all' permission)
+          // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
+          const data = context.data as any;
+          if (context.params.provider && data?.worktree_id) {
+            try {
+              const worktree = await worktreeRepository.findById(data.worktree_id);
+              if (!worktree) {
+                throw new Forbidden(`Worktree not found: ${data.worktree_id}`);
+              }
+              // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
+              const userId = (context.params as any).user?.user_id;
+              const isOwner = userId
+                ? await worktreeRepository.isOwner(worktree.worktree_id, userId)
+                : false;
+
+              // Cache for later hooks
+              // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
+              (context.params as any).worktree = worktree;
+              // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
+              (context.params as any).isWorktreeOwner = isOwner;
+            } catch (error) {
+              console.error('Failed to load worktree for RBAC check:', error);
+              throw error;
+            }
+          }
+          return context;
+        },
+        ensureCanCreateSession(), // Require 'all' permission to create sessions
         async (context) => {
           // Inject user_id if authenticated, otherwise use 'anonymous'
           const user = (context.params as { user?: { user_id: string; email: string } }).user;
@@ -1618,8 +1773,15 @@ async function main() {
           return context;
         },
       ],
-      patch: [requireMinimumRole('member', 'update sessions')],
-      remove: [requireMinimumRole('member', 'delete sessions')],
+      patch: [
+        ensureSessionImmutability(), // Prevent changing session.created_by
+        loadSessionWorktree(sessionsService, worktreeRepository),
+        ensureWorktreePermission('all', 'update sessions'), // Require 'all' permission
+      ],
+      remove: [
+        loadSessionWorktree(sessionsService, worktreeRepository),
+        ensureWorktreePermission('all', 'delete sessions'), // Require 'all' permission
+      ],
     },
     after: {
       create: [
@@ -1703,11 +1865,18 @@ async function main() {
     before: {
       all: [
         // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type compatibility
+        // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
         (validateQuery as any)(taskQueryValidator),
         requireAuth,
       ],
+      get: [
+        loadSessionWorktree(sessionsService, worktreeRepository),
+        ensureCanView(), // Require 'view' permission
+      ],
       create: [
         requireMinimumRole('member', 'create tasks'),
+        loadSessionWorktree(sessionsService, worktreeRepository),
+        ensureCanPrompt(), // Require 'prompt' permission to create tasks
         async (context) => {
           // Inject user_id if authenticated, otherwise use 'anonymous'
           const user = (context.params as { user?: { user_id: string; email: string } }).user;
@@ -1731,7 +1900,10 @@ async function main() {
           return context;
         },
       ],
-      patch: [requireMinimumRole('member', 'update tasks')],
+      patch: [
+        loadSessionWorktree(sessionsService, worktreeRepository),
+        ensureCanPrompt(), // Require 'prompt' permission to update tasks
+      ],
       remove: [requireMinimumRole('member', 'delete tasks')],
     },
   });
@@ -1740,6 +1912,7 @@ async function main() {
     before: {
       all: [
         // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type compatibility
+        // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
         (validateQuery as any)(boardQueryValidator),
         ...getReadAuthHooks(),
       ],
@@ -1963,6 +2136,7 @@ async function main() {
 
   // Configure docs for authentication service (override global security requirement)
   // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service type not fully typed
+  // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
   const authService = app.service('authentication') as any;
   authService.docs = {
     description: 'Authentication service for user login and token management',
@@ -1982,6 +2156,7 @@ async function main() {
           // Only rate limit external requests (not internal service calls)
           if (context.params.provider) {
             // biome-ignore lint/suspicious/noExplicitAny: FeathersJS request params are untyped
+            // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
             const params = context.params as any;
             const ip =
               params.ip ||
@@ -2049,6 +2224,7 @@ async function main() {
       // SECURITY: Rate limit refresh token requests
       if (params?.provider) {
         // biome-ignore lint/suspicious/noExplicitAny: FeathersJS request params are untyped
+        // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
         const p = params as any;
         const ip =
           p.ip ||
@@ -2124,6 +2300,7 @@ async function main() {
 
   // Configure docs for refresh endpoint (override global security requirement)
   // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service type not fully typed
+  // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
   const refreshService = app.service('authentication/refresh') as any;
   refreshService.docs = {
     description: 'Token refresh endpoint - obtain a new access token using a refresh token',
@@ -3676,6 +3853,9 @@ async function main() {
     requireAuth
   );
 
+  // ===== RBAC: Worktree Owner Management =====
+  // Now handled by the worktree-owners service (registered above)
+
   // Configure custom methods for boards service
   const boardsService = app.service('boards') as unknown as BoardsServiceImpl;
 
@@ -3824,6 +4004,7 @@ async function main() {
       // If user is authenticated (via requireAuth hook check), provide detailed info
       // Check if this is an authenticated request
       // biome-ignore lint/suspicious/noExplicitAny: FeathersJS request params are untyped
+      // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
       const isAuthenticated = (params as any)?.user !== undefined;
 
       if (isAuthenticated) {
@@ -3846,8 +4027,10 @@ async function main() {
           auth: {
             ...publicResponse.auth,
             // biome-ignore lint/suspicious/noExplicitAny: FeathersJS request params are untyped
+            // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
             user: (params as any)?.user?.email,
             // biome-ignore lint/suspicious/noExplicitAny: FeathersJS request params are untyped
+            // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
             role: (params as any)?.user?.role,
           },
           encryption: {
@@ -3867,6 +4050,7 @@ async function main() {
 
   // Configure docs for health endpoint (override global security requirement)
   // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service type not fully typed
+  // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
   const healthService = app.service('health') as any;
   healthService.docs = {
     description: 'Health check endpoint (always public)',
@@ -3938,6 +4122,7 @@ async function main() {
 
   // Configure docs for OpenCode models endpoint
   // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service type not fully typed
+  // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
   const opencodeModelsService = app.service('opencode/models') as any;
   opencodeModelsService.docs = {
     description: 'Get available OpenCode providers and models (requires OpenCode server running)',
@@ -3985,6 +4170,7 @@ async function main() {
 
   // Configure docs for OpenCode health endpoint
   // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service type not fully typed
+  // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
   const opencodeHealthService = app.service('opencode/health') as any;
   opencodeHealthService.docs = {
     description: 'Test connection to OpenCode server',

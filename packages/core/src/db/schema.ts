@@ -26,6 +26,7 @@ export const messages = schema.messages;
 export const boards = schema.boards;
 export const repos = schema.repos;
 export const worktrees = schema.worktrees;
+export const worktreeOwners = schema.worktreeOwners;
 export const users = schema.users;
 export const mcpServers = schema.mcpServers;
 export const boardObjects = schema.boardObjects;
