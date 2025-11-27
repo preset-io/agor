@@ -16,7 +16,7 @@ import type {
 } from '@agor/core/types';
 import { PermissionScope } from '@agor/core/types';
 import { Layout } from 'antd';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { mapToArray } from '@/utils/mapHelpers';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
@@ -36,7 +36,7 @@ import { EventStreamPanel } from '../EventStreamPanel';
 import { NewSessionButton } from '../NewSessionButton';
 import { type NewSessionConfig, NewSessionModal } from '../NewSessionModal';
 import { type NewWorktreeConfig, NewWorktreeModal } from '../NewWorktreeModal';
-import { SessionCanvas } from '../SessionCanvas';
+import { SessionCanvas, type SessionCanvasRef } from '../SessionCanvas';
 import { SessionPanel } from '../SessionPanel';
 import { SessionSettingsModal } from '../SessionSettingsModal';
 import { SettingsModal, UserSettingsModal } from '../SettingsModal';
@@ -104,6 +104,8 @@ export interface AppProps {
       pullLatest: boolean;
       issue_url?: string;
       pull_request_url?: string;
+      boardId?: string;
+      position?: { x: number; y: number };
     }
   ) => Promise<Worktree | null>;
   onStartEnvironment?: (worktreeId: string) => void;
@@ -184,8 +186,13 @@ export const App: React.FC<AppProps> = ({
   onRetryConnection,
 }) => {
   const { showWarning } = useThemedMessage();
+  const sessionCanvasRef = useRef<SessionCanvasRef>(null);
   const [newSessionWorktreeId, setNewSessionWorktreeId] = useState<string | null>(null);
   const [newWorktreeModalOpen, setNewWorktreeModalOpen] = useState(false);
+  const [newWorktreeDefaultPosition, setNewWorktreeDefaultPosition] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [listDrawerOpen, setListDrawerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -322,16 +329,21 @@ export const App: React.FC<AppProps> = ({
       pullLatest: config.pullLatest,
       issue_url: config.issue_url,
       pull_request_url: config.pull_request_url,
+      boardId: config.board_id,
+      position: config.position,
     });
 
     // If board_id is provided and worktree was created, assign it to the board
-    if (worktree && config.board_id) {
+    // Note: The backend now handles board assignment directly when boardId is provided
+    if (worktree && config.board_id && !config.position) {
+      // Only need to update board_id if position wasn't provided (legacy path)
       await onUpdateWorktree?.(worktree.worktree_id, {
         board_id: config.board_id as BoardID,
       });
     }
 
     setNewWorktreeModalOpen(false);
+    setNewWorktreeDefaultPosition(null);
   };
 
   const handleSessionClick = (sessionId: string) => {
@@ -580,6 +592,8 @@ export const App: React.FC<AppProps> = ({
               setSettingsOpen(true);
             }}
             onOpenNewWorktree={() => {
+              const center = sessionCanvasRef.current?.getViewportCenter();
+              setNewWorktreeDefaultPosition(center || null);
               setNewWorktreeModalOpen(true);
             }}
             boardById={boardById}
@@ -626,6 +640,7 @@ export const App: React.FC<AppProps> = ({
               <Panel defaultSize={selectedSessionId ? 100 - sessionPanelSize : 100} minSize={20}>
                 <div style={{ position: 'relative', overflow: 'hidden', height: '100%' }}>
                   <SessionCanvas
+                    ref={sessionCanvasRef}
                     board={currentBoard || null}
                     client={client}
                     sessionById={sessionById}
@@ -673,6 +688,8 @@ export const App: React.FC<AppProps> = ({
                       if (repoById.size === 0) {
                         showWarning('Please create a repository first in Settings');
                       } else {
+                        const center = sessionCanvasRef.current?.getViewportCenter();
+                        setNewWorktreeDefaultPosition(center || null);
                         setNewWorktreeModalOpen(true);
                       }
                     }}
@@ -845,10 +862,12 @@ export const App: React.FC<AppProps> = ({
             open={newWorktreeModalOpen}
             onClose={() => {
               setNewWorktreeModalOpen(false);
+              setNewWorktreeDefaultPosition(null);
             }}
             onCreate={handleCreateWorktree}
             repoById={repoById}
             currentBoardId={currentBoardId}
+            defaultPosition={newWorktreeDefaultPosition || undefined}
           />
           {logsModalWorktreeId && (
             <EnvironmentLogsModal
