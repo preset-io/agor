@@ -16,8 +16,13 @@ import type {
 } from '@agor/core/types';
 import { PermissionScope } from '@agor/core/types';
 import { Layout } from 'antd';
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  type ImperativePanelHandle,
+  Panel,
+  PanelGroup,
+  PanelResizeHandle,
+} from 'react-resizable-panels';
 import { mapToArray } from '@/utils/mapHelpers';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
 import { AppDataProvider } from '../../contexts/AppDataContext';
@@ -210,6 +215,9 @@ export const App: React.FC<AppProps> = ({
     25
   );
 
+  // Ref for programmatically controlling the comments panel
+  const commentsPanelRef = useRef<ImperativePanelHandle>(null);
+
   // Session panel size persistence (percentage of available width)
   const [sessionPanelSize, setSessionPanelSize] = useLocalStorage<number>(
     'agor:sessionPanelSize',
@@ -255,6 +263,17 @@ export const App: React.FC<AppProps> = ({
   useEffect(() => {
     initializeAudioOnInteraction();
   }, []);
+
+  // Programmatically collapse/expand the comments panel when toggle state changes
+  useEffect(() => {
+    if (commentsPanelRef.current) {
+      if (commentsPanelCollapsed) {
+        commentsPanelRef.current.collapse();
+      } else {
+        commentsPanelRef.current.expand();
+      }
+    }
+  }, [commentsPanelCollapsed]);
 
   // URL state synchronization - bidirectional sync between URL and state
   useUrlState({
@@ -611,6 +630,7 @@ export const App: React.FC<AppProps> = ({
               }}
             >
               <Panel
+                ref={commentsPanelRef}
                 collapsible
                 defaultSize={commentsPanelCollapsed ? 0 : commentsPanelSize}
                 collapsedSize={0}
