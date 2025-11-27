@@ -109,21 +109,27 @@ export function clearAllJWTTokens(): void {
  * Get MCP server connection args with JWT authentication
  *
  * For MCP servers using JWT auth, this returns the mcp-remote compatible
- * command and args with the Bearer token header.
+ * command and args. The token is passed via environment variable to avoid
+ * exposing it in process arguments (visible via ps/logs).
  *
  * @param serverUrl - The MCP server URL
  * @param jwtConfig - JWT configuration
- * @returns Object with command and args for spawning the MCP connection
+ * @returns Object with command, args, and env for spawning the MCP connection
  */
 export async function getMCPRemoteArgsWithJWT(
   serverUrl: string,
   jwtConfig: JWTConfig
-): Promise<{ command: string; args: string[] }> {
+): Promise<{ command: string; args: string[]; env: Record<string, string> }> {
   const token = await fetchJWTToken(jwtConfig);
 
+  // SECURITY: Pass token via environment variable instead of command-line args
+  // to prevent exposure in process lists (ps) and supervisor logs
   return {
     command: 'npx',
-    args: ['mcp-remote', serverUrl, '--header', `Authorization: Bearer ${token}`],
+    args: ['mcp-remote', serverUrl, '--header', 'Authorization: Bearer $MCP_AUTH_TOKEN'],
+    env: {
+      MCP_AUTH_TOKEN: token,
+    },
   };
 }
 

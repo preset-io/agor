@@ -361,7 +361,6 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
       >
         <Select>
           <Select.Option value="global">Global (all sessions)</Select.Option>
-          <Select.Option value="repo">Repository</Select.Option>
           <Select.Option value="session">Session</Select.Option>
         </Select>
       </Form.Item>

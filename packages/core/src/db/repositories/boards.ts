@@ -570,10 +570,12 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
 
   /**
    * Parse YAML string into a validated BoardExportBlob without creating a board
+   * Uses FAILSAFE_SCHEMA to prevent code execution via malicious YAML tags
    */
   parseYamlToBlob(yamlContent: string): BoardExportBlob {
     try {
-      const blob = yaml.load(yamlContent) as BoardExportBlob;
+      // Use FAILSAFE_SCHEMA to prevent RCE via !!js/function or other code-executing tags
+      const blob = yaml.load(yamlContent, { schema: yaml.FAILSAFE_SCHEMA }) as BoardExportBlob;
       this.validateBoardBlob(blob);
       return blob;
     } catch (error) {

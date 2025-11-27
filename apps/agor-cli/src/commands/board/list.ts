@@ -17,8 +17,8 @@ export default class BoardList extends BaseCommand {
     const client = await this.connectToDaemon();
 
     try {
-      // Fetch boards
-      const result = await client.service('boards').find();
+      // Fetch all boards (handle pagination)
+      const result = await client.service('boards').find({ query: { $limit: -1 } });
       const boards = (Array.isArray(result) ? result : result.data) as Board[];
 
       if (boards.length === 0) {
@@ -27,8 +27,10 @@ export default class BoardList extends BaseCommand {
         return;
       }
 
-      // Fetch board objects to count worktrees per board
-      const boardObjectsResult = await client.service('board-objects').find();
+      // Fetch all board objects to count worktrees per board (handle pagination)
+      const boardObjectsResult = await client
+        .service('board-objects')
+        .find({ query: { $limit: -1 } });
       const boardObjects = (
         Array.isArray(boardObjectsResult) ? boardObjectsResult : boardObjectsResult.data
       ) as BoardEntityObject[];

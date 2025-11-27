@@ -1062,7 +1062,7 @@ async function main() {
 
   // Discover MCP server capabilities endpoint
   app.use('/mcp-servers/discover', {
-    async create(data: { mcp_server_id: string }) {
+    async create(data: { mcp_server_id: string }, params?: AuthenticatedParams) {
       try {
         const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
         const { SSEClientTransport } = await import('@modelcontextprotocol/sdk/client/sse.js');
@@ -1073,6 +1073,33 @@ async function main() {
 
         if (!server) {
           return { success: false, error: 'MCP server not found' };
+        }
+
+        // SECURITY: Verify user has access to this MCP server
+        // Skip authorization for internal calls (params.provider is falsy)
+        if (params?.provider && params.user) {
+          const userId = params.user.user_id;
+
+          // For global servers, only the owner can discover them
+          // For session-scoped servers, admins can discover them (sessions service already checks ownership)
+          if (server.scope === 'global' && server.owner_user_id !== userId) {
+            return {
+              success: false,
+              error: 'Access denied: only server owner can discover this MCP server',
+            };
+          }
+
+          // For session-scoped servers, require admin role since discovery is a privileged operation
+          // that reveals server capabilities and can trigger outbound connections
+          if (server.scope === 'session') {
+            const userRole = params.user.role?.toLowerCase();
+            if (userRole !== 'admin' && userRole !== 'owner') {
+              return {
+                success: false,
+                error: 'Access denied: admin role required to discover session-scoped MCP servers',
+              };
+            }
+          }
         }
 
         // Infer transport from URL if not set (backwards compatibility)
