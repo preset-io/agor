@@ -315,6 +315,14 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       // Queue message to parent session with special metadata
       const messageRepo = new MessagesRepository(this.db);
 
+      // Validate parent session has a creator for authentication
+      if (!parentSession.created_by) {
+        console.warn(
+          `⚠️  [TasksService] Cannot queue callback: parent session ${parentSessionId.substring(0, 8)} has no creator (anonymous session)`
+        );
+        return;
+      }
+
       // Create queued message with Agor callback metadata
       // IMPORTANT: Include queued_by_user_id so authentication works when processing the callback
       // Use the parent session's creator as the user context for callback execution
@@ -330,16 +338,8 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         `🔔 Queued callback to parent ${parentSessionId.substring(0, 8)} from child ${childSession.session_id.substring(0, 8)}`
       );
 
-      // Trigger queue processing for parent session
-      // NOTE: DO NOT pass params here - params are from child session context (executor),
-      // but queue processing should run in parent session context
-      //
-      // The queue processor will check if parent is idle:
-      // - If idle: process immediately
-      // - If running: queued message will be processed when parent becomes idle (via task completion hook)
-      // biome-ignore lint/suspicious/noExplicitAny: Service type casting required for custom method access
-      const sessionsService = this.app.service('sessions') as any;
-      await sessionsService.triggerQueueProcessing(parentSessionId);
+      // NOTE: Queue processing is handled automatically via task completion hook (line 182-188)
+      // When parent session becomes idle, it will process all queued messages including this callback
     } catch (error) {
       console.error(
         `❌ [TasksService] Failed to queue parent callback for session ${childSession.session_id}:`,
