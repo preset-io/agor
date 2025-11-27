@@ -56,24 +56,40 @@ export interface ExecutionContext {
 }
 
 /**
- * Create streaming callbacks that call daemon service methods to broadcast events
+ * Create streaming callbacks that call daemon custom route to broadcast events
  *
- * IMPORTANT: Executors cannot emit events directly - they must call service methods
- * which then use this.emit() to trigger the daemon's app.publish() system.
+ * IMPORTANT: Executors cannot emit events directly - they must call a custom route
+ * which then uses app.service().emit() to trigger the daemon's app.publish() system.
  * See: context/guides/extending-feathers-services.md
  */
 export function createStreamingCallbacks(client: AgorClient, toolName: string): StreamingCallbacks {
   // Track session_id from first onStreamStart call to include in subsequent events
   let currentSessionId: SessionID | undefined;
 
+  // Helper to broadcast streaming events via custom route
+  const broadcastEvent = async (
+    event:
+      | 'streaming:start'
+      | 'streaming:chunk'
+      | 'streaming:end'
+      | 'streaming:error'
+      | 'thinking:start'
+      | 'thinking:chunk'
+      | 'thinking:end',
+    data: Record<string, unknown>
+  ) => {
+    await client.service('/messages/streaming').create({
+      event,
+      data,
+    });
+  };
+
   return {
     onStreamStart: async (message_id, data) => {
       // Capture session_id for use in chunk/end events
       currentSessionId = data.session_id;
 
-      // Call service method to broadcast event (NOT .emit())
-      // biome-ignore lint/suspicious/noExplicitAny: Custom service methods not in type definition
-      await (client.service('messages') as any).emitStreamingStart({
+      await broadcastEvent('streaming:start', {
         message_id,
         session_id: data.session_id,
         task_id: data.task_id,
@@ -85,9 +101,7 @@ export function createStreamingCallbacks(client: AgorClient, toolName: string): 
       console.log(
         `[${toolName}] Streaming chunk: ${message_id.substring(0, 8)}, length: ${chunk.length}`
       );
-      // Call service method to broadcast event (NOT .emit())
-      // biome-ignore lint/suspicious/noExplicitAny: Custom service methods not in type definition
-      await (client.service('messages') as any).emitStreamingChunk({
+      await broadcastEvent('streaming:chunk', {
         message_id,
         session_id: currentSessionId,
         chunk,
@@ -95,45 +109,35 @@ export function createStreamingCallbacks(client: AgorClient, toolName: string): 
     },
     onStreamEnd: async (message_id) => {
       console.log(`[${toolName}] Stream ended: ${message_id}`);
-      // Call service method to broadcast event (NOT .emit())
-      // biome-ignore lint/suspicious/noExplicitAny: Custom service methods not in type definition
-      await (client.service('messages') as any).emitStreamingEnd({
+      await broadcastEvent('streaming:end', {
         message_id,
         session_id: currentSessionId,
       });
     },
     onStreamError: async (message_id, error) => {
       console.error(`[${toolName}] Stream error for ${message_id}:`, error);
-      // Call service method to broadcast event (NOT .emit())
-      // biome-ignore lint/suspicious/noExplicitAny: Custom service methods not in type definition
-      await (client.service('messages') as any).emitStreamingError({
+      await broadcastEvent('streaming:error', {
         message_id,
         session_id: currentSessionId,
         error: error.message,
       });
     },
     onThinkingStart: async (message_id, metadata) => {
-      // Call service method to broadcast event (NOT .emit())
-      // biome-ignore lint/suspicious/noExplicitAny: Custom service methods not in type definition
-      await (client.service('messages') as any).emitThinkingStart({
+      await broadcastEvent('thinking:start', {
         message_id,
         session_id: currentSessionId,
         ...metadata,
       });
     },
     onThinkingChunk: async (message_id, chunk) => {
-      // Call service method to broadcast event (NOT .emit())
-      // biome-ignore lint/suspicious/noExplicitAny: Custom service methods not in type definition
-      await (client.service('messages') as any).emitThinkingChunk({
+      await broadcastEvent('thinking:chunk', {
         message_id,
         session_id: currentSessionId,
         chunk,
       });
     },
     onThinkingEnd: async (message_id) => {
-      // Call service method to broadcast event (NOT .emit())
-      // biome-ignore lint/suspicious/noExplicitAny: Custom service methods not in type definition
-      await (client.service('messages') as any).emitThinkingEnd({
+      await broadcastEvent('thinking:end', {
         message_id,
         session_id: currentSessionId,
       });

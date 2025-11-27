@@ -941,14 +941,6 @@ async function main() {
       'findByTask',
       'findByRange',
       'createMany',
-      // Streaming event broadcast methods (called by executor)
-      'emitStreamingStart',
-      'emitStreamingChunk',
-      'emitStreamingEnd',
-      'emitStreamingError',
-      'emitThinkingStart',
-      'emitThinkingChunk',
-      'emitThinkingEnd',
     ],
     events: [
       'streaming:start',
@@ -2030,6 +2022,37 @@ async function main() {
     },
     {
       create: { role: 'member', action: 'create messages' },
+    },
+    requireAuth
+  );
+
+  // Configure custom route for streaming event broadcasting
+  // Called by executor to broadcast real-time events to WebSocket clients
+  registerAuthenticatedRoute(
+    app,
+    '/messages/streaming',
+    {
+      async create(
+        data: {
+          event:
+            | 'streaming:start'
+            | 'streaming:chunk'
+            | 'streaming:end'
+            | 'streaming:error'
+            | 'thinking:start'
+            | 'thinking:chunk'
+            | 'thinking:end';
+          data: Record<string, unknown>;
+        },
+        _params: RouteParams
+      ) {
+        // Broadcast event using app.service().emit() which triggers app.publish()
+        app.service('messages').emit(data.event, data.data);
+        return { success: true };
+      },
+    },
+    {
+      create: { role: 'member', action: 'broadcast streaming events' },
     },
     requireAuth
   );
