@@ -56,7 +56,11 @@ export interface ExecutionContext {
 }
 
 /**
- * Create streaming callbacks that emit events directly via Feathers WebSocket
+ * Create streaming callbacks that call daemon service methods to broadcast events
+ *
+ * IMPORTANT: Executors cannot emit events directly - they must call service methods
+ * which then use this.emit() to trigger the daemon's app.publish() system.
+ * See: context/guides/extending-feathers-services.md
  */
 export function createStreamingCallbacks(client: AgorClient, toolName: string): StreamingCallbacks {
   // Track session_id from first onStreamStart call to include in subsequent events
@@ -67,9 +71,9 @@ export function createStreamingCallbacks(client: AgorClient, toolName: string): 
       // Capture session_id for use in chunk/end events
       currentSessionId = data.session_id;
 
-      // Emit via Feathers WebSocket
-      // biome-ignore lint/suspicious/noExplicitAny: Feathers service types don't include emit method
-      (client.service('messages') as any).emit('streaming:start', {
+      // Call service method to broadcast event (NOT .emit())
+      // biome-ignore lint/suspicious/noExplicitAny: Custom service methods not in type definition
+      await (client.service('messages') as any).emitStreamingStart({
         message_id,
         session_id: data.session_id,
         task_id: data.task_id,
@@ -78,8 +82,12 @@ export function createStreamingCallbacks(client: AgorClient, toolName: string): 
       });
     },
     onStreamChunk: async (message_id, chunk) => {
-      // biome-ignore lint/suspicious/noExplicitAny: Feathers service types don't include emit method
-      (client.service('messages') as any).emit('streaming:chunk', {
+      console.log(
+        `[${toolName}] Streaming chunk: ${message_id.substring(0, 8)}, length: ${chunk.length}`
+      );
+      // Call service method to broadcast event (NOT .emit())
+      // biome-ignore lint/suspicious/noExplicitAny: Custom service methods not in type definition
+      await (client.service('messages') as any).emitStreamingChunk({
         message_id,
         session_id: currentSessionId,
         chunk,
@@ -87,40 +95,45 @@ export function createStreamingCallbacks(client: AgorClient, toolName: string): 
     },
     onStreamEnd: async (message_id) => {
       console.log(`[${toolName}] Stream ended: ${message_id}`);
-      // biome-ignore lint/suspicious/noExplicitAny: Feathers service types don't include emit method
-      (client.service('messages') as any).emit('streaming:end', {
+      // Call service method to broadcast event (NOT .emit())
+      // biome-ignore lint/suspicious/noExplicitAny: Custom service methods not in type definition
+      await (client.service('messages') as any).emitStreamingEnd({
         message_id,
         session_id: currentSessionId,
       });
     },
     onStreamError: async (message_id, error) => {
       console.error(`[${toolName}] Stream error for ${message_id}:`, error);
-      // biome-ignore lint/suspicious/noExplicitAny: Feathers service types don't include emit method
-      (client.service('messages') as any).emit('streaming:error', {
+      // Call service method to broadcast event (NOT .emit())
+      // biome-ignore lint/suspicious/noExplicitAny: Custom service methods not in type definition
+      await (client.service('messages') as any).emitStreamingError({
         message_id,
         session_id: currentSessionId,
         error: error.message,
       });
     },
     onThinkingStart: async (message_id, metadata) => {
-      // biome-ignore lint/suspicious/noExplicitAny: Feathers service types don't include emit method
-      (client.service('messages') as any).emit('thinking:start', {
+      // Call service method to broadcast event (NOT .emit())
+      // biome-ignore lint/suspicious/noExplicitAny: Custom service methods not in type definition
+      await (client.service('messages') as any).emitThinkingStart({
         message_id,
         session_id: currentSessionId,
         ...metadata,
       });
     },
     onThinkingChunk: async (message_id, chunk) => {
-      // biome-ignore lint/suspicious/noExplicitAny: Feathers service types don't include emit method
-      (client.service('messages') as any).emit('thinking:chunk', {
+      // Call service method to broadcast event (NOT .emit())
+      // biome-ignore lint/suspicious/noExplicitAny: Custom service methods not in type definition
+      await (client.service('messages') as any).emitThinkingChunk({
         message_id,
         session_id: currentSessionId,
         chunk,
       });
     },
     onThinkingEnd: async (message_id) => {
-      // biome-ignore lint/suspicious/noExplicitAny: Feathers service types don't include emit method
-      (client.service('messages') as any).emit('thinking:end', {
+      // Call service method to broadcast event (NOT .emit())
+      // biome-ignore lint/suspicious/noExplicitAny: Custom service methods not in type definition
+      await (client.service('messages') as any).emitThinkingEnd({
         message_id,
         session_id: currentSessionId,
       });

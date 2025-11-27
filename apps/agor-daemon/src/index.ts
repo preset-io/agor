@@ -930,6 +930,26 @@ async function main() {
 
   // Register messages service with custom streaming events
   app.use('/messages', messagesService, {
+    methods: [
+      'find',
+      'get',
+      'create',
+      'update',
+      'patch',
+      'remove',
+      'findBySession',
+      'findByTask',
+      'findByRange',
+      'createMany',
+      // Streaming event broadcast methods (called by executor)
+      'emitStreamingStart',
+      'emitStreamingChunk',
+      'emitStreamingEnd',
+      'emitStreamingError',
+      'emitThinkingStart',
+      'emitThinkingChunk',
+      'emitThinkingEnd',
+    ],
     events: [
       'streaming:start',
       'streaming:chunk',

@@ -119,6 +119,60 @@ export class MessagesService extends DrizzleService<Message, Partial<Message>, M
   async createMany(messages: Message[]): Promise<Message[]> {
     return this.messagesRepo.createMany(messages);
   }
+
+  /**
+   * Custom method: Broadcast streaming events
+   * These methods are called by the executor to emit WebSocket events
+   */
+  async emitStreamingStart(data: {
+    message_id: string;
+    session_id: string;
+    task_id?: string;
+    role: string;
+    timestamp: string;
+  }): Promise<void> {
+    this.emit?.('streaming:start', data);
+  }
+
+  async emitStreamingChunk(data: {
+    message_id: string;
+    session_id: string;
+    chunk: string;
+  }): Promise<void> {
+    this.emit?.('streaming:chunk', data);
+  }
+
+  async emitStreamingEnd(data: { message_id: string; session_id: string }): Promise<void> {
+    this.emit?.('streaming:end', data);
+  }
+
+  async emitStreamingError(data: {
+    message_id: string;
+    session_id: string;
+    error: string;
+  }): Promise<void> {
+    this.emit?.('streaming:error', data);
+  }
+
+  async emitThinkingStart(data: {
+    message_id: string;
+    session_id: string;
+    [key: string]: unknown;
+  }): Promise<void> {
+    this.emit?.('thinking:start', data);
+  }
+
+  async emitThinkingChunk(data: {
+    message_id: string;
+    session_id: string;
+    chunk: string;
+  }): Promise<void> {
+    this.emit?.('thinking:chunk', data);
+  }
+
+  async emitThinkingEnd(data: { message_id: string; session_id: string }): Promise<void> {
+    this.emit?.('thinking:end', data);
+  }
 }
 
 /**
