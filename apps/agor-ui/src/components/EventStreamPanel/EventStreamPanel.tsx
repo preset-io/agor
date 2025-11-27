@@ -5,7 +5,7 @@
  */
 
 import type { AgorClient } from '@agor/core/api';
-import type { Board, Repo, Session, User, Worktree } from '@agor/core/types';
+import type { Board } from '@agor/core/types';
 import {
   ApiOutlined,
   CloseOutlined,
@@ -15,6 +15,8 @@ import {
 } from '@ant-design/icons';
 import { Badge, Button, Checkbox, Empty, Select, Space, Tag, Typography, theme } from 'antd';
 import { useMemo, useState } from 'react';
+import { useAppActions } from '../../contexts/AppActionsContext';
+import { useAppData } from '../../contexts/AppDataContext';
 import type { SocketEvent } from '../../hooks/useEventStream';
 import { EventItem, type WorktreeActions } from './EventItem';
 
@@ -26,11 +28,6 @@ export interface EventStreamPanelProps {
   events: SocketEvent[];
   onClear: () => void;
   width?: number | string;
-  worktreeById: Map<string, Worktree>;
-  sessionById: Map<string, Session>;
-  sessionsByWorktree: Map<string, Session[]>;
-  repos: Repo[];
-  userById: Map<string, User>;
   currentUserId?: string;
   selectedSessionId?: string | null;
   worktreeActions?: WorktreeActions;
@@ -44,11 +41,6 @@ export const EventStreamPanel: React.FC<EventStreamPanelProps> = ({
   events,
   onClear,
   width = 700,
-  worktreeById,
-  sessionById,
-  sessionsByWorktree,
-  repos,
-  userById,
   currentUserId,
   selectedSessionId,
   worktreeActions,
@@ -56,6 +48,42 @@ export const EventStreamPanel: React.FC<EventStreamPanelProps> = ({
   client,
 }) => {
   const { token } = theme.useToken();
+
+  // Get data from context
+  const { worktreeById, sessionById, sessionsByWorktree, repoById, userById } = useAppData();
+  const repos = useMemo(() => Array.from(repoById.values()), [repoById]);
+
+  // Get actions from context
+  const {
+    onFork,
+    onSubsession,
+    onOpenTerminal,
+    onStartEnvironment,
+    onStopEnvironment,
+    onViewLogs,
+  } = useAppActions();
+
+  // Merge context actions with UI-specific actions from props
+  const mergedWorktreeActions: WorktreeActions = useMemo(
+    () => ({
+      ...worktreeActions,
+      onForkSession: onFork,
+      onSpawnSession: onSubsession,
+      onOpenTerminal,
+      onStartEnvironment,
+      onStopEnvironment,
+      onViewLogs,
+    }),
+    [
+      worktreeActions,
+      onFork,
+      onSubsession,
+      onOpenTerminal,
+      onStartEnvironment,
+      onStopEnvironment,
+      onViewLogs,
+    ]
+  );
   const [includeCursor, setIncludeCursor] = useState(false);
   const [includeMessages, setIncludeMessages] = useState(false);
   const [includeTerminalData, setIncludeTerminalData] = useState(false);
@@ -361,7 +389,7 @@ export const EventStreamPanel: React.FC<EventStreamPanelProps> = ({
                 userById={userById}
                 currentUserId={currentUserId}
                 selectedSessionId={selectedSessionId}
-                worktreeActions={worktreeActions}
+                worktreeActions={mergedWorktreeActions}
                 client={client}
               />
             ))}

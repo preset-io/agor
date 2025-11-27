@@ -16,9 +16,11 @@ import type {
 } from '@agor/core/types';
 import { PermissionScope } from '@agor/core/types';
 import { Layout } from 'antd';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { mapToArray } from '@/utils/mapHelpers';
+import { AppActionsProvider } from '../../contexts/AppActionsContext';
+import { AppDataProvider } from '../../contexts/AppDataContext';
 import { useEventStream } from '../../hooks/useEventStream';
 import { useFaviconStatus } from '../../hooks/useFaviconStatus';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
@@ -195,10 +197,10 @@ export const App: React.FC<AppProps> = ({
   const effectiveSettingsTab = openSettingsTab || settingsActiveTab;
 
   // Initialize comments panel state from localStorage (collapsed by default)
-  const [commentsPanelCollapsed, setCommentsPanelCollapsed] = useState(() => {
-    const stored = localStorage.getItem('agor:commentsPanelCollapsed');
-    return stored ? stored === 'true' : true; // Default to collapsed (hidden)
-  });
+  const [commentsPanelCollapsed, setCommentsPanelCollapsed] = useLocalStorage<boolean>(
+    'agor:commentsPanelCollapsed',
+    true
+  );
 
   // Session panel size persistence (percentage of available width)
   const [sessionPanelSize, setSessionPanelSize] = useLocalStorage<number>(
@@ -219,10 +221,10 @@ export const App: React.FC<AppProps> = ({
   const [themeEditorOpen, setThemeEditorOpen] = useState(false);
 
   // Initialize event stream panel state from localStorage (collapsed by default)
-  const [eventStreamPanelCollapsed, setEventStreamPanelCollapsed] = useState(() => {
-    const stored = localStorage.getItem('agor:eventStreamPanelCollapsed');
-    return stored ? stored === 'true' : true; // Default to collapsed (hidden)
-  });
+  const [eventStreamPanelCollapsed, setEventStreamPanelCollapsed] = useLocalStorage<boolean>(
+    'agor:eventStreamPanelCollapsed',
+    true
+  );
 
   // Initialize current board from localStorage or fallback to first board or initialBoardId
   const [currentBoardId, setCurrentBoardIdInternal] = useState(() => {
@@ -265,16 +267,6 @@ export const App: React.FC<AppProps> = ({
     setCurrentBoardIdInternal(boardId);
   }, []);
 
-  // Persist comments panel collapsed state to localStorage
-  useEffect(() => {
-    localStorage.setItem('agor:commentsPanelCollapsed', String(commentsPanelCollapsed));
-  }, [commentsPanelCollapsed]);
-
-  // Persist event stream panel collapsed state to localStorage
-  useEffect(() => {
-    localStorage.setItem('agor:eventStreamPanelCollapsed', String(eventStreamPanelCollapsed));
-  }, [eventStreamPanelCollapsed]);
-
   // If the stored board no longer exists (e.g., deleted), fallback to first board
   useEffect(() => {
     if (currentBoardId && !boardById.has(currentBoardId)) {
@@ -295,11 +287,11 @@ export const App: React.FC<AppProps> = ({
     enabled: !eventStreamPanelCollapsed,
   });
 
-  const handleOpenTerminal = (commands: string[] = [], worktreeId?: string) => {
+  const handleOpenTerminal = useCallback((commands: string[] = [], worktreeId?: string) => {
     setTerminalCommands(commands);
     setTerminalWorktreeId(worktreeId);
     setTerminalOpen(true);
-  };
+  }, []);
 
   const handleCloseTerminal = () => {
     setTerminalOpen(false);
@@ -353,38 +345,6 @@ export const App: React.FC<AppProps> = ({
     const worktree = session?.worktree_id ? worktreeById.get(session.worktree_id) : undefined;
     if (worktree?.needs_attention) {
       onUpdateWorktree?.(worktree.worktree_id, { needs_attention: false });
-    }
-  };
-
-  const handleSendPrompt = async (prompt: string, permissionMode?: PermissionMode) => {
-    if (selectedSessionId) {
-      const session = sessionById.get(selectedSessionId);
-      const agentName = session?.agentic_tool || 'agentic_tool';
-
-      // Show loading state
-      console.log(`Sending prompt to ${agentName}...`, {
-        sessionId: selectedSessionId,
-        prompt,
-        permissionMode,
-      });
-
-      // Call the prompt endpoint
-      // Note: onSendPrompt should be implemented in the parent to call the daemon
-      onSendPrompt?.(selectedSessionId, prompt, permissionMode);
-    }
-  };
-
-  const handleFork = (prompt: string) => {
-    if (selectedSessionId) {
-      onForkSession?.(selectedSessionId, prompt);
-    }
-  };
-
-  const handleSubsession = (config: string | Partial<SpawnConfig>) => {
-    if (selectedSessionId) {
-      // Handle both legacy string prompt and new SpawnConfig
-      const spawnConfig = typeof config === 'string' ? { prompt: config } : config;
-      onSpawnSession?.(selectedSessionId, spawnConfig);
     }
   };
 
@@ -490,392 +450,423 @@ export const App: React.FC<AppProps> = ({
       return mentionPatterns.some((pattern) => comment.content.includes(pattern));
     });
 
+  // Memoize AppDataContext value to prevent unnecessary re-renders
+  const appDataValue = useMemo(
+    () => ({
+      sessionById,
+      worktreeById,
+      sessionsByWorktree,
+      repoById,
+      mcpServerById,
+      sessionMcpServerIds,
+      userById,
+      boardById,
+      boardObjectById,
+      commentById,
+    }),
+    [
+      sessionById,
+      worktreeById,
+      sessionsByWorktree,
+      repoById,
+      mcpServerById,
+      sessionMcpServerIds,
+      userById,
+      boardById,
+      boardObjectById,
+      commentById,
+    ]
+  );
+
+  // Memoize AppActionsContext value with useCallback-wrapped handlers
+  const appActionsValue = useMemo(
+    () => ({
+      onSendPrompt,
+      onFork: onForkSession,
+      onSubsession: onSpawnSession,
+      onUpdateSession,
+      onDeleteSession,
+      onPermissionDecision: handlePermissionDecision,
+      onStartEnvironment,
+      onStopEnvironment,
+      onViewLogs: (worktreeId: string) => setLogsModalWorktreeId(worktreeId),
+      onOpenSettings: (sessionId: string) => setSessionSettingsId(sessionId),
+      onOpenWorktree: (worktreeId: string) => setWorktreeModalWorktreeId(worktreeId),
+      onOpenTerminal: handleOpenTerminal,
+    }),
+    [
+      onSendPrompt,
+      onForkSession,
+      onSpawnSession,
+      onUpdateSession,
+      onDeleteSession,
+      handlePermissionDecision,
+      onStartEnvironment,
+      onStopEnvironment,
+      handleOpenTerminal,
+    ]
+  );
+
   return (
-    <Layout style={{ height: '100vh' }}>
-      <AppHeader
-        user={user}
-        activeUsers={allActiveUsers}
-        currentUserId={user?.user_id}
-        connected={connected}
-        connecting={connecting}
-        onMenuClick={() => setListDrawerOpen(true)}
-        onCommentsClick={() => setCommentsPanelCollapsed(!commentsPanelCollapsed)}
-        onEventStreamClick={() => {
-          // If session is open, close it and show event stream
-          if (selectedSessionId) {
-            setSelectedSessionId(null);
-            setEventStreamPanelCollapsed(false);
-          } else {
-            // Toggle event stream panel
-            setEventStreamPanelCollapsed(!eventStreamPanelCollapsed);
-          }
-        }}
-        onSettingsClick={() => setSettingsOpen(true)}
-        onUserSettingsClick={() => setUserSettingsOpen(true)}
-        onThemeEditorClick={() => setThemeEditorOpen(true)}
-        onLogout={onLogout}
-        onRetryConnection={onRetryConnection}
-        currentBoardName={currentBoard?.name}
-        currentBoardIcon={currentBoard?.icon}
-        unreadCommentsCount={
-          activeComments.filter((c: BoardComment) => !c.parent_comment_id).length
-        }
-        eventStreamEnabled={eventStreamEnabled}
-        hasUserMentions={hasUserMentions}
-        boards={mapToArray(boardById)}
-        currentBoardId={currentBoardId}
-        onBoardChange={setCurrentBoardId}
-        worktreeById={worktreeById}
-        repoCount={repoById.size}
-        worktreeCount={worktreeById.size}
-        hasAuthentication={
-          // Check if user has any AI provider credentials configured
-          !!(
-            user?.api_keys?.ANTHROPIC_API_KEY ||
-            user?.api_keys?.OPENAI_API_KEY ||
-            user?.api_keys?.GEMINI_API_KEY ||
-            user?.env_vars?.ANTHROPIC_API_KEY ||
-            user?.env_vars?.OPENAI_API_KEY ||
-            user?.env_vars?.GEMINI_API_KEY
-          )
-        }
-        onDismissOnboarding={
-          onUpdateUser
-            ? () => {
-                if (user) {
-                  onUpdateUser(user.user_id, { onboarding_completed: true });
-                }
+    <AppDataProvider value={appDataValue}>
+      <AppActionsProvider value={appActionsValue}>
+        <Layout style={{ height: '100vh' }}>
+          <AppHeader
+            user={user}
+            activeUsers={allActiveUsers}
+            currentUserId={user?.user_id}
+            connected={connected}
+            connecting={connecting}
+            onMenuClick={() => setListDrawerOpen(true)}
+            onCommentsClick={() => setCommentsPanelCollapsed(!commentsPanelCollapsed)}
+            onEventStreamClick={() => {
+              // If session is open, close it and show event stream
+              if (selectedSessionId) {
+                setSelectedSessionId(null);
+                setEventStreamPanelCollapsed(false);
+              } else {
+                // Toggle event stream panel
+                setEventStreamPanelCollapsed(!eventStreamPanelCollapsed);
               }
-            : undefined
-        }
-        onOpenRepoSettings={() => {
-          setSettingsActiveTab('repos');
-          setSettingsOpen(true);
-        }}
-        onOpenAuthSettings={() => {
-          setSettingsActiveTab('agentic-tools');
-          setSettingsOpen(true);
-        }}
-        onOpenNewWorktree={() => {
-          setNewWorktreeModalOpen(true);
-        }}
-        boardById={boardById}
-        onUserClick={(userId: string, boardId?: BoardID, cursor?: { x: number; y: number }) => {
-          // Navigate to the user's board
-          if (boardId) {
-            setCurrentBoardId(boardId);
-            // TODO: If cursor position is provided, we could pan to that position
-            // This would require exposing a method on SessionCanvasRef
-          }
-        }}
-      />
-      <Content style={{ position: 'relative', overflow: 'hidden', display: 'flex' }}>
-        <CommentsPanel
-          client={client}
-          boardId={currentBoardId || ''}
-          comments={mapToArray(commentById).filter(
-            (c: BoardComment) => c.board_id === currentBoardId
-          )}
-          userById={userById}
-          currentUserId={user?.user_id || 'anonymous'}
-          boardObjects={currentBoard?.objects}
-          worktreeById={worktreeById}
-          collapsed={commentsPanelCollapsed}
-          onToggleCollapse={() => setCommentsPanelCollapsed(!commentsPanelCollapsed)}
-          onSendComment={(content) => onSendComment?.(currentBoardId || '', content)}
-          onReplyComment={onReplyComment}
-          onResolveComment={onResolveComment}
-          onToggleReaction={onToggleReaction}
-          onDeleteComment={onDeleteComment}
-          hoveredCommentId={hoveredCommentId}
-          selectedCommentId={selectedCommentId}
-        />
-        <PanelGroup
-          direction="horizontal"
-          style={{ flex: 1 }}
-          onLayout={(sizes) => {
-            // Save panel size when user resizes (only when panel is open)
-            if (selectedSessionId && sizes.length === 2) {
-              setSessionPanelSize(sizes[1]);
+            }}
+            onSettingsClick={() => setSettingsOpen(true)}
+            onUserSettingsClick={() => setUserSettingsOpen(true)}
+            onThemeEditorClick={() => setThemeEditorOpen(true)}
+            onLogout={onLogout}
+            onRetryConnection={onRetryConnection}
+            currentBoardName={currentBoard?.name}
+            currentBoardIcon={currentBoard?.icon}
+            unreadCommentsCount={
+              activeComments.filter((c: BoardComment) => !c.parent_comment_id).length
             }
-          }}
-        >
-          <Panel defaultSize={selectedSessionId ? 100 - sessionPanelSize : 100} minSize={20}>
-            <div style={{ position: 'relative', overflow: 'hidden', height: '100%' }}>
-              <SessionCanvas
-                board={currentBoard || null}
-                client={client}
-                sessionById={sessionById}
-                sessionsByWorktree={sessionsByWorktree}
-                userById={userById}
-                repoById={repoById}
-                worktrees={boardWorktrees}
-                worktreeById={worktreeById}
-                boardObjectById={boardObjectById}
-                commentById={commentById}
-                currentUserId={user?.user_id}
-                selectedSessionId={selectedSessionId}
-                availableAgents={availableAgents}
-                mcpServerById={mcpServerById}
-                sessionMcpServerIds={sessionMcpServerIds}
-                onSessionClick={handleSessionClick}
-                onSessionUpdate={onUpdateSession}
-                onSessionDelete={onDeleteSession}
-                onForkSession={onForkSession}
-                onSpawnSession={onSpawnSession}
-                onUpdateSessionMcpServers={onUpdateSessionMcpServers}
-                onOpenSettings={(sessionId) => {
-                  setSessionSettingsId(sessionId);
-                }}
-                onCreateSessionForWorktree={(worktreeId) => {
-                  setNewSessionWorktreeId(worktreeId);
-                }}
-                onOpenWorktree={(worktreeId) => {
-                  setWorktreeModalWorktreeId(worktreeId);
-                }}
-                onArchiveOrDeleteWorktree={onArchiveOrDeleteWorktree}
-                onOpenTerminal={handleOpenTerminal}
-                onStartEnvironment={onStartEnvironment}
-                onStopEnvironment={onStopEnvironment}
-                onViewLogs={setLogsModalWorktreeId}
-                onOpenCommentsPanel={() => setCommentsPanelCollapsed(false)}
-                onCommentHover={setHoveredCommentId}
-                onCommentSelect={(commentId) => {
-                  // Toggle selection: if clicking same comment, deselect
-                  setSelectedCommentId((prev) => (prev === commentId ? null : commentId));
-                }}
-              />
-              <NewSessionButton
-                onClick={() => {
-                  if (repoById.size === 0) {
-                    showWarning('Please create a repository first in Settings');
-                  } else {
-                    setNewWorktreeModalOpen(true);
-                  }
-                }}
-                hasRepos={repoById.size > 0}
-              />
-            </div>
-          </Panel>
-          {(selectedSessionId || !eventStreamPanelCollapsed) && (
-            <>
-              <PanelResizeHandle
-                style={{
-                  width: '4px',
-                  background: 'var(--ant-color-border-secondary)',
-                  cursor: 'col-resize',
-                  transition: 'background 0.2s',
-                }}
-                onMouseEnter={(e) => {
-                  (e.currentTarget as unknown as HTMLDivElement).style.background =
-                    'var(--ant-color-primary)';
-                }}
-                onMouseLeave={(e) => {
-                  (e.currentTarget as unknown as HTMLDivElement).style.background =
-                    'var(--ant-color-border-secondary)';
-                }}
-              />
-              <Panel defaultSize={sessionPanelSize} minSize={25} maxSize={75}>
-                {selectedSessionId ? (
-                  <SessionPanel
-                    client={client}
-                    session={selectedSession}
-                    worktree={selectedSessionWorktree}
-                    userById={userById}
-                    currentUserId={user?.user_id}
-                    repoById={repoById}
-                    mcpServerById={mcpServerById}
-                    sessionMcpServerIds={
-                      selectedSessionId ? sessionMcpServerIds.get(selectedSessionId) || [] : []
+            eventStreamEnabled={eventStreamEnabled}
+            hasUserMentions={hasUserMentions}
+            boards={mapToArray(boardById)}
+            currentBoardId={currentBoardId}
+            onBoardChange={setCurrentBoardId}
+            worktreeById={worktreeById}
+            repoCount={repoById.size}
+            worktreeCount={worktreeById.size}
+            hasAuthentication={
+              // Check if user has any AI provider credentials configured
+              !!(
+                user?.api_keys?.ANTHROPIC_API_KEY ||
+                user?.api_keys?.OPENAI_API_KEY ||
+                user?.api_keys?.GEMINI_API_KEY ||
+                user?.env_vars?.ANTHROPIC_API_KEY ||
+                user?.env_vars?.OPENAI_API_KEY ||
+                user?.env_vars?.GEMINI_API_KEY
+              )
+            }
+            onDismissOnboarding={
+              onUpdateUser
+                ? () => {
+                    if (user) {
+                      onUpdateUser(user.user_id, { onboarding_completed: true });
                     }
-                    open={!!selectedSessionId}
-                    onClose={() => {
-                      setSelectedSessionId(null);
-                    }}
-                    onSendPrompt={handleSendPrompt}
-                    onFork={handleFork}
-                    onSubsession={handleSubsession}
-                    onPermissionDecision={handlePermissionDecision}
+                  }
+                : undefined
+            }
+            onOpenRepoSettings={() => {
+              setSettingsActiveTab('repos');
+              setSettingsOpen(true);
+            }}
+            onOpenAuthSettings={() => {
+              setSettingsActiveTab('agentic-tools');
+              setSettingsOpen(true);
+            }}
+            onOpenNewWorktree={() => {
+              setNewWorktreeModalOpen(true);
+            }}
+            boardById={boardById}
+            onUserClick={(userId: string, boardId?: BoardID, cursor?: { x: number; y: number }) => {
+              // Navigate to the user's board
+              if (boardId) {
+                setCurrentBoardId(boardId);
+                // TODO: If cursor position is provided, we could pan to that position
+                // This would require exposing a method on SessionCanvasRef
+              }
+            }}
+          />
+          <Content style={{ position: 'relative', overflow: 'hidden', display: 'flex' }}>
+            <CommentsPanel
+              client={client}
+              boardId={currentBoardId || ''}
+              comments={mapToArray(commentById).filter(
+                (c: BoardComment) => c.board_id === currentBoardId
+              )}
+              userById={userById}
+              currentUserId={user?.user_id || 'anonymous'}
+              boardObjects={currentBoard?.objects}
+              worktreeById={worktreeById}
+              collapsed={commentsPanelCollapsed}
+              onToggleCollapse={() => setCommentsPanelCollapsed(!commentsPanelCollapsed)}
+              onSendComment={(content) => onSendComment?.(currentBoardId || '', content)}
+              onReplyComment={onReplyComment}
+              onResolveComment={onResolveComment}
+              onToggleReaction={onToggleReaction}
+              onDeleteComment={onDeleteComment}
+              hoveredCommentId={hoveredCommentId}
+              selectedCommentId={selectedCommentId}
+            />
+            <PanelGroup
+              direction="horizontal"
+              style={{ flex: 1 }}
+              onLayout={(sizes) => {
+                // Save panel size when user resizes (only when panel is open)
+                if (selectedSessionId && sizes.length === 2) {
+                  setSessionPanelSize(sizes[1]);
+                }
+              }}
+            >
+              <Panel defaultSize={selectedSessionId ? 100 - sessionPanelSize : 100} minSize={20}>
+                <div style={{ position: 'relative', overflow: 'hidden', height: '100%' }}>
+                  <SessionCanvas
+                    board={currentBoard || null}
+                    client={client}
+                    sessionById={sessionById}
+                    sessionsByWorktree={sessionsByWorktree}
+                    userById={userById}
+                    repoById={repoById}
+                    worktrees={boardWorktrees}
+                    worktreeById={worktreeById}
+                    boardObjectById={boardObjectById}
+                    commentById={commentById}
+                    currentUserId={user?.user_id}
+                    selectedSessionId={selectedSessionId}
+                    availableAgents={availableAgents}
+                    mcpServerById={mcpServerById}
+                    sessionMcpServerIds={sessionMcpServerIds}
+                    onSessionClick={handleSessionClick}
+                    onSessionUpdate={onUpdateSession}
+                    onSessionDelete={onDeleteSession}
+                    onForkSession={onForkSession}
+                    onSpawnSession={onSpawnSession}
+                    onUpdateSessionMcpServers={onUpdateSessionMcpServers}
                     onOpenSettings={(sessionId) => {
                       setSessionSettingsId(sessionId);
+                    }}
+                    onCreateSessionForWorktree={(worktreeId) => {
+                      setNewSessionWorktreeId(worktreeId);
                     }}
                     onOpenWorktree={(worktreeId) => {
                       setWorktreeModalWorktreeId(worktreeId);
                     }}
+                    onArchiveOrDeleteWorktree={onArchiveOrDeleteWorktree}
                     onOpenTerminal={handleOpenTerminal}
-                    onUpdateSession={onUpdateSession}
-                    onDelete={onDeleteSession}
                     onStartEnvironment={onStartEnvironment}
                     onStopEnvironment={onStopEnvironment}
                     onViewLogs={setLogsModalWorktreeId}
-                  />
-                ) : (
-                  <EventStreamPanel
-                    collapsed={false}
-                    onToggleCollapse={() => setEventStreamPanelCollapsed(true)}
-                    events={events}
-                    onClear={clearEvents}
-                    worktreeById={worktreeById}
-                    sessionById={sessionById}
-                    sessionsByWorktree={sessionsByWorktree}
-                    repos={mapToArray(repoById)}
-                    userById={userById}
-                    currentUserId={user?.user_id}
-                    selectedSessionId={selectedSessionId}
-                    currentBoard={currentBoard}
-                    client={client}
-                    worktreeActions={{
-                      onSessionClick: setSelectedSessionId,
-                      onCreateSession: (worktreeId) => setNewSessionWorktreeId(worktreeId),
-                      onForkSession,
-                      onSpawnSession,
-                      onOpenTerminal: handleOpenTerminal,
-                      onStartEnvironment,
-                      onStopEnvironment,
-                      onOpenSettings: (worktreeId) => setWorktreeModalWorktreeId(worktreeId),
-                      onViewLogs: (worktreeId) => setLogsModalWorktreeId(worktreeId),
+                    onOpenCommentsPanel={() => setCommentsPanelCollapsed(false)}
+                    onCommentHover={setHoveredCommentId}
+                    onCommentSelect={(commentId) => {
+                      // Toggle selection: if clicking same comment, deselect
+                      setSelectedCommentId((prev) => (prev === commentId ? null : commentId));
                     }}
                   />
-                )}
+                  <NewSessionButton
+                    onClick={() => {
+                      if (repoById.size === 0) {
+                        showWarning('Please create a repository first in Settings');
+                      } else {
+                        setNewWorktreeModalOpen(true);
+                      }
+                    }}
+                    hasRepos={repoById.size > 0}
+                  />
+                </div>
               </Panel>
-            </>
+              {(selectedSessionId || !eventStreamPanelCollapsed) && (
+                <>
+                  <PanelResizeHandle
+                    style={{
+                      width: '4px',
+                      background: 'var(--ant-color-border-secondary)',
+                      cursor: 'col-resize',
+                      transition: 'background 0.2s',
+                    }}
+                    onMouseEnter={(e) => {
+                      (e.currentTarget as unknown as HTMLDivElement).style.background =
+                        'var(--ant-color-primary)';
+                    }}
+                    onMouseLeave={(e) => {
+                      (e.currentTarget as unknown as HTMLDivElement).style.background =
+                        'var(--ant-color-border-secondary)';
+                    }}
+                  />
+                  <Panel defaultSize={sessionPanelSize} minSize={25} maxSize={75}>
+                    {selectedSessionId ? (
+                      <SessionPanel
+                        client={client}
+                        session={selectedSession}
+                        worktree={selectedSessionWorktree}
+                        currentUserId={user?.user_id}
+                        sessionMcpServerIds={
+                          selectedSessionId ? sessionMcpServerIds.get(selectedSessionId) || [] : []
+                        }
+                        open={!!selectedSessionId}
+                        onClose={() => {
+                          setSelectedSessionId(null);
+                        }}
+                      />
+                    ) : (
+                      <EventStreamPanel
+                        collapsed={false}
+                        onToggleCollapse={() => setEventStreamPanelCollapsed(true)}
+                        events={events}
+                        onClear={clearEvents}
+                        currentUserId={user?.user_id}
+                        selectedSessionId={selectedSessionId}
+                        currentBoard={currentBoard}
+                        client={client}
+                        worktreeActions={{
+                          onSessionClick: setSelectedSessionId,
+                          onCreateSession: (worktreeId) => setNewSessionWorktreeId(worktreeId),
+                          onOpenSettings: (worktreeId) => setWorktreeModalWorktreeId(worktreeId),
+                        }}
+                      />
+                    )}
+                  </Panel>
+                </>
+              )}
+            </PanelGroup>
+          </Content>
+          {newSessionWorktreeId && (
+            <NewSessionModal
+              open={true}
+              onClose={() => setNewSessionWorktreeId(null)}
+              onCreate={handleCreateSession}
+              availableAgents={availableAgents}
+              worktreeId={newSessionWorktreeId}
+              worktree={newSessionWorktree || undefined}
+              mcpServerById={mcpServerById}
+              currentUser={user}
+              client={client}
+              userById={userById}
+            />
           )}
-        </PanelGroup>
-      </Content>
-      {newSessionWorktreeId && (
-        <NewSessionModal
-          open={true}
-          onClose={() => setNewSessionWorktreeId(null)}
-          onCreate={handleCreateSession}
-          availableAgents={availableAgents}
-          worktreeId={newSessionWorktreeId}
-          worktree={newSessionWorktree || undefined}
-          mcpServerById={mcpServerById}
-          currentUser={user}
-          client={client}
-          userById={userById}
-        />
-      )}
-      <SettingsModal
-        open={settingsOpen}
-        onClose={() => {
-          setSettingsOpen(false);
-          onSettingsClose?.();
-        }}
-        client={client}
-        currentUser={user}
-        boardById={boardById}
-        boardObjects={mapToArray(boardObjectById)}
-        repoById={repoById}
-        worktreeById={worktreeById}
-        sessionById={sessionById}
-        sessionsByWorktree={sessionsByWorktree}
-        userById={userById}
-        mcpServerById={mcpServerById}
-        activeTab={effectiveSettingsTab}
-        onTabChange={(newTab) => {
-          setSettingsActiveTab(newTab);
-          // Clear openSettingsTab when user manually changes tabs
-          // This allows normal tab switching after opening from onboarding
-          if (openSettingsTab) {
-            onSettingsClose?.();
-          }
-        }}
-        onCreateBoard={onCreateBoard}
-        onUpdateBoard={onUpdateBoard}
-        onDeleteBoard={onDeleteBoard}
-        onCreateRepo={onCreateRepo}
-        onCreateLocalRepo={onCreateLocalRepo}
-        onUpdateRepo={onUpdateRepo}
-        onDeleteRepo={onDeleteRepo}
-        onArchiveOrDeleteWorktree={onArchiveOrDeleteWorktree}
-        onUpdateWorktree={onUpdateWorktree}
-        onCreateWorktree={onCreateWorktree}
-        onStartEnvironment={onStartEnvironment}
-        onStopEnvironment={onStopEnvironment}
-        onCreateUser={onCreateUser}
-        onUpdateUser={onUpdateUser}
-        onDeleteUser={onDeleteUser}
-        onCreateMCPServer={onCreateMCPServer}
-        onUpdateMCPServer={onUpdateMCPServer}
-        onDeleteMCPServer={onDeleteMCPServer}
-      />
-      {sessionSettingsSession && (
-        <SessionSettingsModal
-          open={!!sessionSettingsId}
-          onClose={() => setSessionSettingsId(null)}
-          session={sessionSettingsSession}
-          mcpServerById={mcpServerById}
-          sessionMcpServerIds={
-            sessionSettingsId ? sessionMcpServerIds.get(sessionSettingsId) || [] : []
-          }
-          onUpdate={onUpdateSession}
-          onUpdateSessionMcpServers={onUpdateSessionMcpServers}
-        />
-      )}
-      <WorktreeModal
-        open={!!worktreeModalWorktreeId}
-        onClose={() => setWorktreeModalWorktreeId(null)}
-        worktree={selectedWorktree || null}
-        repo={selectedWorktreeRepo || null}
-        sessions={worktreeSessions}
-        boardById={boardById}
-        mcpServerById={mcpServerById}
-        client={client}
-        onUpdateWorktree={onUpdateWorktree}
-        onUpdateRepo={onUpdateRepo}
-        onArchiveOrDelete={onArchiveOrDeleteWorktree}
-        onOpenSettings={() => {
-          setWorktreeModalWorktreeId(null);
-          setSettingsOpen(true);
-        }}
-      />
-      <WorktreeListDrawer
-        open={listDrawerOpen}
-        onClose={() => setListDrawerOpen(false)}
-        boards={mapToArray(boardById)}
-        currentBoardId={currentBoardId}
-        onBoardChange={setCurrentBoardId}
-        sessionsByWorktree={sessionsByWorktree}
-        worktreeById={worktreeById}
-        onSessionClick={setSelectedSessionId}
-      />
-      <TerminalModal
-        open={terminalOpen}
-        onClose={handleCloseTerminal}
-        client={client}
-        user={user}
-        worktreeId={terminalWorktreeId}
-        initialCommands={terminalCommands}
-      />
-      <NewWorktreeModal
-        open={newWorktreeModalOpen}
-        onClose={() => {
-          setNewWorktreeModalOpen(false);
-        }}
-        onCreate={handleCreateWorktree}
-        repoById={repoById}
-        currentBoardId={currentBoardId}
-      />
-      {logsModalWorktreeId && (
-        <EnvironmentLogsModal
-          open={!!logsModalWorktreeId}
-          onClose={() => setLogsModalWorktreeId(null)}
-          worktree={worktreeById.get(logsModalWorktreeId)!}
-          client={client}
-        />
-      )}
-      <ThemeEditorModal open={themeEditorOpen} onClose={() => setThemeEditorOpen(false)} />
-      <UserSettingsModal
-        open={effectiveUserSettingsOpen}
-        onClose={() => {
-          setUserSettingsOpen(false);
-          onUserSettingsClose?.();
-        }}
-        user={user || null}
-        mcpServerById={mcpServerById}
-        onUpdate={onUpdateUser}
-      />
-    </Layout>
+          <SettingsModal
+            open={settingsOpen}
+            onClose={() => {
+              setSettingsOpen(false);
+              onSettingsClose?.();
+            }}
+            client={client}
+            currentUser={user}
+            boardById={boardById}
+            boardObjects={mapToArray(boardObjectById)}
+            repoById={repoById}
+            worktreeById={worktreeById}
+            sessionById={sessionById}
+            sessionsByWorktree={sessionsByWorktree}
+            userById={userById}
+            mcpServerById={mcpServerById}
+            activeTab={effectiveSettingsTab}
+            onTabChange={(newTab) => {
+              setSettingsActiveTab(newTab);
+              // Clear openSettingsTab when user manually changes tabs
+              // This allows normal tab switching after opening from onboarding
+              if (openSettingsTab) {
+                onSettingsClose?.();
+              }
+            }}
+            onCreateBoard={onCreateBoard}
+            onUpdateBoard={onUpdateBoard}
+            onDeleteBoard={onDeleteBoard}
+            onCreateRepo={onCreateRepo}
+            onCreateLocalRepo={onCreateLocalRepo}
+            onUpdateRepo={onUpdateRepo}
+            onDeleteRepo={onDeleteRepo}
+            onArchiveOrDeleteWorktree={onArchiveOrDeleteWorktree}
+            onUpdateWorktree={onUpdateWorktree}
+            onCreateWorktree={onCreateWorktree}
+            onStartEnvironment={onStartEnvironment}
+            onStopEnvironment={onStopEnvironment}
+            onCreateUser={onCreateUser}
+            onUpdateUser={onUpdateUser}
+            onDeleteUser={onDeleteUser}
+            onCreateMCPServer={onCreateMCPServer}
+            onUpdateMCPServer={onUpdateMCPServer}
+            onDeleteMCPServer={onDeleteMCPServer}
+          />
+          {sessionSettingsSession && (
+            <SessionSettingsModal
+              open={!!sessionSettingsId}
+              onClose={() => setSessionSettingsId(null)}
+              session={sessionSettingsSession}
+              mcpServerById={mcpServerById}
+              sessionMcpServerIds={
+                sessionSettingsId ? sessionMcpServerIds.get(sessionSettingsId) || [] : []
+              }
+              onUpdate={onUpdateSession}
+              onUpdateSessionMcpServers={onUpdateSessionMcpServers}
+            />
+          )}
+          <WorktreeModal
+            open={!!worktreeModalWorktreeId}
+            onClose={() => setWorktreeModalWorktreeId(null)}
+            worktree={selectedWorktree || null}
+            repo={selectedWorktreeRepo || null}
+            sessions={worktreeSessions}
+            boardById={boardById}
+            mcpServerById={mcpServerById}
+            client={client}
+            onUpdateWorktree={onUpdateWorktree}
+            onUpdateRepo={onUpdateRepo}
+            onArchiveOrDelete={onArchiveOrDeleteWorktree}
+            onOpenSettings={() => {
+              setWorktreeModalWorktreeId(null);
+              setSettingsOpen(true);
+            }}
+          />
+          <WorktreeListDrawer
+            open={listDrawerOpen}
+            onClose={() => setListDrawerOpen(false)}
+            boards={mapToArray(boardById)}
+            currentBoardId={currentBoardId}
+            onBoardChange={setCurrentBoardId}
+            sessionsByWorktree={sessionsByWorktree}
+            worktreeById={worktreeById}
+            onSessionClick={setSelectedSessionId}
+          />
+          <TerminalModal
+            open={terminalOpen}
+            onClose={handleCloseTerminal}
+            client={client}
+            user={user}
+            worktreeId={terminalWorktreeId}
+            initialCommands={terminalCommands}
+          />
+          <NewWorktreeModal
+            open={newWorktreeModalOpen}
+            onClose={() => {
+              setNewWorktreeModalOpen(false);
+            }}
+            onCreate={handleCreateWorktree}
+            repoById={repoById}
+            currentBoardId={currentBoardId}
+          />
+          {logsModalWorktreeId && (
+            <EnvironmentLogsModal
+              open={!!logsModalWorktreeId}
+              onClose={() => setLogsModalWorktreeId(null)}
+              worktree={worktreeById.get(logsModalWorktreeId)!}
+              client={client}
+            />
+          )}
+          <ThemeEditorModal open={themeEditorOpen} onClose={() => setThemeEditorOpen(false)} />
+          <UserSettingsModal
+            open={effectiveUserSettingsOpen}
+            onClose={() => {
+              setUserSettingsOpen(false);
+              onUserSettingsClose?.();
+            }}
+            user={user || null}
+            mcpServerById={mcpServerById}
+            onUpdate={onUpdateUser}
+          />
+        </Layout>
+      </AppActionsProvider>
+    </AppDataProvider>
   );
 };

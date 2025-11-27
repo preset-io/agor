@@ -2,14 +2,10 @@ import type { AgorClient } from '@agor/core/api';
 import type {
   CodexApprovalPolicy,
   CodexSandboxMode,
-  MCPServer,
   Message,
   PermissionMode,
-  PermissionScope,
-  Repo,
   Session,
   SpawnConfig,
-  User,
   Worktree,
 } from '@agor/core/types';
 import { SessionStatus, TaskStatus } from '@agor/core/types';
@@ -25,6 +21,8 @@ import {
 } from '@ant-design/icons';
 import { App, Badge, Button, Space, Spin, Tooltip, Typography, theme } from 'antd';
 import React from 'react';
+import { useAppActions } from '../../contexts/AppActionsContext';
+import { useAppData } from '../../contexts/AppDataContext';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useTasks } from '../../hooks/useTasks';
 import spawnSubsessionTemplate from '../../templates/spawn_subsession.hbs?raw';
@@ -60,60 +58,37 @@ export interface SessionPanelProps {
   client: AgorClient | null;
   session: Session | null;
   worktree?: Worktree | null;
-  userById?: Map<string, User>;
   currentUserId?: string;
-  repoById?: Map<string, Repo>;
-  mcpServerById?: Map<string, MCPServer>;
   sessionMcpServerIds?: string[];
   open: boolean;
   onClose: () => void;
-  onSendPrompt?: (prompt: string, permissionMode?: PermissionMode) => void;
-  onFork?: (prompt: string) => void;
-  onSubsession?: (config: string | Partial<SpawnConfig>) => void;
-  onPermissionDecision?: (
-    sessionId: string,
-    requestId: string,
-    taskId: string,
-    allow: boolean,
-    scope: PermissionScope
-  ) => void;
-  onOpenSettings?: (sessionId: string) => void;
-  onOpenWorktree?: (worktreeId: string) => void;
-  onOpenTerminal?: (commands: string[], worktreeId?: string) => void;
-  onUpdateSession?: (sessionId: string, updates: Partial<Session>) => void;
-  onDelete?: (sessionId: string) => void;
-  onStartEnvironment?: (worktreeId: string) => void;
-  onStopEnvironment?: (worktreeId: string) => void;
-  onViewLogs?: (worktreeId: string) => void;
 }
 
 const SessionPanel: React.FC<SessionPanelProps> = ({
   client,
   session,
   worktree = null,
-  userById = new Map(),
   currentUserId,
-  repoById = new Map(),
-  mcpServerById = new Map(),
   sessionMcpServerIds = [],
   open,
   onClose,
-  onSendPrompt,
-  onFork,
-  onSubsession,
-  onPermissionDecision,
-  onOpenSettings,
-  onOpenWorktree,
-  onOpenTerminal,
-  onUpdateSession,
-  onDelete,
-  onStartEnvironment,
-  onStopEnvironment,
-  onViewLogs,
 }) => {
   const { token } = theme.useToken();
   const { modal, message } = App.useApp();
   const connectionDisabled = useConnectionDisabled();
+
+  // Get data from context
+  const { userById } = useAppData();
+
+  // Get actions from context
+  const {
+    onSendPrompt,
+    onFork,
+    onOpenSettings,
+    onUpdateSession,
+    onDeleteSession: onDelete,
+    onOpenTerminal,
+  } = useAppActions();
 
   // Per-session draft storage
   const draftsRef = React.useRef<Map<string, string>>(new Map());
@@ -365,7 +340,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       } else {
         setInputValue('');
         draftsRef.current.delete(session.session_id);
-        onSendPrompt?.(promptToSend, permissionMode);
+        onSendPrompt?.(session.session_id, promptToSend, permissionMode);
       }
     } catch (error) {
       message.error(
@@ -388,7 +363,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   };
 
   const handleFork = () => {
-    onFork?.(inputValue.trim());
+    if (!session) return;
+    onFork?.(session.session_id, inputValue.trim());
     setInputValue('');
     draftsRef.current.delete(session.session_id);
   };
@@ -403,15 +379,18 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       userPrompt: inputValue,
     });
 
-    onSendPrompt?.(metaPrompt, permissionMode);
+    if (!session) return;
+    onSendPrompt?.(session.session_id, metaPrompt, permissionMode);
     setInputValue('');
     draftsRef.current.delete(session.session_id);
   };
 
   const handleSpawnModalConfirm = async (config: string | Partial<SpawnConfig>) => {
+    if (!session) return;
+
     if (typeof config === 'string') {
       const metaPrompt = compiledSpawnSubsessionTemplate({ userPrompt: config });
-      await onSendPrompt?.(metaPrompt, permissionMode);
+      await onSendPrompt?.(session.session_id, metaPrompt, permissionMode);
     } else {
       const hasConfig =
         config.agent !== undefined ||
@@ -453,7 +432,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         extraInstructions: config.extraInstructions,
       });
 
-      await onSendPrompt?.(metaPrompt, permissionMode);
+      await onSendPrompt?.(session.session_id, metaPrompt, permissionMode);
     }
 
     setSpawnModalOpen(false);
@@ -811,17 +790,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           client={client}
           session={session}
           worktree={worktree}
-          userById={userById}
           currentUserId={currentUserId}
-          repoById={repoById}
-          mcpServerById={mcpServerById}
           sessionMcpServerIds={sessionMcpServerIds}
-          onOpenWorktree={onOpenWorktree}
-          onOpenTerminal={onOpenTerminal}
-          onStartEnvironment={onStartEnvironment}
-          onStopEnvironment={onStopEnvironment}
-          onViewLogs={onViewLogs}
-          onPermissionDecision={onPermissionDecision}
           footerControls={footerControls}
           scrollToBottom={scrollToBottom}
           scrollToTop={scrollToTop}

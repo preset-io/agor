@@ -1,14 +1,5 @@
 import type { AgorClient } from '@agor/core/api';
-import type {
-  MCPServer,
-  Message,
-  PermissionScope,
-  Repo,
-  Session,
-  SpawnConfig,
-  User,
-  Worktree,
-} from '@agor/core/types';
+import type { Message, Session, SpawnConfig, Worktree } from '@agor/core/types';
 import {
   ApiOutlined,
   CopyOutlined,
@@ -18,6 +9,8 @@ import {
 } from '@ant-design/icons';
 import { App, Button, Divider, Space, Tag, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
+import { useAppActions } from '../../contexts/AppActionsContext';
+import { useAppData } from '../../contexts/AppDataContext';
 import { ConversationView } from '../ConversationView';
 import { EnvironmentPill } from '../EnvironmentPill';
 import { ForkSpawnModal } from '../ForkSpawnModal';
@@ -27,23 +20,8 @@ export interface SessionPanelContentProps {
   client: AgorClient | null;
   session: Session;
   worktree?: Worktree | null;
-  userById?: Map<string, User>;
   currentUserId?: string;
-  repoById?: Map<string, Repo>;
-  mcpServerById?: Map<string, MCPServer>;
   sessionMcpServerIds?: string[];
-  onOpenWorktree?: (worktreeId: string) => void;
-  onOpenTerminal?: (commands: string[], worktreeId?: string) => void;
-  onStartEnvironment?: (worktreeId: string) => void;
-  onStopEnvironment?: (worktreeId: string) => void;
-  onViewLogs?: (worktreeId: string) => void;
-  onPermissionDecision?: (
-    sessionId: string,
-    requestId: string,
-    taskId: string,
-    allow: boolean,
-    scope: PermissionScope
-  ) => void;
   footerControls: React.ReactNode;
   scrollToBottom: (() => void) | null;
   scrollToTop: (() => void) | null;
@@ -62,17 +40,8 @@ export const SessionPanelContent: React.FC<SessionPanelContentProps> = ({
   client,
   session,
   worktree = null,
-  userById = new Map(),
   currentUserId,
-  repoById = new Map(),
-  mcpServerById = new Map(),
   sessionMcpServerIds = [],
-  onOpenWorktree,
-  onOpenTerminal,
-  onStartEnvironment,
-  onStopEnvironment,
-  onViewLogs,
-  onPermissionDecision,
   footerControls,
   scrollToBottom,
   scrollToTop,
@@ -88,6 +57,18 @@ export const SessionPanelContent: React.FC<SessionPanelContentProps> = ({
 }) => {
   const { token } = theme.useToken();
   const { message } = App.useApp();
+
+  // Get data from context
+  const { userById, repoById, mcpServerById } = useAppData();
+
+  // Get actions from context
+  const {
+    onOpenWorktree,
+    onStartEnvironment,
+    onStopEnvironment,
+    onViewLogs,
+    onPermissionDecision,
+  } = useAppActions();
 
   // Get repo from worktree
   const repo = worktree ? repoById.get(worktree.repo_id) || null : null;
