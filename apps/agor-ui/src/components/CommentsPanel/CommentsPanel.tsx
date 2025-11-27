@@ -710,7 +710,7 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
         width: '100%',
         height: '100%',
         backgroundColor: token.colorBgContainer,
-        borderLeft: `1px solid ${token.colorBorder}`,
+        borderRight: `1px solid ${token.colorBorder}`,
         display: 'flex',
         flexDirection: 'column',
       }}
