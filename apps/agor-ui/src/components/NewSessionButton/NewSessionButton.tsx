@@ -27,7 +27,7 @@ export const NewSessionButton: React.FC<NewSessionButtonProps> = ({ onClick, has
         style={{
           position: 'absolute',
           right: 24,
-          top: 80,
+          top: 24,
           width: 56,
           height: 56,
           boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
