@@ -62,6 +62,29 @@ interface ResizeTerminalData {
 }
 
 /**
+ * Escape a string for safe use in shell commands
+ * Uses single quotes which prevent all expansions except for single quotes themselves
+ * Single quotes within the string are handled by closing the quote, escaping the quote, and reopening
+ * Example: foo'bar becomes 'foo'\''bar'
+ */
+function escapeShellArg(arg: string): string {
+  // Replace each single quote with '\'' (close quote, escaped quote, open quote)
+  return `'${arg.replace(/'/g, "'\\''")}'`;
+}
+
+/**
+ * Escape a string for use within double quotes in a Zellij write-chars command
+ * Must escape: backslashes, double quotes, dollar signs, backticks
+ */
+function escapeForWriteChars(str: string): string {
+  return str
+    .replace(/\\/g, '\\\\') // Escape backslashes first
+    .replace(/"/g, '\\"') // Escape double quotes
+    .replace(/\$/g, '\\$') // Escape dollar signs (prevent variable expansion)
+    .replace(/`/g, '\\`'); // Escape backticks (prevent command substitution)
+}
+
+/**
  * Check if Zellij is installed
  */
 function isZellijAvailable(): boolean {
@@ -389,18 +412,21 @@ export class TerminalsService {
 
           // Source user env file if it exists (silently fail if not)
           if (envFile) {
-            initCommands.push(`[ -f ${envFile} ] && source ${envFile} 2>/dev/null || true`);
+            initCommands.push(
+              `[ -f ${escapeShellArg(envFile)} ] && source ${escapeShellArg(envFile)} 2>/dev/null || true`
+            );
           }
 
           // Navigate to worktree directory if not home
           if (cwd !== os.homedir()) {
-            initCommands.push(`cd "${cwd}"`);
+            initCommands.push(`cd ${escapeShellArg(cwd)}`);
           }
 
           // Execute initialization commands
           if (initCommands.length > 0) {
             const initScript = initCommands.join(' && ');
-            runZellijAction(zellijSession, `write-chars "${initScript}"`);
+            // Escape the entire script for write-chars (which uses double quotes)
+            runZellijAction(zellijSession, `write-chars "${escapeForWriteChars(initScript)}"`);
             runZellijAction(zellijSession, 'write 10'); // Enter key
           }
         } else if (needsTabCreation) {
@@ -417,17 +443,20 @@ export class TerminalsService {
 
             // Source user env file if it exists (silently fail if not)
             if (envFile) {
-              initCommands.push(`[ -f ${envFile} ] && source ${envFile} 2>/dev/null || true`);
+              initCommands.push(
+                `[ -f ${escapeShellArg(envFile)} ] && source ${escapeShellArg(envFile)} 2>/dev/null || true`
+              );
             }
 
             // ALWAYS cd to worktree directory to override any shell RC file changes
-            // Use quotes to handle paths with spaces
-            initCommands.push(`cd "${cwd}"`);
+            // Use single quotes for maximum safety against shell metacharacters
+            initCommands.push(`cd ${escapeShellArg(cwd)}`);
 
             // Execute initialization commands
             if (initCommands.length > 0) {
               const initScript = initCommands.join(' && ');
-              runZellijAction(zellijSession, `write-chars "${initScript}"`);
+              // Escape the entire script for write-chars (which uses double quotes)
+              runZellijAction(zellijSession, `write-chars "${escapeForWriteChars(initScript)}"`);
               runZellijAction(zellijSession, 'write 10'); // Enter key
             }
           }, 300); // Slightly longer delay to ensure shell is ready
@@ -443,10 +472,27 @@ export class TerminalsService {
 
             // Wait a bit for Ctrl+C to take effect and show new prompt
             setTimeout(() => {
-              // Now navigate to worktree directory to ensure we're in the right place
+              // Build initialization command that sources env and navigates to cwd
+              const initCommands: string[] = [];
+
+              // Source user env file if it exists (refresh environment on reuse)
+              if (envFile) {
+                initCommands.push(
+                  `[ -f ${escapeShellArg(envFile)} ] && source ${escapeShellArg(envFile)} 2>/dev/null || true`
+                );
+              }
+
+              // Navigate to worktree directory to ensure we're in the right place
               // This handles cases where user cd'd elsewhere in a previous session
-              runZellijAction(zellijSession, `write-chars "cd \\"${cwd}\\""`);
-              runZellijAction(zellijSession, 'write 10'); // Enter key
+              initCommands.push(`cd ${escapeShellArg(cwd)}`);
+
+              // Execute initialization commands
+              if (initCommands.length > 0) {
+                const initScript = initCommands.join(' && ');
+                // Escape the entire script for write-chars (which uses double quotes)
+                runZellijAction(zellijSession, `write-chars "${escapeForWriteChars(initScript)}"`);
+                runZellijAction(zellijSession, 'write 10'); // Enter key
+              }
             }, 100);
           }, 200);
         }
