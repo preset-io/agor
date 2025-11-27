@@ -33,7 +33,6 @@ import {
   Descriptions,
   Input,
   Modal,
-  message,
   Space,
   Spin,
   Tag,
@@ -41,12 +40,13 @@ import {
   Typography,
   theme,
 } from 'antd';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useCopyToClipboard } from '../../../utils/clipboard';
 import {
   getEnvironmentState,
   getEnvironmentStateDescription,
 } from '../../../utils/environmentState';
+import { useThemedMessage } from '../../../utils/message';
 import { EnvironmentLogsModal } from '../../EnvironmentLogsModal';
 
 const { Paragraph } = Typography;
@@ -107,6 +107,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   onUpdateWorktree,
 }) => {
   const { token } = theme.useToken();
+  const { showSuccess, showError, showWarning } = useThemedMessage();
   const hasEnvironmentConfig = !!repo.environment_config;
 
   // Repository template state (editable)
@@ -149,12 +150,36 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   const [processInfo, setProcessInfo] = useState(worktree.environment_instance?.process);
   const [logsModalOpen, setLogsModalOpen] = useState(false);
 
+  // Track previous worktree reference to detect actual prop changes (not just editing flag changes)
+  const prevWorktreeRef = useRef(worktree);
+
   // Sync state when worktree prop changes
   useEffect(() => {
+    // Always sync environment_instance fields (these update frequently)
     setEnvStatus(worktree.environment_instance?.status || 'stopped');
     setLastHealthCheck(worktree.environment_instance?.last_health_check);
     setProcessInfo(worktree.environment_instance?.process);
-  }, [worktree]);
+
+    // Check if worktree prop actually changed (not just editing flags)
+    const worktreeChanged = prevWorktreeRef.current !== worktree;
+    prevWorktreeRef.current = worktree;
+
+    // Sync static environment config fields (only when not editing AND worktree prop changed)
+    // This prevents overwriting with stale values when isEditingUrls flips but worktree hasn't updated yet
+    if (!isEditingUrls && worktreeChanged) {
+      setStaticStartCommand(worktree.start_command || '');
+      setStaticStopCommand(worktree.stop_command || '');
+      setStaticNukeCommand(worktree.nuke_command || '');
+      setStaticHealthCheckUrl(worktree.health_check_url || '');
+      setStaticAppUrl(worktree.app_url || '');
+      setStaticLogsCommand(worktree.logs_command || '');
+    }
+
+    // Sync custom context (only when not editing AND worktree prop changed)
+    if (!isEditingContext && worktreeChanged) {
+      setCustomContextJson(JSON.stringify(worktree.custom_context || {}, null, 2));
+    }
+  }, [worktree, isEditingUrls, isEditingContext]);
 
   // WebSocket listener for real-time environment updates
   useEffect(() => {
@@ -185,9 +210,9 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     setIsStarting(true);
     try {
       await client.service(`worktrees/${worktree.worktree_id}/start`).create({});
-      message.success('Environment started successfully');
+      showSuccess('Environment started successfully');
     } catch (error) {
-      message.error(error instanceof Error ? error.message : 'Failed to start environment');
+      showError(error instanceof Error ? error.message : 'Failed to start environment');
     } finally {
       setIsStarting(false);
     }
@@ -198,9 +223,9 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     setIsStopping(true);
     try {
       await client.service(`worktrees/${worktree.worktree_id}/stop`).create({});
-      message.success('Environment stopped successfully');
+      showSuccess('Environment stopped successfully');
     } catch (error) {
-      message.error(error instanceof Error ? error.message : 'Failed to stop environment');
+      showError(error instanceof Error ? error.message : 'Failed to stop environment');
     } finally {
       setIsStopping(false);
     }
@@ -211,9 +236,9 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     setIsRestarting(true);
     try {
       await client.service(`worktrees/${worktree.worktree_id}/restart`).create({});
-      message.success('Environment restarted successfully');
+      showSuccess('Environment restarted successfully');
     } catch (error) {
-      message.error(error instanceof Error ? error.message : 'Failed to restart environment');
+      showError(error instanceof Error ? error.message : 'Failed to restart environment');
     } finally {
       setIsRestarting(false);
     }
@@ -242,9 +267,9 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
         setIsNuking(true);
         try {
           await client.service(`worktrees/${worktree.worktree_id}/nuke`).create({});
-          message.success('Environment nuked successfully');
+          showSuccess('Environment nuked successfully');
         } catch (error) {
-          message.error(error instanceof Error ? error.message : 'Failed to nuke environment');
+          showError(error instanceof Error ? error.message : 'Failed to nuke environment');
         } finally {
           setIsNuking(false);
         }
@@ -255,7 +280,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   // Regenerate static environment config from repo templates
   const handleRegenerateFromTemplate = async () => {
     if (!client || !onUpdateWorktree || !repo.environment_config) {
-      message.warning('No repository environment configuration to regenerate from');
+      showWarning('No repository environment configuration to regenerate from');
       return;
     }
 
@@ -284,14 +309,14 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
       try {
         return renderTemplate(template, context);
       } catch (error) {
-        message.error(
+        showError(
           `Failed to render ${fieldName}: ${error instanceof Error ? error.message : 'Unknown error'}`
         );
         return null;
       }
     };
 
-    // Render all 5 fields from templates
+    // Render all 6 fields from templates
     const updates: Partial<Worktree> = {};
 
     if (repo.environment_config.up_command) {
@@ -334,16 +359,9 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     }
 
     // Update worktree with regenerated values
+    // Note: onUpdateWorktree already shows a success toast, so we don't show another one here
+    // Local state will be updated automatically via useEffect when the worktree prop changes
     onUpdateWorktree(worktree.worktree_id, updates);
-
-    // Update local state
-    if (updates.start_command !== undefined) setStaticStartCommand(updates.start_command);
-    if (updates.stop_command !== undefined) setStaticStopCommand(updates.stop_command);
-    if (updates.health_check_url !== undefined) setStaticHealthCheckUrl(updates.health_check_url);
-    if (updates.app_url !== undefined) setStaticAppUrl(updates.app_url);
-    if (updates.logs_command !== undefined) setStaticLogsCommand(updates.logs_command);
-
-    message.success('Environment configuration regenerated from templates');
   };
 
   // Check if template has unsaved changes
@@ -437,8 +455,8 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
       const updated = (await client
         .service(`repos/${repo.repo_id}/import-agor-yml`)
         .create({})) as Repo;
-      message.success('Imported environment configuration from .agor.yml');
 
+      // Note: onUpdateRepo already shows a success toast, so we don't show another one here
       // Update local state
       if (updated.environment_config) {
         setUpCommand(updated.environment_config.up_command || '');
@@ -452,7 +470,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
       // Notify parent
       onUpdateRepo(repo.repo_id, { environment_config: updated.environment_config });
     } catch (error) {
-      message.error(error instanceof Error ? error.message : 'Failed to import .agor.yml');
+      showError(error instanceof Error ? error.message : 'Failed to import .agor.yml');
     }
   };
 
@@ -462,9 +480,9 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
 
     try {
       await client.service(`repos/${repo.repo_id}/export-agor-yml`).create({});
-      message.success('Exported environment configuration to .agor.yml in repository root');
+      showSuccess('Environment configuration exported to .agor.yml');
     } catch (error) {
-      message.error(error instanceof Error ? error.message : 'Failed to export .agor.yml');
+      showError(error instanceof Error ? error.message : 'Failed to export .agor.yml');
     }
   };
 
@@ -1202,6 +1220,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                       onClick={() => {
                         setStaticStartCommand(worktree.start_command || '');
                         setStaticStopCommand(worktree.stop_command || '');
+                        setStaticNukeCommand(worktree.nuke_command || '');
                         setStaticHealthCheckUrl(worktree.health_check_url || '');
                         setStaticAppUrl(worktree.app_url || '');
                         setStaticLogsCommand(worktree.logs_command || '');

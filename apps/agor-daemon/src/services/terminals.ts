@@ -62,6 +62,29 @@ interface ResizeTerminalData {
 }
 
 /**
+ * Escape a string for safe use in shell commands
+ * Uses single quotes which prevent all expansions except for single quotes themselves
+ * Single quotes within the string are handled by closing the quote, escaping the quote, and reopening
+ * Example: foo'bar becomes 'foo'\''bar'
+ */
+function escapeShellArg(arg: string): string {
+  // Replace each single quote with '\'' (close quote, escaped quote, open quote)
+  return `'${arg.replace(/'/g, "'\\''")}'`;
+}
+
+/**
+ * Escape a string for use within double quotes in a Zellij write-chars command
+ * Must escape: backslashes, double quotes, dollar signs, backticks
+ */
+function escapeForWriteChars(str: string): string {
+  return str
+    .replace(/\\/g, '\\\\') // Escape backslashes first
+    .replace(/"/g, '\\"') // Escape double quotes
+    .replace(/\$/g, '\\$') // Escape dollar signs (prevent variable expansion)
+    .replace(/`/g, '\\`'); // Escape backticks (prevent command substitution)
+}
+
+/**
  * Check if Zellij is installed
  */
 function isZellijAvailable(): boolean {
@@ -380,36 +403,98 @@ export class TerminalsService {
     setTimeout(() => {
       try {
         if (!sessionExists) {
-          // First time creating session - rename first tab
+          // First time creating session - rename first tab and set up environment
           runZellijAction(zellijSession, `rename-tab "${tabName}"`);
-          // Change to worktree directory
-          if (cwd !== os.homedir()) {
-            runZellijAction(zellijSession, `write-chars "cd ${cwd}"`);
-            runZellijAction(zellijSession, 'write 10'); // Enter key (char code 10)
-          }
-          // Show welcome message for new session (simplified to reduce blocking)
-          // Source user env file if it exists
+
+          // Build initialization command that sources env and navigates to cwd
+          // Use compound command with && to ensure each step succeeds before next
+          const initCommands: string[] = [];
+
+          // Source user env file if it exists (silently fail if not)
           if (envFile) {
-            runZellijAction(zellijSession, `write-chars "source ${envFile} 2>/dev/null || true"`);
-            runZellijAction(zellijSession, 'write 10');
+            initCommands.push(
+              `[ -f ${escapeShellArg(envFile)} ] && source ${escapeShellArg(envFile)} 2>/dev/null || true`
+            );
+          }
+
+          // Navigate to worktree directory if not home
+          if (cwd !== os.homedir()) {
+            initCommands.push(`cd ${escapeShellArg(cwd)}`);
+          }
+
+          // Execute initialization commands
+          if (initCommands.length > 0) {
+            const initScript = initCommands.join(' && ');
+            // Escape the entire script for write-chars (which uses double quotes)
+            runZellijAction(zellijSession, `write-chars "${escapeForWriteChars(initScript)}"`);
+            runZellijAction(zellijSession, 'write 10'); // Enter key
           }
         } else if (needsTabCreation) {
           // Create new tab for this worktree
+          // NOTE: We still pass --cwd to new-tab, but also explicitly cd afterwards
+          // This ensures we end up in the right directory even if shell RC files change it
           runZellijAction(zellijSession, `new-tab --name "${tabName}" --cwd "${cwd}"`);
           runZellijAction(zellijSession, `go-to-tab-name "${tabName}"`);
-          // Source user env file in new tab if it exists
-          if (envFile) {
-            setTimeout(() => {
-              runZellijAction(
-                zellijSession,
-                `write-chars "[ -f ${envFile} ] && source ${envFile}"`
+
+          // Wait for tab to be created and shell to initialize
+          setTimeout(() => {
+            // Build initialization command that sources env and navigates to cwd
+            const initCommands: string[] = [];
+
+            // Source user env file if it exists (silently fail if not)
+            if (envFile) {
+              initCommands.push(
+                `[ -f ${escapeShellArg(envFile)} ] && source ${escapeShellArg(envFile)} 2>/dev/null || true`
               );
-              runZellijAction(zellijSession, 'write 10');
-            }, 200);
-          }
+            }
+
+            // ALWAYS cd to worktree directory to override any shell RC file changes
+            // Use single quotes for maximum safety against shell metacharacters
+            initCommands.push(`cd ${escapeShellArg(cwd)}`);
+
+            // Execute initialization commands
+            if (initCommands.length > 0) {
+              const initScript = initCommands.join(' && ');
+              // Escape the entire script for write-chars (which uses double quotes)
+              runZellijAction(zellijSession, `write-chars "${escapeForWriteChars(initScript)}"`);
+              runZellijAction(zellijSession, 'write 10'); // Enter key
+            }
+          }, 300); // Slightly longer delay to ensure shell is ready
         } else if (needsTabSwitch) {
           // Switch to existing tab
           runZellijAction(zellijSession, `go-to-tab-name "${tabName}"`);
+
+          // Wait briefly for tab switch, then clear any incomplete commands
+          setTimeout(() => {
+            // Send Ctrl+C to clear any incomplete command on the prompt
+            // This ensures we start with a clean prompt
+            runZellijAction(zellijSession, 'write 3'); // Ctrl+C (char code 3)
+
+            // Wait a bit for Ctrl+C to take effect and show new prompt
+            setTimeout(() => {
+              // Build initialization command that sources env and navigates to cwd
+              const initCommands: string[] = [];
+
+              // Source user env file if it exists (refresh environment on reuse)
+              if (envFile) {
+                initCommands.push(
+                  `[ -f ${escapeShellArg(envFile)} ] && source ${escapeShellArg(envFile)} 2>/dev/null || true`
+                );
+              }
+
+              // Navigate to worktree directory to ensure we're in the right place
+              // This handles cases where user cd'd elsewhere in a previous session
+              initCommands.push(`cd ${escapeShellArg(cwd)}`);
+
+              // Execute initialization commands
+              if (initCommands.length > 0) {
+                const initScript = initCommands.join(' && ');
+                // Escape the entire script for write-chars (which uses double quotes)
+                runZellijAction(zellijSession, `write-chars "${escapeForWriteChars(initScript)}"`);
+                runZellijAction(zellijSession, 'write 10'); // Enter key
+              }
+            }, 100);
+          }, 200);
         }
 
         // Terminal size is handled by PTY (node-pty sends SIGWINCH to Zellij)
