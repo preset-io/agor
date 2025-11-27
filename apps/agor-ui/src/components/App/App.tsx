@@ -284,6 +284,16 @@ export const App: React.FC<AppProps> = ({
     }
   }, [boardById, currentBoardId, setCurrentBoardId]);
 
+  // Recalculate default position when board changes while modal is open
+  // This ensures worktrees spawn at the center of the new board's viewport
+  // biome-ignore lint/correctness/useExhaustiveDependencies: currentBoardId is intentionally included to trigger recalculation on board switch
+  useEffect(() => {
+    if (newWorktreeModalOpen) {
+      const center = sessionCanvasRef.current?.getViewportCenter();
+      setNewWorktreeDefaultPosition(center || null);
+    }
+  }, [currentBoardId, newWorktreeModalOpen]);
+
   // Update favicon based on session activity on current board
   useFaviconStatus(currentBoardId, sessionsByWorktree, mapToArray(boardObjectById));
 
