@@ -1,0 +1,1 @@
+ALTER TABLE "worktrees" ADD COLUMN "nuke_command" text;
