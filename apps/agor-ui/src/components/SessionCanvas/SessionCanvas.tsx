@@ -1919,10 +1919,12 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             nodesConnectable={false}
             elementsSelectable={true}
             elevateNodesOnSelect={false}
-            // Figma-style controls when in select mode (two-finger scrolling to pan)
-            panOnScroll={activeTool === 'select'}
-            panOnDrag={activeTool === 'select' ? [1, 2] : true} // Middle/right mouse + space when select, pointer drag otherwise
-            selectionOnDrag={activeTool === 'select'}
+            // Two-finger scrolling to pan when in select mode (Figma-style)
+            // Also allow click-drag to pan since selection box isn't useful here
+            // Disable all panning when actively drawing a zone to prevent interference
+            panOnScroll={activeTool === 'select' && !drawingZone}
+            panOnDrag={drawingZone ? false : true} // Always allow drag to pan (left mouse in select, any in other modes)
+            selectionOnDrag={false} // Disable selection box - not useful for worktree cards
             className={`tool-mode-${activeTool}`}
             // Disable React Flow's default keyboard shortcuts to prevent conflicts
             // Note: React Flow keyboard shortcuts were causing Spatial Messages to appear
