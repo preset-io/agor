@@ -467,7 +467,6 @@ const WorktreeCardComponent = ({
         width: 500,
         cursor: 'default', // Override React Flow's drag cursor - only drag handles should show grab cursor
         transition: 'box-shadow 1s ease-in-out, border 1s ease-in-out',
-        ...(isPinned && zoneColor ? { borderColor: zoneColor, borderWidth: 1 } : {}),
         ...(needsAttention && !inPopover
           ? {
               // Intense multi-layer glow for dark mode visibility
@@ -475,7 +474,9 @@ const WorktreeCardComponent = ({
               boxShadow: attentionGlowShadow,
               border: 'none',
             }
-          : {}),
+          : isPinned && zoneColor
+            ? { borderColor: zoneColor, borderWidth: 1 }
+            : {}),
       }}
       styles={{
         body: { padding: 16 },
