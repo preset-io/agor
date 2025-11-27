@@ -1,10 +1,16 @@
-import type { CreateMCPServerInput, MCPServer, UpdateMCPServerInput } from '@agor/core/types';
+import type {
+  CreateMCPServerInput,
+  MCPServer,
+  ToolPermission,
+  UpdateMCPServerInput,
+} from '@agor/core/types';
 import { DeleteOutlined, EditOutlined, EyeOutlined, PlusOutlined } from '@ant-design/icons';
 import type { FormInstance } from 'antd';
 import {
   Badge,
   Button,
   Descriptions,
+  Divider,
   Form,
   Input,
   Modal,
@@ -24,8 +30,97 @@ const { TextArea } = Input;
 
 // Using Typography.Text directly to avoid DOM Text interface collision
 
+interface ToolPermissionsEditorProps {
+  tools?: Array<{ name: string; description: string }>;
+  value?: Record<string, ToolPermission>;
+  onChange?: (permissions: Record<string, ToolPermission>) => void;
+}
+
+const ToolPermissionsEditor: React.FC<ToolPermissionsEditorProps> = ({
+  tools = [],
+  value = {},
+  onChange,
+}) => {
+  const handlePermissionChange = (toolName: string, permission: ToolPermission) => {
+    const updated = { ...value, [toolName]: permission };
+    onChange?.(updated);
+  };
+
+  if (!tools || tools.length === 0) {
+    return (
+      <div
+        style={{
+          padding: '16px',
+          background: 'rgba(0, 0, 0, 0.02)',
+          borderRadius: '4px',
+          border: '1px solid #d9d9d9',
+        }}
+      >
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          No tools discovered yet. Tools will be discovered automatically when you save the server.
+        </Typography.Text>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      style={{
+        maxHeight: '400px',
+        overflowY: 'auto',
+        border: '1px solid #d9d9d9',
+        borderRadius: '4px',
+      }}
+    >
+      {tools.map((tool) => (
+        <div
+          key={tool.name}
+          style={{
+            padding: '12px',
+            borderBottom: '1px solid #f0f0f0',
+            display: 'flex',
+            gap: '12px',
+            alignItems: 'center',
+            background: '#fafafa',
+          }}
+        >
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <Typography.Text strong style={{ fontFamily: 'monospace', fontSize: 13 }}>
+              {tool.name}
+            </Typography.Text>
+            {tool.description && (
+              <div style={{ marginTop: 4 }}>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {tool.description}
+                </Typography.Text>
+              </div>
+            )}
+          </div>
+          <Select
+            size="middle"
+            value={value[tool.name] || 'ask'}
+            onChange={(perm) => handlePermissionChange(tool.name, perm)}
+            style={{ minWidth: 100 }}
+          >
+            <Select.Option value="allow">
+              <Typography.Text style={{ color: '#52c41a' }}>Allow</Typography.Text>
+            </Select.Option>
+            <Select.Option value="ask">
+              <Typography.Text style={{ color: '#faad14' }}>Ask</Typography.Text>
+            </Select.Option>
+            <Select.Option value="deny">
+              <Typography.Text style={{ color: '#ff4d4f' }}>Deny</Typography.Text>
+            </Select.Option>
+          </Select>
+        </div>
+      ))}
+    </div>
+  );
+};
+
 interface MCPServersTableProps {
   mcpServerById: Map<string, MCPServer>;
+  client: import('@agor/core/api').AgorClient | null;
   onCreate?: (data: CreateMCPServerInput) => void;
   onUpdate?: (serverId: string, updates: UpdateMCPServerInput) => void;
   onDelete?: (serverId: string) => void;
@@ -38,6 +133,10 @@ interface MCPServerFormFieldsProps {
   authType?: 'none' | 'bearer' | 'jwt';
   onAuthTypeChange?: (authType: 'none' | 'bearer' | 'jwt') => void;
   form: FormInstance;
+  client: import('@agor/core/api').AgorClient | null;
+  serverTools?: Array<{ name: string; description: string }>;
+  serverId?: string;
+  onToolsDiscovered?: () => void;
 }
 
 const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
@@ -47,10 +146,20 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
   authType = 'none',
   onAuthTypeChange,
   form,
+  client,
+  serverTools,
+  serverId,
+  onToolsDiscovered,
 }) => {
   const [testing, setTesting] = useState(false);
+  const [_discovering, setDiscovering] = useState(false);
 
   const handleTestConnection = async () => {
+    if (!client) {
+      message.error('Client not available');
+      return;
+    }
+
     const values = form.getFieldsValue();
     const currentAuthType = values.auth_type || authType;
 
@@ -66,29 +175,37 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           return;
         }
 
-        // Call daemon to test JWT auth (avoids CORS issues)
-        const daemonUrl = import.meta.env.VITE_DAEMON_URL || 'http://localhost:3030';
-        const response = await fetch(`${daemonUrl}/mcp-servers/test-jwt`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          credentials: 'include',
-          body: JSON.stringify({
-            api_url: apiUrl,
-            api_token: apiToken,
-            api_secret: apiSecret,
-          }),
-        });
+        // Use Feathers client for authenticated request
+        const data = (await client.service('mcp-servers/test-jwt').create({
+          api_url: apiUrl,
+          api_token: apiToken,
+          api_secret: apiSecret,
+        })) as { success: boolean; error?: string };
 
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}));
-          throw new Error(errorData.message || `HTTP ${response.status}: ${response.statusText}`);
-        }
-
-        const data = await response.json();
         if (data.success) {
           message.success('JWT authentication successful - token received');
+
+          // If in edit mode with serverId, also discover tools
+          if (serverId && mode === 'edit') {
+            try {
+              const discoverData = (await client.service('mcp-servers/discover').create({
+                mcp_server_id: serverId,
+              })) as {
+                success: boolean;
+                error?: string;
+                capabilities?: { tools: number; resources: number; prompts: number };
+              };
+
+              if (discoverData.success && discoverData.capabilities) {
+                message.success(
+                  `Discovered ${discoverData.capabilities.tools} tools, ${discoverData.capabilities.resources} resources`
+                );
+                onToolsDiscovered?.();
+              }
+            } catch (discoverError) {
+              console.log('Tool discovery failed (non-fatal):', discoverError);
+            }
+          }
         } else {
           message.error(data.error || 'JWT authentication failed');
         }
@@ -107,6 +224,43 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
       message.error(`Connection test failed: ${errorMessage}`);
     } finally {
       setTesting(false);
+    }
+  };
+
+  const _handleDiscoverTools = async () => {
+    if (!client) {
+      message.error('Client not available');
+      return;
+    }
+
+    if (!serverId) {
+      message.error('Server ID not available - save the server first');
+      return;
+    }
+
+    setDiscovering(true);
+    try {
+      const data = (await client.service('mcp-servers/discover').create({
+        mcp_server_id: serverId,
+      })) as {
+        success: boolean;
+        error?: string;
+        capabilities?: { tools: number; resources: number; prompts: number };
+      };
+
+      if (data.success && data.capabilities) {
+        message.success(
+          `Discovered ${data.capabilities.tools} tools, ${data.capabilities.resources} resources, ${data.capabilities.prompts} prompts`
+        );
+        onToolsDiscovered?.();
+      } else {
+        message.error(data.error || 'Tool discovery failed');
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      message.error(`Discovery failed: ${errorMessage}`);
+    } finally {
+      setDiscovering(false);
     }
   };
 
@@ -143,20 +297,19 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
         <TextArea placeholder="Optional description..." rows={2} />
       </Form.Item>
 
-      {mode === 'create' && (
-        <Form.Item
-          label="Transport"
-          name="transport"
-          rules={[{ required: true }]}
-          initialValue="stdio"
-        >
-          <Select onChange={(value) => onTransportChange?.(value as 'stdio' | 'http' | 'sse')}>
-            <Select.Option value="stdio">stdio (Local process)</Select.Option>
-            <Select.Option value="http">HTTP</Select.Option>
-            <Select.Option value="sse">SSE (Server-Sent Events)</Select.Option>
-          </Select>
-        </Form.Item>
-      )}
+      <Form.Item
+        label="Transport"
+        name="transport"
+        rules={mode === 'create' ? [{ required: true }] : []}
+        initialValue={mode === 'create' ? 'stdio' : undefined}
+        tooltip="Connection method: stdio for local processes, HTTP/SSE for remote servers"
+      >
+        <Select onChange={(value) => onTransportChange?.(value as 'stdio' | 'http' | 'sse')}>
+          <Select.Option value="stdio">stdio (Local process)</Select.Option>
+          <Select.Option value="http">HTTP</Select.Option>
+          <Select.Option value="sse">SSE (Server-Sent Events)</Select.Option>
+        </Select>
+      </Form.Item>
 
       {(mode === 'create' ? transport === 'stdio' : transport === 'stdio') ? (
         <>
@@ -271,6 +424,19 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
         <TextArea placeholder='{"API_KEY": "xxx", "ALLOWED_PATHS": "/path"}' rows={3} />
       </Form.Item>
 
+      {mode === 'edit' && (
+        <>
+          <Divider />
+          <Form.Item
+            label="Tool Permissions"
+            name="tool_permissions"
+            tooltip="Configure which tools require permission approval. 'Ask' prompts for each use, 'Allow' auto-approves, 'Deny' blocks the tool."
+          >
+            <ToolPermissionsEditor tools={serverTools || []} />
+          </Form.Item>
+        </>
+      )}
+
       <Form.Item label="Enabled" name="enabled" valuePropName="checked" initialValue={true}>
         <Switch />
       </Form.Item>
@@ -280,6 +446,7 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
 
 export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   mcpServerById,
+  client,
   onCreate,
   onUpdate,
   onDelete,
@@ -292,64 +459,78 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   const [form] = Form.useForm();
   const [transport, setTransport] = useState<'stdio' | 'http' | 'sse'>('stdio');
   const [authType, setAuthType] = useState<'none' | 'bearer' | 'jwt'>('none');
+  const [_discovering, setDiscovering] = useState(false);
 
   const handleCreate = () => {
-    form.validateFields().then((values) => {
-      const data: CreateMCPServerInput = {
-        name: values.name,
-        display_name: values.display_name,
-        description: values.description,
-        transport: values.transport,
-        scope: values.scope || 'global',
-        enabled: values.enabled ?? true,
-        source: 'user',
-      };
-
-      // Add transport-specific fields
-      if (values.transport === 'stdio') {
-        data.command = values.command;
-        data.args = values.args?.split(',').map((arg: string) => arg.trim()) || [];
-      } else {
-        data.url = values.url;
-      }
-
-      // Add auth config if present
-      if (values.auth_type && values.auth_type !== 'none') {
-        data.auth = {
-          type: values.auth_type,
+    form
+      .validateFields()
+      .then((values) => {
+        const data: CreateMCPServerInput = {
+          name: values.name,
+          display_name: values.display_name,
+          description: values.description,
+          transport: values.transport,
+          scope: values.scope || 'global',
+          enabled: values.enabled ?? true,
+          source: 'user',
         };
-        if (values.auth_type === 'bearer') {
-          data.auth.token = values.auth_token;
-        } else if (values.auth_type === 'jwt') {
-          data.auth.api_url = values.jwt_api_url;
-          data.auth.api_token = values.jwt_api_token;
-          data.auth.api_secret = values.jwt_api_secret;
-        }
-      }
 
-      // Add env vars if present
-      if (values.env) {
-        try {
-          data.env = JSON.parse(values.env);
-        } catch {
-          // Invalid JSON, skip
+        // Add transport-specific fields
+        if (values.transport === 'stdio') {
+          data.command = values.command;
+          data.args = values.args?.split(',').map((arg: string) => arg.trim()) || [];
+        } else {
+          data.url = values.url;
         }
-      }
 
-      onCreate?.(data);
-      form.resetFields();
-      setCreateModalOpen(false);
-      setTransport('stdio');
-    });
+        // Add auth config if present
+        if (values.auth_type && values.auth_type !== 'none') {
+          data.auth = {
+            type: values.auth_type,
+          };
+          if (values.auth_type === 'bearer') {
+            data.auth.token = values.auth_token;
+          } else if (values.auth_type === 'jwt') {
+            data.auth.api_url = values.jwt_api_url;
+            data.auth.api_token = values.jwt_api_token;
+            data.auth.api_secret = values.jwt_api_secret;
+          }
+        }
+
+        // Add env vars if present
+        if (values.env) {
+          try {
+            data.env = JSON.parse(values.env);
+          } catch {
+            // Invalid JSON, skip
+          }
+        }
+
+        onCreate?.(data);
+        form.resetFields();
+        setCreateModalOpen(false);
+        setTransport('stdio');
+      })
+      .catch((error) => {
+        // Validation failed - form will show errors automatically
+        console.log('Form validation failed:', error);
+      });
   };
 
-  const handleEdit = (server: MCPServer) => {
+  const handleEdit = async (server: MCPServer) => {
     setEditingServer(server);
     const serverAuthType = (server.auth?.type as 'none' | 'bearer' | 'jwt') || 'none';
     setAuthType(serverAuthType);
+
+    // Set transport state for conditional rendering
+    if (server.transport) {
+      setTransport(server.transport);
+    }
+
     form.setFieldsValue({
       display_name: server.display_name,
       description: server.description,
+      transport: server.transport || (server.url ? 'http' : 'stdio'),
       command: server.command,
       args: server.args?.join(', '),
       url: server.url,
@@ -361,59 +542,131 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       jwt_api_url: server.auth?.api_url,
       jwt_api_token: server.auth?.api_token,
       jwt_api_secret: server.auth?.api_secret,
+      tool_permissions: server.tool_permissions || {},
     });
     setEditModalOpen(true);
+
+    // Auto-discover tools for HTTP/SSE servers
+    const transport = server.transport || (server.url ? 'http' : 'stdio');
+    if ((transport === 'http' || transport === 'sse') && server.url && client) {
+      // Always try to discover/refresh tools for HTTP/SSE servers
+      setDiscovering(true);
+      try {
+        const data = (await client.service('mcp-servers/discover').create({
+          mcp_server_id: server.mcp_server_id,
+        })) as {
+          success: boolean;
+          error?: string;
+          capabilities?: { tools: number; resources: number; prompts: number };
+        };
+
+        if (data.success && data.capabilities) {
+          // Refresh server to get newly discovered tools
+          const updatedServer = await client.service('mcp-servers').get(server.mcp_server_id);
+          setEditingServer(updatedServer as MCPServer);
+          console.log(
+            '[MCP] Discovered',
+            data.capabilities.tools,
+            'tools for',
+            server.display_name
+          );
+        } else {
+          console.error('[MCP] Discovery failed:', data.error);
+        }
+      } catch (error) {
+        console.error('[MCP] Auto-discovery error:', error);
+      } finally {
+        setDiscovering(false);
+      }
+    }
   };
 
   const handleUpdate = () => {
     if (!editingServer) return;
 
-    form.validateFields().then((values) => {
-      const updates: UpdateMCPServerInput = {
-        display_name: values.display_name,
-        description: values.description,
-        scope: values.scope,
-        enabled: values.enabled,
-      };
-
-      // Add transport-specific fields
-      if (editingServer.transport === 'stdio') {
-        updates.command = values.command;
-        updates.args = values.args?.split(',').map((arg: string) => arg.trim()) || [];
-      } else {
-        updates.url = values.url;
-      }
-
-      // Add env vars if present
-      if (values.env) {
-        try {
-          updates.env = JSON.parse(values.env);
-        } catch {
-          // Invalid JSON, skip
-        }
-      }
-
-      // Add auth config if present
-      if (values.auth_type && values.auth_type !== 'none') {
-        updates.auth = {
-          type: values.auth_type,
+    form
+      .validateFields()
+      .then((values) => {
+        const updates: UpdateMCPServerInput = {
+          display_name: values.display_name,
+          description: values.description,
+          scope: values.scope,
+          enabled: values.enabled,
+          transport: values.transport,
         };
-        if (values.auth_type === 'bearer') {
-          updates.auth.token = values.auth_token;
-        } else if (values.auth_type === 'jwt') {
-          updates.auth.api_url = values.jwt_api_url;
-          updates.auth.api_token = values.jwt_api_token;
-          updates.auth.api_secret = values.jwt_api_secret;
-        }
-      } else {
-        updates.auth = undefined;
-      }
 
-      onUpdate?.(editingServer.mcp_server_id, updates);
-      form.resetFields();
-      setEditModalOpen(false);
-      setEditingServer(null);
-    });
+        // Add transport-specific fields based on the NEW transport value
+        if (values.transport === 'stdio') {
+          updates.command = values.command;
+          updates.args = values.args?.split(',').map((arg: string) => arg.trim()) || [];
+        } else {
+          updates.url = values.url;
+        }
+
+        // Add env vars if present
+        if (values.env) {
+          try {
+            updates.env = JSON.parse(values.env);
+          } catch {
+            // Invalid JSON, skip
+          }
+        }
+
+        // Add auth config if present
+        if (values.auth_type && values.auth_type !== 'none') {
+          updates.auth = {
+            type: values.auth_type,
+          };
+          if (values.auth_type === 'bearer') {
+            updates.auth.token = values.auth_token;
+          } else if (values.auth_type === 'jwt') {
+            updates.auth.api_url = values.jwt_api_url;
+            updates.auth.api_token = values.jwt_api_token;
+            updates.auth.api_secret = values.jwt_api_secret;
+          }
+        } else {
+          updates.auth = undefined;
+        }
+
+        // Add tool permissions if present
+        if (values.tool_permissions) {
+          updates.tool_permissions = values.tool_permissions;
+        }
+
+        // Save the updates first
+        onUpdate?.(editingServer.mcp_server_id, updates);
+
+        // Then discover tools for HTTP/SSE servers
+        const transport = values.transport || editingServer.transport;
+        if ((transport === 'http' || transport === 'sse') && values.url && client) {
+          setDiscovering(true);
+          client
+            .service('mcp-servers/discover')
+            .create({
+              mcp_server_id: editingServer.mcp_server_id,
+            })
+            .then((data: { success: boolean; capabilities?: { tools: number } }) => {
+              if (data.success && data.capabilities) {
+                message.success(`Discovered ${data.capabilities.tools} tools`);
+              }
+            })
+            .catch((error: Error) => {
+              console.error('Discovery failed:', error);
+              message.error('Failed to discover tools');
+            })
+            .finally(() => {
+              setDiscovering(false);
+            });
+        }
+
+        form.resetFields();
+        setEditModalOpen(false);
+        setEditingServer(null);
+      })
+      .catch((error) => {
+        // Validation failed - form will show errors automatically
+        console.log('Form validation failed:', error);
+      });
   };
 
   const handleView = (server: MCPServer) => {
@@ -467,13 +720,32 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       title: 'Status',
       dataIndex: 'enabled',
       key: 'enabled',
-      width: 100,
+      width: 80,
       render: (enabled: boolean) =>
         enabled ? (
           <Badge status="success" text="Enabled" />
         ) : (
           <Badge status="default" text="Disabled" />
         ),
+    },
+    {
+      title: 'Health',
+      key: 'health',
+      width: 100,
+      render: (_: unknown, server: MCPServer) => {
+        const toolCount = server.tools?.length || 0;
+        if (toolCount > 0) {
+          return (
+            <div>
+              <Badge status="success" />
+              <Typography.Text style={{ fontSize: 12, marginLeft: 4 }}>
+                {toolCount} tools
+              </Typography.Text>
+            </div>
+          );
+        }
+        return <Badge status="warning" text="Not connected" />;
+      },
     },
     {
       title: 'Source',
@@ -565,13 +837,34 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
             authType={authType}
             onAuthTypeChange={setAuthType}
             form={form}
+            client={client}
           />
         </Form>
       </Modal>
 
       {/* Edit MCP Server Modal */}
       <Modal
-        title="Edit MCP Server"
+        title={
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span>Edit MCP Server</span>
+            {editingServer &&
+              (editingServer.tools && editingServer.tools.length > 0 ? (
+                <>
+                  <Badge status="success" />
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    {editingServer.tools.length} tools discovered
+                  </Typography.Text>
+                </>
+              ) : (
+                <>
+                  <Badge status="warning" />
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    No tools discovered
+                  </Typography.Text>
+                </>
+              ))}
+          </div>
+        }
         open={editModalOpen}
         onOk={handleUpdate}
         onCancel={() => {
@@ -590,6 +883,22 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
             authType={authType}
             onAuthTypeChange={setAuthType}
             form={form}
+            client={client}
+            serverTools={editingServer?.tools}
+            serverId={editingServer?.mcp_server_id}
+            onToolsDiscovered={async () => {
+              // Refresh the server data to show newly discovered tools
+              if (editingServer && client) {
+                try {
+                  const updatedServer = await client
+                    .service('mcp-servers')
+                    .get(editingServer.mcp_server_id);
+                  setEditingServer(updatedServer as MCPServer);
+                } catch (error) {
+                  console.error('Failed to refresh server data:', error);
+                }
+              }
+            }}
           />
         </Form>
       </Modal>

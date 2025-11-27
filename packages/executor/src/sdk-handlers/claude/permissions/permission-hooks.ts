@@ -9,7 +9,12 @@
 import { generateId } from '@agor/core';
 import type { Message, MessageID, SessionID, TaskID } from '@agor/core/types';
 import { MessageRole, PermissionScope, PermissionStatus, TaskStatus } from '@agor/core/types';
-import type { MessagesRepository, SessionRepository } from '../../../db/feathers-repositories.js';
+import type {
+  MCPServerRepository,
+  MessagesRepository,
+  SessionMCPServerRepository,
+  SessionRepository,
+} from '../../../db/feathers-repositories.js';
 import type { PermissionService } from '../../../permissions/permission-service.js';
 import type { MessagesService, SessionsService, TasksService } from '../claude-tool.js';
 
@@ -31,6 +36,8 @@ export function createCanUseToolCallback(
     messagesService?: MessagesService;
     sessionsService?: SessionsService;
     permissionLocks: Map<SessionID, Promise<void>>;
+    mcpServerRepo: MCPServerRepository;
+    sessionMCPRepo: SessionMCPServerRepository;
   }
 ) {
   return async (
@@ -48,6 +55,76 @@ export function createCanUseToolCallback(
     }>;
     message?: string;
   }> => {
+    // Check MCP tool permissions (tools prefixed with mcp__)
+    if (toolName.startsWith('mcp__')) {
+      try {
+        // Extract server name from tool name: mcp__servername__toolname
+        const parts = toolName.split('__');
+        if (parts.length >= 3) {
+          const serverName = parts[1];
+          const actualToolName = parts.slice(2).join('__');
+
+          // Get session's MCP servers
+          const sessionMCPs = await deps.sessionMCPRepo.findBySessionId(sessionId);
+          const mcpServerIds = sessionMCPs.map((sm: { mcp_server_id: string }) => sm.mcp_server_id);
+
+          // Find the MCP server by name
+          const mcpServers = await deps.mcpServerRepo.findAll();
+          const server = mcpServers.find(
+            (s) => s.name === serverName && mcpServerIds.includes(s.mcp_server_id)
+          );
+
+          if (server?.tool_permissions) {
+            const permission = server.tool_permissions[actualToolName];
+
+            if (permission === 'allow') {
+              console.log(
+                `✅ [canUseTool] Auto-allowing MCP tool ${toolName} (configured as 'allow')`
+              );
+              return {
+                behavior: 'allow',
+                updatedInput: toolInput,
+                updatedPermissions: [
+                  {
+                    type: 'addRules',
+                    rules: [{ toolName }],
+                    behavior: 'allow',
+                    destination: 'session',
+                  },
+                ],
+              };
+            } else if (permission === 'deny') {
+              console.log(`❌ [canUseTool] Denying MCP tool ${toolName} (configured as 'deny')`);
+              return {
+                behavior: 'deny',
+                message: `Tool ${actualToolName} is disabled for this MCP server`,
+              };
+            }
+            // If permission === 'ask' or undefined, fall through to normal permission flow
+          }
+        }
+
+        // Default behavior for MCP tools without specific configuration: auto-approve
+        // (backwards compatible - existing servers without tool_permissions still work)
+        console.log(`✅ [canUseTool] Auto-approving MCP tool: ${toolName} (no specific config)`);
+        return {
+          behavior: 'allow',
+          updatedInput: toolInput,
+          updatedPermissions: [
+            {
+              type: 'addRules',
+              rules: [{ toolName }],
+              behavior: 'allow',
+              destination: 'session',
+            },
+          ],
+        };
+      } catch (error) {
+        console.error(`⚠️ [canUseTool] Error checking MCP tool permissions:`, error);
+        // Fall through to normal permission flow on error
+      }
+    }
+
     // This callback fires AFTER SDK checks settings.json
     // We show Agor's UI and let SDK handle persistence via updatedPermissions
 

@@ -276,7 +276,13 @@ export async function setupQuery(
   // This enables Agor's custom permission UI (WebSocket-based) when SDK would show a prompt
   // Fires AFTER SDK checks settings.json - respects user's existing Claude CLI permissions!
   // IMPORTANT: Only skip for bypassPermissions (which never asks for permissions)
-  if (deps.permissionService && taskId && effectivePermissionMode !== 'bypassPermissions') {
+  if (
+    deps.permissionService &&
+    taskId &&
+    effectivePermissionMode !== 'bypassPermissions' &&
+    deps.sessionMCPRepo &&
+    deps.mcpServerRepo
+  ) {
     queryOptions.canUseTool = createCanUseToolCallback(sessionId, taskId, {
       permissionService: deps.permissionService,
       tasksService: deps.tasksService!,
@@ -285,6 +291,8 @@ export async function setupQuery(
       messagesService: deps.messagesService,
       sessionsService: deps.sessionsService,
       permissionLocks: deps.permissionLocks,
+      mcpServerRepo: deps.mcpServerRepo,
+      sessionMCPRepo: deps.sessionMCPRepo,
     });
     console.log(`✅ canUseTool callback added (permission mode: ${effectivePermissionMode})`);
     console.log(`   SDK will check settings.json first, then call Agor UI if needed`);
@@ -486,14 +494,17 @@ export async function setupQuery(
         const allowedTools: string[] = [];
 
         for (const { server } of serversWithSource) {
+          // Infer transport if missing (backwards compatibility)
+          const transport = server.transport || (server.url ? 'sse' : 'stdio');
+
           // Build server config (convert 'transport' field to 'type' for Claude Code)
           const serverConfig: Record<string, unknown> = {
-            type: server.transport,
+            type: transport,
             env: server.env,
           };
 
           // Add transport-specific fields
-          if (server.transport === 'stdio') {
+          if (transport === 'stdio') {
             serverConfig.command = server.command;
             serverConfig.args = server.args || [];
           } else {
@@ -503,7 +514,7 @@ export async function setupQuery(
 
           try {
             const headers = await resolveMCPAuthHeaders(server.auth);
-            if (headers && server.transport !== 'stdio') {
+            if (headers && transport !== 'stdio') {
               serverConfig.headers = headers;
               console.log(`     🔐 Added Authorization header for ${server.name}`);
             }

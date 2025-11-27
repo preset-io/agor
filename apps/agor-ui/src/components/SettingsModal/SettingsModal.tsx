@@ -209,6 +209,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             children: (
               <MCPServersTable
                 mcpServerById={mcpServerById}
+                client={client}
                 onCreate={onCreateMCPServer}
                 onUpdate={onUpdateMCPServer}
                 onDelete={onDeleteMCPServer}
