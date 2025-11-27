@@ -377,6 +377,7 @@ export const worktrees = sqliteTable(
     // Environment configuration (static, initialized from templates, then user-editable)
     start_command: text('start_command'), // Start command (initialized from repo's up_command template)
     stop_command: text('stop_command'), // Stop command (initialized from repo's down_command template)
+    nuke_command: text('nuke_command'), // Nuke command (initialized from repo's nuke_command template)
     health_check_url: text('health_check_url'), // Health check URL (initialized from repo's health_check.url_template)
     app_url: text('app_url'), // Application URL (initialized from repo's app_url_template)
     logs_command: text('logs_command'), // Logs command (initialized from repo's logs_command template)

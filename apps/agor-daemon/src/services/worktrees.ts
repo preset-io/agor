@@ -742,6 +742,94 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
   }
 
   /**
+   * Custom method: Nuke environment (destructive operation)
+   */
+  async nukeEnvironment(id: WorktreeID, params?: WorktreeParams): Promise<Worktree> {
+    const worktree = await this.get(id, params);
+
+    // Require nuke_command to be configured
+    if (!worktree.nuke_command) {
+      throw new Error('No nuke_command configured for this worktree');
+    }
+
+    // Set status to 'stopping' (reuse stopping state for nuke)
+    await this.updateEnvironment(
+      id,
+      {
+        status: 'stopping',
+      },
+      params
+    );
+
+    try {
+      const command = worktree.nuke_command;
+
+      console.log(`💣 NUKING environment for worktree ${worktree.name}: ${command}`);
+      console.warn('⚠️  This is a destructive operation!');
+
+      // Create clean environment for user process (filters Agor-internal vars like NODE_ENV)
+      const env = await createUserProcessEnvironment(worktree.created_by, this.db);
+
+      // Execute nuke command
+      await new Promise<void>((resolve, reject) => {
+        const nukeProcess = spawn(command, {
+          cwd: worktree.path,
+          shell: true,
+          stdio: 'inherit',
+          env, // Pass clean environment without Agor-internal variables
+        });
+
+        nukeProcess.on('exit', (code) => {
+          if (code === 0) {
+            resolve();
+          } else {
+            reject(new Error(`Nuke command exited with code ${code}`));
+          }
+        });
+
+        nukeProcess.on('error', reject);
+      });
+
+      // Clean up any managed process references
+      const managedProcess = this.processes.get(id);
+      if (managedProcess) {
+        this.processes.delete(id);
+      }
+
+      // Update status to 'stopped' with clear nuke message
+      return await this.updateEnvironment(
+        id,
+        {
+          status: 'stopped',
+          process: undefined,
+          last_health_check: {
+            timestamp: new Date().toISOString(),
+            status: 'unknown',
+            message: 'Environment nuked - all data and volumes destroyed',
+          },
+        },
+        params
+      );
+    } catch (error) {
+      // Update status to 'error'
+      await this.updateEnvironment(
+        id,
+        {
+          status: 'error',
+          last_health_check: {
+            timestamp: new Date().toISOString(),
+            status: 'unhealthy',
+            message: error instanceof Error ? error.message : 'Unknown error during nuke',
+          },
+        },
+        params
+      );
+
+      throw error;
+    }
+  }
+
+  /**
    * Custom method: Check health
    */
   async checkHealth(id: WorktreeID, params?: WorktreeParams): Promise<Worktree> {

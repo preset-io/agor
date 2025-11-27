@@ -30,12 +30,14 @@ This document defines **every message type** that flows over the IPC channel bet
 ### Request/Response (Bidirectional)
 
 **Daemon → Executor:**
+
 - `execute_prompt` - Start SDK execution for a prompt
 - `spawn_terminal` - Create a new terminal session
 - `stop_task` - Cancel running execution
 - `shutdown` - Graceful executor shutdown
 
 **Executor → Daemon:**
+
 - `get_api_key` - Request API key for service (just-in-time)
 - `request_permission` - Request permission to execute tool
 - `get_execution_context` - Get session history, MCP config, etc
@@ -44,11 +46,13 @@ This document defines **every message type** that flows over the IPC channel bet
 ### Notifications (Fire-and-Forget)
 
 **Executor → Daemon:**
+
 - `report_message` - Stream SDK event to daemon
 - `report_progress` - Update task progress
 - `report_error` - Report non-fatal error
 
 **Daemon → Executor:**
+
 - `pause_notifications` - Apply backpressure
 - `resume_notifications` - Resume streaming
 - `cancel_task` - Interrupt execution immediately
@@ -62,40 +66,42 @@ This document defines **every message type** that flows over the IPC channel bet
 **Purpose:** Execute a user prompt via agent SDK
 
 **Request:**
+
 ```typescript
 interface ExecutePromptRequest {
-  jsonrpc: "2.0";
+  jsonrpc: '2.0';
   id: string;
-  method: "execute_prompt";
+  method: 'execute_prompt';
   params: {
     // Authentication
-    session_token: string;        // Opaque token (validates request)
+    session_token: string; // Opaque token (validates request)
 
     // Execution context
-    session_id: SessionID;         // For logging/debugging only
-    task_id: TaskID;               // For associating messages
-    prompt: string;                // User's question/instruction
-    cwd: string;                   // Working directory
+    session_id: SessionID; // For logging/debugging only
+    task_id: TaskID; // For associating messages
+    prompt: string; // User's question/instruction
+    cwd: string; // Working directory
 
     // Permissions
-    tools: string[];               // Allowed tools: ['Read', 'Write', 'Bash', ...]
+    tools: string[]; // Allowed tools: ['Read', 'Write', 'Bash', ...]
     permission_mode: PermissionMode; // 'default' | 'acceptEdits' | 'bypassPermissions'
 
     // Configuration
-    timeout_ms: number;            // Max execution time
-    stream: boolean;               // Whether to stream results (default: true)
+    timeout_ms: number; // Max execution time
+    stream: boolean; // Whether to stream results (default: true)
   };
 }
 ```
 
 **Response:**
+
 ```typescript
 interface ExecutePromptResponse {
-  jsonrpc: "2.0";
+  jsonrpc: '2.0';
   id: string; // Matches request
   result: {
     status: 'completed' | 'failed' | 'cancelled';
-    message_count: number;         // Total messages sent
+    message_count: number; // Total messages sent
     token_usage?: {
       input_tokens: number;
       output_tokens: number;
@@ -122,33 +128,35 @@ interface ExecutePromptResponse {
 **Purpose:** Create a new terminal (PTY) session
 
 **Request:**
+
 ```typescript
 interface SpawnTerminalRequest {
-  jsonrpc: "2.0";
+  jsonrpc: '2.0';
   id: string;
-  method: "spawn_terminal";
+  method: 'spawn_terminal';
   params: {
     session_token: string;
     cwd: string;
-    shell: string;                 // 'bash', 'zsh', etc
-    env: Record<string, string>;   // Environment variables
+    shell: string; // 'bash', 'zsh', etc
+    env: Record<string, string>; // Environment variables
     use_tmux: boolean;
     tmux_session_name?: string;
     tmux_window_name?: string;
-    cols: number;                  // Terminal columns (default: 80)
-    rows: number;                  // Terminal rows (default: 24)
+    cols: number; // Terminal columns (default: 80)
+    rows: number; // Terminal rows (default: 24)
   };
 }
 ```
 
 **Response:**
+
 ```typescript
 interface SpawnTerminalResponse {
-  jsonrpc: "2.0";
+  jsonrpc: '2.0';
   id: string;
   result: {
     terminal_id: TerminalID;
-    pty_pid: number;               // Process ID of PTY
+    pty_pid: number; // Process ID of PTY
     // Note: PTY file descriptor passed via Unix socket ancillary data (SCM_RIGHTS)
   };
 }
@@ -165,23 +173,25 @@ interface SpawnTerminalResponse {
 **Purpose:** Request graceful cancellation of running task
 
 **Request:**
+
 ```typescript
 interface StopTaskRequest {
-  jsonrpc: "2.0";
+  jsonrpc: '2.0';
   id: string;
-  method: "stop_task";
+  method: 'stop_task';
   params: {
     session_token: string;
     task_id: TaskID;
-    reason?: string;               // 'user_cancelled', 'timeout', etc
+    reason?: string; // 'user_cancelled', 'timeout', etc
   };
 }
 ```
 
 **Response:**
+
 ```typescript
 interface StopTaskResponse {
-  jsonrpc: "2.0";
+  jsonrpc: '2.0';
   id: string;
   result: {
     stopped: boolean;
@@ -201,22 +211,24 @@ interface StopTaskResponse {
 **Purpose:** Request graceful executor shutdown
 
 **Request:**
+
 ```typescript
 interface ShutdownRequest {
-  jsonrpc: "2.0";
+  jsonrpc: '2.0';
   id: string;
-  method: "shutdown";
+  method: 'shutdown';
   params: {
-    reason: string;                // 'server_restart', 'idle_timeout', etc
-    timeout_ms: number;            // Max time to finish current work
+    reason: string; // 'server_restart', 'idle_timeout', etc
+    timeout_ms: number; // Max time to finish current work
   };
 }
 ```
 
 **Response:**
+
 ```typescript
 interface ShutdownResponse {
-  jsonrpc: "2.0";
+  jsonrpc: '2.0';
   id: string;
   result: {
     status: 'completed' | 'interrupted' | 'idle';
@@ -237,30 +249,32 @@ interface ShutdownResponse {
 **Purpose:** Request API key for a service (just-in-time, security-critical)
 
 **Request:**
+
 ```typescript
 interface GetApiKeyRequest {
-  jsonrpc: "2.0";
+  jsonrpc: '2.0';
   id: string;
-  method: "get_api_key";
+  method: 'get_api_key';
   params: {
-    session_token: string;         // Validates request
+    session_token: string; // Validates request
     service: 'anthropic' | 'openai' | 'google' | 'github' | string;
   };
 }
 ```
 
 **Response:**
+
 ```typescript
 interface GetApiKeyResponse {
-  jsonrpc: "2.0";
+  jsonrpc: '2.0';
   id: string;
   result: {
-    api_key: string;               // Decrypted API key
-    expires_at?: number;           // Optional expiration (epoch ms)
+    api_key: string; // Decrypted API key
+    expires_at?: number; // Optional expiration (epoch ms)
   };
   error?: {
     code: number;
-    message: string;               // 'No API key configured', 'Invalid token', etc
+    message: string; // 'No API key configured', 'Invalid token', etc
   };
 }
 ```
@@ -268,6 +282,7 @@ interface GetApiKeyResponse {
 **When sent:** Executor about to call SDK, needs API key
 
 **Daemon action:**
+
 1. Validates session token
 2. Retrieves API key from config/database (decrypts if needed)
 3. Logs request (audit trail)
@@ -282,27 +297,29 @@ interface GetApiKeyResponse {
 **Purpose:** Request permission to execute a tool
 
 **Request:**
+
 ```typescript
 interface RequestPermissionRequest {
-  jsonrpc: "2.0";
+  jsonrpc: '2.0';
   id: string;
-  method: "request_permission";
+  method: 'request_permission';
   params: {
     session_token: string;
-    tool_name: string;             // 'Read', 'Write', 'Bash', etc
-    tool_input: unknown;           // Tool-specific parameters
+    tool_name: string; // 'Read', 'Write', 'Bash', etc
+    tool_input: unknown; // Tool-specific parameters
   };
 }
 ```
 
 **Response:**
+
 ```typescript
 interface RequestPermissionResponse {
-  jsonrpc: "2.0";
+  jsonrpc: '2.0';
   id: string;
   result: {
     approved: boolean;
-    reason?: string;               // 'mode=bypassPermissions', 'user_approved', etc
+    reason?: string; // 'mode=bypassPermissions', 'user_approved', etc
   };
 }
 ```
@@ -310,6 +327,7 @@ interface RequestPermissionResponse {
 **When sent:** SDK about to execute tool, permission mode requires approval
 
 **Daemon action:**
+
 1. Validates session token
 2. Checks permission mode (bypassPermissions → auto-approve)
 3. If mode=ask, prompts user via WebSocket
@@ -324,11 +342,12 @@ interface RequestPermissionResponse {
 **Purpose:** Get session history, MCP servers, conversation context
 
 **Request:**
+
 ```typescript
 interface GetExecutionContextRequest {
-  jsonrpc: "2.0";
+  jsonrpc: '2.0';
   id: string;
-  method: "get_execution_context";
+  method: 'get_execution_context';
   params: {
     session_token: string;
   };
@@ -336,16 +355,17 @@ interface GetExecutionContextRequest {
 ```
 
 **Response:**
+
 ```typescript
 interface GetExecutionContextResponse {
-  jsonrpc: "2.0";
+  jsonrpc: '2.0';
   id: string;
   result: {
     session_id: SessionID;
     task_id: TaskID;
 
     // Conversation history (for SDK context)
-    messages: Message[];           // Previous messages in session
+    messages: Message[]; // Previous messages in session
 
     // MCP server configuration
     mcp_servers: Array<{
@@ -356,7 +376,7 @@ interface GetExecutionContextResponse {
     }>;
 
     // Context files to load
-    context_files: string[];       // ['CLAUDE.md', 'context/README.md']
+    context_files: string[]; // ['CLAUDE.md', 'context/README.md']
 
     // Model configuration
     model_config?: {
@@ -370,6 +390,7 @@ interface GetExecutionContextResponse {
 **When sent:** Executor receives `execute_prompt`, needs context before calling SDK
 
 **Daemon action:**
+
 1. Validates session token
 2. Fetches session from database
 3. Fetches conversation history
@@ -383,31 +404,33 @@ interface GetExecutionContextResponse {
 **Purpose:** Ask daemon to create a message record in database
 
 **Request:**
+
 ```typescript
 interface CreateMessageRequest {
-  jsonrpc: "2.0";
+  jsonrpc: '2.0';
   id: string;
-  method: "create_message";
+  method: 'create_message';
   params: {
     session_token: string;
     task_id: TaskID;
     message: {
       role: 'user' | 'assistant';
-      content: unknown;            // Message content (varies by type)
-      type: string;                // 'tool_call', 'content_block', etc
+      content: unknown; // Message content (varies by type)
+      type: string; // 'tool_call', 'content_block', etc
     };
   };
 }
 ```
 
 **Response:**
+
 ```typescript
 interface CreateMessageResponse {
-  jsonrpc: "2.0";
+  jsonrpc: '2.0';
   id: string;
   result: {
     message_id: MessageID;
-    created_at: string;            // ISO timestamp
+    created_at: string; // ISO timestamp
   };
 }
 ```
@@ -417,12 +440,14 @@ interface CreateMessageResponse {
 **Trade-offs:**
 
 **Request/Response (create_message):**
+
 - ✅ Executor knows if message was saved
 - ✅ Receives message ID back
 - ⚠️ Blocks on every message (slower)
 - ⚠️ More IPC round-trips
 
 **Notification (report_message):**
+
 - ✅ Faster (fire-and-forget)
 - ✅ Better for high-frequency streaming
 - ⚠️ Executor doesn't know if saved
@@ -439,19 +464,20 @@ interface CreateMessageResponse {
 **Purpose:** Stream SDK event to daemon (fire-and-forget)
 
 **Notification:**
+
 ```typescript
 interface ReportMessageNotification {
-  jsonrpc: "2.0";
-  method: "report_message";
+  jsonrpc: '2.0';
+  method: 'report_message';
   params: {
     session_token: string;
     task_id: TaskID;
-    sequence: number;              // Message sequence number (for ordering)
-    timestamp: number;             // Epoch milliseconds
+    sequence: number; // Message sequence number (for ordering)
+    timestamp: number; // Epoch milliseconds
 
     // SDK event data
-    event_type: string;            // 'tool_call', 'tool_result', 'content_block', etc
-    event_data: unknown;           // Raw SDK event (varies by type)
+    event_type: string; // 'tool_call', 'tool_result', 'content_block', etc
+    event_data: unknown; // Raw SDK event (varies by type)
   };
 }
 ```
@@ -461,6 +487,7 @@ interface ReportMessageNotification {
 **When sent:** SDK emits event during execution
 
 **Daemon action:**
+
 1. Validates session token
 2. Transforms event_data into Message record
 3. Creates message in database
@@ -470,16 +497,16 @@ interface ReportMessageNotification {
 
 ```typescript
 type EventType =
-  | 'tool_call'              // SDK called a tool
-  | 'tool_result'            // Tool returned result
-  | 'content_block_start'    // Content block started
-  | 'content_block_delta'    // Content chunk (streaming)
-  | 'content_block_stop'     // Content block finished
-  | 'thinking_chunk'         // Extended thinking chunk
-  | 'message_start'          // Message started
-  | 'message_stop'           // Message finished
-  | 'usage'                  // Token usage update
-  | 'error';                 // SDK error
+  | 'tool_call' // SDK called a tool
+  | 'tool_result' // Tool returned result
+  | 'content_block_start' // Content block started
+  | 'content_block_delta' // Content chunk (streaming)
+  | 'content_block_stop' // Content block finished
+  | 'thinking_chunk' // Extended thinking chunk
+  | 'message_start' // Message started
+  | 'message_stop' // Message finished
+  | 'usage' // Token usage update
+  | 'error'; // SDK error
 ```
 
 **Example Events:**
@@ -528,16 +555,17 @@ type EventType =
 **Purpose:** Update task progress (percentage, status message)
 
 **Notification:**
+
 ```typescript
 interface ReportProgressNotification {
-  jsonrpc: "2.0";
-  method: "report_progress";
+  jsonrpc: '2.0';
+  method: 'report_progress';
   params: {
     session_token: string;
     task_id: TaskID;
     progress: {
-      percent?: number;            // 0-100
-      message?: string;            // 'Reading files...', 'Analyzing code...', etc
+      percent?: number; // 0-100
+      message?: string; // 'Reading files...', 'Analyzing code...', etc
       completed_steps?: number;
       total_steps?: number;
     };
@@ -556,15 +584,16 @@ interface ReportProgressNotification {
 **Purpose:** Report non-fatal error (continues execution)
 
 **Notification:**
+
 ```typescript
 interface ReportErrorNotification {
-  jsonrpc: "2.0";
-  method: "report_error";
+  jsonrpc: '2.0';
+  method: 'report_error';
   params: {
     session_token: string;
     task_id: TaskID;
     error: {
-      code: string;                // 'TOOL_FAILED', 'PERMISSION_DENIED', etc
+      code: string; // 'TOOL_FAILED', 'PERMISSION_DENIED', etc
       message: string;
       details?: unknown;
     };
@@ -902,7 +931,9 @@ export class ExecutorIPCService {
           break;
 
         case 'get_execution_context':
-          result = await this.handleGetExecutionContext(params as GetExecutionContextRequest['params']);
+          result = await this.handleGetExecutionContext(
+            params as GetExecutionContextRequest['params']
+          );
           break;
 
         default:
@@ -911,14 +942,16 @@ export class ExecutorIPCService {
 
       socket.write(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\n');
     } catch (error) {
-      socket.write(JSON.stringify({
-        jsonrpc: '2.0',
-        id,
-        error: {
-          code: -32603,
-          message: error.message,
-        },
-      }) + '\n');
+      socket.write(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          id,
+          error: {
+            code: -32603,
+            message: error.message,
+          },
+        }) + '\n'
+      );
     }
   }
 
@@ -987,14 +1020,16 @@ export class ExecutorIPCServer {
 
       socket.write(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\n');
     } catch (error) {
-      socket.write(JSON.stringify({
-        jsonrpc: '2.0',
-        id,
-        error: {
-          code: -32603,
-          message: error.message,
-        },
-      }) + '\n');
+      socket.write(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          id,
+          error: {
+            code: -32603,
+            message: error.message,
+          },
+        }) + '\n'
+      );
     }
   }
 }
@@ -1007,17 +1042,20 @@ export class ExecutorIPCServer {
 ### Complete Message Catalog
 
 **Daemon → Executor (4 requests):**
+
 1. ✅ `execute_prompt` - Run agent SDK
 2. ✅ `spawn_terminal` - Create PTY
 3. ✅ `stop_task` - Cancel execution
 4. ✅ `shutdown` - Graceful shutdown
 
 **Executor → Daemon (3 requests):**
+
 1. ✅ `get_api_key` - Request API key (just-in-time)
 2. ✅ `request_permission` - Request tool approval
 3. ✅ `get_execution_context` - Get session history/config
 
 **Executor → Daemon (3 notifications):**
+
 1. ✅ `report_message` - Stream SDK event (PRIMARY)
 2. ✅ `report_progress` - Update progress
 3. ✅ `report_error` - Report error

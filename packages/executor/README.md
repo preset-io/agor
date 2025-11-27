@@ -5,6 +5,7 @@ Isolated execution environment for Agor - separates privileged daemon operations
 ## Overview
 
 The executor is a standalone Node.js process that:
+
 - Runs as a separate Unix user (via sudo impersonation)
 - Executes untrusted code (agent SDKs, terminals, MCP servers)
 - Has NO access to database or API keys in environment

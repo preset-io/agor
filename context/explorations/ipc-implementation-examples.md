@@ -92,11 +92,14 @@ import { randomUUID } from 'node:crypto';
 export class ExecutorClient {
   private socket: net.Socket;
   private buffer: string = '';
-  private pendingRequests = new Map<string, {
-    resolve: (result: any) => void;
-    reject: (error: Error) => void;
-    timeout: NodeJS.Timeout;
-  }>();
+  private pendingRequests = new Map<
+    string,
+    {
+      resolve: (result: any) => void;
+      reject: (error: Error) => void;
+      timeout: NodeJS.Timeout;
+    }
+  >();
 
   constructor(private socketPath: string) {}
 
@@ -109,11 +112,11 @@ export class ExecutorClient {
         resolve();
       });
 
-      this.socket.on('data', (chunk) => {
+      this.socket.on('data', chunk => {
         this.handleIncomingData(chunk);
       });
 
-      this.socket.on('error', (error) => {
+      this.socket.on('error', error => {
         console.error('Socket error:', error);
         reject(error);
       });
@@ -237,11 +240,11 @@ export class ExecutorIPCServer {
         fs.unlinkSync(this.socketPath);
       }
 
-      this.server = net.createServer((socket) => {
+      this.server = net.createServer(socket => {
         console.log('Daemon connected');
         this.client = socket;
 
-        socket.on('data', (chunk) => {
+        socket.on('data', chunk => {
           this.handleIncomingData(chunk, socket);
         });
 
@@ -250,7 +253,7 @@ export class ExecutorIPCServer {
           this.client = null;
         });
 
-        socket.on('error', (error) => {
+        socket.on('error', error => {
           console.error('Client socket error:', error);
         });
       });
@@ -260,7 +263,7 @@ export class ExecutorIPCServer {
         resolve();
       });
 
-      this.server.on('error', (error) => {
+      this.server.on('error', error => {
         reject(error);
       });
     });
@@ -286,18 +289,22 @@ export class ExecutorIPCServer {
     // Create respond helper
     const respond = {
       success: (result: any) => {
-        socket.write(JSON.stringify({
-          jsonrpc: '2.0',
-          id,
-          result,
-        }) + '\n');
+        socket.write(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            id,
+            result,
+          }) + '\n'
+        );
       },
       error: (code: number, message: string, data?: any) => {
-        socket.write(JSON.stringify({
-          jsonrpc: '2.0',
-          id,
-          error: { code, message, data },
-        }) + '\n');
+        socket.write(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            id,
+            error: { code, message, data },
+          }) + '\n'
+        );
       },
     };
 
@@ -316,15 +323,17 @@ export class ExecutorIPCServer {
       throw new Error('No client connected');
     }
 
-    this.client.write(JSON.stringify({
-      jsonrpc: '2.0',
-      method,
-      params,
-    }) + '\n');
+    this.client.write(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method,
+        params,
+      }) + '\n'
+    );
   }
 
   async stop(): Promise<void> {
-    return new Promise((resolve) => {
+    return new Promise(resolve => {
       if (this.client) {
         this.client.end();
       }
@@ -348,6 +357,7 @@ export class ExecutorIPCServer {
 **Scenario:** User sends a prompt that takes 12 minutes and generates 100+ tool uses
 
 **Challenges:**
+
 1. Can't block waiting for final response (would timeout)
 2. Need real-time updates for UI (WebSocket streaming)
 3. Need to handle failures mid-execution
@@ -409,20 +419,21 @@ export class SessionsPromptService {
     const executor = await this.spawnExecutor(session.created_by);
 
     // 4. Setup notification handler (BEFORE sending request)
-    executor.onNotification('report_message', async (params) => {
+    executor.onNotification('report_message', async params => {
       await this.handleExecutorMessage(params);
     });
 
     // 5. Send execute_prompt request (non-blocking, fire-and-forget)
-    executor.request('execute_prompt', {
-      session_token: await this.generateSessionToken(sessionId, task.task_id),
-      prompt,
-      cwd: worktree.path,
-      tools: ['Read', 'Write', 'Bash', 'Grep', 'Glob'],
-      permission_mode: session.permission_mode || 'default',
-      timeout_ms: 600000, // 10 minutes max
-    })
-      .then(async (result) => {
+    executor
+      .request('execute_prompt', {
+        session_token: await this.generateSessionToken(sessionId, task.task_id),
+        prompt,
+        cwd: worktree.path,
+        tools: ['Read', 'Write', 'Bash', 'Grep', 'Glob'],
+        permission_mode: session.permission_mode || 'default',
+        timeout_ms: 600000, // 10 minutes max
+      })
+      .then(async result => {
         // 6. Completion handler (runs when executor finishes)
         console.log('Execution completed:', result);
 
@@ -435,7 +446,7 @@ export class SessionsPromptService {
         // Cleanup executor
         await executor.disconnect();
       })
-      .catch(async (error) => {
+      .catch(async error => {
         // 7. Error handler
         console.error('Execution failed:', error);
 
@@ -535,11 +546,7 @@ async function main() {
   console.log('Executor ready');
 }
 
-async function handleExecutePrompt(
-  params: any,
-  respond: any,
-  ipcServer: ExecutorIPCServer
-) {
+async function handleExecutePrompt(params: any, respond: any, ipcServer: ExecutorIPCServer) {
   const { session_token, prompt, cwd, tools, permission_mode, timeout_ms } = params;
 
   try {
@@ -601,7 +608,6 @@ async function handleExecutePrompt(
       message_count: messageCount,
       token_usage: tokenUsage,
     });
-
   } catch (error) {
     console.error('Execution failed:', error);
 
@@ -947,11 +953,15 @@ const toolResult = await sdk.executeTool('Write', {
 });
 
 // Executor requests permission from daemon
-const permissionResponse = await client.request('request_permission', {
-  session_token: 'opaque-token-abc',
-  tool_name: 'Write',
-  tool_input: { file_path: '/etc/hosts', content: '...' },
-}, 30000); // 30 second timeout for user approval
+const permissionResponse = await client.request(
+  'request_permission',
+  {
+    session_token: 'opaque-token-abc',
+    tool_name: 'Write',
+    tool_input: { file_path: '/etc/hosts', content: '...' },
+  },
+  30000
+); // 30 second timeout for user approval
 
 if (!permissionResponse.approved) {
   // Send error notification
@@ -1055,13 +1065,15 @@ export class ExecutorIPCServer {
     if (this.batchBuffer.length === 0) return;
 
     // Send as single batched notification
-    this.client.write(JSON.stringify({
-      jsonrpc: '2.0',
-      method: 'batch_notification',
-      params: {
-        notifications: this.batchBuffer,
-      },
-    }) + '\n');
+    this.client.write(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'batch_notification',
+        params: {
+          notifications: this.batchBuffer,
+        },
+      }) + '\n'
+    );
 
     this.batchBuffer = [];
 
@@ -1169,22 +1181,24 @@ export class ExecutorPool {
 
 ### Performance Characteristics
 
-| Metric | Value |
-|--------|-------|
-| Message latency | <1ms (local Unix socket) |
-| Throughput | 10,000+ messages/sec |
-| Memory overhead | ~1KB per pending request |
+| Metric              | Value                               |
+| ------------------- | ----------------------------------- |
+| Message latency     | <1ms (local Unix socket)            |
+| Throughput          | 10,000+ messages/sec                |
+| Memory overhead     | ~1KB per pending request            |
 | Connection overhead | ~100ms (spawn subprocess + connect) |
 
 ### When to Use This Pattern
 
 ✅ **Use for:**
+
 - Long-running operations with streaming updates
 - Process isolation (security boundaries)
 - Independent failure domains
 - CPU-intensive work (executor can peg CPU without blocking daemon)
 
 ❌ **Don't use for:**
+
 - Simple function calls (direct invocation faster)
 - Shared memory access (different processes)
 - Very high throughput (>100k msgs/sec, use shared memory instead)
@@ -1194,6 +1208,7 @@ export class ExecutorPool {
 ## Next Steps
 
 For actual implementation, see:
+
 - `executor-isolation.md` - Full architecture design
 - `/apps/agor-daemon/src/services/executor-client.ts` - Production implementation (when built)
 - `/packages/executor/src/ipc-server.ts` - Production implementation (when built)

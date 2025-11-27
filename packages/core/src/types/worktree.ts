@@ -42,6 +42,9 @@ export interface Worktree {
   /** Stop command - initialized from repo template, then user-editable (e.g., "pkill -f 'pnpm dev'") */
   stop_command?: string;
 
+  /** Nuke command - initialized from repo template, then user-editable (e.g., "docker compose down -v") */
+  nuke_command?: string;
+
   /** Health check URL - initialized from repo template, then user-editable (e.g., "http://localhost:5173/health") */
   health_check_url?: string;
 
@@ -474,6 +477,18 @@ export interface RepoEnvironmentConfig {
    * - "pkill -f 'vite.*{{add 9000 worktree.unique_id}}'"
    */
   down_command: string;
+
+  /**
+   * Command to nuke environment (Handlebars template)
+   *
+   * Destructive operation that typically removes volumes, data, and state.
+   * Requires user confirmation before execution.
+   *
+   * Examples:
+   * - "docker compose -p {{worktree.name}} down -v"
+   * - "rm -rf node_modules .next .cache && docker compose -p {{worktree.name}} down -v"
+   */
+  nuke_command?: string;
 
   /**
    * Optional health check configuration

@@ -47,6 +47,7 @@
 ### Example Security Improvement
 
 **Before (Current):**
+
 ```bash
 # Agent running via Claude SDK (inside daemon process)
 → Tool: Bash("cat ~/.agor/config.yaml")
@@ -54,6 +55,7 @@
 ```
 
 **After (Proposed):**
+
 ```bash
 # Agent running via agor-executor (separate process, separate user)
 → Tool: Bash("cat ~/.agor/config.yaml")
@@ -100,14 +102,14 @@
 
 ### Threat Model
 
-| Threat Scenario | Current Impact | Likelihood |
-|----------------|----------------|------------|
-| **Malicious user prompt** | ❌ Can read database via SDK tools | High (intentional or accidental) |
-| **Agent prompt injection** | ❌ Can exfiltrate API keys via environment vars | Medium (growing threat) |
-| **Compromised MCP server** | ❌ Full access to daemon memory space | Medium (untrusted npm packages) |
-| **Terminal command injection** | ❌ Can read ~/.agor/config.yaml | High (users run arbitrary commands) |
-| **SDK tool abuse** | ❌ Read/Write tools can access sensitive files | High (by design, but unbounded) |
-| **Credential theft** | ❌ All users share daemon's credentials | High (multi-user environments) |
+| Threat Scenario                | Current Impact                                  | Likelihood                          |
+| ------------------------------ | ----------------------------------------------- | ----------------------------------- |
+| **Malicious user prompt**      | ❌ Can read database via SDK tools              | High (intentional or accidental)    |
+| **Agent prompt injection**     | ❌ Can exfiltrate API keys via environment vars | Medium (growing threat)             |
+| **Compromised MCP server**     | ❌ Full access to daemon memory space           | Medium (untrusted npm packages)     |
+| **Terminal command injection** | ❌ Can read ~/.agor/config.yaml                 | High (users run arbitrary commands) |
+| **SDK tool abuse**             | ❌ Read/Write tools can access sensitive files  | High (by design, but unbounded)     |
+| **Credential theft**           | ❌ All users share daemon's credentials         | High (multi-user environments)      |
 
 ### Example Attack: Database Exfiltration
 
@@ -231,15 +233,15 @@ Agent: "I found these API keys: ..." ❌
 
 ### Key Security Properties
 
-| Security Boundary | Enforcement Mechanism | Threat Mitigated |
-|-------------------|----------------------|------------------|
-| **No database access** | Executor doesn't receive connection string | Database exfiltration |
-| **No API keys in memory** | Executor requests keys per-call, daemon validates | API key theft |
-| **Unix user separation** | Executor runs as different UID/GID | Credential isolation |
-| **Filesystem isolation** | Bind mount or chroot to worktree | File system traversal |
-| **Opaque session tokens** | Non-reusable, time-limited tokens | Session hijacking |
-| **IPC audit trail** | All daemon↔executor calls logged | Forensics, compliance |
-| **Network isolation (future)** | Network namespace, egress filtering | Data exfiltration via network |
+| Security Boundary              | Enforcement Mechanism                             | Threat Mitigated              |
+| ------------------------------ | ------------------------------------------------- | ----------------------------- |
+| **No database access**         | Executor doesn't receive connection string        | Database exfiltration         |
+| **No API keys in memory**      | Executor requests keys per-call, daemon validates | API key theft                 |
+| **Unix user separation**       | Executor runs as different UID/GID                | Credential isolation          |
+| **Filesystem isolation**       | Bind mount or chroot to worktree                  | File system traversal         |
+| **Opaque session tokens**      | Non-reusable, time-limited tokens                 | Session hijacking             |
+| **IPC audit trail**            | All daemon↔executor calls logged                 | Forensics, compliance         |
+| **Network isolation (future)** | Network namespace, egress filtering               | Data exfiltration via network |
 
 ---
 
@@ -248,6 +250,7 @@ Agent: "I found these API keys: ..." ❌
 ### Process Model
 
 **Development/Local:**
+
 ```
 1 Daemon Process (persistent)
   ↓
@@ -258,6 +261,7 @@ N Executor Processes (spawned on-demand)
 ```
 
 **Production/Cloud:**
+
 ```
 1 Daemon Process (per customer or shared)
   ↓
@@ -308,6 +312,7 @@ N Executor Processes
 ### Message Format
 
 **Request (Executor → Daemon):**
+
 ```json
 {
   "jsonrpc": "2.0",
@@ -325,6 +330,7 @@ N Executor Processes
 ```
 
 **Response (Daemon → Executor):**
+
 ```json
 {
   "jsonrpc": "2.0",
@@ -342,6 +348,7 @@ N Executor Processes
 ```
 
 **Error Response:**
+
 ```json
 {
   "jsonrpc": "2.0",
@@ -362,33 +369,35 @@ N Executor Processes
 **Purpose:** Start SDK execution for a user prompt
 
 **Request:**
+
 ```typescript
 interface ExecutePromptRequest {
-  jsonrpc: "2.0";
+  jsonrpc: '2.0';
   id: string;
-  method: "execute_prompt";
+  method: 'execute_prompt';
   params: {
-    session_token: string;      // Opaque, single-use token
-    prompt: string;             // User's question/instruction
-    cwd: string;                // Working directory (worktree path)
-    tools: string[];            // Authorized tools (Read, Write, Bash, etc)
+    session_token: string; // Opaque, single-use token
+    prompt: string; // User's question/instruction
+    cwd: string; // Working directory (worktree path)
+    tools: string[]; // Authorized tools (Read, Write, Bash, etc)
     permission_mode: PermissionMode; // default, acceptEdits, bypassPermissions
-    timeout_ms: number;         // Max execution time
+    timeout_ms: number; // Max execution time
   };
 }
 ```
 
 **Response:**
+
 ```typescript
 interface ExecutePromptResponse {
-  jsonrpc: "2.0";
+  jsonrpc: '2.0';
   id: string;
   result: {
-    session_id: SessionID;           // Full session ID (for context)
-    mcp_servers: MCPServerConfig[];  // MCP server configs
-    context_files: string[];         // Files to load (CLAUDE.md, etc)
+    session_id: SessionID; // Full session ID (for context)
+    mcp_servers: MCPServerConfig[]; // MCP server configs
+    context_files: string[]; // Files to load (CLAUDE.md, etc)
     conversation_history: Message[]; // Previous messages
-    model_config?: ModelConfig;      // Model, thinking tokens, etc
+    model_config?: ModelConfig; // Model, thinking tokens, etc
   };
 }
 ```
@@ -399,31 +408,34 @@ interface ExecutePromptResponse {
 **Purpose:** Request API key for a specific service (per-call basis)
 
 **Request:**
+
 ```typescript
 interface GetApiKeyRequest {
-  jsonrpc: "2.0";
+  jsonrpc: '2.0';
   id: string;
-  method: "get_api_key";
+  method: 'get_api_key';
   params: {
-    session_token: string;  // Validates request is authorized
-    service: "anthropic" | "openai" | "google" | "github";
+    session_token: string; // Validates request is authorized
+    service: 'anthropic' | 'openai' | 'google' | 'github';
   };
 }
 ```
 
 **Response:**
+
 ```typescript
 interface GetApiKeyResponse {
-  jsonrpc: "2.0";
+  jsonrpc: '2.0';
   id: string;
   result: {
-    api_key: string;        // Decrypted API key
-    expires_at?: number;    // Optional expiration (epoch ms)
+    api_key: string; // Decrypted API key
+    expires_at?: number; // Optional expiration (epoch ms)
   };
 }
 ```
 
 **Security:**
+
 - API key returned ONCE per request (not stored in executor memory)
 - Daemon logs all API key requests (audit trail)
 - Token validation ensures request is from authorized executor
@@ -435,27 +447,29 @@ interface GetApiKeyResponse {
 **Purpose:** Request permission to execute a tool
 
 **Request:**
+
 ```typescript
 interface RequestPermissionRequest {
-  jsonrpc: "2.0";
+  jsonrpc: '2.0';
   id: string;
-  method: "request_permission";
+  method: 'request_permission';
   params: {
     session_token: string;
-    tool_name: string;      // Read, Write, Bash, etc
-    tool_input: unknown;    // Tool-specific parameters
+    tool_name: string; // Read, Write, Bash, etc
+    tool_input: unknown; // Tool-specific parameters
   };
 }
 ```
 
 **Response:**
+
 ```typescript
 interface RequestPermissionResponse {
-  jsonrpc: "2.0";
+  jsonrpc: '2.0';
   id: string;
   result: {
     approved: boolean;
-    reason?: string;        // "mode=bypassPermissions" or user approval
+    reason?: string; // "mode=bypassPermissions" or user approval
   };
 }
 ```
@@ -466,20 +480,22 @@ interface RequestPermissionResponse {
 **Purpose:** Stream SDK output back to daemon for WebSocket broadcast
 
 **Notification:**
+
 ```typescript
 interface ReportMessageNotification {
-  jsonrpc: "2.0";
-  method: "report_message";
+  jsonrpc: '2.0';
+  method: 'report_message';
   params: {
     session_token: string;
     task_id: TaskID;
-    message_type: "content_block_delta" | "thinking_chunk" | "tool_call";
-    data: unknown;          // Message-specific data
+    message_type: 'content_block_delta' | 'thinking_chunk' | 'tool_call';
+    data: unknown; // Message-specific data
   };
 }
 ```
 
 **Daemon Action:**
+
 - Creates message record in database
 - Broadcasts via WebSocket to connected clients
 - Updates task status
@@ -490,15 +506,16 @@ interface ReportMessageNotification {
 **Purpose:** Report execution completion with final results
 
 **Request:**
+
 ```typescript
 interface ReportCompletionRequest {
-  jsonrpc: "2.0";
+  jsonrpc: '2.0';
   id: string;
-  method: "report_completion";
+  method: 'report_completion';
   params: {
     session_token: string;
     task_id: TaskID;
-    status: "completed" | "failed" | "cancelled";
+    status: 'completed' | 'failed' | 'cancelled';
     token_usage?: {
       input_tokens: number;
       output_tokens: number;
@@ -515,9 +532,10 @@ interface ReportCompletionRequest {
 ```
 
 **Response:**
+
 ```typescript
 interface ReportCompletionResponse {
-  jsonrpc: "2.0";
+  jsonrpc: '2.0';
   id: string;
   result: {
     acknowledged: true;
@@ -531,15 +549,16 @@ interface ReportCompletionResponse {
 **Purpose:** Create a new terminal session
 
 **Request:**
+
 ```typescript
 interface SpawnTerminalRequest {
-  jsonrpc: "2.0";
+  jsonrpc: '2.0';
   id: string;
-  method: "spawn_terminal";
+  method: 'spawn_terminal';
   params: {
-    session_token: string;  // Terminal session token (different from SDK session)
+    session_token: string; // Terminal session token (different from SDK session)
     cwd: string;
-    shell: string;          // bash, zsh, etc
+    shell: string; // bash, zsh, etc
     env: Record<string, string>; // Environment variables (filtered)
     use_tmux: boolean;
     tmux_session_name?: string;
@@ -549,13 +568,14 @@ interface SpawnTerminalRequest {
 ```
 
 **Response:**
+
 ```typescript
 interface SpawnTerminalResponse {
-  jsonrpc: "2.0";
+  jsonrpc: '2.0';
   id: string;
   result: {
     terminal_id: TerminalID;
-    pty_fd: number;         // File descriptor for PTY (passed via socket ancillary data)
+    pty_fd: number; // File descriptor for PTY (passed via socket ancillary data)
   };
 }
 ```
@@ -616,10 +636,10 @@ export class ExecutorIPCService {
       fs.unlinkSync(this.socketPath);
     }
 
-    this.server = net.createServer((socket) => {
+    this.server = net.createServer(socket => {
       logger.info('Executor connected');
 
-      socket.on('data', (data) => {
+      socket.on('data', data => {
         const request = JSON.parse(data.toString());
         this.handleRequest(socket, request);
       });
@@ -818,14 +838,10 @@ app.use('/sessions/:id/prompt', {
       // OLD: Direct SDK execution (current behavior)
       return await executeViaDirectSDK(session, task, prompt);
     }
-  }
+  },
 });
 
-async function executeViaExecutor(
-  session: Session,
-  task: Task,
-  prompt: string
-) {
+async function executeViaExecutor(session: Session, task: Task, prompt: string) {
   // Generate single-use session token
   const session_token = generateSecureToken();
   await sessionsRepo.setExecutorToken(session.session_id, session_token, {
@@ -888,7 +904,7 @@ export class AgorExecutor {
       logger.info('Connected to daemon IPC');
     });
 
-    this.socket.on('data', (data) => {
+    this.socket.on('data', data => {
       const lines = data.toString().split('\n').filter(Boolean);
       for (const line of lines) {
         const message = JSON.parse(line);
@@ -901,7 +917,7 @@ export class AgorExecutor {
       process.exit(0);
     });
 
-    this.socket.on('error', (error) => {
+    this.socket.on('error', error => {
       logger.error('IPC error:', error);
       process.exit(1);
     });
@@ -1077,7 +1093,7 @@ async function main() {
   logger.info('Agor Executor started');
 }
 
-main().catch((error) => {
+main().catch(error => {
   logger.error('Fatal error:', error);
   process.exit(1);
 });
@@ -1146,7 +1162,7 @@ export class ExecutorPool {
 
     this.executors.set(executorId, executorProcess);
 
-    process.on('exit', (code) => {
+    process.on('exit', code => {
       logger.info(`Executor ${executorId} exited with code ${code}`);
       this.executors.delete(executorId);
     });
@@ -1278,7 +1294,7 @@ export class TerminalsService {
     const ptyStream = new net.Socket({ fd: pty_fd });
 
     // Forward PTY I/O to WebSocket
-    ptyStream.on('data', (data) => {
+    ptyStream.on('data', data => {
       this.app.service('terminals').emit('data', {
         terminal_id,
         data: data.toString('base64'),
@@ -1340,7 +1356,8 @@ export class ExecutorTerminalHandler {
   private terminals = new Map<string, any>();
 
   async handleSpawnTerminal(params: any, socket: net.Socket) {
-    const { session_token, cwd, shell, env, use_tmux, tmux_session_name, tmux_window_name } = params;
+    const { session_token, cwd, shell, env, use_tmux, tmux_session_name, tmux_window_name } =
+      params;
 
     const terminal_id = `term-${Date.now()}`;
 
@@ -1375,12 +1392,15 @@ export class ExecutorTerminalHandler {
     const fd = ptyProcess._fd; // Internal PTY file descriptor
 
     // Send file descriptor via SCM_RIGHTS
-    socket.write(JSON.stringify({
-      terminal_id,
-      pty_fd: fd,
-    }), () => {
-      // After sending, we can release the PTY (daemon now owns it)
-    });
+    socket.write(
+      JSON.stringify({
+        terminal_id,
+        pty_fd: fd,
+      }),
+      () => {
+        // After sending, we can release the PTY (daemon now owns it)
+      }
+    );
 
     return { terminal_id, pty_fd: fd };
   }
@@ -1444,24 +1464,26 @@ export async function setupQueryViaExecutor(
   const executor = await deps.executorPool.spawn({ unix_user });
 
   // 7. Send execute_prompt request (non-blocking)
-  executorIPCService.sendToExecutor(executor.id, {
-    jsonrpc: '2.0',
-    method: 'execute_prompt',
-    params: {
-      session_token,
-      prompt,
-      cwd: worktree.path,
-      tools: ['Read', 'Write', 'Bash', 'Grep', 'Glob'],
-      permission_mode: session.permission_mode || 'default',
-      timeout_ms: options.timeout || 300000,
-    },
-  }).catch((error) => {
-    logger.error('Executor execution failed:', error);
-    deps.tasksRepo.update(task.task_id, {
-      status: 'failed',
-      error: { message: error.message },
+  executorIPCService
+    .sendToExecutor(executor.id, {
+      jsonrpc: '2.0',
+      method: 'execute_prompt',
+      params: {
+        session_token,
+        prompt,
+        cwd: worktree.path,
+        tools: ['Read', 'Write', 'Bash', 'Grep', 'Glob'],
+        permission_mode: session.permission_mode || 'default',
+        timeout_ms: options.timeout || 300000,
+      },
+    })
+    .catch(error => {
+      logger.error('Executor execution failed:', error);
+      deps.tasksRepo.update(task.task_id, {
+        status: 'failed',
+        error: { message: error.message },
+      });
     });
-  });
 
   // Return immediately (executor will report results via IPC)
   return {
@@ -1545,39 +1567,45 @@ Same pattern applies to all SDK tools:
 
 ### Threat Model (Updated)
 
-| Threat | Current | With Executor | Residual Risk |
-|--------|---------|---------------|---------------|
-| **Database exfiltration** | ❌ Possible | ✅ Blocked | ✓ None (no DB connection) |
-| **API key theft** | ❌ In memory | ✅ Just-in-time | ⚠️ Key can be logged during use |
-| **Credential isolation** | ❌ Shared | ✅ Per-user Unix accounts | ⚠️ Requires Unix user setup |
-| **File system traversal** | ❌ Unbounded | ✅ Limited to worktree | ⚠️ Bind mount not enforced yet |
-| **Session hijacking** | ❌ Session IDs predictable | ✅ Opaque tokens | ⚠️ Token replay within 24h window |
-| **MCP server compromise** | ❌ Full daemon access | ✅ Sandboxed in executor | ⚠️ Can modify worktree files |
-| **Malicious prompt injection** | ❌ Full system access | ✅ Sandboxed | ⚠️ Can make authorized API calls |
+| Threat                         | Current                    | With Executor             | Residual Risk                     |
+| ------------------------------ | -------------------------- | ------------------------- | --------------------------------- |
+| **Database exfiltration**      | ❌ Possible                | ✅ Blocked                | ✓ None (no DB connection)         |
+| **API key theft**              | ❌ In memory               | ✅ Just-in-time           | ⚠️ Key can be logged during use   |
+| **Credential isolation**       | ❌ Shared                  | ✅ Per-user Unix accounts | ⚠️ Requires Unix user setup       |
+| **File system traversal**      | ❌ Unbounded               | ✅ Limited to worktree    | ⚠️ Bind mount not enforced yet    |
+| **Session hijacking**          | ❌ Session IDs predictable | ✅ Opaque tokens          | ⚠️ Token replay within 24h window |
+| **MCP server compromise**      | ❌ Full daemon access      | ✅ Sandboxed in executor  | ⚠️ Can modify worktree files      |
+| **Malicious prompt injection** | ❌ Full system access      | ✅ Sandboxed              | ⚠️ Can make authorized API calls  |
 
 ### Defense-in-Depth Layers
 
 **Layer 1: Process Separation**
+
 - Daemon and executor are separate processes
 - Different memory spaces (can't read each other's memory)
 
 **Layer 2: Unix User Separation**
+
 - Executor runs as different UID/GID
 - File permissions enforce isolation
 
 **Layer 3: Opaque Session Tokens**
+
 - Non-reusable, time-limited tokens
 - Prevents session hijacking
 
 **Layer 4: IPC Audit Trail**
+
 - All daemon↔executor communication logged
 - Compliance-ready (SOC2, HIPAA)
 
 **Layer 5: Filesystem Isolation (Future)**
+
 - Bind mount worktree directory
 - Chroot or namespaces (Linux)
 
 **Layer 6: Network Isolation (Future)**
+
 - Network namespace per executor
 - Egress filtering (allowlist Anthropic API, etc)
 
@@ -1592,31 +1620,31 @@ Same pattern applies to all SDK tools:
 ```yaml
 execution:
   # Enable executor-based isolation
-  run_as_unix_user: false  # Set to true to enable
+  run_as_unix_user: false # Set to true to enable
 
   # Unix user to run executors as (if not per-user)
   executor_unix_user: agor_executor
 
   # Executor pool settings
   executor_pool:
-    max_executors: 10          # Max concurrent executors
-    reuse_executors: false     # Reuse executor processes (for performance)
-    idle_timeout_ms: 60000     # Kill idle executors after 1 minute
+    max_executors: 10 # Max concurrent executors
+    reuse_executors: false # Reuse executor processes (for performance)
+    idle_timeout_ms: 60000 # Kill idle executors after 1 minute
 
   # IPC settings
   ipc:
     socket_path: /var/run/agor/executor.sock
-    socket_permissions: 0o660  # Only agor and executor users can connect
+    socket_permissions: 0o660 # Only agor and executor users can connect
 
   # Session token settings
   session_tokens:
-    expiration_ms: 86400000    # 24 hours
-    max_uses: 1                # Single-use tokens
+    expiration_ms: 86400000 # 24 hours
+    max_uses: 1 # Single-use tokens
 
   # Filesystem isolation (future)
   filesystem_isolation:
-    enabled: false             # Bind mount worktree
-    mount_options: bind,rw     # Mount options
+    enabled: false # Bind mount worktree
+    mount_options: bind,rw # Mount options
 
   # Network isolation (future)
   network_isolation:
@@ -1683,6 +1711,7 @@ To create per-user Unix accounts (recommended):
 - [ ] Integration tests (daemon ↔ executor communication)
 
 **Success Criteria:**
+
 - Daemon can spawn executor process
 - IPC communication works (request/response)
 - Terminal spawns in executor and forwards I/O to daemon
@@ -1701,6 +1730,7 @@ To create per-user Unix accounts (recommended):
 - [ ] Audit logging (all IPC calls logged)
 
 **Success Criteria:**
+
 - Agent prompts execute in executor process
 - No API keys in executor environment
 - Database not accessible from executor
@@ -1719,6 +1749,7 @@ To create per-user Unix accounts (recommended):
 - [ ] User linking: `agor user setup-unix <email>`
 
 **Success Criteria:**
+
 - Terminals run as correct Unix user (`whoami` = agor_alice)
 - Alice's executor can't read Bob's SSH keys (permission denied)
 - File ownership reflects user identity
@@ -1736,6 +1767,7 @@ To create per-user Unix accounts (recommended):
 - [ ] Security documentation and best practices
 
 **Success Criteria:**
+
 - Executor can't escape worktree (filesystem boundary)
 - Executor can't access arbitrary network hosts
 - Audit trail complete and queryable
@@ -1752,6 +1784,7 @@ To create per-user Unix accounts (recommended):
 - [ ] Optimize tmux integration (persistent sessions)
 
 **Success Criteria:**
+
 - <5% performance regression vs current model
 - Executor pool efficiently reuses processes
 - Streaming latency unchanged
@@ -1759,18 +1792,22 @@ To create per-user Unix accounts (recommended):
 ### Rollout Strategy
 
 **Week 1-2:** Internal testing (Agor team only)
+
 - Enable on dev environment
 - Fix critical bugs
 
 **Week 3-4:** Beta testing (select Agor Cloud customers)
+
 - Opt-in via config flag
 - Gather feedback, monitor logs
 
 **Week 5:** General availability
+
 - Enable by default for new Agor Cloud instances
 - Opt-in for existing instances (migration guide)
 
 **Week 6+:** Deprecate unified model
+
 - Require executor isolation for multi-tenant environments
 - Unified model only for single-user local dev
 
@@ -1781,6 +1818,7 @@ To create per-user Unix accounts (recommended):
 ### Chosen: Daemon + Executor Separation
 
 **Pros:**
+
 - ✅ Strong security boundary (process isolation)
 - ✅ Leverages existing Unix user design
 - ✅ Cross-platform (works on Linux, macOS)
@@ -1788,6 +1826,7 @@ To create per-user Unix accounts (recommended):
 - ✅ Minimal changes to daemon API (non-breaking)
 
 **Cons:**
+
 - ⚠️ IPC overhead (Unix socket round-trips)
 - ⚠️ Complexity (two processes, lifecycle management)
 - ⚠️ Requires Unix user setup (sudo once)
@@ -1797,11 +1836,13 @@ To create per-user Unix accounts (recommended):
 **Approach:** Each executor runs in a Docker/Podman container
 
 **Pros:**
+
 - ✅ Strongest isolation (kernel namespaces)
 - ✅ Resource limits built-in (cgroups)
 - ✅ Well-understood security model
 
 **Cons:**
+
 - ❌ Heavy (container overhead, memory usage)
 - ❌ Complex lifecycle (container startup time)
 - ❌ Sharing worktrees tricky (volume mounts)
@@ -1814,11 +1855,13 @@ To create per-user Unix accounts (recommended):
 **Approach:** Run agent SDK in WASM runtime (wasmtime, wasmer)
 
 **Pros:**
+
 - ✅ Sandboxed by design (WASI capabilities)
 - ✅ Fast startup (no process spawn)
 - ✅ Cross-platform (no OS dependencies)
 
 **Cons:**
+
 - ❌ Agent SDKs not available in WASM (yet)
 - ❌ Limited WASI support (file I/O, networking)
 - ❌ Immature ecosystem
@@ -1830,10 +1873,12 @@ To create per-user Unix accounts (recommended):
 **Approach:** Each user gets a lightweight VM (Firecracker, Kata)
 
 **Pros:**
+
 - ✅ Strongest isolation (hypervisor boundary)
 - ✅ Proven security model (AWS Lambda)
 
 **Cons:**
+
 - ❌ Very heavy (VM overhead, startup time)
 - ❌ Complex orchestration
 - ❌ Not suitable for local dev
@@ -1845,10 +1890,12 @@ To create per-user Unix accounts (recommended):
 **Approach:** Keep unified model, add row-level security to database
 
 **Pros:**
+
 - ✅ No IPC overhead (same process)
 - ✅ Simpler implementation
 
 **Cons:**
+
 - ❌ Doesn't solve API key theft (still in memory)
 - ❌ Doesn't solve file access (same Unix user)
 - ❌ Single failure domain (compromise = game over)
@@ -1882,10 +1929,12 @@ To create per-user Unix accounts (recommended):
 **With Executor:** Executor → IPC → Daemon → WebSocket
 
 **Concerns:**
+
 - Latency (extra hop)
 - Backpressure (if IPC can't keep up)
 
 **Solutions:**
+
 - Buffering (executor buffers chunks, sends in batches)
 - Async notifications (don't wait for ACK)
 - Chunked encoding (stream large messages)
@@ -1915,10 +1964,11 @@ To create per-user Unix accounts (recommended):
 ```yaml
 execution:
   run_as_unix_user: true
-  fallback_to_unified: true  # If executor isolation fails, use current model
+  fallback_to_unified: true # If executor isolation fails, use current model
 ```
 
 **Logging:**
+
 ```
 WARN: Executor isolation unavailable, falling back to unified model
 WARN: All execution will run as daemon user (lower security)
@@ -1931,6 +1981,7 @@ WARN: All execution will run as daemon user (lower security)
 ### Milestones
 
 **M1: IPC Foundation (2 weeks)**
+
 - [ ] ExecutorIPCService implementation
 - [ ] AgorExecutor implementation
 - [ ] JSON-RPC 2.0 protocol
@@ -1938,12 +1989,14 @@ WARN: All execution will run as daemon user (lower security)
 - [ ] Integration tests
 
 **M2: Terminal Integration (1 week)**
+
 - [ ] spawn_terminal IPC method
 - [ ] PTY file descriptor passing
 - [ ] Terminal I/O forwarding
 - [ ] Tmux integration
 
 **M3: SDK Integration (3 weeks)**
+
 - [ ] Claude SDK via executor
 - [ ] Codex, Gemini, OpenCode SDKs
 - [ ] Session token system
@@ -1951,18 +2004,21 @@ WARN: All execution will run as daemon user (lower security)
 - [ ] Permission system integration
 
 **M4: Unix User Isolation (2 weeks)**
+
 - [ ] Per-user executor spawning
 - [ ] Sudo-based impersonation
 - [ ] Credential isolation
 - [ ] Setup command
 
 **M5: Security Hardening (2 weeks)**
+
 - [ ] Filesystem isolation
 - [ ] Network isolation
 - [ ] Audit logging
 - [ ] Rate limiting
 
 **M6: Performance & Polish (1 week)**
+
 - [ ] Executor pooling
 - [ ] Benchmark & optimize
 - [ ] Documentation
@@ -1973,16 +2029,19 @@ WARN: All execution will run as daemon user (lower security)
 ### Success Metrics
 
 **Security:**
+
 - ✅ Zero database exfiltration incidents
 - ✅ Zero API key theft incidents
 - ✅ Audit logs capture 100% of operations
 
 **Performance:**
+
 - ✅ <5% latency regression vs unified model
 - ✅ Streaming latency unchanged (<100ms)
 - ✅ Executor spawn time <500ms
 
 **Reliability:**
+
 - ✅ 99.9% uptime (executor failures don't crash daemon)
 - ✅ Graceful degradation if isolation unavailable
 - ✅ IPC timeout handling (no hanging requests)
@@ -2015,16 +2074,19 @@ WARN: All execution will run as daemon user (lower security)
 ## References
 
 **Unix IPC:**
+
 - `man 7 unix` - Unix domain sockets
 - `man 2 sendmsg` - Passing file descriptors (SCM_RIGHTS)
 - JSON-RPC 2.0: https://www.jsonrpc.org/specification
 
 **Security:**
+
 - Principle of Least Privilege: https://en.wikipedia.org/wiki/Principle_of_least_privilege
 - Defense in Depth: https://en.wikipedia.org/wiki/Defense_in_depth_(computing)
 - OWASP Top 10: https://owasp.org/www-project-top-ten/
 
 **Related Agor Docs:**
+
 - [[unix-user-integration]] - OS-level user isolation (complements this design)
 - [[architecture]] - System architecture overview
 - [[permissions]] - Permission system for tool approval

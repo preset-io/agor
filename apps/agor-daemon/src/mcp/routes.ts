@@ -613,6 +613,21 @@ export function setupMCPRoutes(app: Application): void {
                 required: ['worktreeId'],
               },
             },
+            {
+              name: 'agor_environment_nuke',
+              description:
+                'Nuke the environment for a worktree (destructive operation - typically removes volumes and all data)',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  worktreeId: {
+                    type: 'string',
+                    description: 'Worktree ID (UUIDv7 or short ID)',
+                  },
+                },
+                required: ['worktreeId'],
+              },
+            },
 
             // Board tools
             {
@@ -1958,6 +1973,60 @@ export function setupMCPRoutes(app: Application): void {
                       success: true,
                       url: appUrl,
                       message: `App URL: ${appUrl}`,
+                    },
+                    null,
+                    2
+                  ),
+                },
+              ],
+            };
+          }
+        } else if (name === 'agor_environment_nuke') {
+          const worktreeId = coerceString(args?.worktreeId);
+          if (!worktreeId) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message: 'Invalid params: worktreeId is required',
+              },
+            });
+          }
+
+          const worktreesService = app.service(
+            'worktrees'
+          ) as unknown as import('../declarations').WorktreesServiceImpl;
+          try {
+            const worktree = await worktreesService.nukeEnvironment(
+              worktreeId as import('@agor/core/types').WorktreeID,
+              baseServiceParams
+            );
+            mcpResponse = {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify(
+                    {
+                      success: true,
+                      worktree,
+                      message: 'Environment nuked successfully - all data and volumes destroyed',
+                    },
+                    null,
+                    2
+                  ),
+                },
+              ],
+            };
+          } catch (error) {
+            mcpResponse = {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify(
+                    {
+                      success: false,
+                      error: error instanceof Error ? error.message : 'Unknown error',
                     },
                     null,
                     2

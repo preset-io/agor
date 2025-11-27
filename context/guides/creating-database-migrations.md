@@ -46,11 +46,13 @@ const t = {
 **The golden rule:** When you modify one schema, you must modify the other to match.
 
 **Only 3 types differ between dialects:**
+
 1. **Timestamps:** `integer` (SQLite) vs `timestamp` (Postgres)
 2. **Booleans:** `integer` (SQLite) vs `boolean` (Postgres)
 3. **JSON:** `text` (SQLite) vs `jsonb` (Postgres)
 
 **Everything else is identical:**
+
 - Table structure
 - Column names
 - Indexes
@@ -75,7 +77,7 @@ export const mcpServers = sqliteTable(
     // ... other columns ...
 
     scope: text('scope', {
-      enum: ['global', 'session'],  // ← Changed from 4 to 2 values
+      enum: ['global', 'session'], // ← Changed from 4 to 2 values
     }).notNull(),
 
     // Scope foreign key
@@ -84,7 +86,7 @@ export const mcpServers = sqliteTable(
 
     // ... other columns ...
   },
-  (table) => ({
+  table => ({
     nameIdx: index('mcp_servers_name_idx').on(table.name),
     scopeIdx: index('mcp_servers_scope_idx').on(table.scope),
     ownerIdx: index('mcp_servers_owner_idx').on(table.owner_user_id),
@@ -102,7 +104,7 @@ export const mcpServers = pgTable(
     // ... other columns ...
 
     scope: text('scope', {
-      enum: ['global', 'session'],  // ← Same change
+      enum: ['global', 'session'], // ← Same change
     }).notNull(),
 
     // Scope foreign key
@@ -111,7 +113,7 @@ export const mcpServers = pgTable(
 
     // ... other columns ...
   },
-  (table) => ({
+  table => ({
     nameIdx: index('mcp_servers_name_idx').on(table.name),
     scopeIdx: index('mcp_servers_scope_idx').on(table.scope),
     ownerIdx: index('mcp_servers_owner_idx').on(table.owner_user_id),
@@ -136,6 +138,7 @@ docker exec <container-name> sh -c "cd /app/packages/core && pnpm db:generate:po
 ```
 
 **Example output:**
+
 ```
 [✓] Your SQL migration file ➜ drizzle/sqlite/0014_graceful_ben_grimm.sql 🚀
 [✓] Your SQL migration file ➜ drizzle/postgres/0004_nervous_imperial_guard.sql 🚀
@@ -175,6 +178,7 @@ cat packages/core/drizzle/postgres/0004_nervous_imperial_guard.sql
 ```
 
 **Common patterns to look for:**
+
 - **Column additions:** Should use `ALTER TABLE ADD COLUMN`
 - **Column removals:** SQLite recreates table, Postgres drops column
 - **Type changes:** SQLite recreates table, Postgres alters type
@@ -200,6 +204,7 @@ docker compose -p <project-name> logs | grep -i migration
 ```
 
 Expected output:
+
 ```
 ✅ Migrations complete
 ✅ Database is up to date
@@ -251,19 +256,20 @@ git commit -m "feat: remove unused MCP server scope columns
 // schema.sqlite.ts
 export const myTable = sqliteTable('my_table', {
   // ... existing columns ...
-  new_column: text('new_column'),  // ← Add new column
+  new_column: text('new_column'), // ← Add new column
 });
 
 // schema.postgres.ts
 export const myTable = pgTable('my_table', {
   // ... existing columns ...
-  new_column: text('new_column'),  // ← Same change
+  new_column: text('new_column'), // ← Same change
 });
 ```
 
 **2. Generate migrations** (as described above)
 
 **Result:**
+
 ```sql
 -- SQLite
 ALTER TABLE `my_table` ADD `new_column` text;
@@ -279,6 +285,7 @@ ALTER TABLE "my_table" ADD COLUMN "new_column" text;
 **2. Generate migrations**
 
 **Result:**
+
 ```sql
 -- SQLite (recreates table)
 CREATE TABLE `__new_my_table` (...);  -- Without removed column
@@ -297,6 +304,7 @@ ALTER TABLE "my_table" DROP COLUMN "old_column";
 **2. Generate migrations**
 
 **Result:**
+
 - **SQLite:** Recreates table with new type
 - **Postgres:** Uses `ALTER COLUMN ... TYPE`
 
@@ -305,15 +313,16 @@ ALTER TABLE "my_table" DROP COLUMN "old_column";
 **1. Update both schemas** (add to the index section)
 
 ```typescript
-(table) => ({
+table => ({
   // ... existing indexes ...
   newIdx: index('my_table_new_idx').on(table.new_column),
-})
+});
 ```
 
 **2. Generate migrations**
 
 **Result:**
+
 ```sql
 CREATE INDEX "my_table_new_idx" ON "my_table" ("new_column");
 ```
@@ -390,6 +399,7 @@ docker exec <container-name> sh -c "cd /app/packages/core && pnpm db:generate:sq
 **Problem:** The schema file wasn't updated, or changes were already migrated
 
 **Solutions:**
+
 1. Verify you updated **both** schema files
 2. Check if a migration already exists for your changes
 3. Ensure Docker picked up your schema changes (rebuild if needed)
@@ -399,6 +409,7 @@ docker exec <container-name> sh -c "cd /app/packages/core && pnpm db:generate:sq
 **Problem:** SQL syntax error or constraint violation
 
 **Steps:**
+
 1. Review the generated SQL in `drizzle/*/XXXX.sql`
 2. Check for breaking changes (e.g., removing a column with data)
 3. Test the SQL manually in a test database
@@ -409,11 +420,13 @@ docker exec <container-name> sh -c "cd /app/packages/core && pnpm db:generate:sq
 **Problem:** SQLite and Postgres schemas have different structures
 
 **Prevention:**
+
 - Always update both schemas together
 - Use the same column names and types (except for the 3 dialect-specific types)
 - Generate migrations for both dialects
 
 **Detection:**
+
 ```bash
 # Compare table definitions
 docker exec <container-name> sqlite3 /home/agor/.agor/agor.db ".schema mcp_servers"
@@ -488,12 +501,14 @@ This guide was created while implementing the MCP server scoping fix. Here's the
 **Goal:** Remove unused `team`, `repo` scopes and their associated columns
 
 **Files Modified:**
+
 1. `packages/core/src/db/schema.sqlite.ts` - Updated `mcpServers` table
 2. `packages/core/src/db/schema.postgres.ts` - Updated `mcpServers` table
 3. `packages/core/src/types/mcp.ts` - Updated `MCPScope` type
 4. `packages/core/src/db/repositories/mcp-servers.ts` - Removed scope logic
 
 **Schema Changes:**
+
 - Changed `scope` enum from `['global', 'team', 'repo', 'session']` to `['global', 'session']`
 - Removed columns: `team_id`, `repo_id`, `session_id`
 - Removed foreign key references
@@ -532,6 +547,7 @@ docker exec agor-session-scoped-mcp2-agor-dev-1 \
 ```
 
 **Result:**
+
 - ✅ SQLite migration: 0014_graceful_ben_grimm.sql (recreates table)
 - ✅ Postgres migration: 0004_nervous_imperial_guard.sql (drops columns/indexes)
 - ✅ Both applied successfully in Docker environment
@@ -539,4 +555,4 @@ docker exec agor-session-scoped-mcp2-agor-dev-1 \
 
 ---
 
-*This guide was created on 2025-11-26 during the MCP scoping fix implementation.*
+_This guide was created on 2025-11-26 during the MCP scoping fix implementation._

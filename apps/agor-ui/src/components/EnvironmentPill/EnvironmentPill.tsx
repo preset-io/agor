@@ -4,6 +4,7 @@ import {
   CloseCircleOutlined,
   EditOutlined,
   FileTextOutlined,
+  FireOutlined,
   GlobalOutlined,
   PlayCircleOutlined,
   StopOutlined,
@@ -18,6 +19,7 @@ interface EnvironmentPillProps {
   onEdit?: () => void; // Opens WorktreeModal → Environment tab
   onStartEnvironment?: (worktreeId: string) => void;
   onStopEnvironment?: (worktreeId: string) => void;
+  onNukeEnvironment?: (worktreeId: string) => void;
   onViewLogs?: (worktreeId: string) => void;
   connectionDisabled?: boolean; // Disable actions when disconnected
 }
@@ -28,6 +30,7 @@ export function EnvironmentPill({
   onEdit,
   onStartEnvironment,
   onStopEnvironment,
+  onNukeEnvironment,
   onViewLogs,
   connectionDisabled = false,
 }: EnvironmentPillProps) {
@@ -299,6 +302,27 @@ export function EnvironmentPill({
                     }
                   }}
                   disabled={!repo.environment_config?.logs_command}
+                  style={{
+                    height: 22,
+                    width: 22,
+                    minWidth: 22,
+                    padding: 0,
+                  }}
+                />
+              </Tooltip>
+            )}
+            {onNukeEnvironment && worktree.nuke_command && (
+              <Tooltip title="Nuke environment (destructive - removes all data and volumes)">
+                <Button
+                  type="text"
+                  size="small"
+                  danger
+                  icon={<FireOutlined />}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onNukeEnvironment(worktree.worktree_id);
+                  }}
+                  disabled={connectionDisabled}
                   style={{
                     height: 22,
                     width: 22,

@@ -20,6 +20,7 @@ Both patterns are valid and serve different purposes. Choose based on your use c
 ## Pattern 1: Service Methods (Preferred for New Features)
 
 **When to use:**
+
 - Methods that operate on the service's primary resource
 - Actions that can be called like `client.service('boards').clone(data)`
 - No complex path parameters needed
@@ -41,7 +42,11 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     maybeParams?: BoardParams
   ): Promise<Board> {
     // Parse arguments
-    const { boardIdentifier, name, params } = this.parseCloneArgs(data, newNameOrParams, maybeParams);
+    const { boardIdentifier, name, params } = this.parseCloneArgs(
+      data,
+      newNameOrParams,
+      maybeParams
+    );
 
     // Business logic
     const userId = params?.user?.user_id || 'anonymous';
@@ -98,7 +103,7 @@ app.use('/boards', createBoardsService(db), {
     'fromBlob',
     'toYaml',
     'fromYaml',
-    'clone',  // ← Register your custom method here
+    'clone', // ← Register your custom method here
   ],
 });
 ```
@@ -125,7 +130,7 @@ app.service('boards').hooks({
           app.service('boards').emit('created', context.result);
         }
         return context;
-      }
+      },
     ],
     fromBlob: [
       async (context: HookContext<Board>) => {
@@ -133,7 +138,7 @@ app.service('boards').hooks({
           app.service('boards').emit('created', context.result);
         }
         return context;
-      }
+      },
     ],
   },
 });
@@ -152,6 +157,7 @@ const clonedBoard = await boardsService.clone({ id: 'board-123', name: 'My Clone
 ## Pattern 2: Custom Routes (Use When Needed)
 
 **When to use:**
+
 - Actions that need complex path parameters (e.g., `/sessions/:id/prompt`)
 - Actions that span multiple resources
 - When you need RESTful path structure for external APIs
@@ -165,10 +171,7 @@ registerAuthenticatedRoute(
   app,
   '/sessions/:id/prompt',
   {
-    async create(
-      data: { prompt: string; permissionMode?: PermissionMode },
-      params: RouteParams
-    ) {
+    async create(data: { prompt: string; permissionMode?: PermissionMode }, params: RouteParams) {
       const id = params.route?.id;
       if (!id) throw new Error('Session ID required');
 
@@ -187,6 +190,7 @@ registerAuthenticatedRoute(
 ```
 
 **Benefits:**
+
 - RESTful path structure: `POST /sessions/:id/prompt`
 - Authentication handled by `registerAuthenticatedRoute` helper
 - Clear role-based access control
@@ -261,7 +265,7 @@ app.service('boards').hooks({
           app.service('boards').emit('created', context.result);
         }
         return context;
-      }
+      },
     ],
   },
 });
@@ -274,6 +278,7 @@ app.service('boards').hooks({
 3. **Execution context** - Hooks have proper context for FeathersJS publishing system
 
 **Event types to emit:**
+
 - `created` - After repository `create()`
 - `patched` - After repository `patch()`
 - `updated` - After repository `update()`
@@ -301,7 +306,11 @@ app.service('boards').hooks({
 registerAuthenticatedRoute(
   app,
   '/sessions/:id/prompt',
-  { async create(data, params) { /* ... */ } },
+  {
+    async create(data, params) {
+      /* ... */
+    },
+  },
   { create: { role: 'member', action: 'execute prompts' } },
   requireAuth
 );
@@ -316,6 +325,7 @@ registerAuthenticatedRoute(
 **File**: `apps/agor-daemon/src/services/boards.ts`
 
 **Custom methods:**
+
 - `clone(data, params)` - Clones a board
 - `fromBlob(blob, params)` - Imports from JSON
 - `fromYaml(yaml, params)` - Imports from YAML
@@ -323,6 +333,7 @@ registerAuthenticatedRoute(
 - `toYaml(id)` - Exports to YAML
 
 **What they do right:**
+
 - ✅ Registered in `methods` array
 - ✅ Call repository directly (not `super.create()`)
 - ✅ Have `after` hooks in index.ts that emit events via `app.service().emit()`
@@ -333,12 +344,14 @@ registerAuthenticatedRoute(
 **File**: `apps/agor-daemon/src/index.ts`
 
 **Examples:**
+
 - `/sessions/:id/fork` - Fork a session
 - `/sessions/:id/spawn` - Spawn a child session
 - `/sessions/:id/prompt` - Execute a prompt
 - `/tasks/:id/complete` - Complete a task
 
 **What they do right:**
+
 - ✅ Use `registerAuthenticatedRoute()` helper
 - ✅ No redundant `ensureMinimumRole()` in handlers (hooks handle it)
 - ✅ Clear role/action mapping
@@ -394,7 +407,7 @@ app.service('boards').hooks({
 ```typescript
 // Service has clone() method but it's not callable!
 app.use('/boards', createBoardsService(db), {
-  methods: ['find', 'get', 'create'],  // Missing 'clone'!
+  methods: ['find', 'get', 'create'], // Missing 'clone'!
 });
 ```
 
@@ -493,7 +506,7 @@ app.service('sessions').hooks({
           app.service('sessions').emit('created', context.result);
         }
         return context;
-      }
+      },
     ],
   },
 });
@@ -523,6 +536,7 @@ await client.service('sessions').fork(sessionId, { prompt });
 - **Test WebSocket broadcasting** to ensure events reach clients
 
 For questions or clarifications, see:
+
 - https://feathersjs.com/api/services
 - `apps/agor-daemon/src/services/boards.ts` (service methods example)
 - `apps/agor-daemon/src/index.ts` (custom routes examples)

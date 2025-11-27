@@ -3016,6 +3016,26 @@ async function main() {
     requireAuth
   );
 
+  // POST /worktrees/:id/nuke - Nuke environment (destructive)
+  registerAuthenticatedRoute(
+    app,
+    '/worktrees/:id/nuke',
+    {
+      async create(_data: unknown, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Worktree ID required');
+        return worktreesService.nukeEnvironment(
+          id as import('@agor/core/types').WorktreeID,
+          params
+        );
+      },
+    },
+    {
+      create: { role: 'admin', action: 'nuke worktree environments' },
+    },
+    requireAuth
+  );
+
   // GET /worktrees/:id/health - Check environment health
   registerAuthenticatedRoute(
     app,

@@ -100,6 +100,7 @@ npx tsx src/cli.ts --socket /tmp/executor.sock
 ```
 
 Output:
+
 ```
 [executor] Starting Agor Executor
 [executor] User: agor (uid: 1001)
@@ -111,13 +112,15 @@ Output:
 ### Send Ping Request
 
 Using netcat:
+
 ```bash
 echo '{"jsonrpc":"2.0","id":"1","method":"ping","params":{}}' | nc -U /tmp/executor.sock
 ```
 
 Response:
+
 ```json
-{"jsonrpc":"2.0","id":"1","result":{"pong":true,"timestamp":1763685625028}}
+{ "jsonrpc": "2.0", "id": "1", "result": { "pong": true, "timestamp": 1763685625028 } }
 ```
 
 ### Run Integration Test

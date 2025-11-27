@@ -205,6 +205,7 @@ export interface WorktreesServiceImpl extends Service<Worktree, Partial<Worktree
   startEnvironment(id: WorktreeID, params?: FeathersParams): Promise<Worktree>;
   stopEnvironment(id: WorktreeID, params?: FeathersParams): Promise<Worktree>;
   restartEnvironment(id: WorktreeID, params?: FeathersParams): Promise<Worktree>;
+  nukeEnvironment(id: WorktreeID, params?: FeathersParams): Promise<Worktree>;
   checkHealth(id: WorktreeID, params?: FeathersParams): Promise<Worktree>;
   getLogs(
     id: WorktreeID,

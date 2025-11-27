@@ -55,6 +55,7 @@ Refactoring executor communication from Unix socket IPC to pure Feathers/WebSock
 ```
 
 **Problems**:
+
 - Two separate communication channels (IPC + WebSocket)
 - Complex lifecycle management (IPC server, socket cleanup)
 - IPC adds latency and complexity
@@ -118,6 +119,7 @@ Refactoring executor communication from Unix socket IPC to pure Feathers/WebSock
 ```
 
 **Benefits**:
+
 - Single communication channel (WebSocket)
 - Simpler architecture (no IPC infrastructure)
 - Lower latency (direct WebSocket)
@@ -135,6 +137,7 @@ Refactoring executor communication from Unix socket IPC to pure Feathers/WebSock
 
 1. **User calls**: `sessions.executeTask(sessionId, {prompt, permissionMode})`
 2. **Daemon creates task**:
+
 ```typescript
 const task = await tasksService.create({
   session_id: sessionId,
@@ -147,17 +150,24 @@ const task = await tasksService.create({
 ```
 
 3. **Daemon spawns executor**:
+
 ```typescript
 spawn('executor', [
-  '--session-token', sessionToken,
-  '--session-id', sessionId,
-  '--task-id', task.task_id, // ← Created by daemon
-  '--prompt', prompt,
-  '--tool', agenticTool
+  '--session-token',
+  sessionToken,
+  '--session-id',
+  sessionId,
+  '--task-id',
+  task.task_id, // ← Created by daemon
+  '--prompt',
+  prompt,
+  '--tool',
+  agenticTool,
 ]);
 ```
 
 4. **Executor executes and updates task status**:
+
 ```typescript
 // When done:
 await client.service('tasks').patch(taskId, {
@@ -197,7 +207,7 @@ spawn('executor', [...args], {
   env: {
     ...process.env,
     ANTHROPIC_API_KEY: resolvedApiKey,
-  }
+  },
 });
 ```
 
@@ -206,7 +216,7 @@ spawn('executor', [...args], {
 ```typescript
 // Executor queries for API key (authenticated via session-token)
 const result = await client.service('config').get('api-keys', {
-  query: { credential_key: 'ANTHROPIC_API_KEY' }
+  query: { credential_key: 'ANTHROPIC_API_KEY' },
 });
 ```
 
@@ -229,6 +239,7 @@ const result = await client.service('config').get('api-keys', {
 ### New Flow (WebSocket Events)
 
 1. **Executor requests permission**:
+
 ```typescript
 await client.service('messages').create({
   session_id: sessionId,
@@ -246,17 +257,19 @@ await client.service('messages').create({
 2. **UI displays permission prompt** (via WebSocket 'created' event)
 
 3. **User approves/denies**:
+
 ```typescript
 await client.service('messages').patch(messageId, {
   content: {
     ...existingContent,
     status: 'approved',
     approved_by: userId,
-  }
+  },
 });
 ```
 
 4. **Daemon emits permission_resolved event**:
+
 ```typescript
 // In messages service 'patched' hook:
 client.service('messages').emit('permission_resolved', {
@@ -267,8 +280,9 @@ client.service('messages').emit('permission_resolved', {
 ```
 
 5. **Executor listens for event**:
+
 ```typescript
-client.service('messages').on('permission_resolved', (data) => {
+client.service('messages').on('permission_resolved', data => {
   if (data.task_id === taskId && data.request_id === requestId) {
     resolvePermission(data.approved);
   }
@@ -288,11 +302,13 @@ client.service('messages').on('permission_resolved', (data) => {
 ### New Flow (WebSocket Events)
 
 1. **User clicks stop button**:
+
 ```typescript
-await client.service('sessions').stopTask(sessionId, {taskId});
+await client.service('sessions').stopTask(sessionId, { taskId });
 ```
 
 2. **Daemon emits task_stop event**:
+
 ```typescript
 // In SessionsService.stopTask():
 this.app.service('sessions').emit('task_stop', {
@@ -303,8 +319,9 @@ this.app.service('sessions').emit('task_stop', {
 ```
 
 3. **Executor listens for event**:
+
 ```typescript
-client.service('sessions').on('task_stop', (data) => {
+client.service('sessions').on('task_stop', data => {
   if (data.session_id === sessionId && data.task_id === taskId) {
     abortController.abort(); // Trigger SDK's stopTask()
   }
@@ -312,6 +329,7 @@ client.service('sessions').on('task_stop', (data) => {
 ```
 
 4. **SDK tool aborts execution**:
+
 ```typescript
 // In GeminiTool.stopTask():
 const result = this.promptService.stopTask(sessionId);
@@ -319,6 +337,7 @@ const result = this.promptService.stopTask(sessionId);
 ```
 
 5. **Executor updates task status**:
+
 ```typescript
 await client.service('tasks').patch(taskId, {
   status: TaskStatus.CANCELLED,
@@ -338,14 +357,14 @@ await client.service('tasks').patch(taskId, {
 // Executor sends to daemon via IPC:
 ipcClient.notify('daemon_command', {
   command: 'stream_chunk',
-  data: { message_id, chunk }
+  data: { message_id, chunk },
 });
 
 // Daemon broadcasts via WebSocket:
 app.service('sessions').emit('stream_chunk', {
   session_id,
   message_id,
-  chunk
+  chunk,
 });
 ```
 
@@ -356,7 +375,7 @@ app.service('sessions').emit('stream_chunk', {
 client.service('messages').emit('streaming:chunk', {
   session_id: sessionId,
   message_id: messageId,
-  chunk: chunk
+  chunk: chunk,
 });
 ```
 
@@ -365,20 +384,22 @@ client.service('messages').emit('streaming:chunk', {
 **Answer**: Yes! Feathers services can emit custom events, and clients connected to those services receive them. We just need to:
 
 1. Register custom events when creating service:
+
 ```typescript
 app.use('/messages', messagesService, {
-  events: ['streaming:start', 'streaming:chunk', 'streaming:end']
+  events: ['streaming:start', 'streaming:chunk', 'streaming:end'],
 });
 ```
 
 2. Executor emits via service:
+
 ```typescript
 // NOTE: This might require a custom service method
 // Need to verify if clients can emit events or only services
 await client.service('messages').streamChunk({
   message_id,
   session_id,
-  chunk
+  chunk,
 });
 ```
 
@@ -400,7 +421,7 @@ executeSDK(app, {
   cwd,
   tools,
   permissionMode,
-  timeoutMs
+  timeoutMs,
 });
 ```
 
@@ -417,6 +438,7 @@ executor --session-token <jwt> \
 ```
 
 **Parameters**:
+
 - `--session-token`: JWT for Feathers authentication (includes user_id, session_id, expiration)
 - `--session-id`: Session ID (redundant with JWT but convenient)
 - `--task-id`: Task ID created by daemon
@@ -426,6 +448,7 @@ executor --session-token <jwt> \
 - `--daemon-url`: Daemon WebSocket URL (default: http://localhost:3030)
 
 **Environment variables**:
+
 - `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY` - Injected by daemon
 
 ---
@@ -435,11 +458,13 @@ executor --session-token <jwt> \
 ### Current ExecutorPool
 
 Tracks:
+
 - `executor_id` → executor metadata
 - IPC client connections
 - Subprocess handles
 
 Methods:
+
 - `spawn(sessionId, taskId, ...)` - Spawn executor via executeSDK
 - `terminate(executorId)` - Graceful shutdown via IPC
 - `get(executorId)` - Get executor by ID
@@ -447,15 +472,18 @@ Methods:
 ### New ExecutorPool
 
 Tracks:
+
 - `executor_id` → executor metadata (session_id, task_id, subprocess handle)
 - Session tokens (for validation)
 
 Methods:
+
 - `spawn(sessionId, taskId, prompt, tool, permissionMode)` - Spawn with CLI args
 - `stop(sessionId, taskId)` - Emit stop event via WebSocket
 - `cleanup(executorId)` - Kill subprocess if not exited gracefully
 
 **Changes**:
+
 - Remove IPC client tracking
 - Remove IPC request/notify methods
 - Add session token generation

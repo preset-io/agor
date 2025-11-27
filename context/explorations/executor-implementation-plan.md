@@ -14,10 +14,11 @@
 
 ```typescript
 // Daemon spawns executor as different user
-spawn('sudo', ['-u', 'agor_alice', '/usr/local/bin/agor-executor', '--socket', socketPath])
+spawn('sudo', ['-u', 'agor_alice', '/usr/local/bin/agor-executor', '--socket', socketPath]);
 ```
 
 The sudoers rule allows this (one-time setup):
+
 ```bash
 # /etc/sudoers.d/agor
 agor ALL=(agor_*) NOPASSWD: /usr/local/bin/agor-executor
@@ -47,12 +48,13 @@ The executor is just a regular Node.js script that the daemon spawns. No magic.
 4. Executor calls corresponding functions
 
 Example:
+
 ```typescript
 // Daemon sends
-client.request('execute_prompt', { prompt: '...', cwd: '...' })
+client.request('execute_prompt', { prompt: '...', cwd: '...' });
 
 // Executor receives and routes to handler
-handlers['execute_prompt'](params)
+handlers['execute_prompt'](params);
 ```
 
 ### Q: "Any special packaging required?"
@@ -89,12 +91,14 @@ Communication
 ### What Changes
 
 **Before (Current):**
+
 ```typescript
 // Daemon directly calls SDK
 const result = await query({ prompt, cwd, apiKey: process.env.ANTHROPIC_API_KEY });
 ```
 
 **After (New):**
+
 ```typescript
 // Daemon spawns executor, sends IPC request
 const executor = await executorPool.spawn({ userId });
@@ -106,13 +110,13 @@ const result = await query({ prompt, cwd, apiKey: await requestApiKey() });
 
 ### Key Benefits
 
-| Benefit | How Achieved |
-|---------|--------------|
-| **No DB access in executor** | Executor never receives DB connection string |
-| **No API keys in executor memory** | Executor requests keys just-in-time via IPC |
-| **Unix user isolation** | Executor runs as different UID via sudo |
-| **Audit trail** | All sudo invocations logged to /var/log/auth.log |
-| **Non-breaking** | Config flag enables (defaults to off) |
+| Benefit                            | How Achieved                                     |
+| ---------------------------------- | ------------------------------------------------ |
+| **No DB access in executor**       | Executor never receives DB connection string     |
+| **No API keys in executor memory** | Executor requests keys just-in-time via IPC      |
+| **Unix user isolation**            | Executor runs as different UID via sudo          |
+| **Audit trail**                    | All sudo invocations logged to /var/log/auth.log |
+| **Non-breaking**                   | Config flag enables (defaults to off)            |
 
 ---
 
@@ -121,11 +125,13 @@ const result = await query({ prompt, cwd, apiKey: await requestApiKey() });
 ### Phase 0: Preparation (1 day)
 
 **Goals:**
+
 - [ ] Review design docs (this doc + related)
 - [ ] Set up test environment (Linux VM or local)
 - [ ] Create test Unix users manually
 
 **Setup:**
+
 ```bash
 # Create test users
 sudo useradd -m -s /bin/bash agor_alice
@@ -144,6 +150,7 @@ sudo chmod 440 /etc/sudoers.d/agor
 **Goal:** Create standalone executor that can receive IPC requests
 
 **Tasks:**
+
 - [ ] Create `packages/executor/` directory
 - [ ] Implement `AgorExecutor` class
 - [ ] Implement `ExecutorIPCServer` (Unix socket server)
@@ -203,6 +210,7 @@ export class AgorExecutor {
 ```
 
 **Test:**
+
 ```bash
 # Terminal 1: Start executor manually
 node packages/executor/bin/agor-executor --socket /tmp/test.sock
@@ -223,6 +231,7 @@ sock.on('data', d => console.log(d.toString()));
 **Goal:** Daemon can spawn executor and communicate via IPC
 
 **Tasks:**
+
 - [ ] Create `ExecutorPool` service in daemon
 - [ ] Implement `ExecutorClient` (daemon-side IPC client)
 - [ ] Implement subprocess spawning with sudo
@@ -255,9 +264,12 @@ export class ExecutorPool {
 
     // Spawn subprocess
     const process = spawn('sudo', [
-      '-n', '-u', unixUsername,
+      '-n',
+      '-u',
+      unixUsername,
       '/usr/local/bin/agor-executor',
-      '--socket', socketPath,
+      '--socket',
+      socketPath,
     ]);
 
     // Wait for socket
@@ -292,6 +304,7 @@ export class ExecutorClient {
 ```
 
 **Test:**
+
 ```typescript
 // apps/agor-daemon/test/executor-integration.test.ts
 test('spawn executor and send ping', async () => {
@@ -310,6 +323,7 @@ test('spawn executor and send ping', async () => {
 **Goal:** Claude SDK runs in executor process, not daemon
 
 **Tasks:**
+
 - [ ] Implement `execute_prompt` handler in executor
 - [ ] Implement `get_api_key` request (executor → daemon)
 - [ ] Implement `request_permission` request (executor → daemon)
@@ -371,6 +385,7 @@ export async function handleExecutePrompt(params: any, ipcServer: ExecutorIPCSer
 ```
 
 **Test:**
+
 ```typescript
 test('execute prompt via executor', async () => {
   const executor = await pool.spawn({ userId: 'user-123' });
@@ -395,6 +410,7 @@ test('execute prompt via executor', async () => {
 **Goal:** Terminals spawn via executor, run as correct Unix user
 
 **Tasks:**
+
 - [ ] Implement `spawn_terminal` handler in executor
 - [ ] Modify `TerminalsService` to use executor
 - [ ] Pass PTY file descriptor via Unix socket ancillary data
@@ -424,6 +440,7 @@ export async function handleSpawnTerminal(params: any) {
 **Goal:** Ensure secure deployment
 
 **Tasks:**
+
 - [ ] Token expiration (24h limit)
 - [ ] Rate limiting per session token
 - [ ] Audit logging (all IPC calls)
@@ -435,6 +452,7 @@ export async function handleSpawnTerminal(params: any) {
 **Goal:** Make setup easy for users
 
 **Tasks:**
+
 - [ ] Create `agor setup-executor-isolation` command
 - [ ] Create `agor user setup-unix <email>` command
 - [ ] Write setup guide (docs)
@@ -641,7 +659,7 @@ execution:
   # Executor pool settings
   executor_pool:
     max_executors: 10
-    idle_timeout_ms: 60000  # Kill idle executors after 1 minute
+    idle_timeout_ms: 60000 # Kill idle executors after 1 minute
 
   # IPC settings
   ipc:
@@ -650,8 +668,8 @@ execution:
 
   # Session tokens
   session_tokens:
-    expiration_ms: 86400000  # 24 hours
-    max_uses: 1              # Single-use
+    expiration_ms: 86400000 # 24 hours
+    max_uses: 1 # Single-use
 
 # Database
 database:
@@ -713,6 +731,7 @@ export AGOR_EXECUTOR_DEBUG=true  # Verbose logging
 **Decision:** Start with ephemeral (spawn per request), add pooling later if needed
 
 **Rationale:**
+
 - Simpler implementation (no pool management)
 - Stronger isolation (no state leakage)
 - Can optimize later if spawn overhead is significant
@@ -722,6 +741,7 @@ export AGOR_EXECUTOR_DEBUG=true  # Verbose logging
 **Decision:** Support sudo only initially, add Linux capabilities later
 
 **Rationale:**
+
 - Sudo works on all platforms (Linux, macOS, BSD)
 - Capabilities require Linux-only code
 - Can add capabilities mode in Phase 3+ (advanced)
@@ -731,6 +751,7 @@ export AGOR_EXECUTOR_DEBUG=true  # Verbose logging
 **Decision:** Daemon detects via socket close, updates task status to 'failed'
 
 **Implementation:**
+
 ```typescript
 executor.client.socket.on('close', async () => {
   await tasksRepo.update(taskId, {
@@ -745,6 +766,7 @@ executor.client.socket.on('close', async () => {
 **Decision:** No caching, request just-in-time per SDK call
 
 **Rationale:**
+
 - Stronger security (key not in memory for long)
 - Audit trail (every usage logged)
 - Minimal performance impact (1 IPC call per prompt, not per token)
@@ -771,12 +793,12 @@ A **process-level security boundary** where:
 
 ### Key Risks
 
-| Risk | Mitigation |
-|------|------------|
-| Performance regression | Benchmark early, optimize if needed |
-| Sudo setup complexity | Clear setup script, good error messages |
-| Executor crashes | Graceful error handling, retry logic |
-| Breaking change | Feature flag, maintain old path as fallback |
+| Risk                   | Mitigation                                  |
+| ---------------------- | ------------------------------------------- |
+| Performance regression | Benchmark early, optimize if needed         |
+| Sudo setup complexity  | Clear setup script, good error messages     |
+| Executor crashes       | Graceful error handling, retry logic        |
+| Breaking change        | Feature flag, maintain old path as fallback |
 
 ### Next Action
 

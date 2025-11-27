@@ -110,7 +110,7 @@ if (!values.socket) {
 
 // Start executor
 const executor = new AgorExecutor(values.socket);
-executor.start().catch((error) => {
+executor.start().catch(error => {
   console.error('Executor failed:', error);
   process.exit(1);
 });
@@ -198,8 +198,8 @@ import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 
 export interface SpawnExecutorOptions {
-  userId: UserID;           // Which Agor user
-  worktreeId?: WorktreeID;  // Optional worktree context
+  userId: UserID; // Which Agor user
+  worktreeId?: WorktreeID; // Optional worktree context
 }
 
 export class ExecutorPool {
@@ -241,11 +241,11 @@ export class ExecutorPool {
     });
 
     // 6. Setup logging
-    process.stdout?.on('data', (data) => {
+    process.stdout?.on('data', data => {
       console.log(`[executor] ${data.toString().trim()}`);
     });
 
-    process.stderr?.on('data', (data) => {
+    process.stderr?.on('data', data => {
       console.error(`[executor] ${data.toString().trim()}`);
     });
 
@@ -325,8 +325,9 @@ export class ExecutorPool {
       return {
         command: 'sudo',
         args: [
-          '-n',              // Non-interactive (fail if password required)
-          '-u', unixUsername, // Target user
+          '-n', // Non-interactive (fail if password required)
+          '-u',
+          unixUsername, // Target user
           executorBinary,
           ...executorArgs,
         ],
@@ -394,10 +395,7 @@ export class ExecutorPool {
   /**
    * Wait for Unix socket to exist
    */
-  private async waitForSocket(
-    socketPath: string,
-    timeoutMs: number
-  ): Promise<void> {
+  private async waitForSocket(socketPath: string, timeoutMs: number): Promise<void> {
     const startTime = Date.now();
 
     while (Date.now() - startTime < timeoutMs) {
@@ -898,6 +896,7 @@ ipcServer.notify('report_message', { ... });
 ```
 
 **No magic. Just:**
+
 - ✅ Spawn subprocess with sudo
 - ✅ Connect via Unix socket
 - ✅ Send JSON-RPC messages
@@ -915,6 +914,7 @@ For implementation:
 4. **Integration tests** (spawn executor, send requests, verify user)
 
 For detailed IPC protocol, see:
+
 - `ipc-implementation-examples.md` - JSON-RPC communication details
 - `executor-isolation.md` - Full architecture and security model
 - `unix-user-integration.md` - Unix user setup and credential isolation
