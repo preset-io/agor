@@ -35,7 +35,7 @@ export async function executeOpenCodeTask(params: {
   try {
     // Create execution context (similar to other handlers)
     const repos = createFeathersBackedRepositories(client);
-    const callbacks = createStreamingCallbacks(client, 'opencode');
+    const callbacks = createStreamingCallbacks(client, 'opencode', sessionId);
 
     // Get OpenCode server URL from environment
     const serverUrl = process.env.OPENCODE_SERVER_URL || 'http://localhost:3000';

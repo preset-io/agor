@@ -62,9 +62,14 @@ export interface ExecutionContext {
  * which then uses app.service().emit() to trigger the daemon's app.publish() system.
  * See: context/guides/extending-feathers-services.md
  */
-export function createStreamingCallbacks(client: AgorClient, toolName: string): StreamingCallbacks {
-  // Track session_id from first onStreamStart call to include in subsequent events
-  let currentSessionId: SessionID | undefined;
+export function createStreamingCallbacks(
+  client: AgorClient,
+  toolName: string,
+  sessionId: SessionID
+): StreamingCallbacks {
+  // Use session_id passed in (available before any streaming starts)
+  // This ensures thinking events have session_id even if they fire before onStreamStart
+  const currentSessionId: SessionID = sessionId;
 
   // Helper to broadcast streaming events via custom route
   const broadcastEvent = async (
@@ -86,12 +91,9 @@ export function createStreamingCallbacks(client: AgorClient, toolName: string): 
 
   return {
     onStreamStart: async (message_id, data) => {
-      // Capture session_id for use in chunk/end events
-      currentSessionId = data.session_id;
-
       await broadcastEvent('streaming:start', {
         message_id,
-        session_id: data.session_id,
+        session_id: currentSessionId,
         task_id: data.task_id,
         role: data.role,
         timestamp: data.timestamp,
@@ -148,11 +150,15 @@ export function createStreamingCallbacks(client: AgorClient, toolName: string): 
 /**
  * Create execution context with all necessary resources
  */
-export function createExecutionContext(client: AgorClient, toolName: string): ExecutionContext {
+export function createExecutionContext(
+  client: AgorClient,
+  toolName: string,
+  sessionId: SessionID
+): ExecutionContext {
   return {
     client,
     repos: createFeathersBackedRepositories(client),
-    callbacks: createStreamingCallbacks(client, toolName),
+    callbacks: createStreamingCallbacks(client, toolName, sessionId),
   };
 }
 
@@ -285,7 +291,7 @@ export async function executeToolTask(params: {
   }
 
   // Create execution context
-  const ctx = createExecutionContext(client, toolName);
+  const ctx = createExecutionContext(client, toolName, sessionId);
 
   // Create tool instance using factory function
   // Pass the resolved key (or empty string) and useNativeAuth flag

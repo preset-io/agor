@@ -1361,10 +1361,10 @@ async function main() {
 
           if (Array.isArray(context.data)) {
             context.data.forEach((item: Record<string, unknown>) => {
-              if (!item['created_by']) item['created_by'] = userId;
+              if (!item.created_by) item.created_by = userId;
             });
-          } else if (context.data && !(context.data as Record<string, unknown>)['created_by']) {
-            (context.data as Record<string, unknown>)['created_by'] = userId;
+          } else if (context.data && !(context.data as Record<string, unknown>).created_by) {
+            (context.data as Record<string, unknown>).created_by = userId;
           }
 
           // Populate repo field from worktree_id
@@ -2044,8 +2044,24 @@ async function main() {
             | 'thinking:end';
           data: Record<string, unknown>;
         },
-        _params: RouteParams
+        params: RouteParams
       ) {
+        // Security: Verify session ownership before broadcasting
+        // Extract session_id from event data
+        const sessionId = data.data.session_id as SessionID | undefined;
+
+        if (!sessionId) {
+          throw new Error('session_id is required in streaming event data');
+        }
+
+        // Load session via service to ensure authorization hooks run
+        try {
+          await app.service('sessions').get(sessionId, params);
+        } catch (_error) {
+          // If user doesn't have access to session, reject the broadcast
+          throw new Error('Unauthorized: cannot broadcast events for this session');
+        }
+
         // Broadcast event using app.service().emit() which triggers app.publish()
         app.service('messages').emit(data.event, data.data);
         return { success: true };
