@@ -78,7 +78,6 @@ export const MobileCommentsPage: React.FC<MobileCommentsPageProps> = ({
           onResolveComment={onResolveComment}
           onToggleReaction={onToggleReaction}
           onDeleteComment={onDeleteComment}
-          width="100%" // Full width for mobile
         />
       </div>
     </div>

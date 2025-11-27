@@ -36,6 +36,7 @@ import EmojiPicker, { Theme } from 'emoji-picker-react';
 import React, { useEffect, useMemo, useState } from 'react';
 import { AgorAvatar } from '../AgorAvatar';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
+import { MarkdownRenderer } from '../MarkdownRenderer';
 import { ZONE_CONTENT_OPACITY } from '../SessionCanvas/canvas/BoardObjectNodes';
 
 const { Text, Title } = Typography;
@@ -58,7 +59,6 @@ export interface CommentsPanelProps {
   onDeleteComment?: (commentId: string) => void;
   hoveredCommentId?: string | null;
   selectedCommentId?: string | null;
-  width?: number | string; // Allow responsive width (default: 400)
 }
 
 type FilterMode = 'all' | 'active';
@@ -206,7 +206,7 @@ const ReplyItem: React.FC<{
           description={
             <>
               <div style={{ marginTop: 2 }}>
-                <Text style={{ fontSize: token.fontSizeSM }}>{reply.content}</Text>
+                <MarkdownRenderer content={reply.content} style={{ fontSize: token.fontSizeSM }} />
               </div>
               {/* Reactions Row (always visible if reactions exist) */}
               {onToggleReaction && (reply.reactions || []).length > 0 && (
@@ -342,7 +342,10 @@ const CommentThread: React.FC<{
           description={
             <>
               <div style={{ marginTop: 4 }}>
-                <Text style={{ fontSize: token.fontSizeSM }}>{comment.content}</Text>
+                <MarkdownRenderer
+                  content={comment.content}
+                  style={{ fontSize: token.fontSizeSM }}
+                />
               </div>
               {/* Reactions Row (always visible if reactions exist) */}
               {onToggleReaction && (comment.reactions || []).length > 0 && (
@@ -553,7 +556,6 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
   onDeleteComment,
   hoveredCommentId,
   selectedCommentId,
-  width = 400,
 }) => {
   const { token } = theme.useToken();
   const [filter, setFilter] = useState<FilterMode>('active');
@@ -705,7 +707,7 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
   return (
     <div
       style={{
-        width,
+        width: '100%',
         height: '100%',
         backgroundColor: token.colorBgContainer,
         borderRight: `1px solid ${token.colorBorder}`,
