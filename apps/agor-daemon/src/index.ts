@@ -1082,7 +1082,7 @@ async function main() {
         if (transport === 'stdio') {
           return {
             success: false,
-            error: `Tool discovery not supported for stdio servers (requires active session)`
+            error: `Tool discovery not supported for stdio servers (requires active session)`,
           };
         }
 
@@ -1103,21 +1103,18 @@ async function main() {
 
         // Build headers (auth + Accept for MCP servers that require it)
         const headers: Record<string, string> = {
-          'Accept': 'application/json, text/event-stream',
+          Accept: 'application/json, text/event-stream',
         };
         if (authHeaders) {
           Object.assign(headers, authHeaders);
         }
 
         // Create SSE transport with headers
-        const sseTransport = new SSEClientTransport(
-          new URL(server.url),
-          {
-            requestInit: {
-              headers
-            }
-          }
-        );
+        const sseTransport = new SSEClientTransport(new URL(server.url), {
+          requestInit: {
+            headers,
+          },
+        });
 
         // Create MCP client
         const client = new Client(
@@ -1140,26 +1137,22 @@ async function main() {
             setTimeout(() => reject(new Error('Connection timeout after 30 seconds')), 30000);
           });
 
-          await Promise.race([
-            client.connect(sseTransport),
-            connectTimeout
-          ]);
+          await Promise.race([client.connect(sseTransport), connectTimeout]);
           connected = true;
           console.log('[MCP Discovery] Connected!');
 
           // List capabilities with timeout
           const listTimeout = new Promise((_, reject) => {
-            setTimeout(() => reject(new Error('List capabilities timeout after 15 seconds')), 15000);
+            setTimeout(
+              () => reject(new Error('List capabilities timeout after 15 seconds')),
+              15000
+            );
           });
 
-          const [toolsResult, resourcesResult, promptsResult] = await Promise.race([
-            Promise.all([
-              client.listTools(),
-              client.listResources(),
-              client.listPrompts(),
-            ]),
-            listTimeout
-          ]) as [any, any, any];
+          const [toolsResult, resourcesResult, promptsResult] = (await Promise.race([
+            Promise.all([client.listTools(), client.listResources(), client.listPrompts()]),
+            listTimeout,
+          ])) as [any, any, any];
 
           console.log('[MCP Discovery] Found', toolsResult.tools.length, 'tools');
           console.log('[MCP Discovery] Found', resourcesResult.resources.length, 'resources');
@@ -1211,7 +1204,7 @@ async function main() {
         console.error('MCP discovery error:', error);
         return {
           success: false,
-          error: error instanceof Error ? error.message : String(error)
+          error: error instanceof Error ? error.message : String(error),
         };
       }
     },
