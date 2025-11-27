@@ -177,6 +177,12 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       // Build MCP server Map for efficient lookups
       const mcpServersMap = new Map<string, MCPServer>();
       for (const mcpServer of mcpServersList) {
+        console.log('[useAgorData] Loading MCP server:', {
+          name: mcpServer.name,
+          mcp_server_id: mcpServer.mcp_server_id.substring(0, 8),
+          tools: mcpServer.tools,
+          toolCount: mcpServer.tools?.length || 0,
+        });
         mcpServersMap.set(mcpServer.mcp_server_id, mcpServer);
       }
       setMcpServerById(mcpServersMap);
@@ -532,6 +538,12 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       });
     };
     const handleMCPServerPatched = (server: MCPServer) => {
+      console.log('[useAgorData] MCP server patched:', {
+        name: server.name,
+        mcp_server_id: server.mcp_server_id.substring(0, 8),
+        tools: server.tools,
+        toolCount: server.tools?.length || 0,
+      });
       setMcpServerById((prev) => {
         const existing = prev.get(server.mcp_server_id);
         if (existing === server) return prev; // Same reference, no change

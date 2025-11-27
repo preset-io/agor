@@ -67,6 +67,9 @@ export class MCPServerRepository
       tools: row.data.tools,
       resources: row.data.resources,
       prompts: row.data.prompts,
+
+      // Tool permissions
+      tool_permissions: row.data.tool_permissions,
     };
   }
 
@@ -108,6 +111,7 @@ export class MCPServerRepository
         tools: 'tools' in data ? data.tools : undefined,
         resources: 'resources' in data ? data.resources : undefined,
         prompts: 'prompts' in data ? data.prompts : undefined,
+        tool_permissions: 'tool_permissions' in data ? data.tool_permissions : undefined,
       },
     };
   }
@@ -270,6 +274,7 @@ export class MCPServerRepository
         .set({
           enabled: insertData.enabled,
           scope: insertData.scope,
+          transport: insertData.transport,
           updated_at: new Date(),
           data: insertData.data,
         })

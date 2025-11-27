@@ -648,7 +648,7 @@ export const mcpServers = sqliteTable(
         tools?: Array<{
           name: string;
           description: string;
-          input_schema: Record<string, unknown>;
+          input_schema?: Record<string, unknown>; // Optional - not all MCP servers provide schemas
         }>;
         resources?: Array<{
           uri: string;

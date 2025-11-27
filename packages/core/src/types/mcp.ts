@@ -56,7 +56,7 @@ export type JSONSchema = Record<string, unknown>;
 export interface MCPTool {
   name: string; // e.g., "mcp__filesystem__list_files"
   description: string;
-  input_schema: JSONSchema;
+  input_schema?: JSONSchema; // Optional - not all MCP servers provide schemas
 }
 
 /**
