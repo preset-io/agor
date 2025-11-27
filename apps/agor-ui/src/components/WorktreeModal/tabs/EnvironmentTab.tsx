@@ -691,45 +691,42 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
           }
           size="small"
           extra={
-            !isEditingTemplate && (
-              <Space size="small">
-                <Tooltip title="Import environment configuration from .agor.yml in repository root">
-                  <Button
-                    type="text"
-                    size="small"
-                    icon={<DownloadOutlined />}
-                    onClick={handleImport}
-                  >
-                    Import
-                  </Button>
-                </Tooltip>
-                <Tooltip
-                  title={
-                    hasEnvironmentConfig
-                      ? 'Export current environment configuration to .agor.yml in repository root'
-                      : 'No configuration to export'
-                  }
-                >
-                  <Button
-                    type="text"
-                    size="small"
-                    icon={<UploadOutlined />}
-                    onClick={handleExport}
-                    disabled={!hasEnvironmentConfig}
-                  >
-                    Export
-                  </Button>
-                </Tooltip>
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<EditOutlined />}
-                  onClick={() => setIsEditingTemplate(true)}
-                >
-                  Edit
+            <Space size="small">
+              <Tooltip title="Import environment configuration from .agor.yml in repository root">
+                <Button type="text" size="small" icon={<DownloadOutlined />} onClick={handleImport}>
+                  Import
                 </Button>
-              </Space>
-            )
+              </Tooltip>
+              {!isEditingTemplate && (
+                <>
+                  <Tooltip
+                    title={
+                      hasEnvironmentConfig
+                        ? 'Export current environment configuration to .agor.yml in repository root'
+                        : 'No configuration to export'
+                    }
+                  >
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<UploadOutlined />}
+                      onClick={handleExport}
+                      disabled={!hasEnvironmentConfig}
+                    >
+                      Export
+                    </Button>
+                  </Tooltip>
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<EditOutlined />}
+                    onClick={() => setIsEditingTemplate(true)}
+                  >
+                    Edit
+                  </Button>
+                </>
+              )}
+            </Space>
           }
         >
           <Space direction="vertical" size="middle" style={{ width: '100%' }}>

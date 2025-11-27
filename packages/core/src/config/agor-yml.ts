@@ -17,6 +17,7 @@ import type { RepoEnvironmentConfig } from '../types/worktree';
  * environment:
  *   start: "docker compose -p {{worktree.name}} up -d"
  *   stop: "docker compose -p {{worktree.name}} down"
+ *   nuke: "docker compose -p {{worktree.name}} down -v"
  *   health: "http://localhost:{{add 9000 worktree.unique_id}}/health"
  *   app: "http://localhost:{{add 5000 worktree.unique_id}}"
  *   logs: "docker compose -p {{worktree.name}} logs --tail=100"
@@ -26,6 +27,7 @@ export interface AgorYmlSchema {
   environment?: {
     start?: string;
     stop?: string;
+    nuke?: string;
     health?: string;
     app?: string;
     logs?: string;
@@ -84,6 +86,10 @@ export function parseAgorYml(filePath: string): RepoEnvironmentConfig | null {
   };
 
   // Add optional fields
+  if (env.nuke) {
+    config.nuke_command = env.nuke;
+  }
+
   if (env.health) {
     config.health_check = {
       type: 'http',
@@ -114,6 +120,7 @@ export function writeAgorYml(filePath: string, config: RepoEnvironmentConfig): v
     environment: {
       start: config.up_command,
       stop: config.down_command,
+      nuke: config.nuke_command,
       health: config.health_check?.url_template,
       app: config.app_url_template,
       logs: config.logs_command,
@@ -122,6 +129,7 @@ export function writeAgorYml(filePath: string, config: RepoEnvironmentConfig): v
 
   // Remove undefined fields for cleaner output
   if (schema.environment) {
+    if (!schema.environment.nuke) delete schema.environment.nuke;
     if (!schema.environment.health) delete schema.environment.health;
     if (!schema.environment.app) delete schema.environment.app;
     if (!schema.environment.logs) delete schema.environment.logs;
