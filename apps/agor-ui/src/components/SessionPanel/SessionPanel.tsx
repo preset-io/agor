@@ -138,6 +138,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const [queuedMessages, setQueuedMessages] = React.useState<Message[]>([]);
   const [spawnModalOpen, setSpawnModalOpen] = React.useState(false);
   const [uploadModalOpen, setUploadModalOpen] = React.useState(false);
+  const [droppedFiles, setDroppedFiles] = React.useState<File[]>([]);
 
   const currentUser = currentUserId ? userById.get(currentUserId) || null : null;
   const { tasks } = useTasks(client, session?.session_id || null, currentUser, open);
@@ -555,8 +556,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           sessionId={session?.session_id || null}
           userById={userById}
           onFilesDrop={(files) => {
-            // Open upload modal with the dropped files
-            // For now, just open the modal (we could enhance FileUpload to accept initial files)
+            // Store dropped files and open modal
+            setDroppedFiles(files);
             setUploadModalOpen(true);
           }}
         />
@@ -826,7 +827,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             sessionId={session.session_id}
             daemonUrl={getDaemonUrl()}
             open={uploadModalOpen}
-            onClose={() => setUploadModalOpen(false)}
+            onClose={() => {
+              setUploadModalOpen(false);
+              setDroppedFiles([]); // Clear dropped files when modal closes
+            }}
+            initialFiles={droppedFiles}
             onUploadComplete={(files) => {
               console.log('Files uploaded:', files);
               message.success(`Uploaded ${files.length} file(s)`);

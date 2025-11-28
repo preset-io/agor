@@ -2404,28 +2404,72 @@ async function main() {
   // biome-ignore lint/suspicious/noExplicitAny: Express 5 + multer type compatibility
   const uploadHandler: any = async (req: any, res: any, next: any) => {
     try {
+      console.log('🚀 [Upload Handler] Request received');
+      console.log('   Headers:', {
+        contentType: req.headers['content-type'],
+        authorization: req.headers.authorization ? 'present' : 'missing',
+        cookie: req.headers.cookie ? 'present' : 'missing',
+      });
+
       const { sessionId } = req.params;
       const { destination, notifyAgent, message } = req.body;
       const files = req.files as Express.Multer.File[];
 
-      // Ensure user is authenticated and has member role
-      const params = req.feathers as AuthenticatedParams;
-      ensureMinimumRole(params, 'member', 'upload files');
-
-      console.log(`📎 [Daemon] File upload request for session ${sessionId.substring(0, 8)}`);
+      console.log(`📎 [Upload Handler] Processing for session ${sessionId?.substring(0, 8)}`);
       console.log(`   Destination: ${destination || 'worktree'}`);
       console.log(`   Notify agent: ${notifyAgent === 'true' || notifyAgent === true}`);
+      console.log(`   Files received: ${files?.length || 0}`);
+
+      // Ensure user is authenticated and has member role
+      const params = req.feathers as AuthenticatedParams;
+      console.log(`   Auth params:`, {
+        hasUser: !!params?.user,
+        userId: params?.user?.user_id?.substring(0, 8),
+        provider: params?.provider,
+      });
+
+      ensureMinimumRole(params, 'member', 'upload files');
+
+      // Verify user has access to this session (session-level ACL)
+      const session = await sessionsService.get(sessionId, params);
+      if (!session) {
+        console.error(`❌ [Upload Handler] Session not found: ${sessionId.substring(0, 8)}`);
+        return res.status(404).json({ error: 'Session not found' });
+      }
+
+      // Check if user is the session owner
+      if (session.created_by !== params.user?.user_id) {
+        console.error(
+          `❌ [Upload Handler] User ${params.user?.user_id?.substring(0, 8)} not authorized for session ${sessionId.substring(0, 8)}`
+        );
+        return res.status(403).json({ error: 'Not authorized to upload to this session' });
+      }
 
       if (!files || files.length === 0) {
+        console.error('❌ [Upload Handler] No files in request');
         return res.status(400).json({ error: 'No files uploaded' });
       }
 
-      const uploadedFiles = files.map((f) => ({
-        filename: f.originalname,
-        path: f.path,
-        size: f.size,
-        mimeType: f.mimetype,
-      }));
+      // Get worktree to convert paths to relative
+      let worktree: Awaited<ReturnType<typeof worktreeRepo.findById>> | undefined;
+      if (session.worktree_id) {
+        worktree = await worktreeRepo.findById(session.worktree_id);
+      }
+
+      // Convert absolute paths to relative for response
+      const uploadedFiles = files.map((f) => {
+        let relativePath = f.path;
+        // Make path relative to worktree if possible
+        if (worktree && f.path.startsWith(worktree.path)) {
+          relativePath = f.path.substring(worktree.path.length + 1); // +1 for the leading slash
+        }
+        return {
+          filename: f.filename, // Use sanitized filename from multer
+          path: relativePath, // Return relative path, not absolute
+          size: f.size,
+          mimeType: f.mimetype,
+        };
+      });
 
       console.log(`   Uploaded ${uploadedFiles.length} file(s):`);
       uploadedFiles.forEach((f) => {
@@ -2433,58 +2477,161 @@ async function main() {
       });
 
       // If notifyAgent is true, send a prompt to the agent
+      let notificationError: string | null = null;
       if ((notifyAgent === 'true' || notifyAgent === true) && message) {
-        const session = await sessionsService.get(sessionId, params);
+        try {
+          // Replace {filepath} placeholder with actual paths
+          const filePaths = uploadedFiles.map((f) => f.path).join(', ');
 
-        // Get worktree to make paths relative
-        let worktree: Awaited<ReturnType<typeof worktreeRepo.findById>> | undefined;
-        if (session.worktree_id) {
-          worktree = await worktreeRepo.findById(session.worktree_id);
+          const promptText = message.replace(/\{filepath\}/g, filePaths);
+
+          console.log(`   Sending prompt to agent: ${promptText.substring(0, 100)}...`);
+
+          // Use the same prompt service that the UI uses
+          const promptService = app.service('/sessions/:id/prompt');
+
+          // biome-ignore lint/suspicious/noExplicitAny: Express 5 + FeathersJS type mismatch
+          const promptParams: any = {
+            route: { id: sessionId },
+            user: params.user,
+            // Don't pass provider for internal calls - this bypasses auth hooks
+            // provider: params.provider,
+          };
+          await promptService.create({ prompt: promptText }, promptParams);
+        } catch (error) {
+          console.error('❌ [Upload Handler] Failed to notify agent:', error);
+          notificationError =
+            error instanceof Error ? error.message : 'Failed to send notification to agent';
+          // Don't throw - we still want to return the uploaded files
         }
-
-        // Replace {filepath} placeholder with actual paths
-        const filePaths = uploadedFiles
-          .map((f) => {
-            // Make path relative to worktree if possible
-            if (worktree && f.path.startsWith(worktree.path)) {
-              return f.path.substring(worktree.path.length + 1); // +1 for the leading slash
-            }
-            return f.path;
-          })
-          .join(', ');
-
-        const promptText = message.replace(/\{filepath\}/g, filePaths);
-
-        console.log(`   Sending prompt to agent: ${promptText.substring(0, 100)}...`);
-
-        // Use the same prompt service that the UI uses
-        const promptService = app.service('/sessions/:id/prompt');
-
-        // biome-ignore lint/suspicious/noExplicitAny: Express 5 + FeathersJS type mismatch
-        const promptParams: any = {
-          route: { id: sessionId },
-          user: params.user,
-          provider: params.provider,
-        };
-        await promptService.create({ prompt: promptText }, promptParams);
       }
 
       res.json({
         success: true,
         files: uploadedFiles,
+        ...(notificationError && { warning: notificationError }),
       });
     } catch (error) {
       next(error);
     }
   };
 
+  // Add logging middleware to debug upload requests
+  // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
+  const uploadLogger: any = (req: any, res: any, next: any) => {
+    console.log('📥 [Upload Route] Request received');
+    console.log('   Method:', req.method);
+    console.log('   URL:', req.url);
+    console.log('   Content-Type:', req.headers['content-type']);
+    console.log('   Has auth header:', !!req.headers.authorization);
+    console.log('   Session ID param:', req.params.sessionId?.substring(0, 8));
+    next();
+  };
+
+  // Custom authentication middleware for multipart uploads
+  // We can't use authenticate('jwt', 'anonymous') because it tries to parse the body,
+  // which creates a deadlock with multer (multer can't run until auth completes, but
+  // auth waits for body to be parsed)
+  // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
+  const uploadAuthMiddleware: any = async (req: any, res: any, next: any) => {
+    try {
+      console.log('🔐 [Upload Auth] Attempting authentication');
+
+      let token = null;
+
+      // First, try Authorization header (Bearer token)
+      const authHeader = req.headers.authorization;
+      if (authHeader?.startsWith('Bearer ')) {
+        token = authHeader.substring(7); // Remove 'Bearer ' prefix
+        console.log('   Found token in Authorization header');
+      }
+
+      // Fallback to cookies if no Authorization header
+      if (!token) {
+        const cookies = req.headers.cookie || '';
+
+        // Try different cookie name patterns (don't log cookie values)
+        const patterns = [
+          /feathers-jwt=([^;]+)/, // Standard Feathers cookie
+          /agor-access-token=([^;]+)/, // Agor custom cookie
+          /jwt=([^;]+)/, // Simple jwt cookie
+        ];
+
+        for (const pattern of patterns) {
+          const match = cookies.match(pattern);
+          if (match) {
+            token = match[1];
+            console.log('   Found token in cookie');
+            break;
+          }
+        }
+      }
+
+      if (!token) {
+        console.log('⚠️  [Upload Auth] No JWT token found, rejecting');
+        return res.status(401).json({ error: 'Authentication required' });
+      }
+
+      console.log('🔑 [Upload Auth] JWT token found, verifying...');
+
+      // Manually verify the JWT using the same service Feathers uses
+      const authService = app.service('authentication');
+      const result = await authService.create({
+        strategy: 'jwt',
+        accessToken: token,
+      });
+
+      console.log('✅ [Upload Auth] Authentication successful');
+      console.log('   User:', result.user?.user_id?.substring(0, 8));
+
+      // Set up req.feathers like Feathers auth would
+      req.feathers = {
+        user: result.user,
+        provider: 'rest',
+        authentication: result.authentication,
+      };
+
+      next();
+    } catch (error) {
+      console.error('❌ [Upload Auth] Authentication failed:', error);
+      res.status(401).json({ error: 'Authentication required' });
+    }
+  };
+
   app.post(
     '/sessions/:sessionId/upload',
-    // biome-ignore lint/suspicious/noExplicitAny: Express 5 + FeathersJS type mismatch
-    authenticate('jwt', 'anonymous') as any,
+    uploadLogger,
+    uploadAuthMiddleware,
+    // Add middleware to log after auth
+    // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
+    ((req: any, res: any, next: any) => {
+      console.log('✅ [Upload Route] Authentication passed');
+      console.log('   User:', req.feathers?.user?.user_id?.substring(0, 8) || 'anonymous');
+      next();
+      // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
+    }) as any,
     // biome-ignore lint/suspicious/noExplicitAny: Express 5 + multer type compatibility
     uploadMiddleware.array('files', 10) as any,
-    uploadHandler
+    // Add middleware to log after multer
+    // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
+    ((req: any, res: any, next: any) => {
+      console.log('✅ [Upload Route] Multer processing complete');
+      console.log('   Files parsed:', req.files?.length || 0);
+      next();
+      // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
+    }) as any,
+    uploadHandler,
+    // Error handler for this route
+    // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
+    ((err: any, req: any, res: any, next: any) => {
+      console.error('❌ [Upload Route] Error occurred:', err.message);
+      console.error('   Stack:', err.stack);
+      res.status(err.status || 500).json({
+        error: err.message || 'Upload failed',
+        details: err.toString(),
+      });
+      // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
+    }) as any
   );
 
   // Stop execution endpoint

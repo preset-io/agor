@@ -1,8 +1,8 @@
 import { PaperClipOutlined, UploadOutlined } from '@ant-design/icons';
-import type { UploadFile } from 'antd';
 import { App, Button, Checkbox, Input, Modal, Radio, Space, Typography, Upload } from 'antd';
+import type { RcFile, UploadFile } from 'antd/es/upload/interface';
 import type React from 'react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 const { TextArea } = Input;
 const { Text } = Typography;
@@ -23,6 +23,7 @@ export interface FileUploadProps {
   onClose: () => void;
   onUploadComplete?: (files: UploadedFile[]) => void;
   onInsertMention?: (filepath: string) => void;
+  initialFiles?: File[]; // Allow passing dropped files
 }
 
 export const FileUpload: React.FC<FileUploadProps> = ({
@@ -32,6 +33,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
   onClose,
   onUploadComplete,
   onInsertMention,
+  initialFiles,
 }) => {
   const { message: antMessage } = App.useApp();
   const [fileList, setFileList] = useState<UploadFile[]>([]);
@@ -39,6 +41,19 @@ export const FileUpload: React.FC<FileUploadProps> = ({
   const [notifyAgent, setNotifyAgent] = useState(false);
   const [agentMessage, setAgentMessage] = useState('Please review this file: {filepath}');
   const [uploading, setUploading] = useState(false);
+
+  // Populate fileList when initialFiles are provided
+  useEffect(() => {
+    if (initialFiles && initialFiles.length > 0 && open) {
+      const uploadFiles: UploadFile[] = initialFiles.map((file) => ({
+        uid: `${Date.now()}-${file.name}`,
+        name: file.name,
+        status: 'done',
+        originFileObj: file as RcFile, // Cast File to RcFile (Ant Design's extended File type)
+      }));
+      setFileList((prev) => [...prev, ...uploadFiles]);
+    }
+  }, [initialFiles, open]);
 
   const handleUpload = async () => {
     if (fileList.length === 0) {
@@ -50,27 +65,79 @@ export const FileUpload: React.FC<FileUploadProps> = ({
 
     try {
       const formData = new FormData();
+
+      console.log('[FileUpload] Preparing FormData:', {
+        fileListLength: fileList.length,
+        files: fileList.map((f) => ({
+          name: f.name,
+          hasOriginFileObj: !!f.originFileObj,
+          type: f.type,
+        })),
+      });
+
       fileList.forEach((file) => {
         if (file.originFileObj) {
           formData.append('files', file.originFileObj);
+          console.log('[FileUpload] Added file to FormData:', file.name);
+        } else {
+          console.warn('[FileUpload] File missing originFileObj:', file.name);
         }
       });
-      formData.append('destination', destination);
+      // Note: destination is sent as query param because multer can't access req.body
+      // during the destination callback
       formData.append('notifyAgent', String(notifyAgent));
       formData.append('message', agentMessage);
 
-      const response = await fetch(`${daemonUrl}/sessions/${sessionId}/upload`, {
+      const uploadUrl = `${daemonUrl}/sessions/${sessionId}/upload?destination=${encodeURIComponent(destination)}`;
+      console.log('[FileUpload] Starting upload:', {
+        url: uploadUrl,
+        sessionId: sessionId.substring(0, 8),
+        fileCount: fileList.length,
+        destination,
+        notifyAgent,
+      });
+
+      // Get JWT token from localStorage (same as Feathers client)
+      const accessToken = localStorage.getItem('agor-access-token');
+      const headers: HeadersInit = {};
+
+      if (accessToken) {
+        headers.Authorization = `Bearer ${accessToken}`;
+        console.log('[FileUpload] Added Authorization header with token');
+      } else {
+        console.warn('[FileUpload] No access token found in localStorage');
+      }
+
+      const response = await fetch(uploadUrl, {
         method: 'POST',
+        headers,
         body: formData,
-        credentials: 'include', // Include cookies for authentication
+        credentials: 'include', // Include cookies for session
+      });
+
+      console.log('[FileUpload] Response received:', {
+        status: response.status,
+        ok: response.ok,
       });
 
       if (!response.ok) {
-        const error = await response.json();
+        const errorText = await response.text();
+        console.error('[FileUpload] Upload failed:', {
+          status: response.status,
+          statusText: response.statusText,
+          body: errorText,
+        });
+        let error: { error?: string } = {};
+        try {
+          error = JSON.parse(errorText);
+        } catch {
+          error = { error: errorText || 'Upload failed' };
+        }
         throw new Error(error.error || 'Upload failed');
       }
 
       const result = await response.json();
+      console.log('[FileUpload] Upload successful:', result);
 
       antMessage.success(`Uploaded ${result.files.length} file(s) successfully`);
 
@@ -83,7 +150,9 @@ export const FileUpload: React.FC<FileUploadProps> = ({
       if (!notifyAgent && onInsertMention && result.files.length > 0) {
         // Insert first file path as mention
         const firstFile = result.files[0];
-        onInsertMention(firstFile.path);
+        // Quote paths with spaces to prevent breaking mention parser
+        const mentionPath = firstFile.path.includes(' ') ? `"${firstFile.path}"` : firstFile.path;
+        onInsertMention(mentionPath);
       }
 
       // Reset and close
@@ -123,7 +192,14 @@ export const FileUpload: React.FC<FileUploadProps> = ({
           multiple
           fileList={fileList}
           beforeUpload={(file) => {
-            setFileList((prev) => [...prev, file as UploadFile]);
+            // Create UploadFile object with originFileObj preserved
+            const uploadFile: UploadFile = {
+              uid: file.uid || `${Date.now()}-${file.name}`,
+              name: file.name,
+              status: 'done',
+              originFileObj: file,
+            };
+            setFileList((prev) => [...prev, uploadFile]);
             return false; // Prevent auto upload
           }}
           onRemove={(file) => {
