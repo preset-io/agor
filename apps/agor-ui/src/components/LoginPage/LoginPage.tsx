@@ -5,11 +5,12 @@
  */
 
 import { LockOutlined, MailOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Form, Input, Space, Typography } from 'antd';
+import { Alert, Button, Card, Divider, Form, Input, Space, Typography } from 'antd';
 import { useState } from 'react';
+import { BrandLogo } from '../BrandLogo';
 import { ParticleBackground } from './ParticleBackground';
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 
 interface LoginPageProps {
   onLogin: (email: string, password: string) => Promise<boolean>;
@@ -91,19 +92,22 @@ export function LoginPage({ onLogin, loading = false, error }: LoginPageProps) {
               src={`${import.meta.env.BASE_URL}favicon.png`}
               alt="Agor Logo"
               style={{
-                width: 64,
-                height: 64,
-                marginBottom: 12,
+                width: 72,
+                height: 72,
+                marginBottom: 16,
                 objectFit: 'cover',
                 borderRadius: '50%',
                 display: 'block',
-                margin: '0 auto 12px',
+                margin: '0 auto 16px',
               }}
             />
-            <Title level={2} style={{ margin: 0, marginBottom: 4 }}>
-              Agor
-            </Title>
-            <Text type="secondary">Next-gen agent orchestration</Text>
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12 }}>
+              <BrandLogo level={1} />
+            </div>
+            <div>
+              <Text type="secondary">Next-gen agent orchestration</Text>
+            </div>
+            <Divider style={{ margin: '16px 0 0 0' }} />
           </div>
         </Space>
 

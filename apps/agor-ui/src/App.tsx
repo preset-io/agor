@@ -228,7 +228,11 @@ function AppContent() {
     !!(localStorage.getItem('agor-access-token') || localStorage.getItem('agor-refresh-token'));
 
   if (authConfig?.requireAuth && !authLoading && !authenticated && !hasTokens) {
-    return <LoginPage onLogin={login} error={authError} />;
+    return (
+      <ConfigProvider theme={getCurrentThemeConfig()}>
+        <LoginPage onLogin={login} error={authError} />
+      </ConfigProvider>
+    );
   }
 
   // Show reconnecting state if we have tokens but lost connection
@@ -283,7 +287,11 @@ function AppContent() {
 
     if (authConfig?.requireAuth && isAnonymousAuthError && !authenticated) {
       // Anonymous auth failed but auth is required - show login page
-      return <LoginPage onLogin={login} error={authError || connectionError} />;
+      return (
+        <ConfigProvider theme={getCurrentThemeConfig()}>
+          <LoginPage onLogin={login} error={authError || connectionError} />
+        </ConfigProvider>
+      );
     }
 
     return (

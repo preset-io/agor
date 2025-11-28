@@ -10,16 +10,16 @@ import {
   UserOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import { Badge, Button, Divider, Dropdown, Layout, Space, Tooltip, Typography, theme } from 'antd';
+import { Badge, Button, Divider, Dropdown, Layout, Space, Tooltip, theme } from 'antd';
 import { useState } from 'react';
 import { BoardSwitcher } from '../BoardSwitcher';
+import { BrandLogo } from '../BrandLogo';
 import { ConnectionStatus } from '../ConnectionStatus';
 import { Facepile } from '../Facepile';
 import { GettingStartedPopover } from '../GettingStartedPopover';
 import { ThemeSwitcher } from '../ThemeSwitcher';
 
 const { Header } = Layout;
-const { Title } = Typography;
 
 export interface AppHeaderProps {
   user?: User | null;
@@ -167,9 +167,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             display: 'block',
           }}
         />
-        <Title level={3} style={{ margin: 0, marginTop: -6, color: token.colorText }}>
-          agor
-        </Title>
+        <BrandLogo level={3} style={{ marginTop: -6 }} />
         <Divider type="vertical" style={{ height: 32, margin: '0 8px' }} />
         {currentBoardId && boards.length > 0 && (
           <div style={{ minWidth: 200 }}>
