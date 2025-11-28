@@ -3,9 +3,13 @@ import { App, Button, Checkbox, Input, Modal, Radio, Space, Typography, Upload }
 import type { RcFile, UploadFile } from 'antd/es/upload/interface';
 import type React from 'react';
 import { useEffect, useState } from 'react';
+import { ACCESS_TOKEN_KEY } from '../../utils/tokenRefresh';
 
 const { TextArea } = Input;
 const { Text } = Typography;
+
+// Debug logging only in development
+const DEBUG_UPLOAD = import.meta.env.DEV;
 
 export type UploadDestination = 'worktree' | 'temp' | 'global';
 
@@ -42,7 +46,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
   const [agentMessage, setAgentMessage] = useState('Please review this file: {filepath}');
   const [uploading, setUploading] = useState(false);
 
-  // Populate fileList when initialFiles are provided
+  // Populate fileList when initialFiles are provided (replaces existing list to prevent duplicates)
   useEffect(() => {
     if (initialFiles && initialFiles.length > 0 && open) {
       const uploadFiles: UploadFile[] = initialFiles.map((file) => ({
@@ -51,7 +55,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
         status: 'done',
         originFileObj: file as RcFile, // Cast File to RcFile (Ant Design's extended File type)
       }));
-      setFileList((prev) => [...prev, ...uploadFiles]);
+      setFileList(uploadFiles); // Replace instead of append to prevent duplicate accumulation
     }
   }, [initialFiles, open]);
 
@@ -66,19 +70,21 @@ export const FileUpload: React.FC<FileUploadProps> = ({
     try {
       const formData = new FormData();
 
-      console.log('[FileUpload] Preparing FormData:', {
-        fileListLength: fileList.length,
-        files: fileList.map((f) => ({
-          name: f.name,
-          hasOriginFileObj: !!f.originFileObj,
-          type: f.type,
-        })),
-      });
+      if (DEBUG_UPLOAD) {
+        console.log('[FileUpload] Preparing FormData:', {
+          fileListLength: fileList.length,
+          files: fileList.map((f) => ({
+            name: f.name,
+            hasOriginFileObj: !!f.originFileObj,
+            type: f.type,
+          })),
+        });
+      }
 
       fileList.forEach((file) => {
         if (file.originFileObj) {
           formData.append('files', file.originFileObj);
-          console.log('[FileUpload] Added file to FormData:', file.name);
+          if (DEBUG_UPLOAD) console.log('[FileUpload] Added file to FormData:', file.name);
         } else {
           console.warn('[FileUpload] File missing originFileObj:', file.name);
         }
@@ -89,21 +95,23 @@ export const FileUpload: React.FC<FileUploadProps> = ({
       formData.append('message', agentMessage);
 
       const uploadUrl = `${daemonUrl}/sessions/${sessionId}/upload?destination=${encodeURIComponent(destination)}`;
-      console.log('[FileUpload] Starting upload:', {
-        url: uploadUrl,
-        sessionId: sessionId.substring(0, 8),
-        fileCount: fileList.length,
-        destination,
-        notifyAgent,
-      });
+      if (DEBUG_UPLOAD) {
+        console.log('[FileUpload] Starting upload:', {
+          url: uploadUrl,
+          sessionId: sessionId.substring(0, 8),
+          fileCount: fileList.length,
+          destination,
+          notifyAgent,
+        });
+      }
 
       // Get JWT token from localStorage (same as Feathers client)
-      const accessToken = localStorage.getItem('agor-access-token');
+      const accessToken = localStorage.getItem(ACCESS_TOKEN_KEY);
       const headers: HeadersInit = {};
 
       if (accessToken) {
         headers.Authorization = `Bearer ${accessToken}`;
-        console.log('[FileUpload] Added Authorization header with token');
+        if (DEBUG_UPLOAD) console.log('[FileUpload] Added Authorization header with token');
       } else {
         console.warn('[FileUpload] No access token found in localStorage');
       }
@@ -115,18 +123,22 @@ export const FileUpload: React.FC<FileUploadProps> = ({
         credentials: 'include', // Include cookies for session
       });
 
-      console.log('[FileUpload] Response received:', {
-        status: response.status,
-        ok: response.ok,
-      });
+      if (DEBUG_UPLOAD) {
+        console.log('[FileUpload] Response received:', {
+          status: response.status,
+          ok: response.ok,
+        });
+      }
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error('[FileUpload] Upload failed:', {
-          status: response.status,
-          statusText: response.statusText,
-          body: errorText,
-        });
+        if (DEBUG_UPLOAD) {
+          console.error('[FileUpload] Upload failed:', {
+            status: response.status,
+            statusText: response.statusText,
+            body: errorText,
+          });
+        }
         let error: { error?: string } = {};
         try {
           error = JSON.parse(errorText);
@@ -137,9 +149,14 @@ export const FileUpload: React.FC<FileUploadProps> = ({
       }
 
       const result = await response.json();
-      console.log('[FileUpload] Upload successful:', result);
+      if (DEBUG_UPLOAD) console.log('[FileUpload] Upload successful:', result);
 
-      antMessage.success(`Uploaded ${result.files.length} file(s) successfully`);
+      // Show success message with final filename(s) so user knows what to reference
+      if (result.files.length === 1) {
+        antMessage.success(`Uploaded as: ${result.files[0].filename}`);
+      } else {
+        antMessage.success(`Uploaded ${result.files.length} files successfully`);
+      }
 
       // Call completion callback
       if (onUploadComplete) {

@@ -14,6 +14,9 @@ import type { SessionRepository, WorktreeRepository } from '@agor/core/db';
 import type { Request } from 'express';
 import multer from 'multer';
 
+// Debug logging only in development
+const DEBUG_UPLOAD = process.env.NODE_ENV !== 'production';
+
 /**
  * Destination types for file uploads
  */
@@ -40,10 +43,12 @@ export function createUploadStorage(
           return cb(new Error(`Invalid destination: ${destination}`), '');
         }
 
-        console.log(
-          `📂 [Upload Storage] Processing upload for session ${sessionId?.substring(0, 8)}`
-        );
-        console.log(`   Destination type: ${destination}`);
+        if (DEBUG_UPLOAD) {
+          console.log(
+            `📂 [Upload Storage] Processing upload for session ${sessionId?.substring(0, 8)}`
+          );
+          console.log(`   Destination type: ${destination}`);
+        }
 
         if (!sessionId) {
           console.error('❌ [Upload Storage] No session ID provided');
@@ -79,11 +84,11 @@ export function createUploadStorage(
 
         const dest = paths[destination] || paths.worktree;
 
-        console.log(`📁 [Upload Storage] Target directory: ${dest}`);
+        if (DEBUG_UPLOAD) console.log(`📁 [Upload Storage] Target directory: ${dest}`);
 
         // Ensure directory exists
         await fs.mkdir(dest, { recursive: true });
-        console.log(`✅ [Upload Storage] Directory created/verified: ${dest}`);
+        if (DEBUG_UPLOAD) console.log(`✅ [Upload Storage] Directory created/verified: ${dest}`);
 
         cb(null, dest);
       } catch (error) {
@@ -93,26 +98,28 @@ export function createUploadStorage(
     },
 
     filename: (_req, file, cb) => {
-      // Sanitize filename to prevent path traversal attacks
+      // Sanitize filename to prevent path traversal attacks while preserving readability
       // 1. Extract basename to remove any path components
       const basename = path.basename(file.originalname);
 
-      // 2. Remove dangerous characters and normalize
+      // 2. Remove only truly dangerous characters (preserve spaces, unicode, etc.)
       const sanitized = basename
-        .replace(/[^a-zA-Z0-9._-]/g, '_') // Replace dangerous chars with underscore
-        .replace(/\.+/g, '.') // Collapse multiple dots
-        .replace(/^\.+/, '') // Remove leading dots
-        .substring(0, 255); // Limit length
+        .replace(/\.\./g, '_') // Remove path traversal attempts
+        .replace(/[/\\:*?"<>|]/g, '_') // Remove filesystem-unsafe chars (Windows + Unix)
+        .replace(/\.+$/g, '') // Remove trailing dots (Windows issue)
+        .substring(0, 200); // Limit length (leave room for timestamp)
 
-      // 3. Add timestamp to prevent overwrites
+      // 3. Add timestamp suffix to prevent overwrites (but keep it human-readable)
       const timestamp = Date.now();
       const ext = path.extname(sanitized);
       const nameWithoutExt = sanitized.slice(0, -ext.length || undefined);
       const uniqueFilename = `${nameWithoutExt}_${timestamp}${ext}`;
 
-      console.log(
-        `📝 [Upload Storage] Sanitized filename: ${file.originalname} → ${uniqueFilename}`
-      );
+      if (DEBUG_UPLOAD) {
+        console.log(
+          `📝 [Upload Storage] Sanitized filename: ${file.originalname} → ${uniqueFilename}`
+        );
+      }
 
       cb(null, uniqueFilename);
     },

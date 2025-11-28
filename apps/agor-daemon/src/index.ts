@@ -2400,33 +2400,42 @@ async function main() {
   const worktreeRepo = new WorktreeRepository(db);
   const uploadMiddleware = createUploadMiddleware(sessionRepo, worktreeRepo);
 
+  // Debug logging only in development
+  const DEBUG_UPLOAD = process.env.NODE_ENV !== 'production';
+
   // Add Express route directly for file upload (multer needs raw Express req/res)
   // biome-ignore lint/suspicious/noExplicitAny: Express 5 + multer type compatibility
   const uploadHandler: any = async (req: any, res: any, next: any) => {
     try {
-      console.log('🚀 [Upload Handler] Request received');
-      console.log('   Headers:', {
-        contentType: req.headers['content-type'],
-        authorization: req.headers.authorization ? 'present' : 'missing',
-        cookie: req.headers.cookie ? 'present' : 'missing',
-      });
+      if (DEBUG_UPLOAD) {
+        console.log('🚀 [Upload Handler] Request received');
+        console.log('   Headers:', {
+          contentType: req.headers['content-type'],
+          authorization: req.headers.authorization ? 'present' : 'missing',
+          cookie: req.headers.cookie ? 'present' : 'missing',
+        });
+      }
 
       const { sessionId } = req.params;
       const { destination, notifyAgent, message } = req.body;
       const files = req.files as Express.Multer.File[];
 
-      console.log(`📎 [Upload Handler] Processing for session ${sessionId?.substring(0, 8)}`);
-      console.log(`   Destination: ${destination || 'worktree'}`);
-      console.log(`   Notify agent: ${notifyAgent === 'true' || notifyAgent === true}`);
-      console.log(`   Files received: ${files?.length || 0}`);
+      if (DEBUG_UPLOAD) {
+        console.log(`📎 [Upload Handler] Processing for session ${sessionId?.substring(0, 8)}`);
+        console.log(`   Destination: ${destination || 'worktree'}`);
+        console.log(`   Notify agent: ${notifyAgent === 'true' || notifyAgent === true}`);
+        console.log(`   Files received: ${files?.length || 0}`);
+      }
 
       // Ensure user is authenticated and has member role
       const params = req.feathers as AuthenticatedParams;
-      console.log(`   Auth params:`, {
-        hasUser: !!params?.user,
-        userId: params?.user?.user_id?.substring(0, 8),
-        provider: params?.provider,
-      });
+      if (DEBUG_UPLOAD) {
+        console.log(`   Auth params:`, {
+          hasUser: !!params?.user,
+          userId: params?.user?.user_id?.substring(0, 8),
+          provider: params?.provider,
+        });
+      }
 
       ensureMinimumRole(params, 'member', 'upload files');
 
@@ -2471,10 +2480,12 @@ async function main() {
         };
       });
 
-      console.log(`   Uploaded ${uploadedFiles.length} file(s):`);
-      uploadedFiles.forEach((f) => {
-        console.log(`     - ${f.filename} (${(f.size / 1024).toFixed(2)} KB)`);
-      });
+      if (DEBUG_UPLOAD) {
+        console.log(`   Uploaded ${uploadedFiles.length} file(s):`);
+        uploadedFiles.forEach((f) => {
+          console.log(`     - ${f.filename} (${(f.size / 1024).toFixed(2)} KB)`);
+        });
+      }
 
       // If notifyAgent is true, send a prompt to the agent
       let notificationError: string | null = null;
@@ -2485,7 +2496,9 @@ async function main() {
 
           const promptText = message.replace(/\{filepath\}/g, filePaths);
 
-          console.log(`   Sending prompt to agent: ${promptText.substring(0, 100)}...`);
+          if (DEBUG_UPLOAD) {
+            console.log(`   Sending prompt to agent: ${promptText.substring(0, 100)}...`);
+          }
 
           // Use the same prompt service that the UI uses
           const promptService = app.service('/sessions/:id/prompt');
@@ -2519,12 +2532,14 @@ async function main() {
   // Add logging middleware to debug upload requests
   // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
   const uploadLogger: any = (req: any, res: any, next: any) => {
-    console.log('📥 [Upload Route] Request received');
-    console.log('   Method:', req.method);
-    console.log('   URL:', req.url);
-    console.log('   Content-Type:', req.headers['content-type']);
-    console.log('   Has auth header:', !!req.headers.authorization);
-    console.log('   Session ID param:', req.params.sessionId?.substring(0, 8));
+    if (DEBUG_UPLOAD) {
+      console.log('📥 [Upload Route] Request received');
+      console.log('   Method:', req.method);
+      console.log('   URL:', req.url);
+      console.log('   Content-Type:', req.headers['content-type']);
+      console.log('   Has auth header:', !!req.headers.authorization);
+      console.log('   Session ID param:', req.params.sessionId?.substring(0, 8));
+    }
     next();
   };
 
@@ -2535,7 +2550,7 @@ async function main() {
   // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
   const uploadAuthMiddleware: any = async (req: any, res: any, next: any) => {
     try {
-      console.log('🔐 [Upload Auth] Attempting authentication');
+      if (DEBUG_UPLOAD) console.log('🔐 [Upload Auth] Attempting authentication');
 
       let token = null;
 
@@ -2543,7 +2558,7 @@ async function main() {
       const authHeader = req.headers.authorization;
       if (authHeader?.startsWith('Bearer ')) {
         token = authHeader.substring(7); // Remove 'Bearer ' prefix
-        console.log('   Found token in Authorization header');
+        if (DEBUG_UPLOAD) console.log('   Found token in Authorization header');
       }
 
       // Fallback to cookies if no Authorization header
@@ -2561,18 +2576,18 @@ async function main() {
           const match = cookies.match(pattern);
           if (match) {
             token = match[1];
-            console.log('   Found token in cookie');
+            if (DEBUG_UPLOAD) console.log('   Found token in cookie');
             break;
           }
         }
       }
 
       if (!token) {
-        console.log('⚠️  [Upload Auth] No JWT token found, rejecting');
+        if (DEBUG_UPLOAD) console.log('⚠️  [Upload Auth] No JWT token found, rejecting');
         return res.status(401).json({ error: 'Authentication required' });
       }
 
-      console.log('🔑 [Upload Auth] JWT token found, verifying...');
+      if (DEBUG_UPLOAD) console.log('🔑 [Upload Auth] JWT token found, verifying...');
 
       // Manually verify the JWT using the same service Feathers uses
       const authService = app.service('authentication');
@@ -2581,8 +2596,10 @@ async function main() {
         accessToken: token,
       });
 
-      console.log('✅ [Upload Auth] Authentication successful');
-      console.log('   User:', result.user?.user_id?.substring(0, 8));
+      if (DEBUG_UPLOAD) {
+        console.log('✅ [Upload Auth] Authentication successful');
+        console.log('   User:', result.user?.user_id?.substring(0, 8));
+      }
 
       // Set up req.feathers like Feathers auth would
       req.feathers = {
@@ -2605,8 +2622,10 @@ async function main() {
     // Add middleware to log after auth
     // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
     ((req: any, res: any, next: any) => {
-      console.log('✅ [Upload Route] Authentication passed');
-      console.log('   User:', req.feathers?.user?.user_id?.substring(0, 8) || 'anonymous');
+      if (DEBUG_UPLOAD) {
+        console.log('✅ [Upload Route] Authentication passed');
+        console.log('   User:', req.feathers?.user?.user_id?.substring(0, 8) || 'anonymous');
+      }
       next();
       // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
     }) as any,
@@ -2615,8 +2634,10 @@ async function main() {
     // Add middleware to log after multer
     // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
     ((req: any, res: any, next: any) => {
-      console.log('✅ [Upload Route] Multer processing complete');
-      console.log('   Files parsed:', req.files?.length || 0);
+      if (DEBUG_UPLOAD) {
+        console.log('✅ [Upload Route] Multer processing complete');
+        console.log('   Files parsed:', req.files?.length || 0);
+      }
       next();
       // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
     }) as any,
