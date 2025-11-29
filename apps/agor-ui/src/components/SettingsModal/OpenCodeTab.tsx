@@ -66,7 +66,12 @@ export const OpenCodeTab: React.FC<OpenCodeTabProps> = ({ client }) => {
 
     try {
       // Use daemon endpoint to proxy the health check
-      const result = (await client.service('opencode/health').find()) as {
+      // Pass the current serverUrl from frontend state (not the saved config)
+      const result = (await client.service('opencode/health').find({
+        query: {
+          serverUrl: serverUrl,
+        },
+      })) as {
         connected?: boolean;
       };
       setIsConnected(result.connected === true);

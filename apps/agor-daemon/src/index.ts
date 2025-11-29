@@ -3459,16 +3459,25 @@ async function main() {
 
   // OpenCode health check endpoint - proxy to test connection
   app.use('/opencode/health', {
-    async find() {
+    // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type varies, runtime query param check
+    async find(params?: any) {
       try {
-        // Reload config to get latest OpenCode settings (no caching)
-        const freshConfig = await loadConfig();
-        const opencodeConfig = freshConfig.opencode;
-        if (!opencodeConfig?.enabled) {
-          throw new Error('OpenCode is not enabled in configuration');
+        // Use serverUrl from query params if provided, otherwise fall back to saved config
+        let serverUrl: string;
+
+        if (params?.query?.serverUrl) {
+          // Test with the provided serverUrl (from frontend, not yet saved)
+          serverUrl = params.query.serverUrl;
+        } else {
+          // Fall back to saved config
+          const freshConfig = await loadConfig();
+          const opencodeConfig = freshConfig.opencode;
+          if (!opencodeConfig?.enabled) {
+            throw new Error('OpenCode is not enabled in configuration');
+          }
+          serverUrl = opencodeConfig.serverUrl || 'http://localhost:4096';
         }
 
-        const serverUrl = opencodeConfig.serverUrl || 'http://localhost:4096';
         // OpenCode doesn't have a /health endpoint - use /config as a lightweight test
         const response = await fetch(`${serverUrl}/config`);
 
