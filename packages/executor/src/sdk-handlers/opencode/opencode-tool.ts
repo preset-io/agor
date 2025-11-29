@@ -282,13 +282,13 @@ export class OpenCodeTool implements ITool {
     const client = this.getClient();
 
     try {
-      const metadata = (await client.getSessionMetadata(sessionId)) as Record<string, unknown>;
+      const session = await client.getSessionMetadata(sessionId);
       return {
         sessionId,
         toolType: 'opencode' as const,
         status: 'active',
-        createdAt: new Date((metadata.createdAt as string | number) || Date.now()),
-        lastUpdatedAt: new Date(),
+        createdAt: new Date(session.time.created),
+        lastUpdatedAt: new Date(session.time.updated),
       };
     } catch (error) {
       throw new Error(
