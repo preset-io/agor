@@ -104,10 +104,11 @@ export async function executeOpenCodeTask(params: {
 
     console.log(`[opencode] Execution completed: status=${result?.status}`);
 
-    // Update task status to completed
+    // Update task status to completed and set model
     await client.service('tasks').patch(taskId, {
       status: result?.status === 'completed' ? 'completed' : 'failed',
       completed_at: new Date().toISOString(),
+      model: session.model_config?.model, // Set the model ID used for this task
     });
   } catch (error) {
     const err = error as Error;

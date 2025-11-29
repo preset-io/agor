@@ -397,8 +397,13 @@ interface ModelPillProps extends BasePillProps {
 }
 
 export const ModelPill: React.FC<ModelPillProps> = ({ model, style }) => {
-  // Simplify model name for display (e.g., "claude-sonnet-4-5-20250929" -> "sonnet-4.5")
+  // Simplify model name for display
+  // Examples:
+  // - "claude-sonnet-4-5-20250929" -> "sonnet-4.5"
+  // - "gpt-4o" -> "gpt-4o"
+  // - "gpt-3.5-turbo" -> "gpt-3.5-turbo"
   const getDisplayName = (modelId: string) => {
+    // Claude models: extract version from pattern
     if (modelId.includes('sonnet')) {
       const match = modelId.match(/sonnet-(\d)-(\d)/);
       return match ? `sonnet-${match[1]}.${match[2]}` : 'sonnet';
@@ -411,7 +416,19 @@ export const ModelPill: React.FC<ModelPillProps> = ({ model, style }) => {
       const match = modelId.match(/opus-(\d)-(\d)/);
       return match ? `opus-${match[1]}.${match[2]}` : 'opus';
     }
-    return modelId; // Fallback to full ID
+
+    // OpenAI GPT models: show as-is (e.g., "gpt-4o", "gpt-3.5-turbo", "gpt-4-turbo")
+    if (modelId.startsWith('gpt-')) {
+      return modelId;
+    }
+
+    // Gemini models: show as-is (e.g., "gemini-2.5-flash", "gemini-2.5-pro")
+    if (modelId.startsWith('gemini-')) {
+      return modelId;
+    }
+
+    // Fallback to full ID for unknown models
+    return modelId;
   };
 
   return (
