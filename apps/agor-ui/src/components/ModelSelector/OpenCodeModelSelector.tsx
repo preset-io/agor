@@ -142,7 +142,7 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
     return (
       <Alert
         message="No Providers Available"
-        description="OpenCode has no configured providers. Add API keys via: opencode auth login"
+        description="OpenCode server returned no providers. Check your OpenCode installation."
         type="info"
         showIcon
       />

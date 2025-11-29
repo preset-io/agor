@@ -455,12 +455,9 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
                             placeholder="http://localhost:4096"
                             value={opencodeServerUrl}
                             onChange={(e) => setOpencodeServerUrl(e.target.value)}
-                            style={{ width: '100%' }}
                           />
                           <Tooltip title="Test connection to OpenCode server">
                             <Button
-                              size="small"
-                              type="text"
                               loading={opencodeTesting}
                               icon={opencodeTesting ? <LoadingOutlined /> : undefined}
                               onClick={handleTestOpenCodeConnection}

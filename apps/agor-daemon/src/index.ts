@@ -3399,24 +3399,32 @@ async function main() {
         }
 
         const serverUrl = opencodeConfig.serverUrl || 'http://localhost:4096';
-        console.log('[OpenCode] Fetching models from SDK:', serverUrl);
+        console.log('[OpenCode] Fetching models from server:', serverUrl);
 
-        // Use official OpenCode SDK instead of raw fetch
-        const { createOpencodeClient } = await import('@opencode-ai/sdk');
-        const client = createOpencodeClient({ baseUrl: serverUrl });
+        // Fetch from /config/providers which returns only configured providers
+        // with models that are enabled in OpenCode settings
+        const response = await fetch(`${serverUrl}/config/providers`);
 
-        const response = await client.config.providers();
-
-        if (response.error || !response.data) {
-          throw new Error(
-            `OpenCode API error: ${response.error ? JSON.stringify(response.error) : 'No data returned'}`
-          );
+        if (!response.ok) {
+          throw new Error(`OpenCode server returned ${response.status}: ${response.statusText}`);
         }
 
-        // Transform to frontend-friendly format using SDK types
-        // SDK returns: { providers: Provider[], default: {[key: string]: string} }
+        // Response structure: { providers: Provider[], default: {[key: string]: string} }
         // Provider has: { id, name, models: {[modelId]: Model} }
-        const transformedProviders = response.data.providers.map((provider) => ({
+        const data = (await response.json()) as {
+          providers: Array<{
+            id: string;
+            name: string;
+            models: Record<string, { name?: string }>;
+          }>;
+          default: Record<string, string>;
+        };
+
+        // Use all providers from this endpoint (they're already filtered to configured ones)
+        const connectedProviders = data.providers;
+
+        // Transform to frontend-friendly format
+        const transformedProviders = connectedProviders.map((provider) => ({
           id: provider.id,
           name: provider.name,
           models: Object.entries(provider.models)
@@ -3429,7 +3437,7 @@ async function main() {
 
         return {
           providers: transformedProviders,
-          default: response.data.default,
+          default: data.default,
           serverUrl: serverUrl,
         };
       } catch (error) {
@@ -3461,7 +3469,8 @@ async function main() {
         }
 
         const serverUrl = opencodeConfig.serverUrl || 'http://localhost:4096';
-        const response = await fetch(`${serverUrl}/health`);
+        // OpenCode doesn't have a /health endpoint - use /config as a lightweight test
+        const response = await fetch(`${serverUrl}/config`);
 
         return {
           connected: response.ok,

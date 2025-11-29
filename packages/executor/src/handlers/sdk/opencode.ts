@@ -9,7 +9,9 @@
  * - Different return type (TaskResult vs execution result)
  */
 
-import type { PermissionMode, SessionID, TaskID } from '@agor/core/types';
+import { generateId } from '@agor/core';
+import type { MessageID, PermissionMode, SessionID, TaskID } from '@agor/core/types';
+import { MessageRole } from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import { OpenCodeTool } from '../../sdk-handlers/opencode/index.js';
 import type { AgorClient } from '../../services/feathers-client.js';
@@ -99,8 +101,34 @@ export async function executeOpenCodeTask(params: {
       session.model_config?.provider
     );
 
+    // Get existing messages to determine next index
+    const existingMessages = await client.service('messages').find({
+      query: {
+        session_id: sessionId,
+        $sort: { index: 1 },
+      },
+    });
+    const messages = Array.isArray(existingMessages) ? existingMessages : existingMessages.data;
+    const nextIndex = messages?.length || 0;
+
+    // Create user message (same pattern as Claude/Codex/Gemini)
+    console.log('[opencode] Creating user message at index', nextIndex);
+    await repos.messagesService.create({
+      message_id: generateId() as MessageID,
+      session_id: sessionId,
+      task_id: taskId,
+      type: 'user' as const,
+      role: MessageRole.USER,
+      index: nextIndex,
+      timestamp: new Date().toISOString(),
+      content_preview: prompt.substring(0, 200),
+      content: prompt,
+    });
+
     // Execute task using OpenCode's executeTask interface
-    const result = await tool.executeTask?.(sessionId, prompt, taskId, callbacks);
+    // This will create the assistant message with streaming
+    // Pass nextIndex + 1 for assistant message index
+    const result = await tool.executeTask?.(sessionId, prompt, taskId, callbacks, nextIndex + 1);
 
     console.log(`[opencode] Execution completed: status=${result?.status}`);
 
