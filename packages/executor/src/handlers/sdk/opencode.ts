@@ -104,11 +104,19 @@ export async function executeOpenCodeTask(params: {
 
     console.log(`[opencode] Execution completed: status=${result?.status}`);
 
+    // Construct model identifier in provider/model format (e.g., "openai/gpt-4o")
+    const modelIdentifier =
+      session.model_config?.provider && session.model_config?.model
+        ? `${session.model_config.provider}/${session.model_config.model}`
+        : session.model_config?.model;
+
+    console.log('[opencode] Setting task model:', modelIdentifier);
+
     // Update task status to completed and set model
     await client.service('tasks').patch(taskId, {
       status: result?.status === 'completed' ? 'completed' : 'failed',
       completed_at: new Date().toISOString(),
-      model: session.model_config?.model, // Set the model ID used for this task
+      model: modelIdentifier, // Set the model identifier used for this task (provider/model format)
     });
   } catch (error) {
     const err = error as Error;
