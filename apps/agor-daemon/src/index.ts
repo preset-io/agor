@@ -3399,37 +3399,37 @@ async function main() {
         }
 
         const serverUrl = opencodeConfig.serverUrl || 'http://localhost:4096';
-        console.log('[OpenCode] Fetching models from:', `${serverUrl}/config/providers`);
-        const response = await fetch(`${serverUrl}/config/providers`);
+        console.log('[OpenCode] Fetching models from SDK:', serverUrl);
 
-        if (!response.ok) {
-          throw new Error(`OpenCode server returned ${response.status}: ${response.statusText}`);
+        // Use official OpenCode SDK instead of raw fetch
+        const { createOpencodeClient } = await import('@opencode-ai/sdk');
+        const client = createOpencodeClient({ baseUrl: serverUrl });
+
+        const response = await client.config.providers();
+
+        if (response.error || !response.data) {
+          throw new Error(
+            `OpenCode API error: ${response.error ? JSON.stringify(response.error) : 'No data returned'}`
+          );
         }
 
-        // biome-ignore lint/suspicious/noExplicitAny: OpenCode API response structure not formally typed
-        const data = (await response.json()) as { providers?: any[]; default?: string };
-
-        // Transform to frontend-friendly format
-        // OpenCode returns: { providers: [{id, name, models: {modelId: {id, name, ...}}}] }
-        // We need to convert models object to array and sort alphabetically
-        // biome-ignore lint/suspicious/noExplicitAny: Dynamic provider structure from OpenCode API
-        const transformedProviders = (data.providers || []).map((provider: any) => ({
+        // Transform to frontend-friendly format using SDK types
+        // SDK returns: { providers: Provider[], default: {[key: string]: string} }
+        // Provider has: { id, name, models: {[modelId]: Model} }
+        const transformedProviders = response.data.providers.map((provider) => ({
           id: provider.id,
           name: provider.name,
-          models: provider.models
-            ? Object.entries(provider.models)
-                // biome-ignore lint/suspicious/noExplicitAny: Dynamic model metadata from OpenCode API
-                .map(([modelId, modelMeta]: [string, any]) => ({
-                  id: modelId,
-                  name: modelMeta.name || modelId,
-                }))
-                .sort((a, b) => a.name.localeCompare(b.name))
-            : [],
+          models: Object.entries(provider.models)
+            .map(([modelId, modelMeta]) => ({
+              id: modelId,
+              name: modelMeta.name || modelId,
+            }))
+            .sort((a, b) => a.name.localeCompare(b.name)),
         }));
 
         return {
           providers: transformedProviders,
-          default: data.default,
+          default: response.data.default,
           serverUrl: serverUrl,
         };
       } catch (error) {

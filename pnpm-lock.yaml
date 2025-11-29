@@ -94,6 +94,9 @@ importers:
       '@homebridge/node-pty-prebuilt-multiarch':
         specifier: ^0.13.1
         version: 0.13.1
+      '@opencode-ai/sdk':
+        specifier: ^1.0.65
+        version: 1.0.65
       compression:
         specifier: ^1.8.1
         version: 1.8.1
