@@ -1,5 +1,5 @@
 import type { User } from '@agor/core/types';
-import { MenuOutlined } from '@ant-design/icons';
+import { UnorderedListOutlined } from '@ant-design/icons';
 import { Button, Layout, Space, Typography, theme } from 'antd';
 
 const { Header } = Layout;
@@ -78,7 +78,7 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
         {showMenu && (
           <Button
             type="text"
-            icon={<MenuOutlined style={{ fontSize: token.fontSizeLG }} />}
+            icon={<UnorderedListOutlined style={{ fontSize: token.fontSizeLG }} />}
             onClick={onMenuClick}
           />
         )}

@@ -3,10 +3,10 @@ import {
   ApiOutlined,
   CommentOutlined,
   LogoutOutlined,
-  MenuOutlined,
   QuestionCircleOutlined,
   SettingOutlined,
   SoundOutlined,
+  UnorderedListOutlined,
   UserOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
@@ -185,7 +185,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           <Tooltip title="Toggle session drawer" placement="bottom">
             <Button
               type="text"
-              icon={<MenuOutlined style={{ fontSize: token.fontSizeLG }} />}
+              icon={<UnorderedListOutlined style={{ fontSize: token.fontSizeLG }} />}
               onClick={onMenuClick}
             />
           </Tooltip>
