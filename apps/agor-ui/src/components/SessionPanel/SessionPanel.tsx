@@ -34,6 +34,7 @@ import { PermissionModeSelector } from '../PermissionModeSelector';
 import {
   ContextWindowPill,
   MessageCountPill,
+  ModelPill,
   SessionIdPill,
   TimerPill,
   TokenCountPill,
@@ -585,6 +586,17 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
               agenticTool={session.agentic_tool}
               showCopy={true}
             />
+            {session.model_config?.model && (
+              <ModelPill
+                model={
+                  session.agentic_tool === 'opencode' &&
+                  session.model_config.provider &&
+                  session.model_config.model
+                    ? `${session.model_config.provider}/${session.model_config.model}`
+                    : session.model_config.model
+                }
+              />
+            )}
             <MessageCountPill count={session.message_count} />
             {tokenBreakdown.total > 0 && (
               <TokenCountPill
