@@ -11,19 +11,15 @@
  * - Automatic retries and timeouts
  */
 
-import { createOpencodeClient } from '@opencode-ai/sdk';
+import { createOpencodeClient, type Session, type StepFinishPart } from '@opencode-ai/sdk';
 
 export interface OpenCodeConfig {
   serverUrl: string;
   timeout?: number;
 }
 
-export interface OpenCodeSession {
-  id: string;
-  title: string;
-  project: string;
-  createdAt: string;
-}
+// Re-export SDK Session type for convenience
+export type { Session as OpenCodeSession };
 
 export interface OpenCodeMessageEvent {
   type: 'text' | 'tool_use' | 'tool_result' | 'thinking' | 'error';
@@ -32,19 +28,12 @@ export interface OpenCodeMessageEvent {
   toolInput?: Record<string, unknown>;
 }
 
+// Response metadata extracted from StepFinishPart
 export interface OpenCodeResponseMetadata {
   messageId?: string;
   parentMessageId?: string;
   cost?: number;
-  tokens?: {
-    input?: number;
-    output?: number;
-    reasoning?: number;
-    cache?: {
-      read?: number;
-      write?: number;
-    };
-  };
+  tokens?: StepFinishPart['tokens'];
 }
 
 export interface OpenCodePromptResponse {
@@ -92,7 +81,7 @@ export class OpenCodeClient {
     project: string;
     model?: string;
     provider?: string;
-  }): Promise<OpenCodeSession> {
+  }): Promise<Session> {
     try {
       // Note: OpenCode SDK session.create doesn't support model parameter
       // Model is specified per-message in prompt() calls
@@ -108,12 +97,8 @@ export class OpenCodeClient {
         throw new Error(`OpenCode API error: ${JSON.stringify(response.error)}`);
       }
 
-      return {
-        id: response.data.id,
-        title: response.data.title,
-        project: params.project,
-        createdAt: new Date().toISOString(),
-      };
+      // Return the SDK Session object directly
+      return response.data;
     } catch (error) {
       throw new Error(
         `Failed to create OpenCode session: ${error instanceof Error ? error.message : String(error)}`
@@ -266,9 +251,7 @@ export class OpenCodeClient {
   /**
    * Get session metadata
    */
-  async getSessionMetadata(
-    sessionId: string
-  ): Promise<{ id: string; title: string; createdAt?: string }> {
+  async getSessionMetadata(sessionId: string): Promise<Session> {
     try {
       const response = await this.client.session.get({
         path: { id: sessionId },
@@ -278,11 +261,8 @@ export class OpenCodeClient {
         throw new Error(`OpenCode API error: ${JSON.stringify(response.error)}`);
       }
 
-      return {
-        id: response.data.id,
-        title: response.data.title,
-        createdAt: new Date().toISOString(),
-      };
+      // Return the SDK Session object directly
+      return response.data;
     } catch (error) {
       throw new Error(
         `Failed to get session metadata: ${error instanceof Error ? error.message : String(error)}`
@@ -293,7 +273,7 @@ export class OpenCodeClient {
   /**
    * List all sessions
    */
-  async listSessions(): Promise<OpenCodeSession[]> {
+  async listSessions(): Promise<Session[]> {
     try {
       const response = await this.client.session.list();
 
@@ -301,16 +281,8 @@ export class OpenCodeClient {
         throw new Error(`OpenCode API error: ${JSON.stringify(response.error)}`);
       }
 
-      if (Array.isArray(response.data)) {
-        return response.data.map((s) => ({
-          id: s.id || '',
-          title: s.title || 'Untitled',
-          project: '',
-          createdAt: new Date().toISOString(),
-        }));
-      }
-
-      return [];
+      // Return the SDK Session array directly
+      return Array.isArray(response.data) ? response.data : [];
     } catch (error) {
       throw new Error(
         `Failed to list sessions: ${error instanceof Error ? error.message : String(error)}`

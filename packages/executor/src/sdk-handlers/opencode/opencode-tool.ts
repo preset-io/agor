@@ -328,8 +328,8 @@ export class OpenCodeTool implements ITool {
         sessionId: session.id,
         toolType: 'opencode' as const,
         status: 'active' as const,
-        createdAt: new Date(session.createdAt),
-        lastUpdatedAt: new Date(),
+        createdAt: new Date(session.time.created),
+        lastUpdatedAt: new Date(session.time.updated),
       }));
     } catch (error) {
       throw new Error(
