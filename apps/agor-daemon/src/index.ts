@@ -103,6 +103,7 @@ import type {
   Session,
   SessionID,
   Task,
+  TaskID,
   User,
 } from '@agor/core/types';
 import { SessionStatus, TaskStatus } from '@agor/core/types';
@@ -724,7 +725,11 @@ async function main() {
   // NOTE: Pass app instance for user preferences access (needed for cross-tool spawning and ready_for_prompt updates)
   const sessionsService = createSessionsService(db, app) as unknown as SessionsServiceImpl;
   app.use('/sessions', sessionsService, {
-    events: ['task_stop'], // Custom event for stopping tasks via WebSocket
+    events: [
+      'task_stop', // Custom event for stopping tasks via WebSocket
+      'task_stop_ack', // Executor acknowledges receipt of stop signal
+      'task_stopped_complete', // Executor confirms task fully stopped
+    ],
   });
 
   // Wire up custom session methods for Feathers/WebSocket executor architecture
@@ -2207,6 +2212,12 @@ async function main() {
 
         // Get session to find current message count
         const session = await sessionsService.get(id, params);
+
+        // Reject prompts if session is stopping
+        if (session.status === SessionStatus.STOPPING) {
+          throw new Error('Cannot send prompt: session is currently stopping');
+        }
+
         console.log(`   Session agent: ${session.agentic_tool}`);
         console.log(
           `   Session permission_config.mode: ${session.permission_config?.mode || 'not set'}`
@@ -2664,13 +2675,14 @@ async function main() {
         const id = params.route?.id;
         if (!id) throw new Error('Session ID required');
 
-        console.log(`🛑 [Daemon] Stop request for session ${id.substring(0, 8)}`);
-
-        // Get session to find which tool to use
+        // Get session to check status
         const session = await sessionsService.get(id, params);
 
-        // Check if session is actually running
-        if (session.status !== SessionStatus.RUNNING) {
+        // Check if session is actually running or awaiting permission
+        if (
+          session.status !== SessionStatus.RUNNING &&
+          session.status !== SessionStatus.AWAITING_PERMISSION
+        ) {
           return {
             success: false,
             reason: `Session is not running (status: ${session.status})`,
@@ -2678,7 +2690,6 @@ async function main() {
         }
 
         // Find the currently running task(s)
-        // Use find query instead of mapping over all tasks for better performance
         const runningTasks = await tasksService.find({
           query: {
             session_id: id,
@@ -2688,111 +2699,75 @@ async function main() {
         });
 
         // Extract data array if paginated
-        // Note: FeathersJS Service.find() can return T | T[] | Paginated<Task> depending on query params
-        // We cast to the expected union type since we know we're querying for multiple results
         const findResult = runningTasks as Task[] | Paginated<Task>;
         const runningTasksArray = isPaginated(findResult) ? findResult.data : findResult;
 
-        // PHASE 1: Immediately update status to 'stopping' (UI feedback before SDK call)
-        if (runningTasksArray.length > 0) {
-          const latestTask = runningTasksArray[runningTasksArray.length - 1];
-
-          try {
-            await Promise.race([
-              tasksService.patch(latestTask.task_id, {
-                status: TaskStatus.STOPPING,
-              }),
-              new Promise((_, reject) =>
-                setTimeout(() => reject(new Error('Task patch timeout')), 5000)
-              ),
-            ]);
-          } catch (error) {
-            console.error(`Failed to update task to stopping:`, error);
-            // Continue anyway, we'll still try to stop the SDK
-          }
-        }
-
-        // PHASE 2: Call stopTask handler (for both legacy IPC and new Feathers/WebSocket modes)
-        let result: { success: boolean; reason?: string; message?: string };
-
-        if (runningTasksArray.length > 0) {
-          const latestTask = runningTasksArray[runningTasksArray.length - 1];
-
-          try {
-            // Call the stopTask handler (works for both IPC and WebSocket modes)
-            const stopResult = await sessionsService.stopTask(
-              id,
-              {
-                taskId: latestTask.task_id,
-              },
-              params
-            );
-
-            result = {
-              success: stopResult.success,
-              message: stopResult.message,
-            };
-
-            console.log(`🛑 Stop task result: ${stopResult.message}`);
-          } catch (error) {
-            console.error(`Failed to call stopTask:`, error);
-            result = {
-              success: false,
-              reason: `Failed to stop task: ${error instanceof Error ? error.message : 'Unknown error'}`,
-            };
-          }
-        } else {
-          result = {
+        if (runningTasksArray.length === 0) {
+          return {
             success: false,
             reason: 'No running tasks found',
           };
         }
 
-        // PHASE 3: Update final status based on stop result
-        if (result.success) {
-          // Update session status back to idle
-          // IMPORTANT: Use app.service() instead of sessionsService to go through
-          // FeathersJS service layer and trigger app.publish() for WebSocket events
+        const latestTask = runningTasksArray[runningTasksArray.length - 1];
+
+        // PHASE 1: Atomically update task AND session to STOPPING
+        try {
+          // Update task status to STOPPING
+          await tasksService.patch(latestTask.task_id, {
+            status: TaskStatus.STOPPING,
+          });
+
+          // Update session status to STOPPING
           await app.service('sessions').patch(
             id,
             {
-              status: SessionStatus.IDLE,
-              ready_for_prompt: true, // Set atomically with status
+              status: SessionStatus.STOPPING,
+              ready_for_prompt: false, // Prevent new prompts during stop
             },
             params
           );
 
-          // Update task status to 'stopped'
-          if (runningTasksArray.length > 0) {
-            const latestTask = runningTasksArray[runningTasksArray.length - 1];
-            await tasksService.patch(latestTask.task_id, {
-              status: TaskStatus.STOPPED,
-              message_range: {
-                ...latestTask.message_range,
-                end_timestamp: new Date().toISOString(),
-              },
-            });
-            console.log(`✅ Task ${latestTask.task_id.substring(0, 8)} stopped`);
-          }
+          console.log(
+            `🛑 [Daemon] Stop requested for session ${id.substring(0, 8)}, task ${latestTask.task_id.substring(0, 8)} set to STOPPING`
+          );
+        } catch (error) {
+          console.error(`❌ [Daemon] Failed to set STOPPING status:`, error);
+          return {
+            success: false,
+            reason: `Failed to update status: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          };
+        }
 
-          // PHASE 4: Process next queued message if any
-          // This ensures queued messages aren't stuck when stopping
+        // PHASE 2: Use bulletproof stop handler with ACK protocol
+        const { handleStopWithAck } = await import('./services/sessions/hooks/handle-stop.js');
+
+        const result = await handleStopWithAck(
+          app,
+          id as SessionID,
+          latestTask.task_id as TaskID,
+          params
+        );
+
+        // PHASE 3: Handle failed stop (revert to RUNNING)
+        if (!result.success) {
+          // Stop failed, revert to RUNNING
+          console.warn(`⚠️  [Daemon] Stop failed, reverting to RUNNING`);
           try {
-            await processNextQueuedMessage(id as SessionID, params);
-          } catch (error) {
-            console.error(
-              `⚠️  Failed to process queued message after stop for session ${id.substring(0, 8)}:`,
-              error
-            );
-            // Don't fail the stop request if queue processing fails
-          }
-        } else {
-          // Stop failed, revert to running
-          if (runningTasksArray.length > 0) {
-            const latestTask = runningTasksArray[runningTasksArray.length - 1];
             await tasksService.patch(latestTask.task_id, {
-              status: TaskStatus.RUNNING, // Revert to running
+              status: TaskStatus.RUNNING,
             });
+
+            await app.service('sessions').patch(
+              id,
+              {
+                status: SessionStatus.RUNNING,
+                ready_for_prompt: false,
+              },
+              params
+            );
+          } catch (error) {
+            console.error(`❌ [Daemon] Failed to revert status:`, error);
           }
         }
 

@@ -131,7 +131,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   );
   const [scrollToBottom, setScrollToBottom] = React.useState<(() => void) | null>(null);
   const [scrollToTop, setScrollToTop] = React.useState<(() => void) | null>(null);
-  const [isStopping, setIsStopping] = React.useState(false);
   const [queuedMessages, setQueuedMessages] = React.useState<Message[]>([]);
   const [spawnModalOpen, setSpawnModalOpen] = React.useState(false);
   const [uploadModalOpen, setUploadModalOpen] = React.useState(false);
@@ -312,7 +311,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     });
   };
 
-  const isRunning = session.status === SessionStatus.RUNNING;
+  const isRunning =
+    session.status === SessionStatus.RUNNING || session.status === SessionStatus.STOPPING;
+  const isStopping = session.status === SessionStatus.STOPPING;
 
   const handleSendPrompt = async () => {
     if (!inputValue.trim()) return;
@@ -354,12 +355,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     if (!session || !client || isStopping) return;
 
     try {
-      setIsStopping(true);
       await client.service(`sessions/${session.session_id}/stop`).create({});
     } catch (error) {
       console.error('❌ Failed to stop execution:', error);
-    } finally {
-      setTimeout(() => setIsStopping(false), 2000);
     }
   };
 

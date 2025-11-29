@@ -90,10 +90,31 @@ export class AgorExecutor {
     // biome-ignore lint/suspicious/noExplicitAny: Feathers types don't support custom events
     (this.client.service('sessions') as any).on(
       'task_stop',
-      (data: { session_id: string; task_id: string }) => {
+      async (data: {
+        session_id: string;
+        task_id: string;
+        sequence: number;
+        timestamp: string;
+      }) => {
         console.log('[executor] Received task_stop event:', data);
 
         if (data.session_id === this.config.sessionId && data.task_id === this.config.taskId) {
+          // IMMEDIATELY send acknowledgment (before stopping)
+          try {
+            // biome-ignore lint/suspicious/noExplicitAny: Feathers types don't support custom events
+            (this.client!.service('sessions') as any).emit('task_stop_ack', {
+              session_id: data.session_id,
+              task_id: data.task_id,
+              sequence: data.sequence,
+              received_at: new Date().toISOString(),
+              status: 'stopping',
+            });
+            console.log(`✅ [executor] Sent stop ACK (seq ${data.sequence})`);
+          } catch (error) {
+            console.error('❌ [executor] Failed to send stop ACK:', error);
+          }
+
+          // Now initiate the stop
           console.log('[executor] Stop signal received, aborting execution');
           this.abortController.abort();
         }

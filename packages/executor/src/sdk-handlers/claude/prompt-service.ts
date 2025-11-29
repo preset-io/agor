@@ -148,6 +148,8 @@ export class ClaudePromptService {
             `🛑 Stop requested for session ${sessionId.substring(0, 8)}, breaking event loop`
           );
           this.stopRequested.delete(sessionId);
+          // Yield a 'stopped' event to signal execution was halted
+          yield { type: 'stopped' } as ProcessedEvent;
           break;
         }
 

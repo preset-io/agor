@@ -156,8 +156,11 @@ const WorktreeCardComponent = ({
   // Build genealogy tree structure (only for manual sessions)
   const sessionTreeData = useMemo(() => buildSessionTree(manualSessions), [manualSessions]);
 
-  // Check if any session is running
-  const hasRunningSession = useMemo(() => sessions.some((s) => s.status === 'running'), [sessions]);
+  // Check if any session is running or stopping
+  const hasRunningSession = useMemo(
+    () => sessions.some((s) => s.status === 'running' || s.status === 'stopping'),
+    [sessions]
+  );
 
   // Check if worktree needs attention (newly created OR has ready sessions)
   // Don't highlight if a session from this worktree is currently open in the drawer

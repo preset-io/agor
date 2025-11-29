@@ -305,6 +305,8 @@ export async function executeToolTask(params: {
         const stopResult = await tool.stopTask(sessionId, taskId);
         if (stopResult.success) {
           console.log(`[${toolName}] Tool stopped successfully`);
+          // NOTE: Completion signal is sent AFTER executePromptWithStreaming returns
+          // This ensures all streaming chunks have been flushed before we signal completion
         } else {
           console.warn(`[${toolName}] Tool stop failed: ${stopResult.reason}`);
         }
@@ -356,8 +358,23 @@ export async function executeToolTask(params: {
       };
     }
 
-    // Update task status to completed with git SHA
+    // Update task status to completed/stopped with git SHA
     await client.service('tasks').patch(taskId, patchData);
+
+    // Send completion signal if task was stopped
+    if (result.wasStopped) {
+      try {
+        // biome-ignore lint/suspicious/noExplicitAny: Feathers types don't support custom events
+        (client.service('sessions') as any).emit('task_stopped_complete', {
+          session_id: sessionId,
+          task_id: taskId,
+          stopped_at: new Date().toISOString(),
+        });
+        console.log(`✅ [${toolName}] Sent stop complete signal after execution finished`);
+      } catch (error) {
+        console.error(`❌ [${toolName}] Failed to send stop complete signal:`, error);
+      }
+    }
   } catch (error) {
     const err = error as Error;
     console.error(`[${toolName}] Execution failed:`, err);

@@ -3,9 +3,9 @@ import {
   CheckCircleOutlined,
   ClockCircleOutlined,
   CloseCircleOutlined,
+  LoadingOutlined,
   MinusCircleOutlined,
   PauseCircleOutlined,
-  StopOutlined,
 } from '@ant-design/icons';
 import { Spin, theme } from 'antd';
 import type React from 'react';
@@ -31,17 +31,24 @@ export const TaskStatusIcon: React.FC<TaskStatusIconProps> = ({ status, size = 1
 
   switch (status) {
     case TaskStatus.COMPLETED:
+    case 'completed': // SessionStatus.COMPLETED
       return <CheckCircleOutlined style={{ ...iconStyle, color: token.colorSuccess }} />;
     case TaskStatus.RUNNING:
+    case 'running': // SessionStatus.RUNNING
       return <Spin size={spinSize} />;
     case TaskStatus.STOPPING:
-      return <StopOutlined style={{ ...iconStyle, color: token.colorWarning }} />;
+    case 'stopping': // SessionStatus.STOPPING - animated spinner with warning color
+      return <LoadingOutlined style={{ ...iconStyle, color: token.colorWarning }} />;
     case TaskStatus.AWAITING_PERMISSION:
+    case 'awaiting_permission': // SessionStatus.AWAITING_PERMISSION
       return <PauseCircleOutlined style={{ ...iconStyle, color: token.colorWarning }} />;
     case TaskStatus.FAILED:
+    case 'failed': // SessionStatus.FAILED
       return <CloseCircleOutlined style={{ ...iconStyle, color: token.colorError }} />;
     case TaskStatus.STOPPED:
       return <MinusCircleOutlined style={{ ...iconStyle, color: token.colorWarning }} />;
+    case 'idle': // SessionStatus.IDLE
+      return <ClockCircleOutlined style={{ ...iconStyle, color: token.colorTextDisabled }} />;
     default:
       return <ClockCircleOutlined style={{ ...iconStyle, color: token.colorTextDisabled }} />;
   }

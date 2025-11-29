@@ -116,6 +116,9 @@ export type ProcessedEvent =
       };
     }
   | {
+      type: 'stopped';
+    }
+  | {
       type: 'end';
       reason: 'result' | 'stop_requested' | 'timeout';
     };

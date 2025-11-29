@@ -217,6 +217,7 @@ export class ClaudeTool implements ITool {
     model?: string;
     modelUsage?: unknown;
     rawSdkResponse?: import('@agor/core/sdk').SDKResultMessage;
+    wasStopped?: boolean;
   }> {
     if (!this.promptService || !this.messagesRepo) {
       throw new Error('ClaudeTool not initialized with repositories for live execution');
@@ -278,6 +279,7 @@ export class ClaudeTool implements ITool {
     let contextWindowLimit: number | undefined;
     let modelUsage: unknown | undefined;
     let rawSdkResponse: import('@agor/core/sdk').SDKResultMessage | undefined;
+    let wasStopped = false;
 
     for await (const event of this.promptService.promptSessionStreaming(
       sessionId,
@@ -285,6 +287,13 @@ export class ClaudeTool implements ITool {
       taskId,
       permissionMode
     )) {
+      // Detect if execution was stopped early
+      if (event.type === 'stopped') {
+        wasStopped = true;
+        console.log(`🛑 Claude execution was stopped for session ${sessionId}`);
+        continue; // Skip processing this event
+      }
+
       // Capture resolved model from first event
       if (!resolvedModel && 'resolvedModel' in event && event.resolvedModel) {
         resolvedModel = event.resolvedModel;
@@ -581,6 +590,7 @@ export class ClaudeTool implements ITool {
       model: resolvedModel,
       modelUsage,
       rawSdkResponse,
+      wasStopped,
     };
   }
 
@@ -642,6 +652,7 @@ export class ClaudeTool implements ITool {
     model?: string;
     modelUsage?: unknown;
     rawSdkResponse?: import('@agor/core/sdk').SDKResultMessage;
+    wasStopped?: boolean;
   }> {
     if (!this.promptService || !this.messagesRepo) {
       throw new Error('ClaudeTool not initialized with repositories for live execution');
@@ -674,6 +685,7 @@ export class ClaudeTool implements ITool {
     let contextWindowLimit: number | undefined;
     let modelUsage: unknown | undefined;
     let rawSdkResponse: import('@agor/core/sdk').SDKResultMessage | undefined;
+    let wasStopped = false;
 
     for await (const event of this.promptService.promptSessionStreaming(
       sessionId,
@@ -681,6 +693,13 @@ export class ClaudeTool implements ITool {
       taskId,
       permissionMode
     )) {
+      // Detect if execution was stopped early
+      if (event.type === 'stopped') {
+        wasStopped = true;
+        console.log(`🛑 Claude execution was stopped for session ${sessionId}`);
+        continue; // Skip processing this event
+      }
+
       // Capture resolved model from first event
       if (!resolvedModel && 'resolvedModel' in event && event.resolvedModel) {
         resolvedModel = event.resolvedModel;
@@ -781,6 +800,7 @@ export class ClaudeTool implements ITool {
       model: resolvedModel,
       modelUsage,
       rawSdkResponse,
+      wasStopped,
     };
   }
 

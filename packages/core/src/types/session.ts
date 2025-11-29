@@ -15,6 +15,7 @@ import type { SessionID, TaskID, WorktreeID } from './id';
 export const SessionStatus = {
   IDLE: 'idle',
   RUNNING: 'running',
+  STOPPING: 'stopping', // Stop requested, waiting for task to stop
   AWAITING_PERMISSION: 'awaiting_permission',
   COMPLETED: 'completed',
   FAILED: 'failed',
