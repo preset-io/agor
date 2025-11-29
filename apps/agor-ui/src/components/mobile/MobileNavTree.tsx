@@ -3,6 +3,7 @@ import { CommentOutlined, DownOutlined } from '@ant-design/icons';
 import { Badge, Button, Collapse, List, Space, Typography, theme } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { mapToArray } from '@/utils/mapHelpers';
+import { getSessionDisplayTitle } from '@/utils/sessionTitle';
 import { BoardCollapse } from '../BoardCollapse';
 
 const { Text } = Typography;
@@ -66,12 +67,12 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
     ])
   );
 
-  // Get session title - uses session.title if available, falls back to session ID
+  // Get session title with mobile-friendly 50-char limit
   const getSessionTitle = (session: Session): string => {
-    if (session.title) {
-      return session.title.length > 50 ? `${session.title.slice(0, 50)}...` : session.title;
-    }
-    return `Session ${session.session_id.slice(0, 8)}`;
+    return getSessionDisplayTitle(session, {
+      fallbackChars: 50,
+      includeIdFallback: true,
+    });
   };
 
   // Get session status icon

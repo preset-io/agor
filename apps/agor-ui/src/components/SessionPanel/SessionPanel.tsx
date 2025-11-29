@@ -27,6 +27,7 @@ import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useTasks } from '../../hooks/useTasks';
 import spawnSubsessionTemplate from '../../templates/spawn_subsession.hbs?raw';
 import { getContextWindowGradient } from '../../utils/contextWindow';
+import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
 import { compileTemplate } from '../../utils/templates';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { CreatedByTag } from '../metadata';
@@ -49,10 +50,6 @@ export type { PermissionMode };
 const compiledSpawnSubsessionTemplate = compileTemplate<{ userPrompt: string }>(
   spawnSubsessionTemplate
 );
-
-// Session title display configuration
-const SESSION_TITLE_MAX_LINES = 2;
-const SESSION_TITLE_FALLBACK_CHARS = 150;
 
 export interface SessionPanelProps {
   client: AgorClient | null;
@@ -703,24 +700,10 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                   strong
                   style={{
                     fontSize: 18,
-                    display: '-webkit-box',
-                    WebkitLineClamp: SESSION_TITLE_MAX_LINES,
-                    WebkitBoxOrient: 'vertical',
-                    overflow: 'hidden',
+                    ...getSessionTitleStyles(2),
                   }}
                 >
-                  {(() => {
-                    const displayText =
-                      session.title || session.description || session.agentic_tool;
-                    if (
-                      !session.title &&
-                      session.description &&
-                      session.description.length > SESSION_TITLE_FALLBACK_CHARS
-                    ) {
-                      return `${session.description.substring(0, SESSION_TITLE_FALLBACK_CHARS)}...`;
-                    }
-                    return displayText;
-                  })()}
+                  {getSessionDisplayTitle(session, { includeAgentFallback: true })}
                 </Typography.Text>
                 <Badge
                   status={getStatusColor()}

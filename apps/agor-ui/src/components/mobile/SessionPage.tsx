@@ -3,6 +3,7 @@ import type { PermissionMode, Repo, Session, SessionID, User, Worktree } from '@
 import { PermissionScope } from '@agor/core/types';
 import { Alert, Spin } from 'antd';
 import { useParams } from 'react-router-dom';
+import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { ConversationView } from '../ConversationView';
 import { MobileHeader } from './MobileHeader';
 import { MobilePromptInput } from './MobilePromptInput';
@@ -91,7 +92,10 @@ export const SessionPage: React.FC<SessionPageProps> = ({
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
       <MobileHeader
-        title={worktree?.name || 'Session'}
+        title={
+          worktree?.name ||
+          getSessionDisplayTitle(session, { fallbackChars: 30, includeIdFallback: true })
+        }
         showMenu
         user={currentUser}
         onMenuClick={onMenuClick}

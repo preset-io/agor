@@ -21,6 +21,7 @@ import { Alert, Collapse, Form, Input, Modal, Radio, Select, Space, Typography }
 import Handlebars from 'handlebars';
 import { useEffect, useMemo, useState } from 'react';
 import type { AgenticToolOption } from '../../../types';
+import { getSessionDisplayTitle } from '../../../utils/sessionTitle';
 import { AgenticToolConfigForm } from '../../AgenticToolConfigForm';
 import { AgentSelectionGrid } from '../../AgentSelectionGrid';
 import type { ModelConfig } from '../../ModelSelector';
@@ -336,8 +337,11 @@ export const ZoneTriggerModal = ({
                   value: session.session_id,
                   label: (
                     <span>
-                      {session.title || session.description || session.session_id.substring(0, 8)} (
-                      {session.status})
+                      {getSessionDisplayTitle(session, {
+                        fallbackChars: 50,
+                        includeIdFallback: true,
+                      })}{' '}
+                      ({session.status})
                     </span>
                   ),
                 }))}

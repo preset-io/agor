@@ -3,6 +3,7 @@ import { SearchOutlined } from '@ant-design/icons';
 import { Badge, Drawer, Input, List, Space, Typography, theme } from 'antd';
 import type React from 'react';
 import { useMemo, useState } from 'react';
+import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
 import { ToolIcon } from '../ToolIcon';
 
 const { useToken } = theme;
@@ -130,8 +131,8 @@ export const WorktreeListDrawer: React.FC<WorktreeListDrawerProps> = ({
                 avatar={<ToolIcon tool={session.agentic_tool} size={24} />}
                 title={
                   <Space size={8}>
-                    <Typography.Text strong>
-                      {session.title || session.description || session.agentic_tool}
+                    <Typography.Text strong style={getSessionTitleStyles(2)}>
+                      {getSessionDisplayTitle(session, { includeAgentFallback: true })}
                     </Typography.Text>
                     <Badge status={getStatusColor(session.status)} />
                   </Space>

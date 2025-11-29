@@ -17,6 +17,7 @@ import { Badge, Button, Card, Collapse, Space, Spin, Tree, Typography, theme } f
 import { AggregationColor } from 'antd/es/color-picker/color';
 import React, { useEffect, useMemo, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
+import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
 import { ensureColorVisible, isDarkTheme } from '../../utils/theme';
 import { ArchiveDeleteWorktreeModal } from '../ArchiveDeleteWorktreeModal';
 import { EnvironmentPill } from '../EnvironmentPill';
@@ -28,10 +29,6 @@ import { ToolIcon } from '../ToolIcon';
 import { buildSessionTree, type SessionTreeNode } from './buildSessionTree';
 
 const _WORKTREE_CARD_MAX_WIDTH = 600;
-
-// Session title display configuration for tree view
-const SESSION_TITLE_MAX_LINES = 2; // Limit to 2 lines in tree view
-const SESSION_TITLE_FALLBACK_CHARS = 100; // Fallback truncation for unsupported browsers (smaller font = less chars per line)
 
 // Inject CSS animation for pulsing glow effect
 if (typeof document !== 'undefined' && !document.getElementById('worktree-card-animations')) {
@@ -266,25 +263,10 @@ const WorktreeCardComponent = ({
             style={{
               fontSize: 12,
               flex: 1,
-              display: '-webkit-box',
-              WebkitLineClamp: SESSION_TITLE_MAX_LINES,
-              WebkitBoxOrient: 'vertical',
-              overflow: 'hidden',
-              wordBreak: 'break-word',
+              ...getSessionTitleStyles(2),
             }}
           >
-            {(() => {
-              const displayText = session.title || session.description || session.agentic_tool;
-              // Fallback truncation for browsers that don't support line-clamp
-              if (
-                !session.title &&
-                session.description &&
-                session.description.length > SESSION_TITLE_FALLBACK_CHARS
-              ) {
-                return `${session.description.substring(0, SESSION_TITLE_FALLBACK_CHARS)}...`;
-              }
-              return displayText;
-            })()}
+            {getSessionDisplayTitle(session, { includeAgentFallback: true })}
           </Typography.Text>
         </Space>
 
@@ -402,15 +384,11 @@ const WorktreeCardComponent = ({
               style={{
                 fontSize: 12,
                 flex: 1,
-                display: '-webkit-box',
-                WebkitLineClamp: SESSION_TITLE_MAX_LINES,
-                WebkitBoxOrient: 'vertical',
-                overflow: 'hidden',
-                wordBreak: 'break-word',
                 color: token.colorTextSecondary,
+                ...getSessionTitleStyles(2),
               }}
             >
-              {session.title || session.description || session.agentic_tool}
+              {getSessionDisplayTitle(session, { includeAgentFallback: true })}
             </Typography.Text>
           </Space>
 

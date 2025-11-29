@@ -10,6 +10,7 @@ import { CopyOutlined, FolderOutlined } from '@ant-design/icons';
 import { Button, Space, Tag, Typography, theme } from 'antd';
 import type React from 'react';
 import { copyToClipboard } from '../../utils/clipboard';
+import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { CreatedByTag } from '../metadata';
 import { ToolIcon } from '../ToolIcon';
 import { ForkPill, PILL_COLORS, RepoPill, SpawnPill, StatusPill } from './Pill';
@@ -68,22 +69,8 @@ export const SessionMetadataCard: React.FC<SessionMetadataCardProps> = ({
                 whiteSpace: 'nowrap',
               }}
             >
-              {session.title || session.description || session.agentic_tool}
+              {getSessionDisplayTitle(session, { fallbackChars: 60, includeAgentFallback: true })}
             </Text>
-            {session.title && session.description && (
-              <Text
-                type="secondary"
-                style={{
-                  fontSize: '0.85em',
-                  display: 'block',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {session.description}
-              </Text>
-            )}
           </div>
         </div>
 
