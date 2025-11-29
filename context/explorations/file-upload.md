@@ -14,12 +14,14 @@ Allow users to upload files directly into a conversation, making them accessible
 **New backend endpoint:** `POST /sessions/:id/upload` with multer middleware
 
 **New UI components:**
+
 - Upload button next to prompt textarea
 - Drag-and-drop zone on textarea
 - Upload dialog with destination selection
 - Optional agent notification with custom message
 
 **Key features:**
+
 - Any file type accepted (multimodal-ready)
 - Files accessible via existing `@` autocomplete
 - Optional system message in conversation ("User uploaded file: ...")
@@ -32,17 +34,20 @@ Allow users to upload files directly into a conversation, making them accessible
 ### Why Build This?
 
 **1. Multimodal Workflows**
+
 - Share screenshots for UI feedback
 - Upload error logs for debugging
 - Provide reference documents for context
 - Share design mockups, diagrams, specs
 
 **2. Natural Interaction**
+
 - "Here's what I'm seeing" + screenshot is intuitive
 - Reduces friction vs. manual file placement + path typing
 - Drag-drop matches modern app expectations
 
 **3. Agent Accessibility**
+
 - Files land in worktree = agent can read them
 - `.agor/uploads/` is predictable, agent-friendly location
 - Works with existing `@` mention autocomplete
@@ -55,13 +60,14 @@ Allow users to upload files directly into a conversation, making them accessible
 
 **Primary destination:** `{worktree.path}/.agor/uploads/`
 
-| Location | Path | Use Case |
-|----------|------|----------|
+| Location           | Path                             | Use Case                           |
+| ------------------ | -------------------------------- | ---------------------------------- |
 | Worktree (default) | `{worktree.path}/.agor/uploads/` | Agent-accessible, can be committed |
-| Temp | `$TMPDIR/agor-uploads/` | Ephemeral, auto-cleanup |
-| Global | `~/.agor/uploads/` | Shared across sessions |
+| Temp               | `$TMPDIR/agor-uploads/`          | Ephemeral, auto-cleanup            |
+| Global             | `~/.agor/uploads/`               | Shared across sessions             |
 
 **Rationale for worktree default:**
+
 - Agent always has access (it's running in the worktree)
 - User can commit if desired (though `.agor/` typically gitignored)
 - Clear mental model: "files for this work"
@@ -95,6 +101,7 @@ Allow users to upload files directly into a conversation, making them accessible
 **2. Drag-and-drop** - Drop files anywhere on textarea
 
 Visual feedback on drag-over:
+
 ```
 +---------------------------------------------------------------+
 |  +---------------------------+                                |
@@ -311,6 +318,7 @@ interface UploadedFile {
 ```
 
 **Enables:**
+
 - "Uploaded files" panel in session/worktree UI
 - File browser with download/delete actions
 - Usage analytics
@@ -347,6 +355,7 @@ const handlePaste = (e: React.ClipboardEvent) => {
 ## Implementation Phases
 
 ### Phase 1: MVP
+
 - [ ] Add multer dependency
 - [ ] Create upload endpoint (worktree destination only)
 - [ ] Upload button component
@@ -354,17 +363,20 @@ const handlePaste = (e: React.ClipboardEvent) => {
 - [ ] Insert `@{filepath}` into textarea after upload
 
 ### Phase 2: Full Dialog
+
 - [ ] Destination selection (worktree/temp/global)
 - [ ] "Notify agent" checkbox + message textarea
 - [ ] Drag-and-drop on textarea
 
 ### Phase 3: Polish
+
 - [ ] Upload progress indicator
 - [ ] Multi-file upload UI
 - [ ] Clipboard paste support
 - [ ] System messages in conversation
 
 ### Phase 4: Optional Enhancements
+
 - [ ] Uploaded files metadata table
 - [ ] Files panel in session UI
 - [ ] Cleanup automation for temp files
@@ -374,10 +386,12 @@ const handlePaste = (e: React.ClipboardEvent) => {
 ## Dependencies
 
 **New packages:**
+
 - `multer` - Multipart form handling
 - `@types/multer` - TypeScript types
 
 **Estimated effort:**
+
 - Phase 1: 4-6 hours
 - Phase 2: 2-3 hours
 - Phase 3: 2-3 hours

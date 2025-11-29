@@ -1327,12 +1327,16 @@ async function main() {
   // All services have requireAuth hooks, so only authenticated users can access them
   // This means any connection that successfully calls a service is authenticated
   app.publish((data, context) => {
-    console.log(`📡 [Publish] ${context.path} ${context.method}`, {
-      id: context.id,
-      hasData: !!data,
-      dataKeys: data ? Object.keys(data).join(',') : 'none',
-      channelCount: app.channel('everybody').length,
-    });
+    // Skip logging for internal events without path/method (e.g., repository-triggered events)
+    if (context.path && context.method) {
+      console.log(
+        `📡 [Publish] ${context.path} ${context.method}`,
+        context.id
+          ? `id: ${typeof context.id === 'string' ? context.id.substring(0, 8) : context.id}`
+          : '',
+        `channels: ${app.channel('everybody').length}`
+      );
+    }
     // Broadcast to all connected clients (they're all authenticated due to requireAuth)
     return app.channel('everybody');
   });

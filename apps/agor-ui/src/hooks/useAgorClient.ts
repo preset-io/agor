@@ -59,7 +59,6 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
       setConnecting(true);
       setError(null);
 
-      console.log('🔌 useAgorClient: Creating new client (autoConnect: false)');
       // Create client (autoConnect: false, so we control connection timing)
       client = createClient(url, false);
       clientRef.current = client;
@@ -73,7 +72,6 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
       // Setup socket event listeners BEFORE connecting
       client.io.on('connect', async () => {
         if (mounted) {
-          console.log('🔌 Connected to daemon');
           hasConnectedOnce = true; // Mark that we've successfully connected
 
           // Re-authenticate on reconnection (e.g., after daemon restart or network recovery)
@@ -85,7 +83,6 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
                   strategy: 'jwt',
                   accessToken,
                 });
-                console.log('✓ Re-authenticated with stored token after reconnect');
                 setConnected(true);
                 setConnecting(false);
                 setError(null);
@@ -106,7 +103,6 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
                       accessToken: refreshResult.accessToken,
                     });
 
-                    console.log('✓ Re-authenticated with refresh token after reconnect');
                     setConnected(true);
                     setConnecting(false);
                     setError(null);
@@ -124,7 +120,6 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
               await client.authenticate({
                 strategy: 'anonymous',
               });
-              console.log('✓ Re-authenticated anonymously after reconnect');
               setConnected(true);
               setConnecting(false);
               setError(null);
@@ -177,7 +172,6 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
       });
 
       // Now manually connect the socket
-      console.log('🔌 useAgorClient: Manually connecting socket');
       client.io.connect();
 
       // Wait for connection before authenticating
@@ -253,12 +247,10 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
     return () => {
       mounted = false;
       if (client?.io) {
-        console.log('🔌 useAgorClient: Cleaning up socket connection...');
         // Remove all listeners to prevent memory leaks
         client.io.removeAllListeners();
         // Disconnect gracefully (close is more forceful than disconnect)
         client.io.close();
-        console.log('✅ useAgorClient: Socket closed');
       }
       // Clear global reference
       // biome-ignore lint/suspicious/noExplicitAny: Global window extension for HMR cleanup

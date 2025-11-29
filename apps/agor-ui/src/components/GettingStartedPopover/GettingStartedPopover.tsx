@@ -221,9 +221,11 @@ export const GettingStartedPopover: React.FC<GettingStartedPopoverProps> = ({
       onOpenChange={setOpen}
       placement="bottomRight"
       overlayStyle={{ zIndex: 1050 }}
-      overlayInnerStyle={{
-        backgroundColor: 'rgba(0, 0, 0, 0.5)',
-        backdropFilter: 'blur(8px)',
+      styles={{
+        body: {
+          backgroundColor: 'rgba(0, 0, 0, 0.5)',
+          backdropFilter: 'blur(8px)',
+        },
       }}
     >
       {children}

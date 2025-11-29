@@ -636,6 +636,7 @@ export const App: React.FC<AppProps> = ({
           />
           <Content style={{ position: 'relative', overflow: 'hidden', display: 'flex' }}>
             <PanelGroup
+              id="main-layout"
               direction="horizontal"
               style={{ flex: 1 }}
               onLayout={(sizes) => {
@@ -677,29 +678,33 @@ export const App: React.FC<AppProps> = ({
                   />
                 )}
               </Panel>
-              {!commentsPanelCollapsed && (
-                <PanelResizeHandle
-                  style={{
-                    width: '4px',
-                    background: 'var(--ant-color-border-secondary)',
-                    cursor: 'col-resize',
-                    transition: 'background 0.2s',
-                  }}
-                  onMouseEnter={(e) => {
+              <PanelResizeHandle
+                style={{
+                  width: commentsPanelCollapsed ? '0px' : '4px',
+                  background: 'var(--ant-color-border-secondary)',
+                  cursor: commentsPanelCollapsed ? 'default' : 'col-resize',
+                  transition: 'background 0.2s',
+                  pointerEvents: commentsPanelCollapsed ? 'none' : 'auto',
+                }}
+                onMouseEnter={(e) => {
+                  if (!commentsPanelCollapsed) {
                     (e.currentTarget as unknown as HTMLDivElement).style.background =
                       'var(--ant-color-primary)';
-                  }}
-                  onMouseLeave={(e) => {
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (!commentsPanelCollapsed) {
                     (e.currentTarget as unknown as HTMLDivElement).style.background =
                       'var(--ant-color-border-secondary)';
-                  }}
-                />
-              )}
+                  }
+                }}
+              />
               <Panel
                 defaultSize={commentsPanelCollapsed ? 100 : 100 - commentsPanelSize}
                 minSize={40}
               >
                 <PanelGroup
+                  id="canvas-session"
                   direction="horizontal"
                   style={{ flex: 1 }}
                   onLayout={(sizes) => {

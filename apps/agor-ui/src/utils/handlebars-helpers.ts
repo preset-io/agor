@@ -17,5 +17,4 @@ export * from '@agor/core/templates/handlebars-helpers';
  */
 export function initializeHandlebarsHelpers(): void {
   registerHandlebarsHelpers();
-  console.log('✅ Handlebars helpers registered');
 }

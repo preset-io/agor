@@ -341,9 +341,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       const statusInfo = updates.status
         ? ` (status: ${updates.status}, ready_for_prompt: ${updates.ready_for_prompt})`
         : '';
-      console.log(
-        `🔄 [SessionRepo] Starting transaction for session ${fullId.substring(0, 8)}${statusInfo}`
-      );
+      console.debug(`🔄 [SessionRepo] Updating session ${fullId.substring(0, 8)}${statusInfo}`);
 
       // Use transaction to make read-merge-write atomic
       // This prevents race conditions where another update happens between read and write

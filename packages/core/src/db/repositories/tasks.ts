@@ -292,8 +292,8 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     try {
       const fullId = await this.resolveId(id);
 
-      console.log(
-        `🔄 [TaskRepo] Starting transaction for task ${fullId.substring(0, 8)}${updates.status ? ` (status: ${updates.status})` : ''}`
+      console.debug(
+        `🔄 [TaskRepo] Updating task ${fullId.substring(0, 8)}${updates.status ? ` (status: ${updates.status})` : ''}`
       );
 
       // Use transaction to make read-merge-write atomic
@@ -316,10 +316,6 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         const merged = deepMerge(current, updates);
         const insertData = this.taskToInsert(merged);
 
-        console.log(
-          `💾 [TaskRepo] Writing task ${fullId.substring(0, 8)} status: ${insertData.status}`
-        );
-
         // STEP 3: Write merged task (within same transaction)
         // biome-ignore lint/suspicious/noExplicitAny: Transaction context requires type assertion for database wrapper functions
         await update(tx as any, tasks)
@@ -334,8 +330,6 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         // Return merged task (no need to re-fetch, we have it in memory)
         return merged;
       });
-
-      console.log(`✅ [TaskRepo] Transaction committed for task ${fullId.substring(0, 8)}`);
       return result;
     } catch (error) {
       if (error instanceof RepositoryError) throw error;

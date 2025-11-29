@@ -71,25 +71,29 @@ export const Facepile: React.FC<FacepileProps> = ({
               </div>
             }
           >
-            <AgorAvatar
-              style={{
-                cursor: canClick ? 'pointer' : 'default',
-              }}
-              onClick={() => {
-                if (canClick) {
-                  onUserClick(user.user_id, boardId, cursor);
-                }
-              }}
-            >
-              {user.emoji || '👤'}
-            </AgorAvatar>
+            <span>
+              <AgorAvatar
+                style={{
+                  cursor: canClick ? 'pointer' : 'default',
+                }}
+                onClick={() => {
+                  if (canClick) {
+                    onUserClick(user.user_id, boardId, cursor);
+                  }
+                }}
+              >
+                {user.emoji || '👤'}
+              </AgorAvatar>
+            </span>
           </Tooltip>
         );
       })}
 
       {overflowCount > 0 && (
         <Tooltip title={`+${overflowCount} more active users`}>
-          <AgorAvatar>+{overflowCount}</AgorAvatar>
+          <span>
+            <AgorAvatar>+{overflowCount}</AgorAvatar>
+          </span>
         </Tooltip>
       )}
     </div>

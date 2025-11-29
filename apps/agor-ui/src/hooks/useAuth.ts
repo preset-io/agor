@@ -70,7 +70,6 @@ export function useAuth(): UseAuthReturn {
       }
 
       // Create temporary client
-      console.log('🔌 useAuth: Creating temporary client for authentication');
       client = createClient(getDaemonUrl());
 
       // Connect the client first (since autoConnect is false)
@@ -208,7 +207,6 @@ export function useAuth(): UseAuthReturn {
     } finally {
       // CRITICAL: Always close the client connection to prevent leaks
       if (client?.io) {
-        console.log('🔌 useAuth: Closing temporary client connection');
         client.io.removeAllListeners();
         client.io.close();
       }
@@ -275,7 +273,6 @@ export function useAuth(): UseAuthReturn {
       let client: ReturnType<typeof createClient> | null = null;
 
       try {
-        console.log('🔌 useAuth.autoRefresh: Creating temporary client for token refresh');
         client = createClient(getDaemonUrl());
         client.io.connect();
 
@@ -322,7 +319,6 @@ export function useAuth(): UseAuthReturn {
       } finally {
         // CRITICAL: Always close the client connection to prevent leaks
         if (client?.io) {
-          console.log('🔌 useAuth.autoRefresh: Closing temporary client connection');
           client.io.removeAllListeners();
           client.io.close();
         }
@@ -342,7 +338,6 @@ export function useAuth(): UseAuthReturn {
 
     try {
       // Create temporary client for login
-      console.log('🔌 useAuth.login: Creating temporary client for login');
       client = createClient(getDaemonUrl());
 
       // Connect the client first (since autoConnect is false)
@@ -384,16 +379,7 @@ export function useAuth(): UseAuthReturn {
       });
 
       // Store both access and refresh tokens
-      console.log('💾 Saving tokens to localStorage...');
       storeTokens(result.accessToken, result.refreshToken);
-
-      // Verify tokens were saved
-      const savedAccessToken = getStoredAccessToken();
-      const savedRefreshToken = getStoredRefreshToken();
-      console.log('✓ Tokens stored in localStorage:', {
-        accessTokenSaved: !!savedAccessToken,
-        refreshTokenSaved: !!savedRefreshToken,
-      });
 
       setState({
         user: result.user,
@@ -417,7 +403,6 @@ export function useAuth(): UseAuthReturn {
     } finally {
       // CRITICAL: Always close the client connection to prevent leaks
       if (client?.io) {
-        console.log('🔌 useAuth.login: Closing temporary client connection');
         client.io.removeAllListeners();
         client.io.close();
       }

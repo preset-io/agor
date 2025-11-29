@@ -45,8 +45,6 @@ export const BrandLogo: React.FC<BrandLogoProps> = ({ level = 3, style, classNam
     ...style,
   };
 
-  console.log('BrandLogo rendering with level:', level, 'fontSize:', LEVEL_SIZES[level]);
-
   return (
     <h1 className={className} style={gradientStyle}>
       agor

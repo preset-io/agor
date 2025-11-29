@@ -107,18 +107,14 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const isDark =
       themeMode === 'dark' || (themeMode === 'custom' && customTheme?.algorithm === darkAlgorithm);
 
-    console.log('Theme update:', { themeMode, isDark, customTheme: !!customTheme });
-
     // Set background color on document body
     document.body.style.backgroundColor = isDark ? '#141414' : '#f0f2f5';
 
     // Set 'dark' class for Tailwind dark mode (used by Streamdown)
     if (isDark) {
       document.documentElement.classList.add('dark');
-      console.log('Added dark class to html element');
     } else {
       document.documentElement.classList.remove('dark');
-      console.log('Removed dark class from html element');
     }
   }, [themeMode, customTheme, getCurrentThemeConfig]);
 
