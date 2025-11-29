@@ -3391,12 +3391,15 @@ async function main() {
   app.use('/opencode/models', {
     async find() {
       try {
-        const opencodeConfig = config.opencode;
+        // Reload config to get latest OpenCode settings (no caching)
+        const freshConfig = await loadConfig();
+        const opencodeConfig = freshConfig.opencode;
         if (!opencodeConfig?.enabled) {
           throw new Error('OpenCode is not enabled in configuration');
         }
 
         const serverUrl = opencodeConfig.serverUrl || 'http://localhost:4096';
+        console.log('[OpenCode] Fetching models from:', `${serverUrl}/config/providers`);
         const response = await fetch(`${serverUrl}/config/providers`);
 
         if (!response.ok) {
@@ -3408,17 +3411,19 @@ async function main() {
 
         // Transform to frontend-friendly format
         // OpenCode returns: { providers: [{id, name, models: {modelId: {id, name, ...}}}] }
-        // We need to convert models object to array
+        // We need to convert models object to array and sort alphabetically
         // biome-ignore lint/suspicious/noExplicitAny: Dynamic provider structure from OpenCode API
         const transformedProviders = (data.providers || []).map((provider: any) => ({
           id: provider.id,
           name: provider.name,
           models: provider.models
             ? // biome-ignore lint/suspicious/noExplicitAny: Dynamic model metadata from OpenCode API
-              Object.entries(provider.models).map(([modelId, modelMeta]: [string, any]) => ({
-                id: modelId,
-                name: modelMeta.name || modelId,
-              }))
+              Object.entries(provider.models)
+                .map(([modelId, modelMeta]: [string, any]) => ({
+                  id: modelId,
+                  name: modelMeta.name || modelId,
+                }))
+                .sort((a, b) => a.name.localeCompare(b.name))
             : [],
         }));
 
@@ -3448,7 +3453,9 @@ async function main() {
   app.use('/opencode/health', {
     async find() {
       try {
-        const opencodeConfig = config.opencode;
+        // Reload config to get latest OpenCode settings (no caching)
+        const freshConfig = await loadConfig();
+        const opencodeConfig = freshConfig.opencode;
         if (!opencodeConfig?.enabled) {
           throw new Error('OpenCode is not enabled in configuration');
         }

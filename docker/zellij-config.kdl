@@ -56,8 +56,9 @@ simplified_ui false
 // Default layout - single pane
 default_layout "compact"
 
-// Session serialization for persistence
-session_serialization true
+// Session serialization disabled - Agor manages tabs programmatically
+// Enabling this causes stale tabs to reappear after deletion
+session_serialization false
 
 // Auto-layout on creation
 auto_layout true

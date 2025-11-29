@@ -6,6 +6,15 @@ RUN apt-get update && apt-get install -y \
     git \
     curl \
     vim \
+    procps \
+    htop \
+    lsof \
+    net-tools \
+    iputils-ping \
+    wget \
+    jq \
+    less \
+    tree \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Zellij (terminal multiplexer)
@@ -23,7 +32,7 @@ RUN curl -fsSL "$(curl -s https://api.github.com/repos/cli/cli/releases/latest |
 
 # Install pnpm (for developers who want to build from source)
 # and agor-live from npm for quick start
-RUN npm install -g pnpm@latest agor-live@latest @anthropic-ai/claude-code@latest @google/gemini-cli@latest @openai/codex@latest
+RUN npm install -g pnpm@latest agor-live@latest @anthropic-ai/claude-code@latest @google/gemini-cli@latest @openai/codex@latest @opencode-ai/cli@latest
 
 WORKDIR /workspaces
 

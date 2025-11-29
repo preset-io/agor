@@ -33,12 +33,22 @@ export async function executeOpenCodeTask(params: {
   console.log(`[opencode] Executing task ${taskId.substring(0, 8)}...`);
 
   try {
+    // Get session to extract model config
+    const session = await client.service('sessions').get(sessionId);
+    console.log('[opencode] Session loaded:', {
+      sessionId: sessionId.substring(0, 8),
+      sdk_session_id: session.sdk_session_id?.substring(0, 8),
+      model: session.model_config?.model,
+      provider: session.model_config?.provider,
+    });
+
     // Create execution context (similar to other handlers)
     const repos = createFeathersBackedRepositories(client);
     const callbacks = createStreamingCallbacks(client, 'opencode', sessionId);
 
     // Get OpenCode server URL from environment
-    const serverUrl = process.env.OPENCODE_SERVER_URL || 'http://localhost:3000';
+    // Default to localhost if OpenCode runs in same container, or host.docker.internal if on host
+    const serverUrl = process.env.OPENCODE_SERVER_URL || 'http://localhost:4096';
 
     // Create Tool instance with config
     const tool = new OpenCodeTool(
@@ -49,18 +59,43 @@ export async function executeOpenCodeTask(params: {
       repos.messagesService
     );
 
-    // Create OpenCode session (required for OpenCode)
-    const sessionHandle = await tool.createSession?.({
-      title: `Task ${taskId.substring(0, 8)}`,
-      projectName: 'agor',
-    });
+    let opencodeSessionId: string;
 
-    if (!sessionHandle) {
-      throw new Error('Failed to create OpenCode session');
+    // Check if we already have an OpenCode session (stored in sdk_session_id)
+    if (session.sdk_session_id) {
+      console.log(`[opencode] Resuming existing OpenCode session: ${session.sdk_session_id.substring(0, 8)}`);
+      opencodeSessionId = session.sdk_session_id;
+    } else {
+      // Create new OpenCode session
+      console.log('[opencode] Creating new OpenCode session...');
+      const sessionHandle = await tool.createSession?.({
+        title: session.title || `Task ${taskId.substring(0, 8)}`,
+        projectName: 'agor',
+        model: session.model_config?.model,
+        provider: session.model_config?.provider,
+      });
+
+      if (!sessionHandle) {
+        throw new Error('Failed to create OpenCode session');
+      }
+
+      opencodeSessionId = sessionHandle.sessionId;
+      console.log(`[opencode] Created OpenCode session: ${opencodeSessionId.substring(0, 8)}`);
+
+      // Store OpenCode session ID in Agor session for future resumes
+      await client.service('sessions').patch(sessionId, {
+        sdk_session_id: opencodeSessionId,
+      });
+      console.log('[opencode] Stored OpenCode session ID in Agor session');
     }
 
-    // Set session context (OpenCode-specific requirement)
-    tool.setSessionContext(sessionId, sessionHandle.sessionId);
+    // Set session context with model and provider from session config
+    tool.setSessionContext(
+      sessionId,
+      opencodeSessionId,
+      session.model_config?.model,
+      session.model_config?.provider
+    );
 
     // Execute task using OpenCode's executeTask interface
     const result = await tool.executeTask?.(sessionId, prompt, taskId, callbacks);

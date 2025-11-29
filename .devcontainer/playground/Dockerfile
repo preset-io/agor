@@ -6,6 +6,15 @@ RUN apt-get update && apt-get install -y \
     git \
     curl \
     vim \
+    procps \
+    htop \
+    lsof \
+    net-tools \
+    iputils-ping \
+    wget \
+    jq \
+    less \
+    tree \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Zellij (terminal multiplexer)
@@ -26,7 +35,8 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
 # Install foundation packages one at a time (more robust against npm hiccups)
 RUN npm install -g @anthropic-ai/claude-code@latest && \
     npm install -g @google/gemini-cli@latest && \
-    npm install -g @openai/codex@latest
+    npm install -g @openai/codex@latest && \
+    npm install -g @opencode-ai/cli@latest
 
 # Copy package.json as cache-buster for agor-live (rebuilds only when version changes)
 COPY packages/agor-live/package.json /tmp/agor-live-package.json

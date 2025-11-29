@@ -86,6 +86,11 @@ services:
       - '${DAEMON_PORT:-3030}:${DAEMON_PORT:-3030}'
       # Expose UI port (configurable via UI_PORT env var)
       - '${UI_PORT:-5173}:${UI_PORT:-5173}'
+    # Add host.docker.internal mapping for Linux compatibility
+    # On Mac/Windows, Docker Desktop provides this automatically
+    # On Linux, we need to explicitly map it to the Docker host gateway
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
     environment:
       # Daemon configuration
       - NODE_ENV=development

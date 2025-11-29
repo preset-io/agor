@@ -181,8 +181,15 @@ function getZellijTabs(sessionName: string): string[] {
     for (const match of tabMatches) {
       if (match[1]) tabs.push(match[1]);
     }
+
+    // Debug logging to help diagnose tab detection issues
+    if (tabs.length > 0) {
+      console.log(`[Zellij] Found ${tabs.length} tabs in session ${sessionName}:`, tabs);
+    }
+
     return tabs;
-  } catch {
+  } catch (error) {
+    console.warn(`[Zellij] Failed to get tabs for session ${sessionName}:`, error);
     return [];
   }
 }
@@ -261,17 +268,24 @@ export class TerminalsService {
     if (sessionExists) {
       // Session exists - check if this worktree has a tab
       const existingTabs = getZellijTabs(zellijSession);
+      console.log(
+        `[Zellij] Session ${zellijSession} exists with ${existingTabs.length} tabs. Looking for tab: "${tabName}"`
+      );
       const tabExists = existingTabs.includes(tabName);
 
       if (tabExists) {
         // Tab exists - we'll switch to it after attach
         zellijReused = true;
         needsTabSwitch = true;
-        console.log(`\x1b[36m🔗 Reusing Zellij tab:\x1b[0m ${zellijSession} → ${tabName}`);
+        console.log(
+          `\x1b[36m🔗 Reusing Zellij tab:\x1b[0m ${zellijSession} → ${tabName} (tab found in existing tabs)`
+        );
       } else {
         // Tab doesn't exist - we'll create it after attach
         needsTabCreation = true;
-        console.log(`\x1b[36m📑 Creating new tab in Zellij:\x1b[0m ${zellijSession} → ${tabName}`);
+        console.log(
+          `\x1b[36m📑 Creating new tab in Zellij:\x1b[0m ${zellijSession} → ${tabName} (tab not found in [${existingTabs.join(', ')}])`
+        );
       }
     } else {
       // Session doesn't exist - will be created with first tab

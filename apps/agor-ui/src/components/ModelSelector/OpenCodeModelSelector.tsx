@@ -40,6 +40,7 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
   const [providers, setProviders] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [hasSetDefault, setHasSetDefault] = useState(false);
 
   // Fetch providers/models from daemon endpoint
   // biome-ignore lint/correctness/useExhaustiveDependencies: Only fetch once on mount
@@ -58,19 +59,6 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
           .find()) as unknown as ProvidersResponse;
 
         setProviders(response.providers || []);
-
-        // Set default if no value provided
-        if (!value && response.providers.length > 0) {
-          const defaultProvider = response.providers[0];
-          const defaultModel = defaultProvider.models?.[0];
-
-          if (defaultProvider && defaultModel && onChange) {
-            onChange({
-              provider: defaultProvider.id,
-              model: defaultModel.id,
-            });
-          }
-        }
       } catch (err) {
         console.error('Failed to fetch OpenCode models:', err);
         setError(
@@ -83,6 +71,23 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
 
     fetchProviders();
   }, []); // Only fetch once on mount
+
+  // Set default value only if no value is provided and we haven't set a default yet
+  // This runs after providers are loaded and when value changes
+  useEffect(() => {
+    if (!value && providers.length > 0 && !hasSetDefault && onChange) {
+      const defaultProvider = providers[0];
+      const defaultModel = defaultProvider.models?.[0];
+
+      if (defaultProvider && defaultModel) {
+        onChange({
+          provider: defaultProvider.id,
+          model: defaultModel.id,
+        });
+        setHasSetDefault(true);
+      }
+    }
+  }, [value, providers, hasSetDefault, onChange]);
 
   const selectedProvider = providers.find((p) => p.id === value?.provider);
   const availableModels = selectedProvider?.models || [];

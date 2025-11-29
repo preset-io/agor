@@ -19,6 +19,15 @@ RUN apt-get update && apt-get install -y \
   curl \
   sudo \
   vim \
+  procps \
+  htop \
+  lsof \
+  net-tools \
+  iputils-ping \
+  wget \
+  jq \
+  less \
+  tree \
   && rm -rf /var/lib/apt/lists/*
 
 # Install Zellij (terminal multiplexer)
@@ -42,7 +51,8 @@ RUN npm install -g \
   pnpm@9.15.1 \
   @anthropic-ai/claude-code@2.0.53 \
   @google/gemini-cli@0.15.1 \
-  @openai/codex@0.58.0
+  @openai/codex@0.58.0 \
+  opencode-ai@latest
 
 # Create non-root 'agor' user (main application user)
 RUN useradd -m -s /bin/bash agor && \
