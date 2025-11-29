@@ -3417,8 +3417,8 @@ async function main() {
           id: provider.id,
           name: provider.name,
           models: provider.models
-            ? // biome-ignore lint/suspicious/noExplicitAny: Dynamic model metadata from OpenCode API
-              Object.entries(provider.models)
+            ? Object.entries(provider.models)
+                // biome-ignore lint/suspicious/noExplicitAny: Dynamic model metadata from OpenCode API
                 .map(([modelId, modelMeta]: [string, any]) => ({
                   id: modelId,
                   name: modelMeta.name || modelId,

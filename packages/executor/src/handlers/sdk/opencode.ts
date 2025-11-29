@@ -63,7 +63,9 @@ export async function executeOpenCodeTask(params: {
 
     // Check if we already have an OpenCode session (stored in sdk_session_id)
     if (session.sdk_session_id) {
-      console.log(`[opencode] Resuming existing OpenCode session: ${session.sdk_session_id.substring(0, 8)}`);
+      console.log(
+        `[opencode] Resuming existing OpenCode session: ${session.sdk_session_id.substring(0, 8)}`
+      );
       opencodeSessionId = session.sdk_session_id;
     } else {
       // Create new OpenCode session
