@@ -1020,26 +1020,40 @@ async function main() {
   // NOTE: Pass app instance for environment management (needs to access repos service)
   app.use('/worktrees', createWorktreesService(db, app));
 
+  // Feature flag: Worktree RBAC (default: false)
+  const worktreeRbacEnabled = config.execution?.worktree_rbac === true;
+  console.log(`[RBAC] Worktree RBAC ${worktreeRbacEnabled ? 'Enabled' : 'Disabled'}`);
+
   // Register worktree-owners nested route services for RBAC owner management
-  // Check if services exist first (for watch mode hot reload)
-  if (!app.services['worktrees/:id/owners'] && !app.services['worktrees/:id/owners/:userId']) {
+  // Only register if RBAC is enabled
+  if (
+    worktreeRbacEnabled &&
+    !app.services['worktrees/:id/owners'] &&
+    !app.services['worktrees/:id/owners/:userId']
+  ) {
     const worktreeRepo = new WorktreeRepository(db);
     setupWorktreeOwnersService(app, worktreeRepo);
   }
 
   // Initialize Unix integration service for worktree isolation
   // This service manages Unix groups and filesystem permissions for RBAC
-  const { UnixIntegrationService } = await import('./services/unix-integration.js');
-  const unixIntegrationService = new UnixIntegrationService(db, {
-    enabled:
-      config.execution?.unix_user_mode !== 'simple' &&
-      config.execution?.unix_user_mode !== undefined,
-    cliPath: 'agor',
-    useSudo: true,
-  });
-  console.log(
-    `[Unix Integration] ${unixIntegrationService.isEnabled() ? 'Enabled' : 'Disabled'} (mode: ${config.execution?.unix_user_mode || 'simple'})`
-  );
+  // Only initialize if RBAC is enabled
+  let unixIntegrationService: InstanceType<
+    typeof import('./services/unix-integration.js').UnixIntegrationService
+  > | null = null;
+  if (worktreeRbacEnabled) {
+    const { UnixIntegrationService } = await import('./services/unix-integration.js');
+    unixIntegrationService = new UnixIntegrationService(db, {
+      enabled:
+        config.execution?.unix_user_mode !== 'simple' &&
+        config.execution?.unix_user_mode !== undefined,
+      cliPath: 'agor',
+      useSudo: true,
+    });
+    console.log(
+      `[Unix Integration] ${unixIntegrationService.isEnabled() ? 'Enabled' : 'Disabled'} (mode: ${config.execution?.unix_user_mode || 'simple'})`
+    );
+  }
 
   // Register repos service (accesses worktrees via app.service('worktrees'))
   app.use('/repos', createReposService(db, app));
@@ -1351,23 +1365,39 @@ async function main() {
     before: {
       all: [requireAuth],
       get: [
-        loadSessionWorktree(sessionsService, worktreeRepository),
-        ensureCanView(), // Require 'view' permission
+        ...(worktreeRbacEnabled
+          ? [
+              loadSessionWorktree(sessionsService, worktreeRepository),
+              ensureCanView(), // Require 'view' permission
+            ]
+          : []),
       ],
       create: [
         requireMinimumRole('member', 'create messages'),
-        loadSessionWorktree(sessionsService, worktreeRepository),
-        ensureCanPrompt(), // Require 'prompt' permission to create messages
+        ...(worktreeRbacEnabled
+          ? [
+              loadSessionWorktree(sessionsService, worktreeRepository),
+              ensureCanPrompt(), // Require 'prompt' permission to create messages
+            ]
+          : []),
       ],
       patch: [
         requireMinimumRole('member', 'update messages'),
-        loadSessionWorktree(sessionsService, worktreeRepository),
-        ensureCanPrompt(), // Require 'prompt' permission to update messages
+        ...(worktreeRbacEnabled
+          ? [
+              loadSessionWorktree(sessionsService, worktreeRepository),
+              ensureCanPrompt(), // Require 'prompt' permission to update messages
+            ]
+          : []),
       ],
       remove: [
         requireMinimumRole('member', 'delete messages'),
-        loadSessionWorktree(sessionsService, worktreeRepository),
-        ensureCanPrompt(), // Require 'prompt' permission to delete messages
+        ...(worktreeRbacEnabled
+          ? [
+              loadSessionWorktree(sessionsService, worktreeRepository),
+              ensureCanPrompt(), // Require 'prompt' permission to delete messages
+            ]
+          : []),
       ],
     },
     after: {
@@ -1463,65 +1493,89 @@ async function main() {
         ...(allowAnonymous ? [] : [requireMinimumRole('member', 'access worktrees')]),
       ],
       get: [
-        loadWorktree(worktreeRepository),
-        ensureCanView(), // Require 'view' permission to read worktree
+        ...(worktreeRbacEnabled
+          ? [
+              loadWorktree(worktreeRepository),
+              ensureCanView(), // Require 'view' permission to read worktree
+            ]
+          : []),
       ],
       create: [requireMinimumRole('member', 'create worktrees')],
       patch: [
-        loadWorktree(worktreeRepository),
-        ensureWorktreePermission('all', 'update worktrees'), // Require 'all' permission to update
+        ...(worktreeRbacEnabled
+          ? [
+              loadWorktree(worktreeRepository),
+              ensureWorktreePermission('all', 'update worktrees'), // Require 'all' permission to update
+            ]
+          : []),
       ],
       remove: [
-        loadWorktree(worktreeRepository),
-        ensureWorktreePermission('all', 'delete worktrees'), // Require 'all' permission to delete
+        ...(worktreeRbacEnabled
+          ? [
+              loadWorktree(worktreeRepository),
+              ensureWorktreePermission('all', 'delete worktrees'), // Require 'all' permission to delete
+            ]
+          : []),
       ],
     },
     after: {
-      find: [filterWorktreesByPermission(worktreeRepository)], // Filter results by permission
+      find: [
+        ...(worktreeRbacEnabled ? [filterWorktreesByPermission(worktreeRepository)] : []), // Filter results by permission
+      ],
       create: [
-        async (context) => {
-          // RBAC + Unix Integration: Create Unix group and add initial owner
-          const worktree = context.result as import('@agor/core/types').Worktree;
-          const creatorId = worktree.created_by;
+        ...(worktreeRbacEnabled
+          ? [
+              async (context: HookContext) => {
+                // RBAC + Unix Integration: Create Unix group and add initial owner
+                const worktree = context.result as import('@agor/core/types').Worktree;
+                const creatorId = worktree.created_by;
 
-          // Add creator as initial owner
-          await worktreeRepository.addOwner(
-            worktree.worktree_id,
-            creatorId as import('@agor/core/types').UUID
-          );
-          console.log(
-            `[RBAC] Added creator ${creatorId.substring(0, 8)} as owner of worktree ${worktree.worktree_id.substring(0, 8)}`
-          );
+                // Add creator as initial owner
+                await worktreeRepository.addOwner(
+                  worktree.worktree_id,
+                  creatorId as import('@agor/core/types').UUID
+                );
+                console.log(
+                  `[RBAC] Added creator ${creatorId.substring(0, 8)} as owner of worktree ${worktree.worktree_id.substring(0, 8)}`
+                );
 
-          // Unix Integration: Create group and add creator
-          try {
-            await unixIntegrationService.createWorktreeGroup(worktree.worktree_id);
-            await unixIntegrationService.addUserToWorktreeGroup(
-              worktree.worktree_id,
-              creatorId as import('@agor/core/types').UUID
-            );
-          } catch (error) {
-            console.error('[Unix Integration] Failed to setup worktree group:', error);
-            // Continue - app-layer RBAC is still functional
-          }
+                // Unix Integration: Create group and add creator
+                if (unixIntegrationService) {
+                  try {
+                    await unixIntegrationService.createWorktreeGroup(worktree.worktree_id);
+                    await unixIntegrationService.addUserToWorktreeGroup(
+                      worktree.worktree_id,
+                      creatorId as import('@agor/core/types').UUID
+                    );
+                  } catch (error) {
+                    console.error('[Unix Integration] Failed to setup worktree group:', error);
+                    // Continue - app-layer RBAC is still functional
+                  }
+                }
 
-          return context;
-        },
+                return context;
+              },
+            ]
+          : []),
       ],
       remove: [
-        async (context) => {
-          // Unix Integration: Delete Unix group when worktree is deleted
-          const worktreeId = context.id as import('@agor/core/types').WorktreeID;
+        ...(worktreeRbacEnabled && unixIntegrationService
+          ? [
+              async (context: HookContext) => {
+                // Unix Integration: Delete Unix group when worktree is deleted
+                const worktreeId = context.id as import('@agor/core/types').WorktreeID;
 
-          try {
-            await unixIntegrationService.deleteWorktreeGroup(worktreeId);
-          } catch (error) {
-            console.error('[Unix Integration] Failed to delete worktree group:', error);
-            // Continue - worktree is already deleted from database
-          }
+                try {
+                  await unixIntegrationService.deleteWorktreeGroup(worktreeId);
+                } catch (error) {
+                  console.error('[Unix Integration] Failed to delete worktree group:', error);
+                  // Continue - worktree is already deleted from database
+                }
 
-          return context;
-        },
+                return context;
+              },
+            ]
+          : []),
       ],
     },
   });
@@ -1691,42 +1745,50 @@ async function main() {
         ...getReadAuthHooks(),
       ],
       get: [
-        // Load session's worktree and check permissions
-        loadSessionWorktree(sessionsService, worktreeRepository),
-        ensureCanView(), // Require 'view' permission on worktree
+        ...(worktreeRbacEnabled
+          ? [
+              // Load session's worktree and check permissions
+              loadSessionWorktree(sessionsService, worktreeRepository),
+              ensureCanView(), // Require 'view' permission on worktree
+            ]
+          : []),
       ],
       create: [
         requireMinimumRole('member', 'create sessions'),
-        // Check worktree permission BEFORE injecting created_by (need worktree_id)
-        async (context) => {
-          // RBAC: Ensure user can create sessions in this worktree ('all' permission)
-          // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
-          const data = context.data as any;
-          if (context.params.provider && data?.worktree_id) {
-            try {
-              const worktree = await worktreeRepository.findById(data.worktree_id);
-              if (!worktree) {
-                throw new Forbidden(`Worktree not found: ${data.worktree_id}`);
-              }
-              // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
-              const userId = (context.params as any).user?.user_id;
-              const isOwner = userId
-                ? await worktreeRepository.isOwner(worktree.worktree_id, userId)
-                : false;
+        ...(worktreeRbacEnabled
+          ? [
+              // Check worktree permission BEFORE injecting created_by (need worktree_id)
+              async (context: HookContext) => {
+                // RBAC: Ensure user can create sessions in this worktree ('all' permission)
+                // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
+                const data = context.data as any;
+                if (context.params.provider && data?.worktree_id) {
+                  try {
+                    const worktree = await worktreeRepository.findById(data.worktree_id);
+                    if (!worktree) {
+                      throw new Forbidden(`Worktree not found: ${data.worktree_id}`);
+                    }
+                    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
+                    const userId = (context.params as any).user?.user_id;
+                    const isOwner = userId
+                      ? await worktreeRepository.isOwner(worktree.worktree_id, userId)
+                      : false;
 
-              // Cache for later hooks
-              // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
-              (context.params as any).worktree = worktree;
-              // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
-              (context.params as any).isWorktreeOwner = isOwner;
-            } catch (error) {
-              console.error('Failed to load worktree for RBAC check:', error);
-              throw error;
-            }
-          }
-          return context;
-        },
-        ensureCanCreateSession(), // Require 'all' permission to create sessions
+                    // Cache for later hooks
+                    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
+                    (context.params as any).worktree = worktree;
+                    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
+                    (context.params as any).isWorktreeOwner = isOwner;
+                  } catch (error) {
+                    console.error('Failed to load worktree for RBAC check:', error);
+                    throw error;
+                  }
+                }
+                return context;
+              },
+              ensureCanCreateSession(), // Require 'all' permission to create sessions
+            ]
+          : []),
         async (context) => {
           // Inject user_id if authenticated, otherwise use 'anonymous'
           const user = (context.params as { user?: { user_id: string; email: string } }).user;
@@ -1774,13 +1836,21 @@ async function main() {
         },
       ],
       patch: [
-        ensureSessionImmutability(), // Prevent changing session.created_by
-        loadSessionWorktree(sessionsService, worktreeRepository),
-        ensureWorktreePermission('all', 'update sessions'), // Require 'all' permission
+        ...(worktreeRbacEnabled
+          ? [
+              ensureSessionImmutability(), // Prevent changing session.created_by
+              loadSessionWorktree(sessionsService, worktreeRepository),
+              ensureWorktreePermission('all', 'update sessions'), // Require 'all' permission
+            ]
+          : []),
       ],
       remove: [
-        loadSessionWorktree(sessionsService, worktreeRepository),
-        ensureWorktreePermission('all', 'delete sessions'), // Require 'all' permission
+        ...(worktreeRbacEnabled
+          ? [
+              loadSessionWorktree(sessionsService, worktreeRepository),
+              ensureWorktreePermission('all', 'delete sessions'), // Require 'all' permission
+            ]
+          : []),
       ],
     },
     after: {
@@ -1870,13 +1940,21 @@ async function main() {
         requireAuth,
       ],
       get: [
-        loadSessionWorktree(sessionsService, worktreeRepository),
-        ensureCanView(), // Require 'view' permission
+        ...(worktreeRbacEnabled
+          ? [
+              loadSessionWorktree(sessionsService, worktreeRepository),
+              ensureCanView(), // Require 'view' permission
+            ]
+          : []),
       ],
       create: [
         requireMinimumRole('member', 'create tasks'),
-        loadSessionWorktree(sessionsService, worktreeRepository),
-        ensureCanPrompt(), // Require 'prompt' permission to create tasks
+        ...(worktreeRbacEnabled
+          ? [
+              loadSessionWorktree(sessionsService, worktreeRepository),
+              ensureCanPrompt(), // Require 'prompt' permission to create tasks
+            ]
+          : []),
         async (context) => {
           // Inject user_id if authenticated, otherwise use 'anonymous'
           const user = (context.params as { user?: { user_id: string; email: string } }).user;
@@ -1901,8 +1979,12 @@ async function main() {
         },
       ],
       patch: [
-        loadSessionWorktree(sessionsService, worktreeRepository),
-        ensureCanPrompt(), // Require 'prompt' permission to update tasks
+        ...(worktreeRbacEnabled
+          ? [
+              loadSessionWorktree(sessionsService, worktreeRepository),
+              ensureCanPrompt(), // Require 'prompt' permission to update tasks
+            ]
+          : []),
       ],
       remove: [requireMinimumRole('member', 'delete tasks')],
     },

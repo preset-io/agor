@@ -254,6 +254,46 @@ pnpm -w agor repo list
 
 ---
 
+## Feature Flags
+
+### Worktree RBAC (`execution.worktree_rbac`)
+
+**Default: `false`** (disabled for backward compatibility)
+
+Controls the worktree Role-Based Access Control (RBAC) and Unix group isolation system.
+
+**When enabled (`execution.worktree_rbac: true`)**:
+- ✅ Enforces permission checks on all worktree operations
+- ✅ Worktree owners service (`/worktrees/:id/owners`) is registered
+- ✅ Unix integration service creates groups for worktree isolation
+- ✅ Permission levels: `view` / `prompt` / `all` (see `context/explorations/rbac.md`)
+- ✅ UI displays Owners & Permissions section in WorktreeModal
+
+**When disabled (default)**:
+- ✅ Open access - all authenticated users can access all worktrees
+- ✅ No permission enforcement on worktrees, sessions, tasks, or messages
+- ✅ Worktree owners service not registered (404 on API calls)
+- ✅ No Unix group creation
+- ✅ UI automatically hides Owners & Permissions section
+
+**Configuration**:
+```yaml
+# ~/.agor/config.yaml
+execution:
+  worktree_rbac: false  # Default: disabled
+  unix_user_mode: simple  # Only matters if worktree_rbac: true
+```
+
+**Implementation notes**:
+- Database schema (worktree_owners table, others_can column) exists regardless of flag state
+- Migrations run on all instances (schema changes are permanent)
+- Toggling flag does NOT clean up existing Unix groups or ownership data
+- Safe to enable/disable at runtime - degrades gracefully in both directions
+
+**Related docs**: `context/explorations/rbac.md`, `context/explorations/unix-user-modes.md`
+
+---
+
 ## Extended Thinking Mode
 
 **New in January 2025**: Agor now supports Claude's extended thinking mode with automatic keyword detection!

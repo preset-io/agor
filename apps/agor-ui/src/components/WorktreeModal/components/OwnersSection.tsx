@@ -26,6 +26,7 @@ export const OwnersSection: React.FC<OwnersSectionProps> = ({ worktree, client, 
   const [owners, setOwners] = useState<User[]>([]);
   const [allUsers, setAllUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(false);
+  const [rbacEnabled, setRbacEnabled] = useState(true); // Assume enabled until proven otherwise
   const [selectedOwnerIds, setSelectedOwnerIds] = useState<string[]>([]);
   const [selectKey, setSelectKey] = useState(0); // Force re-render key
   const [othersCanValue, setOthersCanValue] = useState<WorktreePermissionLevel>(
@@ -54,7 +55,7 @@ export const OwnersSection: React.FC<OwnersSectionProps> = ({ worktree, client, 
       try {
         setLoading(true);
 
-        // Load owners
+        // Load owners - if service doesn't exist (404), RBAC is disabled
         const ownersResponse = await client.service('worktrees/:id/owners').find({
           route: { id: worktree.worktree_id },
         });
@@ -66,9 +67,17 @@ export const OwnersSection: React.FC<OwnersSectionProps> = ({ worktree, client, 
         const usersResponse = await client.service('users').find({});
         const users = Array.isArray(usersResponse) ? usersResponse : usersResponse.data || [];
         setAllUsers(users);
-      } catch (error) {
-        console.error('Failed to load data:', error);
-        showError('Failed to load owners');
+        setRbacEnabled(true); // If we got here, RBAC is enabled
+        // biome-ignore lint/suspicious/noExplicitAny: Error type from API client is not strongly typed
+      } catch (error: any) {
+        // If service doesn't exist (404 or method not found), RBAC is disabled
+        if (error?.code === 404 || error?.message?.includes('not found')) {
+          console.log('[OwnersSection] RBAC disabled - worktree-owners service not found');
+          setRbacEnabled(false);
+        } else {
+          console.error('Failed to load data:', error);
+          showError('Failed to load owners');
+        }
       } finally {
         setLoading(false);
       }
@@ -180,6 +189,11 @@ export const OwnersSection: React.FC<OwnersSectionProps> = ({ worktree, client, 
     read: 'Read-only filesystem access',
     write: 'Read and write filesystem access',
   };
+
+  // If RBAC is disabled, don't render anything
+  if (!rbacEnabled) {
+    return null;
+  }
 
   return (
     <div>
