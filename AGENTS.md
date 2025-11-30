@@ -266,7 +266,7 @@ Controls the worktree Role-Based Access Control (RBAC) and Unix group isolation 
 - ✅ Enforces permission checks on all worktree operations
 - ✅ Worktree owners service (`/worktrees/:id/owners`) is registered
 - ✅ Unix integration service creates groups for worktree isolation
-- ✅ Permission levels: `view` / `prompt` / `all` (see `context/explorations/rbac.md`)
+- ✅ Permission levels: `view` / `prompt` / `all` (see `context/guides/rbac-and-unix-isolation.md`)
 - ✅ UI displays Owners & Permissions section in WorktreeModal
 
 **When disabled (default)**:
@@ -290,7 +290,7 @@ execution:
 - Toggling flag does NOT clean up existing Unix groups or ownership data
 - Safe to enable/disable at runtime - degrades gracefully in both directions
 
-**Related docs**: `context/explorations/rbac.md`, `context/explorations/unix-user-modes.md`
+**Related docs**: `context/guides/rbac-and-unix-isolation.md`, `context/explorations/unix-user-modes.md`
 
 ---
 
