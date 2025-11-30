@@ -28,7 +28,17 @@ RUN apt-get update && apt-get install -y \
   jq \
   less \
   tree \
+  openssh-server \
   && rm -rf /var/lib/apt/lists/*
+
+# Configure SSH server for multi-user testing (used in postgres profile)
+RUN mkdir -p /run/sshd && \
+  # Enable password authentication
+  sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config && \
+  # Disable root login
+  sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin no/' /etc/ssh/sshd_config && \
+  # Allow all users to login
+  echo 'AllowUsers agor alice bob' >> /etc/ssh/sshd_config
 
 # Install Zellij (terminal multiplexer)
 # Pinned to v0.43.1 for reproducibility
@@ -105,10 +115,13 @@ COPY packages/executor/package.json ./packages/executor/
 RUN sudo chown -R agor:agor /app && \
     pnpm install --frozen-lockfile
 
-# Copy entrypoint script
+# Copy entrypoint scripts
 COPY docker/docker-entrypoint.sh /usr/local/bin/
+COPY docker/docker-entrypoint-postgres.sh /usr/local/bin/
 RUN sudo chmod +x /usr/local/bin/docker-entrypoint.sh && \
-    sudo chown agor:agor /usr/local/bin/docker-entrypoint.sh
+    sudo chmod +x /usr/local/bin/docker-entrypoint-postgres.sh && \
+    sudo chown agor:agor /usr/local/bin/docker-entrypoint.sh && \
+    sudo chown agor:agor /usr/local/bin/docker-entrypoint-postgres.sh
 
 # Expose UI port only (daemon is internal)
 EXPOSE ${VITE_PORT:-5173}

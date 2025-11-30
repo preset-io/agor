@@ -1,12 +1,32 @@
-# PostgreSQL-specific overrides
-# Automatically loaded when using --profile postgres
+# PostgreSQL + RBAC Testing Environment
+# Extends base docker-compose.yml with PostgreSQL database and RBAC features
 #
 # Usage: docker compose --profile postgres up
-# This file provides environment variable overrides for PostgreSQL mode
+#
+# This profile provides:
+# - PostgreSQL database (instead of SQLite)
+# - RBAC + Unix integration enabled
+# - Test users (alice, bob) with Unix accounts
+# - SSH server for multi-user testing
+# - Test worktrees with ownership configured
 
 services:
   agor-dev:
     environment:
-      # Override database config for PostgreSQL mode
+      # PostgreSQL database configuration
       - AGOR_DB_DIALECT=postgresql
       - DATABASE_URL=postgresql://agor:agor_dev_secret@postgres:5432/agor
+
+      # Enable RBAC + Unix integration
+      - AGOR_RBAC_ENABLED=true
+      - AGOR_UNIX_USER_MODE=insulated
+
+      # Create test users (alice, bob) on startup
+      - CREATE_RBAC_TEST_USERS=true
+
+    # Expose SSH port for testing multi-user access
+    ports:
+      - '${SSH_PORT:-2222}:22'
+
+    # Use PostgreSQL+RBAC-specific entrypoint
+    entrypoint: ["/usr/local/bin/docker-entrypoint-postgres.sh"]
