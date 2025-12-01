@@ -117,6 +117,7 @@ interface SessionCanvasProps {
   onStartEnvironment?: (worktreeId: string) => void;
   onStopEnvironment?: (worktreeId: string) => void;
   onViewLogs?: (worktreeId: string) => void;
+  onNukeEnvironment?: (worktreeId: string) => void;
   onOpenCommentsPanel?: () => void;
   onCommentHover?: (commentId: string | null) => void;
   onCommentSelect?: (commentId: string | null) => void;
@@ -273,6 +274,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       onStartEnvironment,
       onStopEnvironment,
       onViewLogs,
+      onNukeEnvironment,
       onOpenCommentsPanel,
       onCommentHover,
       onCommentSelect,
@@ -578,6 +580,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             onStartEnvironment,
             onStopEnvironment,
             onViewLogs,
+            onNukeEnvironment,
             onUnpin: handleUnpinWorktree,
             compact: false,
             isPinned: !!dbZoneId,
@@ -608,6 +611,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       onStartEnvironment,
       onStopEnvironment,
       onViewLogs,
+      onNukeEnvironment,
       handleUnpinWorktree,
       zoneLabels,
       userById,

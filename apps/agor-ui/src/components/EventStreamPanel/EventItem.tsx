@@ -34,6 +34,7 @@ export interface WorktreeActions {
   onStopEnvironment?: (worktreeId: string) => void;
   onOpenSettings?: (worktreeId: string) => void;
   onViewLogs?: (worktreeId: string) => void;
+  onNukeEnvironment?: (worktreeId: string) => void;
 }
 
 export interface EventItemProps {

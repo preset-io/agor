@@ -756,6 +756,7 @@ export const App: React.FC<AppProps> = ({
                         onStartEnvironment={onStartEnvironment}
                         onStopEnvironment={onStopEnvironment}
                         onViewLogs={setLogsModalWorktreeId}
+                        onNukeEnvironment={onNukeEnvironment}
                         onOpenCommentsPanel={() => setCommentsPanelCollapsed(false)}
                         onCommentHover={setHoveredCommentId}
                         onCommentSelect={(commentId) => {
@@ -827,6 +828,7 @@ export const App: React.FC<AppProps> = ({
                               onCreateSession: (worktreeId) => setNewSessionWorktreeId(worktreeId),
                               onOpenSettings: (worktreeId) =>
                                 setWorktreeModalWorktreeId(worktreeId),
+                              onNukeEnvironment,
                             }}
                           />
                         )}
