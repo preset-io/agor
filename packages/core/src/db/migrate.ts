@@ -126,7 +126,9 @@ function getMigrationsFolder(db: Database): string {
   const __dirname = dirname(__filename);
   const isProduction = __dirname.includes('/dist/');
   const dialect = isSQLiteDatabase(db) ? 'sqlite' : 'postgres';
-  return join(__dirname, isProduction ? '..' : '../..', 'drizzle', dialect);
+  // In production (dist/db/migrate.js), go up 2 levels to reach packages/core/
+  // In dev (src/db/migrate.ts), go up 2 levels to reach packages/core/
+  return join(__dirname, isProduction ? '../..' : '../..', 'drizzle', dialect);
 }
 
 /**
