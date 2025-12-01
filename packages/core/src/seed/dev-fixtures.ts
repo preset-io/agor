@@ -170,9 +170,18 @@ export async function seedDevFixtures(options: SeedOptions = {}): Promise<SeedRe
   // STEP 4: Create board object to position worktree on board
   console.log('4️⃣  Creating board object for worktree...');
 
+  // Position near viewport center (0,0) with random jitter
+  // Jitter area = 2 * card width (card width ~500px, so jitter within ±1000px)
+  const CARD_WIDTH = 500;
+  const JITTER_AREA = 2 * CARD_WIDTH; // 1000px
+  const viewportCenter = { x: 0, y: 0 }; // Default viewport center if not available
+
+  const jitterX = (Math.random() - 0.5) * JITTER_AREA; // -500 to +500
+  const jitterY = (Math.random() - 0.5) * JITTER_AREA; // -500 to +500
+
   const fallbackPosition = {
-    x: 100 + (worktreeUniqueId - 1) * 60,
-    y: 100 + (worktreeUniqueId - 1) * 60,
+    x: Math.round(viewportCenter.x + jitterX),
+    y: Math.round(viewportCenter.y + jitterY),
   };
 
   await boardObjectRepo.create({

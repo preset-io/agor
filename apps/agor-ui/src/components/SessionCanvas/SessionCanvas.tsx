@@ -1011,6 +1011,24 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       setEdges(initialEdges);
     }, [initialEdges, setEdges]); // REMOVED setEdges from dependencies
 
+    // Properly fit view when nodes are loaded
+    // This ensures nodes are visible even when positioned far apart
+    useEffect(() => {
+      if (!reactFlowInstanceRef.current || nodes.length === 0) return;
+
+      // Use a small delay to ensure DOM has updated
+      const timer = setTimeout(() => {
+        reactFlowInstanceRef.current?.fitView({
+          padding: 0.2, // 20% padding around nodes
+          minZoom: 0.1, // Allow zooming out far enough to see widely-spaced nodes
+          maxZoom: 1.0, // Don't zoom in beyond 100% to keep nodes readable
+          duration: 200, // Smooth animation
+        });
+      }, 100);
+
+      return () => clearTimeout(timer);
+    }, [nodes.length]); // Re-run when node count changes (e.g., worktrees added/removed)
+
     // Intercept onNodesChange to detect resize events
     const onNodesChange = useCallback(
       // biome-ignore lint/suspicious/noExplicitAny: React Flow change event types are not exported
@@ -1920,7 +1938,6 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             nodeTypes={nodeTypes}
             snapToGrid={true}
             snapGrid={[20, 20]}
-            fitView
             minZoom={0.1}
             maxZoom={1.5}
             nodesDraggable={true}
