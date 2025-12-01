@@ -20,6 +20,7 @@ import type { HookContext, UUID, Worktree, WorktreePermissionLevel } from '@agor
  * Permission level hierarchy (for comparisons)
  */
 const PERMISSION_RANK: Record<WorktreePermissionLevel, number> = {
+  none: -1, // No access at all
   view: 0,
   prompt: 1,
   all: 2,

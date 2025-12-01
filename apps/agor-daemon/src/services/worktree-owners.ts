@@ -63,7 +63,7 @@ function requireViewPermission(worktreeRepo: WorktreeRepository) {
 
     // Check if user has at least 'view' permission
     const effectivePermission = isOwner ? 'all' : worktree.others_can || 'view';
-    const permissionRank = { view: 0, prompt: 1, all: 2 };
+    const permissionRank = { none: -1, view: 0, prompt: 1, all: 2 };
 
     if (permissionRank[effectivePermission] < permissionRank.view) {
       throw new Forbidden('You do not have permission to view this worktree');

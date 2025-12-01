@@ -179,6 +179,7 @@ export const OwnersSection: React.FC<OwnersSectionProps> = ({ worktree, client, 
   const hasUnsavedChanges = ownersChanged || permissionsChanged;
 
   const permissionLevelDescriptions = {
+    none: 'No access (worktree is completely private to owners)',
     view: 'Can view worktrees, sessions, tasks, and messages',
     prompt: 'View + can create tasks and messages (run agents)',
     all: 'Full access (create/update/delete sessions and worktrees)',
@@ -269,6 +270,7 @@ export const OwnersSection: React.FC<OwnersSectionProps> = ({ worktree, client, 
             onChange={setOthersCanValue}
             disabled={!canEdit}
             options={[
+              { value: 'none', label: 'None' },
               { value: 'view', label: 'View' },
               { value: 'prompt', label: 'Prompt' },
               { value: 'all', label: 'All' },

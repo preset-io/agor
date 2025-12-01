@@ -416,9 +416,9 @@ export const worktrees = pgTable(
 
     // RBAC: App-layer permissions (rbac.md)
     others_can: text('others_can', {
-      enum: ['view', 'prompt', 'all'],
+      enum: ['none', 'view', 'prompt', 'all'],
     })
-      .$type<'view' | 'prompt' | 'all'>()
+      .$type<'none' | 'view' | 'prompt' | 'all'>()
       .default('view'),
 
     // RBAC: OS-layer permissions (unix-user-modes.md)
