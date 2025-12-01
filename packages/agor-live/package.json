@@ -76,7 +76,7 @@
     "cronstrue": "^3.9.0",
     "dotenv": "^17.2.3",
     "drizzle-orm": "^0.44.7",
-    "express": "^5.1.0",
+    "express": "^5.2.0",
     "express-static-gzip": "^3.0.0",
     "feathers-swagger": "^3.0.0",
     "handlebars": "^4.7.8",
