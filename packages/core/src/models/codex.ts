@@ -13,6 +13,7 @@ export const CODEX_MINI_MODEL = 'gpt-5-codex-mini';
 /** Model aliases for Codex */
 export const CODEX_MODELS = {
   // GPT-5.1 models (latest, recommended)
+  'gpt-5.1-codex-max': 'gpt-5.1-codex-max', // Optimized for long-horizon agentic coding
   'gpt-5.1-codex': 'gpt-5.1-codex',
   'gpt-5.1-codex-mini': 'gpt-5.1-codex-mini',
   'gpt-5.1': 'gpt-5.1',
@@ -33,6 +34,7 @@ const DEFAULT_CODEX_CONTEXT_LIMIT = 200_000;
  */
 export const CODEX_CONTEXT_LIMITS: Record<string, number> = {
   // GPT-5.1 models
+  'gpt-5.1-codex-max': 200_000,
   'gpt-5.1-codex': 200_000,
   'gpt-5.1-codex-mini': 200_000,
   'gpt-5.1': 200_000,

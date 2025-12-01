@@ -11,7 +11,8 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { generateId } from '@agor/core/db';
-import type { PermissionMode } from '@agor/core/sdk';
+import type { PermissionMode as ClaudeSDKPermissionMode } from '@agor/core/sdk';
+import { mapPermissionMode } from '@agor/core/utils/permission-mode-mapper';
 import type {
   MCPServerRepository,
   MessagesRepository,
@@ -28,6 +29,7 @@ import {
   type Message,
   type MessageID,
   MessageRole,
+  type PermissionMode,
   type SessionID,
   type TaskID,
   TaskStatus,
@@ -281,11 +283,16 @@ export class ClaudeTool implements ITool {
     let rawSdkResponse: import('@agor/core/sdk').SDKResultMessage | undefined;
     let wasStopped = false;
 
+    // Map our permission mode to Claude SDK's permission mode
+    const mappedPermissionMode = permissionMode
+      ? (mapPermissionMode(permissionMode, 'claude-code') as ClaudeSDKPermissionMode)
+      : undefined;
+
     for await (const event of this.promptService.promptSessionStreaming(
       sessionId,
       prompt,
       taskId,
-      permissionMode
+      mappedPermissionMode
     )) {
       // Detect if execution was stopped early
       if (event.type === 'stopped') {
@@ -687,11 +694,16 @@ export class ClaudeTool implements ITool {
     let rawSdkResponse: import('@agor/core/sdk').SDKResultMessage | undefined;
     let wasStopped = false;
 
+    // Map our permission mode to Claude SDK's permission mode
+    const mappedPermissionMode = permissionMode
+      ? (mapPermissionMode(permissionMode, 'claude-code') as ClaudeSDKPermissionMode)
+      : undefined;
+
     for await (const event of this.promptService.promptSessionStreaming(
       sessionId,
       prompt,
       taskId,
-      permissionMode
+      mappedPermissionMode
     )) {
       // Detect if execution was stopped early
       if (event.type === 'stopped') {

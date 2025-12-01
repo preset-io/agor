@@ -164,7 +164,7 @@
     "db:migrate:mcp": "tsx src/db/scripts/migrate-add-mcp-tables.ts"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.1.53",
+    "@anthropic-ai/claude-agent-sdk": "^0.1.55",
     "@feathersjs/authentication": "^5.0.37",
     "@feathersjs/authentication-client": "^5.0.37",
     "@feathersjs/authentication-local": "^5.0.37",
@@ -176,12 +176,12 @@
     "@feathersjs/socketio": "^5.0.37",
     "@feathersjs/socketio-client": "^5.0.37",
     "@feathersjs/typebox": "^5.0.37",
-    "@google/gemini-cli-core": "^0.15.1",
+    "@google/gemini-cli-core": "^0.18.4",
     "@google/genai": "^1.26.0",
     "@iarna/toml": "^2.2.5",
     "@libsql/client": "^0.15.15",
     "@openai/codex-sdk": "^0.63.0",
-    "@opencode-ai/sdk": "^1.0.65",
+    "@opencode-ai/sdk": "^1.0.122",
     "bcryptjs": "^2.4.3",
     "cron-parser": "^5.4.0",
     "cronstrue": "^3.9.0",

@@ -45,7 +45,7 @@
     "url": "https://github.com/preset-io/agor/issues"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.1.53",
+    "@anthropic-ai/claude-agent-sdk": "^0.1.55",
     "@feathersjs/authentication": "^5.0.37",
     "@feathersjs/authentication-client": "^5.0.37",
     "@feathersjs/authentication-local": "^5.0.37",
@@ -57,7 +57,7 @@
     "@feathersjs/socketio": "^5.0.37",
     "@feathersjs/socketio-client": "^5.0.37",
     "@feathersjs/typebox": "^5.0.37",
-    "@google/gemini-cli-core": "^0.15.1",
+    "@google/gemini-cli-core": "^0.18.4",
     "@google/genai": "^1.26.0",
     "@homebridge/node-pty-prebuilt-multiarch": "^0.13.1",
     "@iarna/toml": "^2.2.5",
@@ -66,7 +66,7 @@
     "@oclif/core": "^4.6.0",
     "@oclif/plugin-help": "^6.2.18",
     "@openai/codex-sdk": "^0.63.0",
-    "@opencode-ai/sdk": "^1.0.65",
+    "@opencode-ai/sdk": "^1.0.122",
     "bcryptjs": "^2.4.3",
     "chalk": "^5.6.2",
     "cli-table3": "^0.6.5",

@@ -42,8 +42,14 @@ export interface AgenticTool {
  * Claude Code permission modes (via Claude Agent SDK)
  *
  * Unified permission model - single mode controls tool approval behavior.
+ * SDK 0.1.55+ includes 'dontAsk' mode for backward compatibility.
  */
-export type ClaudeCodePermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan';
+export type ClaudeCodePermissionMode =
+  | 'default'
+  | 'acceptEdits'
+  | 'bypassPermissions'
+  | 'plan'
+  | 'dontAsk';
 
 /**
  * Gemini permission modes (via Gemini CLI SDK)

@@ -19,13 +19,18 @@ type Part = GenAI.Part;
  */
 export function convertConversationToHistory(conversation: {
   messages: Array<{
-    type: 'user' | 'gemini';
+    type: string;
     content: unknown;
   }>;
 }): Content[] {
   const history: Content[] = [];
 
   for (const msg of conversation.messages) {
+    // Only process user and gemini messages (skip error, info, warning, etc.)
+    if (msg.type !== 'user' && msg.type !== 'gemini') {
+      continue;
+    }
+
     const role = msg.type === 'user' ? 'user' : 'model';
     const parts: Part[] = [];
 
