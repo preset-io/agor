@@ -19,6 +19,6 @@ EXCEPTION
 END $$;
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "users_unix_username_idx" ON "users" ("unix_username");--> statement-breakpoint
-ALTER TABLE "worktrees" ADD COLUMN IF NOT EXISTS "others_can" text DEFAULT 'view';--> statement-breakpoint
+ALTER TABLE "worktrees" ADD COLUMN IF NOT EXISTS "others_can" text DEFAULT 'view' CHECK ("others_can" IN ('none', 'view', 'prompt', 'all'));--> statement-breakpoint
 ALTER TABLE "worktrees" ADD COLUMN IF NOT EXISTS "unix_group" text;--> statement-breakpoint
-ALTER TABLE "worktrees" ADD COLUMN IF NOT EXISTS "others_fs_access" text DEFAULT 'read';
+ALTER TABLE "worktrees" ADD COLUMN IF NOT EXISTS "others_fs_access" text DEFAULT 'read' CHECK ("others_fs_access" IN ('none', 'read', 'write'));

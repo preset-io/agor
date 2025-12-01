@@ -51,6 +51,10 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
       archived_at: row.archived_at ? new Date(row.archived_at).toISOString() : undefined,
       archived_by: (row.archived_by as UUID | null) ?? undefined,
       filesystem_status: row.filesystem_status ?? undefined,
+      // RBAC fields
+      others_can: row.others_can ?? undefined,
+      others_fs_access: row.others_fs_access ?? undefined,
+      unix_group: row.unix_group ?? undefined,
       ...row.data,
     };
   }
@@ -90,6 +94,10 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
       archived_at: worktree.archived_at ? new Date(worktree.archived_at) : null,
       archived_by: worktree.archived_by ?? null,
       filesystem_status: worktree.filesystem_status ?? null,
+      // RBAC fields (explicit null to ensure they're included in updates)
+      others_can: worktree.others_can ?? null,
+      others_fs_access: worktree.others_fs_access ?? null,
+      unix_group: worktree.unix_group ?? null,
       data: {
         path: worktree.path!,
         base_ref: worktree.base_ref,

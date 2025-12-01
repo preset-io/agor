@@ -10,6 +10,6 @@ CREATE TABLE IF NOT EXISTS `worktree_owners` (
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS `users_unix_username_idx` ON `users` (`unix_username`);
 --> statement-breakpoint
-ALTER TABLE `worktrees` ADD `others_can` text DEFAULT 'view' CHECK(`others_can` IN ('view', 'prompt', 'all'));--> statement-breakpoint
+ALTER TABLE `worktrees` ADD `others_can` text DEFAULT 'view' CHECK(`others_can` IN ('none', 'view', 'prompt', 'all'));--> statement-breakpoint
 ALTER TABLE `worktrees` ADD `unix_group` text;--> statement-breakpoint
 ALTER TABLE `worktrees` ADD `others_fs_access` text DEFAULT 'read' CHECK(`others_fs_access` IN ('none', 'read', 'write'));

@@ -18,11 +18,11 @@ services:
       - DATABASE_URL=postgresql://agor:agor_dev_secret@postgres:5432/agor
 
       # Enable RBAC + Unix integration
-      - AGOR_RBAC_ENABLED=true
-      - AGOR_UNIX_USER_MODE=insulated
+      - AGOR_RBAC_ENABLED=${AGOR_RBAC_ENABLED:-true}
+      - AGOR_UNIX_USER_MODE=${AGOR_UNIX_USER_MODE:-insulated}
 
       # Create test users (alice, bob) on startup
-      - CREATE_RBAC_TEST_USERS=true
+      - CREATE_RBAC_TEST_USERS=${CREATE_RBAC_TEST_USERS:-true}
 
     # Expose SSH port for testing multi-user access
     ports:

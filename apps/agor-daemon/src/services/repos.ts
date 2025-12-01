@@ -15,7 +15,7 @@ import {
   resolveUserEnvironment,
   writeAgorYml,
 } from '@agor/core/config';
-import { type Database, RepoRepository } from '@agor/core/db';
+import { type Database, RepoRepository, WorktreeRepository } from '@agor/core/db';
 import { autoAssignWorktreeUniqueId } from '@agor/core/environment/variable-resolver';
 import type { Application } from '@agor/core/feathers';
 import {
@@ -398,6 +398,14 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       },
       params
     )) as Worktree;
+
+    // Add creating user as owner of the worktree
+    if (userId) {
+      const worktreeRepo = new WorktreeRepository(this.db);
+      await worktreeRepo.addOwner(worktree.worktree_id, userId);
+      console.log(`✓ Added user ${userId.substring(0, 8)} as owner of worktree ${worktree.name}`);
+    }
+
     if (data.boardId) {
       const boardObjectsService = this.app.service('board-objects');
 

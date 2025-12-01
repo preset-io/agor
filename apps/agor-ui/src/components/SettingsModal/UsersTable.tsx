@@ -230,7 +230,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
             rules={[{ required: true, message: 'Please select a role' }]}
           >
             <Select>
-              <Select.Option value="owner">Owner</Select.Option>
+              {/* <Select.Option value="owner">Owner</Select.Option> */}
               <Select.Option value="admin">Admin</Select.Option>
               <Select.Option value="member">Member</Select.Option>
               <Select.Option value="viewer">Viewer</Select.Option>

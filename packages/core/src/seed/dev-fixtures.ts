@@ -12,8 +12,13 @@
 import os from 'node:os';
 import path from 'node:path';
 import type { UUID, WorktreeID } from '@agor/core/types';
-import { BoardRepository, RepoRepository, WorktreeRepository } from '../db/repositories';
-import { cloneRepo, getWorktreePath } from '../git';
+import {
+  BoardObjectRepository,
+  BoardRepository,
+  RepoRepository,
+  WorktreeRepository,
+} from '../db/repositories';
+import { cloneRepo, createWorktree, getWorktreePath } from '../git';
 import { generateId } from '../lib/ids';
 
 export interface SeedOptions {
@@ -63,6 +68,7 @@ export async function seedDevFixtures(options: SeedOptions = {}): Promise<SeedRe
   const repoRepo = new RepoRepository(db);
   const worktreeRepo = new WorktreeRepository(db);
   const boardRepo = new BoardRepository(db);
+  const boardObjectRepo = new BoardObjectRepository(db);
 
   const baseDir = options.baseDir ?? path.join(os.homedir(), '.agor', 'repos');
   const userId = (options.userId ?? 'anonymous') as UUID;
@@ -130,20 +136,52 @@ export async function seedDevFixtures(options: SeedOptions = {}): Promise<SeedRe
   // Generate unique numeric ID for worktree (used for port allocation)
   const worktreeUniqueId = Math.floor(Math.random() * 1000) + 1;
 
+  // Create worktree with its own branch (can't checkout main twice)
   const worktree = await worktreeRepo.create({
     repo_id: repo.repo_id,
     name: worktreeName,
-    ref: defaultBranch,
+    ref: worktreeName, // Use worktree name as branch name
     path: worktreePath,
     base_ref: defaultBranch,
-    new_branch: false,
+    new_branch: true, // Create new branch from main
     worktree_unique_id: worktreeUniqueId,
     created_by: userId,
     board_id: defaultBoard.board_id,
     needs_attention: false,
   });
 
+  // Create actual git worktree on disk
+  await createWorktree(
+    repoPath,
+    worktreePath,
+    worktreeName, // ref - new branch with same name as worktree
+    true, // createBranch
+    false, // pullLatest (just cloned)
+    defaultBranch, // sourceBranch
+    undefined, // env
+    'branch' // refType
+  );
+
+  // Add user as owner of the worktree
+  await worktreeRepo.addOwner(worktree.worktree_id, userId);
+
   console.log(`   ✓ Created worktree: ${worktree.name} (${worktree.worktree_id})`);
+
+  // STEP 4: Create board object to position worktree on board
+  console.log('4️⃣  Creating board object for worktree...');
+
+  const fallbackPosition = {
+    x: 100 + (worktreeUniqueId - 1) * 60,
+    y: 100 + (worktreeUniqueId - 1) * 60,
+  };
+
+  await boardObjectRepo.create({
+    board_id: defaultBoard.board_id,
+    worktree_id: worktree.worktree_id,
+    position: fallbackPosition,
+  });
+
+  console.log(`   ✓ Created board object at position (${fallbackPosition.x}, ${fallbackPosition.y})`);
 
   console.log('✅ Dev fixtures seeded successfully!');
   console.log('');

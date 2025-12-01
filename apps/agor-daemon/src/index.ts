@@ -166,6 +166,7 @@ import {
   filterWorktreesByPermission,
   loadSessionWorktree,
   loadWorktree,
+  PERMISSION_RANK,
 } from './utils/worktree-authorization';
 
 /**
@@ -1445,9 +1446,72 @@ async function main() {
         ...getReadAuthHooks(),
         ...(allowAnonymous ? [] : [requireMinimumRole('member', 'manage board objects')]),
       ],
-      // Board objects reference worktrees - check permissions based on referenced worktree
-      // TODO: Implement worktree-level permission checks for board objects
-      // For now, keep existing role-based authorization
+    },
+    after: {
+      find: [
+        ...(worktreeRbacEnabled
+          ? [
+              // Filter board-objects based on worktree access permissions
+              async (context: HookContext) => {
+                // Skip for internal calls
+                if (!context.params.provider) {
+                  return context;
+                }
+
+                // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
+                const userId = (context.params as any).user?.user_id;
+                if (!userId) {
+                  // Not authenticated - return empty results
+                  context.result = {
+                    total: 0,
+                    limit: context.result?.limit ?? 0,
+                    skip: context.result?.skip ?? 0,
+                    data: [],
+                  };
+                  return context;
+                }
+
+                // Get all board objects from result
+                const boardObjects: any[] = context.result?.data ?? context.result ?? [];
+
+                // Filter based on worktree access
+                const authorizedBoardObjects = [];
+                for (const boardObject of boardObjects) {
+                  // Board objects may reference worktrees or sessions
+                  if (boardObject.worktree_id) {
+                    // Check worktree access
+                    const worktree = await worktreeRepository.findById(boardObject.worktree_id);
+                    if (!worktree) {
+                      continue; // Skip if worktree doesn't exist
+                    }
+
+                    const isOwner = await worktreeRepository.isOwner(worktree.worktree_id, userId);
+                    const effectivePermission = worktree.others_can ?? 'view';
+                    const hasAccess =
+                      isOwner || PERMISSION_RANK[effectivePermission] >= PERMISSION_RANK.view;
+
+                    if (hasAccess) {
+                      authorizedBoardObjects.push(boardObject);
+                    }
+                  } else {
+                    // No worktree reference - allow access (e.g., zones, other board objects)
+                    authorizedBoardObjects.push(boardObject);
+                  }
+                }
+
+                // Update result
+                if (context.result?.data) {
+                  context.result.data = authorizedBoardObjects;
+                  context.result.total = authorizedBoardObjects.length;
+                } else {
+                  context.result = authorizedBoardObjects;
+                }
+
+                return context;
+              },
+            ]
+          : []),
+      ],
     },
   });
 

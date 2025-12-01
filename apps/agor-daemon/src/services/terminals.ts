@@ -28,7 +28,7 @@ import {
   loadConfig,
   resolveUserEnvironment,
 } from '@agor/core/config';
-import { type Database, formatShortId, WorktreeRepository } from '@agor/core/db';
+import { type Database, formatShortId, UsersRepository, WorktreeRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { AuthenticatedParams, UserID, WorktreeID } from '@agor/core/types';
 import * as pty from '@homebridge/node-pty-prebuilt-multiarch';
@@ -237,6 +237,9 @@ export class TerminalsService {
     const terminalId = `term-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     const authenticatedUserId = params?.user?.user_id as UserID | undefined;
     const resolvedUserId = data.userId ?? authenticatedUserId;
+
+    console.log(`🔍 Terminal create - authenticatedUserId: ${authenticatedUserId}, resolvedUserId: ${resolvedUserId}, params:`, params);
+
     const userSessionSuffix = (() => {
       if (!resolvedUserId) return 'shared';
       // Use short ID (8 chars) to keep Zellij session names under length limit
@@ -327,22 +330,92 @@ export class TerminalsService {
       );
     }
 
-    // Check if executor impersonation is configured
+    // Determine which Unix user to run the terminal as based on unix_user_mode
     const config = await loadConfig();
+    const unixUserMode = config.execution?.unix_user_mode ?? 'simple';
     const executorUser = config.execution?.executor_unix_user;
+
+    let impersonatedUser: string | null = null;
+
+    // Get authenticated user's unix_username if available
+    if (authenticatedUserId) {
+      const usersRepo = new UsersRepository(this.db);
+      try {
+        const user = await usersRepo.findById(authenticatedUserId);
+        console.log(`🔍 Loaded user for impersonation:`, { userId: authenticatedUserId, user, unix_username: user?.unix_username });
+        if (user?.unix_username) {
+          impersonatedUser = user.unix_username;
+        }
+      } catch (error) {
+        console.warn(`⚠️ Failed to load user ${authenticatedUserId}:`, error);
+      }
+    } else {
+      console.log(`🔍 No authenticatedUserId for impersonation check`);
+    }
+
+    // Determine final Unix user based on mode
+    let finalUnixUser: string | null = null;
+    let impersonationReason = '';
+
+    switch (unixUserMode) {
+      case 'simple':
+        // No impersonation
+        finalUnixUser = null;
+        impersonationReason = 'simple mode - no impersonation';
+        break;
+
+      case 'insulated':
+        // Always use executor user
+        finalUnixUser = executorUser ?? null;
+        impersonationReason = executorUser
+          ? `insulated mode - using executor: ${executorUser}`
+          : 'insulated mode - no executor configured';
+        break;
+
+      case 'opportunistic':
+        // Use user's unix_username if available, else fall back to executor
+        if (impersonatedUser) {
+          finalUnixUser = impersonatedUser;
+          impersonationReason = `opportunistic mode - user has unix_username: ${impersonatedUser}`;
+        } else if (executorUser) {
+          finalUnixUser = executorUser;
+          impersonationReason = `opportunistic mode - fallback to executor: ${executorUser}`;
+        } else {
+          finalUnixUser = null;
+          impersonationReason = 'opportunistic mode - no unix_username or executor';
+        }
+        break;
+
+      case 'strict':
+        // Require user's unix_username, fail if not set
+        if (!impersonatedUser) {
+          throw new Error(
+            `Strict Unix user mode requires unix_username to be set for user ${authenticatedUserId}. ` +
+              'Please configure a Unix username for this user.'
+          );
+        }
+        finalUnixUser = impersonatedUser;
+        impersonationReason = `strict mode - using user's unix_username: ${impersonatedUser}`;
+        break;
+
+      default:
+        console.warn(`⚠️ Unknown unix_user_mode: ${unixUserMode}, falling back to simple mode`);
+        finalUnixUser = null;
+        impersonationReason = 'unknown mode - defaulting to no impersonation';
+    }
 
     let ptyProcess: pty.IPty;
 
-    if (executorUser) {
-      // Executor impersonation enabled - run Zellij as executor user via sudo
-      const executorHome = `/home/${executorUser}`;
-      const configPath = path.join(executorHome, '.config', 'zellij', 'config.kdl');
+    if (finalUnixUser) {
+      // Impersonation enabled - run Zellij as specified Unix user via sudo
+      const targetHome = `/home/${finalUnixUser}`;
+      const configPath = path.join(targetHome, '.config', 'zellij', 'config.kdl');
 
-      console.log(`🔐 Running terminal as executor user: ${executorUser} (impersonation enabled)`);
+      console.log(`🔐 Running terminal as Unix user: ${finalUnixUser} (${impersonationReason})`);
 
       const sudoArgs = [
         '-u',
-        executorUser,
+        finalUnixUser,
         'zellij',
         '--config',
         configPath,
@@ -358,15 +431,15 @@ export class TerminalsService {
         cwd,
         env: {
           ...env,
-          HOME: executorHome,
-          USER: executorUser,
+          HOME: targetHome,
+          USER: finalUnixUser,
         },
       });
     } else {
-      // No executor impersonation - run Zellij as daemon user
+      // No impersonation - run Zellij as daemon user
       const configPath = path.join(os.homedir(), '.config', 'zellij', 'config.kdl');
 
-      console.log(`🔓 Running terminal as daemon user (no impersonation)`);
+      console.log(`🔓 Running terminal as daemon user (${impersonationReason})`);
 
       const zellijArgs = ['--config', configPath, 'attach', zellijSession, '--create'];
 

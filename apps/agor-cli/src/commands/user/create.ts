@@ -32,7 +32,7 @@ export default class UserCreate extends BaseCommand {
     }),
     role: Flags.string({
       description: 'User role',
-      options: ['owner', 'admin', 'member', 'viewer'],
+      options: [/* 'owner', */ 'admin', 'member', 'viewer'], // owner role unused
       default: 'admin',
     }),
   };

@@ -135,7 +135,7 @@ export class UsersRepository implements BaseRepository<User, Partial<User>> {
     const result = await select(this.db)
       .from(users)
       .where(eq(users.unix_username, unixUsername))
-      .get();
+      .one();
 
     if (!result) {
       return false;
@@ -186,7 +186,7 @@ export class UsersRepository implements BaseRepository<User, Partial<User>> {
     try {
       const fullId = await this.resolveId(id);
 
-      const result = await select(this.db).from(users).where(eq(users.user_id, fullId)).get();
+      const result = await select(this.db).from(users).where(eq(users.user_id, fullId)).one();
 
       if (!result) {
         return null;
@@ -205,7 +205,7 @@ export class UsersRepository implements BaseRepository<User, Partial<User>> {
    * Find user by email
    */
   async findByEmail(email: string): Promise<User | null> {
-    const result = await select(this.db).from(users).where(eq(users.email, email)).get();
+    const result = await select(this.db).from(users).where(eq(users.email, email)).one();
 
     if (!result) {
       return null;

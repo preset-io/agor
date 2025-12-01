@@ -500,7 +500,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                   help={currentUser?.role !== 'admin' ? 'Maintained by administrators' : undefined}
                 >
                   <Select disabled={currentUser?.role !== 'admin'}>
-                    <Select.Option value="owner">Owner</Select.Option>
+                    {/* <Select.Option value="owner">Owner</Select.Option> */}
                     <Select.Option value="admin">Admin</Select.Option>
                     <Select.Option value="member">Member</Select.Option>
                     <Select.Option value="viewer">Viewer</Select.Option>

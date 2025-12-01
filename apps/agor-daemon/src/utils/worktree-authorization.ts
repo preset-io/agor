@@ -19,7 +19,7 @@ import type { HookContext, UUID, Worktree, WorktreePermissionLevel } from '@agor
 /**
  * Permission level hierarchy (for comparisons)
  */
-const PERMISSION_RANK: Record<WorktreePermissionLevel, number> = {
+export const PERMISSION_RANK: Record<WorktreePermissionLevel, number> = {
   none: -1, // No access at all
   view: 0,
   prompt: 1,
@@ -274,8 +274,12 @@ export function filterWorktreesByPermission(worktreeRepo: WorktreeRepository) {
     const authorizedWorktrees = [];
     for (const worktree of worktrees) {
       const isOwner = await worktreeRepo.isOwner(worktree.worktree_id, userId);
-      // User can access if they're an owner OR others_can is set (defaults to 'view')
-      if (isOwner || worktree.others_can) {
+      // User can access if they're an owner OR others_can allows at least 'view' permission
+      // Check against permission rank: 'none' (-1) blocks access, 'view' (0) and above allows
+      const effectivePermission = worktree.others_can ?? 'view';
+      const hasAccess = isOwner || PERMISSION_RANK[effectivePermission] >= PERMISSION_RANK.view;
+
+      if (hasAccess) {
         authorizedWorktrees.push(worktree);
       }
     }

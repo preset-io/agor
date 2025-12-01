@@ -544,7 +544,7 @@ export const users = sqliteTable(
     name: text('name'),
     emoji: text('emoji'),
     role: text('role', {
-      enum: ['owner', 'admin', 'member', 'viewer'],
+      enum: ['owner', 'admin', 'member', 'viewer'], // owner rarely used, hidden from UI
     })
       .notNull()
       .default('member'),

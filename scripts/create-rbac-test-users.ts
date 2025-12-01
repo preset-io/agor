@@ -24,6 +24,7 @@ import {
   WorktreeRepository,
 } from '@agor/core/db';
 import { autoAssignWorktreeUniqueId } from '@agor/core/environment/variable-resolver';
+import { createWorktree } from '@agor/core/git';
 import type { UUID } from '@agor/core/types';
 import chalk from 'chalk';
 
@@ -32,6 +33,7 @@ interface TestUser {
   password: string;
   name: string;
   username: string;
+  role?: 'owner' | 'admin' | 'member' | 'viewer';
 }
 
 const TEST_USERS: TestUser[] = [
@@ -40,12 +42,14 @@ const TEST_USERS: TestUser[] = [
     password: 'admin',
     name: 'Alice',
     username: 'alice',
+    role: 'admin', // Alice is admin for testing purposes
   },
   {
     email: 'bob@agor.live',
     password: 'admin',
     name: 'Bob',
     username: 'bob',
+    role: 'member',
   },
 ];
 
@@ -90,7 +94,7 @@ async function main() {
         email: testUser.email,
         password: testUser.password,
         name: testUser.name,
-        role: 'member',
+        role: testUser.role || 'member',
         unix_username: testUser.username, // Link to Unix user account
       });
 
@@ -148,7 +152,7 @@ async function main() {
     },
   ];
 
-  const _repoPath = path.join(os.homedir(), '.agor', 'repos', 'agor');
+  const repoPath = path.join(os.homedir(), '.agor', 'repos', 'agor');
   const worktreesPath = path.join(os.homedir(), '.agor', 'worktrees');
 
   for (const testWorktree of testWorktrees) {
@@ -173,24 +177,40 @@ async function main() {
       const worktreePathId = `wt-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
       const worktreePath = path.join(worktreesPath, worktreePathId);
 
-      // Create worktree
+      // Create a branch name for this worktree (same as worktree name)
+      const branchName = testWorktree.name;
+
+      // Create worktree database entry
       const worktree = await worktreeRepo.create({
         repo_id: agorRepo.repo_id,
         name: testWorktree.name,
-        ref: 'main',
+        ref: branchName,
         ref_type: 'branch',
         created_by: ownerId,
         worktree_unique_id: worktreeUniqueId,
         path: worktreePath,
         base_ref: 'main',
-        new_branch: false,
+        new_branch: true,
       });
+
+      // Create actual git worktree on disk with new branch
+      await createWorktree(
+        repoPath,
+        worktreePath,
+        branchName, // ref - new branch name
+        true, // createBranch - create new branch from main
+        false, // pullLatest (repo already cloned by seed script)
+        'main', // sourceBranch - branch from main
+        undefined, // env
+        'branch' // refType
+      );
 
       // Add owner
       await worktreeRepo.addOwner(worktree.worktree_id, ownerId);
 
       console.log(chalk.green(`  ✓ Created worktree "${testWorktree.name}"`));
       console.log(chalk.gray(`    ID:    ${worktree.worktree_id.substring(0, 8)}`));
+      console.log(chalk.gray(`    Path:  ${worktreePath}`));
       console.log(chalk.gray(`    Owner: ${testWorktree.owner}`));
 
       // Add additional owners with permissions

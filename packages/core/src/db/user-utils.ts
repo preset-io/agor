@@ -20,6 +20,7 @@ export interface CreateUserData {
   password: string;
   name?: string;
   role?: 'owner' | 'admin' | 'member' | 'viewer';
+  unix_username?: string;
 }
 
 /**
@@ -63,6 +64,7 @@ export async function createUser(db: Database, data: CreateUserData): Promise<Us
       name: data.name,
       emoji: defaultEmoji,
       role,
+      unix_username: data.unix_username ?? null,
       // biome-ignore lint/suspicious/noExplicitAny: Database wrapper accepts Date but schema types vary by dialect
       created_at: createdAt as any,
       // biome-ignore lint/suspicious/noExplicitAny: Database wrapper accepts Date but schema types vary by dialect
@@ -83,6 +85,7 @@ export async function createUser(db: Database, data: CreateUserData): Promise<Us
     name: row.name ?? undefined,
     emoji: row.emoji ?? undefined,
     role: row.role as 'owner' | 'admin' | 'member' | 'viewer',
+    unix_username: row.unix_username ?? undefined,
     avatar: userData.avatar,
     preferences: userData.preferences,
     onboarding_completed: !!row.onboarding_completed,
@@ -125,6 +128,7 @@ export async function getUserByEmail(db: Database, email: string): Promise<User 
     name: row.name ?? undefined,
     emoji: row.emoji ?? undefined,
     role: row.role as 'owner' | 'admin' | 'member' | 'viewer',
+    unix_username: row.unix_username ?? undefined,
     avatar: userData.avatar,
     preferences: userData.preferences,
     onboarding_completed: !!row.onboarding_completed,
