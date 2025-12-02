@@ -42,6 +42,14 @@ export interface PromptResult {
   outputTokens: number;
 }
 
+/**
+ * Type for Claude SDK Query object - an AsyncGenerator with interrupt() method
+ */
+interface InterruptibleQuery {
+  interrupt(): Promise<void>;
+  [Symbol.asyncIterator](): AsyncIterator<unknown>;
+}
+
 export class ClaudePromptService {
   /** Enable token-level streaming from Claude Agent SDK */
   // biome-ignore lint/correctness/noUnusedPrivateClassMembers: toggled in future when streaming support lands
@@ -63,6 +71,9 @@ export class ClaudePromptService {
 
   /** Active stop monitors per session - cleanup handles for concurrent stop detection */
   private stopMonitors = new Map<SessionID, NodeJS.Timeout>();
+
+  /** Track if interrupt() is in flight to prevent overlapping calls */
+  private interruptInFlight = new Map<SessionID, boolean>();
 
   constructor(
     private messagesRepo: MessagesRepository,
@@ -145,7 +156,8 @@ export class ClaudePromptService {
 
     // 🔥 Start concurrent stop monitor - polls stopRequested independently of message loop
     // This ensures stop works even during long-running tool executions (build, lint, etc.)
-    this.startStopMonitor(sessionId, result);
+    // Use double cast because SDK's AsyncGenerator has interrupt() at runtime but not in type definition
+    this.startStopMonitor(sessionId, result as unknown as InterruptibleQuery);
 
     try {
       for await (const msg of result) {
@@ -246,6 +258,11 @@ export class ClaudePromptService {
       // Stop the concurrent stop monitor
       this.stopStopMonitor(sessionId);
 
+      // CRITICAL: Always clear stopRequested flag to prevent poisoning the session
+      // If we don't clear it here, a stop near the end leaves the flag set forever,
+      // causing the next prompt to auto-stop immediately
+      this.stopRequested.delete(sessionId);
+
       // Clean up query reference - always runs regardless of success/failure/stop
       this.activeQueries.delete(sessionId);
       console.log(`🧹 Cleaned up query reference for session ${sessionId.substring(0, 8)}`);
@@ -309,7 +326,8 @@ export class ClaudePromptService {
     );
 
     // 🔥 Start concurrent stop monitor (same as streaming mode)
-    this.startStopMonitor(sessionId, result);
+    // Use double cast because SDK's AsyncGenerator has interrupt() at runtime but not in type definition
+    this.startStopMonitor(sessionId, result as unknown as InterruptibleQuery);
 
     // Collect response messages from async generator
     // IMPORTANT: Keep assistant messages SEPARATE (don't merge into one)
@@ -386,6 +404,9 @@ export class ClaudePromptService {
       // Stop the concurrent stop monitor
       this.stopStopMonitor(sessionId);
 
+      // CRITICAL: Always clear stopRequested flag to prevent poisoning the session
+      this.stopRequested.delete(sessionId);
+
       // Clean up query reference - always runs regardless of success/failure/stop
       this.activeQueries.delete(sessionId);
       console.log(
@@ -414,28 +435,42 @@ export class ClaudePromptService {
    * @param sessionId - Session to monitor
    * @param query - Query object with interrupt() method
    */
-  // biome-ignore lint/suspicious/noExplicitAny: Query is AsyncGenerator with interrupt() - complex SDK type
-  private startStopMonitor(sessionId: SessionID, query: any): void {
+  private startStopMonitor(sessionId: SessionID, query: InterruptibleQuery): void {
     // Check every 100ms - fast enough to feel instant (<100ms is imperceptible to users)
     // but light enough to not impact performance (simple boolean check 10x/second)
     const checkInterval = setInterval(async () => {
-      if (this.stopRequested.get(sessionId)) {
-        console.log(
-          `🔥 [Stop Monitor] Detected stop request for ${sessionId.substring(0, 8)}, calling interrupt()...`
-        );
-        try {
-          // Call interrupt() IMMEDIATELY - don't wait for next message in loop
-          await query.interrupt();
-          console.log(`✅ [Stop Monitor] interrupt() called successfully`);
-          // Note: interrupt() causes the SDK to stop yielding messages
-          // The main loop will detect this via stopRequested check and yield { type: 'stopped' }
-          // This ensures wasStopped flag is set properly in claude-tool.ts
-        } catch (error) {
-          console.error(`❌ [Stop Monitor] interrupt() failed:`, error);
-          // Don't clear stopRequested - let the main loop handle it as fallback
-        }
-        // Stop monitoring after interrupt attempt
+      // Only proceed if stop was requested AND we're not already calling interrupt()
+      if (!this.stopRequested.get(sessionId)) {
+        return;
+      }
+
+      // Prevent overlapping interrupt() calls
+      if (this.interruptInFlight.get(sessionId)) {
+        return;
+      }
+
+      console.log(
+        `🔥 [Stop Monitor] Detected stop request for ${sessionId.substring(0, 8)}, calling interrupt()...`
+      );
+
+      this.interruptInFlight.set(sessionId, true);
+
+      try {
+        // Call interrupt() IMMEDIATELY - don't wait for next message in loop
+        await query.interrupt();
+        console.log(`✅ [Stop Monitor] interrupt() called successfully`);
+        // Note: interrupt() causes the SDK to stop yielding messages
+        // The main loop will detect this via stopRequested check and yield { type: 'stopped' }
+        // This ensures wasStopped flag is set properly in claude-tool.ts
+
+        // Success! Stop monitoring since interrupt worked
         this.stopStopMonitor(sessionId);
+      } catch (error) {
+        console.error(`❌ [Stop Monitor] interrupt() failed:`, error);
+        // Don't stop monitoring - keep trying in case it was a transient error
+        // The finally block cleanup will handle stopRequested regardless
+      } finally {
+        this.interruptInFlight.delete(sessionId);
       }
     }, 100); // Poll every 100ms
 
@@ -453,6 +488,7 @@ export class ClaudePromptService {
     if (monitor) {
       clearInterval(monitor);
       this.stopMonitors.delete(sessionId);
+      this.interruptInFlight.delete(sessionId); // Clean up in-flight flag too
       console.log(`👁️  [Stop Monitor] Stopped for session ${sessionId.substring(0, 8)}`);
     }
   }
