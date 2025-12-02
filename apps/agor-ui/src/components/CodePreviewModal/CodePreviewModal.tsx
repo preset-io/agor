@@ -1,8 +1,7 @@
 import type { FileDetail } from '@agor/core/types';
 import { CopyOutlined } from '@ant-design/icons';
 import { Button, Modal, message } from 'antd';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { ThemedSyntaxHighlighter } from '@/components/ThemedSyntaxHighlighter';
 
 export interface CodePreviewModalProps {
   file: FileDetail | null;
@@ -92,17 +91,9 @@ export const CodePreviewModal = ({ file, open, onClose, loading }: CodePreviewMo
       {loading ? (
         <div style={{ textAlign: 'center', padding: '2rem' }}>Loading...</div>
       ) : (
-        <SyntaxHighlighter
-          language={language}
-          style={oneDark}
-          showLineNumbers
-          customStyle={{
-            margin: 0,
-            borderRadius: '4px',
-          }}
-        >
+        <ThemedSyntaxHighlighter language={language} showLineNumbers>
           {file.content}
-        </SyntaxHighlighter>
+        </ThemedSyntaxHighlighter>
       )}
     </Modal>
   );

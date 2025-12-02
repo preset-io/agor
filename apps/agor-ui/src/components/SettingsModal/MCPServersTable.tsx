@@ -30,8 +30,10 @@ import {
   Tag,
   Tooltip,
   Typography,
+  theme,
 } from 'antd';
 import { useEffect, useState } from 'react';
+import { ThemedSyntaxHighlighter } from '@/components/ThemedSyntaxHighlighter';
 import { mapToArray } from '@/utils/mapHelpers';
 
 const { TextArea } = Input;
@@ -49,6 +51,8 @@ const ToolPermissionsEditor: React.FC<ToolPermissionsEditorProps> = ({
   value = {},
   onChange,
 }) => {
+  const { token } = theme.useToken();
+
   const handlePermissionChange = (toolName: string, permission: ToolPermission) => {
     const updated = { ...value, [toolName]: permission };
     onChange?.(updated);
@@ -59,9 +63,9 @@ const ToolPermissionsEditor: React.FC<ToolPermissionsEditorProps> = ({
       <div
         style={{
           padding: '16px',
-          background: 'rgba(0, 0, 0, 0.02)',
-          borderRadius: '4px',
-          border: '1px solid #d9d9d9',
+          background: token.colorBgContainer,
+          borderRadius: token.borderRadius,
+          border: `1px solid ${token.colorBorder}`,
         }}
       >
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -76,8 +80,8 @@ const ToolPermissionsEditor: React.FC<ToolPermissionsEditorProps> = ({
       style={{
         maxHeight: '400px',
         overflowY: 'auto',
-        border: '1px solid #d9d9d9',
-        borderRadius: '4px',
+        border: `1px solid ${token.colorBorder}`,
+        borderRadius: token.borderRadius,
       }}
     >
       {tools.map((tool) => (
@@ -85,17 +89,29 @@ const ToolPermissionsEditor: React.FC<ToolPermissionsEditorProps> = ({
           key={tool.name}
           style={{
             padding: '12px',
-            borderBottom: '1px solid #f0f0f0',
+            borderBottom: `1px solid ${token.colorBorderSecondary}`,
             display: 'flex',
             gap: '12px',
             alignItems: 'center',
-            background: '#fafafa',
+            background: token.colorBgLayout,
           }}
         >
           <div style={{ flex: 1, minWidth: 0 }}>
-            <Typography.Text strong style={{ fontFamily: 'monospace', fontSize: 13 }}>
-              {tool.name}
-            </Typography.Text>
+            <div style={{ marginBottom: 4 }}>
+              <ThemedSyntaxHighlighter
+                language="typescript"
+                customStyle={{
+                  padding: '2px 6px',
+                  display: 'inline-block',
+                  fontSize: '13px',
+                  lineHeight: '1.4',
+                  borderRadius: token.borderRadiusSM,
+                }}
+                PreTag="span"
+              >
+                {tool.name}
+              </ThemedSyntaxHighlighter>
+            </div>
             {tool.description && (
               <div style={{ marginTop: 4 }}>
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -111,13 +127,13 @@ const ToolPermissionsEditor: React.FC<ToolPermissionsEditorProps> = ({
             style={{ minWidth: 100 }}
           >
             <Select.Option value="allow">
-              <Typography.Text style={{ color: '#52c41a' }}>Allow</Typography.Text>
+              <Typography.Text style={{ color: token.colorSuccess }}>Allow</Typography.Text>
             </Select.Option>
             <Select.Option value="ask">
-              <Typography.Text style={{ color: '#faad14' }}>Ask</Typography.Text>
+              <Typography.Text style={{ color: token.colorWarning }}>Ask</Typography.Text>
             </Select.Option>
             <Select.Option value="deny">
-              <Typography.Text style={{ color: '#ff4d4f' }}>Deny</Typography.Text>
+              <Typography.Text style={{ color: token.colorError }}>Deny</Typography.Text>
             </Select.Option>
           </Select>
         </div>
