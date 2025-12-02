@@ -5,17 +5,22 @@
  * Populates the Agor database with test data for development.
  *
  * Usage:
- *   pnpm tsx scripts/seed.ts [--skip-if-exists]
+ *   pnpm tsx scripts/seed.ts [--skip-if-exists] [--user-id <uuid>]
  *   pnpm seed [--skip-if-exists]
  */
 
+import type { UUID } from '@agor/core/types';
 import { seedDevFixtures } from '@agor/core/seed';
 
 async function main() {
   const skipIfExists = process.argv.includes('--skip-if-exists');
 
+  // Parse --user-id argument
+  const userIdIndex = process.argv.indexOf('--user-id');
+  const userId = userIdIndex !== -1 ? process.argv[userIdIndex + 1] as UUID : undefined;
+
   try {
-    const result = await seedDevFixtures({ skipIfExists });
+    const result = await seedDevFixtures({ skipIfExists, userId });
 
     if (result.skipped) {
       console.log('ℹ️  Seeding skipped (data already exists)');
