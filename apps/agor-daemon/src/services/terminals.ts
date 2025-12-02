@@ -238,7 +238,10 @@ export class TerminalsService {
     const authenticatedUserId = params?.user?.user_id as UserID | undefined;
     const resolvedUserId = data.userId ?? authenticatedUserId;
 
-    console.log(`🔍 Terminal create - authenticatedUserId: ${authenticatedUserId}, resolvedUserId: ${resolvedUserId}, params:`, params);
+    console.log(
+      `🔍 Terminal create - authenticatedUserId: ${authenticatedUserId}, resolvedUserId: ${resolvedUserId}, params:`,
+      params
+    );
 
     const userSessionSuffix = (() => {
       if (!resolvedUserId) return 'shared';
@@ -342,7 +345,11 @@ export class TerminalsService {
       const usersRepo = new UsersRepository(this.db);
       try {
         const user = await usersRepo.findById(authenticatedUserId);
-        console.log(`🔍 Loaded user for impersonation:`, { userId: authenticatedUserId, user, unix_username: user?.unix_username });
+        console.log(`🔍 Loaded user for impersonation:`, {
+          userId: authenticatedUserId,
+          user,
+          unix_username: user?.unix_username,
+        });
         if (user?.unix_username) {
           impersonatedUser = user.unix_username;
         }

@@ -40,6 +40,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         ? new Date(row.updated_at).toISOString()
         : new Date(row.created_at).toISOString(),
       created_by: row.created_by,
+      unix_username: row.unix_username || null,
       worktree_id: row.worktree_id as UUID,
       ...row.data,
       tasks: row.data.tasks.map((id) => id as UUID),

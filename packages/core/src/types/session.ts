@@ -96,6 +96,22 @@ export interface Session {
   /** User ID of the user who created this session */
   created_by: string;
 
+  /**
+   * Unix username to impersonate when executing this session
+   *
+   * Set once at session creation time from the creator's unix_username.
+   * IMMUTABLE - never changes, even if the user's unix_username changes.
+   *
+   * Why immutable?
+   * - SDK sessions (Claude Code, Codex) store data in user home directories
+   * - Changing unix_username would break access to existing SDK session state
+   * - If unix user no longer exists, operations will fail (expected behavior)
+   *
+   * DEFENSIVE: Before prompting, we validate that creator's current unix_username
+   * matches session.unix_username. If they differ, reject the prompt with clear error.
+   */
+  unix_username: string | null;
+
   /** Worktree ID - all sessions must be associated with an Agor-managed worktree */
   worktree_id: WorktreeID;
 

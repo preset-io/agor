@@ -57,6 +57,20 @@
       "when": 1764297600001,
       "tag": "0007_backfill_worktree_owners",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1764659067920,
+      "tag": "0008_lonely_kid_colt",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1764659200000,
+      "tag": "0009_backfill_session_unix_username",
+      "breakpoints": true
     }
   ]
 }

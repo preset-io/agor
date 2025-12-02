@@ -190,7 +190,9 @@ export async function seedDevFixtures(options: SeedOptions = {}): Promise<SeedRe
     position: fallbackPosition,
   });
 
-  console.log(`   ✓ Created board object at position (${fallbackPosition.x}, ${fallbackPosition.y})`);
+  console.log(
+    `   ✓ Created board object at position (${fallbackPosition.x}, ${fallbackPosition.y})`
+  );
 
   console.log('✅ Dev fixtures seeded successfully!');
   console.log('');

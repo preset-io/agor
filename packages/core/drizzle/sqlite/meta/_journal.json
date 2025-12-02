@@ -113,6 +113,20 @@
       "when": 1763974000000,
       "tag": "0017_backfill_worktree_owners",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1764659127577,
+      "tag": "0018_fantastic_bruce_banner",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1764659200000,
+      "tag": "0019_backfill_session_unix_username",
+      "breakpoints": true
     }
   ]
 }

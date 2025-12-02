@@ -41,6 +41,12 @@ export const sessions = sqliteTable(
     // User attribution
     created_by: text('created_by', { length: 36 }).notNull().default('anonymous'),
 
+    // Unix username for SDK impersonation (immutable once set)
+    // Set from creator's unix_username at session creation time
+    // NEVER changes, even if user's unix_username changes later
+    // This ensures SDK session data remains accessible in the original home directory
+    unix_username: text('unix_username'),
+
     // Materialized for filtering/joins (cross-DB compatible)
     status: text('status', {
       enum: ['idle', 'running', 'stopping', 'awaiting_permission', 'completed', 'failed'],

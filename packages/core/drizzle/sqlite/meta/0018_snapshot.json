@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "8d1da118-3ca2-4e77-bbc1-46daf81b61cd",
-  "prevId": "a8363f55-40b7-4649-b6e5-1cc0eba79d04",
+  "id": "faca2458-1f18-4c9e-8b65-2af4b42b8db6",
+  "prevId": "8d1da118-3ca2-4e77-bbc1-46daf81b61cd",
   "tables": {
     "board_comments": {
       "name": "board_comments",
@@ -791,6 +791,13 @@
           "autoincrement": false,
           "default": "'anonymous'"
         },
+        "unix_username": {
+          "name": "unix_username",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "status": {
           "name": "status",
           "type": "text",
@@ -1129,6 +1136,63 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
+    "worktree_owners": {
+      "name": "worktree_owners",
+      "columns": {
+        "worktree_id": {
+          "name": "worktree_id",
+          "type": "text(36)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text(36)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false,
+          "default": "(datetime('now'))"
+        }
+      },
+      "indexes": {
+        "worktree_owners_pk": {
+          "name": "worktree_owners_pk",
+          "columns": ["worktree_id", "user_id"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "worktree_owners_worktree_id_worktrees_worktree_id_fk": {
+          "name": "worktree_owners_worktree_id_worktrees_worktree_id_fk",
+          "tableFrom": "worktree_owners",
+          "tableTo": "worktrees",
+          "columnsFrom": ["worktree_id"],
+          "columnsTo": ["worktree_id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "worktree_owners_user_id_users_user_id_fk": {
+          "name": "worktree_owners_user_id_users_user_id_fk",
+          "tableFrom": "worktree_owners",
+          "tableTo": "users",
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["user_id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
     "worktrees": {
       "name": "worktrees",
       "columns": {
@@ -1310,6 +1374,29 @@
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
+        },
+        "others_can": {
+          "name": "others_can",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false,
+          "default": "'view'"
+        },
+        "unix_group": {
+          "name": "unix_group",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "others_fs_access": {
+          "name": "others_fs_access",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false,
+          "default": "'read'"
         },
         "data": {
           "name": "data",
