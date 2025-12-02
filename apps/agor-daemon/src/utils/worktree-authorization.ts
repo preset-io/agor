@@ -399,11 +399,171 @@ export function loadSessionWorktree(
 }
 
 /**
+ * Resolve session context for worktree-nested resources
+ *
+ * Extracts session_id from various sources based on the operation:
+ * - Sessions: context.id (for get/patch/remove) or data.session_id (for create)
+ * - Tasks/Messages: data.session_id (for create) or load from existing record (for patch/remove)
+ *
+ * Caches session_id on context.params.sessionId for downstream hooks.
+ *
+ * This is Step 1 of the RBAC hook chain.
+ */
+export function resolveSessionContext() {
+  return async (context: HookContext) => {
+    // Skip for internal calls
+    if (!context.params.provider) {
+      return context;
+    }
+
+    let sessionId: string | undefined;
+
+    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
+    const data = context.data as any;
+    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
+    const query = context.params.query as any;
+
+    // Sessions service - session_id IS the record ID
+    if (context.path === 'sessions') {
+      if (context.method === 'create') {
+        sessionId = data?.session_id;
+      } else if (context.id) {
+        sessionId = context.id as string;
+      }
+    }
+    // Tasks/Messages services - session_id is a foreign key
+    else if (context.path === 'tasks' || context.path === 'messages') {
+      if (context.method === 'create') {
+        sessionId = data?.session_id;
+      } else if (context.method === 'patch' || context.method === 'remove') {
+        // Try data/query first
+        sessionId = data?.session_id || query?.session_id;
+
+        // If not found, load existing record
+        if (!sessionId && context.id) {
+          try {
+            // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service type
+            const existing = await (context.service as any).get(context.id, {
+              provider: undefined,
+            });
+            sessionId = existing?.session_id;
+          } catch (error) {
+            console.error(`[resolveSessionContext] Failed to load existing record:`, error);
+          }
+        }
+      } else if (context.method === 'get' || context.method === 'find') {
+        sessionId = query?.session_id;
+      }
+    }
+
+    if (!sessionId) {
+      throw new Error(
+        `Cannot resolve session context: session_id not found for ${context.path}.${context.method}`
+      );
+    }
+
+    // Cache on context
+    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
+    (context.params as any).sessionId = sessionId;
+
+    return context;
+  };
+}
+
+/**
+ * Load session record and cache on context.params
+ *
+ * Loads the session using the sessionId cached by resolveSessionContext().
+ * Caches session on context.params.session for downstream hooks.
+ *
+ * This is Step 2 of the RBAC hook chain.
+ *
+ * @param sessionService - FeathersJS sessions service
+ */
+export function loadSession(
+  // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service type
+  sessionService: any
+) {
+  return async (context: HookContext) => {
+    // Skip for internal calls
+    if (!context.params.provider) {
+      return context;
+    }
+
+    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
+    const sessionId = (context.params as any).sessionId;
+
+    if (!sessionId) {
+      throw new Error('resolveSessionContext hook must run before loadSession');
+    }
+
+    // Load session (bypass provider to avoid recursion)
+    const session = await sessionService.get(sessionId, { provider: undefined });
+
+    if (!session) {
+      throw new Forbidden(`Session not found: ${sessionId}`);
+    }
+
+    // Cache on context
+    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
+    (context.params as any).session = session;
+
+    return context;
+  };
+}
+
+/**
+ * Load worktree from session and check ownership
+ *
+ * Loads the worktree referenced by the session (session.worktree_id).
+ * Checks ownership and caches both worktree and ownership on context.params.
+ *
+ * This is Step 3 of the RBAC hook chain.
+ *
+ * @param worktreeRepo - WorktreeRepository instance
+ */
+export function loadWorktreeFromSession(worktreeRepo: WorktreeRepository) {
+  return async (context: HookContext) => {
+    // Skip for internal calls
+    if (!context.params.provider) {
+      return context;
+    }
+
+    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
+    const session = (context.params as any).session;
+
+    if (!session) {
+      throw new Error('loadSession hook must run before loadWorktreeFromSession');
+    }
+
+    // Load worktree
+    const worktree = await worktreeRepo.findById(session.worktree_id);
+
+    if (!worktree) {
+      throw new Forbidden(`Worktree not found: ${session.worktree_id}`);
+    }
+
+    // Check ownership
+    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
+    const userId = (context.params as any).user?.user_id;
+    const isOwner = userId ? await worktreeRepo.isOwner(worktree.worktree_id, userId) : false;
+
+    // Cache on context
+    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
+    (context.params as any).worktree = worktree;
+    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
+    (context.params as any).isWorktreeOwner = isOwner;
+
+    return context;
+  };
+}
+
+/**
  * Ensure session is immutable to its creator
  *
- * Validates that critical session fields (created_by) cannot be changed.
+ * Validates that critical session fields (created_by, unix_username) cannot be changed.
  * This is CRITICAL for Unix isolation - session execution context is determined
- * by session.created_by (which maps to Unix user).
+ * by session.created_by (which maps to Unix user) and session.unix_username.
  *
  * @see context/explorations/rbac.md - Session Ownership (CRITICAL)
  * @see context/explorations/unix-user-modes.md - Session Execution Model
@@ -422,6 +582,127 @@ export function ensureSessionImmutability() {
     if (data?.created_by !== undefined) {
       throw new Forbidden(
         'session.created_by is immutable - it determines execution context (Unix user, credentials, SDK state)'
+      );
+    }
+
+    // Check if unix_username is being changed
+    if (data?.unix_username !== undefined) {
+      throw new Forbidden(
+        'session.unix_username is immutable - it determines SDK session storage location and execution user'
+      );
+    }
+
+    return context;
+  };
+}
+
+/**
+ * Set session unix_username from creator's current unix_username
+ *
+ * When a session is created, stamp it with the creator's current unix_username.
+ * This unix_username is IMMUTABLE and determines:
+ * - SDK session storage location (~/.claude/, ~/.codex/, etc.)
+ * - Unix user for all session operations (sudo -u)
+ *
+ * IMPORTANT: Run this hook BEFORE any permission checks that might need the unix_username.
+ *
+ * @param userRepo - UserRepository instance
+ */
+export function setSessionUnixUsername(
+  // biome-ignore lint/suspicious/noExplicitAny: UserRepository type
+  userRepo: any
+) {
+  return async (context: HookContext) => {
+    // Only for session creation
+    if (context.method !== 'create' || context.path !== 'sessions') {
+      return context;
+    }
+
+    // Skip for internal calls
+    if (!context.params.provider) {
+      return context;
+    }
+
+    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
+    const data = context.data as any;
+    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
+    const userId = (context.params as any).user?.user_id;
+
+    if (!userId) {
+      throw new NotAuthenticated('Authentication required to create session');
+    }
+
+    // Load user to get current unix_username
+    const user = await userRepo.findById(userId);
+
+    if (!user) {
+      throw new NotAuthenticated('User not found');
+    }
+
+    // Stamp session with creator's current unix_username
+    // This is IMMUTABLE - even if user's unix_username changes later, session keeps this value
+    data.unix_username = user.unix_username || null;
+
+    return context;
+  };
+}
+
+/**
+ * Validate session unix_username before prompting
+ *
+ * DEFENSIVE CHECK: Before allowing operations that execute code (create tasks/messages),
+ * verify that the session creator's current unix_username matches the session's stamped unix_username.
+ *
+ * If they differ, reject the operation with a clear error.
+ *
+ * This prevents security issues where:
+ * - User's unix_username changed after session creation
+ * - SDK session data would be inaccessible (stored in old home directory)
+ * - Execution would happen as wrong Unix user
+ *
+ * @param userRepo - UserRepository instance
+ */
+export function validateSessionUnixUsername(
+  // biome-ignore lint/suspicious/noExplicitAny: UserRepository type
+  userRepo: any
+) {
+  return async (context: HookContext) => {
+    // Only validate for operations that will execute code (create tasks/messages)
+    if (context.method !== 'create') return context;
+    if (context.path !== 'tasks' && context.path !== 'messages') return context;
+
+    // Skip for internal calls
+    if (!context.params.provider) {
+      return context;
+    }
+
+    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
+    const session = (context.params as any).session;
+
+    if (!session) {
+      throw new Error('loadSession hook must run before validateSessionUnixUsername');
+    }
+
+    // If session has no unix_username, allow (backward compatibility)
+    if (!session.unix_username) {
+      return context;
+    }
+
+    // Load session creator to check current unix_username
+    const creator = await userRepo.findById(session.created_by);
+
+    if (!creator) {
+      throw new Forbidden(`Session creator not found: ${session.created_by}`);
+    }
+
+    // DEFENSIVE CHECK: Creator's current unix_username must match session's
+    if (creator.unix_username !== session.unix_username) {
+      throw new Forbidden(
+        `Session security context has changed. ` +
+          `Session was created with unix_username="${session.unix_username}" ` +
+          `but creator's current unix_username="${creator.unix_username || 'null'}". ` +
+          `Cannot execute this session with a different unix user. ` +
+          `SDK session data is stored in the original user's home directory and cannot be accessed.`
       );
     }
 

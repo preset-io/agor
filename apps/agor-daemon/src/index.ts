@@ -164,9 +164,14 @@ import {
   ensureSessionImmutability,
   ensureWorktreePermission,
   filterWorktreesByPermission,
+  loadSession,
   loadSessionWorktree,
   loadWorktree,
+  loadWorktreeFromSession,
   PERMISSION_RANK,
+  resolveSessionContext,
+  setSessionUnixUsername,
+  validateSessionUnixUsername,
 } from './utils/worktree-authorization';
 
 /**
@@ -814,7 +819,9 @@ async function main() {
     const daemonUrl = `http://localhost:${DAEMON_PORT}`;
 
     // Build spawn command with optional Unix user impersonation
-    const executorUnixUser = config.execution?.executor_unix_user;
+    // Prefer session.unix_username (immutable, set at session creation)
+    // Fall back to config.execution.executor_unix_user for backward compatibility
+    const executorUnixUser = session.unix_username || config.execution?.executor_unix_user;
 
     // Determine permission mode: explicit override > session config > 'default'
     // This ensures session settings (like bypassPermissions) are preserved unless explicitly overridden
@@ -1323,6 +1330,7 @@ async function main() {
   // Scans context/ directory in worktree for all .md files recursively
   // Requires worktree_id query parameter
   const worktreeRepository = new WorktreeRepository(db);
+  const usersRepository = new UsersRepository(db);
   app.use('/context', createContextService(worktreeRepository));
 
   // Register file service (read-only filesystem browser for all worktree files)
@@ -1368,7 +1376,9 @@ async function main() {
       get: [
         ...(worktreeRbacEnabled
           ? [
-              loadSessionWorktree(sessionsService, worktreeRepository),
+              resolveSessionContext(),
+              loadSession(sessionsService),
+              loadWorktreeFromSession(worktreeRepository),
               ensureCanView(), // Require 'view' permission
             ]
           : []),
@@ -1377,7 +1387,10 @@ async function main() {
         requireMinimumRole('member', 'create messages'),
         ...(worktreeRbacEnabled
           ? [
-              loadSessionWorktree(sessionsService, worktreeRepository),
+              resolveSessionContext(),
+              loadSession(sessionsService),
+              validateSessionUnixUsername(usersRepository), // Defensive check: session.unix_username must match creator's current unix_username
+              loadWorktreeFromSession(worktreeRepository),
               ensureCanPrompt(), // Require 'prompt' permission to create messages
             ]
           : []),
@@ -1386,7 +1399,9 @@ async function main() {
         requireMinimumRole('member', 'update messages'),
         ...(worktreeRbacEnabled
           ? [
-              loadSessionWorktree(sessionsService, worktreeRepository),
+              resolveSessionContext(),
+              loadSession(sessionsService),
+              loadWorktreeFromSession(worktreeRepository),
               ensureCanPrompt(), // Require 'prompt' permission to update messages
             ]
           : []),
@@ -1395,7 +1410,9 @@ async function main() {
         requireMinimumRole('member', 'delete messages'),
         ...(worktreeRbacEnabled
           ? [
-              loadSessionWorktree(sessionsService, worktreeRepository),
+              resolveSessionContext(),
+              loadSession(sessionsService),
+              loadWorktreeFromSession(worktreeRepository),
               ensureCanPrompt(), // Require 'prompt' permission to delete messages
             ]
           : []),
@@ -1472,6 +1489,7 @@ async function main() {
                 }
 
                 // Get all board objects from result
+                // biome-ignore lint/suspicious/noExplicitAny: BoardObject type not fully available in hook context
                 const boardObjects: any[] = context.result?.data ?? context.result ?? [];
 
                 // Filter based on worktree access
@@ -1821,6 +1839,7 @@ async function main() {
         requireMinimumRole('member', 'create sessions'),
         ...(worktreeRbacEnabled
           ? [
+              setSessionUnixUsername(usersRepository), // Stamp session with creator's unix_username (MUST run first)
               // Check worktree permission BEFORE injecting created_by (need worktree_id)
               async (context: HookContext) => {
                 // RBAC: Ensure user can create sessions in this worktree ('all' permission)
@@ -1902,8 +1921,10 @@ async function main() {
       patch: [
         ...(worktreeRbacEnabled
           ? [
-              ensureSessionImmutability(), // Prevent changing session.created_by
-              loadSessionWorktree(sessionsService, worktreeRepository),
+              ensureSessionImmutability(), // Prevent changing session.created_by and unix_username
+              resolveSessionContext(),
+              loadSession(sessionsService),
+              loadWorktreeFromSession(worktreeRepository),
               ensureWorktreePermission('all', 'update sessions'), // Require 'all' permission
             ]
           : []),
@@ -1911,7 +1932,9 @@ async function main() {
       remove: [
         ...(worktreeRbacEnabled
           ? [
-              loadSessionWorktree(sessionsService, worktreeRepository),
+              resolveSessionContext(),
+              loadSession(sessionsService),
+              loadWorktreeFromSession(worktreeRepository),
               ensureWorktreePermission('all', 'delete sessions'), // Require 'all' permission
             ]
           : []),
@@ -2006,7 +2029,9 @@ async function main() {
       get: [
         ...(worktreeRbacEnabled
           ? [
-              loadSessionWorktree(sessionsService, worktreeRepository),
+              resolveSessionContext(),
+              loadSession(sessionsService),
+              loadWorktreeFromSession(worktreeRepository),
               ensureCanView(), // Require 'view' permission
             ]
           : []),
@@ -2015,7 +2040,10 @@ async function main() {
         requireMinimumRole('member', 'create tasks'),
         ...(worktreeRbacEnabled
           ? [
-              loadSessionWorktree(sessionsService, worktreeRepository),
+              resolveSessionContext(),
+              loadSession(sessionsService),
+              validateSessionUnixUsername(usersRepository), // Defensive check: session.unix_username must match creator's current unix_username
+              loadWorktreeFromSession(worktreeRepository),
               ensureCanPrompt(), // Require 'prompt' permission to create tasks
             ]
           : []),
@@ -2045,7 +2073,9 @@ async function main() {
       patch: [
         ...(worktreeRbacEnabled
           ? [
-              loadSessionWorktree(sessionsService, worktreeRepository),
+              resolveSessionContext(),
+              loadSession(sessionsService),
+              loadWorktreeFromSession(worktreeRepository),
               ensureCanPrompt(), // Require 'prompt' permission to update tasks
             ]
           : []),

@@ -91,7 +91,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
           route: { id: worktree.worktree_id },
         });
         setOwners(ownersResponse as User[]);
-      } catch (error) {
+      } catch (_error) {
         // If RBAC is disabled or service not found, allow all edits
         console.log('Could not load owners, allowing edits');
         setOwners([]);
