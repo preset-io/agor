@@ -104,10 +104,14 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
   }, [client, worktree.worktree_id]);
 
   // Check if current user can edit this worktree
-  // Only actual owners can edit, not admins
+  // Owners can edit, AND admins have super powers (can edit any worktree)
   const currentUserId = currentUser?.user_id;
+  const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'owner';
   const isOwner = owners.some((o) => o.user_id === currentUserId);
-  const canEdit = loadingOwners ? false : isOwner;
+
+  // While loading, assume admins can edit (we know their role immediately)
+  // After loading, check ownership OR admin status
+  const canEdit = loadingOwners ? isAdmin : isAdmin || isOwner;
 
   const hasChanges =
     boardId !== worktree.board_id ||
