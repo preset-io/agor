@@ -16,7 +16,7 @@ importers:
     dependencies:
       agor-live:
         specifier: ^0.8.7
-        version: 0.8.7(@opentelemetry/api@1.9.0)(@opentelemetry/core@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/resources@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-metrics@2.0.1(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.0.1(@opentelemetry/api@1.9.0))(@types/node@24.10.0)(typescript@5.9.3)(zod@4.1.12)
+        version: 0.8.7(@opentelemetry/api@1.9.0)(@opentelemetry/core@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/resources@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-metrics@2.0.1(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.0.1(@opentelemetry/api@1.9.0))(@types/node@24.10.0)(typescript@5.9.3)(zod@3.25.76)
     devDependencies:
       '@biomejs/biome':
         specifier: ^2.2.6
@@ -95,8 +95,8 @@ importers:
         specifier: ^0.13.1
         version: 0.13.1
       '@modelcontextprotocol/sdk':
-        specifier: ^1.20.2
-        version: 1.21.0
+        specifier: ^1.24.0
+        version: 1.24.0(zod@4.1.12)
       '@opencode-ai/sdk':
         specifier: ^1.0.122
         version: 1.0.125
@@ -402,7 +402,7 @@ importers:
         version: 0.18.4(@opentelemetry/core@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/resources@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-metrics@2.0.1(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.0.1(@opentelemetry/api@1.9.0))
       '@google/genai':
         specifier: ^1.26.0
-        version: 1.29.0(@modelcontextprotocol/sdk@1.21.0)
+        version: 1.29.0(@modelcontextprotocol/sdk@1.24.0(zod@3.25.76))
       '@homebridge/node-pty-prebuilt-multiarch':
         specifier: ^0.13.1
         version: 0.13.1
@@ -413,8 +413,8 @@ importers:
         specifier: ^0.15.15
         version: 0.15.15
       '@modelcontextprotocol/sdk':
-        specifier: ^1.20.2
-        version: 1.21.0
+        specifier: ^1.24.0
+        version: 1.24.0(zod@3.25.76)
       '@oclif/core':
         specifier: ^4.6.0
         version: 4.8.0
@@ -543,7 +543,7 @@ importers:
         version: 0.18.4(@opentelemetry/core@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/resources@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-metrics@2.0.1(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.0.1(@opentelemetry/api@1.9.0))
       '@google/genai':
         specifier: ^1.26.0
-        version: 1.29.0(@modelcontextprotocol/sdk@1.23.0(zod@4.1.12))
+        version: 1.29.0(@modelcontextprotocol/sdk@1.24.0(zod@4.1.12))
       '@iarna/toml':
         specifier: ^2.2.5
         version: 2.2.5
@@ -2180,17 +2180,8 @@ packages:
   '@mermaid-js/parser@0.6.3':
     resolution: {integrity: sha512-lnjOhe7zyHjc+If7yT4zoedx2vo4sHaTmtkl1+or8BRTnCtDmcTpAjpzDSfCZrshM5bCoz0GyidzadJAH1xobA==}
 
-  '@modelcontextprotocol/sdk@1.21.0':
-    resolution: {integrity: sha512-YFBsXJMFCyI1zP98u7gezMFKX4lgu/XpoZJk7ufI6UlFKXLj2hAMUuRlQX/nrmIPOmhRrG6tw2OQ2ZA/ZlXYpQ==}
-    engines: {node: '>=18'}
-    peerDependencies:
-      '@cfworker/json-schema': ^4.1.1
-    peerDependenciesMeta:
-      '@cfworker/json-schema':
-        optional: true
-
-  '@modelcontextprotocol/sdk@1.23.0':
-    resolution: {integrity: sha512-MCGd4K9aZKvuSqdoBkdMvZNcYXCkZRYVs/Gh92mdV5IHbctX9H9uIvd4X93+9g8tBbXv08sxc/QHXTzf8y65bA==}
+  '@modelcontextprotocol/sdk@1.24.0':
+    resolution: {integrity: sha512-D8h5KXY2vHFW8zTuxn2vuZGN0HGrQ5No6LkHwlEA9trVgNdPL3TF1dSqKA7Dny6BbBYKSW/rOBDXdC8KJAjUCg==}
     engines: {node: '>=18'}
     peerDependencies:
       '@cfworker/json-schema': ^4.1.1
@@ -5885,6 +5876,9 @@ packages:
     resolution: {integrity: sha512-ekilCSN1jwRvIbgeg/57YFh8qQDNbwDb9xT/qu2DAHbFFZUicIl4ygVaAvzveMhMVr3LnpSKTNnwt8PoOfmKhQ==}
     hasBin: true
 
+  jose@6.1.3:
+    resolution: {integrity: sha512-0TpaTfihd4QMNwrz/ob2Bp7X04yuxJkjRGi4aKmOqwhov54i6u79oCv7T+C7lo70MKH6BesI3vscD1yb/yzKXQ==}
+
   joycon@3.1.1:
     resolution: {integrity: sha512-34wB/Y7MW7bzjKRjUKTa46I2Z7eV62Rkhva+KkopW7Qvv/OSWBqvkSY7vusOPrNuZcUG3tApvdVgNB8POj3SPw==}
     engines: {node: '>=10'}
@@ -6851,8 +6845,8 @@ packages:
     resolution: {integrity: sha512-TfySrs/5nm8fQJDcBDuUng3VOUKsd7S+zqvbOTiGXHfxX4wK31ard+hoNuvkicM/2YFzlpDgABOevKSsB4G/FA==}
     engines: {node: '>= 6'}
 
-  pkce-challenge@5.0.0:
-    resolution: {integrity: sha512-ueGLflrrnvwB3xuo/uGob5pd5FN7l0MsLf0Z87o/UQmRtwjvfylfc9MurIxRAWywCYTgrvpXBcqjV4OfCYGCIQ==}
+  pkce-challenge@5.0.1:
+    resolution: {integrity: sha512-wQ0b/W4Fr01qtpHlqSqspcj3EhBvimsdh0KlHhH8HRZnMsEa0ea2fTULOXOS9ccQr3om+GcGRk4e+isrZWV8qQ==}
     engines: {node: '>=16.20.0'}
 
   pkg-types@1.3.1:
@@ -6989,10 +6983,6 @@ packages:
   raw-body@2.5.3:
     resolution: {integrity: sha512-s4VSOf6yN0rvbRZGxs8Om5CWj6seneMwK3oDb4lWDH0UPhWcxwOWw5+qk24bxq87szX1ydrwylIOp2uG1ojUpA==}
     engines: {node: '>= 0.8'}
-
-  raw-body@3.0.1:
-    resolution: {integrity: sha512-9G8cA+tuMS75+6G/TzW8OtLzmBDMo8p1JRxN5AZ+LAp8uxGA8V8GZm4GQ4/N5QNQEnLmg6SS7wyuSmbKepiKqA==}
-    engines: {node: '>= 0.10'}
 
   raw-body@3.0.2:
     resolution: {integrity: sha512-K5zQjDllxWkf7Z5xJdV0/B0WTNqx6vxG70zJE4N0kBs4LovmEYWJzQGxC9bS9RAKu3bgM40lrd5zoLJ12MQ5BA==}
@@ -8685,11 +8675,6 @@ packages:
     resolution: {integrity: sha512-CzhO+pFNo8ajLM2d2IW/R93ipy99LWjtwblvC1RsoSUMZgyLbYFr221TnSNT7GjGdYui6P459mw9JH/g/zW2ug==}
     engines: {node: '>=18'}
 
-  zod-to-json-schema@3.24.6:
-    resolution: {integrity: sha512-h/z3PKvcTcTetyjl1fkj79MHNEjm+HpD6NXheWjzOekY7kV+lwDYnHw+ivHkijnCSMz1yJaWBD9vu/Fcmk+vEg==}
-    peerDependencies:
-      zod: ^3.25.0
-
   zod-to-json-schema@3.25.0:
     resolution: {integrity: sha512-HvWtU2UG41LALjajJrML6uQejQhNJx+JBO9IflpSja4R03iNWfKXrj6W2h7ljuLyc1nKS+9yDyL/9tD1U/yBnQ==}
     peerDependencies:
@@ -8817,9 +8802,9 @@ snapshots:
 
   '@antfu/utils@9.3.0': {}
 
-  '@anthropic-ai/claude-agent-sdk@0.1.53(zod@4.1.12)':
+  '@anthropic-ai/claude-agent-sdk@0.1.53(zod@3.25.76)':
     dependencies:
-      zod: 4.1.12
+      zod: 3.25.76
     optionalDependencies:
       '@img/sharp-darwin-arm64': 0.33.5
       '@img/sharp-darwin-x64': 0.33.5
@@ -10103,10 +10088,10 @@ snapshots:
       '@google-cloud/logging': 11.2.1
       '@google-cloud/opentelemetry-cloud-monitoring-exporter': 0.21.0(@opentelemetry/api@1.9.0)(@opentelemetry/core@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/resources@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-metrics@2.0.1(@opentelemetry/api@1.9.0))
       '@google-cloud/opentelemetry-cloud-trace-exporter': 3.0.0(@opentelemetry/api@1.9.0)(@opentelemetry/core@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/resources@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.0.1(@opentelemetry/api@1.9.0))
-      '@google/genai': 1.16.0(@modelcontextprotocol/sdk@1.21.0)
+      '@google/genai': 1.16.0(@modelcontextprotocol/sdk@1.24.0(zod@3.25.76))
       '@iarna/toml': 2.2.5
       '@joshua.litt/get-ripgrep': 0.0.3
-      '@modelcontextprotocol/sdk': 1.21.0
+      '@modelcontextprotocol/sdk': 1.24.0(zod@3.25.76)
       '@opentelemetry/api': 1.9.0
       '@opentelemetry/exporter-logs-otlp-grpc': 0.203.0(@opentelemetry/api@1.9.0)
       '@opentelemetry/exporter-logs-otlp-http': 0.203.0(@opentelemetry/api@1.9.0)
@@ -10174,10 +10159,10 @@ snapshots:
       '@google-cloud/logging': 11.2.1
       '@google-cloud/opentelemetry-cloud-monitoring-exporter': 0.21.0(@opentelemetry/api@1.9.0)(@opentelemetry/core@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/resources@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-metrics@2.0.1(@opentelemetry/api@1.9.0))
       '@google-cloud/opentelemetry-cloud-trace-exporter': 3.0.0(@opentelemetry/api@1.9.0)(@opentelemetry/core@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/resources@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.0.1(@opentelemetry/api@1.9.0))
-      '@google/genai': 1.30.0(@modelcontextprotocol/sdk@1.23.0(zod@3.25.76))
+      '@google/genai': 1.30.0(@modelcontextprotocol/sdk@1.24.0(zod@3.25.76))
       '@iarna/toml': 2.2.5
       '@joshua.litt/get-ripgrep': 0.0.3
-      '@modelcontextprotocol/sdk': 1.23.0(zod@3.25.76)
+      '@modelcontextprotocol/sdk': 1.24.0(zod@3.25.76)
       '@opentelemetry/api': 1.9.0
       '@opentelemetry/exporter-logs-otlp-grpc': 0.203.0(@opentelemetry/api@1.9.0)
       '@opentelemetry/exporter-logs-otlp-http': 0.203.0(@opentelemetry/api@1.9.0)
@@ -10240,46 +10225,46 @@ snapshots:
       - tree-sitter
       - utf-8-validate
 
-  '@google/genai@1.16.0(@modelcontextprotocol/sdk@1.21.0)':
+  '@google/genai@1.16.0(@modelcontextprotocol/sdk@1.24.0(zod@3.25.76))':
     dependencies:
       google-auth-library: 9.15.1
       ws: 8.18.3
     optionalDependencies:
-      '@modelcontextprotocol/sdk': 1.21.0
+      '@modelcontextprotocol/sdk': 1.24.0(zod@3.25.76)
     transitivePeerDependencies:
       - bufferutil
       - encoding
       - supports-color
       - utf-8-validate
 
-  '@google/genai@1.29.0(@modelcontextprotocol/sdk@1.21.0)':
+  '@google/genai@1.29.0(@modelcontextprotocol/sdk@1.24.0(zod@3.25.76))':
     dependencies:
       google-auth-library: 10.5.0
       ws: 8.18.3
     optionalDependencies:
-      '@modelcontextprotocol/sdk': 1.21.0
+      '@modelcontextprotocol/sdk': 1.24.0(zod@3.25.76)
     transitivePeerDependencies:
       - bufferutil
       - supports-color
       - utf-8-validate
 
-  '@google/genai@1.29.0(@modelcontextprotocol/sdk@1.23.0(zod@4.1.12))':
+  '@google/genai@1.29.0(@modelcontextprotocol/sdk@1.24.0(zod@4.1.12))':
     dependencies:
       google-auth-library: 10.5.0
       ws: 8.18.3
     optionalDependencies:
-      '@modelcontextprotocol/sdk': 1.23.0(zod@4.1.12)
+      '@modelcontextprotocol/sdk': 1.24.0(zod@4.1.12)
     transitivePeerDependencies:
       - bufferutil
       - supports-color
       - utf-8-validate
 
-  '@google/genai@1.30.0(@modelcontextprotocol/sdk@1.23.0(zod@3.25.76))':
+  '@google/genai@1.30.0(@modelcontextprotocol/sdk@1.24.0(zod@3.25.76))':
     dependencies:
       google-auth-library: 10.5.0
       ws: 8.18.3
     optionalDependencies:
-      '@modelcontextprotocol/sdk': 1.23.0(zod@3.25.76)
+      '@modelcontextprotocol/sdk': 1.24.0(zod@3.25.76)
     transitivePeerDependencies:
       - bufferutil
       - supports-color
@@ -10885,7 +10870,7 @@ snapshots:
     dependencies:
       langium: 3.3.1
 
-  '@modelcontextprotocol/sdk@1.21.0':
+  '@modelcontextprotocol/sdk@1.24.0(zod@3.25.76)':
     dependencies:
       ajv: 8.17.1
       ajv-formats: 3.0.1(ajv@8.17.1)
@@ -10896,32 +10881,15 @@ snapshots:
       eventsource-parser: 3.0.6
       express: 5.2.1
       express-rate-limit: 7.5.1(express@5.2.1)
-      pkce-challenge: 5.0.0
-      raw-body: 3.0.1
-      zod: 3.25.76
-      zod-to-json-schema: 3.24.6(zod@3.25.76)
-    transitivePeerDependencies:
-      - supports-color
-
-  '@modelcontextprotocol/sdk@1.23.0(zod@3.25.76)':
-    dependencies:
-      ajv: 8.17.1
-      ajv-formats: 3.0.1(ajv@8.17.1)
-      content-type: 1.0.5
-      cors: 2.8.5
-      cross-spawn: 7.0.6
-      eventsource: 3.0.7
-      eventsource-parser: 3.0.6
-      express: 5.2.1
-      express-rate-limit: 7.5.1(express@5.2.1)
-      pkce-challenge: 5.0.0
-      raw-body: 3.0.1
+      jose: 6.1.3
+      pkce-challenge: 5.0.1
+      raw-body: 3.0.2
       zod: 3.25.76
       zod-to-json-schema: 3.25.0(zod@3.25.76)
     transitivePeerDependencies:
       - supports-color
 
-  '@modelcontextprotocol/sdk@1.23.0(zod@4.1.12)':
+  '@modelcontextprotocol/sdk@1.24.0(zod@4.1.12)':
     dependencies:
       ajv: 8.17.1
       ajv-formats: 3.0.1(ajv@8.17.1)
@@ -10932,13 +10900,13 @@ snapshots:
       eventsource-parser: 3.0.6
       express: 5.2.1
       express-rate-limit: 7.5.1(express@5.2.1)
-      pkce-challenge: 5.0.0
-      raw-body: 3.0.1
+      jose: 6.1.3
+      pkce-challenge: 5.0.1
+      raw-body: 3.0.2
       zod: 4.1.12
       zod-to-json-schema: 3.25.0(zod@4.1.12)
     transitivePeerDependencies:
       - supports-color
-    optional: true
 
   '@napi-rs/simple-git-android-arm-eabi@0.1.22':
     optional: true
@@ -13101,9 +13069,9 @@ snapshots:
 
   agent-base@7.1.4: {}
 
-  agor-live@0.8.7(@opentelemetry/api@1.9.0)(@opentelemetry/core@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/resources@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-metrics@2.0.1(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.0.1(@opentelemetry/api@1.9.0))(@types/node@24.10.0)(typescript@5.9.3)(zod@4.1.12):
+  agor-live@0.8.7(@opentelemetry/api@1.9.0)(@opentelemetry/core@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/resources@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-metrics@2.0.1(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.0.1(@opentelemetry/api@1.9.0))(@types/node@24.10.0)(typescript@5.9.3)(zod@3.25.76):
     dependencies:
-      '@anthropic-ai/claude-agent-sdk': 0.1.53(zod@4.1.12)
+      '@anthropic-ai/claude-agent-sdk': 0.1.53(zod@3.25.76)
       '@feathersjs/authentication': 5.0.37(typescript@5.9.3)
       '@feathersjs/authentication-client': 5.0.37(typescript@5.9.3)
       '@feathersjs/authentication-local': 5.0.37(typescript@5.9.3)
@@ -13116,11 +13084,11 @@ snapshots:
       '@feathersjs/socketio-client': 5.0.37
       '@feathersjs/typebox': 5.0.37(typescript@5.9.3)
       '@google/gemini-cli-core': 0.15.1(@opentelemetry/core@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/resources@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-metrics@2.0.1(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.0.1(@opentelemetry/api@1.9.0))
-      '@google/genai': 1.29.0(@modelcontextprotocol/sdk@1.21.0)
+      '@google/genai': 1.29.0(@modelcontextprotocol/sdk@1.24.0(zod@3.25.76))
       '@homebridge/node-pty-prebuilt-multiarch': 0.13.1
       '@iarna/toml': 2.2.5
       '@libsql/client': 0.15.15
-      '@modelcontextprotocol/sdk': 1.21.0
+      '@modelcontextprotocol/sdk': 1.24.0(zod@3.25.76)
       '@oclif/core': 4.8.0
       '@oclif/plugin-help': 6.2.35
       '@openai/codex-sdk': 0.58.0
@@ -15394,6 +15362,8 @@ snapshots:
 
   jiti@2.6.1: {}
 
+  jose@6.1.3: {}
+
   joycon@3.1.1: {}
 
   js-base64@3.7.8: {}
@@ -16760,7 +16730,7 @@ snapshots:
 
   pirates@4.0.7: {}
 
-  pkce-challenge@5.0.0: {}
+  pkce-challenge@5.0.1: {}
 
   pkg-types@1.3.1:
     dependencies:
@@ -16916,13 +16886,6 @@ snapshots:
       bytes: 3.1.2
       http-errors: 2.0.1
       iconv-lite: 0.4.24
-      unpipe: 1.0.0
-
-  raw-body@3.0.1:
-    dependencies:
-      bytes: 3.1.2
-      http-errors: 2.0.0
-      iconv-lite: 0.7.0
       unpipe: 1.0.0
 
   raw-body@3.0.2:
@@ -19042,10 +19005,6 @@ snapshots:
 
   yoctocolors@2.1.2: {}
 
-  zod-to-json-schema@3.24.6(zod@3.25.76):
-    dependencies:
-      zod: 3.25.76
-
   zod-to-json-schema@3.25.0(zod@3.25.76):
     dependencies:
       zod: 3.25.76
@@ -19053,7 +19012,6 @@ snapshots:
   zod-to-json-schema@3.25.0(zod@4.1.12):
     dependencies:
       zod: 4.1.12
-    optional: true
 
   zod-validation-error@3.5.4(zod@3.25.76):
     dependencies:
