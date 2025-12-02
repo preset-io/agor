@@ -110,6 +110,8 @@ echo "$ADMIN_OUTPUT"
 # Get FULL admin user UUID from database (the CLI only shows short ID)
 # Use dedicated script to query the database
 echo "🔍 Querying admin user ID from database..."
+# Clear tsx cache to ensure fresh module resolution
+rm -rf /app/node_modules/.tsx 2>/dev/null || true
 ADMIN_USER_ID=$(cd /app && ./node_modules/.bin/tsx scripts/get-admin-id.ts 2>&1 || echo "")
 if [ -z "$ADMIN_USER_ID" ]; then
   echo "⚠️  Warning: Failed to query admin user ID"
