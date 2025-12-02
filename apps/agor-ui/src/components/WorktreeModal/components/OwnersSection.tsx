@@ -37,14 +37,13 @@ export const OwnersSection: React.FC<OwnersSectionProps> = ({ worktree, client, 
   );
 
   // Check if current user can edit owners
-  // Only owners themselves OR users with admin/owner role can edit
+  // Only actual owners can edit, not admins
   const currentUserId = currentUser?.user_id;
-  const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'owner';
   const isOwner = owners.some((o) => o.user_id === currentUserId);
 
-  // While loading, assume admins can edit (we know their role immediately)
-  // After loading, check ownership or admin status
-  const canEdit = loading ? isAdmin : isAdmin || isOwner;
+  // While loading, disable edits
+  // After loading, only allow edits if user is an owner
+  const canEdit = loading ? false : isOwner;
 
   // Load owners and all users
   // biome-ignore lint/correctness/useExhaustiveDependencies: showError causes infinite loop as it changes on every render
