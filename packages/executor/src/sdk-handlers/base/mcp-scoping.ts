@@ -5,11 +5,14 @@
  * Used by all SDK handlers (Claude, Gemini, Codex) to ensure consistent behavior.
  *
  * Scoping Rules:
- * - Isolated Mode: Session has assigned servers → use ONLY those
- * - Hierarchical Mode: Session has NO assigned servers → fall back to global servers
+ * - ALL global-scoped MCPs are included in every session (available to all users)
+ * - PLUS any session-scoped MCPs that are explicitly assigned to this session
+ *
+ * Note: owner_user_id on MCP servers is NOT used for filtering. Global MCPs are
+ * truly global and available to all sessions regardless of who created them.
  */
 
-import type { MCPServer, SessionID, UserID } from '@agor/core/types';
+import type { MCPServer, SessionID } from '@agor/core/types';
 import type {
   FeathersSessionsRepository,
   MCPServerRepository,
@@ -43,15 +46,16 @@ export interface MCPResolutionDeps {
  * @example
  * ```typescript
  * const servers = await getMcpServersForSession(sessionId, {
+ *   sessionsRepo,
  *   sessionMCPRepo,
  *   mcpServerRepo
  * });
  *
- * // Isolated mode (session has assigned servers)
- * // => [{ server: { name: "mcp sdx", ... }, source: "session-assigned" }]
- *
- * // Hierarchical mode (session has no assigned servers)
- * // => [{ server: { name: "filesystem", ... }, source: "global" }, ...]
+ * // Always returns: ALL global MCPs + session-assigned MCPs
+ * // => [
+ * //   { server: { name: "filesystem", scope: "global", ... }, source: "global" },
+ * //   { server: { name: "preset sdx", scope: "session", ... }, source: "session-assigned" }
+ * // ]
  * ```
  */
 export async function getMcpServersForSession(
@@ -74,44 +78,33 @@ export async function getMcpServersForSession(
       return servers;
     }
 
-    const ownerId = session.created_by as UserID;
+    console.log('🔌 Resolving MCP servers for session...');
 
-    // Check if session has explicitly assigned MCP servers (via junction table)
+    // STEP 1: Get ALL global-scoped MCP servers (available to all sessions)
+    const globalServers = await deps.mcpServerRepo.findAll({
+      scope: 'global',
+      enabled: true,
+    });
+
+    console.log(`   📍 Global scope: ${globalServers?.length ?? 0} server(s)`);
+
+    for (const server of globalServers ?? []) {
+      servers.push({
+        server,
+        source: 'global',
+      });
+    }
+
+    // STEP 2: Get session-scoped MCP servers assigned to this specific session
     const sessionServers = await deps.sessionMCPRepo.listServers(sessionId, true); // enabledOnly
 
-    // Isolated Mode: Session has assigned MCP servers
-    if (sessionServers.length > 0) {
-      console.log('🔌 Using session-assigned MCP servers (isolated mode)...');
-      console.log(`   📍 Session-assigned: ${sessionServers.length} server(s)`);
+    console.log(`   📍 Session-assigned: ${sessionServers.length} server(s)`);
 
-      for (const server of sessionServers) {
-        servers.push({
-          server,
-          source: 'session-assigned',
-        });
-      }
-    }
-    // Hierarchical Mode: Session has no assigned servers, fall back to global
-    else {
-      console.log('🔌 Fetching global MCP servers (hierarchical mode)...');
-
-      // Get global servers ONLY for the session owner (not all users!)
-      const globalServers = await deps.mcpServerRepo.findAll({
-        scope: 'global',
-        scopeId: ownerId,
-        enabled: true,
+    for (const server of sessionServers) {
+      servers.push({
+        server,
+        source: 'session-assigned',
       });
-
-      console.log(
-        `   📍 Global scope (owner: ${ownerId.substring(0, 8)}): ${globalServers?.length ?? 0} server(s)`
-      );
-
-      for (const server of globalServers ?? []) {
-        servers.push({
-          server,
-          source: 'global',
-        });
-      }
     }
 
     // Log summary
