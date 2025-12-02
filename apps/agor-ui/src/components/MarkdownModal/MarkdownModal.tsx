@@ -6,9 +6,11 @@
  * - Breadcrumb path header
  * - Uses existing MarkdownRenderer component
  * - Scrollable content area
+ * - Copy path and copy content buttons
  */
 
-import { Modal } from 'antd';
+import { CopyOutlined } from '@ant-design/icons';
+import { Button, Modal, message } from 'antd';
 import type React from 'react';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 
@@ -47,12 +49,21 @@ export const MarkdownModal: React.FC<MarkdownModalProps> = ({
 }) => {
   const _breadcrumbItems = parseBreadcrumb(filePath);
 
+  const handleCopyPath = () => {
+    navigator.clipboard.writeText(filePath);
+    message.success('Path copied to clipboard!');
+  };
+
+  const handleCopyContent = () => {
+    navigator.clipboard.writeText(content);
+    message.success('Content copied to clipboard!');
+  };
+
   return (
     <Modal
       title={title}
       open={open}
       onCancel={onClose}
-      footer={null}
       width={900}
       styles={{
         body: {
@@ -61,6 +72,22 @@ export const MarkdownModal: React.FC<MarkdownModalProps> = ({
           padding: '24px',
         },
       }}
+      footer={[
+        <Button key="copy-path" icon={<CopyOutlined />} onClick={handleCopyPath}>
+          Copy Path
+        </Button>,
+        <Button
+          key="copy-content"
+          type="primary"
+          icon={<CopyOutlined />}
+          onClick={handleCopyContent}
+        >
+          Copy Content
+        </Button>,
+        <Button key="close" onClick={onClose}>
+          Close
+        </Button>,
+      ]}
     >
       <MarkdownRenderer content={content} />
     </Modal>

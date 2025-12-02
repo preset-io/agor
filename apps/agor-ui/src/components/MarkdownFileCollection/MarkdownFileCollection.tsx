@@ -7,22 +7,46 @@
  * - Click handler for opening files
  * - Loading and empty states
  * - Search/filter capability
+ * - Download button for each file
+ * - Copy path button for each file
+ * - Virtual scrolling for performance
  */
 
-import { FileMarkdownOutlined, FolderOutlined } from '@ant-design/icons';
-import { Empty, Input, Spin, Tree, Typography } from 'antd';
+import {
+  CopyOutlined,
+  DownloadOutlined,
+  FileMarkdownOutlined,
+  FileOutlined,
+  FolderOutlined,
+} from '@ant-design/icons';
+import { Button, Empty, Input, message, Spin, Tooltip, Tree } from 'antd';
 import type React from 'react';
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import type { ConceptListItem } from '../../types';
 
 const { Search } = Input;
 
+// Support both old ContextFileListItem and new FileListItem types
+type FileItem =
+  | ConceptListItem
+  | {
+      path: string;
+      title: string;
+      size: number;
+      lastModified: string;
+      isText?: boolean;
+      mimeType?: string;
+    };
+
 export interface MarkdownFileCollectionProps {
-  /** List of markdown files from server */
-  files: ConceptListItem[];
+  /** List of files from server */
+  files: FileItem[];
 
   /** Callback when file is clicked */
-  onFileClick: (file: ConceptListItem) => void;
+  onFileClick: (file: FileItem) => void;
+
+  /** Callback when download button is clicked (optional) */
+  onDownload?: (file: FileItem) => void;
 
   /** Loading state */
   loading?: boolean;
@@ -40,14 +64,19 @@ interface TreeNode {
   icon?: React.ReactNode;
   isLeaf?: boolean;
   children?: TreeNode[];
-  file?: ConceptListItem; // Attached for leaf nodes
+  file?: FileItem; // Attached for leaf nodes
 }
 
 /**
  * Build tree structure from flat file list
  * Groups files by directory, preserving hierarchy
  */
-function buildTree(files: ConceptListItem[], searchQuery: string): TreeNode[] {
+function buildTree(
+  files: FileItem[],
+  searchQuery: string,
+  onDownload?: (file: FileItem) => void,
+  onCopyPath?: (file: FileItem) => void
+): TreeNode[] {
   // Filter files by search query
   const filteredFiles = searchQuery
     ? files.filter(
@@ -61,8 +90,8 @@ function buildTree(files: ConceptListItem[], searchQuery: string): TreeNode[] {
   const tree: Map<string, TreeNode> = new Map();
 
   for (const file of filteredFiles) {
-    // Strip "context/" prefix from path for display
-    const displayPath = file.path.replace(/^context\//, '');
+    // Use path as-is (no prefix stripping)
+    const displayPath = file.path;
     const parts = displayPath.split('/');
 
     // Build directory structure
@@ -76,8 +105,12 @@ function buildTree(files: ConceptListItem[], searchQuery: string): TreeNode[] {
       if (!tree.has(currentPath)) {
         tree.set(currentPath, {
           key: currentPath,
-          title: part,
-          icon: <FolderOutlined />,
+          title: (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+              <FolderOutlined />
+              <strong>{part}</strong>
+            </span>
+          ),
           isLeaf: false,
           children: [],
         });
@@ -91,18 +124,72 @@ function buildTree(files: ConceptListItem[], searchQuery: string): TreeNode[] {
       }
     }
 
-    // Add file node
+    // Determine file icon based on type
+    const isMarkdown = file.path.endsWith('.md');
+    const FileIcon = isMarkdown ? FileMarkdownOutlined : FileOutlined;
+
+    // Add file node with action buttons
+    const fileName = parts[parts.length - 1];
+
+    // Format file size for tooltip
+    const formatSize = (bytes: number): string => {
+      if (bytes < 1024) return `${bytes} B`;
+      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+      return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    };
+
+    const fileSize = formatSize(file.size);
+    const tooltipText = `${file.path} (${fileSize})`;
+
     const fileNode: TreeNode = {
       key: file.path,
       title: (
-        <span>
-          <Typography.Text strong>{file.title}</Typography.Text>
-          <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
-            ({displayPath})
-          </Typography.Text>
-        </span>
+        <Tooltip title={tooltipText} mouseEnterDelay={0.5}>
+          <div
+            style={{
+              display: 'inline-flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              width: '100%',
+            }}
+          >
+            <span
+              style={{ flex: 1, minWidth: 0, display: 'inline-flex', alignItems: 'center', gap: 8 }}
+            >
+              <FileIcon />
+              {fileName}
+            </span>
+            <span style={{ marginLeft: 8, whiteSpace: 'nowrap', display: 'inline-flex', gap: 4 }}>
+              <Tooltip title="Copy path">
+                <Button
+                  size="small"
+                  type="text"
+                  icon={<CopyOutlined />}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (onCopyPath) {
+                      onCopyPath(file);
+                    }
+                  }}
+                />
+              </Tooltip>
+              {onDownload && (
+                <Tooltip title="Download file">
+                  <Button
+                    size="small"
+                    type="text"
+                    icon={<DownloadOutlined />}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onDownload(file);
+                    }}
+                  />
+                </Tooltip>
+              )}
+            </span>
+          </div>
+        </Tooltip>
       ),
-      icon: <FileMarkdownOutlined />,
       isLeaf: true,
       file,
     };
@@ -156,14 +243,24 @@ function buildTree(files: ConceptListItem[], searchQuery: string): TreeNode[] {
 export const MarkdownFileCollection: React.FC<MarkdownFileCollectionProps> = ({
   files,
   onFileClick,
+  onDownload,
   loading = false,
   emptyMessage = 'No markdown files found',
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
 
+  // Handle copy path
+  const handleCopyPath = useCallback((file: FileItem) => {
+    navigator.clipboard.writeText(file.path);
+    message.success('Path copied to clipboard!');
+  }, []);
+
   // Build tree structure
-  const treeData = useMemo(() => buildTree(files, searchQuery), [files, searchQuery]);
+  const treeData = useMemo(
+    () => buildTree(files, searchQuery, onDownload, handleCopyPath),
+    [files, searchQuery, onDownload, handleCopyPath]
+  );
 
   // Handle node selection
   const handleSelect = (_selectedKeys: React.Key[], info: { node: TreeNode }) => {
@@ -232,10 +329,12 @@ export const MarkdownFileCollection: React.FC<MarkdownFileCollectionProps> = ({
       <Tree
         treeData={treeData}
         onSelect={handleSelect}
-        showIcon
+        showIcon={false}
         expandedKeys={expandedKeys}
         onExpand={(keys) => setExpandedKeys(keys as string[])}
         style={{ background: 'transparent' }}
+        virtual
+        height={600}
       />
     </div>
   );

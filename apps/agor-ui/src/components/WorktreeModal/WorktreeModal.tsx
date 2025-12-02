@@ -10,8 +10,8 @@ import type {
 import { Modal, Tabs } from 'antd';
 import { useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
-import { ConceptsTab } from './tabs/ConceptsTab';
 import { EnvironmentTab } from './tabs/EnvironmentTab';
+import { FilesTab } from './tabs/FilesTab';
 import { GeneralTab, type WorktreeUpdate } from './tabs/GeneralTab';
 import { ScheduleTab } from './tabs/ScheduleTab';
 
@@ -103,9 +103,9 @@ export const WorktreeModal: React.FC<WorktreeModalProps> = ({
             ),
           },
           {
-            key: 'concepts',
-            label: 'Concepts',
-            children: <ConceptsTab worktree={worktree} client={client} />,
+            key: 'files',
+            label: 'Files',
+            children: <FilesTab worktree={worktree} client={client} />,
           },
           {
             key: 'schedule',

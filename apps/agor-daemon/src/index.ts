@@ -135,6 +135,7 @@ import { createBoardObjectsService } from './services/board-objects';
 import { createBoardsService } from './services/boards';
 import { createConfigService } from './services/config';
 import { createContextService } from './services/context';
+import { createFileService } from './services/file';
 import { createFilesService } from './services/files';
 import { createHealthMonitor } from './services/health-monitor';
 import { createLeaderboardService } from './services/leaderboard';
@@ -1275,6 +1276,12 @@ async function main() {
   // Requires worktree_id query parameter
   const worktreeRepository = new WorktreeRepository(db);
   app.use('/context', createContextService(worktreeRepository));
+
+  // Register file service (read-only filesystem browser for all worktree files)
+  // Scans entire worktree for all files recursively (up to 50k files)
+  // Excludes node_modules, .git, dist, build, etc.
+  // Requires worktree_id query parameter
+  app.use('/file', createFileService(worktreeRepository));
 
   // Register files service for autocomplete search
   app.use('/files', createFilesService(db));

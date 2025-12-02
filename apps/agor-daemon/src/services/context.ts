@@ -1,6 +1,9 @@
 /**
  * Context Service
  *
+ * @deprecated This service is deprecated. Use the 'file' service instead, which supports
+ * browsing all files in a worktree, not just markdown files in context/.
+ *
  * Provides read-only REST + WebSocket API for browsing markdown files in worktree context/ directories.
  * Does not use database - reads directly from filesystem.
  *
@@ -47,8 +50,14 @@ export class ContextService
   /**
    * Find all markdown files (GET /context?worktree_id=xxx)
    * Returns lightweight list items without content
+   *
+   * @deprecated Use the 'file' service instead
    */
   async find(params?: ContextParams): Promise<ContextFileListItem[]> {
+    console.warn(
+      '[Context Service] DEPRECATED: This service is deprecated. Use /file endpoint instead for browsing all files in a worktree.'
+    );
+
     ensureMinimumRole(params, 'member', 'list context files');
 
     const worktreeId = params?.query?.worktree_id;
