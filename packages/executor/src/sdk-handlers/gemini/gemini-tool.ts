@@ -11,7 +11,6 @@
  */
 
 import { execSync } from 'node:child_process';
-import type { Database } from '@agor/core/db';
 import { generateId } from '@agor/core/db';
 import type {
   MCPServerRepository,
@@ -63,7 +62,6 @@ export class GeminiTool implements ITool {
     mcpServerRepo?: MCPServerRepository,
     sessionMCPRepo?: SessionMCPServerRepository,
     mcpEnabled?: boolean,
-    db?: Database, // Database for user env vars and API key resolution
     useNativeAuth?: boolean // Flag to use OAuth when no API key
   ) {
     if (messagesRepo && sessionsRepo) {
@@ -76,8 +74,6 @@ export class GeminiTool implements ITool {
         mcpServerRepo,
         sessionMCPRepo,
         mcpEnabled,
-        db,
-        tasksService,
         useNativeAuth
       );
     }

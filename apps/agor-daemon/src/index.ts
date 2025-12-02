@@ -821,6 +821,13 @@ async function main() {
     // Build spawn command with optional Unix user impersonation
     // Prefer session.unix_username (immutable, set at session creation)
     // Fall back to config.execution.executor_unix_user for backward compatibility
+    console.log('[Daemon] Checking unix_username for executor spawn:', {
+      sessionId: session.session_id.slice(0, 8),
+      session_unix_username: session.unix_username,
+      session_unix_username_type: typeof session.unix_username,
+      session_unix_username_length: session.unix_username?.length,
+      config_executor_unix_user: config.execution?.executor_unix_user,
+    });
     const executorUnixUser = session.unix_username || config.execution?.executor_unix_user;
 
     // Determine permission mode: explicit override > session config > 'default'
@@ -1324,7 +1331,18 @@ async function main() {
   });
 
   // Register config service for API key management
-  app.use('/config', createConfigService());
+  const configService = createConfigService(db);
+  // Store app reference for service method access
+  // biome-ignore lint/suspicious/noExplicitAny: Service needs app reference for cross-service calls
+  (configService as any).app = app;
+  app.use('/config', configService);
+
+  // Register custom method for API key resolution (used by executors)
+  app.use('/config/resolve-api-key', {
+    async create(data: { taskId: TaskID; keyName: string }) {
+      return await configService.resolveApiKey(data);
+    },
+  });
 
   // Register context service (read-only filesystem browser for worktree context/ files)
   // Scans context/ directory in worktree for all .md files recursively

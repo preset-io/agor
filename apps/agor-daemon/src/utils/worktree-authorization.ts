@@ -451,7 +451,23 @@ export function resolveSessionContext() {
             console.error(`[resolveSessionContext] Failed to load existing record:`, error);
           }
         }
-      } else if (context.method === 'get' || context.method === 'find') {
+      } else if (context.method === 'get') {
+        // Try query first (if session_id provided in params)
+        sessionId = query?.session_id;
+
+        // If not found and we have an ID, load existing record
+        if (!sessionId && context.id) {
+          try {
+            // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service type
+            const existing = await (context.service as any).get(context.id, {
+              provider: undefined,
+            });
+            sessionId = existing?.session_id;
+          } catch (error) {
+            console.error(`[resolveSessionContext] Failed to load existing record:`, error);
+          }
+        }
+      } else if (context.method === 'find') {
         sessionId = query?.session_id;
       }
     }
@@ -613,13 +629,21 @@ export function setSessionUnixUsername(
   userRepo: any
 ) {
   return async (context: HookContext) => {
+    console.log('[setSessionUnixUsername] Hook entry', {
+      method: context.method,
+      path: context.path,
+      hasProvider: !!context.params.provider,
+    });
+
     // Only for session creation
     if (context.method !== 'create' || context.path !== 'sessions') {
+      console.log('[setSessionUnixUsername] Skipping - not session creation');
       return context;
     }
 
     // Skip for internal calls
     if (!context.params.provider) {
+      console.log('[setSessionUnixUsername] Skipping - no provider (internal call)');
       return context;
     }
 
@@ -628,12 +652,23 @@ export function setSessionUnixUsername(
     // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
     const userId = (context.params as any).user?.user_id;
 
+    console.log('[setSessionUnixUsername] Hook called for session creation', {
+      userId,
+      hasProvider: !!context.params.provider,
+    });
+
     if (!userId) {
       throw new NotAuthenticated('Authentication required to create session');
     }
 
     // Load user to get current unix_username
     const user = await userRepo.findById(userId);
+
+    console.log('[setSessionUnixUsername] Loaded user:', {
+      userId,
+      email: user?.email,
+      unix_username: user?.unix_username,
+    });
 
     if (!user) {
       throw new NotAuthenticated('User not found');
@@ -642,6 +677,8 @@ export function setSessionUnixUsername(
     // Stamp session with creator's current unix_username
     // This is IMMUTABLE - even if user's unix_username changes later, session keeps this value
     data.unix_username = user.unix_username || null;
+
+    console.log('[setSessionUnixUsername] Stamped session with unix_username:', data.unix_username);
 
     return context;
   };

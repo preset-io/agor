@@ -1,4 +1,3 @@
-import type { Database } from '@agor/core/db/client';
 import type { MCPServerRepository } from '@agor/core/db/repositories/mcp-servers';
 import type { MessagesRepository } from '@agor/core/db/repositories/messages';
 import type { SessionMCPServerRepository } from '@agor/core/db/repositories/session-mcp-servers';
@@ -15,7 +14,6 @@ describe('GeminiPromptService', () => {
   let mockWorktreesRepo: WorktreeRepository;
   let mockMCPServerRepo: MCPServerRepository;
   let mockSessionMCPRepo: SessionMCPServerRepository;
-  let mockDb: Database;
   let originalEnv: NodeJS.ProcessEnv;
 
   beforeEach(() => {
@@ -40,8 +38,6 @@ describe('GeminiPromptService', () => {
       findBySessionId: vi.fn().mockResolvedValue([]),
     } as unknown as SessionMCPServerRepository;
 
-    mockDb = {} as Database;
-
     service = new GeminiPromptService(
       mockMessagesRepo,
       mockSessionsRepo,
@@ -50,8 +46,7 @@ describe('GeminiPromptService', () => {
       undefined, // reposRepo
       mockMCPServerRepo,
       mockSessionMCPRepo,
-      false,
-      mockDb
+      false
     );
   });
 
@@ -88,8 +83,7 @@ describe('GeminiPromptService', () => {
         undefined, // reposRepo
         mockMCPServerRepo,
         mockSessionMCPRepo,
-        true,
-        mockDb
+        true
       );
       expect(serviceWithMCP).toBeInstanceOf(GeminiPromptService);
     });

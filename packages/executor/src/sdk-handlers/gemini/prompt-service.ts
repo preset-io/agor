@@ -13,7 +13,6 @@ import * as crypto from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { Database } from '@agor/core/db';
 import type { GenAI } from '@agor/core/sdk';
 import { Gemini } from '@agor/core/sdk';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
@@ -99,8 +98,6 @@ export class GeminiPromptService {
     private mcpServerRepo?: MCPServerRepository,
     private sessionMCPRepo?: SessionMCPServerRepository,
     private mcpEnabled?: boolean,
-    _db?: Database, // No longer needed - resolution happens in base-executor
-    _tasksService?: { get: (id: TaskID) => Promise<{ created_by: string }> },
     useNativeAuth?: boolean // Flag from base-executor indicating OAuth should be used
   ) {
     this.apiKey = apiKey;

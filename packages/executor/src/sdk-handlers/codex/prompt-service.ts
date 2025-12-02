@@ -13,8 +13,6 @@
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { resolveApiKey, resolveUserEnvironment } from '@agor/core/config';
-import type { Database } from '@agor/core/db';
 import type { Thread, ThreadItem } from '@agor/core/sdk';
 import { Codex } from '@agor/core/sdk';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
@@ -27,7 +25,7 @@ import type {
   WorktreeRepository,
 } from '../../db/feathers-repositories.js';
 import type { TokenUsage } from '../../types/token-usage.js';
-import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
+import type { PermissionMode, SessionID, TaskID } from '../../types.js';
 import { DEFAULT_CODEX_MODEL } from './models.js';
 import { extractCodexTokenUsage } from './usage.js';
 
@@ -119,9 +117,7 @@ export class CodexPromptService {
   private lastApiKey: string | null = null;
   private stopRequested = new Map<SessionID, boolean>();
   private apiKey: string | undefined;
-  private db?: Database; // Database for user env vars and API key resolution
   private lastCodexHome: string | null = null;
-  private tasksService?: { get: (id: TaskID) => Promise<{ created_by: string }> };
 
   constructor(
     _messagesRepo: MessagesRepository,
@@ -129,14 +125,10 @@ export class CodexPromptService {
     private sessionMCPServerRepo?: SessionMCPServerRepository,
     private worktreesRepo?: WorktreeRepository,
     private reposRepo?: RepoRepository,
-    apiKey?: string,
-    db?: Database, // Database for user env vars and API key resolution
-    tasksService?: { get: (id: TaskID) => Promise<{ created_by: string }> }
+    apiKey?: string
   ) {
     // Store API key from base-executor (already resolved with proper precedence)
     this.apiKey = apiKey || '';
-    this.db = db;
-    this.tasksService = tasksService;
     this.lastApiKey = this.apiKey;
     // Initialize Codex SDK with resolved API key
     this.codex = new Codex.Codex({
@@ -486,39 +478,10 @@ export class CodexPromptService {
       throw new Error(`Session ${sessionId} not found`);
     }
 
-    // Determine which user's context to use for environment variables and API keys
-    // Priority: task creator (if task exists) > session owner (fallback)
-    let contextUserId = session.created_by as UserID | undefined;
-
-    if (taskId && this.tasksService) {
-      try {
-        const task = await this.tasksService.get(taskId);
-        if (task?.created_by) {
-          contextUserId = task.created_by as UserID;
-        }
-      } catch (_err) {
-        // Fall back to session owner if task not found
-      }
-    }
-
-    // Resolve per-user API key with precedence: per-user > global config > env var
-    // This allows each user to have their own OPENAI_API_KEY
-    const resolvedApiKey = await resolveApiKey('OPENAI_API_KEY', {
-      userId: contextUserId,
-      db: this.db,
-    });
-
-    let currentApiKey = '';
-    if (resolvedApiKey.apiKey) {
-      process.env.OPENAI_API_KEY = resolvedApiKey.apiKey;
-      currentApiKey = resolvedApiKey.apiKey;
-      console.log(
-        `🔑 [Codex] Using per-user/global API key from ${resolvedApiKey.source} for ${contextUserId?.substring(0, 8) ?? 'unknown user'}`
-      );
-    } else {
-      // Clear stale API key to ensure SDK fails if no valid key is found
-      delete process.env.OPENAI_API_KEY;
-    }
+    // NOTE: API key resolution is already handled by executeToolTask in base-executor
+    // The API key was resolved via daemon service and passed to this constructor
+    // Use the API key from constructor (this.apiKey)
+    const currentApiKey = this.apiKey || '';
 
     // Only recreate Codex client if API key changed (prevents memory leak - issue #133)
     // This ensures hot-reload of credentials from Settings UI while avoiding process accumulation
@@ -683,32 +646,9 @@ export class CodexPromptService {
         `▶️  [Codex] Running prompt: "${prompt.substring(0, 50)}${prompt.length > 50 ? '...' : ''}"`
       );
 
-      // Resolve user environment variables and augment process.env
-      // This allows the Codex subprocess to access per-user env vars
-      const originalProcessEnv = { ...process.env };
-      let userEnvCount = 0;
-
-      if (contextUserId && this.db) {
-        try {
-          const userEnv = await resolveUserEnvironment(contextUserId, this.db);
-          // Count how many user env vars we're adding (exclude system vars)
-          const systemVarCount = Object.keys(originalProcessEnv).length;
-          const totalVarCount = Object.keys(userEnv).length;
-          userEnvCount = totalVarCount - systemVarCount;
-
-          // Augment process.env with user variables (user takes precedence)
-          Object.assign(process.env, userEnv);
-
-          if (userEnvCount > 0) {
-            console.log(
-              `🔐 [Codex] Augmented process.env with ${userEnvCount} user env vars for ${contextUserId.substring(0, 8)}`
-            );
-          }
-        } catch (err) {
-          console.error(`⚠️  [Codex] Failed to resolve user environment:`, err);
-          // Continue without user env vars - non-fatal error
-        }
-      }
+      // NOTE: User environment variables are already in process.env
+      // The daemon passes them when spawning the executor via createUserProcessEnvironment()
+      // No need to query the database again here!
 
       // Clear any stale stop flag from previous executions
       // This prevents a stop request meant for a previous prompt from affecting this one

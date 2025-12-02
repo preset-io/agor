@@ -8,7 +8,6 @@
  */
 
 import { execSync } from 'node:child_process';
-import type { Database } from '@agor/core/db';
 import { generateId } from '@agor/core/db';
 import type {
   MessagesRepository,
@@ -62,7 +61,6 @@ export class CodexTool implements ITool {
     apiKey?: string,
     messagesService?: MessagesService,
     tasksService?: TasksService,
-    db?: Database, // Database for user env vars and API key resolution
     _useNativeAuth?: boolean // Codex doesn't have OAuth fallback, but accept for interface consistency
   ) {
     this.messagesRepo = messagesRepo;
@@ -77,9 +75,7 @@ export class CodexTool implements ITool {
         sessionMCPServerRepo,
         worktreesRepo,
         reposRepo,
-        apiKey,
-        db,
-        tasksService
+        apiKey
       );
     }
   }

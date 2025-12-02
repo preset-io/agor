@@ -41,7 +41,6 @@ export async function executeGeminiTask(params: {
         repos.mcpServers,
         repos.sessionMCP,
         true, // mcpEnabled
-        undefined, // Database (not used in Feathers architecture)
         useNativeAuth // Flag to use OAuth when no API key
       ),
   });

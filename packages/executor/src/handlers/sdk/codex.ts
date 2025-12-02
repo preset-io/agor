@@ -39,7 +39,6 @@ export async function executeCodexTask(params: {
         apiKey,
         repos.messagesService,
         repos.tasksService,
-        undefined, // Database (not used in Feathers architecture)
         useNativeAuth // Flag for native auth (if applicable)
       ),
   });

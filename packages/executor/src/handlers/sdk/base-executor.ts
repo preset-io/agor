@@ -6,9 +6,8 @@
  */
 
 import { type ApiKeyName, resolveApiKey } from '@agor/core/config';
-import { createDatabase, createLocalDatabase, type Database } from '@agor/core/db';
 import { getCurrentSha } from '@agor/core/git';
-import type { MessageID, PermissionMode, SessionID, Task, TaskID, UserID } from '@agor/core/types';
+import type { MessageID, PermissionMode, SessionID, Task, TaskID } from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
 import type { AgorClient } from '../../services/feathers-client.js';
@@ -211,48 +210,20 @@ async function resolveApiKeyForTask(
   client: AgorClient,
   taskId: TaskID
 ): Promise<import('@agor/core/config').KeyResolutionResult> {
-  // Get database connection
-  let db: Database;
-  const dbUrl = process.env.LIBSQL_URL || process.env.DATABASE_URL;
-
-  if (dbUrl) {
-    // Use custom database URL from environment
-    db = createDatabase({ url: dbUrl });
-  } else {
-    // Use default local database (~/.agor/agor.db)
-    try {
-      db = createLocalDatabase();
-    } catch (err) {
-      console.warn(
-        '[API Key Resolution] No database connection available, using config/env only:',
-        err
-      );
-      // Fall back to sync resolution (config + env only, no per-user keys)
-      return resolveApiKey(keyName, {});
-    }
-  }
-
-  // Fetch task to get creator user ID
-  let contextUserId: UserID | undefined;
+  // Call daemon service to resolve API key (no direct database access from executor!)
+  // This allows executors to run as different Unix users without needing database access
   try {
-    const task = await client.service('tasks').get(taskId);
-    if (task?.created_by) {
-      contextUserId = task.created_by as UserID;
-      console.log(
-        `[API Key Resolution] Task ${taskId.substring(0, 8)} created by user ${contextUserId.substring(0, 8)}`
-      );
-    }
+    const result = (await client.service('config/resolve-api-key').create({
+      taskId,
+      keyName,
+    })) as import('@agor/core/config').KeyResolutionResult;
+    console.log(`[API Key Resolution] Resolved ${keyName} via daemon (source: ${result.source})`);
+    return result;
   } catch (err) {
-    console.warn(`[API Key Resolution] Failed to fetch task ${taskId}:`, err);
+    console.warn('[API Key Resolution] Failed to resolve via daemon service:', err);
+    // Fall back to sync resolution (config + env only, no per-user keys)
+    return resolveApiKey(keyName, {});
   }
-
-  // Resolve API key with full precedence hierarchy
-  const result = await resolveApiKey(keyName, {
-    userId: contextUserId,
-    db,
-  });
-
-  return result;
 }
 
 /**
