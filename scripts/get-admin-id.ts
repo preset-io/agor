@@ -7,8 +7,7 @@
 
 import os from 'node:os';
 import path from 'node:path';
-import { createDatabase } from '@agor/core/db/client';
-import { UserRepository } from '@agor/core/db/repositories';
+import { createDatabase, UserRepository } from '@agor/core/db';
 
 async function main() {
   // Respect DATABASE_URL and AGOR_DB_DIALECT environment variables
