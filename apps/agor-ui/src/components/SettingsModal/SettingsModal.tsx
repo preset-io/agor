@@ -259,6 +259,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         boardObjects={boardObjects}
         mcpServerById={mcpServerById}
         client={client}
+        currentUser={currentUser}
         onUpdateWorktree={onUpdateWorktree}
         onUpdateRepo={onUpdateRepo}
         onArchiveOrDelete={handleArchiveOrDeleteWorktreeWithClose}
