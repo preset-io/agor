@@ -334,6 +334,19 @@ export function loadSessionWorktree(
       } else {
         // For tasks/messages, session_id should be in data/query
         sessionId = data?.session_id || query?.session_id;
+
+        // If session_id not provided in patch/remove, load existing record
+        if (!sessionId && (context.method === 'patch' || context.method === 'remove')) {
+          try {
+            // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service type not fully typed
+            const existingRecord = await (context.service as any).get(context.id, {
+              provider: undefined, // Bypass provider to avoid recursion
+            });
+            sessionId = existingRecord?.session_id;
+          } catch (error) {
+            console.error(`Failed to load existing ${context.path} record for session_id:`, error);
+          }
+        }
       }
     } else if (query?.session_id) {
       sessionId = query.session_id;
