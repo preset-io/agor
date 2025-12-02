@@ -108,25 +108,9 @@ ADMIN_OUTPUT=$(pnpm --filter @agor/cli exec tsx bin/dev.ts user create-admin --f
 echo "$ADMIN_OUTPUT"
 
 # Get FULL admin user UUID from database (the CLI only shows short ID)
-# Query the database directly to get the full UUID for the admin user
-ADMIN_USER_ID=$(node -e "
-const { execSync } = require('child_process');
-const dialect = process.env.AGOR_DB_DIALECT || 'sqlite';
-let query;
-if (dialect === 'postgresql') {
-  const dbUrl = process.env.DATABASE_URL;
-  query = \`psql '\${dbUrl}' -t -c \"SELECT user_id FROM users WHERE email = 'admin@agor.live' LIMIT 1\" 2>/dev/null\`;
-} else {
-  const dbPath = process.env.HOME + '/.agor/agor.db';
-  query = \`sqlite3 '\${dbPath}' \"SELECT user_id FROM users WHERE email = 'admin@agor.live' LIMIT 1\" 2>/dev/null\`;
-}
-try {
-  const result = execSync(query, { encoding: 'utf8' }).trim();
-  console.log(result);
-} catch (e) {
-  process.exit(1);
-}
-" 2>/dev/null)
+# Use dedicated script to query the database
+echo "🔍 Querying admin user ID from database..."
+ADMIN_USER_ID=$(pnpm tsx scripts/get-admin-id.ts 2>/dev/null)
 
 # Run seed script if SEED=true (idempotent: only runs if no data exists)
 if [ "$SEED" = "true" ]; then
