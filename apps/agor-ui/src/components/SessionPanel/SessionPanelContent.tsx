@@ -223,8 +223,7 @@ export const SessionPanelContent: React.FC<SessionPanelContentProps> = ({
                     size="small"
                     icon={<CopyOutlined />}
                     onClick={() => {
-                      const textToCopy =
-                        msg.content_preview || (typeof msg.content === 'string' ? msg.content : '');
+                      const textToCopy = typeof msg.content === 'string' ? msg.content : '';
                       navigator.clipboard.writeText(textToCopy);
                       message.success('Message copied to clipboard');
                     }}
