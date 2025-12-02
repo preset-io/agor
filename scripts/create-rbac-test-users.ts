@@ -17,6 +17,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { getConfigPath } from '@agor/core/config';
 import {
+  BoardObjectRepository,
+  BoardRepository,
   createDatabase,
   createUser,
   getUserByEmail,
@@ -72,6 +74,8 @@ async function main() {
   const db = createDatabase({ url: databaseUrl });
   const repoRepo = new RepoRepository(db);
   const worktreeRepo = new WorktreeRepository(db);
+  const boardRepo = new BoardRepository(db);
+  const boardObjectRepo = new BoardObjectRepository(db);
 
   // Create users
   console.log(chalk.bold('1. Creating users...\n'));
@@ -127,8 +131,23 @@ async function main() {
   console.log(chalk.green(`  ✓ Found agor repo (${agorRepo.repo_id.substring(0, 8)})`));
   console.log('');
 
+  // Find default board
+  console.log(chalk.bold('3. Finding default board...\n'));
+
+  const defaultBoard = await boardRepo.findBySlug('default');
+
+  if (!defaultBoard) {
+    console.log(chalk.yellow('  ⚠️  Default board not found'));
+    console.log(chalk.gray('     Run with SEED=true to create the default board first'));
+    console.log('');
+    process.exit(1);
+  }
+
+  console.log(chalk.green(`  ✓ Found default board (${defaultBoard.board_id.substring(0, 8)})`));
+  console.log('');
+
   // Create test worktrees
-  console.log(chalk.bold('3. Creating test worktrees...\n'));
+  console.log(chalk.bold('4. Creating test worktrees...\n'));
 
   interface TestWorktree {
     name: string;
@@ -163,6 +182,35 @@ async function main() {
 
       if (existing) {
         console.log(chalk.gray(`  ✓ Worktree "${testWorktree.name}" already exists`));
+
+        // Check if it needs board association
+        if (!existing.board_id) {
+          await worktreeRepo.update(existing.worktree_id, { board_id: defaultBoard.board_id });
+          console.log(chalk.gray(`    → Associated with board "${defaultBoard.name}"`));
+        }
+
+        // Check if board object exists
+        const boardObject = await boardObjectRepo.findByWorktreeId(existing.worktree_id);
+        if (!boardObject) {
+          const worktreeIndex = testWorktrees.findIndex((w) => w.name === testWorktree.name);
+          const baseX = 0;
+          const baseY = 0;
+          const spacing = 600;
+          const jitter = 100;
+
+          await boardObjectRepo.create({
+            board_id: defaultBoard.board_id,
+            worktree_id: existing.worktree_id,
+            data: {
+              position: {
+                x: baseX + worktreeIndex * spacing,
+                y: baseY + (Math.random() - 0.5) * jitter,
+              },
+            },
+          });
+          console.log(chalk.gray(`    → Created board object with position`));
+        }
+
         continue;
       }
 
@@ -180,7 +228,7 @@ async function main() {
       // Create a branch name for this worktree (same as worktree name)
       const branchName = testWorktree.name;
 
-      // Create worktree database entry
+      // Create worktree database entry with board association
       const worktree = await worktreeRepo.create({
         repo_id: agorRepo.repo_id,
         name: testWorktree.name,
@@ -191,6 +239,7 @@ async function main() {
         path: worktreePath,
         base_ref: 'main',
         new_branch: true,
+        board_id: defaultBoard.board_id,
       });
 
       // Create actual git worktree on disk with new branch
@@ -208,10 +257,29 @@ async function main() {
       // Add owner
       await worktreeRepo.addOwner(worktree.worktree_id, ownerId);
 
+      // Create board object with position (spread worktrees horizontally with some jitter)
+      const baseX = 0;
+      const baseY = 0;
+      const spacing = 600; // Space cards ~600px apart horizontally
+      const jitter = 100; // Add some random vertical jitter
+      const worktreeIndex = testWorktrees.findIndex((w) => w.name === testWorktree.name);
+
+      await boardObjectRepo.create({
+        board_id: defaultBoard.board_id,
+        worktree_id: worktree.worktree_id,
+        data: {
+          position: {
+            x: baseX + worktreeIndex * spacing,
+            y: baseY + (Math.random() - 0.5) * jitter,
+          },
+        },
+      });
+
       console.log(chalk.green(`  ✓ Created worktree "${testWorktree.name}"`));
       console.log(chalk.gray(`    ID:    ${worktree.worktree_id.substring(0, 8)}`));
       console.log(chalk.gray(`    Path:  ${worktreePath}`));
       console.log(chalk.gray(`    Owner: ${testWorktree.owner}`));
+      console.log(chalk.gray(`    Board: ${defaultBoard.name}`));
 
       // Add additional owners with permissions
       if (testWorktree.additionalOwners) {
