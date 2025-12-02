@@ -4,6 +4,16 @@
   --agor-teal: #2e9a92;
   --agor-teal-light: #3db4aa;
   --agor-teal-dark: #236e68;
+  --agor-gradient: linear-gradient(90deg, #2e9a92 0%, #7fe8df 50%, #a8f5ed 100%);
+}
+
+/* Gradient text utility class for brand consistency */
+.gradient-text {
+  background: var(--agor-gradient);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  font-weight: 700;
 }
 
 /* Custom link color for brand consistency */

@@ -17,7 +17,17 @@ const config: DocsThemeConfig = {
         style={{ height: '42px', width: '42px', borderRadius: '50%' }}
         suppressHydrationWarning
       />
-      <strong style={{ fontSize: '18px' }}>agor</strong>
+      <strong
+        style={{
+          fontSize: '18px',
+          background: 'linear-gradient(90deg, #2e9a92 0%, #7fe8df 50%, #a8f5ed 100%)',
+          WebkitBackgroundClip: 'text',
+          WebkitTextFillColor: 'transparent',
+          backgroundClip: 'text',
+        }}
+      >
+        agor
+      </strong>
     </span>
   ),
   project: {
