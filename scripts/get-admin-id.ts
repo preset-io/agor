@@ -7,7 +7,7 @@
 
 import os from 'node:os';
 import path from 'node:path';
-import { createDatabase, UserRepository } from '@agor/core/db';
+import { createDatabase, UsersRepository } from '@agor/core/db';
 
 async function main() {
   // Respect DATABASE_URL and AGOR_DB_DIALECT environment variables
@@ -24,7 +24,7 @@ async function main() {
 
   try {
     const db = createDatabase({ url: databaseUrl });
-    const userRepo = new UserRepository(db);
+    const userRepo = new UsersRepository(db);
 
     // Find admin user
     const adminUser = await userRepo.findByEmail('admin@agor.live');
