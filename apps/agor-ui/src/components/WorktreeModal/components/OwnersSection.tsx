@@ -202,62 +202,63 @@ export const OwnersSection: React.FC<OwnersSectionProps> = ({ worktree, client, 
         Owners & Permissions
       </Typography.Text>
 
-      {/* Owners Multi-Select */}
-      <div style={{ marginBottom: 16 }}>
-        <Typography.Text
-          type="secondary"
-          style={{ fontSize: 12, display: 'block', marginBottom: 8 }}
-        >
-          Owners (always have full access)
-        </Typography.Text>
-        <Select
-          key={selectKey}
-          mode="multiple"
-          style={{ width: '100%' }}
-          placeholder="Select owners..."
-          value={selectedOwnerIds}
-          onChange={handleOwnersChange}
-          loading={loading}
-          disabled={!canEdit}
-          showSearch
-          filterOption={(input, option) =>
-            (option?.label?.toString() || '').toLowerCase().includes(input.toLowerCase())
-          }
-          optionLabelProp="label"
-          options={allUsers.map((user) => {
-            const isCurrentUser = user.user_id === currentUserId;
-            const label = user.email || `User ${user.user_id.substring(0, 8)}`;
-            const displayLabel = isCurrentUser ? `${label} (You)` : label;
-
-            return {
-              value: user.user_id,
-              label: displayLabel,
-            };
-          })}
-          tagRender={(props) => {
-            const user = allUsers.find((u) => u.user_id === props.value);
-            const isCurrentUser = user?.user_id === currentUserId;
-
-            return (
-              <Tag
-                {...props}
-                color={isCurrentUser ? 'green' : 'default'}
-                closable={props.closable}
-                onClose={props.onClose}
-                style={{ marginRight: 3 }}
-              >
-                <Space size={4}>
-                  <UserOutlined style={{ fontSize: 11 }} />
-                  <span>{props.label}</span>
-                </Space>
-              </Tag>
-            );
-          }}
-        />
-      </div>
-
-      {/* Permission Settings */}
+      {/* All fields use consistent Form layout */}
       <Form layout="horizontal" colon={false}>
+        {/* Owners Multi-Select */}
+        <Form.Item
+          label="Owners"
+          labelCol={{ span: 8 }}
+          wrapperCol={{ span: 16 }}
+          help="Owners always have full access"
+          style={{ marginBottom: 12 }}
+        >
+          <Select
+            key={selectKey}
+            mode="multiple"
+            style={{ width: '100%' }}
+            placeholder="Select owners..."
+            value={selectedOwnerIds}
+            onChange={handleOwnersChange}
+            loading={loading}
+            disabled={!canEdit}
+            showSearch
+            filterOption={(input, option) =>
+              (option?.label?.toString() || '').toLowerCase().includes(input.toLowerCase())
+            }
+            optionLabelProp="label"
+            options={allUsers.map((user) => {
+              const isCurrentUser = user.user_id === currentUserId;
+              const label = user.email || `User ${user.user_id.substring(0, 8)}`;
+              const displayLabel = isCurrentUser ? `${label} (You)` : label;
+
+              return {
+                value: user.user_id,
+                label: displayLabel,
+              };
+            })}
+            tagRender={(props) => {
+              const user = allUsers.find((u) => u.user_id === props.value);
+              const isCurrentUser = user?.user_id === currentUserId;
+
+              return (
+                <Tag
+                  {...props}
+                  color={isCurrentUser ? 'green' : 'default'}
+                  closable={props.closable}
+                  onClose={props.onClose}
+                  style={{ marginRight: 3 }}
+                >
+                  <Space size={4}>
+                    <UserOutlined style={{ fontSize: 11 }} />
+                    <span>{props.label}</span>
+                  </Space>
+                </Tag>
+              );
+            }}
+          />
+        </Form.Item>
+
+        {/* Permission Settings */}
         <Form.Item
           label="Others Can"
           labelCol={{ span: 8 }}
