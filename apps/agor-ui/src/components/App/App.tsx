@@ -919,6 +919,7 @@ export const App: React.FC<AppProps> = ({
             boardById={boardById}
             mcpServerById={mcpServerById}
             client={client}
+            currentUser={user}
             onUpdateWorktree={onUpdateWorktree}
             onUpdateRepo={onUpdateRepo}
             onArchiveOrDelete={onArchiveOrDeleteWorktree}
