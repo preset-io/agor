@@ -107,9 +107,26 @@ echo "👤 Ensuring default admin user exists..."
 ADMIN_OUTPUT=$(pnpm --filter @agor/cli exec tsx bin/dev.ts user create-admin --force 2>&1)
 echo "$ADMIN_OUTPUT"
 
-# Extract admin user ID from output (format: "ID:       a24897d4" with possible ANSI color codes)
-# Strip ANSI codes first, then extract ID
-ADMIN_USER_ID=$(echo "$ADMIN_OUTPUT" | sed 's/\x1b\[[0-9;]*m//g' | grep -i "ID:" | awk '{print $2}' | head -1)
+# Get FULL admin user UUID from database (the CLI only shows short ID)
+# Query the database directly to get the full UUID for the admin user
+ADMIN_USER_ID=$(node -e "
+const { execSync } = require('child_process');
+const dialect = process.env.AGOR_DB_DIALECT || 'sqlite';
+let query;
+if (dialect === 'postgresql') {
+  const dbUrl = process.env.DATABASE_URL;
+  query = \`psql '\${dbUrl}' -t -c \"SELECT user_id FROM users WHERE email = 'admin@agor.live' LIMIT 1\" 2>/dev/null\`;
+} else {
+  const dbPath = process.env.HOME + '/.agor/agor.db';
+  query = \`sqlite3 '\${dbPath}' \"SELECT user_id FROM users WHERE email = 'admin@agor.live' LIMIT 1\" 2>/dev/null\`;
+}
+try {
+  const result = execSync(query, { encoding: 'utf8' }).trim();
+  console.log(result);
+} catch (e) {
+  process.exit(1);
+}
+" 2>/dev/null)
 
 # Run seed script if SEED=true (idempotent: only runs if no data exists)
 if [ "$SEED" = "true" ]; then
