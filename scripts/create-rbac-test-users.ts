@@ -201,11 +201,9 @@ async function main() {
           await boardObjectRepo.create({
             board_id: defaultBoard.board_id,
             worktree_id: existing.worktree_id,
-            data: {
-              position: {
-                x: baseX + worktreeIndex * spacing,
-                y: baseY + (Math.random() - 0.5) * jitter,
-              },
+            position: {
+              x: baseX + worktreeIndex * spacing,
+              y: baseY + (Math.random() - 0.5) * jitter,
             },
           });
           console.log(chalk.gray(`    → Created board object with position`));
@@ -267,11 +265,9 @@ async function main() {
       await boardObjectRepo.create({
         board_id: defaultBoard.board_id,
         worktree_id: worktree.worktree_id,
-        data: {
-          position: {
-            x: baseX + worktreeIndex * spacing,
-            y: baseY + (Math.random() - 0.5) * jitter,
-          },
+        position: {
+          x: baseX + worktreeIndex * spacing,
+          y: baseY + (Math.random() - 0.5) * jitter,
         },
       });
 
