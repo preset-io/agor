@@ -98,6 +98,18 @@ export interface QuerySetupDeps {
  * Setup and configure query for Claude Agent SDK
  * Handles session loading, CWD resolution, MCP configuration, and resume/fork/spawn logic
  */
+/**
+ * Type for Claude SDK Query object - an AsyncGenerator with interrupt() method
+ * Note: We use `any` for the iterator type because the SDK returns complex union types
+ * that include user messages, assistant messages, stream events, results, etc.
+ * The actual runtime type is validated by SDKMessageProcessor.
+ */
+export interface InterruptibleQuery {
+  interrupt(): Promise<void>;
+  // biome-ignore lint/suspicious/noExplicitAny: SDK returns complex union of message types
+  [Symbol.asyncIterator](): AsyncIterator<any>;
+}
+
 export async function setupQuery(
   sessionId: SessionID,
   prompt: string,
@@ -108,8 +120,7 @@ export async function setupQuery(
     resume?: boolean;
   } = {}
 ): Promise<{
-  // biome-ignore lint/suspicious/noExplicitAny: SDK Message types include user, assistant, stream_event, result, etc.
-  query: AsyncGenerator<any, any, unknown>;
+  query: InterruptibleQuery;
   resolvedModel: string;
   getStderr: () => string;
 }> {
@@ -595,5 +606,7 @@ export async function setupQuery(
   // Store stderr buffer getter for error reporting
   const getStderr = () => stderrBuffer;
 
-  return { query: result, resolvedModel: model, getStderr };
+  // Cast to InterruptibleQuery - the SDK's query() returns an AsyncGenerator with interrupt() method
+  // This is safe because the SDK guarantees interrupt() exists at runtime
+  return { query: result as unknown as InterruptibleQuery, resolvedModel: model, getStderr };
 }

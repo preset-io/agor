@@ -18,7 +18,7 @@ import type { SessionID, TaskID } from '../../types.js';
 import { MessageRole } from '../../types.js';
 import type { SessionsService, TasksService } from './claude-tool.js';
 import { type ProcessedEvent, SDKMessageProcessor } from './message-processor.js';
-import { setupQuery } from './query-builder.js';
+import { type InterruptibleQuery, setupQuery } from './query-builder.js';
 
 export interface PromptResult {
   /** Assistant messages (can be multiple: tool invocation, then response) */
@@ -42,14 +42,6 @@ export interface PromptResult {
   outputTokens: number;
 }
 
-/**
- * Type for Claude SDK Query object - an AsyncGenerator with interrupt() method
- */
-interface InterruptibleQuery {
-  interrupt(): Promise<void>;
-  [Symbol.asyncIterator](): AsyncIterator<unknown>;
-}
-
 export class ClaudePromptService {
   /** Enable token-level streaming from Claude Agent SDK */
   // biome-ignore lint/correctness/noUnusedPrivateClassMembers: toggled in future when streaming support lands
@@ -60,8 +52,7 @@ export class ClaudePromptService {
   private static readonly IDLE_TIMEOUT_MS = 300000; // 5 minutes
 
   /** Store active Query objects per session for interruption */
-  // biome-ignore lint/suspicious/noExplicitAny: Query type from SDK is complex
-  private activeQueries = new Map<SessionID, any>();
+  private activeQueries = new Map<SessionID, InterruptibleQuery>();
 
   /** Track stop requests for immediate loop breaking */
   private stopRequested = new Map<SessionID, boolean>();
@@ -156,8 +147,7 @@ export class ClaudePromptService {
 
     // 🔥 Start concurrent stop monitor - polls stopRequested independently of message loop
     // This ensures stop works even during long-running tool executions (build, lint, etc.)
-    // Use double cast because SDK's AsyncGenerator has interrupt() at runtime but not in type definition
-    this.startStopMonitor(sessionId, result as unknown as InterruptibleQuery);
+    this.startStopMonitor(sessionId, result);
 
     try {
       for await (const msg of result) {
@@ -326,8 +316,7 @@ export class ClaudePromptService {
     );
 
     // 🔥 Start concurrent stop monitor (same as streaming mode)
-    // Use double cast because SDK's AsyncGenerator has interrupt() at runtime but not in type definition
-    this.startStopMonitor(sessionId, result as unknown as InterruptibleQuery);
+    this.startStopMonitor(sessionId, result);
 
     // Collect response messages from async generator
     // IMPORTANT: Keep assistant messages SEPARATE (don't merge into one)
