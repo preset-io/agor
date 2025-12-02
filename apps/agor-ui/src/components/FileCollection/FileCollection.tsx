@@ -1,5 +1,5 @@
 /**
- * MarkdownFileCollection - Reusable tree view for browsing markdown files
+ * FileCollection - Reusable tree view for browsing files
  *
  * Features:
  * - Tree view with nested folders
@@ -10,6 +10,7 @@
  * - Download button for each file
  * - Copy path button for each file
  * - Virtual scrolling for performance
+ * - Supports all file types (text and binary)
  */
 
 import {
@@ -41,7 +42,7 @@ export type FileItem =
       mimeType?: string;
     };
 
-export interface MarkdownFileCollectionProps {
+export interface FileCollectionProps {
   /** List of files from server */
   files: FileItem[];
 
@@ -243,12 +244,12 @@ function buildTree(
   return sortNodes(roots);
 }
 
-export const MarkdownFileCollection: React.FC<MarkdownFileCollectionProps> = ({
+export const FileCollection: React.FC<FileCollectionProps> = ({
   files,
   onFileClick,
   onDownload,
   loading = false,
-  emptyMessage = 'No markdown files found',
+  emptyMessage = 'No files found',
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchInput, setSearchInput] = useState('');

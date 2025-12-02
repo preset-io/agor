@@ -3,8 +3,8 @@ import type { FileDetail, FileListItem, Worktree } from '@agor/core/types';
 import { Alert, message, Space } from 'antd';
 import { useEffect, useState } from 'react';
 import { CodePreviewModal } from '../../CodePreviewModal/CodePreviewModal';
-import type { FileItem } from '../../MarkdownFileCollection/MarkdownFileCollection';
-import { MarkdownFileCollection } from '../../MarkdownFileCollection/MarkdownFileCollection';
+import type { FileItem } from '../../FileCollection/FileCollection';
+import { FileCollection } from '../../FileCollection/FileCollection';
 import { MarkdownModal } from '../../MarkdownModal/MarkdownModal';
 
 const MAX_FILES = 50000;
@@ -162,7 +162,7 @@ export const FilesTab: React.FC<FilesTabProps> = ({ worktree, client }) => {
 
         {error && <Alert message="Error" description={error} type="error" showIcon />}
 
-        <MarkdownFileCollection
+        <FileCollection
           files={files}
           loading={loading}
           onFileClick={handleFileClick}

@@ -35,13 +35,14 @@ Convert the WorktreeModal's "Concepts" tab into a general-purpose file browser t
 - **ConceptsTab** (`apps/agor-ui/src/components/WorktreeModal/tabs/ConceptsTab.tsx`)
   - Fetches files from `context` service
   - Displays info alert about `context/` directory
-  - Uses `MarkdownFileCollection` for file tree
+  - Uses `FileCollection` for file tree
   - Opens `MarkdownModal` on file click
 
-- **MarkdownFileCollection** (`apps/agor-ui/src/components/MarkdownFileCollection/MarkdownFileCollection.tsx`)
+- **FileCollection** (`apps/agor-ui/src/components/FileCollection/FileCollection.tsx`)
   - Builds hierarchical tree from flat file list
-  - Strips `context/` prefix for display
+  - Strips `context/` prefix for display (in ConceptsTab)
   - Supports search/filter with auto-expand
+  - Handles all file types (text and binary)
   - Sorts directories first, then files alphabetically
 
 - **MarkdownModal** (`apps/agor-ui/src/components/MarkdownModal/MarkdownModal.tsx`)
@@ -382,7 +383,7 @@ app.use('/file', createFileService(worktreeRepository));
 - Update component name: `ConceptsTab` → `FilesTab`
 - Update props interface: `ConceptsTabProps` → `FilesTabProps`
 
-**Update MarkdownFileCollection:**
+**Update FileCollection:**
 
 - Remove hardcoded `context/` prefix stripping
 - Keep generic, works for any file tree
@@ -395,7 +396,7 @@ import { Alert, Spin, message, Button } from 'antd';
 import { DownloadOutlined } from '@ant-design/icons';
 import type { Worktree } from '@agor/core';
 import type { AgorClient } from '@agor/core/api';
-import { MarkdownFileCollection } from '../../MarkdownFileCollection/MarkdownFileCollection';
+import { FileCollection } from '../../FileCollection/FileCollection';
 import { MarkdownModal } from '../../MarkdownModal/MarkdownModal';
 import { CodePreviewModal } from '../../CodePreviewModal/CodePreviewModal';
 import type { FileListItem, FileDetail } from '@agor/core/types/file';
@@ -554,7 +555,7 @@ export const FilesTab = ({ worktree, client }: FilesTabProps) => {
         style={{ marginBottom: '1rem' }}
       />
 
-      <MarkdownFileCollection
+      <FileCollection
         files={files}
         onFileClick={handleFileClick}
         onDownload={downloadFile}
@@ -597,7 +598,7 @@ import { FilesTab } from './tabs/FilesTab';
 
 ### 3. Add Download Functionality
 
-**Update MarkdownFileCollection to show download button:**
+**Update FileCollection to show download button:**
 
 ```typescript
 // In buildTree(), update TreeNode title rendering for leaf nodes
@@ -634,10 +635,10 @@ if (isLeaf) {
 }
 ```
 
-**Update MarkdownFileCollection props:**
+**Update FileCollection props:**
 
 ```typescript
-export interface MarkdownFileCollectionProps {
+export interface FileCollectionProps {
   files: FileListItem[];
   onFileClick: (file: FileListItem) => void;
   onDownload?: (file: FileListItem) => void; // NEW
@@ -647,7 +648,7 @@ export interface MarkdownFileCollectionProps {
 **Enable virtual scrolling for performance:**
 
 ```typescript
-// In MarkdownFileCollection.tsx, update the Tree component
+// In FileCollection.tsx, update the Tree component
 <Tree
   treeData={treeData}
   onSelect={handleSelect}
@@ -1134,7 +1135,8 @@ export const CodePreviewModal = ({
 
 - `ConceptsTab` → `FilesTab`
 - New: `CodePreviewModal` (syntax highlighting)
-- Update: `MarkdownFileCollection` (add download button, virtual scrolling)
+- Rename: `MarkdownFileCollection` → `FileCollection` (handles all file types)
+- Update: `FileCollection` (add download button, virtual scrolling, binary file support)
 - Reuse: `MarkdownModal` (for .md files)
 
 ---
