@@ -3,20 +3,11 @@ import type { FileDetail, FileListItem, Worktree } from '@agor/core/types';
 import { Alert, message, Space } from 'antd';
 import { useEffect, useState } from 'react';
 import { CodePreviewModal } from '../../CodePreviewModal/CodePreviewModal';
+import type { FileItem } from '../../MarkdownFileCollection/MarkdownFileCollection';
 import { MarkdownFileCollection } from '../../MarkdownFileCollection/MarkdownFileCollection';
 import { MarkdownModal } from '../../MarkdownModal/MarkdownModal';
 
 const MAX_FILES = 50000;
-
-// FileItem type compatible with MarkdownFileCollection
-type FileItem = {
-  path: string;
-  title: string;
-  size: number;
-  lastModified: string;
-  isText?: boolean;
-  mimeType?: string;
-};
 
 interface FilesTabProps {
   worktree: Worktree;
@@ -67,7 +58,7 @@ export const FilesTab: React.FC<FilesTabProps> = ({ worktree, client }) => {
     if (!client) return;
 
     // If text file under size limit, preview in modal
-    if (file.isText && file.size < 1024 * 1024) {
+    if ('isText' in file && file.isText && file.size < 1024 * 1024) {
       try {
         setLoadingDetail(true);
         setModalOpen(true);
@@ -91,7 +82,7 @@ export const FilesTab: React.FC<FilesTabProps> = ({ worktree, client }) => {
     }
   };
 
-  // Download file
+  // Download file (handles both UTF-8 text and base64 binary)
   const downloadFile = async (file: FileItem) => {
     if (!client) return;
 
@@ -102,9 +93,27 @@ export const FilesTab: React.FC<FilesTabProps> = ({ worktree, client }) => {
         query: { worktree_id: worktree.worktree_id },
       })) as FileDetail;
 
-      const blob = new Blob([detail.content], {
-        type: file.mimeType || 'application/octet-stream',
-      });
+      // Decode content based on encoding
+      let blob: Blob;
+      const mimeType = 'mimeType' in file ? file.mimeType : undefined;
+
+      if (detail.encoding === 'base64') {
+        // Binary file: decode base64 to binary
+        const binaryString = atob(detail.content);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+        blob = new Blob([bytes], {
+          type: mimeType || 'application/octet-stream',
+        });
+      } else {
+        // Text file: use UTF-8 string directly
+        blob = new Blob([detail.content], {
+          type: mimeType || 'text/plain',
+        });
+      }
+
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;

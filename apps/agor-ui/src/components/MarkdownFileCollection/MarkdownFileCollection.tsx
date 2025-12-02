@@ -21,13 +21,16 @@ import {
 } from '@ant-design/icons';
 import { Button, Empty, Input, message, Spin, Tooltip, Tree } from 'antd';
 import type React from 'react';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ConceptListItem } from '../../types';
 
 const { Search } = Input;
 
+// Debounce delay for live search (milliseconds)
+const SEARCH_DEBOUNCE_MS = 300;
+
 // Support both old ContextFileListItem and new FileListItem types
-type FileItem =
+export type FileItem =
   | ConceptListItem
   | {
       path: string;
@@ -248,6 +251,7 @@ export const MarkdownFileCollection: React.FC<MarkdownFileCollectionProps> = ({
   emptyMessage = 'No markdown files found',
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchInput, setSearchInput] = useState('');
   const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
 
   // Handle copy path
@@ -269,22 +273,8 @@ export const MarkdownFileCollection: React.FC<MarkdownFileCollectionProps> = ({
     }
   };
 
-  // Handle search - expand all matching paths
-  const handleSearch = (value: string) => {
-    setSearchQuery(value);
-
-    if (value) {
-      // Expand all directories when searching
-      const allKeys = getAllKeys(treeData);
-      setExpandedKeys(allKeys);
-    } else {
-      // Collapse all when clearing search
-      setExpandedKeys([]);
-    }
-  };
-
   // Get all directory keys for expansion
-  const getAllKeys = (nodes: TreeNode[]): string[] => {
+  const getAllKeys = useCallback((nodes: TreeNode[]): string[] => {
     const keys: string[] = [];
     const traverse = (node: TreeNode) => {
       if (!node.isLeaf) {
@@ -296,6 +286,34 @@ export const MarkdownFileCollection: React.FC<MarkdownFileCollectionProps> = ({
     };
     nodes.forEach(traverse);
     return keys;
+  }, []);
+
+  // Debounced search effect
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setSearchQuery(searchInput);
+
+      if (searchInput) {
+        // Expand all directories when searching
+        const allKeys = getAllKeys(treeData);
+        setExpandedKeys(allKeys);
+      } else {
+        // Collapse all when clearing search
+        setExpandedKeys([]);
+      }
+    }, SEARCH_DEBOUNCE_MS);
+
+    return () => clearTimeout(timer);
+  }, [searchInput, treeData, getAllKeys]);
+
+  // Handle search input change (live filtering with debounce)
+  const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setSearchInput(e.target.value);
+  };
+
+  // Handle explicit search button click
+  const handleSearch = (value: string) => {
+    setSearchInput(value);
   };
 
   if (loading) {
@@ -320,8 +338,9 @@ export const MarkdownFileCollection: React.FC<MarkdownFileCollectionProps> = ({
         <Search
           placeholder="Search files..."
           allowClear
+          value={searchInput}
           onSearch={handleSearch}
-          onChange={(e) => !e.target.value && handleSearch('')}
+          onChange={handleSearchChange}
           style={{ width: '100%' }}
         />
       </div>

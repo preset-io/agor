@@ -11,14 +11,15 @@
  * - Detects text files for preview vs download
  */
 
-import { readdir, readFile, stat } from 'node:fs/promises';
-import { extname, isAbsolute, join, relative, resolve } from 'node:path';
+import { lstat, readdir, readFile, realpath } from 'node:fs/promises';
+import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { WorktreeRepository } from '@agor/core/db';
 import type { FileDetail, FileListItem, Id, QueryParams, ServiceMethods } from '@agor/core/types';
 import { ensureMinimumRole } from '../utils/authorization';
 
 const MAX_FILES = 50000; // Hard limit to prevent browser crashes
 const MAX_PREVIEW_SIZE = 1024 * 1024; // 1MB max file size for preview
+const MAX_TITLE_READ_BYTES = 4096; // Only read first 4KB for markdown title extraction
 
 /**
  * File service params (read-only, no create/update/delete)
@@ -159,22 +160,22 @@ export class FileService
       path: worktree.path,
     });
 
+    // Resolve real path to handle symlinks
+    const worktreeRoot = await realpath(worktree.path);
+
     const files: FileListItem[] = [];
+    const scanState = { truncated: false, totalCount: 0 };
 
     // Scan entire worktree
-    await this.scanDirectory(worktree.path, worktree.path, files);
+    await this.scanDirectory(worktreeRoot, worktreeRoot, files, scanState);
 
-    // Apply hard limit to prevent browser crashes
-    if (files.length > MAX_FILES) {
-      console.warn(
-        `[File Service] Repository has ${files.length} files, truncating to ${MAX_FILES}`
-      );
-      const truncated = files.slice(0, MAX_FILES);
-      console.log(`[File Service] Returning ${truncated.length} files (truncated)`);
-      return truncated;
-    }
+    console.log(
+      `[File Service] Found ${scanState.totalCount} files total, returning ${files.length} files`,
+      {
+        truncated: scanState.truncated,
+      }
+    );
 
-    console.log(`[File Service] Found ${files.length} files`);
     return files;
   }
 
@@ -202,29 +203,51 @@ export class FileService
     const relativePathInput = id.toString();
     const normalizedRelativePath = this.normalizeRelativePath(relativePathInput);
 
-    const worktreeRoot = resolve(worktree.path);
+    // Resolve real worktree root to handle symlinks
+    const worktreeRoot = await realpath(worktree.path);
     const fullPath = resolve(worktreeRoot, normalizedRelativePath);
-    const relativeToRoot = relative(worktreeRoot, fullPath);
-
-    // Validate path is within worktree
-    if (!relativeToRoot || relativeToRoot.startsWith('..') || isAbsolute(relativeToRoot)) {
-      throw new Error('Invalid file path');
-    }
 
     try {
-      // Read file content
-      const content = await readFile(fullPath, 'utf-8');
+      // Resolve real path and validate it's within worktree (prevents symlink escape)
+      const realFilePath = await realpath(fullPath);
+      const relativeToRoot = relative(worktreeRoot, realFilePath);
 
-      // Get file stats
-      const stats = await stat(fullPath);
+      // Validate path is within worktree
+      if (!relativeToRoot || relativeToRoot.startsWith('..') || isAbsolute(relativeToRoot)) {
+        throw new Error('Access denied: path escapes worktree');
+      }
+
+      // Get file stats using lstat (doesn't follow symlinks)
+      const stats = await lstat(fullPath);
+
+      // Reject symlinks to prevent escape
+      if (stats.isSymbolicLink()) {
+        throw new Error('Access denied: symlinks not allowed');
+      }
 
       // Determine if text file
       const isText = isTextFile(normalizedRelativePath, stats.size);
 
+      // Read file content (binary-safe)
+      const buffer = await readFile(fullPath);
+      let content: string;
+      let encoding: 'utf-8' | 'base64';
+
+      if (isText) {
+        // Text files: return as UTF-8 string
+        content = buffer.toString('utf-8');
+        encoding = 'utf-8';
+      } else {
+        // Binary files: return as base64
+        content = buffer.toString('base64');
+        encoding = 'base64';
+      }
+
       // Extract title from first H1 for markdown, otherwise use filename
-      const title = normalizedRelativePath.endsWith('.md')
-        ? this.extractTitle(content, normalizedRelativePath)
-        : normalizedRelativePath.split('/').pop() || normalizedRelativePath;
+      let title = normalizedRelativePath.split('/').pop() || normalizedRelativePath;
+      if (normalizedRelativePath.endsWith('.md') && isText) {
+        title = this.extractTitle(content, normalizedRelativePath);
+      }
 
       return {
         path: normalizedRelativePath,
@@ -234,8 +257,12 @@ export class FileService
         isText,
         mimeType: getMimeType(normalizedRelativePath),
         content,
+        encoding,
       };
     } catch (error) {
+      if (error instanceof Error && error.message.startsWith('Access denied')) {
+        throw error;
+      }
       throw new Error(`Failed to read file: ${error}`);
     }
   }
@@ -247,6 +274,7 @@ export class FileService
     baseDir: string,
     currentDir: string,
     files: FileListItem[],
+    scanState: { truncated: boolean; totalCount: number },
     excludePatterns: string[] = [
       'node_modules',
       '.git',
@@ -259,55 +287,79 @@ export class FileService
       'venv',
     ]
   ): Promise<void> {
+    // Early exit if we've already hit the limit
+    if (files.length >= MAX_FILES) {
+      scanState.truncated = true;
+      return;
+    }
+
     try {
       const entries = await readdir(currentDir, { withFileTypes: true });
 
       for (const entry of entries) {
+        // Check limit before processing each entry
+        if (files.length >= MAX_FILES) {
+          scanState.truncated = true;
+          return;
+        }
+
         const fullPath = join(currentDir, entry.name);
+
+        // Use lstat to not follow symlinks
+        const stats = await lstat(fullPath);
+
+        // Skip symlinks entirely to prevent escape
+        if (stats.isSymbolicLink()) {
+          console.log(`[File Service] Skipping symlink: ${fullPath}`);
+          continue;
+        }
+
         const relativePath = relative(baseDir, fullPath);
 
+        // Normalize path separators to POSIX (forward slashes)
+        const normalizedPath = relativePath.split(sep).join('/');
+
         // Skip excluded directories
-        const pathParts = relativePath.split('/');
+        const pathParts = normalizedPath.split('/');
         if (excludePatterns.some((pattern) => pathParts.includes(pattern))) {
           continue;
         }
 
-        if (entry.isDirectory()) {
+        if (stats.isDirectory()) {
           // Recursively scan subdirectories
-          await this.scanDirectory(baseDir, fullPath, files, excludePatterns);
-        } else if (entry.isFile()) {
-          const stats = await stat(fullPath);
-          const isText = isTextFile(relativePath, stats.size);
+          await this.scanDirectory(baseDir, fullPath, files, scanState, excludePatterns);
+        } else if (stats.isFile()) {
+          scanState.totalCount++;
 
-          // Extract title for markdown files
+          const isText = isTextFile(normalizedPath, stats.size);
+
+          // Extract title for markdown files (lazy: only read first 4KB)
           let title = entry.name;
-          if (relativePath.endsWith('.md')) {
+          if (normalizedPath.endsWith('.md') && stats.size > 0 && stats.size <= MAX_PREVIEW_SIZE) {
             try {
-              const content = await readFile(fullPath, 'utf-8');
-              title = this.extractTitle(content, relativePath);
-            } catch {
-              // If can't read, use filename
+              // Only read first 4KB for title extraction
+              const buffer = await readFile(fullPath);
+              const chunk = buffer.subarray(0, MAX_TITLE_READ_BYTES).toString('utf-8');
+              title = this.extractTitle(chunk, normalizedPath);
+            } catch (err) {
+              console.warn(`[File Service] Failed to extract title from ${normalizedPath}:`, err);
               title = entry.name;
             }
           }
 
           files.push({
-            path: relativePath,
+            path: normalizedPath,
             title,
             size: stats.size,
             lastModified: stats.mtime.toISOString(),
             isText,
-            mimeType: getMimeType(relativePath),
+            mimeType: getMimeType(normalizedPath),
           });
-
-          // Early exit if we've hit the limit
-          if (files.length >= MAX_FILES) {
-            return;
-          }
         }
       }
-    } catch (_error) {
-      // Directory access error, skip silently
+    } catch (error) {
+      // Log directory access errors instead of silently skipping
+      console.error(`[File Service] Failed to read directory ${currentDir}:`, error);
     }
   }
 
