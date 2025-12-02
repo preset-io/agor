@@ -317,6 +317,10 @@ export function loadSessionWorktree(
       return context;
     }
 
+    console.log(
+      `[loadSessionWorktree] method=${context.method}, path=${context.path}, id=${context.id || 'none'}`
+    );
+
     // Extract session_id from data, query, or id
     let sessionId: string | undefined;
 
@@ -337,14 +341,23 @@ export function loadSessionWorktree(
 
         // If session_id not provided in patch/remove, load existing record
         if (!sessionId && (context.method === 'patch' || context.method === 'remove')) {
+          console.log(
+            `[loadSessionWorktree] Loading existing ${context.path} record to get session_id. ID: ${context.id}`
+          );
           try {
             // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service type not fully typed
             const existingRecord = await (context.service as any).get(context.id, {
               provider: undefined, // Bypass provider to avoid recursion
             });
             sessionId = existingRecord?.session_id;
+            console.log(
+              `[loadSessionWorktree] Loaded session_id from existing record: ${sessionId?.substring(0, 8) || 'NOT FOUND'}`
+            );
           } catch (error) {
-            console.error(`Failed to load existing ${context.path} record for session_id:`, error);
+            console.error(
+              `[loadSessionWorktree] Failed to load existing ${context.path} record for session_id:`,
+              error
+            );
           }
         }
       }
