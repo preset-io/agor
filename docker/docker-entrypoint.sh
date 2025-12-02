@@ -110,7 +110,7 @@ echo "$ADMIN_OUTPUT"
 # Get FULL admin user UUID from database (the CLI only shows short ID)
 # Use dedicated script to query the database
 echo "🔍 Querying admin user ID from database..."
-ADMIN_USER_ID=$(pnpm tsx scripts/get-admin-id.ts 2>/dev/null)
+ADMIN_USER_ID=$(pnpm tsx scripts/get-admin-id.ts 2>&1)
 
 # Run seed script if SEED=true (idempotent: only runs if no data exists)
 if [ "$SEED" = "true" ]; then
