@@ -3066,8 +3066,37 @@ async function main() {
    *
    * NOTE: params argument may be empty when called from callback-triggered queue processing.
    * We reconstruct the original user's authentication context from message metadata.
+   *
+   * IMPORTANT: Uses in-memory lock to prevent concurrent processing of the same session's queue,
+   * which would cause duplicate callback execution in race conditions.
    */
+  // In-memory lock to prevent concurrent queue processing for the same session
+  const queueProcessingLocks = new Set<SessionID>();
+
   async function processNextQueuedMessage(
+    sessionId: SessionID,
+    params: RouteParams
+  ): Promise<void> {
+    // Check if already processing queue for this session
+    if (queueProcessingLocks.has(sessionId)) {
+      console.log(
+        `⏭️  [Queue] Already processing queue for session ${sessionId.substring(0, 8)}, skipping duplicate call`
+      );
+      return;
+    }
+
+    // Acquire lock
+    queueProcessingLocks.add(sessionId);
+
+    try {
+      await processNextQueuedMessageInternal(sessionId, params);
+    } finally {
+      // Always release lock, even if processing fails
+      queueProcessingLocks.delete(sessionId);
+    }
+  }
+
+  async function processNextQueuedMessageInternal(
     sessionId: SessionID,
     params: RouteParams
   ): Promise<void> {
