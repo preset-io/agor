@@ -158,8 +158,9 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agor_dev_secret}
       # Performance tuning for development
       POSTGRES_INITDB_ARGS: '-E UTF8 --locale=C'
-    ports:
-      - '${POSTGRES_PORT:-5432}:5432'
+    # NOTE: No external port exposure - postgres is only accessed via Docker internal network
+    # The agor-dev container connects to postgres:5432 (internal Docker DNS)
+    # This avoids port conflicts when running multiple docker-compose instances
     volumes:
       - postgres-data:/var/lib/postgresql/data
       # Init script to grant permissions (runs only on first startup)
