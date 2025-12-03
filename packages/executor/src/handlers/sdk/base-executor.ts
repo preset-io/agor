@@ -46,6 +46,24 @@ export interface BaseTool {
     partialResult?: Partial<{ taskId: string; status: 'completed' | 'failed' | 'cancelled' }>;
     reason?: string;
   }>;
+
+  /**
+   * Compute cumulative context window usage for a session
+   *
+   * Each tool implements its own strategy:
+   * - Claude Code: Sum input+output tokens across tasks since last compaction
+   * - Codex/Gemini: May use SDK's cumulative reporting
+   *
+   * @param sessionId - Session ID to compute context for
+   * @param currentTaskId - Current task ID (optional)
+   * @param currentRawSdkResponse - Raw SDK response for current task (required during task completion)
+   * @returns Cumulative context window usage in tokens
+   */
+  computeContextWindow?(
+    sessionId: string,
+    currentTaskId?: string,
+    currentRawSdkResponse?: unknown
+  ): Promise<number>;
 }
 
 /**
@@ -346,6 +364,24 @@ export async function executeToolTask(params: {
         console.log(
           `[${toolName}] Normalized SDK response: ${normalized.tokenUsage.totalTokens} tokens, $${normalized.costUsd?.toFixed(4) ?? 'N/A'}`
         );
+      }
+
+      // Compute cumulative context window usage (BEFORE the patch to avoid DB deadlocks)
+      if (tool.computeContextWindow) {
+        try {
+          const contextWindow = await tool.computeContextWindow(
+            sessionId,
+            taskId,
+            result.rawSdkResponse
+          );
+          if (contextWindow > 0) {
+            patchData.computed_context_window = contextWindow;
+            console.log(`[${toolName}] Computed context window: ${contextWindow} tokens`);
+          }
+        } catch (error) {
+          console.error(`[${toolName}] Failed to compute context window:`, error);
+          // Continue without context window - not critical
+        }
       }
     }
 
