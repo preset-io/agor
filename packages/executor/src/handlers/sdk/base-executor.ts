@@ -6,7 +6,7 @@
  */
 
 import { type ApiKeyName, resolveApiKey } from '@agor/core/config';
-import { getCurrentSha } from '@agor/core/git';
+import { getGitState } from '@agor/core/git';
 import type { MessageID, PermissionMode, SessionID, Task, TaskID } from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
@@ -162,12 +162,13 @@ export function createExecutionContext(
 }
 
 /**
- * Capture git SHA at task end
+ * Capture git state at task end
  *
- * Fetches the worktree path from the session and captures the current git SHA.
- * Returns the SHA or undefined if it cannot be determined.
+ * Fetches the worktree path from the session and captures the current git state.
+ * Returns the SHA (with "-dirty" suffix if working directory has uncommitted changes)
+ * or undefined if it cannot be determined.
  */
-async function captureGitShaAtTaskEnd(
+async function captureGitStateAtTaskEnd(
   client: AgorClient,
   sessionId: SessionID
 ): Promise<string | undefined> {
@@ -186,9 +187,11 @@ async function captureGitShaAtTaskEnd(
       return undefined;
     }
 
-    // Get current git SHA
-    const sha = await getCurrentSha(worktree.path);
-    console.log(`[Git SHA Capture] Captured SHA at task end: ${sha.substring(0, 8)}`);
+    // Get current git state (includes dirty detection)
+    const sha = await getGitState(worktree.path);
+    console.log(
+      `[Git SHA Capture] Captured git state at task end: ${sha.substring(0, 8)}${sha.endsWith('-dirty') ? ' (dirty)' : ''}`
+    );
     return sha;
   } catch (error) {
     console.warn('[Git SHA Capture] Failed to capture git SHA at task end:', error);
@@ -312,7 +315,7 @@ export async function executeToolTask(params: {
     );
 
     // Capture git SHA at task end
-    const shaAtEnd = await captureGitShaAtTaskEnd(client, sessionId);
+    const shaAtEnd = await captureGitStateAtTaskEnd(client, sessionId);
 
     // Build patch data
     const patchData: Partial<Task> = {
@@ -351,7 +354,7 @@ export async function executeToolTask(params: {
     console.error(`[${toolName}] Execution failed:`, err);
 
     // Capture git SHA at task end (even for failed tasks)
-    const shaAtEnd = await captureGitShaAtTaskEnd(client, sessionId);
+    const shaAtEnd = await captureGitStateAtTaskEnd(client, sessionId);
 
     // Build patch data
     const patchData: Partial<Task> = {
