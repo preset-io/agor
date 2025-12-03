@@ -112,7 +112,8 @@ echo "$ADMIN_OUTPUT"
 echo "🔍 Querying admin user ID from database..."
 # Clear tsx cache to ensure fresh module resolution
 rm -rf /app/node_modules/.tsx 2>/dev/null || true
-ADMIN_USER_ID=$(cd /app && ./node_modules/.bin/tsx scripts/get-admin-id.ts 2>&1 || echo "")
+# Silence SQLite pragma logs to prevent polluting captured output
+ADMIN_USER_ID=$(cd /app && AGOR_SILENT_PRAGMA_LOGS=true ./node_modules/.bin/tsx scripts/get-admin-id.ts || echo "")
 if [ -z "$ADMIN_USER_ID" ]; then
   echo "⚠️  Warning: Failed to query admin user ID"
 else

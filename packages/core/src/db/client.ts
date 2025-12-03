@@ -131,15 +131,18 @@ function createLibSQLClient(config: DbConfig): Client {
  * - Foreign key constraints required for CASCADE, SET NULL, etc.
  */
 async function configureSQLitePragmas(client: Client): Promise<void> {
+  // Allow silencing pragma logs via environment variable (useful for scripts)
+  const silent = process.env.AGOR_SILENT_PRAGMA_LOGS === 'true';
+
   try {
     await client.execute('PRAGMA journal_mode = WAL');
-    console.log('✅ WAL mode enabled for concurrent access');
+    if (!silent) console.log('✅ WAL mode enabled for concurrent access');
 
     await client.execute('PRAGMA busy_timeout = 5000');
-    console.log('✅ Busy timeout set to 5 seconds');
+    if (!silent) console.log('✅ Busy timeout set to 5 seconds');
 
     await client.execute('PRAGMA foreign_keys = ON');
-    console.log('✅ Foreign key constraints enabled');
+    if (!silent) console.log('✅ Foreign key constraints enabled');
   } catch (error) {
     console.warn('⚠️  Failed to configure SQLite pragmas:', error);
   }
