@@ -904,17 +904,16 @@ export class ClaudeTool implements ITool {
    * Compute cumulative context window usage for a Claude Code session
    *
    * Algorithm:
-   * 1. Check if CURRENT task has compaction (if so, return only current task tokens)
-   * 2. Include current task tokens (if provided via currentRawSdkResponse)
-   * 3. Loop through previous tasks from DB (most recent to oldest)
-   * 4. Stop when we encounter a compaction event (context was reset)
-   * 5. Sum tokens across ALL models for each task
+   * 1. Start with current task tokens (from currentRawSdkResponse)
+   * 2. Query previous completed tasks from DB (ordered by created_at desc)
+   * 3. Sum their tokens from normalized_sdk_response
+   * 4. Stop if we encounter a task with compaction event (context was reset)
    *
-   * Note: The current task is not yet in the DB when this is called, so we receive
-   * its raw response separately via currentRawSdkResponse parameter.
+   * Note: This is called BEFORE the task UPDATE, so querying the DB is safe.
+   * The current task is not yet in the DB, so we receive its raw response separately.
    *
    * @param sessionId - Session ID to compute context for
-   * @param currentTaskId - Current task ID (used to check if it has compaction)
+   * @param currentTaskId - Current task ID (excluded from DB query)
    * @param currentRawSdkResponse - Raw SDK response for the current task (not yet in DB)
    * @returns Promise resolving to computed context window usage in tokens
    */
@@ -923,33 +922,58 @@ export class ClaudeTool implements ITool {
     currentTaskId?: string,
     currentRawSdkResponse?: unknown
   ): Promise<number> {
-    // IMPORTANT: When currentRawSdkResponse is provided (during task completion),
-    // we MUST NOT query the database because this is called during task UPDATE
-    // operations. Querying the database during a pending UPDATE causes deadlocks
-    // in PostgreSQL due to read-while-write in the same transaction.
-    //
-    // For Claude Code, we need to sum previous tasks + current task, but we can't
-    // safely query previous tasks during the UPDATE. The solution is to compute
-    // incrementally: store cumulative tokens in each task, then just use the
-    // current task's tokens.
-    //
-    // TODO: In the future, we should store cumulative tokens in raw_sdk_response
-    // or compute them before the UPDATE begins.
+    // Start with current task tokens
+    let totalTokens = 0;
     if (currentRawSdkResponse) {
-      const currentTaskTokens = this.computeContextTokensFromRawResponse(currentRawSdkResponse);
-      console.log(
-        `✅ Computed context window for Claude Code session ${sessionId}: ${currentTaskTokens} tokens (from current task only - safe mode)`
-      );
-      return currentTaskTokens;
+      totalTokens = this.computeContextTokensFromRawResponse(currentRawSdkResponse);
     }
 
-    // IMPORTANT: Do NOT query database when currentRawSdkResponse is not provided
-    // This prevents deadlocks in PostgreSQL when called during task UPDATE operations.
-    // The caller should ALWAYS provide currentRawSdkResponse during task completion.
-    console.warn(
-      `⚠️  computeContextWindow called without currentRawSdkResponse for session ${sessionId}. ` +
-        'This should not happen during task completion. Returning 0 to avoid database deadlock.'
-    );
-    return 0;
+    // Query previous completed tasks to sum their tokens
+    // This is safe because we're called BEFORE the UPDATE (not during)
+    if (this.tasksService) {
+      try {
+        // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service find returns paginated or array
+        const result = await (this.tasksService as any).find({
+          query: {
+            session_id: sessionId,
+            status: 'completed', // Only completed tasks have token data
+            $sort: { created_at: -1 }, // Most recent first
+            $limit: 100, // Reasonable limit for context window computation
+          },
+        });
+
+        const tasks = Array.isArray(result) ? result : result.data || [];
+
+        for (const task of tasks) {
+          // Skip current task (it's not in DB yet anyway, but just in case)
+          if (task.task_id === currentTaskId) continue;
+
+          // Check for compaction event - if found, stop summing (context was reset)
+          // TODO: Implement compaction detection from messages or task metadata
+          // For now, we sum all previous tasks
+
+          // Get tokens from normalized_sdk_response
+          const normalized = task.normalized_sdk_response;
+          if (normalized?.tokenUsage) {
+            const taskTokens =
+              (normalized.tokenUsage.inputTokens || 0) + (normalized.tokenUsage.outputTokens || 0);
+            totalTokens += taskTokens;
+          }
+        }
+
+        console.log(
+          `✅ Computed cumulative context window for session ${sessionId}: ${totalTokens} tokens (${tasks.length} previous tasks + current)`
+        );
+      } catch (error) {
+        console.error(`❌ Failed to query previous tasks for context window:`, error);
+        // Fall back to just current task tokens
+      }
+    } else {
+      console.warn(
+        `⚠️  computeContextWindow: tasksService not available, returning current task tokens only`
+      );
+    }
+
+    return totalTokens;
   }
 }
