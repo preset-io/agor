@@ -78,6 +78,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         duration_ms: task.duration_ms, // Task execution duration
         agent_session_id: task.agent_session_id, // SDK session ID
         raw_sdk_response: task.raw_sdk_response, // Raw SDK response - single source of truth for token accounting
+        normalized_sdk_response: task.normalized_sdk_response, // Normalized for UI consumption
         computed_context_window: task.computed_context_window, // Cumulative context window (computed by tool.computeContextWindow())
         report: task.report,
         permission_request: task.permission_request, // Permission state for UI approval flow

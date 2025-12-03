@@ -213,6 +213,10 @@ export const tasks = pgTable(
         // Raw SDK response - single source of truth for token accounting
         raw_sdk_response?: Task['raw_sdk_response'];
 
+        // Normalized SDK response - computed from raw_sdk_response by executor
+        // Stored so UI doesn't need SDK-specific normalization logic
+        normalized_sdk_response?: Task['normalized_sdk_response'];
+
         // Computed context window (cumulative tokens)
         computed_context_window?: Task['computed_context_window'];
 
