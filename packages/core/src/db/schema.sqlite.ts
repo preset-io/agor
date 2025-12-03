@@ -521,9 +521,11 @@ export const worktreeOwners = sqliteTable(
     user_id: text('user_id', { length: 36 })
       .notNull()
       .references(() => users.user_id, { onDelete: 'cascade' }),
-    created_at: t.timestamp('created_at').default(sql`(datetime('now'))`),
+    created_at: t.timestamp('created_at'),
   },
   (table) => ({
+    // Note: Using primaryKey() would require drizzle-kit to generate a migration
+    // Current migration 0016 uses PRIMARY KEY in SQL, so we keep index() for schema parity
     pk: index('worktree_owners_pk').on(table.worktree_id, table.user_id),
   })
 );

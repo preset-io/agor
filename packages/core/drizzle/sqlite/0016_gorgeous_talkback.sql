@@ -2,7 +2,7 @@
 CREATE TABLE IF NOT EXISTS `worktree_owners` (
 	`worktree_id` text(36) NOT NULL,
 	`user_id` text(36) NOT NULL,
-	`created_at` integer DEFAULT (datetime('now')),
+	`created_at` integer,
 	PRIMARY KEY(`worktree_id`, `user_id`),
 	FOREIGN KEY (`worktree_id`) REFERENCES `worktrees`(`worktree_id`) ON UPDATE no action ON DELETE cascade,
 	FOREIGN KEY (`user_id`) REFERENCES `users`(`user_id`) ON UPDATE no action ON DELETE cascade
