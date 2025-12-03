@@ -20,10 +20,11 @@ import {
   FileOutlined,
   FolderOutlined,
 } from '@ant-design/icons';
-import { Button, Empty, Input, message, Spin, Tooltip, Tree } from 'antd';
+import { Button, Empty, Input, Spin, Tooltip, Tree } from 'antd';
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ConceptListItem } from '../../types';
+import { useThemedMessage } from '../../utils/message';
 
 const { Search } = Input;
 
@@ -254,12 +255,16 @@ export const FileCollection: React.FC<FileCollectionProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
+  const { showSuccess } = useThemedMessage();
 
   // Handle copy path
-  const handleCopyPath = useCallback((file: FileItem) => {
-    navigator.clipboard.writeText(file.path);
-    message.success('Path copied to clipboard!');
-  }, []);
+  const handleCopyPath = useCallback(
+    (file: FileItem) => {
+      navigator.clipboard.writeText(file.path);
+      showSuccess('Path copied to clipboard!');
+    },
+    [showSuccess]
+  );
 
   // Build tree structure
   const treeData = useMemo(

@@ -32,7 +32,6 @@ import {
   Card,
   Descriptions,
   Input,
-  Modal,
   Space,
   Spin,
   Tag,
@@ -47,6 +46,7 @@ import {
   getEnvironmentStateDescription,
 } from '../../../utils/environmentState';
 import { useThemedMessage } from '../../../utils/message';
+import { useThemedModal } from '../../../utils/modal';
 import { EnvironmentLogsModal } from '../../EnvironmentLogsModal';
 
 const { Paragraph } = Typography;
@@ -108,6 +108,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
 }) => {
   const { token } = theme.useToken();
   const { showSuccess, showError, showWarning } = useThemedMessage();
+  const { confirm } = useThemedModal();
   const hasEnvironmentConfig = !!repo.environment_config;
 
   // Repository template state (editable)
@@ -248,7 +249,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     if (!client) return;
 
     // Show confirmation dialog
-    Modal.confirm({
+    confirm({
       title: 'Nuke Environment?',
       icon: <FireOutlined style={{ color: '#ff4d4f' }} />,
       content: (

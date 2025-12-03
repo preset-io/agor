@@ -12,8 +12,9 @@ import {
   InfoCircleOutlined,
   LoadingOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, Form, Input, message, Space, Spin, Switch, Tooltip, theme } from 'antd';
+import { Alert, Button, Form, Input, Space, Spin, Switch, Tooltip, theme } from 'antd';
 import { useEffect, useState } from 'react';
+import { useThemedMessage } from '../../utils/message';
 
 export interface OpenCodeTabProps {
   client: AgorClient | null;
@@ -21,6 +22,7 @@ export interface OpenCodeTabProps {
 
 export const OpenCodeTab: React.FC<OpenCodeTabProps> = ({ client }) => {
   const { token } = theme.useToken();
+  const { showSuccess, showError } = useThemedMessage();
   const [form] = Form.useForm();
 
   // State
@@ -95,10 +97,10 @@ export const OpenCodeTab: React.FC<OpenCodeTabProps> = ({ client }) => {
         },
       });
 
-      message.success('OpenCode settings saved successfully');
+      showSuccess('OpenCode settings saved successfully');
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Failed to save OpenCode settings';
-      message.error(errorMsg);
+      showError(errorMsg);
       console.error('Failed to save OpenCode settings:', err);
     }
   };

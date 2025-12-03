@@ -12,7 +12,6 @@ import {
   Form,
   Input,
   InputNumber,
-  message,
   Row,
   Select,
   Slider,
@@ -28,6 +27,7 @@ import {
   getChimeDisplayName,
   previewChimeSound,
 } from '../../utils/audio';
+import { useThemedMessage } from '../../utils/message';
 
 const { Text, Paragraph } = Typography;
 
@@ -37,6 +37,7 @@ interface AudioSettingsTabProps {
 }
 
 export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({ user, form }) => {
+  const { showError, showWarning, showInfo } = useThemedMessage();
   const [isPlaying, setIsPlaying] = useState(false);
   const [audioBlocked, setAudioBlocked] = useState<boolean | null>(null);
   const [showPermissionAlert, setShowPermissionAlert] = useState(false);
@@ -62,7 +63,7 @@ export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({ user, form }
     } catch (_error) {
       setAudioBlocked(true);
       setShowPermissionAlert(true);
-      message.error('Audio blocked by browser. See instructions below to enable.');
+      showError('Audio blocked by browser. See instructions below to enable.');
     } finally {
       // Reset after a short delay (chimes are ~1-2 seconds)
       setTimeout(() => setIsPlaying(false), 2000);
@@ -76,9 +77,9 @@ export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({ user, form }
       setAudioBlocked(blocked);
       if (blocked) {
         setShowPermissionAlert(true);
-        message.warning('Audio may be blocked. Click Preview to test and grant permissions.');
+        showWarning('Audio may be blocked. Click Preview to test and grant permissions.');
       } else {
-        message.info('Audio notifications enabled. Use the preview button to test.');
+        showInfo('Audio notifications enabled. Use the preview button to test.');
       }
     } else {
       setShowPermissionAlert(false);

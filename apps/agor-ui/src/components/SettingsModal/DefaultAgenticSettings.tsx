@@ -7,8 +7,9 @@
 
 import type { AgenticToolName, DefaultAgenticConfig, MCPServer } from '@agor/core/types';
 import { getDefaultPermissionMode } from '@agor/core/types';
-import { Button, Form, message, Space, Tabs, Typography } from 'antd';
+import { Button, Form, Space, Tabs, Typography } from 'antd';
 import { useState } from 'react';
+import { useThemedMessage } from '../../utils/message';
 import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
 
 interface DefaultAgenticSettingsProps {
@@ -25,6 +26,8 @@ export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
   mcpServerById,
   onSave,
 }) => {
+  const { showSuccess, showError } = useThemedMessage();
+
   // Separate form for each tool
   const [claudeForm] = Form.useForm();
   const [codexForm] = Form.useForm();
@@ -96,9 +99,9 @@ export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
       };
 
       await onSave(newConfig);
-      message.success(`Default ${tool} settings saved`);
+      showSuccess(`Default ${tool} settings saved`);
     } catch (error) {
-      message.error('Failed to save settings');
+      showError('Failed to save settings');
       console.error('Error saving default agentic settings:', error);
     } finally {
       setSaving((prev) => ({ ...prev, [tool]: false }));

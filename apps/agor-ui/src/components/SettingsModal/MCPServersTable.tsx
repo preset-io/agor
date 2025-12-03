@@ -20,7 +20,6 @@ import {
   Form,
   Input,
   Modal,
-  message,
   Popconfirm,
   Select,
   Space,
@@ -35,6 +34,7 @@ import {
 import { useEffect, useState } from 'react';
 import { ThemedSyntaxHighlighter } from '@/components/ThemedSyntaxHighlighter';
 import { mapToArray } from '@/utils/mapHelpers';
+import { useThemedMessage } from '@/utils/message';
 
 const { TextArea } = Input;
 
@@ -177,11 +177,12 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
   onDiscoverTools,
   discovering = false,
 }) => {
+  const { showSuccess, showError, showWarning, showInfo } = useThemedMessage();
   const [testing, setTesting] = useState(false);
 
   const handleTestConnection = async () => {
     if (!client) {
-      message.error('Client not available');
+      showError('Client not available');
       return;
     }
 
@@ -196,7 +197,7 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
         const apiSecret = values.jwt_api_secret;
 
         if (!apiUrl || !apiToken || !apiSecret) {
-          message.error('Please fill in all JWT authentication fields');
+          showError('Please fill in all JWT authentication fields');
           return;
         }
 
@@ -208,23 +209,23 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
         })) as { success: boolean; error?: string };
 
         if (data.success) {
-          message.success('JWT authentication successful - token received');
+          showSuccess('JWT authentication successful - token received');
         } else {
-          message.error(data.error || 'JWT authentication failed');
+          showError(data.error || 'JWT authentication failed');
         }
       } else if (currentAuthType === 'bearer') {
         const token = values.auth_token;
         if (token) {
-          message.success('Bearer token configured');
+          showSuccess('Bearer token configured');
         } else {
-          message.warning('No bearer token provided');
+          showWarning('No bearer token provided');
         }
       } else {
-        message.info('No auth configured');
+        showInfo('No auth configured');
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      message.error(`Connection test failed: ${errorMessage}`);
+      showError(`Connection test failed: ${errorMessage}`);
     } finally {
       setTesting(false);
     }
@@ -448,6 +449,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   onUpdate,
   onDelete,
 }) => {
+  const { showSuccess, showError } = useThemedMessage();
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [viewModalOpen, setViewModalOpen] = useState(false);
@@ -546,7 +548,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
 
   const handleDiscoverTools = async (serverId: string) => {
     if (!client) {
-      message.error('Client not available');
+      showError('Client not available');
       return;
     }
 
@@ -564,7 +566,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       };
 
       if (data.success && data.capabilities) {
-        message.success(
+        showSuccess(
           `Discovered ${data.capabilities.tools} tools, ${data.capabilities.resources} resources, ${data.capabilities.prompts} prompts`
         );
 
@@ -579,13 +581,13 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
         // The WebSocket event will update mcpServerById, which will trigger the useEffect above
         // to refresh editingServer and the form
       } else {
-        message.error(data.error || 'Failed to discover tools');
+        showError(data.error || 'Failed to discover tools');
         setDiscoveryStatus((prev) => new Map(prev).set(serverId, { discovering: false }));
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       console.error('Discovery failed:', error);
-      message.error(`Failed to discover tools: ${errorMessage}`);
+      showError(`Failed to discover tools: ${errorMessage}`);
       setDiscoveryStatus((prev) => new Map(prev).set(serverId, { discovering: false }));
     } finally {
       setDiscovering(false);
@@ -696,7 +698,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       // Also call parent callback for state management
       onUpdate?.(editingServer.mcp_server_id, updates);
 
-      message.success('MCP server updated successfully');
+      showSuccess('MCP server updated successfully');
 
       // Close the modal after successful update
       form.resetFields();
