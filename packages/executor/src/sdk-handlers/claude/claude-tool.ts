@@ -909,7 +909,15 @@ export class ClaudeTool implements ITool {
    * 3. Query previous completed tasks (ordered by created_at ASC for proper iteration)
    * 4. Find the most recent compaction task
    * 5. Sum tokens only from tasks AFTER the last compaction
-   * 6. Add current task tokens
+   * 6. Add BASELINE context on FIRST message after session start or compaction:
+   *    - Fresh session: cache_read + cache_creation (~23-27K for system prompt + tools)
+   *    - Post-compaction: cache_creation only (the compacted conversation summary)
+   * 7. Add current task tokens (and baseline if this IS the first task)
+   *
+   * Why baseline matters:
+   * - cache_read_tokens: System prompt, tool definitions (~20K tokens)
+   * - cache_creation_tokens: CLAUDE.md, MCP server tools (~3-7K tokens)
+   * - These are part of the context window but not reported in input/output tokens
    *
    * Note: This is called BEFORE the task UPDATE, so querying the DB is safe.
    * The current task is not yet in the DB, so we receive its raw response separately.
@@ -970,6 +978,7 @@ export class ClaudeTool implements ITool {
       const startIndex = lastCompactionIndex >= 0 ? lastCompactionIndex + 1 : 0;
       let totalTokens = 0;
       let tasksCounted = 0;
+      let baselineTokensAdded = 0;
 
       for (let i = startIndex; i < tasks.length; i++) {
         const task = tasks[i];
@@ -983,19 +992,59 @@ export class ClaudeTool implements ITool {
             (normalized.tokenUsage.inputTokens || 0) + (normalized.tokenUsage.outputTokens || 0);
           totalTokens += taskTokens;
           tasksCounted++;
+
+          // CRITICAL: Add baseline context on FIRST message after start/compaction
+          // This accounts for system prompt, CLAUDE.md, MCP tools, etc.
+          if (i === startIndex) {
+            if (lastCompactionIndex === -1) {
+              // Fresh session: cache_read (~20K system prompt) + cache_creation (CLAUDE.md + MCP tools ~3-7K)
+              // Total baseline: ~23K-27K tokens for a fresh session
+              const cacheRead = normalized.tokenUsage.cacheReadInputTokens || 0;
+              const cacheCreation = normalized.tokenUsage.cacheCreationInputTokens || 0;
+              baselineTokensAdded = cacheRead + cacheCreation;
+              totalTokens += baselineTokensAdded;
+            } else {
+              // Post-compaction: cache_creation only (the compacted conversation summary)
+              // Note: We exclude cache_read here because it can exceed 200K context limits
+              // post-compaction (observed: 248K-1.9M tokens), likely due to cumulative caching
+              const cacheCreation = normalized.tokenUsage.cacheCreationInputTokens || 0;
+              baselineTokensAdded = cacheCreation;
+              totalTokens += baselineTokensAdded;
+            }
+          }
         }
       }
 
       // Add current task tokens
       totalTokens += currentTaskTokens;
 
+      // CRITICAL: Handle the case where THIS is the first task (no previous tasks)
+      // In this case, we need to add baseline context from the current task's raw response
+      if (tasksCounted === 0 && currentRawSdkResponse && lastCompactionIndex === -1) {
+        const response =
+          currentRawSdkResponse as import('../../types/sdk-response').ClaudeCodeSdkResponseTyped;
+        // Extract cache tokens from the first model in modelUsage
+        if (response.modelUsage && typeof response.modelUsage === 'object') {
+          const firstModelUsage = Object.values(response.modelUsage)[0];
+          if (firstModelUsage) {
+            // Fresh session: add cache_read + cache_creation as baseline
+            const cacheRead = firstModelUsage.cacheReadInputTokens || 0;
+            const cacheCreation = firstModelUsage.cacheCreationInputTokens || 0;
+            baselineTokensAdded = cacheRead + cacheCreation;
+            totalTokens += baselineTokensAdded;
+          }
+        }
+      }
+
       const compactionInfo =
         lastCompactionIndex >= 0
           ? ` (reset after compaction at task index ${lastCompactionIndex})`
           : ' (no compaction detected)';
 
+      const baselineInfo = baselineTokensAdded > 0 ? `, baseline: ${baselineTokensAdded}` : '';
+
       console.log(
-        `✅ Computed cumulative context window for session ${sessionId}: ${totalTokens} tokens (${tasksCounted} previous tasks + current)${compactionInfo}`
+        `✅ Computed cumulative context window for session ${sessionId}: ${totalTokens} tokens (${tasksCounted} previous tasks + current${baselineInfo})${compactionInfo}`
       );
 
       return totalTokens;
