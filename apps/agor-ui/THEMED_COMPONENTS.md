@@ -135,25 +135,6 @@ export const BadComponent = () => {
 };
 ```
 
-## Automated Checking
-
-We have a script that automatically checks for unthemed imports:
-
-```bash
-# Run the checker
-pnpm lint:themed
-
-# Or as part of the full lint suite
-pnpm lint
-```
-
-This will catch:
-- ❌ Direct `message` imports from `antd`
-- ❌ `Modal.confirm()`, `Modal.info()`, etc. static method calls
-- ✅ `<Modal>` component usage is allowed (for custom modal rendering)
-
-The script runs automatically as part of `pnpm lint` in CI/pre-commit hooks.
-
 ## Code Review Checklist
 
 When reviewing PRs, check for:
@@ -162,7 +143,7 @@ When reviewing PRs, check for:
 - [ ] All modals use `useThemedModal()`
 - [ ] All toast messages use `useThemedMessage()`
 - [ ] Imports are from `@/utils/modal` and `@/utils/message`
-- [ ] `pnpm lint:themed` passes
+- [ ] `<Modal>` component usage is allowed (for custom modal rendering)
 
 ## Migration Guide
 
