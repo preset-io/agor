@@ -904,10 +904,12 @@ export class ClaudeTool implements ITool {
    * Compute cumulative context window usage for a Claude Code session
    *
    * Algorithm:
-   * 1. Start with current task tokens (from currentRawSdkResponse)
-   * 2. Query previous completed tasks from DB (ordered by created_at desc)
-   * 3. Sum their tokens from normalized_sdk_response
-   * 4. Stop if we encounter a task with compaction event (context was reset)
+   * 1. Query messages to find compaction boundary events
+   * 2. Build set of task IDs that had compaction events
+   * 3. Query previous completed tasks (ordered by created_at ASC for proper iteration)
+   * 4. Find the most recent compaction task
+   * 5. Sum tokens only from tasks AFTER the last compaction
+   * 6. Add current task tokens
    *
    * Note: This is called BEFORE the task UPDATE, so querying the DB is safe.
    * The current task is not yet in the DB, so we receive its raw response separately.
@@ -923,57 +925,137 @@ export class ClaudeTool implements ITool {
     currentRawSdkResponse?: unknown
   ): Promise<number> {
     // Start with current task tokens
-    let totalTokens = 0;
+    let currentTaskTokens = 0;
     if (currentRawSdkResponse) {
-      totalTokens = this.computeContextTokensFromRawResponse(currentRawSdkResponse);
+      currentTaskTokens = this.computeContextTokensFromRawResponse(currentRawSdkResponse);
     }
 
     // Query previous completed tasks to sum their tokens
     // This is safe because we're called BEFORE the UPDATE (not during)
-    if (this.tasksService) {
-      try {
-        // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service find returns paginated or array
-        const result = await (this.tasksService as any).find({
-          query: {
-            session_id: sessionId,
-            status: 'completed', // Only completed tasks have token data
-            $sort: { created_at: -1 }, // Most recent first
-            $limit: 100, // Reasonable limit for context window computation
-          },
-        });
-
-        const tasks = Array.isArray(result) ? result : result.data || [];
-
-        for (const task of tasks) {
-          // Skip current task (it's not in DB yet anyway, but just in case)
-          if (task.task_id === currentTaskId) continue;
-
-          // Check for compaction event - if found, stop summing (context was reset)
-          // TODO: Implement compaction detection from messages or task metadata
-          // For now, we sum all previous tasks
-
-          // Get tokens from normalized_sdk_response
-          const normalized = task.normalized_sdk_response;
-          if (normalized?.tokenUsage) {
-            const taskTokens =
-              (normalized.tokenUsage.inputTokens || 0) + (normalized.tokenUsage.outputTokens || 0);
-            totalTokens += taskTokens;
-          }
-        }
-
-        console.log(
-          `✅ Computed cumulative context window for session ${sessionId}: ${totalTokens} tokens (${tasks.length} previous tasks + current)`
-        );
-      } catch (error) {
-        console.error(`❌ Failed to query previous tasks for context window:`, error);
-        // Fall back to just current task tokens
-      }
-    } else {
+    if (!this.tasksService) {
       console.warn(
         `⚠️  computeContextWindow: tasksService not available, returning current task tokens only`
       );
+      return currentTaskTokens;
     }
 
-    return totalTokens;
+    try {
+      // Step 1: Find compaction events from messages
+      const compactionTaskIds = await this.findCompactionTaskIds(sessionId as SessionID);
+
+      // Step 2: Query previous completed tasks (chronological order for proper iteration)
+      // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service find returns paginated or array
+      const result = await (this.tasksService as any).find({
+        query: {
+          session_id: sessionId,
+          status: 'completed', // Only completed tasks have token data
+          $sort: { created_at: 1 }, // Chronological order (oldest first)
+          $limit: 100, // Reasonable limit for context window computation
+        },
+      });
+
+      // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service returns dynamic task data
+      const tasks: any[] = Array.isArray(result) ? result : result.data || [];
+
+      // Step 3: Find the most recent compaction event index
+      let lastCompactionIndex = -1;
+      for (let i = tasks.length - 1; i >= 0; i--) {
+        if (compactionTaskIds.has(tasks[i].task_id)) {
+          lastCompactionIndex = i;
+          break;
+        }
+      }
+
+      // Step 4: Sum tokens starting from after the last compaction
+      const startIndex = lastCompactionIndex >= 0 ? lastCompactionIndex + 1 : 0;
+      let totalTokens = 0;
+      let tasksCounted = 0;
+
+      for (let i = startIndex; i < tasks.length; i++) {
+        const task = tasks[i];
+        // Skip current task (it's not in DB yet anyway, but just in case)
+        if (task.task_id === currentTaskId) continue;
+
+        // Get tokens from normalized_sdk_response
+        const normalized = task.normalized_sdk_response;
+        if (normalized?.tokenUsage) {
+          const taskTokens =
+            (normalized.tokenUsage.inputTokens || 0) + (normalized.tokenUsage.outputTokens || 0);
+          totalTokens += taskTokens;
+          tasksCounted++;
+        }
+      }
+
+      // Add current task tokens
+      totalTokens += currentTaskTokens;
+
+      const compactionInfo =
+        lastCompactionIndex >= 0
+          ? ` (reset after compaction at task index ${lastCompactionIndex})`
+          : ' (no compaction detected)';
+
+      console.log(
+        `✅ Computed cumulative context window for session ${sessionId}: ${totalTokens} tokens (${tasksCounted} previous tasks + current)${compactionInfo}`
+      );
+
+      return totalTokens;
+    } catch (error) {
+      console.error(`❌ Failed to compute context window:`, error);
+      // Fall back to just current task tokens
+      return currentTaskTokens;
+    }
+  }
+
+  /**
+   * Find task IDs that have compaction events in their messages
+   *
+   * Compaction events are system messages with:
+   * - type === 'system' AND content is object with status === 'compacting'
+   * - OR content is array with a block having type === 'system_status' and status === 'compacting'
+   */
+  private async findCompactionTaskIds(sessionId: SessionID): Promise<Set<string>> {
+    const compactionTaskIds = new Set<string>();
+
+    if (!this.messagesRepo) {
+      console.warn(
+        `⚠️  findCompactionTaskIds: messagesRepo not available, skipping compaction detection`
+      );
+      return compactionTaskIds;
+    }
+
+    try {
+      const messages = await this.messagesRepo.findBySessionId(sessionId);
+
+      for (const msg of messages) {
+        if (msg.role !== MessageRole.SYSTEM) continue;
+        if (!msg.content || typeof msg.content !== 'object') continue;
+
+        const content = msg.content as { type?: string; status?: string } | unknown[];
+
+        // Check if content is array with compaction block
+        if (Array.isArray(content)) {
+          const hasCompaction = (content as Array<{ type?: string; status?: string }>).some(
+            (block) => block.type === 'system_status' && block.status === 'compacting'
+          );
+          if (hasCompaction && msg.task_id) {
+            compactionTaskIds.add(msg.task_id);
+          }
+        }
+        // Check if content is object with compacting status
+        else if (content.status === 'compacting' && msg.task_id) {
+          compactionTaskIds.add(msg.task_id);
+        }
+      }
+
+      if (compactionTaskIds.size > 0) {
+        console.log(
+          `🔄 Found ${compactionTaskIds.size} compaction event(s) in session ${sessionId}`
+        );
+      }
+    } catch (error) {
+      console.error(`❌ Failed to find compaction events:`, error);
+    }
+
+    return compactionTaskIds;
   }
 }
