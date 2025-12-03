@@ -50,7 +50,9 @@ try {
 }
 
 import {
+  and,
   createDatabaseAsync,
+  eq,
   MCPServerRepository,
   MessagesRepository,
   RepoRepository,
@@ -1296,10 +1298,33 @@ async function main() {
   // This is needed for real-time updates when MCP servers are added/removed from sessions
   const sessionMCPServersService = createSessionMCPServersService(db);
   app.use('/session-mcp-servers', {
-    async find() {
-      // Return all session-MCP relationships
-      // This allows the UI to fetch all relationships in one call
-      const rows = await select(db).from(sessionMcpServers).all();
+    async find(params?: {
+      query?: { session_id?: string; mcp_server_id?: string; enabled?: boolean };
+    }) {
+      // Build query with optional filters
+      // Supports filtering by session_id, mcp_server_id, and enabled status
+      // Collect all filter conditions
+      const conditions: ReturnType<typeof eq>[] = [];
+
+      if (params?.query?.session_id) {
+        conditions.push(eq(sessionMcpServers.session_id, params.query.session_id));
+      }
+
+      if (params?.query?.mcp_server_id) {
+        conditions.push(eq(sessionMcpServers.mcp_server_id, params.query.mcp_server_id));
+      }
+
+      if (params?.query?.enabled !== undefined) {
+        conditions.push(eq(sessionMcpServers.enabled, params.query.enabled));
+      }
+
+      // Build the query with all conditions combined using AND
+      let query = select(db).from(sessionMcpServers);
+      if (conditions.length > 0) {
+        query = query.where(and(...conditions)) as typeof query;
+      }
+
+      const rows = await query.all();
       return rows.map((row: SessionMCPServerRow) => ({
         session_id: row.session_id,
         mcp_server_id: row.mcp_server_id,
