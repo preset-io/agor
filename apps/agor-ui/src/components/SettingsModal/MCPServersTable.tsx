@@ -249,7 +249,7 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                 <Form.Item
                   label="Scope"
                   name="scope"
-                  initialValue="global"
+                  initialValue="session"
                   tooltip="Where this server is available"
                 >
                   <Select>
@@ -288,6 +288,14 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
             label: <Typography.Text strong>Basic Information</Typography.Text>,
             children: (
               <>
+                <Form.Item
+                  label="Name (Internal ID)"
+                  name="name"
+                  tooltip="Internal identifier - cannot be changed after creation"
+                >
+                  <Input disabled />
+                </Form.Item>
+
                 <Form.Item
                   label="Scope"
                   name="scope"
