@@ -1,9 +1,19 @@
 /**
  * Unix User Mode Integration
  *
- * Utilities for Unix-level isolation and permission management.
+ * Utilities and services for Unix-level isolation and permission management.
  *
- * @see context/explorations/unix-user-modes.md
+ * @see context/guides/rbac-and-unix-isolation.md
  */
 
-export * from './group-manager';
+// Command execution abstraction
+export * from './command-executor.js';
+
+// Worktree group management
+export * from './group-manager.js';
+// Symlink management
+export * from './symlink-manager.js';
+// Main orchestration service
+export * from './unix-integration-service.js';
+// Unix user management
+export * from './user-manager.js';

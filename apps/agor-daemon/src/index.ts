@@ -1052,23 +1052,26 @@ async function main() {
   }
 
   // Initialize Unix integration service for worktree isolation
-  // This service manages Unix groups and filesystem permissions for RBAC
+  // This service manages Unix groups, users, symlinks, and filesystem permissions for RBAC
   // Only initialize if RBAC is enabled
-  let unixIntegrationService: InstanceType<
-    typeof import('./services/unix-integration.js').UnixIntegrationService
-  > | null = null;
+  let unixIntegrationService: import('@agor/core/unix').UnixIntegrationService | null = null;
   if (worktreeRbacEnabled) {
-    const { UnixIntegrationService } = await import('./services/unix-integration.js');
-    unixIntegrationService = new UnixIntegrationService(db, {
-      enabled:
-        config.execution?.unix_user_mode !== 'simple' &&
-        config.execution?.unix_user_mode !== undefined,
+    const { createUnixIntegrationService } = await import('./services/unix-integration.js');
+    const unixEnabled =
+      config.execution?.unix_user_mode !== 'simple' &&
+      config.execution?.unix_user_mode !== undefined;
+    unixIntegrationService = createUnixIntegrationService(db, {
+      enabled: unixEnabled,
       cliPath: 'agor',
       useSudo: true,
+      autoManageSymlinks: unixEnabled,
     });
     console.log(
       `[Unix Integration] ${unixIntegrationService.isEnabled() ? 'Enabled' : 'Disabled'} (mode: ${config.execution?.unix_user_mode || 'simple'})`
     );
+
+    // Register on app for access by other services (e.g., worktree-owners)
+    app.set('unixIntegration', unixIntegrationService);
   }
 
   // Register repos service (accesses worktrees via app.service('worktrees'))
@@ -1873,6 +1876,62 @@ async function main() {
         },
       ],
       remove: [requireMinimumRole('admin', 'delete users')],
+    },
+    after: {
+      // After user create/patch: optionally ensure Unix user exists
+      create: [
+        async (context: HookContext) => {
+          const unixIntegration = app.get('unixIntegration') as
+            | import('@agor/core/unix').UnixIntegrationService
+            | undefined;
+          if (!unixIntegration?.isEnabled()) {
+            return context;
+          }
+
+          const user = context.result as User;
+          if (!user.unix_username) {
+            return context; // No unix_username set, skip Unix user creation
+          }
+
+          try {
+            await unixIntegration.ensureUnixUser(user.user_id);
+            console.log(`[Unix Integration] Ensured Unix user for: ${user.unix_username}`);
+          } catch (error) {
+            console.error('[Unix Integration] Failed to create Unix user:', error);
+            // Don't fail the request - Agor user is already created
+          }
+
+          return context;
+        },
+      ],
+      patch: [
+        async (context: HookContext) => {
+          const unixIntegration = app.get('unixIntegration') as
+            | import('@agor/core/unix').UnixIntegrationService
+            | undefined;
+          if (!unixIntegration?.isEnabled()) {
+            return context;
+          }
+
+          // Only handle if unix_username was just set
+          const data = context.data as { unix_username?: string };
+          if (!data?.unix_username) {
+            return context;
+          }
+
+          const user = context.result as User;
+
+          try {
+            await unixIntegration.ensureUnixUser(user.user_id);
+            console.log(`[Unix Integration] Ensured Unix user for: ${user.unix_username}`);
+          } catch (error) {
+            console.error('[Unix Integration] Failed to create Unix user:', error);
+            // Don't fail the request - Agor user is already updated
+          }
+
+          return context;
+        },
+      ],
     },
   });
 

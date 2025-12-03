@@ -1,0 +1,607 @@
+/**
+ * Unix Integration Service
+ *
+ * Central controller for all Unix-level operations in Agor:
+ * - Unix group management for worktree isolation
+ * - Unix user creation/management
+ * - Symlink management in user home directories
+ *
+ * This service can be used by both the daemon and CLI.
+ * The CommandExecutor determines how privileged commands are executed.
+ *
+ * @see context/guides/rbac-and-unix-isolation.md
+ */
+
+import type { Database } from '../db/index.js';
+import { UsersRepository, WorktreeRepository } from '../db/repositories/index.js';
+import type { UserID, UUID, WorktreeID } from '../types/index.js';
+import type { CommandExecutor } from './command-executor.js';
+import { NoOpExecutor } from './command-executor.js';
+import {
+  generateWorktreeGroupName,
+  getWorktreePermissionMode,
+  UnixGroupCommands,
+} from './group-manager.js';
+import { getWorktreeSymlinkPath, SymlinkCommands } from './symlink-manager.js';
+import {
+  AGOR_HOME_BASE,
+  generateUnixUsername,
+  getUserWorktreesDir,
+  isValidUnixUsername,
+  UnixUserCommands,
+} from './user-manager.js';
+
+/**
+ * Unix integration service configuration
+ */
+export interface UnixIntegrationConfig {
+  /** Enable Unix integration (default: false) */
+  enabled: boolean;
+
+  /** Home directory base (default: /home) */
+  homeBase?: string;
+
+  /** Whether to auto-create Unix users when Agor users are created (default: false) */
+  autoCreateUnixUsers?: boolean;
+
+  /** Whether to auto-create symlinks when ownership changes (default: true when enabled) */
+  autoManageSymlinks?: boolean;
+}
+
+/**
+ * Result of a Unix operation
+ */
+export interface UnixOperationResult {
+  success: boolean;
+  message: string;
+  error?: string;
+}
+
+/**
+ * Unix Integration Service
+ *
+ * Orchestrates all Unix-level operations for Agor RBAC.
+ */
+export class UnixIntegrationService {
+  private config: Required<UnixIntegrationConfig>;
+  private executor: CommandExecutor;
+  private worktreeRepo: WorktreeRepository;
+  private usersRepo: UsersRepository;
+
+  constructor(
+    db: Database,
+    executor: CommandExecutor,
+    config: UnixIntegrationConfig = { enabled: false }
+  ) {
+    this.config = {
+      enabled: config.enabled,
+      homeBase: config.homeBase || AGOR_HOME_BASE,
+      autoCreateUnixUsers: config.autoCreateUnixUsers ?? false,
+      autoManageSymlinks: config.autoManageSymlinks ?? config.enabled,
+    };
+    this.executor = config.enabled ? executor : new NoOpExecutor();
+    this.worktreeRepo = new WorktreeRepository(db);
+    this.usersRepo = new UsersRepository(db);
+  }
+
+  /**
+   * Check if Unix integration is enabled
+   */
+  isEnabled(): boolean {
+    return this.config.enabled;
+  }
+
+  // ============================================================
+  // WORKTREE GROUP MANAGEMENT
+  // ============================================================
+
+  /**
+   * Create a Unix group for a worktree
+   *
+   * @param worktreeId - Worktree ID
+   * @returns Group name created
+   */
+  async createWorktreeGroup(worktreeId: WorktreeID): Promise<string> {
+    const groupName = generateWorktreeGroupName(worktreeId);
+
+    console.log(
+      `[UnixIntegration] Creating group ${groupName} for worktree ${worktreeId.substring(0, 8)}`
+    );
+
+    // Check if group already exists
+    const exists = await this.executor.check(UnixGroupCommands.groupExists(groupName));
+    if (exists) {
+      console.log(`[UnixIntegration] Group ${groupName} already exists`);
+    } else {
+      await this.executor.exec(UnixGroupCommands.createGroup(groupName));
+    }
+
+    // Update worktree record with group name
+    await this.worktreeRepo.update(worktreeId, {
+      unix_group: groupName,
+    });
+
+    return groupName;
+  }
+
+  /**
+   * Delete a Unix group for a worktree
+   *
+   * @param worktreeId - Worktree ID
+   */
+  async deleteWorktreeGroup(worktreeId: WorktreeID): Promise<void> {
+    const worktree = await this.worktreeRepo.findById(worktreeId);
+    if (!worktree?.unix_group) {
+      console.log(`[UnixIntegration] No Unix group for worktree ${worktreeId.substring(0, 8)}`);
+      return;
+    }
+
+    console.log(
+      `[UnixIntegration] Deleting group ${worktree.unix_group} for worktree ${worktreeId.substring(0, 8)}`
+    );
+
+    // Check if group exists before deleting
+    const exists = await this.executor.check(UnixGroupCommands.groupExists(worktree.unix_group));
+    if (exists) {
+      await this.executor.exec(UnixGroupCommands.deleteGroup(worktree.unix_group));
+    }
+  }
+
+  /**
+   * Add a user to a worktree's Unix group
+   *
+   * @param worktreeId - Worktree ID
+   * @param userId - User ID to add
+   */
+  async addUserToWorktreeGroup(worktreeId: WorktreeID, userId: UUID): Promise<void> {
+    const worktree = await this.worktreeRepo.findById(worktreeId);
+    if (!worktree?.unix_group) {
+      console.log(
+        `[UnixIntegration] No Unix group for worktree ${worktreeId.substring(0, 8)}, skipping user add`
+      );
+      return;
+    }
+
+    const user = await this.usersRepo.findById(userId as UserID);
+    if (!user?.unix_username) {
+      console.log(
+        `[UnixIntegration] User ${userId.substring(0, 8)} has no Unix username, skipping group add`
+      );
+      return;
+    }
+
+    console.log(
+      `[UnixIntegration] Adding user ${user.unix_username} to group ${worktree.unix_group}`
+    );
+
+    // Check if already in group
+    const inGroup = await this.executor.check(
+      UnixGroupCommands.isUserInGroup(user.unix_username, worktree.unix_group)
+    );
+    if (inGroup) {
+      console.log(`[UnixIntegration] User ${user.unix_username} already in group`);
+    } else {
+      await this.executor.exec(
+        UnixGroupCommands.addUserToGroup(user.unix_username, worktree.unix_group)
+      );
+    }
+
+    // Also create symlink if auto-manage is enabled
+    if (this.config.autoManageSymlinks && worktree.path) {
+      await this.createWorktreeSymlink(userId, worktreeId);
+    }
+  }
+
+  /**
+   * Remove a user from a worktree's Unix group
+   *
+   * @param worktreeId - Worktree ID
+   * @param userId - User ID to remove
+   */
+  async removeUserFromWorktreeGroup(worktreeId: WorktreeID, userId: UUID): Promise<void> {
+    const worktree = await this.worktreeRepo.findById(worktreeId);
+    if (!worktree?.unix_group) {
+      console.log(
+        `[UnixIntegration] No Unix group for worktree ${worktreeId.substring(0, 8)}, skipping user remove`
+      );
+      return;
+    }
+
+    const user = await this.usersRepo.findById(userId as UserID);
+    if (!user?.unix_username) {
+      console.log(
+        `[UnixIntegration] User ${userId.substring(0, 8)} has no Unix username, skipping group remove`
+      );
+      return;
+    }
+
+    console.log(
+      `[UnixIntegration] Removing user ${user.unix_username} from group ${worktree.unix_group}`
+    );
+
+    // Check if in group before removing
+    const inGroup = await this.executor.check(
+      UnixGroupCommands.isUserInGroup(user.unix_username, worktree.unix_group)
+    );
+    if (inGroup) {
+      await this.executor.exec(
+        UnixGroupCommands.removeUserFromGroup(user.unix_username, worktree.unix_group)
+      );
+    }
+
+    // Also remove symlink if auto-manage is enabled
+    if (this.config.autoManageSymlinks) {
+      await this.removeWorktreeSymlink(userId, worktreeId);
+    }
+  }
+
+  /**
+   * Set filesystem permissions for a worktree directory
+   *
+   * @param worktreeId - Worktree ID
+   * @param worktreePath - Absolute path to worktree directory
+   */
+  async setWorktreePermissions(worktreeId: WorktreeID, worktreePath: string): Promise<void> {
+    const worktree = await this.worktreeRepo.findById(worktreeId);
+    if (!worktree?.unix_group) {
+      console.log(
+        `[UnixIntegration] No Unix group for worktree ${worktreeId.substring(0, 8)}, skipping permissions`
+      );
+      return;
+    }
+
+    const permissionMode = getWorktreePermissionMode(worktree.others_fs_access || 'read');
+
+    console.log(
+      `[UnixIntegration] Setting permissions ${permissionMode} for ${worktreePath} (group: ${worktree.unix_group})`
+    );
+
+    await this.executor.exec(
+      UnixGroupCommands.setDirectoryGroup(worktreePath, worktree.unix_group, permissionMode)
+    );
+  }
+
+  /**
+   * Initialize Unix group for an existing worktree
+   *
+   * Creates group and adds all current owners.
+   *
+   * @param worktreeId - Worktree ID
+   */
+  async initializeWorktreeGroup(worktreeId: WorktreeID): Promise<void> {
+    const groupName = await this.createWorktreeGroup(worktreeId);
+
+    const ownerIds = await this.worktreeRepo.getOwners(worktreeId);
+    for (const ownerId of ownerIds) {
+      await this.addUserToWorktreeGroup(worktreeId, ownerId);
+    }
+
+    console.log(
+      `[UnixIntegration] Initialized group ${groupName} with ${ownerIds.length} owner(s)`
+    );
+  }
+
+  // ============================================================
+  // UNIX USER MANAGEMENT
+  // ============================================================
+
+  /**
+   * Ensure a Unix user exists for an Agor user
+   *
+   * Creates the Unix user if it doesn't exist.
+   * Also sets up the ~/agor/worktrees directory.
+   *
+   * @param userId - Agor user ID
+   * @returns Unix username (existing or newly created)
+   */
+  async ensureUnixUser(userId: UserID): Promise<string> {
+    const user = await this.usersRepo.findById(userId);
+    if (!user) {
+      throw new Error(`User not found: ${userId}`);
+    }
+
+    // If user already has a unix_username, ensure it exists on the system
+    let unixUsername = user.unix_username;
+
+    if (!unixUsername) {
+      // Generate a default username
+      unixUsername = generateUnixUsername(userId);
+      console.log(
+        `[UnixIntegration] Generated Unix username: ${unixUsername} for user ${userId.substring(0, 8)}`
+      );
+    }
+
+    // Validate username format
+    if (!isValidUnixUsername(unixUsername)) {
+      throw new Error(`Invalid Unix username format: ${unixUsername}`);
+    }
+
+    // Check if Unix user exists
+    const exists = await this.executor.check(UnixUserCommands.userExists(unixUsername));
+
+    if (!exists) {
+      console.log(`[UnixIntegration] Creating Unix user: ${unixUsername}`);
+      await this.executor.exec(UnixUserCommands.createUser(unixUsername));
+
+      // Setup ~/agor/worktrees directory
+      await this.executor.exec(
+        UnixUserCommands.setupWorktreesDir(unixUsername, this.config.homeBase)
+      );
+    } else {
+      console.log(`[UnixIntegration] Unix user ${unixUsername} already exists`);
+
+      // Ensure ~/agor/worktrees exists
+      const worktreesDir = getUserWorktreesDir(unixUsername, this.config.homeBase);
+      const dirExists = await this.executor.check(SymlinkCommands.pathExists(worktreesDir));
+      if (!dirExists) {
+        await this.executor.exec(
+          UnixUserCommands.setupWorktreesDir(unixUsername, this.config.homeBase)
+        );
+      }
+    }
+
+    // Update Agor user record if username was generated
+    if (!user.unix_username) {
+      await this.usersRepo.update(userId, { unix_username: unixUsername });
+    }
+
+    return unixUsername;
+  }
+
+  /**
+   * Delete a Unix user
+   *
+   * @param userId - Agor user ID
+   * @param deleteHome - Also delete home directory (default: false)
+   */
+  async deleteUnixUser(userId: UserID, deleteHome: boolean = false): Promise<void> {
+    const user = await this.usersRepo.findById(userId);
+    if (!user?.unix_username) {
+      console.log(`[UnixIntegration] User ${userId.substring(0, 8)} has no Unix username`);
+      return;
+    }
+
+    const exists = await this.executor.check(UnixUserCommands.userExists(user.unix_username));
+    if (!exists) {
+      console.log(`[UnixIntegration] Unix user ${user.unix_username} does not exist`);
+      return;
+    }
+
+    console.log(
+      `[UnixIntegration] Deleting Unix user: ${user.unix_username} (deleteHome: ${deleteHome})`
+    );
+
+    if (deleteHome) {
+      await this.executor.exec(UnixUserCommands.deleteUserWithHome(user.unix_username));
+    } else {
+      await this.executor.exec(UnixUserCommands.deleteUser(user.unix_username));
+    }
+  }
+
+  /**
+   * Lock a Unix user account (disable login)
+   *
+   * @param userId - Agor user ID
+   */
+  async lockUnixUser(userId: UserID): Promise<void> {
+    const user = await this.usersRepo.findById(userId);
+    if (!user?.unix_username) {
+      return;
+    }
+
+    console.log(`[UnixIntegration] Locking Unix user: ${user.unix_username}`);
+    await this.executor.exec(UnixUserCommands.lockUser(user.unix_username));
+  }
+
+  /**
+   * Unlock a Unix user account
+   *
+   * @param userId - Agor user ID
+   */
+  async unlockUnixUser(userId: UserID): Promise<void> {
+    const user = await this.usersRepo.findById(userId);
+    if (!user?.unix_username) {
+      return;
+    }
+
+    console.log(`[UnixIntegration] Unlocking Unix user: ${user.unix_username}`);
+    await this.executor.exec(UnixUserCommands.unlockUser(user.unix_username));
+  }
+
+  // ============================================================
+  // SYMLINK MANAGEMENT
+  // ============================================================
+
+  /**
+   * Create a symlink for a worktree in a user's home directory
+   *
+   * @param userId - User ID
+   * @param worktreeId - Worktree ID
+   */
+  async createWorktreeSymlink(userId: UUID, worktreeId: WorktreeID): Promise<void> {
+    const user = await this.usersRepo.findById(userId as UserID);
+    if (!user?.unix_username) {
+      console.log(
+        `[UnixIntegration] User ${userId.substring(0, 8)} has no Unix username, skipping symlink`
+      );
+      return;
+    }
+
+    const worktree = await this.worktreeRepo.findById(worktreeId);
+    if (!worktree?.path || !worktree.name) {
+      console.log(
+        `[UnixIntegration] Worktree ${worktreeId.substring(0, 8)} has no path/name, skipping symlink`
+      );
+      return;
+    }
+
+    const linkPath = getWorktreeSymlinkPath(
+      user.unix_username,
+      worktree.name,
+      this.config.homeBase
+    );
+
+    console.log(`[UnixIntegration] Creating symlink: ${linkPath} -> ${worktree.path}`);
+
+    await this.executor.exec(
+      SymlinkCommands.createSymlinkWithOwnership(worktree.path, linkPath, user.unix_username)
+    );
+  }
+
+  /**
+   * Remove a symlink for a worktree from a user's home directory
+   *
+   * @param userId - User ID
+   * @param worktreeId - Worktree ID
+   */
+  async removeWorktreeSymlink(userId: UUID, worktreeId: WorktreeID): Promise<void> {
+    const user = await this.usersRepo.findById(userId as UserID);
+    if (!user?.unix_username) {
+      return;
+    }
+
+    const worktree = await this.worktreeRepo.findById(worktreeId);
+    if (!worktree?.name) {
+      return;
+    }
+
+    const linkPath = getWorktreeSymlinkPath(
+      user.unix_username,
+      worktree.name,
+      this.config.homeBase
+    );
+
+    console.log(`[UnixIntegration] Removing symlink: ${linkPath}`);
+
+    await this.executor.exec(SymlinkCommands.removeSymlink(linkPath));
+  }
+
+  /**
+   * Sync all symlinks for a user based on their worktree ownership
+   *
+   * Removes stale symlinks and creates missing ones.
+   *
+   * @param userId - User ID
+   */
+  async syncUserSymlinks(userId: UserID): Promise<void> {
+    const user = await this.usersRepo.findById(userId);
+    if (!user?.unix_username) {
+      console.log(`[UnixIntegration] User ${userId.substring(0, 8)} has no Unix username`);
+      return;
+    }
+
+    console.log(`[UnixIntegration] Syncing symlinks for user: ${user.unix_username}`);
+
+    const worktreesDir = getUserWorktreesDir(user.unix_username, this.config.homeBase);
+
+    // Get all worktrees the user owns
+    const allWorktrees = await this.worktreeRepo.findAll();
+    const ownedWorktreeIds = new Set<string>();
+
+    for (const wt of allWorktrees) {
+      const isOwner = await this.worktreeRepo.isOwner(wt.worktree_id, userId);
+      if (isOwner) {
+        ownedWorktreeIds.add(wt.worktree_id);
+      }
+    }
+
+    // Remove broken symlinks
+    await this.executor.exec(SymlinkCommands.removeBrokenSymlinks(worktreesDir));
+
+    // Create symlinks for owned worktrees
+    for (const worktreeId of ownedWorktreeIds) {
+      await this.createWorktreeSymlink(userId, worktreeId as WorktreeID);
+    }
+
+    console.log(
+      `[UnixIntegration] Synced ${ownedWorktreeIds.size} symlinks for ${user.unix_username}`
+    );
+  }
+
+  /**
+   * Sync all symlinks for a worktree (for all owners)
+   *
+   * @param worktreeId - Worktree ID
+   */
+  async syncWorktreeSymlinks(worktreeId: WorktreeID): Promise<void> {
+    const ownerIds = await this.worktreeRepo.getOwners(worktreeId);
+
+    console.log(
+      `[UnixIntegration] Syncing symlinks for worktree ${worktreeId.substring(0, 8)} (${ownerIds.length} owners)`
+    );
+
+    for (const ownerId of ownerIds) {
+      await this.createWorktreeSymlink(ownerId, worktreeId);
+    }
+  }
+
+  // ============================================================
+  // BULK / SYNC OPERATIONS
+  // ============================================================
+
+  /**
+   * Full sync for a worktree
+   *
+   * Ensures group exists, all owners are in group, and symlinks are created.
+   *
+   * @param worktreeId - Worktree ID
+   */
+  async syncWorktree(worktreeId: WorktreeID): Promise<void> {
+    console.log(`[UnixIntegration] Full sync for worktree ${worktreeId.substring(0, 8)}`);
+
+    // Ensure group exists
+    await this.createWorktreeGroup(worktreeId);
+
+    // Get worktree for path
+    const worktree = await this.worktreeRepo.findById(worktreeId);
+
+    // Add all owners to group and create symlinks
+    const ownerIds = await this.worktreeRepo.getOwners(worktreeId);
+    for (const ownerId of ownerIds) {
+      await this.addUserToWorktreeGroup(worktreeId, ownerId);
+    }
+
+    // Set permissions if path is available
+    if (worktree?.path) {
+      await this.setWorktreePermissions(worktreeId, worktree.path);
+    }
+  }
+
+  /**
+   * Full sync for a user
+   *
+   * Ensures Unix user exists, syncs all worktree symlinks.
+   *
+   * @param userId - User ID
+   */
+  async syncUser(userId: UserID): Promise<void> {
+    console.log(`[UnixIntegration] Full sync for user ${userId.substring(0, 8)}`);
+
+    // Ensure Unix user exists
+    await this.ensureUnixUser(userId);
+
+    // Sync symlinks
+    await this.syncUserSymlinks(userId);
+  }
+
+  /**
+   * Sync everything
+   *
+   * Full system sync - use with caution on large installations.
+   */
+  async syncAll(): Promise<void> {
+    console.log('[UnixIntegration] Starting full system sync...');
+
+    // Sync all worktrees
+    const worktrees = await this.worktreeRepo.findAll();
+    for (const wt of worktrees) {
+      try {
+        await this.syncWorktree(wt.worktree_id);
+      } catch (error) {
+        console.error(`[UnixIntegration] Failed to sync worktree ${wt.worktree_id}:`, error);
+      }
+    }
+
+    console.log(`[UnixIntegration] Full sync complete. Synced ${worktrees.length} worktrees.`);
+  }
+}

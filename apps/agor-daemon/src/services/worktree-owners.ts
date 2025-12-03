@@ -12,12 +12,16 @@
  * Authorization:
  * - Only worktree owners can manage other owners (requires 'all' permission)
  *
- * @see context/explorations/rbac.md
+ * Unix Integration:
+ * - When owners are added/removed, updates Unix groups and symlinks accordingly
+ *
+ * @see context/guides/rbac-and-unix-isolation.md
  */
 
 import type { WorktreeRepository } from '@agor/core/db';
 import { type Application, Forbidden, NotAuthenticated } from '@agor/core/feathers';
-import type { HookContext, User, UUID } from '@agor/core/types';
+import type { HookContext, User, UUID, WorktreeID } from '@agor/core/types';
+import type { UnixIntegrationService } from '@agor/core/unix';
 
 interface WorktreeOwnerCreateData {
   user_id: string;
@@ -188,12 +192,66 @@ export function setupWorktreeOwnersService(app: Application, worktreeRepo: Workt
     }
   );
 
-  // Add authorization hooks
+  // Add authorization and Unix integration hooks
   app.service('worktrees/:id/owners').hooks({
     before: {
       find: [requireViewPermission(worktreeRepo)],
       create: [requireWorktreeOwner(worktreeRepo)],
       remove: [requireWorktreeOwner(worktreeRepo)],
+    },
+    after: {
+      // After adding owner: add to Unix group + create symlink
+      create: [
+        async (context: HookContext) => {
+          const unixIntegration = app.get('unixIntegration') as UnixIntegrationService | undefined;
+          if (!unixIntegration?.isEnabled()) {
+            return context;
+          }
+
+          // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
+          const params = context.params as any;
+          const worktreeId = params.route?.id as WorktreeID;
+          const userId = (context.data as WorktreeOwnerCreateData).user_id as UUID;
+
+          try {
+            await unixIntegration.addUserToWorktreeGroup(worktreeId, userId);
+            console.log(
+              `[Unix Integration] Added user ${userId.substring(0, 8)} to worktree ${worktreeId.substring(0, 8)} group`
+            );
+          } catch (error) {
+            console.error('[Unix Integration] Failed to add user to worktree group:', error);
+            // Don't fail the request - app-layer ownership is already set
+          }
+
+          return context;
+        },
+      ],
+      // After removing owner: remove from Unix group + remove symlink
+      remove: [
+        async (context: HookContext) => {
+          const unixIntegration = app.get('unixIntegration') as UnixIntegrationService | undefined;
+          if (!unixIntegration?.isEnabled()) {
+            return context;
+          }
+
+          // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
+          const params = context.params as any;
+          const worktreeId = params.route?.id as WorktreeID;
+          const userId = context.id as UUID; // userId passed as id parameter
+
+          try {
+            await unixIntegration.removeUserFromWorktreeGroup(worktreeId, userId);
+            console.log(
+              `[Unix Integration] Removed user ${userId.substring(0, 8)} from worktree ${worktreeId.substring(0, 8)} group`
+            );
+          } catch (error) {
+            console.error('[Unix Integration] Failed to remove user from worktree group:', error);
+            // Don't fail the request - app-layer ownership is already removed
+          }
+
+          return context;
+        },
+      ],
     },
   });
 }
