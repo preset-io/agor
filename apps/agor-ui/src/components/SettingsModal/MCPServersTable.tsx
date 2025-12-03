@@ -622,7 +622,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
         // Error fields are shown inline by Ant Design Form
         if (error.errorFields && error.errorFields.length > 0) {
           const firstError = error.errorFields[0];
-          message.error(firstError.errors[0] || 'Please fill in required fields');
+          showError(firstError.errors[0] || 'Please fill in required fields');
         }
       });
   };
@@ -694,6 +694,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
 
     // Set form fields
     form.setFieldsValue({
+      name: server.name,
       display_name: server.display_name,
       description: server.description,
       transport: server.transport || (server.url ? 'http' : 'stdio'),
@@ -789,7 +790,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       // Validation or update failed
       console.error('Update failed:', error);
       const errorMessage = error instanceof Error ? error.message : 'Failed to update server';
-      message.error(errorMessage);
+      showError(errorMessage);
     }
   };
 
