@@ -1006,7 +1006,6 @@ async function main() {
       },
     },
     // biome-ignore lint/suspicious/noExplicitAny: feathers-swagger docs option not typed in FeathersJS
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
   } as any);
 
   app.use('/boards', createBoardsService(db), {
@@ -1128,7 +1127,9 @@ async function main() {
     async create(data: { mcp_server_id: string }, params?: AuthenticatedParams) {
       try {
         const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
-        const { SSEClientTransport } = await import('@modelcontextprotocol/sdk/client/sse.js');
+        const { StreamableHTTPClientTransport } = await import(
+          '@modelcontextprotocol/sdk/client/streamableHttp.js'
+        );
         const { resolveMCPAuthHeaders } = await import('@agor/core/tools/mcp/jwt-auth');
 
         const mcpServerRepo = new MCPServerRepository(db);
@@ -1199,8 +1200,8 @@ async function main() {
           Object.assign(headers, authHeaders);
         }
 
-        // Create SSE transport with headers
-        const sseTransport = new SSEClientTransport(new URL(server.url), {
+        // Create Streamable HTTP transport (supports both SSE and regular HTTP)
+        const httpTransport = new StreamableHTTPClientTransport(new URL(server.url), {
           requestInit: {
             headers,
           },
@@ -1220,23 +1221,41 @@ async function main() {
         let connected = false;
 
         try {
-          console.log('[MCP Discovery] Connecting...');
+          console.log('[MCP Discovery] Connecting to HTTP endpoint...');
+          console.log('[MCP Discovery] URL:', server.url);
+          console.log('[MCP Discovery] Headers:', JSON.stringify(headers, null, 2));
 
-          // Add timeout to prevent hanging indefinitely
-          const connectTimeout = new Promise((_, reject) => {
-            setTimeout(() => reject(new Error('Connection timeout after 30 seconds')), 30000);
+          // Add timeout to prevent hanging indefinitely (10s should be plenty)
+          const connectTimeout = new Promise<never>((_, reject) => {
+            setTimeout(() => {
+              console.error(
+                '[MCP Discovery] ❌ Connection timeout - server did not respond in 10 seconds'
+              );
+              console.error(
+                '[MCP Discovery] This likely means the MCP SDK cannot establish a connection'
+              );
+              reject(new Error('Connection timeout after 10 seconds'));
+            }, 10000);
           });
 
-          await Promise.race([client.connect(sseTransport), connectTimeout]);
-          connected = true;
-          console.log('[MCP Discovery] Connected!');
+          console.log('[MCP Discovery] Calling client.connect()...');
+          const connectPromise = client.connect(httpTransport).catch((err) => {
+            console.error('[MCP Discovery] ❌ Connection error during connect():', err);
+            throw err;
+          });
 
-          // List capabilities with timeout
-          const listTimeout = new Promise((_, reject) => {
-            setTimeout(
-              () => reject(new Error('List capabilities timeout after 15 seconds')),
-              15000
-            );
+          await Promise.race([connectPromise, connectTimeout]);
+          connected = true;
+          console.log('[MCP Discovery] ✅ Successfully connected!');
+
+          // List capabilities with timeout (10s should be plenty for most servers)
+          const listTimeout = new Promise<never>((_, reject) => {
+            setTimeout(() => {
+              console.error(
+                '[MCP Discovery] ❌ List capabilities timeout - server did not respond in 10 seconds'
+              );
+              reject(new Error('List capabilities timeout after 10 seconds'));
+            }, 10000);
           });
 
           interface MCPListResult<T> {
@@ -1263,14 +1282,35 @@ async function main() {
             }>;
           }>;
 
-          const [toolsResult, resourcesResult, promptsResult] = (await Promise.race([
-            Promise.all([client.listTools(), client.listResources(), client.listPrompts()]),
+          console.log('[MCP Discovery] Listing tools...');
+          const toolsResult = (await Promise.race([
+            client.listTools().catch((err) => {
+              console.error('[MCP Discovery] ❌ listTools() failed:', err.message);
+              throw err;
+            }),
             listTimeout,
-          ])) as [ToolsResult, ResourcesResult, PromptsResult];
+          ])) as ToolsResult;
+          console.log('[MCP Discovery] ✅ Found', toolsResult.tools.length, 'tools');
 
-          console.log('[MCP Discovery] Found', toolsResult.tools.length, 'tools');
-          console.log('[MCP Discovery] Found', resourcesResult.resources.length, 'resources');
-          console.log('[MCP Discovery] Found', promptsResult.prompts.length, 'prompts');
+          console.log('[MCP Discovery] Listing resources...');
+          const resourcesResult = (await Promise.race([
+            client.listResources().catch((err) => {
+              console.warn('[MCP Discovery] ⚠️  listResources() failed:', err.message, '- skipping');
+              return { resources: [] } as ResourcesResult;
+            }),
+            listTimeout,
+          ])) as ResourcesResult;
+          console.log('[MCP Discovery] ✅ Found', resourcesResult.resources.length, 'resources');
+
+          console.log('[MCP Discovery] Listing prompts...');
+          const promptsResult = (await Promise.race([
+            client.listPrompts().catch((err) => {
+              console.warn('[MCP Discovery] ⚠️  listPrompts() failed:', err.message, '- skipping');
+              return { prompts: [] } as PromptsResult;
+            }),
+            listTimeout,
+          ])) as PromptsResult;
+          console.log('[MCP Discovery] ✅ Found', promptsResult.prompts.length, 'prompts');
 
           // Update server with discovered capabilities
           await mcpServerRepo.update(data.mcp_server_id, {
@@ -1476,7 +1516,6 @@ async function main() {
     before: {
       all: [
         // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type compatibility
-        // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
         (validateQuery as any)(boardObjectQueryValidator),
         ...getReadAuthHooks(),
         ...(allowAnonymous ? [] : [requireMinimumRole('member', 'manage board objects')]),
@@ -1493,7 +1532,7 @@ async function main() {
                   return context;
                 }
 
-                // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
+                // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type not fully typed
                 const userId = (context.params as any).user?.user_id;
                 if (!userId) {
                   // Not authenticated - return empty results
@@ -1555,7 +1594,6 @@ async function main() {
     before: {
       all: [
         // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type compatibility
-        // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
         (validateQuery as any)(boardCommentQueryValidator),
         ...getReadAuthHooks(),
       ],
@@ -1572,7 +1610,6 @@ async function main() {
     before: {
       all: [
         // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type compatibility
-        // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
         (validateQuery as any)(repoQueryValidator),
         ...getReadAuthHooks(),
         ...(allowAnonymous ? [] : [requireMinimumRole('member', 'access repositories')]),
@@ -1587,7 +1624,6 @@ async function main() {
     before: {
       all: [
         // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type compatibility
-        // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
         (validateQuery as any)(worktreeQueryValidator),
         ...getReadAuthHooks(),
         ...(allowAnonymous ? [] : [requireMinimumRole('member', 'access worktrees')]),
@@ -1684,7 +1720,6 @@ async function main() {
     before: {
       all: [
         // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type compatibility
-        // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
         (validateQuery as any)(mcpServerQueryValidator),
         ...getReadAuthHooks(),
       ],
@@ -1732,7 +1767,6 @@ async function main() {
     before: {
       all: [
         // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type compatibility
-        // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
         (validateQuery as any)(userQueryValidator),
       ],
       find: [
@@ -1840,7 +1874,6 @@ async function main() {
     before: {
       all: [
         // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type compatibility
-        // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
         (validateQuery as any)(sessionQueryValidator),
         ...getReadAuthHooks(),
       ],
@@ -1861,7 +1894,7 @@ async function main() {
               // Check worktree permission BEFORE injecting created_by (need worktree_id)
               async (context: HookContext) => {
                 // RBAC: Ensure user can create sessions in this worktree ('all' permission)
-                // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
+                // biome-ignore lint/suspicious/noExplicitAny: FeathersJS data type not fully typed
                 const data = context.data as any;
                 if (context.params.provider && data?.worktree_id) {
                   try {
@@ -1869,16 +1902,16 @@ async function main() {
                     if (!worktree) {
                       throw new Forbidden(`Worktree not found: ${data.worktree_id}`);
                     }
-                    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
+                    // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type not fully typed
                     const userId = (context.params as any).user?.user_id;
                     const isOwner = userId
                       ? await worktreeRepository.isOwner(worktree.worktree_id, userId)
                       : false;
 
                     // Cache for later hooks
-                    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
+                    // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type not fully typed
                     (context.params as any).worktree = worktree;
-                    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
+                    // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type not fully typed
                     (context.params as any).isWorktreeOwner = isOwner;
                   } catch (error) {
                     console.error('Failed to load worktree for RBAC check:', error);
@@ -2039,7 +2072,6 @@ async function main() {
     before: {
       all: [
         // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type compatibility
-        // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
         (validateQuery as any)(taskQueryValidator),
         requireAuth,
       ],
@@ -2105,7 +2137,6 @@ async function main() {
     before: {
       all: [
         // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type compatibility
-        // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
         (validateQuery as any)(boardQueryValidator),
         ...getReadAuthHooks(),
       ],
@@ -2329,7 +2360,6 @@ async function main() {
 
   // Configure docs for authentication service (override global security requirement)
   // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service type not fully typed
-  // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
   const authService = app.service('authentication') as any;
   authService.docs = {
     description: 'Authentication service for user login and token management',
@@ -2349,7 +2379,6 @@ async function main() {
           // Only rate limit external requests (not internal service calls)
           if (context.params.provider) {
             // biome-ignore lint/suspicious/noExplicitAny: FeathersJS request params are untyped
-            // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
             const params = context.params as any;
             const ip =
               params.ip ||
@@ -2417,7 +2446,6 @@ async function main() {
       // SECURITY: Rate limit refresh token requests
       if (params?.provider) {
         // biome-ignore lint/suspicious/noExplicitAny: FeathersJS request params are untyped
-        // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
         const p = params as any;
         const ip =
           p.ip ||
@@ -2493,7 +2521,6 @@ async function main() {
 
   // Configure docs for refresh endpoint (override global security requirement)
   // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service type not fully typed
-  // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
   const refreshService = app.service('authentication/refresh') as any;
   refreshService.docs = {
     description: 'Token refresh endpoint - obtain a new access token using a refresh token',
@@ -4197,7 +4224,6 @@ async function main() {
       // If user is authenticated (via requireAuth hook check), provide detailed info
       // Check if this is an authenticated request
       // biome-ignore lint/suspicious/noExplicitAny: FeathersJS request params are untyped
-      // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
       const isAuthenticated = (params as any)?.user !== undefined;
 
       if (isAuthenticated) {
@@ -4220,10 +4246,8 @@ async function main() {
           auth: {
             ...publicResponse.auth,
             // biome-ignore lint/suspicious/noExplicitAny: FeathersJS request params are untyped
-            // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
             user: (params as any)?.user?.email,
             // biome-ignore lint/suspicious/noExplicitAny: FeathersJS request params are untyped
-            // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
             role: (params as any)?.user?.role,
           },
           encryption: {
@@ -4243,7 +4267,6 @@ async function main() {
 
   // Configure docs for health endpoint (override global security requirement)
   // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service type not fully typed
-  // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
   const healthService = app.service('health') as any;
   healthService.docs = {
     description: 'Health check endpoint (always public)',
@@ -4315,7 +4338,6 @@ async function main() {
 
   // Configure docs for OpenCode models endpoint
   // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service type not fully typed
-  // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
   const opencodeModelsService = app.service('opencode/models') as any;
   opencodeModelsService.docs = {
     description: 'Get available OpenCode providers and models (requires OpenCode server running)',
@@ -4363,7 +4385,6 @@ async function main() {
 
   // Configure docs for OpenCode health endpoint
   // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service type not fully typed
-  // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
   const opencodeHealthService = app.service('opencode/health') as any;
   opencodeHealthService.docs = {
     description: 'Test connection to OpenCode server',

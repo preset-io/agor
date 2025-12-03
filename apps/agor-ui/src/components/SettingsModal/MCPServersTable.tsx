@@ -6,6 +6,7 @@ import type {
 } from '@agor/core/types';
 import {
   DeleteOutlined,
+  DownOutlined,
   EditOutlined,
   EyeOutlined,
   PlusOutlined,
@@ -15,10 +16,11 @@ import type { FormInstance } from 'antd';
 import {
   Badge,
   Button,
+  Collapse,
   Descriptions,
-  Divider,
   Form,
   Input,
+  List,
   Modal,
   Popconfirm,
   Select,
@@ -32,7 +34,6 @@ import {
   theme,
 } from 'antd';
 import { useEffect, useState } from 'react';
-import { ThemedSyntaxHighlighter } from '@/components/ThemedSyntaxHighlighter';
 import { mapToArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
 
@@ -58,7 +59,22 @@ const ToolPermissionsEditor: React.FC<ToolPermissionsEditorProps> = ({
     onChange?.(updated);
   };
 
-  if (!tools || tools.length === 0) {
+  // Safeguard: If tools is a string (shouldn't happen but just in case), try to parse it
+  let parsedTools = tools;
+  if (typeof tools === 'string') {
+    console.error(
+      '[MCP] tools is a string, attempting to parse:',
+      (tools as string).substring(0, 100)
+    );
+    try {
+      parsedTools = JSON.parse(tools);
+    } catch (e) {
+      console.error('[MCP] Failed to parse tools string:', e);
+      parsedTools = [];
+    }
+  }
+
+  if (!parsedTools || parsedTools.length === 0) {
     return (
       <div
         style={{
@@ -76,69 +92,49 @@ const ToolPermissionsEditor: React.FC<ToolPermissionsEditorProps> = ({
   }
 
   return (
-    <div
-      style={{
-        maxHeight: '400px',
-        overflowY: 'auto',
-        border: `1px solid ${token.colorBorder}`,
-        borderRadius: token.borderRadius,
-      }}
-    >
-      {tools.map((tool) => (
-        <div
-          key={tool.name}
-          style={{
-            padding: '12px',
-            borderBottom: `1px solid ${token.colorBorderSecondary}`,
-            display: 'flex',
-            gap: '12px',
-            alignItems: 'center',
-            background: token.colorBgLayout,
-          }}
-        >
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ marginBottom: 4 }}>
-              <ThemedSyntaxHighlighter
-                language="typescript"
-                customStyle={{
-                  padding: '2px 6px',
-                  display: 'inline-block',
-                  fontSize: '13px',
-                  lineHeight: '1.4',
-                  borderRadius: token.borderRadiusSM,
-                }}
-                PreTag="span"
-              >
-                {tool.name}
-              </ThemedSyntaxHighlighter>
-            </div>
-            {tool.description && (
-              <div style={{ marginTop: 4 }}>
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  {tool.description}
-                </Typography.Text>
-              </div>
-            )}
-          </div>
-          <Select
-            size="middle"
-            value={value[tool.name] || 'ask'}
-            onChange={(perm) => handlePermissionChange(tool.name, perm)}
-            style={{ minWidth: 100 }}
+    <List
+      size="small"
+      bordered
+      dataSource={parsedTools}
+      style={{ maxHeight: '400px', overflowY: 'auto' }}
+      renderItem={(tool) => (
+        <List.Item style={{ display: 'block' }}>
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginBottom: 8,
+            }}
           >
-            <Select.Option value="allow">
-              <Typography.Text style={{ color: token.colorSuccess }}>Allow</Typography.Text>
-            </Select.Option>
-            <Select.Option value="ask">
-              <Typography.Text style={{ color: token.colorWarning }}>Ask</Typography.Text>
-            </Select.Option>
-            <Select.Option value="deny">
-              <Typography.Text style={{ color: token.colorError }}>Deny</Typography.Text>
-            </Select.Option>
-          </Select>
-        </div>
-      ))}
-    </div>
+            <Typography.Text code strong>
+              {tool.name}
+            </Typography.Text>
+            <Select
+              size="small"
+              value={value[tool.name] || 'ask'}
+              onChange={(perm) => handlePermissionChange(tool.name, perm)}
+              style={{ width: 100 }}
+            >
+              <Select.Option value="allow">
+                <Typography.Text style={{ color: token.colorSuccess }}>Allow</Typography.Text>
+              </Select.Option>
+              <Select.Option value="ask">
+                <Typography.Text style={{ color: token.colorWarning }}>Ask</Typography.Text>
+              </Select.Option>
+              <Select.Option value="deny">
+                <Typography.Text style={{ color: token.colorError }}>Deny</Typography.Text>
+              </Select.Option>
+            </Select>
+          </div>
+          {tool.description && (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {tool.description}
+            </Typography.Text>
+          )}
+        </List.Item>
+      )}
+    />
   );
 };
 
@@ -221,7 +217,8 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           showWarning('No bearer token provided');
         }
       } else {
-        showInfo('No auth configured');
+        // Auth type is 'none' - just confirm the configuration
+        showInfo('No authentication required - ready to use');
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -231,214 +228,285 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
     }
   };
 
-  return (
-    <>
-      {mode === 'create' && (
+  const collapseItems = [
+    // Basic Info - always shown, not in collapse
+    ...(mode === 'create'
+      ? [
+          {
+            key: 'basic',
+            label: <Typography.Text strong>Basic Information</Typography.Text>,
+            children: (
+              <>
+                <Form.Item
+                  label="Name (Internal ID)"
+                  name="name"
+                  rules={[{ required: true, message: 'Please enter a server name' }]}
+                  tooltip="Internal identifier - lowercase, no spaces (e.g., filesystem, sentry, context7)"
+                >
+                  <Input placeholder="context7" />
+                </Form.Item>
+
+                <Form.Item
+                  label="Scope"
+                  name="scope"
+                  initialValue="global"
+                  tooltip="Where this server is available"
+                >
+                  <Select>
+                    <Select.Option value="global">Global (all sessions)</Select.Option>
+                    <Select.Option value="session">Session</Select.Option>
+                  </Select>
+                </Form.Item>
+
+                <Form.Item
+                  label="Display Name (Optional)"
+                  name="display_name"
+                  tooltip="User-friendly name shown in UI (e.g., Context7 MCP)"
+                >
+                  <Input placeholder="Context7 MCP" />
+                </Form.Item>
+
+                <Form.Item
+                  label="Enabled"
+                  name="enabled"
+                  valuePropName="checked"
+                  initialValue={true}
+                >
+                  <Switch />
+                </Form.Item>
+
+                <Form.Item label="Description" name="description">
+                  <TextArea placeholder="Optional description..." rows={2} />
+                </Form.Item>
+              </>
+            ),
+          },
+        ]
+      : [
+          {
+            key: 'basic',
+            label: <Typography.Text strong>Basic Information</Typography.Text>,
+            children: (
+              <>
+                <Form.Item
+                  label="Scope"
+                  name="scope"
+                  initialValue="global"
+                  tooltip="Where this server is available"
+                >
+                  <Select>
+                    <Select.Option value="global">Global (all sessions)</Select.Option>
+                    <Select.Option value="session">Session</Select.Option>
+                  </Select>
+                </Form.Item>
+
+                <Form.Item label="Display Name" name="display_name">
+                  <Input placeholder="Filesystem Access" />
+                </Form.Item>
+
+                <Form.Item
+                  label="Enabled"
+                  name="enabled"
+                  valuePropName="checked"
+                  initialValue={true}
+                >
+                  <Switch />
+                </Form.Item>
+
+                <Form.Item label="Description" name="description">
+                  <TextArea placeholder="Optional description..." rows={2} />
+                </Form.Item>
+              </>
+            ),
+          },
+        ]),
+    {
+      key: 'connection',
+      label: <Typography.Text strong>Connection</Typography.Text>,
+      children: (
         <>
           <Form.Item
-            label="Name"
-            name="name"
-            rules={[{ required: true, message: 'Please enter a server name' }]}
-            tooltip="Internal identifier (e.g., filesystem, sentry)"
+            label="Transport"
+            name="transport"
+            rules={mode === 'create' ? [{ required: true }] : []}
+            initialValue={mode === 'create' ? 'stdio' : undefined}
+            tooltip="Connection method: stdio for local processes, HTTP/SSE for remote servers"
           >
-            <Input placeholder="filesystem" />
-          </Form.Item>
-
-          <Form.Item
-            label="Display Name"
-            name="display_name"
-            tooltip="User-friendly name shown in UI"
-          >
-            <Input placeholder="Filesystem Access" />
-          </Form.Item>
-        </>
-      )}
-
-      {mode === 'edit' && (
-        <Form.Item label="Display Name" name="display_name">
-          <Input placeholder="Filesystem Access" />
-        </Form.Item>
-      )}
-
-      <Form.Item label="Description" name="description">
-        <TextArea placeholder="Optional description..." rows={2} />
-      </Form.Item>
-
-      <Form.Item
-        label="Transport"
-        name="transport"
-        rules={mode === 'create' ? [{ required: true }] : []}
-        initialValue={mode === 'create' ? 'stdio' : undefined}
-        tooltip="Connection method: stdio for local processes, HTTP/SSE for remote servers"
-      >
-        <Select onChange={(value) => onTransportChange?.(value as 'stdio' | 'http' | 'sse')}>
-          <Select.Option value="stdio">stdio (Local process)</Select.Option>
-          <Select.Option value="http">HTTP</Select.Option>
-          <Select.Option value="sse">SSE (Server-Sent Events)</Select.Option>
-        </Select>
-      </Form.Item>
-
-      {(mode === 'create' ? transport === 'stdio' : transport === 'stdio') ? (
-        <>
-          <Form.Item
-            label="Command"
-            name="command"
-            rules={mode === 'create' ? [{ required: true, message: 'Please enter a command' }] : []}
-            tooltip="Command to execute (e.g., npx, node, python)"
-          >
-            <Input placeholder="npx" />
-          </Form.Item>
-
-          <Form.Item
-            label="Arguments"
-            name="args"
-            tooltip="Comma-separated arguments. Each argument will be passed separately to the command. Example: -y, @modelcontextprotocol/server-filesystem, /allowed/path"
-          >
-            <Input placeholder="-y, @modelcontextprotocol/server-filesystem, /allowed/path" />
-          </Form.Item>
-        </>
-      ) : (
-        <>
-          <Form.Item
-            label="URL"
-            name="url"
-            rules={mode === 'create' ? [{ required: true, message: 'Please enter a URL' }] : []}
-          >
-            <Input placeholder="https://mcp.example.com" />
-          </Form.Item>
-
-          <Form.Item
-            label="Auth Type"
-            name="auth_type"
-            initialValue="none"
-            tooltip="Authentication method for the MCP server"
-          >
-            <Select onChange={(value) => onAuthTypeChange?.(value as 'none' | 'bearer' | 'jwt')}>
-              <Select.Option value="none">None</Select.Option>
-              <Select.Option value="bearer">Bearer Token</Select.Option>
-              <Select.Option value="jwt">JWT</Select.Option>
+            <Select onChange={(value) => onTransportChange?.(value as 'stdio' | 'http' | 'sse')}>
+              <Select.Option value="stdio">stdio (Local process)</Select.Option>
+              <Select.Option value="http">HTTP</Select.Option>
+              <Select.Option value="sse">SSE (Server-Sent Events)</Select.Option>
             </Select>
           </Form.Item>
 
-          {authType === 'bearer' && (
-            <Form.Item
-              label="Token"
-              name="auth_token"
-              rules={[{ required: true, message: 'Please enter a bearer token' }]}
-              tooltip="Bearer token for authentication"
-            >
-              <Input.Password placeholder="Enter bearer token" />
-            </Form.Item>
-          )}
-
-          {authType === 'jwt' && (
+          {transport === 'stdio' ? (
             <>
               <Form.Item
-                label="API URL"
-                name="jwt_api_url"
-                rules={[{ required: true, message: 'Please enter the API URL' }]}
-                tooltip="URL of the JWT authentication API"
+                label="Command"
+                name="command"
+                rules={
+                  mode === 'create' ? [{ required: true, message: 'Please enter a command' }] : []
+                }
+                tooltip="Command to execute (e.g., npx, node, python)"
               >
-                <Input placeholder="https://auth.example.com/token" />
+                <Input placeholder="npx" />
               </Form.Item>
 
               <Form.Item
-                label="API Token"
-                name="jwt_api_token"
-                rules={[{ required: true, message: 'Please enter the API token' }]}
-                tooltip="Token for the JWT authentication API"
+                label="Arguments"
+                name="args"
+                tooltip="Comma-separated arguments. Each argument will be passed separately to the command. Example: -y, @modelcontextprotocol/server-filesystem, /allowed/path"
               >
-                <Input.Password placeholder="Enter API token" />
+                <Input placeholder="-y, @modelcontextprotocol/server-filesystem, /allowed/path" />
+              </Form.Item>
+            </>
+          ) : (
+            <>
+              <Form.Item
+                label="URL"
+                name="url"
+                rules={mode === 'create' ? [{ required: true, message: 'Please enter a URL' }] : []}
+              >
+                <Input placeholder="https://mcp.example.com" />
               </Form.Item>
 
               <Form.Item
-                label="API Secret"
-                name="jwt_api_secret"
-                rules={[{ required: true, message: 'Please enter the API secret' }]}
-                tooltip="Secret for the JWT authentication API"
+                label="Auth Type"
+                name="auth_type"
+                initialValue="none"
+                tooltip="Authentication method for the MCP server"
               >
-                <Input.Password placeholder="Enter API secret" />
+                <Select
+                  onChange={(value) => onAuthTypeChange?.(value as 'none' | 'bearer' | 'jwt')}
+                >
+                  <Select.Option value="none">None</Select.Option>
+                  <Select.Option value="bearer">Bearer Token</Select.Option>
+                  <Select.Option value="jwt">JWT</Select.Option>
+                </Select>
               </Form.Item>
+
+              {authType === 'bearer' && (
+                <Form.Item
+                  label="Token"
+                  name="auth_token"
+                  rules={[{ required: true, message: 'Please enter a bearer token' }]}
+                  tooltip="Bearer token for authentication"
+                >
+                  <Input.Password placeholder="Enter bearer token" />
+                </Form.Item>
+              )}
+
+              {authType === 'jwt' && (
+                <>
+                  <Form.Item
+                    label="API URL"
+                    name="jwt_api_url"
+                    rules={[{ required: true, message: 'Please enter the API URL' }]}
+                    tooltip="URL of the JWT authentication API"
+                  >
+                    <Input placeholder="https://auth.example.com/token" />
+                  </Form.Item>
+
+                  <Form.Item
+                    label="API Token"
+                    name="jwt_api_token"
+                    rules={[{ required: true, message: 'Please enter the API token' }]}
+                    tooltip="Token for the JWT authentication API"
+                  >
+                    <Input.Password placeholder="Enter API token" />
+                  </Form.Item>
+
+                  <Form.Item
+                    label="API Secret"
+                    name="jwt_api_secret"
+                    rules={[{ required: true, message: 'Please enter the API secret' }]}
+                    tooltip="Secret for the JWT authentication API"
+                  >
+                    <Input.Password placeholder="Enter API secret" />
+                  </Form.Item>
+                </>
+              )}
+
+              {authType !== 'none' && (
+                <Form.Item>
+                  <Button type="default" loading={testing} onClick={handleTestConnection}>
+                    Test Authentication
+                  </Button>
+                </Form.Item>
+              )}
             </>
           )}
 
-          <Form.Item>
-            <Button type="default" loading={testing} onClick={handleTestConnection}>
-              Test Connection
-            </Button>
+          <Form.Item
+            label="Environment Variables"
+            name="env"
+            tooltip="JSON object of environment variables"
+          >
+            <TextArea placeholder='{"API_KEY": "xxx", "ALLOWED_PATHS": "/path"}' rows={3} />
           </Form.Item>
         </>
-      )}
-
-      <Form.Item
-        label="Scope"
-        name="scope"
-        initialValue="global"
-        tooltip="Where this server is available"
-      >
-        <Select>
-          <Select.Option value="global">Global (all sessions)</Select.Option>
-          <Select.Option value="session">Session</Select.Option>
-        </Select>
-      </Form.Item>
-
-      <Form.Item
-        label="Environment Variables"
-        name="env"
-        tooltip="JSON object of environment variables"
-      >
-        <TextArea placeholder='{"API_KEY": "xxx", "ALLOWED_PATHS": "/path"}' rows={3} />
-      </Form.Item>
-
-      {mode === 'edit' && (
-        <>
-          <Divider />
-          <Form.Item
-            label={
+      ),
+    },
+    ...(mode === 'edit'
+      ? [
+          {
+            key: 'tools',
+            label: (
               <Space>
-                <span>Tool Permissions</span>
-                {serverId && onDiscoverTools && !serverTools?.length && (
-                  <Tooltip title="Connect to MCP server to discover available tools">
+                <Typography.Text strong>Tools</Typography.Text>
+                {serverTools && serverTools.length > 0 && (
+                  <Badge count={serverTools.length} showZero={false} />
+                )}
+              </Space>
+            ),
+            children: (
+              <>
+                <Space direction="vertical" style={{ width: '100%', marginBottom: 16 }}>
+                  {serverId && onDiscoverTools && !serverTools?.length && (
                     <Button
-                      type="link"
-                      size="small"
+                      type="default"
                       icon={<ReloadOutlined spin={discovering} />}
                       onClick={onDiscoverTools}
                       loading={discovering}
-                      style={{ padding: 0, height: 'auto' }}
+                      block
                     >
                       {discovering ? 'Discovering...' : 'Discover Tools'}
                     </Button>
-                  </Tooltip>
-                )}
-                {serverTools && serverTools.length > 0 && (
-                  <Tooltip title="Refresh discovered tools">
+                  )}
+                  {serverTools && serverTools.length > 0 && (
                     <Button
-                      type="link"
-                      size="small"
+                      type="default"
                       icon={<ReloadOutlined spin={discovering} />}
                       onClick={onDiscoverTools}
                       loading={discovering}
-                      style={{ padding: 0, height: 'auto', color: '#52c41a' }}
+                      block
                     >
-                      {discovering ? 'Refreshing...' : `Refresh (${serverTools.length})`}
+                      {discovering ? 'Refreshing...' : `Refresh (${serverTools.length} tools)`}
                     </Button>
-                  </Tooltip>
-                )}
-              </Space>
-            }
-            name="tool_permissions"
-            tooltip="Configure which tools require permission approval. 'Ask' prompts for each use, 'Allow' auto-approves, 'Deny' blocks the tool."
-          >
-            <ToolPermissionsEditor tools={serverTools || []} />
-          </Form.Item>
-        </>
-      )}
+                  )}
+                </Space>
 
-      <Form.Item label="Enabled" name="enabled" valuePropName="checked" initialValue={true}>
-        <Switch />
-      </Form.Item>
-    </>
+                <Form.Item
+                  label="Tool Permissions"
+                  name="tool_permissions"
+                  tooltip="Configure which tools require permission approval. 'Ask' prompts for each use, 'Allow' auto-approves, 'Deny' blocks the tool."
+                >
+                  <ToolPermissionsEditor tools={serverTools || []} />
+                </Form.Item>
+              </>
+            ),
+          },
+        ]
+      : []),
+  ];
+
+  return (
+    <Collapse
+      ghost
+      defaultActiveKey={['basic']}
+      expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
+      items={collapseItems}
+    />
   );
 };
 
@@ -542,7 +610,12 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       })
       .catch((error) => {
         // Validation failed - form will show errors automatically
-        console.log('Form validation failed:', error);
+        console.error('Form validation failed:', error);
+        // Error fields are shown inline by Ant Design Form
+        if (error.errorFields && error.errorFields.length > 0) {
+          const firstError = error.errorFields[0];
+          message.error(firstError.errors[0] || 'Please fill in required fields');
+        }
       });
   };
 
@@ -705,8 +778,10 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       setEditModalOpen(false);
       setEditingServer(null);
     } catch (error) {
-      // Validation failed - form will show errors automatically
-      console.log('Form validation failed:', error);
+      // Validation or update failed
+      console.error('Update failed:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Failed to update server';
+      message.error(errorMessage);
     }
   };
 
