@@ -14,7 +14,7 @@ import type {
   Task,
 } from '@agor/core/types';
 import { sql } from 'drizzle-orm';
-import { index, integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { index, integer, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 
 // SQLite-specific type helpers (inline to avoid factory pattern type issues)
 const t = {
@@ -524,9 +524,8 @@ export const worktreeOwners = sqliteTable(
     created_at: t.timestamp('created_at'),
   },
   (table) => ({
-    // Note: Using primaryKey() would require drizzle-kit to generate a migration
-    // Current migration 0016 uses PRIMARY KEY in SQL, so we keep index() for schema parity
-    pk: index('worktree_owners_pk').on(table.worktree_id, table.user_id),
+    // Composite primary key matching migration 0016
+    pk: primaryKey({ columns: [table.worktree_id, table.user_id] }),
   })
 );
 
