@@ -1011,8 +1011,9 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       setEdges(initialEdges);
     }, [initialEdges, setEdges]); // REMOVED setEdges from dependencies
 
-    // Properly fit view when nodes are loaded
-    // This ensures nodes are visible even when positioned far apart
+    // Fit view when switching boards or when nodes are loaded
+    // This ensures nodes are visible even when positioned far apart or when navigating between boards
+    // biome-ignore lint/correctness/useExhaustiveDependencies: board?.board_id is intentionally included to trigger fitView when switching boards, even if node count stays the same
     useEffect(() => {
       if (!reactFlowInstanceRef.current || nodes.length === 0) return;
 
@@ -1027,7 +1028,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       }, 100);
 
       return () => clearTimeout(timer);
-    }, [nodes.length]); // Re-run when node count changes (e.g., worktrees added/removed)
+    }, [nodes.length, board?.board_id]); // Re-run when node count changes OR when board changes
 
     // Intercept onNodesChange to detect resize events
     const onNodesChange = useCallback(
