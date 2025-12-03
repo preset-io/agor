@@ -1987,10 +1987,9 @@ async function main() {
           console.log(`💾 Stored MCP token in session record`);
 
           // Note: We no longer auto-attach global MCP servers to sessions.
-          // Instead, the hierarchical fallback in getMcpServersForSession() will
-          // automatically provide the session owner's global servers when no
-          // session-specific servers are assigned. This avoids polluting the
-          // session_mcp_servers junction table and ensures proper isolation.
+          // Instead, getMcpServersForSession() will automatically provide ALL
+          // global servers plus any session-specific servers assigned to this
+          // session. This avoids polluting the session_mcp_servers junction table.
 
           // Update context.result to include the token
           context.result = { ...session, mcp_token: mcpToken };

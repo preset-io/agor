@@ -492,9 +492,8 @@ export async function setupQuery(
   // Fetch and configure MCP servers for this session
   if (deps.sessionMCPRepo && deps.mcpServerRepo) {
     try {
-      // Use shared MCP scoping utility (isolated vs hierarchical mode)
+      // Use shared MCP scoping utility
       const serversWithSource = await getMcpServersForSession(sessionId, {
-        sessionsRepo: deps.sessionsRepo,
         sessionMCPRepo: deps.sessionMCPRepo,
         mcpServerRepo: deps.mcpServerRepo,
       });

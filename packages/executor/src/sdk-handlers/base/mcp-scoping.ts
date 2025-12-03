@@ -14,7 +14,6 @@
 
 import type { MCPServer, SessionID } from '@agor/core/types';
 import type {
-  FeathersSessionsRepository,
   MCPServerRepository,
   SessionMCPServerRepository,
 } from '../../db/feathers-repositories.js';
@@ -31,7 +30,6 @@ export interface MCPServerWithSource {
  * Dependencies required for MCP server resolution
  */
 export interface MCPResolutionDeps {
-  sessionsRepo?: FeathersSessionsRepository;
   sessionMCPRepo?: SessionMCPServerRepository;
   mcpServerRepo?: MCPServerRepository;
 }
@@ -46,12 +44,11 @@ export interface MCPResolutionDeps {
  * @example
  * ```typescript
  * const servers = await getMcpServersForSession(sessionId, {
- *   sessionsRepo,
  *   sessionMCPRepo,
  *   mcpServerRepo
  * });
  *
- * // Always returns: ALL global MCPs + session-assigned MCPs
+ * // Always returns: ALL global MCPs + session-assigned MCPs (deduplicated)
  * // => [
  * //   { server: { name: "filesystem", scope: "global", ... }, source: "global" },
  * //   { server: { name: "preset sdx", scope: "session", ... }, source: "session-assigned" }
@@ -65,20 +62,16 @@ export async function getMcpServersForSession(
   const servers: MCPServerWithSource[] = [];
 
   // Early return if dependencies not available
-  if (!deps.sessionsRepo || !deps.sessionMCPRepo || !deps.mcpServerRepo) {
+  if (!deps.sessionMCPRepo || !deps.mcpServerRepo) {
     console.warn('⚠️  MCP repository dependencies not available - skipping MCP configuration');
     return servers;
   }
 
   try {
-    // Fetch session to get owner (created_by)
-    const session = await deps.sessionsRepo.findById(sessionId);
-    if (!session) {
-      console.error(`❌ Session ${sessionId} not found`);
-      return servers;
-    }
-
     console.log('🔌 Resolving MCP servers for session...');
+
+    // Track seen server IDs to prevent duplicates
+    const seenServerIds = new Set<string>();
 
     // STEP 1: Get ALL global-scoped MCP servers (available to all sessions)
     const globalServers = await deps.mcpServerRepo.findAll({
@@ -89,10 +82,17 @@ export async function getMcpServersForSession(
     console.log(`   📍 Global scope: ${globalServers?.length ?? 0} server(s)`);
 
     for (const server of globalServers ?? []) {
-      servers.push({
-        server,
-        source: 'global',
-      });
+      if (!seenServerIds.has(server.mcp_server_id)) {
+        seenServerIds.add(server.mcp_server_id);
+        servers.push({
+          server,
+          source: 'global',
+        });
+      } else {
+        console.warn(
+          `   ⚠️  Skipping duplicate global MCP server: ${server.name} (${server.mcp_server_id})`
+        );
+      }
     }
 
     // STEP 2: Get session-scoped MCP servers assigned to this specific session
@@ -101,10 +101,17 @@ export async function getMcpServersForSession(
     console.log(`   📍 Session-assigned: ${sessionServers.length} server(s)`);
 
     for (const server of sessionServers) {
-      servers.push({
-        server,
-        source: 'session-assigned',
-      });
+      if (!seenServerIds.has(server.mcp_server_id)) {
+        seenServerIds.add(server.mcp_server_id);
+        servers.push({
+          server,
+          source: 'session-assigned',
+        });
+      } else {
+        console.warn(
+          `   ⚠️  Skipping duplicate session-assigned MCP server: ${server.name} (${server.mcp_server_id})`
+        );
+      }
     }
 
     // Log summary
