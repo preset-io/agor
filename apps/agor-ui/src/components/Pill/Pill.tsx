@@ -178,6 +178,20 @@ interface ContextWindowPillProps extends BasePillProps {
     agentic_tool?: string;
     // Raw SDK response - single source of truth for token accounting
     raw_sdk_response?: unknown;
+    // Normalized SDK response - pre-computed by executor
+    normalized_sdk_response?: {
+      tokenUsage: {
+        inputTokens: number;
+        outputTokens: number;
+        totalTokens: number;
+        cacheReadTokens?: number;
+        cacheCreationTokens?: number;
+      };
+      contextWindowLimit?: number;
+      costUsd?: number;
+      primaryModel?: string;
+      durationMs?: number;
+    };
   };
 }
 
@@ -198,8 +212,8 @@ const ContextWindowPopoverContent: React.FC<{
 
   // Get SDK response from task metadata
   const sdkResponse = taskMetadata?.raw_sdk_response;
-  // biome-ignore lint/suspicious/noExplicitAny: Legacy normalized_sdk_response stub for compatibility
-  const normalized: any = null;
+  // Get normalized SDK response (pre-computed by executor)
+  const normalized = taskMetadata?.normalized_sdk_response;
 
   // Add per-model usage if available (Claude Code multi-model)
   // Check for modelUsage field (only Claude SDK has this)
@@ -296,13 +310,13 @@ const ContextWindowPopoverContent: React.FC<{
           <div style={{ fontSize: '0.9em', marginLeft: 12, color: token.colorTextSecondary }}>
             <div>Input: {normalized.tokenUsage.inputTokens.toLocaleString()}</div>
             <div>Output: {normalized.tokenUsage.outputTokens.toLocaleString()}</div>
-            {normalized.tokenUsage.cacheCreationTokens > 0 && (
+            {(normalized.tokenUsage.cacheCreationTokens ?? 0) > 0 && (
               <div>
-                Cache creation: {normalized.tokenUsage.cacheCreationTokens.toLocaleString()}
+                Cache creation: {normalized.tokenUsage.cacheCreationTokens?.toLocaleString()}
               </div>
             )}
-            {normalized.tokenUsage.cacheReadTokens > 0 && (
-              <div>Cache read: {normalized.tokenUsage.cacheReadTokens.toLocaleString()}</div>
+            {(normalized.tokenUsage.cacheReadTokens ?? 0) > 0 && (
+              <div>Cache read: {normalized.tokenUsage.cacheReadTokens?.toLocaleString()}</div>
             )}
             <div style={{ marginTop: 4, fontWeight: 500, color: token.colorText }}>
               Total: {normalized.tokenUsage.totalTokens.toLocaleString()}
