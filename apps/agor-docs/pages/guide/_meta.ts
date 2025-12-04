@@ -18,4 +18,9 @@ export default {
     title: 'Development',
   },
   development: 'Development Guide',
+  '--- Deployment': {
+    type: 'separator',
+    title: 'Deployment',
+  },
+  'multiplayer-unix-isolation': 'Full Multiplayer Mode',
 };

@@ -1,0 +1,199 @@
+---
+title: Full Multiplayer Mode
+description: Running Agor with full RBAC and Unix isolation for shared development environments
+---
+
+# Full Multiplayer Mode
+
+This guide covers running Agor in full multiplayer mode with RBAC (Role-Based Access Control) and Unix-level isolation for production shared environments.
+
+---
+
+## Overview
+
+Multiplayer Agor enables true collaboration on shared development environments:
+
+- **Shared development environments** - Multiple users working on the same codebase with proper isolation
+- **True Unix isolation** - Worktree-level permissions enforced at the filesystem level
+- **Real-time collaboration** - See what teammates are working on, share terminals, pair program
+
+---
+
+## Security Considerations
+
+Running Agor in full multiplayer mode with Unix isolation grants the Agor daemon significant system privileges.
+
+### What the Daemon Can Do
+
+- Create and manage Unix users and groups
+- Impersonate managed users to run agent sessions
+- Modify filesystem permissions on worktree directories
+- Execute privileged commands via sudo
+
+### Exposure Considerations
+
+- **API Keys** - Users configure their own API keys (Anthropic, OpenAI, etc.) through the UI. These are stored in the Agor database and used by the daemon when running sessions on their behalf.
+- **Worktree Access** - Users with worktree access can see files, terminal output, and session history for that worktree.
+- **Daemon Compromise** - If the daemon is compromised, an attacker could potentially access all managed worktrees and user API keys.
+
+### Recommendations
+
+1. **VPN/Private Network** - Run on a trusted network, not exposed to the public internet
+2. **Trusted Users Only** - Only grant access to users you trust with shared infrastructure
+3. **API Key Rotation** - Regularly rotate API keys, especially if users leave the team
+4. **Minimal Permissions** - Use the RBAC system to grant minimal necessary permissions per worktree
+5. **Audit Logs** - Enable comprehensive logging for security auditing
+
+---
+
+## Setup Guide
+
+### Prerequisites
+
+- Linux server with systemd
+- PostgreSQL (recommended for production)
+- sudo access for initial setup
+- tmux (for multiplayer terminal sessions)
+
+### 1. PostgreSQL Configuration
+
+For production multiplayer deployments, use PostgreSQL instead of SQLite:
+
+```yaml
+# ~/.agor/config.yaml
+database:
+  driver: postgres
+  url: postgresql://agor:password@localhost:5432/agor
+```
+
+### 2. Volume Configuration
+
+Configure persistent storage for worktrees and repositories:
+
+```yaml
+# ~/.agor/config.yaml
+storage:
+  repos_dir: /var/lib/agor/repos
+  worktrees_dir: /var/lib/agor/worktrees
+```
+
+### 3. Sudoers Configuration
+
+The daemon needs sudo access for Unix user/group management. Create a sudoers file with minimal required permissions:
+
+```bash
+# /etc/sudoers.d/agor
+# Agor daemon privileged operations
+
+# User/group management
+agor ALL=(ALL) NOPASSWD: /usr/sbin/useradd *
+agor ALL=(ALL) NOPASSWD: /usr/sbin/userdel *
+agor ALL=(ALL) NOPASSWD: /usr/sbin/usermod *
+agor ALL=(ALL) NOPASSWD: /usr/sbin/groupadd agor_wt_*
+agor ALL=(ALL) NOPASSWD: /usr/sbin/groupadd agor_users
+agor ALL=(ALL) NOPASSWD: /usr/sbin/groupdel agor_wt_*
+agor ALL=(ALL) NOPASSWD: /usr/sbin/gpasswd *
+
+# Filesystem operations (restricted to agor paths)
+agor ALL=(ALL) NOPASSWD: /usr/bin/chgrp -R agor_wt_* /home/*/worktrees/*
+agor ALL=(ALL) NOPASSWD: /usr/bin/chgrp -R agor_wt_* /var/lib/agor/worktrees/*
+agor ALL=(ALL) NOPASSWD: /usr/bin/chmod -R * /home/*/worktrees/*
+agor ALL=(ALL) NOPASSWD: /usr/bin/chmod -R * /var/lib/agor/worktrees/*
+
+# User impersonation (only agor_users group members)
+agor ALL=(%agor_users) NOPASSWD: ALL
+```
+
+**Security Notes:**
+- The `agor_wt_*` pattern restricts group creation to worktree groups only
+- Path restrictions prevent the daemon from modifying files outside agor directories
+- The `agor_users` group provides namespace containment for user impersonation
+
+### 4. Enable RBAC
+
+Enable the worktree RBAC feature flag:
+
+```yaml
+# ~/.agor/config.yaml
+execution:
+  worktree_rbac: true
+  unix_user_mode: full  # Options: simple, full
+```
+
+### 5. Observability Setup
+
+For production deployments, configure logging and monitoring:
+
+```yaml
+# ~/.agor/config.yaml
+logging:
+  level: info
+  format: json
+  file: /var/log/agor/daemon.log
+
+metrics:
+  enabled: true
+  port: 9090  # Prometheus metrics endpoint
+```
+
+---
+
+## How It Works
+
+### User Management
+
+When RBAC is enabled:
+
+1. Each Agor user can have an associated Unix username
+2. Users are added to the `agor_users` group for daemon impersonation
+3. Agent sessions run as the user's Unix account, not as the daemon
+
+### Worktree Isolation
+
+Each worktree gets:
+
+1. A dedicated Unix group (`agor_wt_<short-id>`)
+2. Filesystem permissions based on RBAC settings
+3. Owners with specific permission levels (view/prompt/all)
+
+### Permission Levels
+
+| Level | Can View | Can Prompt | Can Modify Settings |
+|-------|----------|------------|---------------------|
+| view | Yes | No | No |
+| prompt | Yes | Yes | No |
+| all | Yes | Yes | Yes |
+
+---
+
+## Troubleshooting
+
+### Daemon Can't Create Users
+
+Check sudoers configuration:
+```bash
+sudo -l -U agor
+```
+
+### Permission Denied on Worktree
+
+Verify group membership:
+```bash
+id username
+ls -la /path/to/worktree
+```
+
+### Session Fails to Start
+
+Check if user is in `agor_users` group:
+```bash
+getent group agor_users
+```
+
+---
+
+## Related Docs
+
+- [Architecture](/guide/architecture) - System design overview
+- [Advanced Features](/guide/advanced-features) - Multiplayer terminal sessions
+- [Concepts](/guide/concepts) - Understanding worktrees and sessions
