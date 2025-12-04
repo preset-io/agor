@@ -50,6 +50,15 @@ export function isValidWorktreeGroupName(groupName: string): boolean {
 }
 
 /**
+ * The global group for all Agor-managed users
+ *
+ * Users in this group can be impersonated by the daemon.
+ * This provides namespace containment - daemon can only
+ * impersonate users it manages.
+ */
+export const AGOR_USERS_GROUP = 'agor_users';
+
+/**
  * Unix group management commands (to be executed via sudo)
  *
  * These are shell command strings that should be executed with elevated privileges.

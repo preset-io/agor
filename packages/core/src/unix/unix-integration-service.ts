@@ -18,6 +18,7 @@ import type { UserID, UUID, WorktreeID } from '../types/index.js';
 import type { CommandExecutor } from './command-executor.js';
 import { NoOpExecutor } from './command-executor.js';
 import {
+  AGOR_USERS_GROUP,
   generateWorktreeGroupName,
   getWorktreePermissionMode,
   UnixGroupCommands,
@@ -89,6 +90,71 @@ export class UnixIntegrationService {
    */
   isEnabled(): boolean {
     return this.config.enabled;
+  }
+
+  // ============================================================
+  // AGOR_USERS GROUP MANAGEMENT
+  // ============================================================
+
+  /**
+   * Ensure the agor_users group exists
+   *
+   * This group contains all Agor-managed users. The daemon can only
+   * impersonate users in this group, providing namespace containment.
+   */
+  async ensureAgorUsersGroup(): Promise<void> {
+    const exists = await this.executor.check(UnixGroupCommands.groupExists(AGOR_USERS_GROUP));
+    if (!exists) {
+      console.log(`[UnixIntegration] Creating ${AGOR_USERS_GROUP} group`);
+      await this.executor.exec(UnixGroupCommands.createGroup(AGOR_USERS_GROUP));
+    }
+  }
+
+  /**
+   * Add a user to the agor_users group
+   *
+   * Users must be in this group to be impersonated by the daemon.
+   *
+   * @param unixUsername - Unix username to add
+   */
+  async addUserToAgorUsersGroup(unixUsername: string): Promise<void> {
+    // Ensure group exists first
+    await this.ensureAgorUsersGroup();
+
+    const inGroup = await this.executor.check(
+      UnixGroupCommands.isUserInGroup(unixUsername, AGOR_USERS_GROUP)
+    );
+    if (!inGroup) {
+      console.log(`[UnixIntegration] Adding ${unixUsername} to ${AGOR_USERS_GROUP}`);
+      await this.executor.exec(UnixGroupCommands.addUserToGroup(unixUsername, AGOR_USERS_GROUP));
+    }
+  }
+
+  /**
+   * Remove a user from the agor_users group
+   *
+   * @param unixUsername - Unix username to remove
+   */
+  async removeUserFromAgorUsersGroup(unixUsername: string): Promise<void> {
+    const inGroup = await this.executor.check(
+      UnixGroupCommands.isUserInGroup(unixUsername, AGOR_USERS_GROUP)
+    );
+    if (inGroup) {
+      console.log(`[UnixIntegration] Removing ${unixUsername} from ${AGOR_USERS_GROUP}`);
+      await this.executor.exec(
+        UnixGroupCommands.removeUserFromGroup(unixUsername, AGOR_USERS_GROUP)
+      );
+    }
+  }
+
+  /**
+   * Check if a user is in the agor_users group
+   *
+   * @param unixUsername - Unix username to check
+   * @returns true if user is in agor_users group
+   */
+  async isAgorManagedUser(unixUsername: string): Promise<boolean> {
+    return this.executor.check(UnixGroupCommands.isUserInGroup(unixUsername, AGOR_USERS_GROUP));
   }
 
   // ============================================================
@@ -345,6 +411,9 @@ export class UnixIntegrationService {
       await this.usersRepo.update(userId, { unix_username: unixUsername });
     }
 
+    // Add user to agor_users group (enables impersonation)
+    await this.addUserToAgorUsersGroup(unixUsername);
+
     return unixUsername;
   }
 
@@ -370,6 +439,9 @@ export class UnixIntegrationService {
     console.log(
       `[UnixIntegration] Deleting Unix user: ${user.unix_username} (deleteHome: ${deleteHome})`
     );
+
+    // Remove from agor_users group first
+    await this.removeUserFromAgorUsersGroup(user.unix_username);
 
     if (deleteHome) {
       await this.executor.exec(UnixUserCommands.deleteUserWithHome(user.unix_username));
