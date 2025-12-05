@@ -32,7 +32,8 @@ while [ ! -f "/app/packages/core/dist/index.js" ] || [ ! -f "/app/packages/core/
   sleep 0.1
 done
 echo "⏳ Waiting for @agor/core type definitions..."
-while [ ! -f "/app/packages/core/dist/api/index.d.ts" ]; do
+# Wait for critical type definitions including database types (needed for migrations)
+while [ ! -f "/app/packages/core/dist/api/index.d.ts" ] || [ ! -f "/app/packages/core/dist/db/index.d.ts" ]; do
   sleep 0.1
 done
 echo "✅ @agor/core build ready"

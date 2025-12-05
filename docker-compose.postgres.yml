@@ -7,8 +7,9 @@
 # - PostgreSQL database (instead of SQLite)
 # - RBAC + Unix integration enabled
 # - Test users (alice, bob) with Unix accounts
-# - SSH server for multi-user testing
 # - Test worktrees with ownership configured
+#
+# To test as alice/bob: docker exec -it <container> sudo su alice
 
 services:
   agor-dev:
@@ -23,10 +24,6 @@ services:
 
       # Create test users (alice, bob) on startup
       - CREATE_RBAC_TEST_USERS=${CREATE_RBAC_TEST_USERS:-true}
-
-    # Expose SSH port for testing multi-user access
-    ports:
-      - '${SSH_PORT:-2222}:22'
 
     # Use PostgreSQL+RBAC-specific entrypoint
     entrypoint: ["/usr/local/bin/docker-entrypoint-postgres.sh"]
