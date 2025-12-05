@@ -99,7 +99,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 }}
               >
                 <img
-                  src="/favicon.png"
+                  src={`${import.meta.env.BASE_URL}favicon.png`}
                   alt="Agor"
                   style={{
                     width: 160,
