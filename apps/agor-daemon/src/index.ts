@@ -13,45 +13,22 @@ import { patchConsole } from '@agor/core/utils/logger';
 
 patchConsole();
 
-// Read package version once at startup (not on every /health request)
-// Use fs.readFile instead of import (works reliably with tsx and node)
-import { readFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { createUserProcessEnvironment, loadConfig, type UnknownJson } from '@agor/core/config';
+import { buildCorsConfig } from './setup/cors.js';
+import { initializeAnthropicApiKey } from './setup/credentials.js';
+import { initializeDatabase } from './setup/database.js';
+import { configureChannels, createSocketIOConfig } from './setup/socketio.js';
+// Phase 2: Configuration builders
+import { configureSwagger } from './setup/swagger.js';
+// Setup modules - extracted functions for daemon initialization
+// Phase 1: Pure functions
+import { loadDaemonVersion } from './setup/version.js';
 
-let DAEMON_VERSION = '0.0.0';
-try {
-  const __dirname = dirname(fileURLToPath(import.meta.url));
-
-  // Try to read from ../package.json (development) or ../../package.json (agor-live)
-  let pkgPath = join(__dirname, '../package.json');
-  let pkgData: string | undefined;
-
-  try {
-    pkgData = await readFile(pkgPath, 'utf-8');
-  } catch {
-    // If ../package.json doesn't exist, try ../../package.json (agor-live structure)
-    pkgPath = join(__dirname, '../../package.json');
-    try {
-      pkgData = await readFile(pkgPath, 'utf-8');
-    } catch {
-      // Silently fail - will use default version
-    }
-  }
-
-  if (pkgData) {
-    const pkg = JSON.parse(pkgData);
-    DAEMON_VERSION = pkg.version || DAEMON_VERSION;
-  }
-} catch (err) {
-  // Fallback if package.json can't be read
-  console.warn('⚠️  Could not read package.json for version - using fallback 0.0.0', err);
-}
+// Load daemon version at startup (extracted to setup/version.ts)
+const DAEMON_VERSION = await loadDaemonVersion(import.meta.url);
 
 import {
   and,
-  createDatabaseAsync,
   eq,
   MCPServerRepository,
   MessagesRepository,
@@ -122,9 +99,7 @@ import compression from 'compression';
 import cors from 'cors';
 import express from 'express';
 import expressStaticGzip from 'express-static-gzip';
-import swagger from 'feathers-swagger';
 import jwt from 'jsonwebtoken';
-import type { Socket } from 'socket.io';
 import type {
   BoardsServiceImpl,
   MessagesServiceImpl,
@@ -188,17 +163,8 @@ interface RouteParams extends Params {
   user?: User;
 }
 
-/**
- * FeathersJS extends Socket.io socket with authentication context
- */
-interface FeathersSocket extends Socket {
-  feathers?: {
-    user?: User;
-  };
-}
-
 // Expand ~ to home directory in database path
-import { expandPath, extractDbFilePath } from '@agor/core/utils/path';
+import { expandPath } from '@agor/core/utils/path';
 
 // Determine database URL based on dialect preference
 // Priority:
@@ -209,41 +175,6 @@ const DB_PATH =
   process.env.AGOR_DB_DIALECT === 'postgresql'
     ? process.env.DATABASE_URL || 'postgresql://localhost:5432/agor'
     : expandPath(process.env.AGOR_DB_PATH || 'file:~/.agor/agor.db');
-
-/**
- * Initialize Gemini API key with OAuth fallback support
- *
- * Priority: config.yaml > env var
- * If no API key is found, GeminiTool will fall back to OAuth via Gemini CLI
- *
- * @param config - Application config object
- * @param envApiKey - GEMINI_API_KEY from process.env
- * @returns Resolved API key or undefined (triggers OAuth fallback)
- */
-export function initializeGeminiApiKey(
-  config: { credentials?: { GEMINI_API_KEY?: string } },
-  envApiKey?: string
-): string | undefined {
-  // Handle GEMINI_API_KEY with priority: config.yaml > env var
-  // Config service will update process.env when credentials change (hot-reload)
-  // GeminiTool will read fresh credentials dynamically via refreshAuth()
-  // If no API key is found, GeminiTool will fall back to OAuth via Gemini CLI
-  if (config.credentials?.GEMINI_API_KEY && !envApiKey) {
-    process.env.GEMINI_API_KEY = config.credentials.GEMINI_API_KEY;
-    console.log('✅ Set GEMINI_API_KEY from config for Gemini');
-  }
-
-  const geminiApiKey = config.credentials?.GEMINI_API_KEY || envApiKey;
-
-  if (!geminiApiKey) {
-    console.warn('⚠️  No GEMINI_API_KEY found - will use OAuth authentication');
-    console.warn('   To use API key: agor config set credentials.GEMINI_API_KEY <your-key>');
-    console.warn('   Or set GEMINI_API_KEY environment variable');
-    console.warn('   OAuth requires: gemini CLI installed and authenticated');
-  }
-
-  return geminiApiKey;
-}
 
 // Main async function
 async function main() {
@@ -293,79 +224,19 @@ async function main() {
   const envUiPort = process.env.UI_PORT ? Number.parseInt(process.env.UI_PORT, 10) : undefined;
   const UI_PORT = envUiPort || config.ui?.port || 5173;
 
-  // Handle ANTHROPIC_API_KEY with priority: config.yaml > env var
-  // Config service will update process.env when credentials change (hot-reload)
-  // Tools will read fresh credentials dynamically via getCredential() helper
-  if (config.credentials?.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_API_KEY) {
-    process.env.ANTHROPIC_API_KEY = config.credentials.ANTHROPIC_API_KEY;
-    console.log('✅ Set ANTHROPIC_API_KEY from config for Claude Code');
-  }
-
-  const apiKey = config.credentials?.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY;
-
-  // Note: API key is optional - it can be configured per-tool or use Claude CLI's auth
-  // Only show info message if no key is found (not a warning since it's not required)
-  if (!apiKey) {
-    console.log('ℹ️  No ANTHROPIC_API_KEY found - will use Claude CLI auth if available');
-    console.log('   To use API key: agor config set credentials.ANTHROPIC_API_KEY <key>');
-    console.log('   Or run: claude login');
-  }
+  // Initialize Anthropic API key (extracted to setup/credentials.ts)
+  // Side effect: sets process.env.ANTHROPIC_API_KEY if found in config
+  initializeAnthropicApiKey(config, process.env.ANTHROPIC_API_KEY);
 
   // Create Feathers app
   const app = feathersExpress(feathers());
 
-  // Enable CORS for all REST API requests
-  // Support UI port and 3 additional ports (for parallel dev servers)
-  const corsOrigins = [
-    `http://localhost:${UI_PORT}`,
-    `http://localhost:${UI_PORT + 1}`,
-    `http://localhost:${UI_PORT + 2}`,
-    `http://localhost:${UI_PORT + 3}`,
-  ];
-
-  // SECURITY: Configure CORS based on deployment environment
-  let corsOrigin:
-    | boolean
-    | string[]
-    | ((
-        origin: string | undefined,
-        callback: (err: Error | null, allow?: boolean) => void
-      ) => void);
-
-  if (process.env.CORS_ORIGIN === '*') {
-    // Explicit wildcard - allow all origins (use with caution!)
-    console.warn('⚠️  CORS set to allow ALL origins (CORS_ORIGIN=*)');
-    corsOrigin = true;
-  } else if (process.env.CODESPACES === 'true') {
-    // Codespaces: Only allow GitHub Codespaces domains and localhost
-    console.log('🔒 CORS configured for GitHub Codespaces (*.github.dev, *.githubpreview.dev)');
-    corsOrigin = (origin, callback) => {
-      // Allow requests with no origin (like mobile apps, curl, Postman)
-      if (!origin) {
-        return callback(null, true);
-      }
-
-      // Allow GitHub Codespaces domains
-      const allowedPatterns = [
-        /\.github\.dev$/,
-        /\.githubpreview\.dev$/,
-        /\.preview\.app\.github\.dev$/,
-        /^https?:\/\/localhost(:\d+)?$/,
-      ];
-
-      const isAllowed = allowedPatterns.some((pattern) => pattern.test(origin));
-
-      if (isAllowed) {
-        callback(null, true);
-      } else {
-        console.warn(`⚠️  CORS rejected origin: ${origin}`);
-        callback(new Error('Not allowed by CORS'));
-      }
-    };
-  } else {
-    // Local development: Allow localhost ports only
-    corsOrigin = corsOrigins;
-  }
+  // Configure CORS based on deployment environment (extracted to setup/cors.ts)
+  const { origin: corsOrigin } = buildCorsConfig({
+    uiPort: UI_PORT,
+    isCodespaces: process.env.CODESPACES === 'true',
+    corsOriginOverride: process.env.CORS_ORIGIN,
+  });
 
   app.use(
     cors({
@@ -455,280 +326,22 @@ async function main() {
     console.log('🔑 Loaded existing JWT secret from config:', `${jwtSecret.substring(0, 16)}...`);
   }
 
-  // Store Socket.io instance for graceful shutdown
-  let socketServer: import('socket.io').Server | null = null;
-
-  app.configure(
-    socketio(
-      {
-        cors: {
-          origin: corsOrigin,
-          methods: ['GET', 'POST', 'PATCH', 'DELETE'],
-          credentials: true,
-        },
-        // Socket.io server options for better connection management
-        pingTimeout: 60000, // How long to wait for pong before considering connection dead
-        pingInterval: 25000, // How often to ping clients
-        maxHttpBufferSize: 1e6, // 1MB max message size
-        transports: ['websocket', 'polling'], // Prefer WebSocket
-      },
-      (io) => {
-        // Store Socket.io server instance for shutdown
-        socketServer = io;
-
-        // Track active connections for debugging
-        let activeConnections = 0;
-        let lastLoggedCount = 0;
-
-        // SECURITY: Add authentication middleware for WebSocket connections
-        io.use(async (socket, next) => {
-          try {
-            // Extract authentication token from handshake
-            // Clients can send token via:
-            // 1. socket.io auth object: io('url', { auth: { token: 'xxx' } })
-            // 2. Authorization header: io('url', { extraHeaders: { Authorization: 'Bearer xxx' } })
-            const token =
-              socket.handshake.auth?.token ||
-              socket.handshake.headers?.authorization?.replace('Bearer ', '');
-
-            if (!token) {
-              // SECURITY: Always allow unauthenticated socket connections
-              // This is required for the login flow to work (client needs to connect before authenticating)
-              // Service-level hooks (requireAuth) will enforce authentication for protected endpoints
-              // The /authentication endpoint explicitly allows unauthenticated access for login
-              if (allowAnonymous) {
-                console.log(
-                  `🔓 WebSocket connection without auth (anonymous allowed): ${socket.id}`
-                );
-              } else {
-                console.log(`🔓 WebSocket connection without auth (for login flow): ${socket.id}`);
-              }
-              // Don't set socket.feathers.user - will be handled by FeathersJS auth
-              return next();
-            }
-
-            // Verify JWT token
-            const decoded = jwt.verify(token, jwtSecret, {
-              issuer: 'agor',
-              audience: 'https://agor.dev',
-            }) as { sub: string; type: string };
-
-            if (decoded.type !== 'access') {
-              return next(new Error('Invalid token type'));
-            }
-
-            // Fetch user from database
-            const user = await app
-              .service('users')
-              .get(decoded.sub as import('@agor/core/types').UUID);
-
-            // Attach user to socket (FeathersJS convention)
-            (socket as FeathersSocket).feathers = { user };
-
-            console.log(
-              `🔐 WebSocket authenticated: ${socket.id} (user: ${user.user_id.substring(0, 8)})`
-            );
-            next();
-          } catch (error) {
-            console.error(`❌ WebSocket authentication failed for ${socket.id}:`, error);
-            next(new Error('Invalid or expired authentication token'));
-          }
-        });
-
-        // Configure Socket.io for cursor presence events
-        io.on('connection', (socket) => {
-          activeConnections++;
-          const user = (socket as FeathersSocket).feathers?.user;
-          console.log(
-            `🔌 Socket.io connection established: ${socket.id} (user: ${user ? user.user_id.substring(0, 8) : 'anonymous'}, total: ${activeConnections})`
-          );
-
-          // Log connection lifespan after 5 seconds to identify long-lived connections
-          setTimeout(() => {
-            if (socket.connected) {
-              console.log(
-                `⏱️  Socket ${socket.id} still connected after 5s (likely persistent connection)`
-              );
-            }
-          }, 5000);
-
-          // Helper to get user ID from socket's Feathers connection
-          const getUserId = () => {
-            // In FeathersJS, the authenticated user is stored in socket.feathers
-            const user = (socket as FeathersSocket).feathers?.user;
-            return user?.user_id || 'anonymous';
-          };
-
-          // Handle cursor movement events
-          socket.on('cursor-move', (data: import('@agor/core/types').CursorMoveEvent) => {
-            const userId = getUserId();
-
-            // Broadcast cursor position to all users on the same board except sender
-            const broadcastData = {
-              userId,
-              boardId: data.boardId,
-              x: data.x,
-              y: data.y,
-              timestamp: data.timestamp,
-            } as import('@agor/core/types').CursorMovedEvent;
-
-            socket.broadcast.emit('cursor-moved', broadcastData);
-          });
-
-          // Handle cursor leave events (user navigates away from board)
-          socket.on('cursor-leave', (data: import('@agor/core/types').CursorLeaveEvent) => {
-            const userId = getUserId();
-
-            socket.broadcast.emit('cursor-left', {
-              userId,
-              boardId: data.boardId,
-              timestamp: Date.now(),
-            });
-          });
-
-          // Track disconnections
-          socket.on('disconnect', (reason) => {
-            activeConnections--;
-            console.log(
-              `🔌 Socket.io disconnected: ${socket.id} (reason: ${reason}, remaining: ${activeConnections})`
-            );
-          });
-
-          // Handle socket errors
-          socket.on('error', (error) => {
-            console.error(`❌ Socket.io error on ${socket.id}:`, error);
-          });
-        });
-
-        // Log connection metrics only when count changes (every 30 seconds)
-        // FIX: Store interval handle to prevent memory leak
-        const metricsInterval = setInterval(() => {
-          if (activeConnections !== lastLoggedCount) {
-            console.log(`📊 Active WebSocket connections: ${activeConnections}`);
-            lastLoggedCount = activeConnections;
-          }
-        }, 30000);
-
-        // Ensure interval is cleared on shutdown
-        process.once('beforeExit', () => clearInterval(metricsInterval));
-      }
-    )
-  );
-
-  // Configure channels to broadcast events to authenticated clients
-  // Join all new connections to 'everybody' channel initially
-  app.on('connection', (connection: unknown) => {
-    app.channel('everybody').join(connection as never);
+  // Configure Socket.io with authentication and presence events (extracted to setup/socketio.ts)
+  const socketIOConfig = createSocketIOConfig(app, {
+    corsOrigin,
+    jwtSecret,
+    allowAnonymous,
   });
+  app.configure(socketio(socketIOConfig.serverOptions, socketIOConfig.callback));
 
-  // Note: The 'login' event is fired by FeathersJS authentication service
-  // However, socket re-authentication might not always trigger this event
-  // So we use a broadcast-all approach with the 'everybody' channel
-  app.on('login', (authResult: unknown, context: { connection?: unknown }) => {
-    if (context.connection) {
-      const result = authResult as { user?: { user_id?: string; email?: string } };
-      console.log('✅ Login event fired:', result.user?.user_id, result.user?.email);
-    }
-  });
+  // Configure channels for event broadcasting (extracted to setup/socketio.ts)
+  configureChannels(app);
 
-  app.on('logout', (_authResult: unknown, context: { connection?: unknown }) => {
-    if (context.connection) {
-      console.log('👋 Logout event fired');
-    }
-  });
+  // Configure Swagger for API documentation (extracted to setup/swagger.ts)
+  configureSwagger(app, { version: DAEMON_VERSION, port: DAEMON_PORT });
 
-  // Configure Swagger for API documentation
-  app.configure(
-    swagger({
-      openApiVersion: 3,
-      docsPath: '/docs',
-      docsJsonPath: '/docs.json',
-      ui: swagger.swaggerUI({ docsPath: '/docs' }),
-      specs: {
-        info: {
-          title: 'Agor API',
-          description: 'REST and WebSocket API for Agor agent orchestration platform',
-          version: DAEMON_VERSION,
-        },
-        servers: [{ url: `http://localhost:${DAEMON_PORT}`, description: 'Local daemon' }],
-        components: {
-          securitySchemes: {
-            BearerAuth: {
-              type: 'http',
-              scheme: 'bearer',
-              bearerFormat: 'JWT',
-            },
-          },
-        },
-        // Apply BearerAuth globally to all endpoints (except public endpoints like /health, /login)
-        security: [{ BearerAuth: [] }],
-      },
-    })
-  );
-
-  // Initialize database (auto-create if it doesn't exist)
-  console.log(`📦 Connecting to database: ${DB_PATH}`);
-
-  // Only handle file system setup for SQLite (file: URLs)
-  if (DB_PATH.startsWith('file:')) {
-    // Extract file path from DB_PATH (remove 'file:' prefix and expand ~)
-    const dbFilePath = extractDbFilePath(DB_PATH);
-    const dbDir = dbFilePath.substring(0, dbFilePath.lastIndexOf('/'));
-
-    // Ensure database directory exists
-    const { mkdir, access } = await import('node:fs/promises');
-    const { constants } = await import('node:fs');
-
-    try {
-      await access(dbDir, constants.F_OK);
-    } catch {
-      console.log(`📁 Creating database directory: ${dbDir}`);
-      await mkdir(dbDir, { recursive: true });
-    }
-
-    // Check if database file exists (create message if needed)
-    try {
-      await access(dbFilePath, constants.F_OK);
-    } catch {
-      console.log('🆕 Database does not exist - will create on first connection');
-    }
-  }
-
-  // Create database with foreign keys enabled
-  const db = await createDatabaseAsync({ url: DB_PATH });
-
-  // Check if migrations are needed
-  console.log('🔍 Checking database migration status...');
-  const { checkMigrationStatus, seedInitialData } = await import('@agor/core/db');
-  const migrationStatus = await checkMigrationStatus(db);
-
-  if (migrationStatus.hasPending) {
-    console.error('');
-    console.error('❌ Database migrations required!');
-    console.error('');
-    console.error(`   Found ${migrationStatus.pending.length} pending migration(s):`);
-    migrationStatus.pending.forEach((tag) => {
-      console.error(`     - ${tag}`);
-    });
-    console.error('');
-    console.error('⚠️  For safety, please backup your database before running migrations:');
-    console.error(`   cp ~/.agor/agor.db ~/.agor/agor.db.backup-$(date +%s)`);
-    console.error('');
-    console.error('Then run migrations with:');
-    console.error('   agor db migrate');
-    console.error('');
-    console.error('After migrations complete successfully, restart the daemon.');
-    console.error('');
-    process.exit(1);
-  }
-
-  console.log('✅ Database migrations up to date');
-
-  // Seed initial data (idempotent - only creates if missing)
-  console.log('🌱 Seeding initial data...');
-  await seedInitialData(db);
-
-  console.log('✅ Database ready');
+  // Initialize database with migrations and seeding (extracted to setup/database.ts)
+  const { db } = await initializeDatabase(DB_PATH);
 
   // Initialize session token service (ALWAYS needed for Feathers/WebSocket executor)
   const { SessionTokenService } = await import('./services/session-token-service.js');
@@ -4674,6 +4287,7 @@ async function main() {
       schedulerService.stop();
 
       // Close Socket.io connections (this also closes the HTTP server)
+      const socketServer = socketIOConfig.getSocketServer();
       if (socketServer) {
         console.log('🔌 Closing Socket.io and HTTP server...');
         // Disconnect all active clients first
