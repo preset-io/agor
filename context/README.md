@@ -70,30 +70,18 @@ Experimental ideas and designs not yet crystallized into concepts. These represe
 - **[executor-feathers-architecture.md](explorations/executor-feathers-architecture.md)** - Refactoring from IPC to WebSocket communication
 - **[executor-implementation-plan.md](explorations/executor-implementation-plan.md)** - Phased implementation plan
 - **[executor-subprocess-spawning.md](explorations/executor-subprocess-spawning.md)** - Subprocess spawning patterns
-- **[ipc-message-catalog.md](explorations/ipc-message-catalog.md)** - JSON-RPC message type definitions
-- **[ipc-implementation-examples.md](explorations/ipc-implementation-examples.md)** - IPC code examples and patterns
 - **[unix-user-integration.md](explorations/unix-user-integration.md)** - Deep dive on sudo-based impersonation
 - **[unix-user-modes.md](explorations/unix-user-modes.md)** - Progressive Unix isolation modes
-- **[tmux-terminal-isolation.md](explorations/tmux-terminal-isolation.md)** - Tmux-based terminal isolation
 
 **Multi-Agent Orchestration**
 - **[parent-session-callbacks.md](explorations/parent-session-callbacks.md)** - Notifying parent sessions on child completion
 
 **UI/UX Enhancements**
-- **[activity-feed.md](explorations/activity-feed.md)** - Real-time activity stream for boards
-- **[board-export-import.md](explorations/board-export-import.md)** - Board serialization and sharing
-- **[board-level-filtering.md](explorations/board-level-filtering.md)** - Filter sessions/worktrees on boards
-- **[event-stream-rich-pills.md](explorations/event-stream-rich-pills.md)** - Rich metadata pills in event stream
-- **[file-browser-design.md](explorations/file-browser-design.md)** - General-purpose worktree file browser
 - **[text-highlights.md](explorations/text-highlights.md)** - Text highlighting features
-- **[worktree-card-composition-analysis.md](explorations/worktree-card-composition-analysis.md)** - Component reuse analysis
 
 **Infrastructure**
 - **[ide-integration.md](explorations/ide-integration.md)** - Remote SSH vs code-server for IDE support
-- **[file-upload.md](explorations/file-upload.md)** - File upload to sessions
-- **[local-repos.md](explorations/local-repos.md)** - Using existing local repos without cloning
 - **[knowledge-graph.md](explorations/knowledge-graph.md)** - Knowledge graph for codebase understanding
-- **[gemini-accounting.md](explorations/gemini-accounting.md)** - Token/cost accounting for Gemini sessions
 
 **Lifecycle:** `explorations/` → `concepts/` when design is validated and ready to be official
 
