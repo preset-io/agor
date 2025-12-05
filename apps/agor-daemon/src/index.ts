@@ -820,17 +820,39 @@ async function main() {
 
     const daemonUrl = `http://localhost:${DAEMON_PORT}`;
 
-    // Build spawn command with optional Unix user impersonation
-    // Prefer session.unix_username (immutable, set at session creation)
-    // Fall back to config.execution.executor_unix_user for backward compatibility
-    console.log('[Daemon] Checking unix_username for executor spawn:', {
+    // =========================================================================
+    // DETERMINE UNIX USER FOR EXECUTOR BASED ON unix_user_mode
+    // Uses centralized logic from @agor/core/unix
+    // =========================================================================
+    const { resolveUnixUserForImpersonation, validateResolvedUnixUser, UnixUserNotFoundError } =
+      await import('@agor/core/unix');
+
+    const unixUserMode = (config.execution?.unix_user_mode ?? 'simple') as
+      | 'simple'
+      | 'insulated'
+      | 'opportunistic'
+      | 'strict';
+    const configExecutorUser = config.execution?.executor_unix_user;
+    const sessionUnixUser = session.unix_username;
+
+    console.log('[Daemon] Determining executor Unix user:', {
       sessionId: session.session_id.slice(0, 8),
-      session_unix_username: session.unix_username,
-      session_unix_username_type: typeof session.unix_username,
-      session_unix_username_length: session.unix_username?.length,
-      config_executor_unix_user: config.execution?.executor_unix_user,
+      unixUserMode,
+      sessionUnixUser,
+      configExecutorUser,
     });
-    const executorUnixUser = session.unix_username || config.execution?.executor_unix_user;
+
+    // Use centralized impersonation resolution logic
+    const impersonationResult = resolveUnixUserForImpersonation({
+      mode: unixUserMode,
+      userUnixUsername: sessionUnixUser,
+      executorUnixUser: configExecutorUser,
+    });
+
+    const executorUnixUser = impersonationResult.unixUser;
+    const impersonationReason = impersonationResult.reason;
+
+    console.log(`[Daemon] Executor impersonation: ${impersonationReason}`);
 
     // Determine permission mode: explicit override > session config > 'default'
     // This ensures session settings (like bypassPermissions) are preserved unless explicitly overridden
@@ -854,6 +876,18 @@ async function main() {
       '--daemon-url',
       daemonUrl,
     ];
+
+    // Validate Unix user exists for modes that require it
+    try {
+      validateResolvedUnixUser(unixUserMode, executorUnixUser);
+    } catch (err) {
+      if (err instanceof UnixUserNotFoundError) {
+        throw new Error(
+          `${(err as InstanceType<typeof UnixUserNotFoundError>).message}. Ensure the Unix user is created before attempting to execute sessions.`
+        );
+      }
+      throw err;
+    }
 
     let spawnCommand: string;
     let spawnArgs: string[];

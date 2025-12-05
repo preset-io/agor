@@ -7,6 +7,7 @@
  * @see context/guides/rbac-and-unix-isolation.md
  */
 
+import { execSync } from 'node:child_process';
 import { formatShortId } from '../lib/ids.js';
 import type { UserID, UUID } from '../types/index.js';
 
@@ -213,7 +214,8 @@ export const UnixUserCommands = {
    */
   createOwnedDirectory: (path: string, username: string, group?: string, mode: string = '755') => {
     const grp = group || username;
-    return `mkdir -p "${path}" && chown "${username}:${grp}" "${path}" && chmod ${mode} "${path}"`;
+    // Wrap in sh -c so sudo elevates the entire command chain
+    return `sh -c 'mkdir -p "${path}" && chown "${username}:${grp}" "${path}" && chmod ${mode} "${path}"'`;
   },
 
   /**
@@ -227,6 +229,212 @@ export const UnixUserCommands = {
    */
   setupWorktreesDir: (username: string, homeBase: string = AGOR_HOME_BASE) => {
     const worktreesDir = `${homeBase}/${username}/${AGOR_WORKTREES_DIR}`;
-    return `mkdir -p "${worktreesDir}" && chown -R "${username}:${username}" "${homeBase}/${username}/agor"`;
+    // Wrap in sh -c so sudo elevates the entire command chain
+    return `sh -c 'mkdir -p "${worktreesDir}" && chown -R "${username}:${username}" "${homeBase}/${username}/agor"'`;
   },
 } as const;
+
+/**
+ * Error thrown when attempting to impersonate a non-existent Unix user
+ */
+export class UnixUserNotFoundError extends Error {
+  constructor(
+    public readonly username: string,
+    message?: string
+  ) {
+    super(message ?? `Unix user "${username}" does not exist on this system`);
+    this.name = 'UnixUserNotFoundError';
+  }
+}
+
+/**
+ * Check if a Unix user exists on the system
+ *
+ * @param username - Unix username to check
+ * @returns true if user exists
+ */
+export function unixUserExists(username: string): boolean {
+  try {
+    execSync(`id "${username}" > /dev/null 2>&1`, { stdio: 'pipe' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Build command prefix for running commands as another Unix user
+ *
+ * This is the central utility for user impersonation via `sudo -u`.
+ * All code that needs to run commands as another user should use this.
+ *
+ * @param username - Unix username to impersonate (undefined = no impersonation)
+ * @param validate - If true, throws UnixUserNotFoundError if user doesn't exist (default: true)
+ * @returns Command prefix string (empty if no username, "sudo -u <user> " otherwise)
+ * @throws UnixUserNotFoundError if validate=true and user doesn't exist
+ *
+ * @example
+ * ```ts
+ * // Run a command as another user
+ * const prefix = buildImpersonationPrefix('alice');
+ * execSync(`${prefix}whoami`); // Runs: sudo -u alice whoami
+ *
+ * // No impersonation
+ * const prefix = buildImpersonationPrefix(undefined);
+ * execSync(`${prefix}whoami`); // Runs: whoami
+ *
+ * // Skip validation (caller already verified)
+ * const prefix = buildImpersonationPrefix('alice', false);
+ * ```
+ */
+export function buildImpersonationPrefix(
+  username: string | undefined,
+  validate: boolean = true
+): string {
+  if (!username) {
+    return '';
+  }
+
+  if (validate && !unixUserExists(username)) {
+    throw new UnixUserNotFoundError(username);
+  }
+
+  return `sudo -u ${username} `;
+}
+
+/**
+ * Unix user mode types
+ */
+export type UnixUserMode = 'simple' | 'insulated' | 'opportunistic' | 'strict';
+
+/**
+ * Result of resolving which Unix user to impersonate
+ */
+export interface ImpersonationResult {
+  /** Unix username to impersonate, or null for no impersonation */
+  unixUser: string | null;
+  /** Human-readable reason for the decision */
+  reason: string;
+}
+
+/**
+ * Options for resolving Unix user impersonation
+ */
+export interface ResolveImpersonationOptions {
+  /** Unix user mode from config */
+  mode: UnixUserMode;
+  /** User's unix_username (from authenticated user or session creator) */
+  userUnixUsername?: string | null;
+  /** Fallback executor user from config */
+  executorUnixUser?: string | null;
+}
+
+/**
+ * Resolve which Unix user to impersonate based on mode and available users
+ *
+ * This is the central logic for determining impersonation across:
+ * - Terminal sessions (uses authenticated user's unix_username)
+ * - Executor spawning (uses session's unix_username)
+ *
+ * @param options - Resolution options
+ * @returns ImpersonationResult with user and reason
+ * @throws Error if strict mode and no unix_username provided
+ *
+ * @example
+ * ```ts
+ * const result = resolveUnixUserForImpersonation({
+ *   mode: 'opportunistic',
+ *   userUnixUsername: 'alice',
+ *   executorUnixUser: 'agor_executor',
+ * });
+ * // result.unixUser = 'alice' (if exists) or 'agor_executor' (if alice doesn't exist)
+ * ```
+ */
+export function resolveUnixUserForImpersonation(
+  options: ResolveImpersonationOptions
+): ImpersonationResult {
+  const { mode, userUnixUsername, executorUnixUser } = options;
+
+  switch (mode) {
+    case 'simple':
+      // No impersonation - run as current user
+      return {
+        unixUser: null,
+        reason: 'simple mode - no impersonation',
+      };
+
+    case 'insulated':
+      // Always use executor user from config
+      return {
+        unixUser: executorUnixUser ?? null,
+        reason: executorUnixUser
+          ? `insulated mode - using executor: ${executorUnixUser}`
+          : 'insulated mode - no executor configured',
+      };
+
+    case 'opportunistic':
+      // Use user's unix_username if set AND exists, else fall back to executor
+      if (userUnixUsername && unixUserExists(userUnixUsername)) {
+        return {
+          unixUser: userUnixUsername,
+          reason: `opportunistic mode - using unix_username: ${userUnixUsername}`,
+        };
+      }
+      if (executorUnixUser && unixUserExists(executorUnixUser)) {
+        return {
+          unixUser: executorUnixUser,
+          reason: userUnixUsername
+            ? `opportunistic mode - unix user ${userUnixUsername} not found, using executor: ${executorUnixUser}`
+            : `opportunistic mode - no unix_username, using executor: ${executorUnixUser}`,
+        };
+      }
+      return {
+        unixUser: null,
+        reason: 'opportunistic mode - no valid unix user available',
+      };
+
+    case 'strict':
+      // Require user's unix_username, fail if not set
+      if (!userUnixUsername) {
+        throw new Error(
+          'Strict Unix user mode requires unix_username to be set. ' +
+            'Ensure the user has a unix_username configured.'
+        );
+      }
+      return {
+        unixUser: userUnixUsername,
+        reason: `strict mode - using unix_username: ${userUnixUsername}`,
+      };
+
+    default:
+      console.warn(`⚠️ Unknown unix_user_mode: ${mode}, falling back to simple mode`);
+      return {
+        unixUser: null,
+        reason: 'unknown mode - defaulting to no impersonation',
+      };
+  }
+}
+
+/**
+ * Validate that a resolved Unix user exists (for strict/insulated modes)
+ *
+ * Call this after resolveUnixUserForImpersonation for modes that require validation.
+ * Opportunistic mode already validates during resolution, so skip for that mode.
+ *
+ * @param mode - Unix user mode
+ * @param unixUser - Resolved Unix user (from resolveUnixUserForImpersonation)
+ * @throws Error with user-friendly message if user doesn't exist
+ */
+export function validateResolvedUnixUser(mode: UnixUserMode, unixUser: string | null): void {
+  // Only validate for strict/insulated - opportunistic already validated during resolution
+  if ((mode === 'strict' || mode === 'insulated') && unixUser) {
+    if (!unixUserExists(unixUser)) {
+      throw new UnixUserNotFoundError(
+        unixUser,
+        `${mode === 'strict' ? 'Strict' : 'Insulated'} Unix user mode: ` +
+          `user "${unixUser}" does not exist on this system. ` +
+          'Ensure the Unix user is created first.'
+      );
+    }
+  }
+}

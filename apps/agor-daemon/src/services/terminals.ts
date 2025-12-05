@@ -31,6 +31,13 @@ import {
 import { type Database, formatShortId, UsersRepository, WorktreeRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { AuthenticatedParams, UserID, WorktreeID } from '@agor/core/types';
+import {
+  buildImpersonationPrefix,
+  resolveUnixUserForImpersonation,
+  type UnixUserMode,
+  UnixUserNotFoundError,
+  validateResolvedUnixUser,
+} from '@agor/core/unix';
 import * as pty from '@homebridge/node-pty-prebuilt-multiarch';
 
 interface TerminalSession {
@@ -136,10 +143,16 @@ ${exportLines.join('\n')}
 
 /**
  * Check if a Zellij session exists
+ *
+ * @param sessionName - Zellij session name
+ * @param asUser - Optional Unix username to check as (for impersonated sessions)
+ *                 Caller must ensure user exists before calling
  */
-function zellijSessionExists(sessionName: string): boolean {
+function zellijSessionExists(sessionName: string, asUser?: string): boolean {
   try {
-    const output = execSync('zellij list-sessions 2>/dev/null', {
+    // Use validate=false since caller already validated user exists
+    const prefix = buildImpersonationPrefix(asUser, false);
+    const output = execSync(`${prefix}zellij list-sessions 2>/dev/null`, {
       encoding: 'utf-8',
       stdio: 'pipe',
     });
@@ -151,10 +164,17 @@ function zellijSessionExists(sessionName: string): boolean {
 
 /**
  * Run a Zellij CLI action on a specific session
+ *
+ * @param sessionName - Zellij session name
+ * @param action - Zellij action to run
+ * @param asUser - Optional Unix username to run as (for impersonated sessions)
+ *                 Caller must ensure user exists before calling
  */
-function runZellijAction(sessionName: string, action: string): void {
+function runZellijAction(sessionName: string, action: string, asUser?: string): void {
   try {
-    execSync(`zellij --session "${sessionName}" action ${action}`, { stdio: 'pipe' });
+    // Use validate=false since caller already validated user exists
+    const prefix = buildImpersonationPrefix(asUser, false);
+    execSync(`${prefix}zellij --session "${sessionName}" action ${action}`, { stdio: 'pipe' });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.warn(`⚠️ Failed to run Zellij action on ${sessionName}: ${action}\n${message}`);
@@ -164,15 +184,24 @@ function runZellijAction(sessionName: string, action: string): void {
 /**
  * Get list of tab names in a Zellij session
  * Returns array of tab names, or empty array if session doesn't exist
+ *
+ * @param sessionName - Zellij session name
+ * @param asUser - Optional Unix username to run as (for impersonated sessions)
+ *                 Caller must ensure user exists before calling
  */
-function getZellijTabs(sessionName: string): string[] {
+function getZellijTabs(sessionName: string, asUser?: string): string[] {
   try {
+    // Use validate=false since caller already validated user exists
+    const prefix = buildImpersonationPrefix(asUser, false);
     // Use zellij action to dump layout, then parse tab names
     // This is hacky but works - alternative is to maintain our own state
-    const output = execSync(`zellij --session "${sessionName}" action dump-layout 2>/dev/null`, {
-      encoding: 'utf-8',
-      stdio: 'pipe',
-    });
+    const output = execSync(
+      `${prefix}zellij --session "${sessionName}" action dump-layout 2>/dev/null`,
+      {
+        encoding: 'utf-8',
+        stdio: 'pipe',
+      }
+    );
 
     // Parse tab names from layout dump (this is brittle, but functional)
     // Layout format includes: name: "tab-name"
@@ -249,6 +278,65 @@ export class TerminalsService {
       return formatShortId(resolvedUserId);
     })();
 
+    // =========================================================================
+    // DETERMINE UNIX USER IMPERSONATION FIRST
+    // This affects how we check Zellij sessions and what cwd to use
+    // =========================================================================
+
+    // Determine which Unix user to run the terminal as based on unix_user_mode
+    const config = await loadConfig();
+    const unixUserMode = config.execution?.unix_user_mode ?? 'simple';
+    const executorUser = config.execution?.executor_unix_user;
+
+    let impersonatedUser: string | null = null;
+
+    // Get authenticated user's unix_username if available
+    if (authenticatedUserId) {
+      const usersRepo = new UsersRepository(this.db);
+      try {
+        const user = await usersRepo.findById(authenticatedUserId);
+        console.log(`🔍 Loaded user for impersonation:`, {
+          userId: authenticatedUserId,
+          user,
+          unix_username: user?.unix_username,
+        });
+        if (user?.unix_username) {
+          impersonatedUser = user.unix_username;
+        }
+      } catch (error) {
+        console.warn(`⚠️ Failed to load user ${authenticatedUserId}:`, error);
+      }
+    } else {
+      console.log(`🔍 No authenticatedUserId for impersonation check`);
+    }
+
+    // Determine final Unix user based on mode using centralized logic
+    const impersonationResult = resolveUnixUserForImpersonation({
+      mode: unixUserMode as UnixUserMode,
+      userUnixUsername: impersonatedUser,
+      executorUnixUser: executorUser,
+    });
+
+    const finalUnixUser = impersonationResult.unixUser;
+    const impersonationReason = impersonationResult.reason;
+
+    // Validate Unix user exists for modes that require it
+    try {
+      validateResolvedUnixUser(unixUserMode as UnixUserMode, finalUnixUser);
+    } catch (err) {
+      if (err instanceof UnixUserNotFoundError) {
+        throw new Error(
+          `${(err as UnixUserNotFoundError).message}. Ensure the Unix user is created before attempting terminal access.`
+        );
+      }
+      throw err;
+    }
+
+    // =========================================================================
+    // RESOLVE WORKTREE AND CWD
+    // When impersonating, use symlink path: ~/agor/worktrees/<worktree-name>
+    // =========================================================================
+
     // Resolve worktree context if provided
     let worktree = null;
     let cwd = data.cwd || os.homedir();
@@ -258,14 +346,36 @@ export class TerminalsService {
       const worktreeRepo = new WorktreeRepository(this.db);
       worktree = await worktreeRepo.findById(data.worktreeId);
       if (worktree) {
-        cwd = worktree.path;
         worktreeName = worktree.name;
+
+        // When impersonating a user, prefer symlink path in their home directory
+        // This gives a cleaner path: ~/agor/worktrees/<name> instead of ~/.agor/worktrees/...
+        // But fallback to real path if symlink doesn't exist (e.g., for shared worktrees
+        // where the user has access via others_can but no explicit ownership/symlink)
+        if (finalUnixUser && worktree.name) {
+          const symlinkPath = `/home/${finalUnixUser}/agor/worktrees/${worktree.name}`;
+          if (fs.existsSync(symlinkPath)) {
+            cwd = symlinkPath;
+            console.log(`📂 Using symlink path for cwd: ${cwd}`);
+          } else {
+            cwd = worktree.path;
+            console.log(`📂 Symlink not found, using real path for cwd: ${cwd}`);
+          }
+        } else {
+          cwd = worktree.path;
+        }
       }
     }
 
+    // =========================================================================
+    // ZELLIJ SESSION AND TAB MANAGEMENT
+    // When impersonating, run Zellij commands as that user
+    // =========================================================================
+
     // Use single shared Zellij session with one tab per worktree
     const zellijSession = `agor-${userSessionSuffix}`;
-    const sessionExists = zellijSessionExists(zellijSession);
+    // Pass finalUnixUser to check sessions owned by that user (or undefined for daemon user)
+    const sessionExists = zellijSessionExists(zellijSession, finalUnixUser || undefined);
     const tabName = worktreeName || 'terminal';
     let zellijReused = false;
     let needsTabCreation = false;
@@ -273,7 +383,7 @@ export class TerminalsService {
 
     if (sessionExists) {
       // Session exists - check if this worktree has a tab
-      const existingTabs = getZellijTabs(zellijSession);
+      const existingTabs = getZellijTabs(zellijSession, finalUnixUser || undefined);
       console.log(
         `[Zellij] Session ${zellijSession} exists with ${existingTabs.length} tabs. Looking for tab: "${tabName}"`
       );
@@ -299,6 +409,10 @@ export class TerminalsService {
         `\x1b[36m🚀 Creating Zellij session:\x1b[0m ${zellijSession} with tab ${tabName}`
       );
     }
+
+    // =========================================================================
+    // ENVIRONMENT SETUP
+    // =========================================================================
 
     // Get user-specific environment variables (for env file)
     const userEnv = resolvedUserId ? await resolveUserEnvironment(resolvedUserId, this.db) : {};
@@ -333,103 +447,24 @@ export class TerminalsService {
       );
     }
 
-    // Determine which Unix user to run the terminal as based on unix_user_mode
-    const config = await loadConfig();
-    const unixUserMode = config.execution?.unix_user_mode ?? 'simple';
-    const executorUser = config.execution?.executor_unix_user;
-
-    let impersonatedUser: string | null = null;
-
-    // Get authenticated user's unix_username if available
-    if (authenticatedUserId) {
-      const usersRepo = new UsersRepository(this.db);
-      try {
-        const user = await usersRepo.findById(authenticatedUserId);
-        console.log(`🔍 Loaded user for impersonation:`, {
-          userId: authenticatedUserId,
-          user,
-          unix_username: user?.unix_username,
-        });
-        if (user?.unix_username) {
-          impersonatedUser = user.unix_username;
-        }
-      } catch (error) {
-        console.warn(`⚠️ Failed to load user ${authenticatedUserId}:`, error);
-      }
-    } else {
-      console.log(`🔍 No authenticatedUserId for impersonation check`);
-    }
-
-    // Determine final Unix user based on mode
-    let finalUnixUser: string | null = null;
-    let impersonationReason = '';
-
-    switch (unixUserMode) {
-      case 'simple':
-        // No impersonation
-        finalUnixUser = null;
-        impersonationReason = 'simple mode - no impersonation';
-        break;
-
-      case 'insulated':
-        // Always use executor user
-        finalUnixUser = executorUser ?? null;
-        impersonationReason = executorUser
-          ? `insulated mode - using executor: ${executorUser}`
-          : 'insulated mode - no executor configured';
-        break;
-
-      case 'opportunistic':
-        // Use user's unix_username if available, else fall back to executor
-        if (impersonatedUser) {
-          finalUnixUser = impersonatedUser;
-          impersonationReason = `opportunistic mode - user has unix_username: ${impersonatedUser}`;
-        } else if (executorUser) {
-          finalUnixUser = executorUser;
-          impersonationReason = `opportunistic mode - fallback to executor: ${executorUser}`;
-        } else {
-          finalUnixUser = null;
-          impersonationReason = 'opportunistic mode - no unix_username or executor';
-        }
-        break;
-
-      case 'strict':
-        // Require user's unix_username, fail if not set
-        if (!impersonatedUser) {
-          throw new Error(
-            `Strict Unix user mode requires unix_username to be set for user ${authenticatedUserId}. ` +
-              'Please configure a Unix username for this user.'
-          );
-        }
-        finalUnixUser = impersonatedUser;
-        impersonationReason = `strict mode - using user's unix_username: ${impersonatedUser}`;
-        break;
-
-      default:
-        console.warn(`⚠️ Unknown unix_user_mode: ${unixUserMode}, falling back to simple mode`);
-        finalUnixUser = null;
-        impersonationReason = 'unknown mode - defaulting to no impersonation';
-    }
-
     let ptyProcess: pty.IPty;
+
+    // Zellij config is NOT explicitly specified - Zellij uses its standard config search:
+    //   1. ~/.config/zellij/config.kdl (for effective user)
+    //   2. Built-in defaults if no config exists
+    //
+    // This allows:
+    //   - Admins to configure global defaults by placing config in daemon user's home
+    //   - Individual users to customize their experience with their own config
+    //   - Session serialization to persist terminal state (useful for worktree persistence)
 
     if (finalUnixUser) {
       // Impersonation enabled - run Zellij as specified Unix user via sudo
       const targetHome = `/home/${finalUnixUser}`;
-      const configPath = path.join(targetHome, '.config', 'zellij', 'config.kdl');
 
       console.log(`🔐 Running terminal as Unix user: ${finalUnixUser} (${impersonationReason})`);
 
-      const sudoArgs = [
-        '-u',
-        finalUnixUser,
-        'zellij',
-        '--config',
-        configPath,
-        'attach',
-        zellijSession,
-        '--create',
-      ];
+      const sudoArgs = ['-u', finalUnixUser, 'zellij', 'attach', zellijSession, '--create'];
 
       ptyProcess = pty.spawn('sudo', sudoArgs, {
         name: 'xterm-256color',
@@ -444,11 +479,9 @@ export class TerminalsService {
       });
     } else {
       // No impersonation - run Zellij as daemon user
-      const configPath = path.join(os.homedir(), '.config', 'zellij', 'config.kdl');
-
       console.log(`🔓 Running terminal as daemon user (${impersonationReason})`);
 
-      const zellijArgs = ['--config', configPath, 'attach', zellijSession, '--create'];
+      const zellijArgs = ['attach', zellijSession, '--create'];
 
       ptyProcess = pty.spawn('zellij', zellijArgs, {
         name: 'xterm-256color',
@@ -493,12 +526,17 @@ export class TerminalsService {
     });
 
     // After Zellij starts, perform tab management and show welcome message
-    // Wait briefly for Zellij to initialize
+    // Capture finalUnixUser for use in setTimeout closures
+    const asUser = finalUnixUser || undefined;
+
+    // Wait for Zellij to fully initialize before injecting commands
+    // 400ms allows time for terminal capability negotiation (color queries, etc.)
+    // to complete before we send write-chars commands
     setTimeout(() => {
       try {
         if (!sessionExists) {
           // First time creating session - rename first tab and set up environment
-          runZellijAction(zellijSession, `rename-tab "${tabName}"`);
+          runZellijAction(zellijSession, `rename-tab "${tabName}"`, asUser);
 
           // Build initialization command that sources env and navigates to cwd
           // Use compound command with && to ensure each step succeeds before next
@@ -520,17 +558,22 @@ export class TerminalsService {
           if (initCommands.length > 0) {
             const initScript = initCommands.join(' && ');
             // Escape the entire script for write-chars (which uses double quotes)
-            runZellijAction(zellijSession, `write-chars "${escapeForWriteChars(initScript)}"`);
-            runZellijAction(zellijSession, 'write 10'); // Enter key
+            runZellijAction(
+              zellijSession,
+              `write-chars "${escapeForWriteChars(initScript)}"`,
+              asUser
+            );
+            runZellijAction(zellijSession, 'write 10', asUser); // Enter key
           }
         } else if (needsTabCreation) {
           // Create new tab for this worktree
           // NOTE: We still pass --cwd to new-tab, but also explicitly cd afterwards
           // This ensures we end up in the right directory even if shell RC files change it
-          runZellijAction(zellijSession, `new-tab --name "${tabName}" --cwd "${cwd}"`);
-          runZellijAction(zellijSession, `go-to-tab-name "${tabName}"`);
+          runZellijAction(zellijSession, `new-tab --name "${tabName}" --cwd "${cwd}"`, asUser);
+          runZellijAction(zellijSession, `go-to-tab-name "${tabName}"`, asUser);
 
           // Wait for tab to be created and shell to initialize
+          // Reduced from 300ms to 150ms
           setTimeout(() => {
             // Build initialization command that sources env and navigates to cwd
             const initCommands: string[] = [];
@@ -550,21 +593,27 @@ export class TerminalsService {
             if (initCommands.length > 0) {
               const initScript = initCommands.join(' && ');
               // Escape the entire script for write-chars (which uses double quotes)
-              runZellijAction(zellijSession, `write-chars "${escapeForWriteChars(initScript)}"`);
-              runZellijAction(zellijSession, 'write 10'); // Enter key
+              runZellijAction(
+                zellijSession,
+                `write-chars "${escapeForWriteChars(initScript)}"`,
+                asUser
+              );
+              runZellijAction(zellijSession, 'write 10', asUser); // Enter key
             }
-          }, 300); // Slightly longer delay to ensure shell is ready
+          }, 150);
         } else if (needsTabSwitch) {
           // Switch to existing tab
-          runZellijAction(zellijSession, `go-to-tab-name "${tabName}"`);
+          runZellijAction(zellijSession, `go-to-tab-name "${tabName}"`, asUser);
 
           // Wait briefly for tab switch, then clear any incomplete commands
+          // Reduced from 200ms to 100ms
           setTimeout(() => {
             // Send Ctrl+C to clear any incomplete command on the prompt
             // This ensures we start with a clean prompt
-            runZellijAction(zellijSession, 'write 3'); // Ctrl+C (char code 3)
+            runZellijAction(zellijSession, 'write 3', asUser); // Ctrl+C (char code 3)
 
             // Wait a bit for Ctrl+C to take effect and show new prompt
+            // Reduced from 100ms to 50ms
             setTimeout(() => {
               // Build initialization command that sources env and navigates to cwd
               const initCommands: string[] = [];
@@ -584,11 +633,15 @@ export class TerminalsService {
               if (initCommands.length > 0) {
                 const initScript = initCommands.join(' && ');
                 // Escape the entire script for write-chars (which uses double quotes)
-                runZellijAction(zellijSession, `write-chars "${escapeForWriteChars(initScript)}"`);
-                runZellijAction(zellijSession, 'write 10'); // Enter key
+                runZellijAction(
+                  zellijSession,
+                  `write-chars "${escapeForWriteChars(initScript)}"`,
+                  asUser
+                );
+                runZellijAction(zellijSession, 'write 10', asUser); // Enter key
               }
-            }, 100);
-          }, 200);
+            }, 50);
+          }, 100);
         }
 
         // Terminal size is handled by PTY (node-pty sends SIGWINCH to Zellij)
@@ -596,7 +649,7 @@ export class TerminalsService {
       } catch (error) {
         console.warn('Failed to configure Zellij tab:', error);
       }
-    }, 500);
+    }, 400);
 
     return { terminalId, cwd, zellijSession, zellijReused, worktreeName };
   }
