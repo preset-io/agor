@@ -59,6 +59,61 @@ interface AutocompleteTextareaProps {
   onFilesDrop?: (files: File[]) => void;
 }
 
+// Minimum characters required after : before showing emoji picker (like Slack)
+const MIN_EMOJI_QUERY_LENGTH = 2;
+
+/**
+ * Check if a character is an emoji
+ * Uses a simple heuristic: emojis are typically in the surrogate pair range or specific Unicode blocks
+ */
+const isEmoji = (char: string): boolean => {
+  if (!char) return false;
+  const codePoint = char.codePointAt(0);
+  if (!codePoint) return false;
+
+  // Common emoji ranges:
+  // - Emoticons: U+1F600 - U+1F64F
+  // - Misc Symbols and Pictographs: U+1F300 - U+1F5FF
+  // - Transport and Map: U+1F680 - U+1F6FF
+  // - Misc Symbols: U+2600 - U+26FF
+  // - Dingbats: U+2700 - U+27BF
+  // - Flags: U+1F1E0 - U+1F1FF
+  // - Supplemental Symbols: U+1F900 - U+1F9FF
+  // - More supplemental: U+1FA00 - U+1FA6F
+  return (
+    (codePoint >= 0x1f600 && codePoint <= 0x1f64f) ||
+    (codePoint >= 0x1f300 && codePoint <= 0x1f5ff) ||
+    (codePoint >= 0x1f680 && codePoint <= 0x1f6ff) ||
+    (codePoint >= 0x2600 && codePoint <= 0x26ff) ||
+    (codePoint >= 0x2700 && codePoint <= 0x27bf) ||
+    (codePoint >= 0x1f1e0 && codePoint <= 0x1f1ff) ||
+    (codePoint >= 0x1f900 && codePoint <= 0x1f9ff) ||
+    (codePoint >= 0x1fa00 && codePoint <= 0x1fa6f)
+  );
+};
+
+/**
+ * Get the character before a position, handling emoji surrogate pairs correctly
+ */
+const getCharBefore = (text: string, position: number): string => {
+  if (position <= 0) return '';
+
+  // Check if we're in the middle of a surrogate pair
+  const charBefore = text.charAt(position - 1);
+  const charBeforeBefore = position >= 2 ? text.charAt(position - 2) : '';
+
+  // If charBefore is a low surrogate, we need to include the high surrogate too
+  const charCode = charBefore.charCodeAt(0);
+  if (charCode >= 0xdc00 && charCode <= 0xdfff && charBeforeBefore) {
+    const prevCharCode = charBeforeBefore.charCodeAt(0);
+    if (prevCharCode >= 0xd800 && prevCharCode <= 0xdbff) {
+      return charBeforeBefore + charBefore;
+    }
+  }
+
+  return charBefore;
+};
+
 /**
  * Extract text at cursor position before a trigger character (@ or :)
  */
@@ -75,13 +130,19 @@ const getTriggerQuery = (
   }
 
   // For @ mentions, require whitespace before trigger to avoid matching email addresses
-  // For : emojis, allow consecutive emojis without spaces (e.g., :smile::heart::fire:)
-  if (trigger === '@') {
-    const charBeforeTrigger = lastTriggerIndex > 0 ? textBeforeCursor[lastTriggerIndex - 1] : ' ';
-    const isValidTrigger =
-      charBeforeTrigger === ' ' || charBeforeTrigger === '\n' || lastTriggerIndex === 0;
+  // For : emojis, require whitespace, start of text, or an emoji before trigger (like Slack)
+  const charBeforeTrigger = getCharBefore(textBeforeCursor, lastTriggerIndex);
+  const isAtStart = lastTriggerIndex === 0;
+  const isAfterWhitespace = charBeforeTrigger === ' ' || charBeforeTrigger === '\n';
+  const isAfterEmoji = isEmoji(charBeforeTrigger);
 
-    if (!isValidTrigger) {
+  if (trigger === '@') {
+    if (!isAtStart && !isAfterWhitespace) {
+      return null;
+    }
+  } else if (trigger === ':') {
+    // Emoji trigger: must be at start, after whitespace, or after another emoji
+    if (!isAtStart && !isAfterWhitespace && !isAfterEmoji) {
       return null;
     }
   }
@@ -90,6 +151,11 @@ const getTriggerQuery = (
 
   // Don't trigger if query contains whitespace
   if (query.includes(' ') || query.includes('\n')) {
+    return null;
+  }
+
+  // For emoji trigger, require minimum query length (like Slack requires 2 chars)
+  if (trigger === ':' && query.length < MIN_EMOJI_QUERY_LENGTH) {
     return null;
   }
 
