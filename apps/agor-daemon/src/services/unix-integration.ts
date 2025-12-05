@@ -13,7 +13,6 @@
 import type { Database } from '@agor/core/db';
 import {
   UnixIntegrationService as CoreUnixIntegrationService,
-  SudoCliExecutor,
   SudoDirectExecutor,
   type UnixIntegrationConfig,
 } from '@agor/core/unix';
@@ -23,20 +22,20 @@ export type { UnixIntegrationConfig };
 
 /**
  * Daemon-specific configuration for Unix integration
+ *
+ * Note: CLI executor mode (via `sudo agor admin`) is not yet implemented.
+ * Currently only 'direct' mode is supported (sudo commands directly).
  */
 export interface DaemonUnixIntegrationConfig extends UnixIntegrationConfig {
-  /** Executor mode: 'direct' runs sudo commands directly, 'cli' uses agor admin proxy */
-  executorMode?: 'direct' | 'cli';
-
-  /** Path to agor CLI binary (only used when executorMode='cli', default: 'agor') */
-  cliPath?: string;
-
-  /** Use sudo for admin commands (default: true) */
-  useSudo?: boolean;
+  // Future: executorMode for CLI proxy support
+  // Currently always uses SudoDirectExecutor
 }
 
 /**
  * Create Unix Integration Service for daemon use
+ *
+ * Uses SudoDirectExecutor which runs privileged commands via `sudo <command>`.
+ * This requires passwordless sudo for the daemon user (typical in Docker/dev).
  *
  * @param db - Database instance
  * @param config - Configuration options
@@ -46,17 +45,9 @@ export function createUnixIntegrationService(
   db: Database,
   config: DaemonUnixIntegrationConfig = { enabled: false }
 ): CoreUnixIntegrationService {
-  // Default to 'direct' mode - runs sudo commands directly
+  // Always use SudoDirectExecutor - runs sudo commands directly
   // This works in Docker where agor user has passwordless sudo
-  const mode = config.executorMode || 'direct';
-
-  const executor =
-    mode === 'cli'
-      ? new SudoCliExecutor({
-          cliPath: config.cliPath || 'agor',
-          useSudo: config.useSudo ?? true,
-        })
-      : new SudoDirectExecutor();
+  const executor = new SudoDirectExecutor();
 
   return new CoreUnixIntegrationService(db, executor, config);
 }

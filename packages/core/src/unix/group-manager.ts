@@ -135,7 +135,8 @@ export const UnixGroupCommands = {
    * @returns Command string
    */
   setDirectoryGroup: (path: string, groupName: string, permissions: string) =>
-    `chgrp -R ${groupName} "${path}" && chmod -R ${permissions} "${path}"`,
+    // Wrap in sh -c so sudo elevates the entire command chain
+    `sh -c 'chgrp -R ${groupName} "${path}" && chmod -R ${permissions} "${path}"'`,
 } as const;
 
 /**

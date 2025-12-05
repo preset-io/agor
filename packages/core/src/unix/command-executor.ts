@@ -59,8 +59,8 @@ export interface CommandExecutor {
 /**
  * Direct command executor
  *
- * Executes commands directly via shell. Use when running as root/sudo.
- * Typically used by CLI admin commands.
+ * Executes commands directly via shell. Use when running as root.
+ * Typically used by CLI admin commands when running with root privileges.
  */
 export class DirectExecutor implements CommandExecutor {
   async exec(command: string): Promise<CommandResult> {
@@ -88,6 +88,42 @@ export class DirectExecutor implements CommandExecutor {
     } catch {
       return false;
     }
+  }
+}
+
+/**
+ * Sudo direct command executor
+ *
+ * Executes commands with sudo prefix. Use when running as unprivileged user
+ * with passwordless sudo access (e.g., Docker dev environment).
+ */
+export class SudoDirectExecutor implements CommandExecutor {
+  async exec(command: string): Promise<CommandResult> {
+    const sudoCommand = `sudo ${command}`;
+    console.log(`[SudoDirectExecutor] Executing: ${sudoCommand}`);
+    try {
+      const { stdout, stderr } = await execAsync(sudoCommand);
+      return { stdout, stderr, exitCode: 0 };
+    } catch (error: unknown) {
+      const err = error as { stdout?: string; stderr?: string; code?: number; message?: string };
+      console.error(`[SudoDirectExecutor] Command failed: ${sudoCommand}`, err.message);
+      return {
+        stdout: err.stdout || '',
+        stderr: err.stderr || err.message || '',
+        exitCode: err.code || 1,
+      };
+    }
+  }
+
+  execSync(command: string): string {
+    const sudoCommand = `sudo ${command}`;
+    console.log(`[SudoDirectExecutor] Executing (sync): ${sudoCommand}`);
+    return execSync(sudoCommand, { encoding: 'utf-8' });
+  }
+
+  async check(command: string): Promise<boolean> {
+    const result = await this.exec(command);
+    return result.exitCode === 0;
   }
 }
 
@@ -191,17 +227,23 @@ export class NoOpExecutor implements CommandExecutor {
 /**
  * Create appropriate executor based on configuration
  *
- * @param mode - Execution mode
- * @param config - Configuration for sudo executor
+ * @param mode - Execution mode:
+ *   - 'direct': Run commands directly (requires root)
+ *   - 'sudo-direct': Run commands with sudo prefix (for unprivileged user with passwordless sudo)
+ *   - 'sudo-cli': Run commands via `sudo agor admin` (requires agor CLI installed)
+ *   - 'noop': Log commands but don't execute (for testing)
+ * @param config - Configuration for sudo CLI executor
  */
 export function createExecutor(
-  mode: 'direct' | 'sudo' | 'noop',
+  mode: 'direct' | 'sudo-direct' | 'sudo-cli' | 'noop',
   config?: SudoCliExecutorConfig
 ): CommandExecutor {
   switch (mode) {
     case 'direct':
       return new DirectExecutor();
-    case 'sudo':
+    case 'sudo-direct':
+      return new SudoDirectExecutor();
+    case 'sudo-cli':
       return new SudoCliExecutor(config);
     case 'noop':
       return new NoOpExecutor();

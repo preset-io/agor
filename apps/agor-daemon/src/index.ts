@@ -1096,8 +1096,6 @@ async function main() {
       config.execution?.unix_user_mode !== undefined;
     unixIntegrationService = createUnixIntegrationService(db, {
       enabled: unixEnabled,
-      cliPath: 'agor',
-      useSudo: true,
       autoManageSymlinks: unixEnabled,
     });
     console.log(

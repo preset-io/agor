@@ -104,12 +104,14 @@ export const SymlinkCommands = {
    */
   createSymlinkWithOwnership: (target: string, linkPath: string, username: string) => {
     const parentDir = linkPath.substring(0, linkPath.lastIndexOf('/'));
-    return [
+    // Wrap in sh -c so sudo elevates the entire command chain
+    const commands = [
       `mkdir -p "${parentDir}"`,
       `chown "${username}:${username}" "${parentDir}"`,
       `ln -sfn "${target}" "${linkPath}"`,
       `chown -h "${username}:${username}" "${linkPath}"`,
     ].join(' && ');
+    return `sh -c '${commands}'`;
   },
 
   /**

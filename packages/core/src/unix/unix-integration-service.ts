@@ -25,12 +25,28 @@ import {
 } from './group-manager.js';
 import { getWorktreeSymlinkPath, SymlinkCommands } from './symlink-manager.js';
 import {
+  AGOR_DEFAULT_SHELL,
   AGOR_HOME_BASE,
   generateUnixUsername,
+  getUserHomeDir,
   getUserWorktreesDir,
   isValidUnixUsername,
   UnixUserCommands,
 } from './user-manager.js';
+
+/**
+ * Minimal Zellij configuration for Agor users
+ *
+ * Only suppresses startup banners for cleaner UX.
+ * Users can customize further by editing ~/.config/zellij/config.kdl
+ */
+export const AGOR_ZELLIJ_CONFIG = `// Agor Zellij Config
+// Customize as needed
+
+// Hide startup banners for cleaner embedded terminal UX
+show_startup_tips false
+show_release_notes false
+`;
 
 /**
  * Unix integration service configuration
@@ -387,7 +403,10 @@ export class UnixIntegrationService {
 
     if (!exists) {
       console.log(`[UnixIntegration] Creating Unix user: ${unixUsername}`);
-      await this.executor.exec(UnixUserCommands.createUser(unixUsername));
+      // Pass homeBase to ensure home directory is created in the configured location
+      await this.executor.exec(
+        UnixUserCommands.createUser(unixUsername, AGOR_DEFAULT_SHELL, this.config.homeBase)
+      );
 
       // Setup ~/agor/worktrees directory
       await this.executor.exec(
@@ -414,7 +433,47 @@ export class UnixIntegrationService {
     // Add user to agor_users group (enables impersonation)
     await this.addUserToAgorUsersGroup(unixUsername);
 
+    // Prepare user's home directory with default configs
+    await this.prepareUserHome(unixUsername);
+
     return unixUsername;
+  }
+
+  /**
+   * Prepare a user's home directory with Agor default configurations
+   *
+   * Sets up:
+   * - ~/.config/zellij/config.kdl - Zellij config optimized for xterm.js embedding
+   *
+   * @param unixUsername - Unix username
+   */
+  async prepareUserHome(unixUsername: string): Promise<void> {
+    const homeDir = getUserHomeDir(unixUsername, this.config.homeBase);
+    const zellijConfigDir = `${homeDir}/.config/zellij`;
+    const zellijConfigPath = `${zellijConfigDir}/config.kdl`;
+
+    // Check if config already exists - don't overwrite user customizations
+    const configExists = await this.executor.check(SymlinkCommands.pathExists(zellijConfigPath));
+    if (configExists) {
+      console.log(`[UnixIntegration] Zellij config already exists for ${unixUsername}, skipping`);
+      return;
+    }
+
+    console.log(`[UnixIntegration] Preparing home directory for ${unixUsername}`);
+
+    // Create ~/.config/zellij directory with proper ownership
+    await this.executor.exec(
+      UnixUserCommands.createOwnedDirectory(zellijConfigDir, unixUsername, unixUsername, '755')
+    );
+
+    // Write Zellij config file using base64 encoding to safely pass content
+    // This avoids shell escaping issues with quotes, newlines, etc.
+    const configBase64 = Buffer.from(AGOR_ZELLIJ_CONFIG).toString('base64');
+    const writeConfigCmd = `sh -c 'echo "${configBase64}" | base64 -d > "${zellijConfigPath}" && chown "${unixUsername}:${unixUsername}" "${zellijConfigPath}" && chmod 644 "${zellijConfigPath}"'`;
+
+    await this.executor.exec(writeConfigCmd);
+
+    console.log(`[UnixIntegration] Created Zellij config at ${zellijConfigPath}`);
   }
 
   /**

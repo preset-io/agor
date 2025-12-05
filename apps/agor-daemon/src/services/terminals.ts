@@ -106,8 +106,17 @@ function isZellijAvailable(): boolean {
 /**
  * Write user environment variables to a shell script
  * This allows shells spawned in Zellij tabs to source the env vars
+ *
+ * @param userId - User ID for naming the file
+ * @param env - Environment variables to export
+ * @param chownTo - Optional Unix username to chown the file to (for impersonation)
+ * @returns Path to the env file, or null on error
  */
-function writeEnvFile(userId: UserID | undefined, env: Record<string, string>): string | null {
+function writeEnvFile(
+  userId: UserID | undefined,
+  env: Record<string, string>,
+  chownTo?: string | null
+): string | null {
   if (!userId) return null;
 
   try {
@@ -133,7 +142,20 @@ function writeEnvFile(userId: UserID | undefined, env: Record<string, string>): 
 ${exportLines.join('\n')}
 `;
 
+    // Write file with restrictive permissions initially
     fs.writeFileSync(envFile, scriptContent, { mode: 0o600 });
+
+    // If we're impersonating a user, chown the file to them so they can read it
+    // Without this, impersonated users can't source the env file (permission denied)
+    if (chownTo) {
+      try {
+        execSync(`sudo chown "${chownTo}" "${envFile}"`, { stdio: 'pipe' });
+      } catch (chownError) {
+        console.warn(`Failed to chown env file to ${chownTo}:`, chownError);
+        // Continue anyway - file may still be readable in some configurations
+      }
+    }
+
     return envFile;
   } catch (error) {
     console.warn('Failed to write user env file:', error);
@@ -440,10 +462,11 @@ export class TerminalsService {
     const env = baseEnv;
 
     // Write user env vars to file for sourcing in new shells (only custom user vars)
-    const envFile = resolvedUserId ? writeEnvFile(resolvedUserId, userEnv) : null;
+    // Pass finalUnixUser so the file is chowned to the impersonated user (they need read access)
+    const envFile = resolvedUserId ? writeEnvFile(resolvedUserId, userEnv, finalUnixUser) : null;
     if (envFile && resolvedUserId) {
       console.log(
-        `📝 Wrote user env file: ${envFile} (${Object.keys(userEnv).length} custom vars for user ${resolvedUserId.substring(0, 8)})`
+        `📝 Wrote user env file: ${envFile} (${Object.keys(userEnv).length} custom vars for user ${resolvedUserId.substring(0, 8)}${finalUnixUser ? `, chowned to ${finalUnixUser}` : ''})`
       );
     }
 
