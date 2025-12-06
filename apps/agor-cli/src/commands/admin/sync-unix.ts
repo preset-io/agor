@@ -576,21 +576,33 @@ export default class SyncUnix extends Command {
           this.log(chalk.cyan(`Found ${worktreesWithGroup.length} worktree(s) with unix_group\n`));
 
           for (const wt of worktreesWithGroup) {
-            const worktree = wt as {
+            // Extract path from the data JSON blob (it's not a top-level column)
+            const rawWorktree = wt as {
               worktree_id: string;
               name: string;
               unix_group: string;
-              path: string;
               others_fs_access: 'none' | 'read' | 'write' | null;
+              data: { path?: string } | null;
             };
 
-            this.log(chalk.bold(`📁 ${worktree.name}`));
-            this.log(chalk.gray(`   worktree_id: ${worktree.worktree_id.substring(0, 8)}`));
-            this.log(chalk.gray(`   unix_group: ${worktree.unix_group}`));
-            this.log(chalk.gray(`   path: ${worktree.path}`));
+            const worktreePath = rawWorktree.data?.path;
+
+            // Skip worktrees without a path
+            if (!worktreePath) {
+              this.log(chalk.yellow(`📁 ${rawWorktree.name}`));
+              this.log(chalk.gray(`   worktree_id: ${rawWorktree.worktree_id.substring(0, 8)}`));
+              this.log(chalk.gray(`   unix_group: ${rawWorktree.unix_group}`));
+              this.log(chalk.red(`   ⚠ No path found in worktree data, skipping\n`));
+              continue;
+            }
+
+            this.log(chalk.bold(`📁 ${rawWorktree.name}`));
+            this.log(chalk.gray(`   worktree_id: ${rawWorktree.worktree_id.substring(0, 8)}`));
+            this.log(chalk.gray(`   unix_group: ${rawWorktree.unix_group}`));
+            this.log(chalk.gray(`   path: ${worktreePath}`));
 
             // Calculate permission mode based on others_fs_access
-            const othersAccess = worktree.others_fs_access || 'read';
+            const othersAccess = rawWorktree.others_fs_access || 'read';
             const permissionMode = getWorktreePermissionMode(othersAccess);
 
             this.log(chalk.gray(`   others_fs_access: ${othersAccess} → mode: ${permissionMode}`));
@@ -598,17 +610,17 @@ export default class SyncUnix extends Command {
             if (dryRun) {
               this.log(
                 chalk.gray(
-                  `   [dry-run] Would run: chgrp -R ${worktree.unix_group} "${worktree.path}"`
+                  `   [dry-run] Would run: chgrp -R ${rawWorktree.unix_group} "${worktreePath}"`
                 )
               );
               this.log(
-                chalk.gray(`   [dry-run] Would run: chmod -R ${permissionMode} "${worktree.path}"`)
+                chalk.gray(`   [dry-run] Would run: chmod -R ${permissionMode} "${worktreePath}"`)
               );
               this.log('');
             } else {
               try {
                 // Use the same command structure as UnixGroupCommands.setDirectoryGroup
-                const cmd = `sh -c 'chgrp -R ${worktree.unix_group} "${worktree.path}" && chmod -R ${permissionMode} "${worktree.path}"'`;
+                const cmd = `sh -c 'chgrp -R ${rawWorktree.unix_group} "${worktreePath}" && chmod -R ${permissionMode} "${worktreePath}"'`;
                 execSync(cmd, { stdio: 'pipe' });
 
                 worktreesRepaired++;

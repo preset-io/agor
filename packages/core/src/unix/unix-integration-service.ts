@@ -686,21 +686,14 @@ export class UnixIntegrationService {
   async syncWorktree(worktreeId: WorktreeID): Promise<void> {
     console.log(`[UnixIntegration] Full sync for worktree ${worktreeId.substring(0, 8)}`);
 
-    // Ensure group exists
+    // Ensure group exists and permissions are set
+    // Note: createWorktreeGroup() handles setting directory permissions internally
     await this.createWorktreeGroup(worktreeId);
-
-    // Get worktree for path
-    const worktree = await this.worktreeRepo.findById(worktreeId);
 
     // Add all owners to group and create symlinks
     const ownerIds = await this.worktreeRepo.getOwners(worktreeId);
     for (const ownerId of ownerIds) {
       await this.addUserToWorktreeGroup(worktreeId, ownerId);
-    }
-
-    // Set permissions if path is available
-    if (worktree?.path) {
-      await this.setWorktreePermissions(worktreeId, worktree.path);
     }
   }
 
