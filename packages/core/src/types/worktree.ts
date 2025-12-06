@@ -325,11 +325,14 @@ export interface Worktree {
   unix_group?: string;
 
   /**
-   * Filesystem access level for non-owners
+   * Filesystem access level for non-owners ("others" in Unix terms)
    *
-   * - 'none': No filesystem access (permission denied)
-   * - 'read': Can read files (chmod 2755)
-   * - 'write': Can read and write files (chmod 2777)
+   * Controls OS-level permissions for users who are NOT worktree owners.
+   * Worktree owners always have full access (7 = rwx) via group membership.
+   *
+   * - 'none': Others get no access (chmod 2770 → drwxrws---)
+   * - 'read': Others can read files (chmod 2775 → drwxrwsr-x)
+   * - 'write': Others can read and write files (chmod 2777 → drwxrwsrwx)
    *
    * This controls OS-level permissions independent of app-layer 'others_can'.
    */

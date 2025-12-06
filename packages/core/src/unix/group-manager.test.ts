@@ -100,15 +100,24 @@ describe('group-manager', () => {
   // =========================================================================
 
   describe('WorktreePermissionModes', () => {
-    it('has correct mode for none (no access)', () => {
-      expect(WorktreePermissionModes.none).toBe('2750');
+    // NOTE: Group (owners) ALWAYS gets 7 (rwx) because they access via group membership.
+    // The 'others_fs_access' setting controls what OTHERS (non-owners) get:
+    // - 'none'  → others get 0 (---)
+    // - 'read'  → others get 5 (r-x)
+    // - 'write' → others get 7 (rwx)
+
+    it('has correct mode for none (no access for others)', () => {
+      // 2770 = setgid + owner:rwx + group:rwx + others:---
+      expect(WorktreePermissionModes.none).toBe('2770');
     });
 
-    it('has correct mode for read (read-only)', () => {
-      expect(WorktreePermissionModes.read).toBe('2755');
+    it('has correct mode for read (read-only for others)', () => {
+      // 2775 = setgid + owner:rwx + group:rwx + others:r-x
+      expect(WorktreePermissionModes.read).toBe('2775');
     });
 
-    it('has correct mode for write (read-write)', () => {
+    it('has correct mode for write (read-write for others)', () => {
+      // 2777 = setgid + owner:rwx + group:rwx + others:rwx
       expect(WorktreePermissionModes.write).toBe('2777');
     });
 
@@ -117,17 +126,24 @@ describe('group-manager', () => {
       expect(WorktreePermissionModes.read.startsWith('2')).toBe(true);
       expect(WorktreePermissionModes.write.startsWith('2')).toBe(true);
     });
+
+    it('all modes give group full access (x7xx)', () => {
+      // Group always gets 7 (rwx) because owners access files via group membership
+      expect(WorktreePermissionModes.none[1]).toBe('7');
+      expect(WorktreePermissionModes.read[1]).toBe('7');
+      expect(WorktreePermissionModes.write[1]).toBe('7');
+    });
   });
 
   describe('getWorktreePermissionMode', () => {
     it('returns correct mode for each access level', () => {
-      expect(getWorktreePermissionMode('none')).toBe('2750');
-      expect(getWorktreePermissionMode('read')).toBe('2755');
+      expect(getWorktreePermissionMode('none')).toBe('2770');
+      expect(getWorktreePermissionMode('read')).toBe('2775');
       expect(getWorktreePermissionMode('write')).toBe('2777');
     });
 
     it('defaults to read when no argument', () => {
-      expect(getWorktreePermissionMode()).toBe('2755');
+      expect(getWorktreePermissionMode()).toBe('2775');
     });
   });
 

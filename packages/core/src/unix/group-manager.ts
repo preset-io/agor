@@ -143,16 +143,25 @@ export const UnixGroupCommands = {
  * Permission modes for worktree directories
  *
  * These map to the 'others_fs_access' RBAC setting.
+ *
+ * IMPORTANT: The GROUP always gets full access (7 = rwx) because owners
+ * access files through their group membership. The 'others_fs_access' setting
+ * controls what OTHERS (non-owners) get:
+ * - 'none'  → others get 0 (---)
+ * - 'read'  → others get 5 (r-x)
+ * - 'write' → others get 7 (rwx)
+ *
+ * The setgid bit (2) ensures new files inherit the group.
  */
 export const WorktreePermissionModes = {
   /** No access for non-owners (permission denied) */
-  none: '2750', // drwxr-s--- (group read/execute only, setgid)
+  none: '2770', // drwxrws--- (owner + group full access, others nothing, setgid)
 
   /** Read-only access for non-owners */
-  read: '2755', // drwxr-sr-x (group + others read/execute, setgid)
+  read: '2775', // drwxrwsr-x (owner + group full access, others read/execute, setgid)
 
   /** Read-write access for non-owners */
-  write: '2777', // drwxrwsrwx (full access, setgid)
+  write: '2777', // drwxrwsrwx (full access for everyone, setgid)
 } as const;
 
 /**

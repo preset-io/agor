@@ -1362,6 +1362,44 @@ async function main() {
             ]
           : []),
       ],
+      patch: [
+        ...(worktreeRbacEnabled && unixIntegrationService
+          ? [
+              async (context: HookContext) => {
+                // Unix Integration: Update Unix permissions when others_fs_access changes
+                const patchData = context.data as Partial<import('@agor/core/types').Worktree>;
+
+                // Only proceed if others_fs_access was in the patch data
+                if (!Object.hasOwn(patchData, 'others_fs_access')) {
+                  return context;
+                }
+
+                const worktree = context.result as import('@agor/core/types').Worktree;
+                if (!worktree.path || !worktree.unix_group) {
+                  console.log(
+                    `[Unix Integration] Worktree ${worktree.worktree_id.substring(0, 8)} has no path or unix_group, skipping permission update`
+                  );
+                  return context;
+                }
+
+                try {
+                  console.log(
+                    `[Unix Integration] Updating permissions for worktree ${worktree.worktree_id.substring(0, 8)} (others_fs_access: ${worktree.others_fs_access})`
+                  );
+                  await unixIntegrationService.setWorktreePermissions(
+                    worktree.worktree_id,
+                    worktree.path
+                  );
+                } catch (error) {
+                  console.error('[Unix Integration] Failed to update worktree permissions:', error);
+                  // Continue - app-layer change is already persisted
+                }
+
+                return context;
+              },
+            ]
+          : []),
+      ],
       remove: [
         ...(worktreeRbacEnabled && unixIntegrationService
           ? [
