@@ -203,6 +203,12 @@ export class UnixIntegrationService {
       unix_group: groupName,
     });
 
+    // Apply group ownership and permissions to worktree directory
+    const worktree = await this.worktreeRepo.findById(worktreeId);
+    if (worktree?.path) {
+      await this.setWorktreePermissions(worktreeId, worktree.path);
+    }
+
     return groupName;
   }
 

@@ -38,6 +38,7 @@ import type { WorktreeID } from '@agor/core/types';
 import {
   AGOR_USERS_GROUP,
   generateWorktreeGroupName,
+  getWorktreePermissionMode,
   UnixGroupCommands,
   UnixUserCommands,
 } from '@agor/core/unix';
@@ -81,6 +82,7 @@ export default class SyncUnix extends Command {
     'sudo <%= config.bin %> <%= command.id %> --create-groups',
     'sudo <%= config.bin %> <%= command.id %> --cleanup --dry-run',
     'sudo <%= config.bin %> <%= command.id %> --cleanup-groups',
+    'sudo <%= config.bin %> <%= command.id %> --repair-worktree-perms',
   ];
 
   static override flags = {
@@ -119,6 +121,10 @@ export default class SyncUnix extends Command {
     }),
     'cleanup-users': Flags.boolean({
       description: 'Delete stale agor_* users not in database (keeps home directories)',
+      default: false,
+    }),
+    'repair-worktree-perms': Flags.boolean({
+      description: 'Repair filesystem permissions for all worktrees with unix_group set',
       default: false,
     }),
   };
@@ -296,6 +302,7 @@ export default class SyncUnix extends Command {
     // Cleanup flags - --cleanup enables both
     const cleanupGroups = flags.cleanup || flags['cleanup-groups'];
     const cleanupUsers = flags.cleanup || flags['cleanup-users'];
+    const repairWorktreePerms = flags['repair-worktree-perms'];
 
     if (dryRun) {
       this.log(chalk.yellow('🔍 Dry run mode - no changes will be made\n'));
@@ -306,6 +313,8 @@ export default class SyncUnix extends Command {
     let groupsDeleted = 0;
     let usersDeleted = 0;
     let cleanupErrors = 0;
+    let worktreesRepaired = 0;
+    let repairErrors = 0;
 
     try {
       // Connect to database
@@ -549,6 +558,79 @@ export default class SyncUnix extends Command {
       } // end if (validUsers.length > 0)
 
       // ========================================
+      // Worktree Permission Repair Phase
+      // ========================================
+
+      if (repairWorktreePerms) {
+        this.log(chalk.cyan.bold('\n━━━ Worktree Permission Repair ━━━\n'));
+
+        // Get all worktrees with unix_group set
+        const allWorktreesForRepair = await select(db).from(worktrees).all();
+        const worktreesWithGroup = allWorktreesForRepair.filter(
+          (wt: { unix_group: string | null }) => wt.unix_group !== null
+        );
+
+        if (worktreesWithGroup.length === 0) {
+          this.log(chalk.yellow('No worktrees with unix_group found\n'));
+        } else {
+          this.log(chalk.cyan(`Found ${worktreesWithGroup.length} worktree(s) with unix_group\n`));
+
+          for (const wt of worktreesWithGroup) {
+            const worktree = wt as {
+              worktree_id: string;
+              name: string;
+              unix_group: string;
+              path: string;
+              others_fs_access: 'none' | 'read' | 'write' | null;
+            };
+
+            this.log(chalk.bold(`📁 ${worktree.name}`));
+            this.log(chalk.gray(`   worktree_id: ${worktree.worktree_id.substring(0, 8)}`));
+            this.log(chalk.gray(`   unix_group: ${worktree.unix_group}`));
+            this.log(chalk.gray(`   path: ${worktree.path}`));
+
+            // Calculate permission mode based on others_fs_access
+            const othersAccess = worktree.others_fs_access || 'read';
+            const permissionMode = getWorktreePermissionMode(othersAccess);
+
+            this.log(chalk.gray(`   others_fs_access: ${othersAccess} → mode: ${permissionMode}`));
+
+            if (dryRun) {
+              this.log(
+                chalk.gray(
+                  `   [dry-run] Would run: chgrp -R ${worktree.unix_group} "${worktree.path}"`
+                )
+              );
+              this.log(
+                chalk.gray(`   [dry-run] Would run: chmod -R ${permissionMode} "${worktree.path}"`)
+              );
+              this.log('');
+            } else {
+              try {
+                // Use the same command structure as UnixGroupCommands.setDirectoryGroup
+                const cmd = `sh -c 'chgrp -R ${worktree.unix_group} "${worktree.path}" && chmod -R ${permissionMode} "${worktree.path}"'`;
+                execSync(cmd, { stdio: 'pipe' });
+
+                worktreesRepaired++;
+                this.log(chalk.green(`   ✓ Applied permissions (${permissionMode})\n`));
+              } catch (error) {
+                repairErrors++;
+                this.log(chalk.red(`   ✗ Failed: ${error}\n`));
+              }
+            }
+          }
+
+          // Summary for repair
+          this.log(chalk.bold('Repair Summary:'));
+          this.log(`  Worktrees repaired: ${worktreesRepaired}${dryRun ? ' (dry-run)' : ''}`);
+          if (repairErrors > 0) {
+            this.log(chalk.red(`  Errors: ${repairErrors}`));
+          }
+          this.log('');
+        }
+      }
+
+      // ========================================
       // Cleanup Phase
       // ========================================
 
@@ -647,7 +729,7 @@ export default class SyncUnix extends Command {
       const groupsAdded = results.reduce((acc, r) => acc + r.groups.added.length, 0);
       const groupsMissing = results.reduce((acc, r) => acc + r.groups.missing.length, 0);
       const syncErrors = results.reduce((acc, r) => acc + r.errors.length, 0);
-      const totalErrors = syncErrors + cleanupErrors;
+      const totalErrors = syncErrors + cleanupErrors + repairErrors;
 
       const dryRunSuffix = dryRun ? ' (dry-run)' : '';
 
@@ -662,6 +744,16 @@ export default class SyncUnix extends Command {
         this.log(
           chalk.yellow(`  Groups missing:    ${groupsMissing} (use --create-groups to create)`)
         );
+      }
+
+      // Repair stats (only if repair was requested)
+      if (repairWorktreePerms) {
+        this.log('');
+        this.log(chalk.bold('Repair:'));
+        this.log(`  Worktrees repaired: ${worktreesRepaired}${dryRunSuffix}`);
+        if (repairErrors > 0) {
+          this.log(chalk.red(`  Repair errors:     ${repairErrors}`));
+        }
       }
 
       // Cleanup stats (only if cleanup was requested)
@@ -688,7 +780,8 @@ export default class SyncUnix extends Command {
         groupsAdded > 0 ||
         groupsCreated > 0 ||
         usersDeleted > 0 ||
-        groupsDeleted > 0;
+        groupsDeleted > 0 ||
+        worktreesRepaired > 0;
       if (dryRun && hasChanges) {
         this.log(chalk.yellow('\nRun without --dry-run to apply changes'));
       }
