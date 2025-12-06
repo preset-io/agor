@@ -1312,6 +1312,24 @@ async function main() {
               ensureWorktreePermission('all', 'update worktrees'), // Require 'all' permission to update
             ]
           : []),
+        // Capture previous others_fs_access for comparison in after hook
+        ...(worktreeRbacEnabled && unixIntegrationService
+          ? [
+              async (context: HookContext) => {
+                const patchData = context.data as Partial<import('@agor/core/types').Worktree>;
+                const params = context.params as AuthenticatedParams & {
+                  _skipUnixSync?: boolean;
+                  _previousOthersFsAccess?: string;
+                };
+                if (Object.hasOwn(patchData, 'others_fs_access') && !params._skipUnixSync) {
+                  // Fetch current value to compare in after hook
+                  const worktree = await context.service.get(context.id);
+                  params._previousOthersFsAccess = worktree.others_fs_access;
+                }
+                return context;
+              },
+            ]
+          : []),
       ],
       remove: [
         ...(worktreeRbacEnabled
@@ -1367,6 +1385,16 @@ async function main() {
           ? [
               async (context: HookContext) => {
                 // Unix Integration: Update Unix permissions when others_fs_access changes
+                const params = context.params as AuthenticatedParams & {
+                  _skipUnixSync?: boolean;
+                  _previousOthersFsAccess?: string;
+                };
+
+                // Skip if this is a revert call from a failed chmod
+                if (params._skipUnixSync) {
+                  return context;
+                }
+
                 const patchData = context.data as Partial<import('@agor/core/types').Worktree>;
 
                 // Only proceed if others_fs_access was in the patch data
@@ -1375,6 +1403,16 @@ async function main() {
                 }
 
                 const worktree = context.result as import('@agor/core/types').Worktree;
+
+                // Check if the value actually changed (avoid unnecessary chmod)
+                const previousValue = params._previousOthersFsAccess;
+                if (previousValue === worktree.others_fs_access) {
+                  console.log(
+                    `[Unix Integration] Worktree ${worktree.worktree_id.substring(0, 8)} others_fs_access unchanged (${previousValue}), skipping`
+                  );
+                  return context;
+                }
+
                 if (!worktree.path || !worktree.unix_group) {
                   console.log(
                     `[Unix Integration] Worktree ${worktree.worktree_id.substring(0, 8)} has no path or unix_group, skipping permission update`
@@ -1384,15 +1422,32 @@ async function main() {
 
                 try {
                   console.log(
-                    `[Unix Integration] Updating permissions for worktree ${worktree.worktree_id.substring(0, 8)} (others_fs_access: ${worktree.others_fs_access})`
+                    `[Unix Integration] Updating permissions for worktree ${worktree.worktree_id.substring(0, 8)} (others_fs_access: ${previousValue} -> ${worktree.others_fs_access})`
                   );
                   await unixIntegrationService.setWorktreePermissions(
                     worktree.worktree_id,
                     worktree.path
                   );
                 } catch (error) {
-                  console.error('[Unix Integration] Failed to update worktree permissions:', error);
-                  // Continue - app-layer change is already persisted
+                  // Security: If chmod fails, revert the DB change so UI doesn't show wrong state
+                  console.error(
+                    '[Unix Integration] Failed to update worktree permissions, reverting DB change:',
+                    error
+                  );
+                  if (previousValue !== undefined) {
+                    try {
+                      await context.service.patch(
+                        worktree.worktree_id,
+                        { others_fs_access: previousValue },
+                        { ...params, _skipUnixSync: true }
+                      );
+                    } catch (revertError) {
+                      console.error('[Unix Integration] Failed to revert DB change:', revertError);
+                    }
+                  }
+                  throw new Error(
+                    `Failed to update filesystem permissions: ${error instanceof Error ? error.message : String(error)}`
+                  );
                 }
 
                 return context;

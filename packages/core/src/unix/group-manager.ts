@@ -168,7 +168,7 @@ export const WorktreePermissionModes = {
  * Get permission mode for a worktree based on others_fs_access setting
  *
  * @param othersAccess - Access level ('none' | 'read' | 'write')
- * @returns Permission mode string (e.g., '2755')
+ * @returns Permission mode string (e.g., '2775')
  */
 export function getWorktreePermissionMode(
   othersAccess: 'none' | 'read' | 'write' = 'read'
