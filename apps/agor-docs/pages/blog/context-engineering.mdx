@@ -64,6 +64,68 @@ This makes “docs as inputs” repeatable and auditable.
 
 Did this alone enable shipping most of Agor in under a month (after hours)? Not alone — but it removed a major bottleneck for both me and the agents.
 
+## Attaching Context To Your Development Workflow
+
+Having organized context nuggets is step one. Using them effectively is where the real leverage comes from. Here's the workflow I've iterated into:
+
+### 1. Plan Mode: Design Before Code
+
+Start every significant feature in plan mode — no code yet. The goal is a design document.
+
+- Describe the feature clearly.
+- Pull in the relevant context nuggets (`architecture.md`, `models.md`, the specific guidelines that apply).
+- Let the agent synthesize a proposal: scope, approach, edge cases, open questions.
+
+Iterate until the design feels solid. This is cheap — just markdown — and catches misunderstandings before they become refactoring.
+
+### 2. Clear The Long Tail
+
+Before implementation, ask the agent: "What's unclear? What assumptions are you making?"
+
+This surfaces the long tail of questions that would otherwise become bugs or rework. Clarify now; pay less later.
+
+### 3. Break It Down (Or Don't)
+
+Here's the hard-won intuition:
+
+**One agent can probably do it all** — frontend, backend, tests, docs — sequentially. Models are getting better at long-duration, heavy-context tasks.
+
+**But specialist agents with just the right context often do better.** A backend agent with `backend-guidelines.md` and `architecture.md`. A frontend agent with `design.md` and `frontend-guidelines.md`. Each with a fresh context window, focused on their slice.
+
+**When to break down:**
+
+- Context can be cleanly segmented (backend vs. frontend vs. tests).
+- The task is complex enough that a single agent starts losing coherence.
+- You want parallelism — multiple agents working simultaneously.
+
+**When to keep it unified:**
+
+- The feature is small enough to one-shot.
+- Heavy cross-cutting concerns (a change that touches everything).
+- Orchestration overhead isn't worth the gains.
+
+**My default:** Try the one-shot first. Save the design doc, create a worktree, let one agent run. If the results disappoint, fall back to breaking it down. Don't over-engineer your agent orchestration before you know you need it.
+
+### 4. Spawn With Fresh Context
+
+When you do break down, spawn subsessions with:
+
+- The design document (your shared contract).
+- Only the context nuggets relevant to that agent's slice.
+- A clear, bounded task description.
+
+Fresh context windows mean less noise and more focus. The design doc keeps everyone aligned without each agent needing to understand the whole system.
+
+### The Meta-Pattern
+
+This is context engineering applied to workflow, not just files:
+
+- **Plan phase:** Load broad context, produce a focused artifact (the design doc).
+- **Implementation phase:** Load narrow context, execute against the artifact.
+- **Coordination:** The design doc is the shared state; context nuggets are the specialized knowledge.
+
+The same principles apply: bite-sized, task-scoped, linked not duplicated.
+
 ## For Humans And AIs
 
 Humans:
