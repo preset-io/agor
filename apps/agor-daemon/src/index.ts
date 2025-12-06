@@ -3201,6 +3201,7 @@ async function main() {
    * This ensures callbacks queued during processing are not missed.
    */
   // Promise-based lock: maps session ID to the active processing promise
+  // We store the actual processing promise (with .catch() to prevent unhandled rejection)
   // Concurrent callers wait on this promise then retry, ensuring no messages are missed
   const queueProcessingLocks = new Map<SessionID, Promise<void>>();
 
@@ -3217,12 +3218,8 @@ async function main() {
       console.log(
         `⏳ [Queue] Processing in progress for session ${sessionId.substring(0, 8)}, waiting...`
       );
-      // Wait for current processing to complete, then schedule a retry
-      try {
-        await existingLock;
-      } catch {
-        // Ignore errors from the original processing
-      }
+      // Wait for current processing to complete (errors are already handled by the lock)
+      await existingLock;
       // After waiting, schedule a retry (if not already scheduled)
       // Use setImmediate to avoid deep recursion and allow other events to process
       if (!queueRetryScheduled.has(sessionId)) {
@@ -3242,23 +3239,21 @@ async function main() {
       return;
     }
 
-    // Create a new promise that will resolve when we're done processing
-    let resolveLock: () => void;
-    let rejectLock: (error: unknown) => void;
-    const lockPromise = new Promise<void>((resolve, reject) => {
-      resolveLock = resolve;
-      rejectLock = reject;
-    });
+    // Create the processing promise and store it as the lock
+    // CRITICAL: We attach .catch() to prevent unhandled rejection when no one is waiting
+    // The actual error is still thrown to the original caller via the unwrapped promise
+    const processingPromise = processNextQueuedMessageInternal(sessionId, params);
 
-    // Acquire lock atomically by setting the promise
-    queueProcessingLocks.set(sessionId, lockPromise);
+    // Store with .catch() so if no one is awaiting, Node won't crash on rejection
+    queueProcessingLocks.set(
+      sessionId,
+      processingPromise.catch(() => {
+        // Swallow error for waiters - they'll retry anyway
+      })
+    );
 
     try {
-      await processNextQueuedMessageInternal(sessionId, params);
-      resolveLock!();
-    } catch (error) {
-      rejectLock!(error);
-      throw error;
+      await processingPromise;
     } finally {
       // Release lock
       queueProcessingLocks.delete(sessionId);
