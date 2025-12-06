@@ -72,7 +72,7 @@ interface SyncResult {
 
 export default class SyncUnix extends Command {
   static override description =
-    'Sync Unix users and groups with database (admin only). Creates missing users and fixes group memberships.';
+    'Sync Unix users and groups with database (admin only). Creates missing users and fixes group memberships. NOTE: This command does NOT sync passwords - password hashes are one-way and cannot be converted to Unix passwords. Passwords are only synced in real-time during user creation or password updates via the web API.';
 
   static override examples = [
     'sudo <%= config.bin %> <%= command.id %>',

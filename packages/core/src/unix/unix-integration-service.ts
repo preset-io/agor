@@ -440,6 +440,46 @@ export class UnixIntegrationService {
   }
 
   /**
+   * Sync user password to Unix (if enabled in config)
+   *
+   * Only syncs when:
+   * - Unix integration is enabled
+   * - sync_unix_passwords config is true (default)
+   * - User has a unix_username set
+   *
+   * @param userId - User ID
+   * @param plaintextPassword - Plaintext password to sync
+   */
+  async syncPassword(userId: UserID, plaintextPassword: string): Promise<void> {
+    if (!this.isEnabled()) {
+      return; // Unix integration disabled
+    }
+
+    // Check if password sync is enabled (default: true)
+    const { loadConfig } = await import('../config/config-manager.js');
+    const config = await loadConfig();
+    const syncEnabled = config.execution?.sync_unix_passwords ?? true;
+
+    if (!syncEnabled) {
+      return; // Password sync disabled via config
+    }
+
+    const user = await this.usersRepo.findById(userId);
+    if (!user?.unix_username) {
+      return; // No unix username set
+    }
+
+    try {
+      const cmd = UnixUserCommands.setPassword(user.unix_username, plaintextPassword);
+      await this.executor.exec(cmd);
+      console.log(`[UnixIntegration] Synced password for ${user.unix_username}`);
+    } catch (error) {
+      console.error(`[UnixIntegration] Failed to sync password for ${user.unix_username}:`, error);
+      throw error;
+    }
+  }
+
+  /**
    * Prepare a user's home directory with Agor default configurations
    *
    * Sets up:

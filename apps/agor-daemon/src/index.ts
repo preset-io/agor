@@ -1910,7 +1910,7 @@ async function main() {
       remove: [requireMinimumRole('admin', 'delete users')],
     },
     after: {
-      // After user create/patch: optionally ensure Unix user exists
+      // After user create/patch: optionally ensure Unix user exists and sync password
       create: [
         async (context: HookContext) => {
           const unixIntegration = app.get('unixIntegration') as
@@ -1933,6 +1933,17 @@ async function main() {
             // Don't fail the request - Agor user is already created
           }
 
+          // Sync password if plaintext is available (context.data contains original input)
+          const data = context.data as { password?: string };
+          if (data?.password) {
+            try {
+              await unixIntegration.syncPassword(user.user_id, data.password);
+            } catch (error) {
+              console.error('[Unix Integration] Failed to sync password on user creation:', error);
+              // Don't fail user creation if password sync fails
+            }
+          }
+
           return context;
         },
       ],
@@ -1945,20 +1956,28 @@ async function main() {
             return context;
           }
 
-          // Only handle if unix_username was just set
-          const data = context.data as { unix_username?: string };
-          if (!data?.unix_username) {
-            return context;
-          }
-
+          const data = context.data as { unix_username?: string; password?: string };
           const user = context.result as User;
 
-          try {
-            await unixIntegration.ensureUnixUser(user.user_id);
-            console.log(`[Unix Integration] Ensured Unix user for: ${user.unix_username}`);
-          } catch (error) {
-            console.error('[Unix Integration] Failed to create Unix user:', error);
-            // Don't fail the request - Agor user is already updated
+          // Handle unix_username changes (existing logic)
+          if (data?.unix_username) {
+            try {
+              await unixIntegration.ensureUnixUser(user.user_id);
+              console.log(`[Unix Integration] Ensured Unix user for: ${user.unix_username}`);
+            } catch (error) {
+              console.error('[Unix Integration] Failed to create Unix user:', error);
+              // Don't fail the request - Agor user is already updated
+            }
+          }
+
+          // Handle password changes
+          if (data?.password) {
+            try {
+              await unixIntegration.syncPassword(user.user_id, data.password);
+            } catch (error) {
+              console.error('[Unix Integration] Failed to sync password on update:', error);
+              // Don't fail patch if password sync fails
+            }
           }
 
           return context;

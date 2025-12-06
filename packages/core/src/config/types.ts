@@ -162,6 +162,9 @@ export interface AgorExecutionSettings {
 
   /** Maximum session token uses (default: 1 = single-use, -1 = unlimited) */
   session_token_max_uses?: number;
+
+  /** Sync web passwords to Unix user passwords (default: true). When enabled, passwords are synced on user creation/update. */
+  sync_unix_passwords?: boolean;
 }
 
 /**

@@ -156,6 +156,23 @@ export const UnixUserCommands = {
   deleteUser: (username: string) => `userdel "${username}"`,
 
   /**
+   * Set Unix user password (non-interactive via chpasswd)
+   *
+   * SECURITY: Password is passed via stdin to avoid command-line exposure.
+   * Format: "username:password" piped to chpasswd
+   *
+   * @param username - Unix username
+   * @param password - Plaintext password to set
+   * @returns Command string
+   */
+  setPassword: (username: string, password: string): string => {
+    // Use printf instead of echo to handle special characters safely
+    // chpasswd reads from stdin in format "username:password"
+    // Use %s placeholders to avoid shell interpretation of special chars
+    return `printf '%s:%s' "${username}" "${password}" | chpasswd`;
+  },
+
+  /**
    * Delete a Unix user and their home directory
    *
    * @param username - Unix username to delete

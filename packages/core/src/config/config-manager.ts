@@ -108,6 +108,7 @@ export function getDefaultConfig(): AgorConfig {
     execution: {
       session_token_expiration_ms: 86400000, // 24 hours
       session_token_max_uses: 1, // Single-use tokens
+      sync_unix_passwords: true, // Default: sync passwords to Unix
     },
   };
 }
