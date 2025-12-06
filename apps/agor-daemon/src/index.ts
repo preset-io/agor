@@ -1580,9 +1580,9 @@ async function main() {
     },
   });
 
-  // Publish service events to all connected clients
-  // All services have requireAuth hooks, so only authenticated users can access them
-  // This means any connection that successfully calls a service is authenticated
+  // Publish service events to authenticated clients only
+  // SECURITY: Only connections in 'authenticated' channel (joined on login) receive events
+  // This prevents unauthenticated sockets from receiving sensitive data
   app.publish((data, context) => {
     // Skip logging for internal events without path/method (e.g., repository-triggered events)
     if (context.path && context.method) {
@@ -1591,11 +1591,11 @@ async function main() {
         context.id
           ? `id: ${typeof context.id === 'string' ? context.id.substring(0, 8) : context.id}`
           : '',
-        `channels: ${app.channel('everybody').length}`
+        `channels: ${app.channel('authenticated').length}`
       );
     }
-    // Broadcast to all connected clients (they're all authenticated due to requireAuth)
-    return app.channel('everybody');
+    // Broadcast only to authenticated clients (joined to channel on login)
+    return app.channel('authenticated');
   });
 
   // Add hooks to inject created_by from authenticated user and populate repo from worktree

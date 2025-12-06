@@ -222,32 +222,45 @@ export function createSocketIOConfig(
 /**
  * Configure FeathersJS channels for event broadcasting
  *
+ * SECURITY: Only authenticated connections receive broadcast events.
+ * Unauthenticated sockets can connect (for login flow) but won't receive
+ * any service events until they successfully authenticate.
+ *
  * Sets up:
- * - 'everybody' channel for all connections
- * - Login/logout event logging
+ * - 'authenticated' channel for authenticated connections only
+ * - Login event joins connection to authenticated channel
+ * - Logout event removes connection from authenticated channel
  *
  * @param app - FeathersJS application instance
  */
 export function configureChannels(app: Application): void {
-  // Configure channels to broadcast events to authenticated clients
-  // Join all new connections to 'everybody' channel initially
-  app.on('connection', (connection: unknown) => {
-    app.channel('everybody').join(connection as never);
+  // SECURITY: Do NOT join connections to any channel on connect.
+  // Unauthenticated sockets should not receive broadcast events.
+  // They will be joined to 'authenticated' channel only after successful login.
+  app.on('connection', (_connection: unknown) => {
+    // Intentionally empty - connections start without channel membership
+    // This prevents unauthenticated sockets from receiving service events
   });
 
-  // Note: The 'login' event is fired by FeathersJS authentication service
-  // However, socket re-authentication might not always trigger this event
-  // So we use a broadcast-all approach with the 'everybody' channel
+  // Join authenticated connections to the 'authenticated' channel
+  // This is the only way to receive broadcast events
   app.on('login', (authResult: unknown, context: { connection?: unknown }) => {
     if (context.connection) {
       const result = authResult as { user?: { user_id?: string; email?: string } };
       console.log('✅ Login event fired:', result.user?.user_id, result.user?.email);
+
+      // SECURITY: Only now does the connection receive broadcast events
+      app.channel('authenticated').join(context.connection as never);
     }
   });
 
+  // Remove connection from authenticated channel on logout
   app.on('logout', (_authResult: unknown, context: { connection?: unknown }) => {
     if (context.connection) {
       console.log('👋 Logout event fired');
+
+      // Remove from authenticated channel - no more broadcast events
+      app.channel('authenticated').leave(context.connection as never);
     }
   });
 }

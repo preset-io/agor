@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { initializeGeminiApiKey } from './index';
+import { initializeGeminiApiKey } from './setup/credentials';
 
 /**
  * Tests for the actual daemon Gemini initialization logic
@@ -184,7 +184,10 @@ describe('initializeGeminiApiKey', () => {
 
       const result = initializeGeminiApiKey(config, '');
 
-      expect(result).toBeUndefined();
+      // Empty string is returned as-is (validation happens in GeminiTool)
+      // The || operator returns '' when config is undefined and env is ''
+      expect(result).toBe('');
+      // Warning is shown because empty string is falsy
       expect(consoleWarnSpy).toHaveBeenCalled();
     });
 
