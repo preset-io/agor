@@ -22,9 +22,18 @@
  */
 
 import { execSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { getConfigPath } from '@agor/core/config';
-import { createDatabase, eq, select, users, worktreeOwners, worktrees } from '@agor/core/db';
+import {
+  createDatabase,
+  eq,
+  inArray,
+  select,
+  users,
+  worktreeOwners,
+  worktrees,
+} from '@agor/core/db';
 import type { WorktreeID } from '@agor/core/types';
 import {
   AGOR_USERS_GROUP,
@@ -300,11 +309,51 @@ export default class SyncUnix extends Command {
 
     try {
       // Connect to database
+      // When running via sudo, os.homedir() returns /root, but we need the original user's DB.
+      // Use SUDO_USER env var to resolve the correct home directory.
       let databaseUrl = process.env.DATABASE_URL;
       if (!databaseUrl) {
-        const configPath = getConfigPath();
-        const agorHome = join(configPath, '..');
+        const sudoUser = process.env.SUDO_USER;
+        let agorHome: string;
+
+        if (sudoUser) {
+          // Running under sudo - use the invoking user's home directory
+          // Try to get home directory from passwd entry
+          try {
+            const passwdEntry = execSync(`getent passwd ${sudoUser}`, {
+              encoding: 'utf-8',
+              stdio: ['pipe', 'pipe', 'ignore'],
+            }).trim();
+            const homeDir = passwdEntry.split(':')[5]; // 6th field is home directory
+            agorHome = join(homeDir, '.agor');
+          } catch {
+            // Fallback to /home/<user>/.agor if getent fails
+            agorHome = join('/home', sudoUser, '.agor');
+          }
+        } else {
+          // Not running under sudo - use current user's home
+          agorHome = join(homedir(), '.agor');
+        }
+
         const dbPath = join(agorHome, 'agor.db');
+
+        // Verify the database exists
+        if (!existsSync(dbPath)) {
+          this.log(chalk.red(`Database not found: ${dbPath}`));
+          if (sudoUser) {
+            this.log(
+              chalk.yellow(
+                `\nHint: Running as root via sudo. Expected database at ~${sudoUser}/.agor/agor.db`
+              )
+            );
+            this.log(
+              chalk.yellow('If your database is elsewhere, set DATABASE_URL environment variable:')
+            );
+            this.log(chalk.gray('  sudo DATABASE_URL=file:/path/to/agor.db agor admin sync-unix'));
+          }
+          process.exit(1);
+        }
+
         databaseUrl = `file:${dbPath}`;
       }
 
@@ -328,163 +377,176 @@ export default class SyncUnix extends Command {
       const allUsers = (await select(db).from(users).all()) as UserWithUnix[];
       const validUsers = allUsers.filter((u) => u.unix_username);
 
+      const results: SyncResult[] = [];
+
       if (validUsers.length === 0) {
         this.log(chalk.yellow('No users with unix_username found in database'));
         this.log(chalk.gray('\nTo set a unix_username for a user:'));
-        this.log(chalk.gray('  agor user update <email> --unix-username <username>'));
-        return;
-      }
+        this.log(chalk.gray('  agor user update <email> --unix-username <username>\n'));
+        // Don't return early - still need to run cleanup if requested
+      } else {
+        this.log(chalk.cyan(`Found ${validUsers.length} user(s) with unix_username\n`));
 
-      this.log(chalk.cyan(`Found ${validUsers.length} user(s) with unix_username\n`));
+        // Prefetch all worktree ownerships in a single query to avoid N+1
+        const userIds = validUsers.map((u) => u.user_id);
+        const allOwnerships = await select(db)
+          .from(worktreeOwners)
+          .innerJoin(worktrees, eq(worktreeOwners.worktree_id, worktrees.worktree_id))
+          .where(inArray(worktreeOwners.user_id, userIds))
+          .all();
 
-      const results: SyncResult[] = [];
-
-      for (const user of validUsers) {
-        const result: SyncResult = {
-          user,
-          unixUserExists: false,
-          unixUserCreated: false,
-          groups: {
-            expected: [],
-            actual: [],
-            added: [],
-            missing: [],
-          },
-          errors: [],
-        };
-
-        this.log(chalk.bold(`📋 ${user.email}`));
-        this.log(chalk.gray(`   unix_username: ${user.unix_username}`));
-        this.log(chalk.gray(`   user_id: ${user.user_id.substring(0, 8)}`));
-
-        // Check if Unix user exists
-        result.unixUserExists = this.userExists(user.unix_username);
-
-        if (result.unixUserExists) {
-          this.log(chalk.green(`   ✓ Unix user exists`));
-        } else {
-          this.log(chalk.red(`   ✗ Unix user does not exist`));
-
-          if (createUsers) {
-            this.log(chalk.yellow(`   → Creating Unix user...`));
-            if (this.createUser(user.unix_username, dryRun)) {
-              result.unixUserCreated = true;
-              result.unixUserExists = true;
-              this.log(chalk.green(`   ✓ Unix user created`));
-            } else {
-              result.errors.push('Failed to create Unix user');
-              this.log(chalk.red(`   ✗ Failed to create Unix user`));
+        // Group ownerships by user_id for O(1) lookup
+        const ownershipsByUser = new Map<string, WorktreeOwnership[]>();
+        for (const row of allOwnerships) {
+          const userId = (
+            row as {
+              worktree_owners: { user_id: string };
+              worktrees: { worktree_id: string; name: string; unix_group: string | null };
             }
-          }
+          ).worktree_owners.user_id;
+          const ownership: WorktreeOwnership = {
+            worktree_id: (row as { worktrees: { worktree_id: string } }).worktrees.worktree_id,
+            name: (row as { worktrees: { name: string } }).worktrees.name,
+            unix_group: (row as { worktrees: { unix_group: string | null } }).worktrees.unix_group,
+          };
+          const existing = ownershipsByUser.get(userId) || [];
+          existing.push(ownership);
+          ownershipsByUser.set(userId, existing);
         }
 
-        // Get current groups (only if user exists)
-        if (result.unixUserExists || dryRun) {
-          result.groups.actual = result.unixUserExists
-            ? this.getUserGroups(user.unix_username)
-            : [];
+        for (const user of validUsers) {
+          const result: SyncResult = {
+            user,
+            unixUserExists: false,
+            unixUserCreated: false,
+            groups: {
+              expected: [],
+              actual: [],
+              added: [],
+              missing: [],
+            },
+            errors: [],
+          };
 
-          if (verbose && result.groups.actual.length > 0) {
-            this.log(chalk.gray(`   Current groups: ${result.groups.actual.join(', ')}`));
-          }
+          this.log(chalk.bold(`📋 ${user.email}`));
+          this.log(chalk.gray(`   unix_username: ${user.unix_username}`));
+          this.log(chalk.gray(`   user_id: ${user.user_id.substring(0, 8)}`));
 
-          // Ensure user is in agor_users group
-          if (syncGroups && !result.groups.actual.includes(AGOR_USERS_GROUP)) {
-            this.log(chalk.yellow(`   → Adding to ${AGOR_USERS_GROUP}...`));
-            if (this.addUserToGroup(user.unix_username, AGOR_USERS_GROUP, dryRun)) {
-              result.groups.added.push(AGOR_USERS_GROUP);
-              this.log(chalk.green(`   ✓ Added to ${AGOR_USERS_GROUP}`));
-            } else {
-              result.errors.push(`Failed to add to ${AGOR_USERS_GROUP}`);
-              this.log(chalk.red(`   ✗ Failed to add to ${AGOR_USERS_GROUP}`));
+          // Check if Unix user exists
+          result.unixUserExists = this.userExists(user.unix_username);
+
+          if (result.unixUserExists) {
+            this.log(chalk.green(`   ✓ Unix user exists`));
+          } else {
+            this.log(chalk.red(`   ✗ Unix user does not exist`));
+
+            if (createUsers) {
+              this.log(chalk.yellow(`   → Creating Unix user...`));
+              if (this.createUser(user.unix_username, dryRun)) {
+                result.unixUserCreated = true;
+                result.unixUserExists = true;
+                this.log(chalk.green(`   ✓ Unix user created`));
+              } else {
+                result.errors.push('Failed to create Unix user');
+                this.log(chalk.red(`   ✗ Failed to create Unix user`));
+              }
             }
           }
 
-          // Get worktrees owned by this user
-          const ownerships = await select(db)
-            .from(worktreeOwners)
-            .innerJoin(worktrees, eq(worktreeOwners.worktree_id, worktrees.worktree_id))
-            .where(eq(worktreeOwners.user_id, user.user_id))
-            .all();
+          // Get current groups (only if user exists)
+          if (result.unixUserExists || dryRun) {
+            result.groups.actual = result.unixUserExists
+              ? this.getUserGroups(user.unix_username)
+              : [];
 
-          const ownedWorktrees: WorktreeOwnership[] = ownerships.map(
-            (row: {
-              worktrees: { worktree_id: string; name: string; unix_group: string | null };
-            }) => ({
-              worktree_id: row.worktrees.worktree_id,
-              name: row.worktrees.name,
-              unix_group: row.worktrees.unix_group,
-            })
-          );
+            if (verbose && result.groups.actual.length > 0) {
+              this.log(chalk.gray(`   Current groups: ${result.groups.actual.join(', ')}`));
+            }
 
-          if (verbose) {
-            this.log(chalk.gray(`   Owns ${ownedWorktrees.length} worktree(s)`));
-          }
+            // Ensure user is in agor_users group
+            if (syncGroups && !result.groups.actual.includes(AGOR_USERS_GROUP)) {
+              this.log(chalk.yellow(`   → Adding to ${AGOR_USERS_GROUP}...`));
+              if (this.addUserToGroup(user.unix_username, AGOR_USERS_GROUP, dryRun)) {
+                result.groups.added.push(AGOR_USERS_GROUP);
+                this.log(chalk.green(`   ✓ Added to ${AGOR_USERS_GROUP}`));
+              } else {
+                result.errors.push(`Failed to add to ${AGOR_USERS_GROUP}`);
+                this.log(chalk.red(`   ✗ Failed to add to ${AGOR_USERS_GROUP}`));
+              }
+            }
 
-          // Build expected groups from owned worktrees
-          for (const wt of ownedWorktrees) {
-            // Use existing unix_group or generate from worktree_id
-            const expectedGroup =
-              wt.unix_group || generateWorktreeGroupName(wt.worktree_id as WorktreeID);
-            result.groups.expected.push(expectedGroup);
-
-            const isInGroup = result.groups.actual.includes(expectedGroup);
-            const groupExistsOnSystem = this.groupExists(expectedGroup);
+            // Get worktrees owned by this user (from prefetched data)
+            const ownedWorktrees: WorktreeOwnership[] = ownershipsByUser.get(user.user_id) || [];
 
             if (verbose) {
-              this.log(
-                chalk.gray(
-                  `   Worktree "${wt.name}" → group ${expectedGroup} ` +
-                    `(exists: ${groupExistsOnSystem ? 'yes' : 'no'}, member: ${isInGroup ? 'yes' : 'no'})`
-                )
-              );
+              this.log(chalk.gray(`   Owns ${ownedWorktrees.length} worktree(s)`));
             }
 
-            if (!isInGroup && syncGroups) {
-              let groupReady = groupExistsOnSystem;
+            // Build expected groups from owned worktrees
+            for (const wt of ownedWorktrees) {
+              // Use existing unix_group or generate from worktree_id
+              const expectedGroup =
+                wt.unix_group || generateWorktreeGroupName(wt.worktree_id as WorktreeID);
+              result.groups.expected.push(expectedGroup);
 
-              // Create group if it doesn't exist and --create-groups is set
-              if (!groupExistsOnSystem) {
-                if (createGroups) {
-                  this.log(chalk.yellow(`   → Creating group ${expectedGroup}...`));
-                  if (this.createGroup(expectedGroup, dryRun)) {
-                    groupsCreated++;
-                    groupReady = true;
-                    this.log(chalk.green(`   ✓ Created group ${expectedGroup}`));
-                  } else {
-                    result.errors.push(`Failed to create group ${expectedGroup}`);
-                    this.log(chalk.red(`   ✗ Failed to create group ${expectedGroup}`));
-                  }
-                } else {
-                  result.groups.missing.push(expectedGroup);
-                  if (verbose) {
-                    this.log(
-                      chalk.yellow(
-                        `   ⚠ Group ${expectedGroup} does not exist (use --create-groups to create)`
-                      )
-                    );
-                  }
-                }
+              const isInGroup = result.groups.actual.includes(expectedGroup);
+              const groupExistsOnSystem = this.groupExists(expectedGroup);
+
+              if (verbose) {
+                this.log(
+                  chalk.gray(
+                    `   Worktree "${wt.name}" → group ${expectedGroup} ` +
+                      `(exists: ${groupExistsOnSystem ? 'yes' : 'no'}, member: ${isInGroup ? 'yes' : 'no'})`
+                  )
+                );
               }
 
-              // Add user to group if it exists/was created
-              if (groupReady) {
-                this.log(chalk.yellow(`   → Adding to group ${expectedGroup}...`));
-                if (this.addUserToGroup(user.unix_username, expectedGroup, dryRun)) {
-                  result.groups.added.push(expectedGroup);
-                  this.log(chalk.green(`   ✓ Added to ${expectedGroup}`));
-                } else {
-                  result.errors.push(`Failed to add to group ${expectedGroup}`);
-                  this.log(chalk.red(`   ✗ Failed to add to ${expectedGroup}`));
+              if (!isInGroup && syncGroups) {
+                let groupReady = groupExistsOnSystem;
+
+                // Create group if it doesn't exist and --create-groups is set
+                if (!groupExistsOnSystem) {
+                  if (createGroups) {
+                    this.log(chalk.yellow(`   → Creating group ${expectedGroup}...`));
+                    if (this.createGroup(expectedGroup, dryRun)) {
+                      groupsCreated++;
+                      groupReady = true;
+                      this.log(chalk.green(`   ✓ Created group ${expectedGroup}`));
+                    } else {
+                      result.errors.push(`Failed to create group ${expectedGroup}`);
+                      this.log(chalk.red(`   ✗ Failed to create group ${expectedGroup}`));
+                    }
+                  } else {
+                    result.groups.missing.push(expectedGroup);
+                    if (verbose) {
+                      this.log(
+                        chalk.yellow(
+                          `   ⚠ Group ${expectedGroup} does not exist (use --create-groups to create)`
+                        )
+                      );
+                    }
+                  }
+                }
+
+                // Add user to group if it exists/was created
+                if (groupReady) {
+                  this.log(chalk.yellow(`   → Adding to group ${expectedGroup}...`));
+                  if (this.addUserToGroup(user.unix_username, expectedGroup, dryRun)) {
+                    result.groups.added.push(expectedGroup);
+                    this.log(chalk.green(`   ✓ Added to ${expectedGroup}`));
+                  } else {
+                    result.errors.push(`Failed to add to group ${expectedGroup}`);
+                    this.log(chalk.red(`   ✗ Failed to add to ${expectedGroup}`));
+                  }
                 }
               }
             }
           }
-        }
 
-        results.push(result);
-        this.log('');
-      }
+          results.push(result);
+          this.log('');
+        }
+      } // end if (validUsers.length > 0)
 
       // ========================================
       // Cleanup Phase
