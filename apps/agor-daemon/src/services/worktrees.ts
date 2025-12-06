@@ -9,7 +9,7 @@ import { type ChildProcess, spawn } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { createUserProcessEnvironment, ENVIRONMENT } from '@agor/core/config';
+import { createUserProcessEnvironment, ENVIRONMENT, PAGINATION } from '@agor/core/config';
 import { type Database, WorktreeRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import { cleanWorktree, removeWorktree } from '@agor/core/git';
@@ -59,8 +59,8 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       id: 'worktree_id',
       resourceType: 'Worktree',
       paginate: {
-        default: 50,
-        max: 100,
+        default: PAGINATION.DEFAULT_LIMIT,
+        max: PAGINATION.MAX_LIMIT,
       },
     });
 

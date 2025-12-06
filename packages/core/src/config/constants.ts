@@ -99,16 +99,29 @@ export const DATABASE = {
    * Batch size for bulk task inserts
    */
   TASK_BATCH_SIZE: 100,
+} as const;
+
+/**
+ * Pagination Constants
+ *
+ * High limits to avoid silent truncation of results.
+ * FeathersJS pagination defaults were causing data loss when collections grew.
+ */
+export const PAGINATION = {
+  /**
+   * Default limit for services/UI - high enough to fetch "all" in practice
+   */
+  DEFAULT_LIMIT: 10_000,
 
   /**
-   * Default pagination limit
+   * Maximum allowed limit - prevents accidental DoS from unbounded queries
    */
-  DEFAULT_PAGE_SIZE: 50,
+  MAX_LIMIT: 10_000,
 
   /**
-   * Maximum pagination limit
+   * Default limit for CLI list commands - reasonable for terminal display
    */
-  MAX_PAGE_SIZE: 100,
+  CLI_DEFAULT_LIMIT: 50,
 } as const;
 
 /**

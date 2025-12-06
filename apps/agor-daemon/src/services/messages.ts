@@ -5,6 +5,7 @@
  * Uses DrizzleService adapter with MessagesRepository.
  */
 
+import { PAGINATION } from '@agor/core/config';
 import { type Database, MessagesRepository } from '@agor/core/db';
 import type { Message, Paginated, QueryParams, SessionID, TaskID } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
@@ -31,8 +32,8 @@ export class MessagesService extends DrizzleService<Message, Partial<Message>, M
       id: 'message_id',
       resourceType: 'Message',
       paginate: {
-        default: 100,
-        max: 1000, // Allow larger page size for bulk message retrieval
+        default: PAGINATION.DEFAULT_LIMIT,
+        max: PAGINATION.MAX_LIMIT,
       },
       multi: ['create', 'remove'], // Allow bulk creates and removes
     });

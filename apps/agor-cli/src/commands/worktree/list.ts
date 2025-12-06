@@ -4,6 +4,7 @@
  * Shows all worktrees, optionally filtered by repository.
  */
 
+import { PAGINATION } from '@agor/core/config';
 import { formatShortId } from '@agor/core/db';
 import type { Repo, Worktree } from '@agor/core/types';
 import { Flags } from '@oclif/core';
@@ -32,6 +33,11 @@ export default class WorktreeList extends BaseCommand {
     archived: Flags.boolean({
       description: 'Show only archived worktrees',
       default: false,
+    }),
+    limit: Flags.integer({
+      char: 'l',
+      description: 'Maximum number of worktrees to show',
+      default: PAGINATION.CLI_DEFAULT_LIMIT,
     }),
   };
 
@@ -65,19 +71,22 @@ export default class WorktreeList extends BaseCommand {
       const reposService = client.service('repos');
 
       // Fetch worktrees - optionally filtered by repo ID
+      // Use high limit to get all, then filter/limit client-side for accurate counts
       let allWorktrees: Worktree[] = [];
 
       if (flags['repo-id']) {
         // Filter by repo ID
         const worktreesResult = await worktreesService.find({
-          query: { repo_id: flags['repo-id'], $limit: 1000 },
+          query: { repo_id: flags['repo-id'], $limit: PAGINATION.DEFAULT_LIMIT },
         });
         allWorktrees = (
           Array.isArray(worktreesResult) ? worktreesResult : worktreesResult.data
         ) as Worktree[];
       } else {
         // Show all worktrees
-        const worktreesResult = await worktreesService.find({ query: { $limit: 1000 } });
+        const worktreesResult = await worktreesService.find({
+          query: { $limit: PAGINATION.DEFAULT_LIMIT },
+        });
         allWorktrees = (
           Array.isArray(worktreesResult) ? worktreesResult : worktreesResult.data
         ) as Worktree[];
@@ -91,6 +100,19 @@ export default class WorktreeList extends BaseCommand {
         // Default: show only active (not archived)
         filteredWorktrees = allWorktrees.filter((w) => !w.archived);
       }
+
+      // Sort by last_used/created_at descending (most recent first)
+      filteredWorktrees.sort((a, b) => {
+        const aDate = new Date(a.last_used || a.created_at).getTime();
+        const bDate = new Date(b.last_used || b.created_at).getTime();
+        return bDate - aDate;
+      });
+
+      // Track total before applying limit
+      const totalFiltered = filteredWorktrees.length;
+
+      // Apply display limit
+      const displayWorktrees = filteredWorktrees.slice(0, flags.limit);
 
       if (filteredWorktrees.length === 0) {
         this.log(chalk.dim('No worktrees found.'));
@@ -122,9 +144,9 @@ export default class WorktreeList extends BaseCommand {
       const sessionCounts = new Map<string, number>();
 
       try {
-        // Fetch all sessions (use high limit to get all)
+        // Fetch all sessions (use high limit to get all for accurate counts)
         const sessionsResult = await sessionsService.find({
-          query: { $limit: 10000 },
+          query: { $limit: PAGINATION.DEFAULT_LIMIT },
         });
         const allSessions = Array.isArray(sessionsResult) ? sessionsResult : sessionsResult.data;
 
@@ -154,7 +176,7 @@ export default class WorktreeList extends BaseCommand {
         colWidths: [10, 18, 18, 22, 10, 15],
       });
 
-      for (const worktree of filteredWorktrees) {
+      for (const worktree of displayWorktrees) {
         const repo = repoCache.get(worktree.repo_id);
         const sessionCount = sessionCounts.get(worktree.worktree_id) || 0;
         const nameDisplay = worktree.archived
@@ -173,7 +195,12 @@ export default class WorktreeList extends BaseCommand {
       this.log(table.toString());
       this.log('');
 
-      this.log(chalk.dim(`Showing ${filteredWorktrees.length} worktree(s)`));
+      // Show count with "of total" if limited
+      if (displayWorktrees.length < totalFiltered) {
+        this.log(chalk.dim(`Showing ${displayWorktrees.length} of ${totalFiltered} worktree(s)`));
+      } else {
+        this.log(chalk.dim(`Showing ${displayWorktrees.length} worktree(s)`));
+      }
       this.log('');
 
       // Cleanup

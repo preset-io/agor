@@ -5,6 +5,7 @@
  * Uses DrizzleService adapter with SessionRepository.
  */
 
+import { PAGINATION } from '@agor/core/config';
 import { type Database, SessionRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { Paginated, QueryParams, Session, TaskID } from '@agor/core/types';
@@ -33,8 +34,8 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
       id: 'session_id',
       resourceType: 'Session',
       paginate: {
-        default: 50,
-        max: 1000, // Increased from 100 to allow fetching more sessions
+        default: PAGINATION.DEFAULT_LIMIT,
+        max: PAGINATION.MAX_LIMIT,
       },
       multi: ['patch', 'remove'], // Allow multi-patch and multi-remove
     });

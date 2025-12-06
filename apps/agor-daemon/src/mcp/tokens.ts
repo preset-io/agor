@@ -78,39 +78,38 @@ export async function validateSessionToken(
   }
 
   // Not in memory - check database (slow path, survives daemon restarts)
-  // Use internal service call (no HTTP, but hooks may run)
+  // Query directly by mcp_token for O(1) lookup instead of loading all sessions
   try {
     const result = await app.service('sessions').find({
-      query: { $limit: 1000 }, // Get all sessions (use high limit)
+      query: { mcp_token: token, $limit: 1 },
       provider: undefined, // Internal call, bypass external-only hooks
     });
 
     const sessions = result.data || result;
+    const session = Array.isArray(sessions) && sessions.length > 0 ? sessions[0] : null;
 
-    for (const session of sessions) {
-      if (session.mcp_token === token) {
-        // Found in database - restore to memory
-        const data: SessionTokenData = {
-          userId: session.created_by as UserID,
-          sessionId: session.session_id,
-          createdAt: new Date(session.created_at).getTime(),
-        };
+    if (session) {
+      // Found in database - restore to memory
+      const data: SessionTokenData = {
+        userId: session.created_by as UserID,
+        sessionId: session.session_id,
+        createdAt: new Date(session.created_at).getTime(),
+      };
 
-        // Check if expired
-        const maxAge = 24 * 60 * 60 * 1000;
-        if (Date.now() - data.createdAt > maxAge) {
-          return null;
-        }
-
-        // Restore to memory for future fast lookups
-        tokenStore.set(token, data);
-        sessionToTokenStore.set(session.session_id, token);
-
-        console.log(
-          `♻️  Restored MCP token from database for session ${session.session_id.substring(0, 8)}`
-        );
-        return data;
+      // Check if expired
+      const maxAge = 24 * 60 * 60 * 1000;
+      if (Date.now() - data.createdAt > maxAge) {
+        return null;
       }
+
+      // Restore to memory for future fast lookups
+      tokenStore.set(token, data);
+      sessionToTokenStore.set(session.session_id, token);
+
+      console.log(
+        `♻️  Restored MCP token from database for session ${session.session_id.substring(0, 8)}`
+      );
+      return data;
     }
   } catch (error) {
     console.error('Failed to check database for token:', error);

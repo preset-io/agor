@@ -5,6 +5,7 @@
  * Uses DrizzleService adapter with BoardRepository.
  */
 
+import { PAGINATION } from '@agor/core/config';
 import { BoardRepository, type Database } from '@agor/core/db';
 import type {
   AuthenticatedParams,
@@ -39,8 +40,8 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
       id: 'board_id',
       resourceType: 'Board',
       paginate: {
-        default: 50,
-        max: 100,
+        default: PAGINATION.DEFAULT_LIMIT,
+        max: PAGINATION.MAX_LIMIT,
       },
     });
 

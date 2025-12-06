@@ -9,6 +9,7 @@ import {
   type ChildCompletionContext,
   renderChildCompletionCallback,
 } from '@agor/core/callbacks/child-completion-template';
+import { PAGINATION } from '@agor/core/config';
 import { type Database, MessagesRepository, TaskRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { Paginated, QueryParams, Session, Task } from '@agor/core/types';
@@ -37,8 +38,8 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       id: 'task_id',
       resourceType: 'Task',
       paginate: {
-        default: 100,
-        max: 500,
+        default: PAGINATION.DEFAULT_LIMIT,
+        max: PAGINATION.MAX_LIMIT,
       },
       multi: ['patch', 'remove'],
     });
@@ -58,7 +59,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
       // Apply pagination if enabled
       if (this.paginate) {
-        const limit = params.query.$limit ?? this.paginate.default ?? 100;
+        const limit = params.query.$limit ?? this.paginate.default ?? PAGINATION.DEFAULT_LIMIT;
         const skip = params.query.$skip ?? 0;
 
         return {
@@ -77,7 +78,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       const tasks = await this.taskRepo.findRunning();
 
       if (this.paginate) {
-        const limit = params.query.$limit ?? this.paginate.default ?? 100;
+        const limit = params.query.$limit ?? this.paginate.default ?? PAGINATION.DEFAULT_LIMIT;
         const skip = params.query.$skip ?? 0;
 
         return {

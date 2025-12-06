@@ -3,6 +3,7 @@
  */
 
 import type { AgorClient } from '@agor/core/api';
+import { PAGINATION } from '@agor/core/config/browser';
 import type { Message, SessionID } from '@agor/core/types';
 import { useCallback, useEffect, useState } from 'react';
 
@@ -42,7 +43,7 @@ export function useMessages(
       const result = await client.service('messages').find({
         query: {
           session_id: sessionId,
-          $limit: 1000, // Fetch up to 1000 messages
+          $limit: PAGINATION.DEFAULT_LIMIT,
           $sort: {
             index: 1, // Sort by index ascending
           },

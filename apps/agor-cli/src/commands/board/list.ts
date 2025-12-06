@@ -2,7 +2,9 @@
  * List all boards
  */
 
+import { PAGINATION } from '@agor/core/config';
 import type { Board, BoardEntityObject } from '@agor/core/types';
+import { Flags } from '@oclif/core';
 import chalk from 'chalk';
 import Table from 'cli-table3';
 import { BaseCommand } from '../../base-command';
@@ -12,28 +14,41 @@ export default class BoardList extends BaseCommand {
 
   static override examples = ['<%= config.bin %> <%= command.id %>'];
 
+  static override flags = {
+    limit: Flags.integer({
+      char: 'l',
+      description: 'Maximum number of boards to show',
+      default: PAGINATION.CLI_DEFAULT_LIMIT,
+    }),
+  };
+
   public async run(): Promise<void> {
-    await this.parse(BoardList);
+    const { flags } = await this.parse(BoardList);
     const client = await this.connectToDaemon();
 
     try {
-      // Fetch all boards (handle pagination)
-      const result = await client.service('boards').find({ query: { $limit: -1 } });
-      const boards = (Array.isArray(result) ? result : result.data) as Board[];
+      // Fetch all boards (high limit for accurate counts)
+      const result = await client
+        .service('boards')
+        .find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } });
+      const allBoards = (Array.isArray(result) ? result : result.data) as Board[];
 
-      if (boards.length === 0) {
+      if (allBoards.length === 0) {
         this.log(chalk.yellow('No boards found.'));
         await this.cleanupClient(client);
         return;
       }
 
-      // Fetch all board objects to count worktrees per board (handle pagination)
+      // Fetch all board objects to count worktrees per board
       const boardObjectsResult = await client
         .service('board-objects')
-        .find({ query: { $limit: -1 } });
+        .find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } });
       const boardObjects = (
         Array.isArray(boardObjectsResult) ? boardObjectsResult : boardObjectsResult.data
       ) as BoardEntityObject[];
+
+      // Apply display limit
+      const displayBoards = allBoards.slice(0, flags.limit);
 
       // Create table
       const table = new Table({
@@ -49,7 +64,7 @@ export default class BoardList extends BaseCommand {
       });
 
       // Add rows
-      for (const board of boards) {
+      for (const board of displayBoards) {
         const worktreeCount = boardObjects.filter((bo) => bo.board_id === board.board_id).length;
         table.push([
           board.board_id.substring(0, 8),
@@ -61,7 +76,11 @@ export default class BoardList extends BaseCommand {
       }
 
       this.log(table.toString());
-      this.log(chalk.gray(`\nTotal: ${boards.length} board(s)`));
+      if (displayBoards.length < allBoards.length) {
+        this.log(chalk.gray(`\nShowing ${displayBoards.length} of ${allBoards.length} board(s)`));
+      } else {
+        this.log(chalk.gray(`\nShowing ${displayBoards.length} board(s)`));
+      }
     } catch (error) {
       await this.cleanupClient(client);
       this.error(

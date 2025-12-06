@@ -6,6 +6,7 @@
  */
 
 import type { AgorClient } from '@agor/core/api';
+import { PAGINATION } from '@agor/core/config/browser';
 import type {
   Board,
   BoardComment,
@@ -83,17 +84,15 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       ] = await Promise.all([
         client
           .service('sessions')
-          .find({ query: { $limit: 1000, $sort: { updated_at: -1 } } }), // Fetch up to 1000 sessions, sorted by most recent
-        client.service('boards').find(),
-        client.service('board-objects').find(),
-        client
-          .service('board-comments')
-          .find({ query: { $limit: 500 } }), // Fetch up to 500 comments
-        client.service('repos').find(),
-        client.service('worktrees').find(),
-        client.service('users').find(),
-        client.service('mcp-servers').find(),
-        client.service('session-mcp-servers').find(),
+          .find({ query: { $limit: PAGINATION.DEFAULT_LIMIT, $sort: { updated_at: -1 } } }),
+        client.service('boards').find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+        client.service('board-objects').find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+        client.service('board-comments').find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+        client.service('repos').find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+        client.service('worktrees').find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+        client.service('users').find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+        client.service('mcp-servers').find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+        client.service('session-mcp-servers').find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
       ]);
 
       // Handle paginated vs array results

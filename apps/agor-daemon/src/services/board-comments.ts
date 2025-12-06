@@ -11,6 +11,7 @@
  * - Mentions and notifications (Phase 4)
  */
 
+import { PAGINATION } from '@agor/core/config';
 import { BoardCommentsRepository, type Database } from '@agor/core/db';
 import type { BoardComment, QueryParams } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
@@ -44,8 +45,8 @@ export class BoardCommentsService extends DrizzleService<
       id: 'comment_id',
       resourceType: 'BoardComment',
       paginate: {
-        default: 100,
-        max: 500,
+        default: PAGINATION.DEFAULT_LIMIT,
+        max: PAGINATION.MAX_LIMIT,
       },
     });
 
@@ -70,9 +71,9 @@ export class BoardCommentsService extends DrizzleService<
       created_by: filters.created_by,
     });
 
-    // Apply pagination if requested (default: 100)
-    const $limit = filters.$limit || 100;
-    const $skip = filters.$skip || 0;
+    // Apply pagination if requested
+    const $limit = filters.$limit ?? PAGINATION.DEFAULT_LIMIT;
+    const $skip = filters.$skip ?? 0;
     const paginated = allComments.slice($skip, $skip + $limit);
 
     // Return paginated result format expected by FeathersJS

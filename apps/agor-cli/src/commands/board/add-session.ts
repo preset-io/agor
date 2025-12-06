@@ -6,6 +6,7 @@
  * associated with that worktree.
  */
 
+import { PAGINATION } from '@agor/core/config';
 import type { Board, BoardEntityObject, Session, Worktree } from '@agor/core/types';
 import { Args } from '@oclif/core';
 import chalk from 'chalk';
@@ -36,8 +37,10 @@ export default class BoardAddSession extends BaseCommand {
     const client = await this.connectToDaemon();
 
     try {
-      // Find board by ID or slug (fetch all boards)
-      const boardsResult = await client.service('boards').find({ query: { $limit: -1 } });
+      // Find board by ID or slug
+      const boardsResult = await client
+        .service('boards')
+        .find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } });
       const boards = (Array.isArray(boardsResult) ? boardsResult : boardsResult.data) as Board[];
 
       const board = boards.find(
@@ -52,8 +55,10 @@ export default class BoardAddSession extends BaseCommand {
         this.error(`Board not found: ${args.boardId}`);
       }
 
-      // Find session by short or full ID (fetch all sessions)
-      const sessionsResult = await client.service('sessions').find({ query: { $limit: -1 } });
+      // Find session by short or full ID
+      const sessionsResult = await client
+        .service('sessions')
+        .find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } });
       const sessions = (
         Array.isArray(sessionsResult) ? sessionsResult : sessionsResult.data
       ) as Session[];
@@ -73,7 +78,9 @@ export default class BoardAddSession extends BaseCommand {
         this.error('Session has no worktree associated');
       }
 
-      const worktreesResult = await client.service('worktrees').find({ query: { $limit: -1 } });
+      const worktreesResult = await client
+        .service('worktrees')
+        .find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } });
       const worktrees = (
         Array.isArray(worktreesResult) ? worktreesResult : worktreesResult.data
       ) as Worktree[];

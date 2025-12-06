@@ -6,6 +6,7 @@
  */
 
 import type { AgorClient } from '@agor/core/api';
+import { PAGINATION } from '@agor/core/config/browser';
 import type { Message, TaskID } from '@agor/core/types';
 import { useCallback, useEffect, useState } from 'react';
 import { flushSync } from 'react-dom';
@@ -48,7 +49,7 @@ export function useTaskMessages(
       const result = await client.service('messages').find({
         query: {
           task_id: taskId,
-          $limit: 10000, // High limit to fetch all messages for this task
+          $limit: PAGINATION.DEFAULT_LIMIT,
           $sort: {
             index: 1, // Sort by index ascending
           },

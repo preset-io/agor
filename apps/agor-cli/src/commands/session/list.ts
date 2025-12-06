@@ -4,6 +4,7 @@
  * Displays sessions in a beautiful table with filters.
  */
 
+import { PAGINATION } from '@agor/core/config';
 import { formatShortId } from '@agor/core/db';
 import type { Session } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
@@ -53,7 +54,7 @@ export default class SessionList extends BaseCommand {
     limit: Flags.integer({
       char: 'l',
       description: 'Maximum number of sessions to show',
-      default: 50,
+      default: PAGINATION.CLI_DEFAULT_LIMIT,
     }),
   };
 

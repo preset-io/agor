@@ -4,6 +4,7 @@
  * Displays repositories in a beautiful table.
  */
 
+import { PAGINATION } from '@agor/core/config';
 import { formatShortId } from '@agor/core/db';
 import type { Repo } from '@agor/core/types';
 import { Flags } from '@oclif/core';
@@ -28,7 +29,7 @@ export default class RepoList extends BaseCommand {
     limit: Flags.integer({
       char: 'l',
       description: 'Maximum number of repos to show',
-      default: 50,
+      default: PAGINATION.CLI_DEFAULT_LIMIT,
     }),
   };
 

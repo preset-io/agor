@@ -5,6 +5,7 @@
  * Uses DrizzleService adapter with MCPServerRepository.
  */
 
+import { PAGINATION } from '@agor/core/config';
 import { type Database, MCPServerRepository } from '@agor/core/db';
 import type {
   CreateMCPServerInput,
@@ -46,8 +47,8 @@ export class MCPServersService extends DrizzleService<
       id: 'mcp_server_id',
       resourceType: 'McpServer',
       paginate: {
-        default: 50,
-        max: 100,
+        default: PAGINATION.DEFAULT_LIMIT,
+        max: PAGINATION.MAX_LIMIT,
       },
     });
 

@@ -11,6 +11,7 @@ import {
   extractSlugFromUrl,
   isValidGitUrl,
   isValidSlug,
+  PAGINATION,
   parseAgorYml,
   resolveUserEnvironment,
   writeAgorYml,
@@ -100,8 +101,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       id: 'repo_id',
       resourceType: 'Repo',
       paginate: {
-        default: 50,
-        max: 100,
+        default: PAGINATION.DEFAULT_LIMIT,
+        max: PAGINATION.MAX_LIMIT,
       },
     });
 
