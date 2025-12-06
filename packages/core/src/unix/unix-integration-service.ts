@@ -442,6 +442,9 @@ export class UnixIntegrationService {
   /**
    * Sync user password to Unix (if enabled in config)
    *
+   * SECURITY: Password is passed via stdin to chpasswd, NOT as command-line argument.
+   * This prevents command injection and password exposure in process listings.
+   *
    * Only syncs when:
    * - Unix integration is enabled
    * - sync_unix_passwords config is true (default)
@@ -470,8 +473,10 @@ export class UnixIntegrationService {
     }
 
     try {
-      const cmd = UnixUserCommands.setPassword(user.unix_username, plaintextPassword);
-      await this.executor.exec(cmd);
+      // SECURITY: Use execWithInput to pass password via stdin, not command line
+      const cmd = UnixUserCommands.setPasswordCommand();
+      const input = UnixUserCommands.formatPasswordInput(user.unix_username, plaintextPassword);
+      await this.executor.execWithInput(cmd, { input });
       console.log(`[UnixIntegration] Synced password for ${user.unix_username}`);
     } catch (error) {
       console.error(`[UnixIntegration] Failed to sync password for ${user.unix_username}:`, error);

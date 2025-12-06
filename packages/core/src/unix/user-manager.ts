@@ -156,20 +156,37 @@ export const UnixUserCommands = {
   deleteUser: (username: string) => `userdel "${username}"`,
 
   /**
-   * Set Unix user password (non-interactive via chpasswd)
+   * Get command array for setting Unix user password via chpasswd
    *
-   * SECURITY: Password is passed via stdin to avoid command-line exposure.
-   * Format: "username:password" piped to chpasswd
+   * SECURITY: This returns a command array to be used with execWithInput().
+   * The password MUST be passed via stdin (not command-line arguments) to avoid:
+   * 1. Command injection vulnerabilities (shell metacharacters in password)
+   * 2. Password exposure in process listings (ps aux)
+   * 3. Password exposure in shell history
+   *
+   * Format for stdin: "username:password\n"
+   *
+   * @returns Command array for execWithInput: ['chpasswd']
+   *
+   * @example
+   * ```ts
+   * const cmd = UnixUserCommands.setPasswordCommand();
+   * await executor.execWithInput(cmd, { input: `${username}:${password}\n` });
+   * ```
+   */
+  setPasswordCommand: (): string[] => {
+    return ['chpasswd'];
+  },
+
+  /**
+   * Format stdin input for chpasswd command
    *
    * @param username - Unix username
    * @param password - Plaintext password to set
-   * @returns Command string
+   * @returns Formatted stdin input: "username:password\n"
    */
-  setPassword: (username: string, password: string): string => {
-    // Use printf instead of echo to handle special characters safely
-    // chpasswd reads from stdin in format "username:password"
-    // Use %s placeholders to avoid shell interpretation of special chars
-    return `printf '%s:%s' "${username}" "${password}" | chpasswd`;
+  formatPasswordInput: (username: string, password: string): string => {
+    return `${username}:${password}\n`;
   },
 
   /**

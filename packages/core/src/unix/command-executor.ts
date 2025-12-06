@@ -9,10 +9,55 @@
  * @see context/guides/rbac-and-unix-isolation.md
  */
 
-import { exec, execSync } from 'node:child_process';
+import { exec, execSync, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execAsync = promisify(exec);
+
+/**
+ * Execute a command with stdin input using spawn
+ *
+ * @param cmd - Command to execute
+ * @param args - Command arguments
+ * @param input - Data to write to stdin
+ * @returns Promise with stdout, stderr, and exit code
+ */
+function spawnWithInput(
+  cmd: string,
+  args: string[],
+  input: string
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (data: Buffer) => {
+      stdout += data.toString();
+    });
+
+    child.stderr.on('data', (data: Buffer) => {
+      stderr += data.toString();
+    });
+
+    child.on('error', reject);
+
+    child.on('close', (code: number | null) => {
+      resolve({
+        stdout,
+        stderr,
+        exitCode: code ?? 1,
+      });
+    });
+
+    // Write input to stdin and close it
+    child.stdin.write(input);
+    child.stdin.end();
+  });
+}
 
 /**
  * Result of command execution
@@ -21,6 +66,14 @@ export interface CommandResult {
   stdout: string;
   stderr: string;
   exitCode: number;
+}
+
+/**
+ * Options for command execution with stdin input
+ */
+export interface ExecWithInputOptions {
+  /** Data to write to stdin */
+  input: string;
 }
 
 /**
@@ -37,6 +90,20 @@ export interface CommandExecutor {
    * @throws Error if command fails (non-zero exit)
    */
   exec(command: string): Promise<CommandResult>;
+
+  /**
+   * Execute a command with stdin input
+   *
+   * SECURITY: Use this for passing sensitive data (passwords, secrets) to commands.
+   * Data is passed via stdin, NOT as command-line arguments, so it won't be
+   * visible in process listings (ps) or shell history.
+   *
+   * @param command - Shell command to execute (as array for execFile)
+   * @param options - Options including stdin input
+   * @returns Command result with stdout, stderr, and exit code
+   * @throws Error if command fails (non-zero exit)
+   */
+  execWithInput(command: string[], options: ExecWithInputOptions): Promise<CommandResult>;
 
   /**
    * Execute a command synchronously
@@ -77,6 +144,20 @@ export class DirectExecutor implements CommandExecutor {
     }
   }
 
+  async execWithInput(command: string[], options: ExecWithInputOptions): Promise<CommandResult> {
+    try {
+      const [cmd, ...args] = command;
+      return await spawnWithInput(cmd, args, options.input);
+    } catch (error: unknown) {
+      const err = error as { stdout?: string; stderr?: string; code?: number; message?: string };
+      return {
+        stdout: err.stdout || '',
+        stderr: err.stderr || err.message || '',
+        exitCode: err.code || 1,
+      };
+    }
+  }
+
   execSync(command: string): string {
     return execSync(command, { encoding: 'utf-8' });
   }
@@ -110,6 +191,25 @@ export class SudoDirectExecutor implements CommandExecutor {
     } catch (error: unknown) {
       const err = error as { stdout?: string; stderr?: string; code?: number; message?: string };
       console.error(`[SudoDirectExecutor] Command failed: ${sudoCommand}`, err.message);
+      return {
+        stdout: err.stdout || '',
+        stderr: err.stderr || err.message || '',
+        exitCode: err.code || 1,
+      };
+    }
+  }
+
+  async execWithInput(command: string[], options: ExecWithInputOptions): Promise<CommandResult> {
+    // Prepend 'sudo' and '-n' to the command array
+    const sudoCommand = ['sudo', '-n', ...command];
+    const cmdStr = sudoCommand.join(' ');
+    console.log(`[SudoDirectExecutor] Executing with input: ${cmdStr}`);
+    try {
+      const [cmd, ...args] = sudoCommand;
+      return await spawnWithInput(cmd, args, options.input);
+    } catch (error: unknown) {
+      const err = error as { stdout?: string; stderr?: string; code?: number; message?: string };
+      console.error(`[SudoDirectExecutor] Command with input failed: ${cmdStr}`, err.message);
       return {
         stdout: err.stdout || '',
         stderr: err.stderr || err.message || '',
@@ -195,6 +295,15 @@ export class SudoCliExecutor implements CommandExecutor {
     }
   }
 
+  async execWithInput(_command: string[], _options: ExecWithInputOptions): Promise<CommandResult> {
+    // SudoCliExecutor routes through CLI admin commands, which don't support stdin input.
+    // Password sync should use DirectExecutor or SudoDirectExecutor instead.
+    throw new Error(
+      'execWithInput is not supported by SudoCliExecutor. ' +
+        'Use DirectExecutor or SudoDirectExecutor for commands requiring stdin input.'
+    );
+  }
+
   execSync(command: string): string {
     const fullCommand = this.buildCommand(command);
     console.log(`[SudoCliExecutor] Executing (sync): ${fullCommand}`);
@@ -215,6 +324,11 @@ export class SudoCliExecutor implements CommandExecutor {
 export class NoOpExecutor implements CommandExecutor {
   async exec(command: string): Promise<CommandResult> {
     console.log(`[NoOpExecutor] Would execute: ${command}`);
+    return { stdout: '', stderr: '', exitCode: 0 };
+  }
+
+  async execWithInput(command: string[], _options: ExecWithInputOptions): Promise<CommandResult> {
+    console.log(`[NoOpExecutor] Would execute with input: ${command.join(' ')}`);
     return { stdout: '', stderr: '', exitCode: 0 };
   }
 
