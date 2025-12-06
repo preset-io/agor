@@ -175,6 +175,7 @@ export function createCanUseToolCallback(
         content_preview: `Permission required: ${toolName}`,
         content: {
           request_id: requestId,
+          task_id: taskId, // Required for daemon to route permission_resolved event back to executor
           tool_name: toolName,
           tool_input: toolInput,
           tool_use_id: undefined,

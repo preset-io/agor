@@ -102,6 +102,7 @@ import type {
   Message,
   Paginated,
   Params,
+  PermissionRequestContent,
   Session,
   SessionID,
   Task,
@@ -3736,7 +3737,8 @@ async function main() {
 
         const messageList = isPaginated(messages) ? messages.data : messages;
         const permissionMessage = messageList.find((msg: Message) => {
-          const content = msg.content as unknown as Record<string, unknown>;
+          // Type-safe access to permission request content
+          const content = msg.content as PermissionRequestContent;
           return content?.request_id === data.requestId;
         });
 
@@ -3744,11 +3746,28 @@ async function main() {
           throw new Error(`Permission request ${data.requestId} not found`);
         }
 
+        // Type-safe access to permission content
+        const permissionContent = permissionMessage.content as PermissionRequestContent;
+
+        // Resolve task_id with fallback for backward compatibility:
+        // 1. Try content.task_id (new messages)
+        // 2. Fall back to message.task_id (legacy messages or if content was missing it)
+        const resolvedTaskId = permissionContent.task_id || permissionMessage.task_id;
+
+        if (!resolvedTaskId) {
+          console.error(
+            `❌ [Permission] Cannot resolve permission: task_id missing from both content and message. requestId=${data.requestId}`
+          );
+          throw new Error(
+            'Cannot process permission decision: task_id is missing. This permission request may be corrupted.'
+          );
+        }
+
         // Update the message to mark it as approved/denied
         // This triggers the messages.patch hook which notifies the executor via IPC (legacy mode)
         await messagesService.patch(permissionMessage.message_id, {
           content: {
-            ...(permissionMessage.content as object),
+            ...permissionContent,
             status: data.allow ? 'approved' : 'denied',
             scope: data.scope,
             approved_by: data.decidedBy,
@@ -3761,12 +3780,11 @@ async function main() {
 
         // Emit permission_resolved event for Feathers/WebSocket executor architecture
         // IMPORTANT: Use camelCase property names to match executor's expectations
-        const content = permissionMessage.content as unknown as Record<string, unknown>;
         app.service('messages').emit('permission_resolved', {
-          requestId: data.requestId, // camelCase
-          taskId: content.task_id as string, // camelCase
-          sessionId: id, // camelCase (for consistency, though not used by executor)
-          allow: data.allow, // Correct property name (not "approved")
+          requestId: data.requestId,
+          taskId: resolvedTaskId, // Use resolved task_id with fallback for backward compat
+          sessionId: id,
+          allow: data.allow,
           reason: data.reason,
           remember: data.remember,
           scope: data.scope,

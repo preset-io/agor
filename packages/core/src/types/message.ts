@@ -82,6 +82,7 @@ export enum PermissionStatus {
  */
 export interface PermissionRequestContent {
   request_id: string;
+  task_id?: TaskID; // Required for daemon to route permission_resolved event back to executor (optional for backward compat with legacy messages)
   tool_name: string;
   tool_input: Record<string, unknown>;
   tool_use_id?: string;
