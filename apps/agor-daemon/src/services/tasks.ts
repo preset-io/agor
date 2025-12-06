@@ -178,29 +178,27 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
           if (session.genealogy?.parent_session_id) {
             await this.queueParentCallback(task, session, params);
 
-            // CRITICAL FIX: After queuing callback to parent, trigger parent's queue processing
-            // if parent is idle. This ensures callbacks don't sit in the queue forever.
-            // IMPORTANT: Isolated in try/catch so parent failures don't break child queue processing
+            // CRITICAL: After queuing callback to parent, ALWAYS trigger parent's queue processing.
+            // The queue processor uses a promise-based lock that will:
+            // - If parent is busy: wait for current processing, then retry (self-healing)
+            // - If parent is idle: immediately process the callback
+            // - If parent becomes idle while waiting: the retry will catch it
+            //
+            // DO NOT check parent status before triggering - let the queue processor handle it.
+            // This ensures callbacks are never missed due to timing issues.
             try {
               // biome-ignore lint/suspicious/noExplicitAny: Service type casting required for custom method access
               const sessionsService = this.app.service('sessions') as any;
               if (sessionsService.triggerQueueProcessing) {
-                // Get parent session to check if it's idle
-                // NOTE: Don't pass params here - we fetch parent without child's auth context
-                const parentSession = await this.app
-                  .service('sessions')
-                  .get(session.genealogy.parent_session_id);
-                if (parentSession.status === 'idle' && parentSession.ready_for_prompt) {
-                  console.log(
-                    `🔄 [TasksService] Triggering parent queue processing for ${parentSession.session_id.substring(0, 8)} (callback queued)`
-                  );
-                  // Pass empty params to avoid leaking child's auth context to parent
-                  // The queue processor will reconstruct parent auth from queued message metadata
-                  await sessionsService.triggerQueueProcessing(
-                    session.genealogy.parent_session_id,
-                    {}
-                  );
-                }
+                console.log(
+                  `🔄 [TasksService] Triggering parent queue processing for ${session.genealogy.parent_session_id.substring(0, 8)} (callback queued)`
+                );
+                // Pass empty params to avoid leaking child's auth context to parent
+                // The queue processor will reconstruct parent auth from queued message metadata
+                await sessionsService.triggerQueueProcessing(
+                  session.genealogy.parent_session_id,
+                  {}
+                );
               }
             } catch (error) {
               // Don't throw - parent issues shouldn't break child queue processing
