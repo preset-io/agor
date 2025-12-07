@@ -33,7 +33,7 @@ export default class CreateSymlink extends Command {
       required: true,
     }),
     'worktree-name': Flags.string({
-      char: 'n',
+      char: 'w',
       description: 'Worktree name/slug (symlink name)',
       required: true,
     }),

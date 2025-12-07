@@ -491,6 +491,69 @@ export class LoggingExecutor implements CommandExecutor {
 }
 
 /**
+ * Error thrown when a command fails (non-zero exit code)
+ */
+export class CommandError extends Error {
+  readonly result: CommandResult;
+  readonly command: string;
+
+  constructor(command: string, result: CommandResult) {
+    const msg = result.stderr.trim() || `Command failed with exit code ${result.exitCode}`;
+    super(msg);
+    this.name = 'CommandError';
+    this.command = command;
+    this.result = result;
+  }
+}
+
+/**
+ * Throwing executor wrapper
+ *
+ * Wraps any executor to throw on non-zero exit codes.
+ * This enforces the CommandExecutor interface contract that failures throw.
+ */
+export class ThrowingExecutor implements CommandExecutor {
+  private delegate: CommandExecutor;
+
+  constructor(delegate: CommandExecutor) {
+    this.delegate = delegate;
+  }
+
+  async exec(command: string): Promise<CommandResult> {
+    const result = await this.delegate.exec(command);
+    if (result.exitCode !== 0) {
+      throw new CommandError(command, result);
+    }
+    return result;
+  }
+
+  async execAll(commands: string[]): Promise<CommandResult> {
+    const result = await this.delegate.execAll(commands);
+    if (result.exitCode !== 0) {
+      throw new CommandError(commands.join(' && '), result);
+    }
+    return result;
+  }
+
+  async execWithInput(command: string[], options: ExecWithInputOptions): Promise<CommandResult> {
+    const result = await this.delegate.execWithInput(command, options);
+    if (result.exitCode !== 0) {
+      throw new CommandError(command.join(' '), result);
+    }
+    return result;
+  }
+
+  execSync(command: string): string {
+    // execSync already throws on failure
+    return this.delegate.execSync(command);
+  }
+
+  async check(command: string): Promise<boolean> {
+    return this.delegate.check(command);
+  }
+}
+
+/**
  * Dry-run executor wrapper
  *
  * Wraps any executor to provide dry-run functionality.
@@ -616,6 +679,7 @@ export function createExecutor(
  *
  * This is a convenience function for CLI commands that provides:
  * - Direct execution (CLI runs as root via sudo)
+ * - Throws on command failure (non-zero exit code)
  * - Dry-run support via --dry-run flag
  * - Verbose logging via --verbose flag
  *
@@ -624,9 +688,19 @@ export function createExecutor(
 export function createAdminExecutor(
   flags: { 'dry-run'?: boolean; verbose?: boolean } = {}
 ): CommandExecutor {
-  return createExecutor('direct', {
-    dryRun: flags['dry-run'],
-    verbose: flags.verbose,
-    logPrefix: 'Admin',
-  });
+  let executor: CommandExecutor = new DirectExecutor();
+
+  // Wrap with ThrowingExecutor to enforce failure handling
+  executor = new ThrowingExecutor(executor);
+
+  // Wrap with dry-run if requested
+  if (flags['dry-run']) {
+    executor = new DryRunExecutor(executor, { prefix: 'Admin' });
+  }
+  // Wrap with logging if verbose (and not already dry-run which logs anyway)
+  else if (flags.verbose) {
+    executor = new LoggingExecutor(executor, { prefix: 'Admin', verbose: true });
+  }
+
+  return executor;
 }

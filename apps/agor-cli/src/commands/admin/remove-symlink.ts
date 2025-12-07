@@ -33,7 +33,7 @@ export default class RemoveSymlink extends Command {
       required: true,
     }),
     'worktree-name': Flags.string({
-      char: 'n',
+      char: 'w',
       description: 'Worktree name/slug (symlink name)',
       required: true,
     }),
@@ -42,7 +42,7 @@ export default class RemoveSymlink extends Command {
       default: AGOR_HOME_BASE,
     }),
     'dry-run': Flags.boolean({
-      char: 'd',
+      char: 'n',
       description: 'Show what would be done without making changes',
       default: false,
     }),

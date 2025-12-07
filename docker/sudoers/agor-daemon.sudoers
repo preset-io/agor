@@ -71,28 +71,50 @@ agor ALL=(ALL) NOPASSWD: /usr/sbin/groupdel *
 agor ALL=(ALL) NOPASSWD: /usr/sbin/gpasswd *
 
 # ============================================================================
-# FILESYSTEM OPERATIONS - Worktree Permissions
+# FILESYSTEM OPERATIONS - Worktree Permissions (SCOPED TO AGOR PATHS)
 # ============================================================================
 # These commands set ownership and permissions on worktree directories.
 # Used when:
 # - Creating worktrees (set owner/group)
 # - Adding/removing users from worktrees (update group membership)
 # - Creating symlinks in user home directories
+#
+# SECURITY: All filesystem operations are scoped to Agor-managed paths only:
+# - /home/*/agor/* - User worktree symlinks and config
+# - /home/*/.agor/* - Agor data directories (worktrees, repos)
+# - /var/agor/* - Optional shared Agor data directory
+#
+# Wildcards are constrained to prevent arbitrary filesystem access.
 
-agor ALL=(ALL) NOPASSWD: /usr/bin/chown *
-agor ALL=(ALL) NOPASSWD: /usr/bin/chgrp *
-agor ALL=(ALL) NOPASSWD: /usr/bin/chmod *
-agor ALL=(ALL) NOPASSWD: /usr/bin/mkdir *
-agor ALL=(ALL) NOPASSWD: /usr/bin/ln *
-agor ALL=(ALL) NOPASSWD: /usr/bin/rm *
+# User home directory operations (symlinks, user config)
+agor ALL=(ALL) NOPASSWD: /usr/bin/chown * /home/*/agor/*
+agor ALL=(ALL) NOPASSWD: /usr/bin/chown * /home/*/.agor/*
+agor ALL=(ALL) NOPASSWD: /usr/bin/chgrp * /home/*/agor/*
+agor ALL=(ALL) NOPASSWD: /usr/bin/chgrp * /home/*/.agor/*
+agor ALL=(ALL) NOPASSWD: /usr/bin/chmod * /home/*/agor/*
+agor ALL=(ALL) NOPASSWD: /usr/bin/chmod * /home/*/.agor/*
+agor ALL=(ALL) NOPASSWD: /usr/bin/mkdir -p /home/*/agor/*
+agor ALL=(ALL) NOPASSWD: /usr/bin/mkdir -p /home/*/.agor/*
+agor ALL=(ALL) NOPASSWD: /usr/bin/ln -sfn * /home/*/agor/worktrees/*
+agor ALL=(ALL) NOPASSWD: /usr/bin/rm -f /home/*/agor/worktrees/*
+
+# Optional: /var/agor for shared worktree storage
+agor ALL=(ALL) NOPASSWD: /usr/bin/chown * /var/agor/*
+agor ALL=(ALL) NOPASSWD: /usr/bin/chgrp * /var/agor/*
+agor ALL=(ALL) NOPASSWD: /usr/bin/chmod * /var/agor/*
+agor ALL=(ALL) NOPASSWD: /usr/bin/mkdir -p /var/agor/*
 
 # ============================================================================
-# FILE CONTENT - Writing Config Files
+# FILE CONTENT - Writing Config Files (SCOPED TO AGOR PATHS)
 # ============================================================================
 # Used to write configuration files (e.g., zellij config).
 # Content is passed via stdin (safe from command injection).
+#
+# SECURITY: Scoped to Agor directories only.
 
-agor ALL=(ALL) NOPASSWD: /usr/bin/tee *
+agor ALL=(ALL) NOPASSWD: /usr/bin/tee /home/*/agor/*
+agor ALL=(ALL) NOPASSWD: /usr/bin/tee /home/*/.agor/*
+agor ALL=(ALL) NOPASSWD: /usr/bin/tee /var/agor/*
 
 # ============================================================================
 # QUERY COMMANDS - Read-Only Operations
@@ -114,7 +136,10 @@ agor ALL=(ALL) NOPASSWD: /usr/bin/find *
 #
 # DEFENSE IN DEPTH:
 #   1. App Layer - Agor API validates permissions before any sudo call
-#   2. Sudoers Layer - Commands restricted to specific patterns
+#   2. Sudoers Layer - Commands restricted to specific Agor paths:
+#      - /home/*/agor/* and /home/*/.agor/* for user data
+#      - /var/agor/* for shared storage
+#      - User/group management tools for Agor users only
 #   3. OS Layer - Unix permissions prevent unauthorized filesystem access
 #   4. Audit Layer - All sudo operations logged to /var/log/auth.log
 #
