@@ -268,32 +268,37 @@ describe('user-manager', () => {
     });
 
     describe('createOwnedDirectory', () => {
-      it('generates mkdir + chown + chmod command', () => {
-        const cmd = UnixUserCommands.createOwnedDirectory('/data/project', 'alice');
-        expect(cmd).toBe(
-          `sh -c 'mkdir -p "/data/project" && chown "alice:alice" "/data/project" && chmod 755 "/data/project"'`
-        );
+      it('returns array of mkdir + chown + chmod commands', () => {
+        const cmds = UnixUserCommands.createOwnedDirectory('/data/project', 'alice');
+        expect(cmds).toEqual([
+          'mkdir -p "/data/project"',
+          'chown "alice:alice" "/data/project"',
+          'chmod 755 "/data/project"',
+        ]);
       });
 
       it('uses custom group and mode', () => {
-        const cmd = UnixUserCommands.createOwnedDirectory(
+        const cmds = UnixUserCommands.createOwnedDirectory(
           '/data/shared',
           'alice',
           'developers',
           '775'
         );
-        expect(cmd).toBe(
-          `sh -c 'mkdir -p "/data/shared" && chown "alice:developers" "/data/shared" && chmod 775 "/data/shared"'`
-        );
+        expect(cmds).toEqual([
+          'mkdir -p "/data/shared"',
+          'chown "alice:developers" "/data/shared"',
+          'chmod 775 "/data/shared"',
+        ]);
       });
     });
 
     describe('setupWorktreesDir', () => {
-      it('generates directory setup command', () => {
-        const cmd = UnixUserCommands.setupWorktreesDir('alice');
-        expect(cmd).toBe(
-          `sh -c 'mkdir -p "/home/alice/agor/worktrees" && chown -R "alice:alice" "/home/alice/agor"'`
-        );
+      it('returns array of directory setup commands', () => {
+        const cmds = UnixUserCommands.setupWorktreesDir('alice');
+        expect(cmds).toEqual([
+          'mkdir -p "/home/alice/agor/worktrees"',
+          'chown -R "alice:alice" "/home/alice/agor"',
+        ]);
       });
     });
   });

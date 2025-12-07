@@ -344,7 +344,7 @@ export class UnixIntegrationService {
       `[UnixIntegration] Setting permissions ${permissionMode} for ${worktreePath} (group: ${worktree.unix_group})`
     );
 
-    await this.executor.exec(
+    await this.executor.execAll(
       UnixGroupCommands.setDirectoryGroup(worktreePath, worktree.unix_group, permissionMode)
     );
   }
@@ -415,7 +415,7 @@ export class UnixIntegrationService {
       );
 
       // Setup ~/agor/worktrees directory
-      await this.executor.exec(
+      await this.executor.execAll(
         UnixUserCommands.setupWorktreesDir(unixUsername, this.config.homeBase)
       );
     } else {
@@ -425,7 +425,7 @@ export class UnixIntegrationService {
       const worktreesDir = getUserWorktreesDir(unixUsername, this.config.homeBase);
       const dirExists = await this.executor.check(SymlinkCommands.pathExists(worktreesDir));
       if (!dirExists) {
-        await this.executor.exec(
+        await this.executor.execAll(
           UnixUserCommands.setupWorktreesDir(unixUsername, this.config.homeBase)
         );
       }
@@ -513,16 +513,21 @@ export class UnixIntegrationService {
     console.log(`[UnixIntegration] Preparing home directory for ${unixUsername}`);
 
     // Create ~/.config/zellij directory with proper ownership
-    await this.executor.exec(
+    await this.executor.execAll(
       UnixUserCommands.createOwnedDirectory(zellijConfigDir, unixUsername, unixUsername, '755')
     );
 
-    // Write Zellij config file using base64 encoding to safely pass content
-    // This avoids shell escaping issues with quotes, newlines, etc.
-    const configBase64 = Buffer.from(AGOR_ZELLIJ_CONFIG).toString('base64');
-    const writeConfigCmd = `sh -c 'echo "${configBase64}" | base64 -d > "${zellijConfigPath}" && chown "${unixUsername}:${unixUsername}" "${zellijConfigPath}" && chmod 644 "${zellijConfigPath}"'`;
-
-    await this.executor.exec(writeConfigCmd);
+    // Write Zellij config file
+    // Use tee with stdin to write the file content, avoiding shell escaping issues
+    // The execWithInput method passes data via stdin (safe from command injection)
+    await this.executor.execWithInput(['tee', zellijConfigPath], {
+      input: AGOR_ZELLIJ_CONFIG,
+    });
+    // Set ownership and permissions
+    await this.executor.execAll([
+      `chown "${unixUsername}:${unixUsername}" "${zellijConfigPath}"`,
+      `chmod 644 "${zellijConfigPath}"`,
+    ]);
 
     console.log(`[UnixIntegration] Created Zellij config at ${zellijConfigPath}`);
   }
@@ -625,7 +630,7 @@ export class UnixIntegrationService {
 
     console.log(`[UnixIntegration] Creating symlink: ${linkPath} -> ${worktree.path}`);
 
-    await this.executor.exec(
+    await this.executor.execAll(
       SymlinkCommands.createSymlinkWithOwnership(worktree.path, linkPath, user.unix_username)
     );
   }

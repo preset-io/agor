@@ -9,9 +9,9 @@
  * @see context/guides/rbac-and-unix-isolation.md
  */
 
-import { execSync } from 'node:child_process';
 import {
   AGOR_HOME_BASE,
+  createAdminExecutor,
   getWorktreeSymlinkPath,
   isValidUnixUsername,
   SymlinkCommands,
@@ -23,6 +23,7 @@ export default class CreateSymlink extends Command {
 
   static override examples = [
     '<%= config.bin %> <%= command.id %> --username alice --worktree-name my-feature --worktree-path /var/agor/worktrees/abc123',
+    '<%= config.bin %> <%= command.id %> --username alice --worktree-name my-feature --worktree-path /var/agor/worktrees/abc123 --dry-run',
   ];
 
   static override flags = {
@@ -45,14 +46,32 @@ export default class CreateSymlink extends Command {
       description: 'Base directory for home directories',
       default: AGOR_HOME_BASE,
     }),
+    'dry-run': Flags.boolean({
+      char: 'n',
+      description: 'Show what would be done without making changes',
+      default: false,
+    }),
+    verbose: Flags.boolean({
+      char: 'v',
+      description: 'Show detailed output including command stdout/stderr',
+      default: false,
+    }),
   };
 
   public async run(): Promise<void> {
     const { flags } = await this.parse(CreateSymlink);
-    const { username } = flags;
+    const { username, verbose } = flags;
     const worktreeName = flags['worktree-name'];
     const worktreePath = flags['worktree-path'];
     const homeBase = flags['home-base'];
+    const dryRun = flags['dry-run'];
+
+    // Create executor with dry-run and verbose support
+    const executor = createAdminExecutor({ 'dry-run': dryRun, verbose });
+
+    if (dryRun) {
+      this.log('🔍 Dry run mode - no changes will be made\n');
+    }
 
     // Validate username
     if (!isValidUnixUsername(username)) {
@@ -68,9 +87,8 @@ export default class CreateSymlink extends Command {
 
     // Check if symlink already exists and points to same target
     try {
-      const existingTarget = execSync(SymlinkCommands.readSymlink(linkPath), {
-        encoding: 'utf-8',
-      }).trim();
+      const result = await executor.exec(SymlinkCommands.readSymlink(linkPath));
+      const existingTarget = result.stdout.trim();
 
       if (existingTarget === worktreePath) {
         this.log(`✅ Symlink already exists: ${linkPath} -> ${worktreePath}`);
@@ -84,9 +102,9 @@ export default class CreateSymlink extends Command {
 
     // Create symlink with proper ownership
     try {
-      execSync(SymlinkCommands.createSymlinkWithOwnership(worktreePath, linkPath, username), {
-        stdio: 'inherit',
-      });
+      await executor.execAll(
+        SymlinkCommands.createSymlinkWithOwnership(worktreePath, linkPath, username)
+      );
       this.log(`✅ Created symlink: ${linkPath} -> ${worktreePath}`);
     } catch (error) {
       this.error(`Failed to create symlink: ${error}`);

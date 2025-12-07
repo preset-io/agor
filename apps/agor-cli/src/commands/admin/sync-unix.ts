@@ -619,9 +619,14 @@ export default class SyncUnix extends Command {
               this.log('');
             } else {
               try {
-                // Use the same command structure as UnixGroupCommands.setDirectoryGroup
-                const cmd = `sh -c 'chgrp -R ${rawWorktree.unix_group} "${worktreePath}" && chmod -R ${permissionMode} "${worktreePath}"'`;
-                execSync(cmd, { stdio: 'pipe' });
+                // Run each command separately (no sh -c wrapper for security)
+                for (const cmd of UnixGroupCommands.setDirectoryGroup(
+                  worktreePath,
+                  rawWorktree.unix_group,
+                  permissionMode
+                )) {
+                  execSync(cmd, { stdio: 'pipe' });
+                }
 
                 worktreesRepaired++;
                 this.log(chalk.green(`   ✓ Applied permissions (${permissionMode})\n`));

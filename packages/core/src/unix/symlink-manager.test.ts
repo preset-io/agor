@@ -122,31 +122,31 @@ describe('symlink-manager', () => {
     });
 
     describe('createSymlinkWithOwnership', () => {
-      it('generates mkdir + chown + ln + chown -h command chain', () => {
-        const cmd = SymlinkCommands.createSymlinkWithOwnership(
+      it('returns array of mkdir + chown + ln + chown -h commands', () => {
+        const cmds = SymlinkCommands.createSymlinkWithOwnership(
           '/data/worktree',
           '/home/alice/agor/worktrees/my-feature',
           'alice'
         );
 
-        expect(cmd).toBe(
-          `sh -c 'mkdir -p "/home/alice/agor/worktrees" && ` +
-            `chown "alice:alice" "/home/alice/agor/worktrees" && ` +
-            `ln -sfn "/data/worktree" "/home/alice/agor/worktrees/my-feature" && ` +
-            `chown -h "alice:alice" "/home/alice/agor/worktrees/my-feature"'`
-        );
+        expect(cmds).toEqual([
+          'mkdir -p "/home/alice/agor/worktrees"',
+          'chown "alice:alice" "/home/alice/agor/worktrees"',
+          'ln -sfn "/data/worktree" "/home/alice/agor/worktrees/my-feature"',
+          'chown -h "alice:alice" "/home/alice/agor/worktrees/my-feature"',
+        ]);
       });
 
       it('handles nested paths correctly', () => {
-        const cmd = SymlinkCommands.createSymlinkWithOwnership(
+        const cmds = SymlinkCommands.createSymlinkWithOwnership(
           '/data/wt',
           '/home/bob/agor/worktrees/feature',
           'bob'
         );
 
         // Should create parent dir /home/bob/agor/worktrees
-        expect(cmd).toContain('mkdir -p "/home/bob/agor/worktrees"');
-        expect(cmd).toContain('chown "bob:bob"');
+        expect(cmds[0]).toBe('mkdir -p "/home/bob/agor/worktrees"');
+        expect(cmds).toContainEqual(expect.stringContaining('chown "bob:bob"'));
       });
     });
 

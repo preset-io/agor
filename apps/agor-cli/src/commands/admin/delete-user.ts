@@ -9,8 +9,7 @@
  * @see context/guides/rbac-and-unix-isolation.md
  */
 
-import { execSync } from 'node:child_process';
-import { isValidUnixUsername, UnixUserCommands } from '@agor/core/unix';
+import { createAdminExecutor, isValidUnixUsername, UnixUserCommands } from '@agor/core/unix';
 import { Command, Flags } from '@oclif/core';
 
 export default class DeleteUser extends Command {
@@ -19,6 +18,7 @@ export default class DeleteUser extends Command {
   static override examples = [
     '<%= config.bin %> <%= command.id %> --username agor_03b62447',
     '<%= config.bin %> <%= command.id %> --username agor_03b62447 --delete-home',
+    '<%= config.bin %> <%= command.id %> --username agor_03b62447 --dry-run',
   ];
 
   static override flags = {
@@ -31,12 +31,30 @@ export default class DeleteUser extends Command {
       description: 'Also delete the user home directory',
       default: false,
     }),
+    'dry-run': Flags.boolean({
+      char: 'n',
+      description: 'Show what would be done without making changes',
+      default: false,
+    }),
+    verbose: Flags.boolean({
+      char: 'v',
+      description: 'Show detailed output including command stdout/stderr',
+      default: false,
+    }),
   };
 
   public async run(): Promise<void> {
     const { flags } = await this.parse(DeleteUser);
-    const { username } = flags;
+    const { username, verbose } = flags;
     const deleteHome = flags['delete-home'];
+    const dryRun = flags['dry-run'];
+
+    // Create executor with dry-run and verbose support
+    const executor = createAdminExecutor({ 'dry-run': dryRun, verbose });
+
+    if (dryRun) {
+      this.log('🔍 Dry run mode - no changes will be made\n');
+    }
 
     // Validate username format
     if (!isValidUnixUsername(username)) {
@@ -44,9 +62,9 @@ export default class DeleteUser extends Command {
     }
 
     // Check if user exists
-    try {
-      execSync(UnixUserCommands.userExists(username), { stdio: 'ignore' });
-    } catch {
+    const userExists = await executor.check(UnixUserCommands.userExists(username));
+
+    if (!userExists) {
       this.log(`✅ Unix user ${username} does not exist (nothing to do)`);
       return;
     }
@@ -54,10 +72,10 @@ export default class DeleteUser extends Command {
     // Delete the user
     try {
       if (deleteHome) {
-        execSync(UnixUserCommands.deleteUserWithHome(username), { stdio: 'inherit' });
+        await executor.exec(UnixUserCommands.deleteUserWithHome(username));
         this.log(`✅ Deleted Unix user ${username} and home directory`);
       } else {
-        execSync(UnixUserCommands.deleteUser(username), { stdio: 'inherit' });
+        await executor.exec(UnixUserCommands.deleteUser(username));
         this.log(`✅ Deleted Unix user ${username} (home directory preserved)`);
       }
     } catch (error) {

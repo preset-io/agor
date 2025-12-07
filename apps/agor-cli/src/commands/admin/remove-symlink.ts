@@ -9,9 +9,9 @@
  * @see context/guides/rbac-and-unix-isolation.md
  */
 
-import { execSync } from 'node:child_process';
 import {
   AGOR_HOME_BASE,
+  createAdminExecutor,
   getWorktreeSymlinkPath,
   isValidUnixUsername,
   SymlinkCommands,
@@ -23,6 +23,7 @@ export default class RemoveSymlink extends Command {
 
   static override examples = [
     '<%= config.bin %> <%= command.id %> --username alice --worktree-name my-feature',
+    '<%= config.bin %> <%= command.id %> --username alice --worktree-name my-feature --dry-run',
   ];
 
   static override flags = {
@@ -40,13 +41,31 @@ export default class RemoveSymlink extends Command {
       description: 'Base directory for home directories',
       default: AGOR_HOME_BASE,
     }),
+    'dry-run': Flags.boolean({
+      char: 'd',
+      description: 'Show what would be done without making changes',
+      default: false,
+    }),
+    verbose: Flags.boolean({
+      char: 'v',
+      description: 'Show detailed output including command stdout/stderr',
+      default: false,
+    }),
   };
 
   public async run(): Promise<void> {
     const { flags } = await this.parse(RemoveSymlink);
-    const { username } = flags;
+    const { username, verbose } = flags;
     const worktreeName = flags['worktree-name'];
     const homeBase = flags['home-base'];
+    const dryRun = flags['dry-run'];
+
+    // Create executor with dry-run and verbose support
+    const executor = createAdminExecutor({ 'dry-run': dryRun, verbose });
+
+    if (dryRun) {
+      this.log('🔍 Dry run mode - no changes will be made\n');
+    }
 
     // Validate username
     if (!isValidUnixUsername(username)) {
@@ -56,16 +75,16 @@ export default class RemoveSymlink extends Command {
     const linkPath = getWorktreeSymlinkPath(username, worktreeName, homeBase);
 
     // Check if symlink exists
-    try {
-      execSync(SymlinkCommands.symlinkExists(linkPath), { stdio: 'ignore' });
-    } catch {
+    const symlinkExists = await executor.check(SymlinkCommands.symlinkExists(linkPath));
+
+    if (!symlinkExists) {
       this.log(`✅ Symlink does not exist: ${linkPath} (nothing to do)`);
       return;
     }
 
     // Remove symlink
     try {
-      execSync(SymlinkCommands.removeSymlink(linkPath), { stdio: 'inherit' });
+      await executor.exec(SymlinkCommands.removeSymlink(linkPath));
       this.log(`✅ Removed symlink: ${linkPath}`);
     } catch (error) {
       this.error(`Failed to remove symlink: ${error}`);

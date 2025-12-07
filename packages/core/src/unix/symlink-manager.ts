@@ -97,21 +97,22 @@ export const SymlinkCommands = {
    * Note: Symlink ownership doesn't affect access (target permissions matter),
    * but it's good practice for cleanup/auditing.
    *
+   * Returns an array of commands to be executed sequentially.
+   * Each command should be run with sudo separately (no sh -c wrapper needed).
+   *
    * @param target - Target path (actual worktree)
    * @param linkPath - Symlink path
    * @param username - Owner of the symlink
-   * @returns Command string
+   * @returns Array of command strings to execute sequentially
    */
-  createSymlinkWithOwnership: (target: string, linkPath: string, username: string) => {
+  createSymlinkWithOwnership: (target: string, linkPath: string, username: string): string[] => {
     const parentDir = linkPath.substring(0, linkPath.lastIndexOf('/'));
-    // Wrap in sh -c so sudo elevates the entire command chain
-    const commands = [
+    return [
       `mkdir -p "${parentDir}"`,
       `chown "${username}:${username}" "${parentDir}"`,
       `ln -sfn "${target}" "${linkPath}"`,
       `chown -h "${username}:${username}" "${linkPath}"`,
-    ].join(' && ');
-    return `sh -c '${commands}'`;
+    ];
   },
 
   /**

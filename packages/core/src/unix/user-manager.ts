@@ -240,31 +240,45 @@ export const UnixUserCommands = {
   /**
    * Create directory with proper ownership
    *
+   * Returns an array of commands to be executed sequentially.
+   * Each command should be run with sudo separately (no sh -c wrapper needed).
+   *
    * @param path - Directory path to create
    * @param username - Owner username
    * @param group - Owner group (defaults to username)
    * @param mode - Permission mode (default: 755)
-   * @returns Command string
+   * @returns Array of command strings to execute sequentially
    */
-  createOwnedDirectory: (path: string, username: string, group?: string, mode: string = '755') => {
+  createOwnedDirectory: (
+    path: string,
+    username: string,
+    group?: string,
+    mode: string = '755'
+  ): string[] => {
     const grp = group || username;
-    // Wrap in sh -c so sudo elevates the entire command chain
-    return `sh -c 'mkdir -p "${path}" && chown "${username}:${grp}" "${path}" && chmod ${mode} "${path}"'`;
+    return [
+      `mkdir -p "${path}"`,
+      `chown "${username}:${grp}" "${path}"`,
+      `chmod ${mode} "${path}"`,
+    ];
   },
 
   /**
    * Setup Agor worktrees directory structure for a user
    *
-   * Creates ~/agor/worktrees with proper ownership
+   * Creates ~/agor/worktrees with proper ownership.
+   * Returns an array of commands to be executed sequentially.
    *
    * @param username - Unix username
    * @param homeBase - Home directory base
-   * @returns Command string
+   * @returns Array of command strings to execute sequentially
    */
-  setupWorktreesDir: (username: string, homeBase: string = AGOR_HOME_BASE) => {
+  setupWorktreesDir: (username: string, homeBase: string = AGOR_HOME_BASE): string[] => {
     const worktreesDir = `${homeBase}/${username}/${AGOR_WORKTREES_DIR}`;
-    // Wrap in sh -c so sudo elevates the entire command chain
-    return `sh -c 'mkdir -p "${worktreesDir}" && chown -R "${username}:${username}" "${homeBase}/${username}/agor"'`;
+    return [
+      `mkdir -p "${worktreesDir}"`,
+      `chown -R "${username}:${username}" "${homeBase}/${username}/agor"`,
+    ];
   },
 } as const;
 

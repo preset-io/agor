@@ -189,11 +189,12 @@ describe('group-manager', () => {
     });
 
     describe('setDirectoryGroup', () => {
-      it('generates chgrp + chmod command wrapped in sh -c', () => {
-        const cmd = UnixGroupCommands.setDirectoryGroup('/data/project', 'developers', '2775');
-        expect(cmd).toBe(
-          `sh -c 'chgrp -R developers "/data/project" && chmod -R 2775 "/data/project"'`
-        );
+      it('returns array of chgrp and chmod commands', () => {
+        const cmds = UnixGroupCommands.setDirectoryGroup('/data/project', 'developers', '2775');
+        expect(cmds).toEqual([
+          'chgrp -R developers "/data/project"',
+          'chmod -R 2775 "/data/project"',
+        ]);
       });
     });
   });

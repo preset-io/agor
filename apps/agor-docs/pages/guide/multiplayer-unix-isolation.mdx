@@ -79,35 +79,62 @@ storage:
 
 ### 3. Sudoers Configuration
 
-The daemon needs sudo access for Unix user/group management. Create a sudoers file with minimal required permissions:
+The daemon needs sudo access for Unix user/group management. We provide a reference sudoers file with comprehensive documentation:
+
+**Download the sudoers template:**
 
 ```bash
-# /etc/sudoers.d/agor
-# Agor daemon privileged operations
+# Download the reference sudoers file
+curl -O https://raw.githubusercontent.com/preset-io/agor/main/docker/sudoers/agor-daemon.sudoers
 
-# User/group management
+# IMPORTANT: Validate syntax before installing
+sudo visudo -c -f ./agor-daemon.sudoers
+
+# Install to sudoers.d (use your daemon username if not 'agor')
+sudo install -m 0440 ./agor-daemon.sudoers /etc/sudoers.d/agor
+
+# Verify the configuration
+sudo -l -U agor
+```
+
+**Or view the file directly:** [agor-daemon.sudoers on GitHub](https://github.com/preset-io/agor/blob/main/docker/sudoers/agor-daemon.sudoers)
+
+<details>
+<summary>**Quick reference: What the sudoers file enables**</summary>
+
+```bash
+# Core feature: User impersonation (run agents as the user who created the session)
+# Only agor_users group members can be impersonated (prevents root escalation)
+agor ALL=(%agor_users) NOPASSWD: ALL
+
+# User management (create Unix users for Agor users)
 agor ALL=(ALL) NOPASSWD: /usr/sbin/useradd *
 agor ALL=(ALL) NOPASSWD: /usr/sbin/userdel *
 agor ALL=(ALL) NOPASSWD: /usr/sbin/usermod *
-agor ALL=(ALL) NOPASSWD: /usr/sbin/groupadd agor_wt_*
-agor ALL=(ALL) NOPASSWD: /usr/sbin/groupadd agor_users
-agor ALL=(ALL) NOPASSWD: /usr/sbin/groupdel agor_wt_*
+
+# Group management (create agor_wt_* groups for worktree isolation)
+agor ALL=(ALL) NOPASSWD: /usr/sbin/groupadd *
+agor ALL=(ALL) NOPASSWD: /usr/sbin/groupdel *
 agor ALL=(ALL) NOPASSWD: /usr/sbin/gpasswd *
 
-# Filesystem operations (restricted to agor paths)
-agor ALL=(ALL) NOPASSWD: /usr/bin/chgrp -R agor_wt_* /home/*/worktrees/*
-agor ALL=(ALL) NOPASSWD: /usr/bin/chgrp -R agor_wt_* /var/lib/agor/worktrees/*
-agor ALL=(ALL) NOPASSWD: /usr/bin/chmod -R * /home/*/worktrees/*
-agor ALL=(ALL) NOPASSWD: /usr/bin/chmod -R * /var/lib/agor/worktrees/*
-
-# User impersonation (only agor_users group members)
-agor ALL=(%agor_users) NOPASSWD: ALL
+# Filesystem operations (set ownership/permissions on worktrees)
+agor ALL=(ALL) NOPASSWD: /usr/bin/chown *
+agor ALL=(ALL) NOPASSWD: /usr/bin/chmod *
+# ... and more (see full file for details)
 ```
 
-**Security Notes:**
-- The `agor_wt_*` pattern restricts group creation to worktree groups only
-- Path restrictions prevent the daemon from modifying files outside agor directories
-- The `agor_users` group provides namespace containment for user impersonation
+</details>
+
+**Security properties of this configuration:**
+
+1. **Scoped impersonation** - Only `agor_users` group members can be impersonated, preventing escalation to system users (root, postgres, etc.)
+2. **No TTY required** - `Defaults:agor !requiretty` allows daemon operation without a terminal
+3. **Audit trail** - All sudo operations logged to `/var/log/auth.log`
+4. **Defense in depth** - App layer validates before sudo, OS layer enforces after
+
+**Customization:**
+- Replace `agor` with your daemon username if different (e.g., `agorpg` for PostgreSQL deployments)
+- The file is well-commented; read through it before deploying
 
 ### 4. Enable RBAC
 

@@ -129,14 +129,18 @@ export const UnixGroupCommands = {
   /**
    * Set directory group ownership and permissions
    *
+   * Returns an array of commands to be executed sequentially.
+   * Each command should be run with sudo separately (no sh -c wrapper needed).
+   *
    * @param path - Directory path
    * @param groupName - Group to own the directory
    * @param permissions - Permissions mode (e.g., '2775' for group-writable with setgid)
-   * @returns Command string
+   * @returns Array of command strings to execute sequentially
    */
-  setDirectoryGroup: (path: string, groupName: string, permissions: string) =>
-    // Wrap in sh -c so sudo elevates the entire command chain
-    `sh -c 'chgrp -R ${groupName} "${path}" && chmod -R ${permissions} "${path}"'`,
+  setDirectoryGroup: (path: string, groupName: string, permissions: string): string[] => [
+    `chgrp -R ${groupName} "${path}"`,
+    `chmod -R ${permissions} "${path}"`,
+  ],
 } as const;
 
 /**
