@@ -200,12 +200,14 @@ Before enabling RBAC + Unix integration, ensure:
    - Creating Unix groups (via `agor unix-integration ensure-group`)
    - Setting filesystem permissions (`chown`, `chmod`)
 
-2. **Sudoers configuration** - Add Agor daemon user to sudoers:
+2. **Sudoers configuration** - Install the Agor sudoers file:
    ```bash
-   # /etc/sudoers.d/agor
-   agor ALL=(ALL) NOPASSWD: /usr/local/bin/agor unix-integration *
+   # Download and install
+   curl -O https://raw.githubusercontent.com/preset-io/agor/main/docker/sudoers/agor-daemon.sudoers
+   sudo visudo -c -f ./agor-daemon.sudoers  # Validate first!
+   sudo install -m 0440 ./agor-daemon.sudoers /etc/sudoers.d/agor
    ```
-   *(Adjust path if `agor` is installed elsewhere)*
+   See [docker/sudoers/agor-daemon.sudoers](../../docker/sudoers/agor-daemon.sudoers) for the full, well-documented configuration.
 
 3. **User management strategy** - Decide:
    - Will you create Unix users manually or let Agor manage them?

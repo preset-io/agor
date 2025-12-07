@@ -117,10 +117,10 @@ agor ALL=(ALL) NOPASSWD: /usr/sbin/groupadd *
 agor ALL=(ALL) NOPASSWD: /usr/sbin/groupdel *
 agor ALL=(ALL) NOPASSWD: /usr/sbin/gpasswd *
 
-# Filesystem operations (set ownership/permissions on worktrees)
-agor ALL=(ALL) NOPASSWD: /usr/bin/chown *
-agor ALL=(ALL) NOPASSWD: /usr/bin/chmod *
-# ... and more (see full file for details)
+# Filesystem operations (scoped to Agor paths only)
+agor ALL=(ALL) NOPASSWD: /usr/bin/chown * /home/*/agor/*
+agor ALL=(ALL) NOPASSWD: /usr/bin/chmod * /home/*/agor/*
+# ... and more (see full file for complete scoped rules)
 ```
 
 </details>
