@@ -2,7 +2,7 @@ import type { AgorClient } from '@agor/core/api';
 import type { User } from '@agor/core/types';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Terminal } from '@xterm/xterm';
-import { App, Modal } from 'antd';
+import { App, Modal, Spin } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import '@xterm/xterm/css/xterm.css';
 
@@ -78,11 +78,12 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
   worktreeId,
   initialCommands = [],
 }) => {
-  const { modal } = App.useApp();
+  const { modal, message } = App.useApp();
   const terminalDivRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const [_terminalId, setTerminalId] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
+  const [uploadingScreenshot, setUploadingScreenshot] = useState(false);
   const [sessionInfo, setSessionInfo] = useState<{
     zellijSession?: string;
     zellijReused?: boolean;
@@ -91,6 +92,76 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
 
   // Check if user has admin role
   const isAdmin = user?.role === 'admin' || user?.role === 'owner';
+
+  /**
+   * Handle paste events for screenshot uploads
+   */
+  const handlePaste = async (event: ClipboardEvent) => {
+    const items = event.clipboardData?.items;
+    if (!items || !worktreeId || !client) return;
+
+    // Check for image in clipboard
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.type.startsWith('image/')) {
+        event.preventDefault();
+        const blob = item.getAsFile();
+        if (!blob) continue;
+
+        setUploadingScreenshot(true);
+
+        try {
+          // Get JWT token from localStorage
+          const token = localStorage.getItem('feathers-jwt');
+          if (!token) {
+            message.error('Authentication required. Please log in.');
+            return;
+          }
+
+          // Create FormData for upload
+          const formData = new FormData();
+          formData.append('image', blob);
+          formData.append('worktreeId', worktreeId);
+
+          // Get daemon URL from environment
+          const daemonUrl =
+            import.meta.env.VITE_DAEMON_URL || `http://localhost:${import.meta.env.VITE_DAEMON_PORT || 3030}`;
+
+          // Upload to terminal-files service
+          const response = await fetch(`${daemonUrl}/terminal-files`, {
+            method: 'POST',
+            body: formData,
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          });
+
+          if (!response.ok) {
+            const error = await response.json().catch(() => ({ error: 'Upload failed' }));
+            throw new Error(error.error || `Upload failed with status ${response.status}`);
+          }
+
+          const result = await response.json();
+
+          // Insert file path into terminal
+          if (terminalRef.current && result.path) {
+            // Write the path to terminal input (simulating typing)
+            terminalRef.current.paste(result.path);
+            message.success('Screenshot uploaded successfully');
+          }
+        } catch (error) {
+          console.error('Screenshot paste failed:', error);
+          message.error(
+            `Failed to paste screenshot: ${error instanceof Error ? error.message : 'Unknown error'}`
+          );
+        } finally {
+          setUploadingScreenshot(false);
+        }
+
+        break; // Only handle first image
+      }
+    }
+  };
 
   useEffect(() => {
     if (!open || !terminalDivRef.current || !client) return;
@@ -258,6 +329,11 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
 
     setupTerminal();
 
+    // Attach paste event listener for screenshot uploads
+    // biome-ignore lint/suspicious/noExplicitAny: ClipboardEvent type compatibility
+    const pasteHandler = handlePaste as any;
+    window.addEventListener('paste', pasteHandler);
+
     return () => {
       mounted = false;
       // Cleanup terminal instance
@@ -273,8 +349,10 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
       setTerminalId(null);
       setIsConnected(false);
       setSessionInfo({});
+      // Remove paste event listener
+      window.removeEventListener('paste', pasteHandler);
     };
-  }, [open, client, initialCommands, isAdmin, worktreeId]);
+  }, [open, client, initialCommands, isAdmin, worktreeId, handlePaste]);
 
   const handleClose = () => {
     if (isConnected) {
@@ -321,6 +399,11 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12, color: '#fff' }}>
+          {uploadingScreenshot && (
+            <div style={{ padding: '8px', textAlign: 'center' }}>
+              <Spin size="small" /> Uploading screenshot...
+            </div>
+          )}
           <div ref={terminalDivRef} />
         </div>
       )}

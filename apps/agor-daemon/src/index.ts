@@ -125,6 +125,7 @@ import { SchedulerService } from './services/scheduler';
 import { createSessionMCPServersService } from './services/session-mcp-servers';
 import { createSessionsService } from './services/sessions';
 import { createTasksService } from './services/tasks';
+import { TerminalFilesService } from './services/terminal-files';
 import { TerminalsService } from './services/terminals';
 import { createUsersService } from './services/users';
 import { setupWorktreeOwnersService } from './services/worktree-owners.js';
@@ -1050,6 +1051,103 @@ async function main() {
   app.use('/terminals', terminalsService, {
     events: ['data', 'exit'], // Custom events for terminal I/O
   });
+
+  // Register terminal-files service for screenshot uploads
+  // This service handles pasting screenshots into the terminal UI
+  const terminalFilesService = new TerminalFilesService(app, db);
+  const terminalFilesUpload = terminalFilesService.createUploadMiddleware();
+
+  // Debug logging for terminal file uploads
+  const DEBUG_TERMINAL_FILES = process.env.NODE_ENV !== 'production';
+
+  // Custom auth middleware for terminal file uploads (similar to session uploads)
+  // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
+  const terminalFilesAuthMiddleware: any = async (req: any, res: any, next: any) => {
+    try {
+      if (DEBUG_TERMINAL_FILES) console.log('🔐 [Terminal Files Auth] Attempting authentication');
+
+      let token = null;
+
+      // Try Authorization header first (recommended)
+      const authHeader = req.headers.authorization;
+      if (authHeader?.startsWith('Bearer ')) {
+        token = authHeader.substring(7);
+      }
+
+      // Verify token and attach user to req.feathers
+      if (token) {
+        try {
+          const jwtSecret = process.env.JWT_SECRET;
+          if (!jwtSecret) {
+            console.error('❌ [Terminal Files Auth] JWT_SECRET not configured');
+            return res.status(500).json({ error: 'Server authentication not configured' });
+          }
+
+          const decoded = jwt.verify(token, jwtSecret) as { userId: string };
+          const usersRepo = new UsersRepository(db);
+          const user = await usersRepo.findById(decoded.userId);
+
+          if (!user) {
+            console.error('❌ [Terminal Files Auth] User not found:', decoded.userId?.substring(0, 8));
+            return res.status(401).json({ error: 'User not found' });
+          }
+
+          // Attach user to req.feathers (Feathers convention)
+          req.feathers = { user };
+
+          if (DEBUG_TERMINAL_FILES) {
+            console.log('✅ [Terminal Files Auth] Authenticated:', user.user_id.substring(0, 8));
+          }
+
+          return next();
+        } catch (error) {
+          console.error('❌ [Terminal Files Auth] Token verification failed:', error);
+          return res.status(401).json({ error: 'Invalid or expired token' });
+        }
+      }
+
+      // Anonymous mode fallback (if enabled)
+      if (allowAnonymous) {
+        if (DEBUG_TERMINAL_FILES) console.log('⚠️  [Terminal Files Auth] Using anonymous mode');
+        req.feathers = { user: null };
+        return next();
+      }
+
+      console.error('❌ [Terminal Files Auth] No valid authentication found');
+      res.status(401).json({ error: 'Authentication required' });
+    } catch (error) {
+      console.error('❌ [Terminal Files Auth] Unexpected error:', error);
+      res.status(500).json({ error: 'Authentication error' });
+    }
+  };
+
+  // POST /terminal-files - Upload screenshot to terminal
+  app.post(
+    '/terminal-files',
+    terminalFilesAuthMiddleware,
+    // biome-ignore lint/suspicious/noExplicitAny: Express 5 + multer type compatibility
+    terminalFilesUpload.single('image') as any,
+    // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
+    async (req: any, res: any, next: any) => {
+      try {
+        // Enforce minimum role (admin required for terminal access)
+        const params: AuthenticatedParams = {
+          user: req.feathers?.user,
+          provider: 'rest',
+          req,
+        };
+
+        ensureMinimumRole(params, 'admin', 'upload terminal files');
+
+        // Call service create method
+        const result = await terminalFilesService.create({}, params);
+
+        res.json(result);
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
 
   // Register session-mcp-servers as a top-level service for WebSocket events
   // This is needed for real-time updates when MCP servers are added/removed from sessions
