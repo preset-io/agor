@@ -30,6 +30,7 @@ import { useEventStream } from '../../hooks/useEventStream';
 import { useFaviconStatus } from '../../hooks/useFaviconStatus';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { usePresence } from '../../hooks/usePresence';
+import { useSettingsRoute } from '../../hooks/useSettingsRoute';
 import { useUrlState } from '../../hooks/useUrlState';
 import type { AgenticToolOption } from '../../types';
 import { initializeAudioOnInteraction } from '../../utils/audio';
@@ -198,15 +199,25 @@ export const App: React.FC<AppProps> = ({
   } | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [listDrawerOpen, setListDrawerOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsActiveTab, setSettingsActiveTab] = useState<string>('boards');
   const [userSettingsOpen, setUserSettingsOpen] = useState(false);
+
+  // Settings modal state via URL routing
+  const {
+    isOpen: settingsRouteOpen,
+    section: settingsRouteSection,
+    // itemId: settingsRouteItemId, // TODO: wire up to nested modals
+    openSettings,
+    closeSettings,
+    setSection: setSettingsSection,
+  } = useSettingsRoute();
+
+  // Combine route-based and prop-based settings state
+  // Props take precedence for backward compatibility with onboarding flow
+  const settingsOpen = settingsRouteOpen || !!openSettingsTab;
+  const effectiveSettingsTab = openSettingsTab || settingsRouteSection;
 
   // Handle external user settings modal control (e.g., from onboarding "Configure API Keys")
   const effectiveUserSettingsOpen = userSettingsOpen || !!openUserSettings;
-
-  // Handle external settings tab control (e.g., from onboarding "Configure API Keys")
-  const effectiveSettingsTab = openSettingsTab || settingsActiveTab;
 
   // Initialize comments panel state from localStorage (collapsed by default)
   const [commentsPanelCollapsed, setCommentsPanelCollapsed] = useLocalStorage<boolean>(
@@ -573,7 +584,7 @@ export const App: React.FC<AppProps> = ({
                 setEventStreamPanelCollapsed(!eventStreamPanelCollapsed);
               }
             }}
-            onSettingsClick={() => setSettingsOpen(true)}
+            onSettingsClick={() => openSettings()}
             onUserSettingsClick={() => setUserSettingsOpen(true)}
             onThemeEditorClick={() => setThemeEditorOpen(true)}
             onLogout={onLogout}
@@ -611,14 +622,8 @@ export const App: React.FC<AppProps> = ({
                   }
                 : undefined
             }
-            onOpenRepoSettings={() => {
-              setSettingsActiveTab('repos');
-              setSettingsOpen(true);
-            }}
-            onOpenAuthSettings={() => {
-              setSettingsActiveTab('agentic-tools');
-              setSettingsOpen(true);
-            }}
+            onOpenRepoSettings={() => openSettings('repos')}
+            onOpenAuthSettings={() => openSettings('agentic-tools')}
             onOpenNewWorktree={() => {
               const center = sessionCanvasRef.current?.getViewportCenter();
               setNewWorktreeDefaultPosition(center || null);
@@ -856,7 +861,7 @@ export const App: React.FC<AppProps> = ({
           <SettingsModal
             open={settingsOpen}
             onClose={() => {
-              setSettingsOpen(false);
+              closeSettings();
               onSettingsClose?.();
             }}
             client={client}
@@ -871,7 +876,7 @@ export const App: React.FC<AppProps> = ({
             mcpServerById={mcpServerById}
             activeTab={effectiveSettingsTab}
             onTabChange={(newTab) => {
-              setSettingsActiveTab(newTab);
+              setSettingsSection(newTab as Parameters<typeof setSettingsSection>[0]);
               // Clear openSettingsTab when user manually changes tabs
               // This allows normal tab switching after opening from onboarding
               if (openSettingsTab) {
@@ -925,7 +930,7 @@ export const App: React.FC<AppProps> = ({
             onArchiveOrDelete={onArchiveOrDeleteWorktree}
             onOpenSettings={() => {
               setWorktreeModalWorktreeId(null);
-              setSettingsOpen(true);
+              openSettings();
             }}
           />
           <WorktreeListDrawer
