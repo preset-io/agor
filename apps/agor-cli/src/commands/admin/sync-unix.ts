@@ -312,7 +312,8 @@ export default class SyncUnix extends Command {
     let usersDeleted = 0;
     let cleanupErrors = 0;
     let worktreesSynced = 0;
-    let reposSynced = 0;
+    let reposBackfilled = 0; // Repos that needed unix_group set in DB
+    let reposPermSynced = 0; // Repos that had .git permissions synced
     let syncErrors = 0;
 
     try {
@@ -541,13 +542,13 @@ export default class SyncUnix extends Command {
               this.log(chalk.yellow(`   ⚠ No local_path found, skipping .git permissions`));
             }
 
-            reposSynced++;
+            reposBackfilled++;
             this.log('');
           }
 
-          // Summary for repo sync
-          this.log(chalk.bold('Repo Sync Summary:'));
-          this.log(`  Repos synced: ${reposSynced}${dryRun ? ' (dry-run)' : ''}`);
+          // Summary for repo backfill
+          this.log(chalk.bold('Repo Backfill Summary:'));
+          this.log(`  Repos backfilled: ${reposBackfilled}${dryRun ? ' (dry-run)' : ''}`);
           if (syncErrors > 0) {
             this.log(chalk.red(`  Errors: ${syncErrors}`));
           }
@@ -896,7 +897,7 @@ export default class SyncUnix extends Command {
                 execSync(cmd, { stdio: 'pipe' });
               }
 
-              reposSynced++;
+              reposPermSynced++;
               this.log(
                 chalk.green(`   ✓ Applied .git permissions (${REPO_GIT_PERMISSION_MODE})\n`)
               );
@@ -907,9 +908,9 @@ export default class SyncUnix extends Command {
           }
         }
 
-        // Summary for repo sync
-        this.log(chalk.bold('Repo Sync Summary:'));
-        this.log(`  Repos synced: ${reposSynced}${dryRun ? ' (dry-run)' : ''}`);
+        // Summary for repo permission sync
+        this.log(chalk.bold('Repo Permission Sync Summary:'));
+        this.log(`  Repos synced: ${reposPermSynced}${dryRun ? ' (dry-run)' : ''}`);
         if (syncErrors > 0) {
           this.log(chalk.red(`  Errors: ${syncErrors}`));
         }
@@ -1072,7 +1073,8 @@ export default class SyncUnix extends Command {
       this.log('');
       this.log(chalk.bold('Filesystem Sync:'));
       this.log(`  Worktrees synced:  ${worktreesSynced}${dryRunSuffix}`);
-      this.log(`  Repos synced:      ${reposSynced}${dryRunSuffix}`);
+      this.log(`  Repos backfilled:  ${reposBackfilled}${dryRunSuffix}`);
+      this.log(`  Repo perms synced: ${reposPermSynced}${dryRunSuffix}`);
       if (syncErrors > 0) {
         this.log(chalk.red(`  Sync errors:       ${syncErrors}`));
       }
@@ -1103,8 +1105,8 @@ export default class SyncUnix extends Command {
         usersDeleted > 0 ||
         groupsDeleted > 0 ||
         worktreesSynced > 0 ||
-        reposSynced > 0 ||
-        reposSynced > 0;
+        reposBackfilled > 0 ||
+        reposPermSynced > 0;
       if (dryRun && hasChanges) {
         this.log(chalk.yellow('\nRun without --dry-run to apply changes'));
       }
