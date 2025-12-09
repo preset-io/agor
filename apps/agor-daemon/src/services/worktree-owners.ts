@@ -20,7 +20,7 @@
 
 import type { WorktreeRepository } from '@agor/core/db';
 import { type Application, Forbidden, NotAuthenticated } from '@agor/core/feathers';
-import type { HookContext, User, UUID, WorktreeID } from '@agor/core/types';
+import type { HookContext, RepoID, User, UUID, WorktreeID } from '@agor/core/types';
 import type { UnixIntegrationService } from '@agor/core/unix';
 
 interface WorktreeOwnerCreateData {
@@ -200,7 +200,7 @@ export function setupWorktreeOwnersService(app: Application, worktreeRepo: Workt
       remove: [requireWorktreeOwner(worktreeRepo)],
     },
     after: {
-      // After adding owner: add to Unix group + create symlink
+      // After adding owner: add to worktree Unix group + add to repo group + create symlink
       create: [
         async (context: HookContext) => {
           const unixIntegration = app.get('unixIntegration') as UnixIntegrationService | undefined;
@@ -214,19 +214,29 @@ export function setupWorktreeOwnersService(app: Application, worktreeRepo: Workt
           const userId = (context.data as WorktreeOwnerCreateData).user_id as UUID;
 
           try {
+            // Add to worktree group
             await unixIntegration.addUserToWorktreeGroup(worktreeId, userId);
             console.log(
               `[Unix Integration] Added user ${userId.substring(0, 8)} to worktree ${worktreeId.substring(0, 8)} group`
             );
+
+            // Add to repo group (for .git access)
+            const worktree = await worktreeRepo.findById(worktreeId);
+            if (worktree?.repo_id) {
+              await unixIntegration.addUserToRepoGroup(worktree.repo_id as RepoID, userId);
+              console.log(
+                `[Unix Integration] Added user ${userId.substring(0, 8)} to repo ${worktree.repo_id.substring(0, 8)} group`
+              );
+            }
           } catch (error) {
-            console.error('[Unix Integration] Failed to add user to worktree group:', error);
+            console.error('[Unix Integration] Failed to add user to groups:', error);
             // Don't fail the request - app-layer ownership is already set
           }
 
           return context;
         },
       ],
-      // After removing owner: remove from Unix group + remove symlink
+      // After removing owner: remove from worktree Unix group + conditionally remove from repo group + remove symlink
       remove: [
         async (context: HookContext) => {
           const unixIntegration = app.get('unixIntegration') as UnixIntegrationService | undefined;
@@ -240,12 +250,32 @@ export function setupWorktreeOwnersService(app: Application, worktreeRepo: Workt
           const userId = context.id as UUID; // userId passed as id parameter
 
           try {
+            // Remove from worktree group
             await unixIntegration.removeUserFromWorktreeGroup(worktreeId, userId);
             console.log(
               `[Unix Integration] Removed user ${userId.substring(0, 8)} from worktree ${worktreeId.substring(0, 8)} group`
             );
+
+            // Conditionally remove from repo group (only if user doesn't own any other worktrees in the repo)
+            const worktree = await worktreeRepo.findById(worktreeId);
+            if (worktree?.repo_id) {
+              const shouldRemainInRepoGroup = await unixIntegration.shouldUserBeInRepoGroup(
+                worktree.repo_id as RepoID,
+                userId
+              );
+              if (!shouldRemainInRepoGroup) {
+                await unixIntegration.removeUserFromRepoGroup(worktree.repo_id as RepoID, userId);
+                console.log(
+                  `[Unix Integration] Removed user ${userId.substring(0, 8)} from repo ${worktree.repo_id.substring(0, 8)} group`
+                );
+              } else {
+                console.log(
+                  `[Unix Integration] User ${userId.substring(0, 8)} still owns other worktrees in repo, keeping in repo group`
+                );
+              }
+            }
           } catch (error) {
-            console.error('[Unix Integration] Failed to remove user from worktree group:', error);
+            console.error('[Unix Integration] Failed to remove user from groups:', error);
             // Don't fail the request - app-layer ownership is already removed
           }
 

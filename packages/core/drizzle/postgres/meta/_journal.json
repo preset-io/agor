@@ -57,6 +57,13 @@
       "when": 1764659200000,
       "tag": "0007_backfill_session_unix_username",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1765328000000,
+      "tag": "0008_add_repos_unix_group",
+      "breakpoints": true
     }
   ]
 }

@@ -33,10 +33,12 @@ import type {
   QueryParams,
   Repo,
   RepoEnvironmentConfig,
+  RepoID,
   RepoSlug,
   UserID,
   Worktree,
 } from '@agor/core/types';
+import type { UnixIntegrationService } from '@agor/core/unix';
 import { DrizzleService } from '../adapters/drizzle';
 
 /**
@@ -119,6 +121,27 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
   }
 
   /**
+   * Helper: Initialize repo Unix group if Unix integration is enabled
+   *
+   * Creates the repo group and sets .git permissions.
+   * Called after repo creation (clone or local add).
+   */
+  private async initializeRepoGroup(repoId: RepoID): Promise<void> {
+    const unixIntegration = this.app.get('unixIntegration') as UnixIntegrationService | undefined;
+    if (!unixIntegration?.isEnabled()) {
+      return;
+    }
+
+    try {
+      await unixIntegration.createRepoGroup(repoId);
+      console.log(`[Unix Integration] Created repo group for ${repoId.substring(0, 8)}`);
+    } catch (error) {
+      console.error('[Unix Integration] Failed to create repo group:', error);
+      // Don't fail the request - repo is already created, group can be synced later
+    }
+  }
+
+  /**
    * Custom method: Clone repository
    */
   async cloneRepository(
@@ -165,7 +188,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     }
 
     // Create database record
-    return this.create(
+    const repo = (await this.create(
       {
         repo_type: 'remote',
         slug,
@@ -176,7 +199,12 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         environment_config: environmentConfig || undefined,
       },
       params
-    ) as Promise<Repo>;
+    )) as Repo;
+
+    // Initialize Unix group for the repo (if enabled)
+    await this.initializeRepoGroup(repo.repo_id as RepoID);
+
+    return repo;
   }
 
   /**
@@ -242,7 +270,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     const remoteUrl = (await getRemoteUrl(repoPath)) ?? undefined;
     const name = slug.split('/').pop() ?? slug;
 
-    return this.create(
+    const repo = (await this.create(
       {
         repo_type: 'local',
         slug,
@@ -253,7 +281,12 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         environment_config: environmentConfig,
       },
       params
-    ) as Promise<Repo>;
+    )) as Repo;
+
+    // Initialize Unix group for the repo (if enabled)
+    await this.initializeRepoGroup(repo.repo_id as RepoID);
+
+    return repo;
   }
 
   /**

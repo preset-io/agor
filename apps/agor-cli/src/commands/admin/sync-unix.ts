@@ -5,16 +5,17 @@
  *   sudo agor admin sync-unix
  *
  * Verifies that all users with unix_username in the database have corresponding
- * Unix system users, and that they belong to the correct worktree groups.
+ * Unix system users, and that they belong to the correct worktree and repo groups.
  *
  * Operations (additive by default):
  * - Creates missing Unix users
  * - Ensures agor_users group exists and contains all managed users
- * - Adds users to worktree groups they own
+ * - Adds users to worktree groups (agor_wt_*) they own
+ * - Adds users to repo groups (agor_rp_*) for repos where they own any worktree
  * - Reports discrepancies
  *
  * Cleanup operations (with --cleanup flags):
- * - --cleanup-groups: Deletes stale agor_wt_* groups not in database
+ * - --cleanup-groups: Deletes stale agor_wt_* and agor_rp_* groups not in database
  * - --cleanup-users: Deletes stale agor_* users not in database (keeps home dirs)
  * - --cleanup: Enables both cleanup operations
  *
@@ -29,16 +30,20 @@ import {
   createDatabase,
   eq,
   inArray,
+  repos,
   select,
+  update,
   users,
   worktreeOwners,
   worktrees,
 } from '@agor/core/db';
-import type { WorktreeID } from '@agor/core/types';
+import type { RepoID, WorktreeID } from '@agor/core/types';
 import {
   AGOR_USERS_GROUP,
+  generateRepoGroupName,
   generateWorktreeGroupName,
   getWorktreePermissionMode,
+  REPO_GIT_PERMISSION_MODE,
   UnixGroupCommands,
   UnixUserCommands,
 } from '@agor/core/unix';
@@ -56,6 +61,7 @@ interface WorktreeOwnership {
   worktree_id: string;
   name: string;
   unix_group: string | null;
+  repo_id: string;
 }
 
 interface SyncResult {
@@ -83,6 +89,8 @@ export default class SyncUnix extends Command {
     'sudo <%= config.bin %> <%= command.id %> --cleanup --dry-run',
     'sudo <%= config.bin %> <%= command.id %> --cleanup-groups',
     'sudo <%= config.bin %> <%= command.id %> --repair-worktree-perms',
+    'sudo <%= config.bin %> <%= command.id %> --repair-repo-perms',
+    'sudo <%= config.bin %> <%= command.id %> --sync-repos',
   ];
 
   static override flags = {
@@ -125,6 +133,15 @@ export default class SyncUnix extends Command {
     }),
     'repair-worktree-perms': Flags.boolean({
       description: 'Repair filesystem permissions for all worktrees with unix_group set',
+      default: false,
+    }),
+    'repair-repo-perms': Flags.boolean({
+      description: 'Repair .git directory permissions for all repos with unix_group set',
+      default: false,
+    }),
+    'sync-repos': Flags.boolean({
+      description:
+        'Ensure all repos have unix_group set (creates groups for repos without one). Required for existing repos before this feature was added.',
       default: false,
     }),
   };
@@ -291,6 +308,25 @@ export default class SyncUnix extends Command {
     }
   }
 
+  /**
+   * List all agor_rp_* (repo) groups on the system
+   */
+  private listRepoGroups(): string[] {
+    try {
+      // Get all groups from /etc/group matching agor_rp_* pattern
+      const output = execSync("getent group | grep '^agor_rp_' | cut -d: -f1", {
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'ignore'],
+      });
+      return output
+        .trim()
+        .split('\n')
+        .filter((g) => g && /^agor_rp_[0-9a-f]{8}$/.test(g));
+    } catch {
+      return [];
+    }
+  }
+
   async run(): Promise<void> {
     const { flags } = await this.parse(SyncUnix);
     const dryRun = flags['dry-run'];
@@ -303,6 +339,8 @@ export default class SyncUnix extends Command {
     const cleanupGroups = flags.cleanup || flags['cleanup-groups'];
     const cleanupUsers = flags.cleanup || flags['cleanup-users'];
     const repairWorktreePerms = flags['repair-worktree-perms'];
+    const repairRepoPerms = flags['repair-repo-perms'];
+    const syncRepos = flags['sync-repos'];
 
     if (dryRun) {
       this.log(chalk.yellow('🔍 Dry run mode - no changes will be made\n'));
@@ -314,6 +352,8 @@ export default class SyncUnix extends Command {
     let usersDeleted = 0;
     let cleanupErrors = 0;
     let worktreesRepaired = 0;
+    let reposRepaired = 0;
+    let reposSynced = 0;
     let repairErrors = 0;
 
     try {
@@ -410,17 +450,164 @@ export default class SyncUnix extends Command {
           const userId = (
             row as {
               worktree_owners: { user_id: string };
-              worktrees: { worktree_id: string; name: string; unix_group: string | null };
+              worktrees: {
+                worktree_id: string;
+                name: string;
+                unix_group: string | null;
+                repo_id: string;
+              };
             }
           ).worktree_owners.user_id;
           const ownership: WorktreeOwnership = {
             worktree_id: (row as { worktrees: { worktree_id: string } }).worktrees.worktree_id,
             name: (row as { worktrees: { name: string } }).worktrees.name,
             unix_group: (row as { worktrees: { unix_group: string | null } }).worktrees.unix_group,
+            repo_id: (row as { worktrees: { repo_id: string } }).worktrees.repo_id,
           };
           const existing = ownershipsByUser.get(userId) || [];
           existing.push(ownership);
           ownershipsByUser.set(userId, existing);
+        }
+
+        // ========================================
+        // Sync Repos Phase (--sync-repos)
+        // Ensures all repos have unix_group set in the database
+        // and creates the corresponding Unix group if needed.
+        // This runs BEFORE the per-user loop so that the repoGroupMap
+        // will have the correct unix_group values when processing users.
+        // ========================================
+
+        // Get all repos first
+        let allRepos = await select(db).from(repos).all();
+
+        if (syncRepos) {
+          this.log(chalk.cyan.bold('\n━━━ Sync Repos ━━━\n'));
+
+          const reposWithoutGroup = allRepos.filter(
+            (r: { unix_group: string | null }) => r.unix_group === null
+          );
+
+          if (reposWithoutGroup.length === 0) {
+            this.log(chalk.green('   ✓ All repos have unix_group set\n'));
+          } else {
+            this.log(
+              chalk.cyan(
+                `Found ${reposWithoutGroup.length} repo(s) without unix_group (of ${allRepos.length} total)\n`
+              )
+            );
+
+            for (const repo of reposWithoutGroup) {
+              const rawRepo = repo as {
+                repo_id: string;
+                slug: string;
+                data: { local_path?: string } | null;
+              };
+
+              const repoGroup = generateRepoGroupName(rawRepo.repo_id as RepoID);
+
+              this.log(chalk.bold(`📁 ${rawRepo.slug}`));
+              this.log(chalk.gray(`   repo_id: ${rawRepo.repo_id.substring(0, 8)}`));
+              this.log(chalk.gray(`   generated group: ${repoGroup}`));
+
+              // Create the Unix group if it doesn't exist
+              const groupExistsOnSystem = this.groupExists(repoGroup);
+
+              if (groupExistsOnSystem) {
+                this.log(chalk.green(`   ✓ Unix group already exists`));
+              } else {
+                this.log(chalk.yellow(`   → Creating Unix group ${repoGroup}...`));
+                if (this.createGroup(repoGroup, dryRun)) {
+                  groupsCreated++;
+                  this.log(chalk.green(`   ✓ Created Unix group ${repoGroup}`));
+                } else {
+                  repairErrors++;
+                  this.log(chalk.red(`   ✗ Failed to create Unix group ${repoGroup}`));
+                  this.log('');
+                  continue; // Skip DB update if group creation failed
+                }
+              }
+
+              // Update the database to set unix_group
+              if (dryRun) {
+                this.log(
+                  chalk.gray(
+                    `   [dry-run] Would update database: SET unix_group = '${repoGroup}' WHERE repo_id = '${rawRepo.repo_id}'`
+                  )
+                );
+              } else {
+                try {
+                  await update(db, repos)
+                    .set({ unix_group: repoGroup })
+                    .where(eq(repos.repo_id, rawRepo.repo_id))
+                    .run();
+                  this.log(chalk.green(`   ✓ Updated database with unix_group`));
+                } catch (error) {
+                  repairErrors++;
+                  this.log(chalk.red(`   ✗ Failed to update database: ${error}`));
+                  this.log('');
+                  continue;
+                }
+              }
+
+              // Set .git permissions if the repo has a local_path
+              const repoPath = rawRepo.data?.local_path;
+              if (repoPath) {
+                const gitPath = `${repoPath}/.git`;
+                this.log(chalk.gray(`   .git path: ${gitPath}`));
+
+                if (dryRun) {
+                  this.log(
+                    chalk.gray(`   [dry-run] Would run: chgrp -R ${repoGroup} "${gitPath}"`)
+                  );
+                  this.log(
+                    chalk.gray(
+                      `   [dry-run] Would run: chmod -R ${REPO_GIT_PERMISSION_MODE} "${gitPath}"`
+                    )
+                  );
+                } else {
+                  try {
+                    for (const cmd of UnixGroupCommands.setDirectoryGroup(
+                      gitPath,
+                      repoGroup,
+                      REPO_GIT_PERMISSION_MODE
+                    )) {
+                      execSync(cmd, { stdio: 'pipe' });
+                    }
+                    this.log(
+                      chalk.green(`   ✓ Applied .git permissions (${REPO_GIT_PERMISSION_MODE})`)
+                    );
+                  } catch (error) {
+                    repairErrors++;
+                    this.log(chalk.red(`   ✗ Failed to set .git permissions: ${error}`));
+                  }
+                }
+              } else {
+                this.log(chalk.yellow(`   ⚠ No local_path found, skipping .git permissions`));
+              }
+
+              reposSynced++;
+              this.log('');
+            }
+
+            // Summary for repo sync
+            this.log(chalk.bold('Repo Sync Summary:'));
+            this.log(`  Repos synced: ${reposSynced}${dryRun ? ' (dry-run)' : ''}`);
+            if (repairErrors > 0) {
+              this.log(chalk.red(`  Errors: ${repairErrors}`));
+            }
+            this.log('');
+
+            // Refresh allRepos after updates so the repoGroupMap will have correct values
+            allRepos = await select(db).from(repos).all();
+          }
+        }
+
+        // Build a map of repo_id -> unix_group for quick lookup
+        // This happens AFTER --sync-repos so newly created groups are included
+        const repoGroupMap = new Map<string, string | null>();
+        for (const repo of allRepos) {
+          const r = repo as { repo_id: string; unix_group: string | null };
+          repoGroupMap.set(r.repo_id, r.unix_group);
         }
 
         for (const user of validUsers) {
@@ -550,6 +737,70 @@ export default class SyncUnix extends Command {
                 }
               }
             }
+
+            // Sync repo groups - user should be in repo group for each unique repo they own worktrees in
+            const repoIdsSeen = new Set<string>();
+            for (const wt of ownedWorktrees) {
+              if (repoIdsSeen.has(wt.repo_id)) continue;
+              repoIdsSeen.add(wt.repo_id);
+
+              // Get repo group (from prefetched map or generate)
+              const repoGroup =
+                repoGroupMap.get(wt.repo_id) || generateRepoGroupName(wt.repo_id as RepoID);
+              result.groups.expected.push(repoGroup);
+
+              const isInRepoGroup = result.groups.actual.includes(repoGroup);
+              const repoGroupExistsOnSystem = this.groupExists(repoGroup);
+
+              if (verbose) {
+                this.log(
+                  chalk.gray(
+                    `   Repo ${wt.repo_id.substring(0, 8)} → group ${repoGroup} ` +
+                      `(exists: ${repoGroupExistsOnSystem ? 'yes' : 'no'}, member: ${isInRepoGroup ? 'yes' : 'no'})`
+                  )
+                );
+              }
+
+              if (!isInRepoGroup && syncGroups) {
+                let repoGroupReady = repoGroupExistsOnSystem;
+
+                // Create repo group if it doesn't exist and --create-groups is set
+                if (!repoGroupExistsOnSystem) {
+                  if (createGroups) {
+                    this.log(chalk.yellow(`   → Creating repo group ${repoGroup}...`));
+                    if (this.createGroup(repoGroup, dryRun)) {
+                      groupsCreated++;
+                      repoGroupReady = true;
+                      this.log(chalk.green(`   ✓ Created repo group ${repoGroup}`));
+                    } else {
+                      result.errors.push(`Failed to create repo group ${repoGroup}`);
+                      this.log(chalk.red(`   ✗ Failed to create repo group ${repoGroup}`));
+                    }
+                  } else {
+                    result.groups.missing.push(repoGroup);
+                    if (verbose) {
+                      this.log(
+                        chalk.yellow(
+                          `   ⚠ Repo group ${repoGroup} does not exist (use --create-groups to create)`
+                        )
+                      );
+                    }
+                  }
+                }
+
+                // Add user to repo group if it exists/was created
+                if (repoGroupReady) {
+                  this.log(chalk.yellow(`   → Adding to repo group ${repoGroup}...`));
+                  if (this.addUserToGroup(user.unix_username, repoGroup, dryRun)) {
+                    result.groups.added.push(repoGroup);
+                    this.log(chalk.green(`   ✓ Added to ${repoGroup}`));
+                  } else {
+                    result.errors.push(`Failed to add to repo group ${repoGroup}`);
+                    this.log(chalk.red(`   ✗ Failed to add to repo group ${repoGroup}`));
+                  }
+                }
+              }
+            }
           }
 
           results.push(result);
@@ -637,9 +888,97 @@ export default class SyncUnix extends Command {
             }
           }
 
-          // Summary for repair
-          this.log(chalk.bold('Repair Summary:'));
+          // Summary for worktree repair
+          this.log(chalk.bold('Worktree Repair Summary:'));
           this.log(`  Worktrees repaired: ${worktreesRepaired}${dryRun ? ' (dry-run)' : ''}`);
+          if (repairErrors > 0) {
+            this.log(chalk.red(`  Errors: ${repairErrors}`));
+          }
+          this.log('');
+        }
+      }
+
+      // ========================================
+      // Repo .git Permission Repair Phase
+      // ========================================
+
+      if (repairRepoPerms) {
+        this.log(chalk.cyan.bold('\n━━━ Repo .git Permission Repair ━━━\n'));
+
+        // Get all repos with unix_group set
+        const allReposForRepair = await select(db).from(repos).all();
+        const reposWithGroup = allReposForRepair.filter(
+          (r: { unix_group: string | null }) => r.unix_group !== null
+        );
+
+        if (reposWithGroup.length === 0) {
+          this.log(chalk.yellow('No repos with unix_group found\n'));
+        } else {
+          this.log(chalk.cyan(`Found ${reposWithGroup.length} repo(s) with unix_group\n`));
+
+          for (const repo of reposWithGroup) {
+            // Extract local_path from the data JSON blob
+            const rawRepo = repo as {
+              repo_id: string;
+              slug: string;
+              unix_group: string;
+              data: { local_path?: string } | null;
+            };
+
+            const repoPath = rawRepo.data?.local_path;
+
+            // Skip repos without a path
+            if (!repoPath) {
+              this.log(chalk.yellow(`📁 ${rawRepo.slug}`));
+              this.log(chalk.gray(`   repo_id: ${rawRepo.repo_id.substring(0, 8)}`));
+              this.log(chalk.gray(`   unix_group: ${rawRepo.unix_group}`));
+              this.log(chalk.red(`   ⚠ No local_path found in repo data, skipping\n`));
+              continue;
+            }
+
+            const gitPath = `${repoPath}/.git`;
+
+            this.log(chalk.bold(`📁 ${rawRepo.slug}`));
+            this.log(chalk.gray(`   repo_id: ${rawRepo.repo_id.substring(0, 8)}`));
+            this.log(chalk.gray(`   unix_group: ${rawRepo.unix_group}`));
+            this.log(chalk.gray(`   .git path: ${gitPath}`));
+            this.log(chalk.gray(`   mode: ${REPO_GIT_PERMISSION_MODE} (setgid, owner+group rwx)`));
+
+            if (dryRun) {
+              this.log(
+                chalk.gray(`   [dry-run] Would run: chgrp -R ${rawRepo.unix_group} "${gitPath}"`)
+              );
+              this.log(
+                chalk.gray(
+                  `   [dry-run] Would run: chmod -R ${REPO_GIT_PERMISSION_MODE} "${gitPath}"`
+                )
+              );
+              this.log('');
+            } else {
+              try {
+                // Run each command separately (no sh -c wrapper for security)
+                for (const cmd of UnixGroupCommands.setDirectoryGroup(
+                  gitPath,
+                  rawRepo.unix_group,
+                  REPO_GIT_PERMISSION_MODE
+                )) {
+                  execSync(cmd, { stdio: 'pipe' });
+                }
+
+                reposRepaired++;
+                this.log(
+                  chalk.green(`   ✓ Applied .git permissions (${REPO_GIT_PERMISSION_MODE})\n`)
+                );
+              } catch (error) {
+                repairErrors++;
+                this.log(chalk.red(`   ✗ Failed: ${error}\n`));
+              }
+            }
+          }
+
+          // Summary for repo repair
+          this.log(chalk.bold('Repo Repair Summary:'));
+          this.log(`  Repos repaired: ${reposRepaired}${dryRun ? ' (dry-run)' : ''}`);
           if (repairErrors > 0) {
             this.log(chalk.red(`  Errors: ${repairErrors}`));
           }
@@ -685,6 +1024,49 @@ export default class SyncUnix extends Command {
           this.log(chalk.yellow(`   Found ${staleGroups.length} stale group(s) to remove:\n`));
 
           for (const groupName of staleGroups) {
+            this.log(chalk.yellow(`   → Deleting group ${groupName}...`));
+            if (this.deleteGroup(groupName, dryRun)) {
+              groupsDeleted++;
+              this.log(chalk.green(`   ✓ Deleted ${groupName}`));
+            } else {
+              cleanupErrors++;
+              this.log(chalk.red(`   ✗ Failed to delete ${groupName}`));
+            }
+          }
+          this.log('');
+        }
+
+        // Cleanup stale repo groups
+        this.log(chalk.cyan('Checking for stale repo groups...\n'));
+
+        // Get all repo groups that should exist (from DB)
+        const allReposForCleanup = await select(db).from(repos).all();
+        const expectedRepoGroups = new Set(
+          allReposForCleanup.map(
+            (r: { repo_id: string; unix_group: string | null }) =>
+              r.unix_group || generateRepoGroupName(r.repo_id as RepoID)
+          )
+        );
+
+        // Get all agor_rp_* groups on the system
+        const systemRepoGroups = this.listRepoGroups();
+
+        if (verbose) {
+          this.log(chalk.gray(`   Found ${systemRepoGroups.length} agor_rp_* group(s) on system`));
+          this.log(chalk.gray(`   Expected ${expectedRepoGroups.size} group(s) from database`));
+        }
+
+        // Find stale repo groups (on system but not in DB)
+        const staleRepoGroups = systemRepoGroups.filter((g) => !expectedRepoGroups.has(g));
+
+        if (staleRepoGroups.length === 0) {
+          this.log(chalk.green('   ✓ No stale repo groups found\n'));
+        } else {
+          this.log(
+            chalk.yellow(`   Found ${staleRepoGroups.length} stale repo group(s) to remove:\n`)
+          );
+
+          for (const groupName of staleRepoGroups) {
             this.log(chalk.yellow(`   → Deleting group ${groupName}...`));
             if (this.deleteGroup(groupName, dryRun)) {
               groupsDeleted++;
@@ -763,11 +1145,23 @@ export default class SyncUnix extends Command {
         );
       }
 
+      // Sync repos stats (only if --sync-repos was requested)
+      if (syncRepos) {
+        this.log('');
+        this.log(chalk.bold('Sync Repos:'));
+        this.log(`  Repos synced:      ${reposSynced}${dryRunSuffix}`);
+      }
+
       // Repair stats (only if repair was requested)
-      if (repairWorktreePerms) {
+      if (repairWorktreePerms || repairRepoPerms) {
         this.log('');
         this.log(chalk.bold('Repair:'));
-        this.log(`  Worktrees repaired: ${worktreesRepaired}${dryRunSuffix}`);
+        if (repairWorktreePerms) {
+          this.log(`  Worktrees repaired: ${worktreesRepaired}${dryRunSuffix}`);
+        }
+        if (repairRepoPerms) {
+          this.log(`  Repos repaired:     ${reposRepaired}${dryRunSuffix}`);
+        }
         if (repairErrors > 0) {
           this.log(chalk.red(`  Repair errors:     ${repairErrors}`));
         }
@@ -798,7 +1192,9 @@ export default class SyncUnix extends Command {
         groupsCreated > 0 ||
         usersDeleted > 0 ||
         groupsDeleted > 0 ||
-        worktreesRepaired > 0;
+        worktreesRepaired > 0 ||
+        reposRepaired > 0 ||
+        reposSynced > 0;
       if (dryRun && hasChanges) {
         this.log(chalk.yellow('\nRun without --dry-run to apply changes'));
       }

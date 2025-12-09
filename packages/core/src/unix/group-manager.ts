@@ -1,7 +1,10 @@
 /**
- * Unix Group Management for Worktree Isolation
+ * Unix Group Management for Worktree and Repo Isolation
  *
- * Provides utilities for managing worktree Unix groups (agor_wt_<short-id>).
+ * Provides utilities for managing:
+ * - Worktree Unix groups (agor_wt_<short-id>) - for worktree directory access
+ * - Repo Unix groups (agor_rp_<short-id>) - for .git/ directory access
+ *
  * These functions are designed to be called via `sudo agor admin` commands
  * to perform privileged operations safely.
  *
@@ -10,7 +13,7 @@
  */
 
 import { formatShortId } from '../lib/ids.js';
-import type { UUID, WorktreeID } from '../types/index.js';
+import type { RepoID, UUID, WorktreeID } from '../types/index.js';
 
 /**
  * Generate Unix group name for a worktree
@@ -47,6 +50,50 @@ export function parseWorktreeGroupName(groupName: string): string | null {
  */
 export function isValidWorktreeGroupName(groupName: string): boolean {
   return /^agor_wt_[0-9a-f]{8}$/.test(groupName);
+}
+
+// ============================================================
+// REPO GROUP UTILITIES
+// ============================================================
+
+/**
+ * Generate Unix group name for a repo
+ *
+ * Format: agor_rp_<short-id>
+ * Example: agor_rp_03b62447
+ *
+ * This group controls access to the repo's .git/ directory,
+ * which is shared across all worktrees.
+ *
+ * @param repoId - Full repo UUID
+ * @returns Unix group name (e.g., 'agor_rp_03b62447')
+ */
+export function generateRepoGroupName(repoId: RepoID): string {
+  const shortId = formatShortId(repoId as UUID);
+  return `agor_rp_${shortId}`;
+}
+
+/**
+ * Parse repo ID from Unix group name
+ *
+ * Extracts the short ID from a group name like 'agor_rp_03b62447'
+ *
+ * @param groupName - Unix group name
+ * @returns Short repo ID (8 chars) or null if invalid format
+ */
+export function parseRepoGroupName(groupName: string): string | null {
+  const match = groupName.match(/^agor_rp_([0-9a-f]{8})$/);
+  return match ? match[1] : null;
+}
+
+/**
+ * Validate Unix repo group name format
+ *
+ * @param groupName - Group name to validate
+ * @returns true if valid repo group name
+ */
+export function isValidRepoGroupName(groupName: string): boolean {
+  return /^agor_rp_[0-9a-f]{8}$/.test(groupName);
 }
 
 /**
@@ -179,3 +226,19 @@ export function getWorktreePermissionMode(
 ): string {
   return WorktreePermissionModes[othersAccess];
 }
+
+/**
+ * Permission mode for repo .git directories
+ *
+ * The .git directory is shared across all worktrees in a repo.
+ * Users who have access to ANY worktree in the repo get added
+ * to the repo group to enable git operations (commit, push, etc).
+ *
+ * Mode: 2770 (drwxrws---)
+ * - Owner: full access (rwx)
+ * - Group: full access (rwx) + setgid
+ * - Others: no access (---)
+ *
+ * The setgid bit ensures new files (objects, refs) inherit the group.
+ */
+export const REPO_GIT_PERMISSION_MODE = '2770';
