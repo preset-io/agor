@@ -331,6 +331,25 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       userEnv = await resolveUserEnvironment(userId, this.db);
     }
 
+    // Add user to repo group BEFORE creating worktree (for .git access)
+    // This is required because gitCreateWorktree needs to read/write .git/config
+    if (userId) {
+      const unixIntegration = this.app.get('unixIntegration') as UnixIntegrationService | undefined;
+      if (unixIntegration?.isEnabled()) {
+        try {
+          await unixIntegration.addUserToRepoGroup(repo.repo_id, userId);
+          console.log(
+            `[Unix Integration] Added user ${userId.substring(0, 8)} to repo ${repo.repo_id.substring(0, 8)} group (pre-worktree-create)`
+          );
+        } catch (error) {
+          // Fail fast - without repo group access, gitCreateWorktree will fail with "permission denied"
+          throw new Error(
+            `Failed to grant repo access for worktree creation: ${error instanceof Error ? error.message : String(error)}`
+          );
+        }
+      }
+    }
+
     await gitCreateWorktree(
       repo.local_path,
       worktreePath,
