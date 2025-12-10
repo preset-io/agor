@@ -87,6 +87,9 @@ export function useUrlState(options: UseUrlStateOptions) {
   const urlBoardParam = params.boardParam || null;
   const urlSessionParam = params.sessionParam || null;
 
+  // Check if we're on a settings route (should not interfere with board URL state)
+  const isSettingsRoute = location.pathname.startsWith('/settings');
+
   /**
    * Build URL from state (Django-style with trailing slash)
    */
@@ -202,7 +205,8 @@ export function useUrlState(options: UseUrlStateOptions) {
 
     if (!urlBoardParam) {
       // No board in URL - if we have a current board, update URL
-      if (currentBoardIdRef.current && boardById.size > 0) {
+      // But skip if we're on a settings route (settings modal overlays the board)
+      if (currentBoardIdRef.current && boardById.size > 0 && !isSettingsRoute) {
         updateUrlFromState();
       }
       return;
@@ -260,11 +264,17 @@ export function useUrlState(options: UseUrlStateOptions) {
     onBoardChange,
     onSessionChange,
     updateUrlFromState,
+    isSettingsRoute,
   ]);
 
   // Sync State -> URL when state changes
   useEffect(() => {
     if (syncingRef.current) {
+      return;
+    }
+
+    // Skip if we're on a settings route (settings modal overlays the board)
+    if (isSettingsRoute) {
       return;
     }
 
@@ -284,7 +294,7 @@ export function useUrlState(options: UseUrlStateOptions) {
     }
 
     updateUrlFromState();
-  }, [boardById.size, urlBoardParam, urlSessionParam, updateUrlFromState]);
+  }, [boardById.size, urlBoardParam, urlSessionParam, updateUrlFromState, isSettingsRoute]);
 
   return {
     urlBoardParam,
