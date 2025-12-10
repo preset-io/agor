@@ -110,6 +110,16 @@ export const taskQuerySchema = createQuerySchema(
   Type.Object({
     task_id: Type.Optional(CommonSchemas.uuid),
     session_id: Type.Optional(CommonSchemas.uuid),
+    status: Type.Optional(
+      Type.Union([
+        Type.Literal('pending'),
+        Type.Literal('running'),
+        Type.Literal('awaiting_permission'),
+        Type.Literal('completed'),
+        Type.Literal('failed'),
+        Type.Literal('stopped'),
+      ])
+    ),
     created_at: Type.Optional(CommonSchemas.timestamp),
     updated_at: Type.Optional(CommonSchemas.timestamp),
   })
@@ -202,7 +212,17 @@ export const repoQuerySchema = createQuerySchema(
  */
 export const mcpServerQuerySchema = createQuerySchema(
   Type.Object({
-    server_id: Type.Optional(CommonSchemas.uuid),
+    mcp_server_id: Type.Optional(CommonSchemas.uuid),
+    server_id: Type.Optional(CommonSchemas.uuid), // Legacy alias
+    scope: Type.Optional(Type.Union([Type.Literal('global'), Type.Literal('session')])),
+    scopeId: Type.Optional(Type.String()), // scope_id for session-scoped servers
+    transport: Type.Optional(
+      Type.Union([Type.Literal('stdio'), Type.Literal('http'), Type.Literal('sse')])
+    ),
+    enabled: Type.Optional(Type.Boolean()),
+    source: Type.Optional(
+      Type.Union([Type.Literal('user'), Type.Literal('imported'), Type.Literal('agor')])
+    ),
     created_at: Type.Optional(CommonSchemas.timestamp),
   })
 );
