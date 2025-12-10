@@ -13,6 +13,7 @@
  * @see context/guides/rbac-and-unix-isolation.md
  */
 
+import { userInfo } from 'node:os';
 import type { Database } from '../db/index.js';
 import { RepoRepository, UsersRepository, WorktreeRepository } from '../db/repositories/index.js';
 import type { RepoID, UserID, UUID, WorktreeID } from '../types/index.js';
@@ -414,11 +415,16 @@ export class UnixIntegrationService {
       await this.setRepoGitPermissions(repoId, repo.local_path);
     }
 
-    // Add the daemon user to the repo group so it can run git commands
-    // The daemon process needs access to .git for worktree creation, fetching, etc.
-    const daemonUser = process.env.USER;
-    if (daemonUser) {
-      await this.addUnixUserToRepoGroup(groupName, daemonUser);
+    // Add the current process user to the repo group so it can run git commands
+    // The process needs access to .git for worktree creation, fetching, etc.
+    let currentUser: string | undefined;
+    try {
+      currentUser = userInfo().username;
+    } catch {
+      // userInfo() can fail in some environments
+    }
+    if (currentUser) {
+      await this.addUnixUserToRepoGroup(groupName, currentUser);
     }
 
     return groupName;
@@ -444,6 +450,40 @@ export class UnixIntegrationService {
     } else {
       await this.executor.exec(UnixGroupCommands.addUserToGroup(unixUsername, groupName));
     }
+  }
+
+  /**
+   * Ensure the current process user is in the repo's Unix group
+   *
+   * Git commands run as the current process user and need access to .git
+   * which has mode 2770 (owner+group only). This method ensures the user
+   * running the current process has the necessary group membership.
+   *
+   * This should be called before any git operation on the repo to ensure
+   * access, even for repos created before Unix isolation was properly set up.
+   *
+   * Uses os.userInfo() for reliable user detection across execution contexts.
+   *
+   * @param repoId - Repo ID
+   */
+  async ensureProcessUserInRepoGroup(repoId: RepoID): Promise<void> {
+    const repo = await this.repoRepo.findById(repoId);
+    if (!repo?.unix_group) {
+      console.log(
+        `[UnixIntegration] No Unix group for repo ${repoId.substring(0, 8)}, skipping process user add`
+      );
+      return;
+    }
+
+    let currentUser: string;
+    try {
+      currentUser = userInfo().username;
+    } catch {
+      console.log('[UnixIntegration] Could not determine current user, skipping process user add');
+      return;
+    }
+
+    await this.addUnixUserToRepoGroup(repo.unix_group, currentUser);
   }
 
   /**
