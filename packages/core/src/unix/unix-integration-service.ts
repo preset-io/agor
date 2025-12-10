@@ -414,7 +414,36 @@ export class UnixIntegrationService {
       await this.setRepoGitPermissions(repoId, repo.local_path);
     }
 
+    // Add the daemon user to the repo group so it can run git commands
+    // The daemon process needs access to .git for worktree creation, fetching, etc.
+    const daemonUser = process.env.USER;
+    if (daemonUser) {
+      await this.addUnixUserToRepoGroup(groupName, daemonUser);
+    }
+
     return groupName;
+  }
+
+  /**
+   * Add a Unix username directly to a repo group
+   *
+   * Used for adding the daemon user or other system users.
+   *
+   * @param groupName - Unix group name
+   * @param unixUsername - Unix username to add
+   */
+  async addUnixUserToRepoGroup(groupName: string, unixUsername: string): Promise<void> {
+    console.log(`[UnixIntegration] Adding Unix user ${unixUsername} to repo group ${groupName}`);
+
+    // Check if already in group
+    const inGroup = await this.executor.check(
+      UnixGroupCommands.isUserInGroup(unixUsername, groupName)
+    );
+    if (inGroup) {
+      console.log(`[UnixIntegration] User ${unixUsername} already in repo group ${groupName}`);
+    } else {
+      await this.executor.exec(UnixGroupCommands.addUserToGroup(unixUsername, groupName));
+    }
   }
 
   /**
