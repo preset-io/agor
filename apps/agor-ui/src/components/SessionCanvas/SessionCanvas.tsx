@@ -626,6 +626,9 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     const reactFlowInstanceRef = useRef<ReactFlowInstance | null>(null);
     const reactFlowWrapperRef = useRef<HTMLDivElement | null>(null);
 
+    // Track which board we last fit the view for (prevents repeated fitView on node changes)
+    const lastFitBoardIdRef = useRef<string | null>(null);
+
     // Expose methods to parent via ref
     useImperativeHandle(
       ref,
@@ -1011,11 +1014,16 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       setEdges(initialEdges);
     }, [initialEdges, setEdges]); // REMOVED setEdges from dependencies
 
-    // Fit view when switching boards or when nodes are loaded
-    // This ensures nodes are visible even when positioned far apart or when navigating between boards
-    // biome-ignore lint/correctness/useExhaustiveDependencies: board?.board_id is intentionally included to trigger fitView when switching boards, even if node count stays the same
+    // Fit view ONCE when entering a board (not on every node change)
+    // This ensures nodes are visible when navigating between boards or on initial load,
+    // but doesn't disrupt the user's zoom level when comments/cursors/zones change
+    // biome-ignore lint/correctness/useExhaustiveDependencies: nodes.length is used to gate execution (wait for nodes to load), not to trigger re-runs
     useEffect(() => {
+      // Wait for ReactFlow to be ready and nodes to be loaded
       if (!reactFlowInstanceRef.current || nodes.length === 0) return;
+
+      // Only fit view once per board - skip if we already fit for this board
+      if (board?.board_id === lastFitBoardIdRef.current) return;
 
       // Use a small delay to ensure DOM has updated
       const timer = setTimeout(() => {
@@ -1025,10 +1033,12 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           maxZoom: 1.0, // Don't zoom in beyond 100% to keep nodes readable
           duration: 200, // Smooth animation
         });
+        // Mark this board as fitted
+        lastFitBoardIdRef.current = board?.board_id ?? null;
       }, 100);
 
       return () => clearTimeout(timer);
-    }, [nodes.length, board?.board_id]); // Re-run when node count changes OR when board changes
+    }, [nodes.length, board?.board_id]); // board_id triggers check, nodes.length gates execution
 
     // Intercept onNodesChange to detect resize events
     const onNodesChange = useCallback(
