@@ -28,7 +28,6 @@ import {
 } from './group-manager.js';
 import { getWorktreeSymlinkPath, SymlinkCommands } from './symlink-manager.js';
 import {
-  AGOR_DEFAULT_DAEMON_USER,
   AGOR_DEFAULT_SHELL,
   AGOR_HOME_BASE,
   generateUnixUsername,
@@ -69,7 +68,7 @@ export interface UnixIntegrationConfig {
   autoManageSymlinks?: boolean;
 
   /** Unix user the daemon runs as. Added to all Unix groups to ensure daemon has access.
-   * If not set, falls back to AGOR_DEFAULT_DAEMON_USER ('agor'). */
+   * Should be resolved via getAgorDaemonUser() before passing to the service. */
   daemonUser?: string;
 }
 
@@ -88,7 +87,7 @@ export interface UnixOperationResult {
  * Orchestrates all Unix-level operations for Agor RBAC.
  */
 export class UnixIntegrationService {
-  private config: Required<UnixIntegrationConfig>;
+  private config: Required<Omit<UnixIntegrationConfig, 'daemonUser'>> & { daemonUser?: string };
   private executor: CommandExecutor;
   private worktreeRepo: WorktreeRepository;
   private usersRepo: UsersRepository;
@@ -99,15 +98,14 @@ export class UnixIntegrationService {
     executor: CommandExecutor,
     config: UnixIntegrationConfig = { enabled: false }
   ) {
-    // Get daemon user from config, or fall back to default 'agor'
-    const daemonUser = config.daemonUser || AGOR_DEFAULT_DAEMON_USER;
-
+    // daemonUser should be resolved by the caller via getAgorDaemonUser()
+    // If not provided, daemon user operations will be skipped
     this.config = {
       enabled: config.enabled,
       homeBase: config.homeBase || AGOR_HOME_BASE,
       autoCreateUnixUsers: config.autoCreateUnixUsers ?? false,
       autoManageSymlinks: config.autoManageSymlinks ?? config.enabled,
-      daemonUser,
+      daemonUser: config.daemonUser,
     };
     this.executor = config.enabled ? executor : new NoOpExecutor();
     this.worktreeRepo = new WorktreeRepository(db);
@@ -118,10 +116,10 @@ export class UnixIntegrationService {
   /**
    * Get the configured daemon user
    *
-   * Returns the Unix user that runs the daemon process.
+   * Returns the Unix user that runs the daemon process, or undefined if not configured.
    * Used to ensure daemon has access to all Unix groups.
    */
-  getDaemonUser(): string {
+  getDaemonUser(): string | undefined {
     return this.config.daemonUser;
   }
 

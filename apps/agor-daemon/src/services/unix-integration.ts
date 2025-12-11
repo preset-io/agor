@@ -13,12 +13,14 @@
 import type { Database } from '@agor/core/db';
 import {
   UnixIntegrationService as CoreUnixIntegrationService,
+  getAgorDaemonUser,
   SudoDirectExecutor,
   type UnixIntegrationConfig,
 } from '@agor/core/unix';
 
-// Re-export types
+// Re-export types and helpers
 export type { UnixIntegrationConfig };
+export { getAgorDaemonUser };
 
 /**
  * Daemon-specific configuration for Unix integration

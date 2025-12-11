@@ -698,17 +698,23 @@ async function main() {
   // Only initialize if RBAC is enabled
   let unixIntegrationService: import('@agor/core/unix').UnixIntegrationService | null = null;
   if (worktreeRbacEnabled) {
-    const { createUnixIntegrationService } = await import('./services/unix-integration.js');
+    const { createUnixIntegrationService, getAgorDaemonUser } = await import(
+      './services/unix-integration.js'
+    );
     const unixEnabled =
       config.execution?.unix_user_mode !== 'simple' &&
       config.execution?.unix_user_mode !== undefined;
+
+    // Get daemon user - throws if Unix isolation enabled but not configured
+    const daemonUser = getAgorDaemonUser(config);
+
     unixIntegrationService = createUnixIntegrationService(db, {
       enabled: unixEnabled,
       autoManageSymlinks: unixEnabled,
-      daemonUser: config.daemon?.unix_user,
+      daemonUser,
     });
     console.log(
-      `[Unix Integration] ${unixIntegrationService.isEnabled() ? 'Enabled' : 'Disabled'} (mode: ${config.execution?.unix_user_mode || 'simple'})`
+      `[Unix Integration] ${unixIntegrationService.isEnabled() ? 'Enabled' : 'Disabled'} (mode: ${config.execution?.unix_user_mode || 'simple'}, daemon user: ${daemonUser})`
     );
 
     // Register on app for access by other services (e.g., worktree-owners)
