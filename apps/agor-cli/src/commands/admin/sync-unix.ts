@@ -38,6 +38,7 @@ import {
 } from '@agor/core/db';
 import type { RepoID, WorktreeID } from '@agor/core/types';
 import {
+  AGOR_DEFAULT_DAEMON_USER,
   AGOR_USERS_GROUP,
   generateRepoGroupName,
   generateWorktreeGroupName,
@@ -383,22 +384,17 @@ export default class SyncUnix extends Command {
 
       // Load config and get daemon user
       // The daemon user must be added to all Unix groups so it can access files
-      // Note: We only use the explicitly configured daemon user - NO fallback to userInfo()
-      // because when running via sudo, userInfo() would return 'root' which is wrong
+      // Falls back to AGOR_DEFAULT_DAEMON_USER ('agor') if not configured
       const config = await loadConfig();
-      const daemonUser = config.daemon?.unix_user;
+      const configuredDaemonUser = config.daemon?.unix_user;
+      const daemonUser = configuredDaemonUser || AGOR_DEFAULT_DAEMON_USER;
 
-      if (daemonUser) {
-        this.log(chalk.cyan(`Daemon user: ${daemonUser}\n`));
-        if (verbose) {
-          this.log(
-            chalk.gray(
-              `   (from config.daemon.unix_user, will be added to all repo and worktree groups)\n`
-            )
-          );
-        }
-      } else {
-        this.log(chalk.yellow(`⚠ No daemon user configured, skipping daemon group memberships\n`));
+      this.log(chalk.cyan(`Daemon user: ${daemonUser}\n`));
+      if (verbose) {
+        const source = configuredDaemonUser ? 'config.daemon.unix_user' : 'default';
+        this.log(
+          chalk.gray(`   (from ${source}, will be added to all repo and worktree groups)\n`)
+        );
       }
 
       // Track daemon memberships added

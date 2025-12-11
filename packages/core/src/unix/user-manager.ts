@@ -22,6 +22,14 @@ export const AGOR_HOME_BASE = '/home';
 export const AGOR_DEFAULT_SHELL = '/bin/bash';
 
 /**
+ * Default daemon user for Agor
+ *
+ * This is the Unix user that the Agor daemon typically runs as.
+ * Used as a fallback when daemon.unix_user is not configured.
+ */
+export const AGOR_DEFAULT_DAEMON_USER = 'agor';
+
+/**
  * Agor worktrees directory name within user home
  */
 export const AGOR_WORKTREES_DIR = 'agor/worktrees';

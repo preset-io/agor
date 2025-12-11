@@ -61,7 +61,7 @@ export interface AgorDaemonSettings {
   mcpEnabled?: boolean;
 
   /** Unix user the daemon runs as. Used to ensure daemon has access to all Unix groups.
-   * If not set, falls back to os.userInfo().username at runtime. */
+   * If not set, falls back to 'agor' (AGOR_DEFAULT_DAEMON_USER). */
   unix_user?: string;
 }
 

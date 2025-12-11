@@ -13,7 +13,6 @@
  * @see context/guides/rbac-and-unix-isolation.md
  */
 
-import { userInfo } from 'node:os';
 import type { Database } from '../db/index.js';
 import { RepoRepository, UsersRepository, WorktreeRepository } from '../db/repositories/index.js';
 import type { RepoID, UserID, UUID, WorktreeID } from '../types/index.js';
@@ -29,6 +28,7 @@ import {
 } from './group-manager.js';
 import { getWorktreeSymlinkPath, SymlinkCommands } from './symlink-manager.js';
 import {
+  AGOR_DEFAULT_DAEMON_USER,
   AGOR_DEFAULT_SHELL,
   AGOR_HOME_BASE,
   generateUnixUsername,
@@ -69,7 +69,7 @@ export interface UnixIntegrationConfig {
   autoManageSymlinks?: boolean;
 
   /** Unix user the daemon runs as. Added to all Unix groups to ensure daemon has access.
-   * If not set, falls back to os.userInfo().username at runtime. */
+   * If not set, falls back to AGOR_DEFAULT_DAEMON_USER ('agor'). */
   daemonUser?: string;
 }
 
@@ -88,7 +88,7 @@ export interface UnixOperationResult {
  * Orchestrates all Unix-level operations for Agor RBAC.
  */
 export class UnixIntegrationService {
-  private config: Required<Omit<UnixIntegrationConfig, 'daemonUser'>> & { daemonUser?: string };
+  private config: Required<UnixIntegrationConfig>;
   private executor: CommandExecutor;
   private worktreeRepo: WorktreeRepository;
   private usersRepo: UsersRepository;
@@ -99,16 +99,8 @@ export class UnixIntegrationService {
     executor: CommandExecutor,
     config: UnixIntegrationConfig = { enabled: false }
   ) {
-    // Get daemon user from config, or fall back to current process user
-    let daemonUser = config.daemonUser;
-    if (!daemonUser) {
-      try {
-        daemonUser = userInfo().username;
-      } catch {
-        // userInfo() can fail in some environments (e.g., no passwd entry)
-        daemonUser = undefined;
-      }
-    }
+    // Get daemon user from config, or fall back to default 'agor'
+    const daemonUser = config.daemonUser || AGOR_DEFAULT_DAEMON_USER;
 
     this.config = {
       enabled: config.enabled,
@@ -129,7 +121,7 @@ export class UnixIntegrationService {
    * Returns the Unix user that runs the daemon process.
    * Used to ensure daemon has access to all Unix groups.
    */
-  getDaemonUser(): string | undefined {
+  getDaemonUser(): string {
     return this.config.daemonUser;
   }
 
