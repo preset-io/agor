@@ -22,8 +22,9 @@
 
 import { execSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, userInfo } from 'node:os';
 import { join } from 'node:path';
+import { loadConfig } from '@agor/core/config';
 import {
   createDatabase,
   eq,
@@ -145,6 +146,18 @@ export default class SyncUnix extends Command {
   private groupExists(groupName: string): boolean {
     try {
       execSync(UnixGroupCommands.groupExists(groupName), { stdio: 'ignore' });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Check if a Unix user is in a group
+   */
+  private isUserInGroup(username: string, groupName: string): boolean {
+    try {
+      execSync(UnixGroupCommands.isUserInGroup(username, groupName), { stdio: 'ignore' });
       return true;
     } catch {
       return false;
@@ -368,6 +381,34 @@ export default class SyncUnix extends Command {
 
       const db = createDatabase({ url: databaseUrl });
 
+      // Load config and get daemon user
+      // The daemon user must be added to all Unix groups so it can access files
+      const config = await loadConfig();
+      let daemonUser = config.daemon?.unix_user;
+      if (!daemonUser) {
+        try {
+          daemonUser = userInfo().username;
+        } catch {
+          daemonUser = undefined;
+        }
+      }
+
+      if (daemonUser) {
+        this.log(chalk.cyan(`Daemon user: ${daemonUser}\n`));
+        if (verbose) {
+          this.log(
+            chalk.gray(
+              `   (from config.daemon.unix_user, will be added to all repo and worktree groups)\n`
+            )
+          );
+        }
+      } else {
+        this.log(chalk.yellow(`⚠ No daemon user configured, skipping daemon group memberships\n`));
+      }
+
+      // Track daemon memberships added
+      let daemonMembershipsAdded = 0;
+
       // Ensure agor_users group exists (global group for all managed users)
       this.log(chalk.cyan(`Checking ${AGOR_USERS_GROUP} group...\n`));
       if (!this.groupExists(AGOR_USERS_GROUP)) {
@@ -484,6 +525,22 @@ export default class SyncUnix extends Command {
                 this.log(chalk.red(`   ✗ Failed to create Unix group ${repoGroup}`));
                 this.log('');
                 continue; // Skip DB update if group creation failed
+              }
+            }
+
+            // Add daemon user to repo group
+            if (daemonUser) {
+              const daemonInGroup = dryRun ? false : this.isUserInGroup(daemonUser, repoGroup);
+              if (!daemonInGroup) {
+                this.log(chalk.yellow(`   → Adding daemon user ${daemonUser} to ${repoGroup}...`));
+                if (this.addUserToGroup(daemonUser, repoGroup, dryRun)) {
+                  daemonMembershipsAdded++;
+                  this.log(chalk.green(`   ✓ Added daemon user to ${repoGroup}`));
+                } else {
+                  this.log(chalk.red(`   ✗ Failed to add daemon user to ${repoGroup}`));
+                }
+              } else if (verbose) {
+                this.log(chalk.gray(`   ✓ Daemon user already in ${repoGroup}`));
               }
             }
 
@@ -652,32 +709,50 @@ export default class SyncUnix extends Command {
                 );
               }
 
-              if (!isInGroup) {
-                let groupReady = groupExistsOnSystem;
+              let groupReady = groupExistsOnSystem;
 
-                // Create group if it doesn't exist
-                if (!groupExistsOnSystem) {
-                  this.log(chalk.yellow(`   → Creating group ${expectedGroup}...`));
-                  if (this.createGroup(expectedGroup, dryRun)) {
-                    groupsCreated++;
-                    groupReady = true;
-                    this.log(chalk.green(`   ✓ Created group ${expectedGroup}`));
-                  } else {
-                    result.errors.push(`Failed to create group ${expectedGroup}`);
-                    this.log(chalk.red(`   ✗ Failed to create group ${expectedGroup}`));
-                  }
+              // Create group if it doesn't exist
+              if (!groupExistsOnSystem) {
+                this.log(chalk.yellow(`   → Creating group ${expectedGroup}...`));
+                if (this.createGroup(expectedGroup, dryRun)) {
+                  groupsCreated++;
+                  groupReady = true;
+                  this.log(chalk.green(`   ✓ Created group ${expectedGroup}`));
+                } else {
+                  result.errors.push(`Failed to create group ${expectedGroup}`);
+                  this.log(chalk.red(`   ✗ Failed to create group ${expectedGroup}`));
                 }
+              }
 
-                // Add user to group if it exists/was created
-                if (groupReady) {
-                  this.log(chalk.yellow(`   → Adding to group ${expectedGroup}...`));
-                  if (this.addUserToGroup(user.unix_username, expectedGroup, dryRun)) {
-                    result.groups.added.push(expectedGroup);
-                    this.log(chalk.green(`   ✓ Added to ${expectedGroup}`));
+              // Add user to group if it exists/was created and user is not already in it
+              if (groupReady && !isInGroup) {
+                this.log(chalk.yellow(`   → Adding to group ${expectedGroup}...`));
+                if (this.addUserToGroup(user.unix_username, expectedGroup, dryRun)) {
+                  result.groups.added.push(expectedGroup);
+                  this.log(chalk.green(`   ✓ Added to ${expectedGroup}`));
+                } else {
+                  result.errors.push(`Failed to add to group ${expectedGroup}`);
+                  this.log(chalk.red(`   ✗ Failed to add to ${expectedGroup}`));
+                }
+              }
+
+              // Add daemon user to worktree group
+              if (groupReady && daemonUser) {
+                const daemonInWtGroup = dryRun
+                  ? false
+                  : this.isUserInGroup(daemonUser, expectedGroup);
+                if (!daemonInWtGroup) {
+                  this.log(
+                    chalk.yellow(`   → Adding daemon user ${daemonUser} to ${expectedGroup}...`)
+                  );
+                  if (this.addUserToGroup(daemonUser, expectedGroup, dryRun)) {
+                    daemonMembershipsAdded++;
+                    this.log(chalk.green(`   ✓ Added daemon user to ${expectedGroup}`));
                   } else {
-                    result.errors.push(`Failed to add to group ${expectedGroup}`);
-                    this.log(chalk.red(`   ✗ Failed to add to ${expectedGroup}`));
+                    this.log(chalk.red(`   ✗ Failed to add daemon user to ${expectedGroup}`));
                   }
+                } else if (verbose) {
+                  this.log(chalk.gray(`   ✓ Daemon user already in ${expectedGroup}`));
                 }
               }
             }
@@ -705,32 +780,48 @@ export default class SyncUnix extends Command {
                 );
               }
 
-              if (!isInRepoGroup) {
-                let repoGroupReady = repoGroupExistsOnSystem;
+              let repoGroupReady = repoGroupExistsOnSystem;
 
-                // Create repo group if it doesn't exist
-                if (!repoGroupExistsOnSystem) {
-                  this.log(chalk.yellow(`   → Creating repo group ${repoGroup}...`));
-                  if (this.createGroup(repoGroup, dryRun)) {
-                    groupsCreated++;
-                    repoGroupReady = true;
-                    this.log(chalk.green(`   ✓ Created repo group ${repoGroup}`));
-                  } else {
-                    result.errors.push(`Failed to create repo group ${repoGroup}`);
-                    this.log(chalk.red(`   ✗ Failed to create repo group ${repoGroup}`));
-                  }
+              // Create repo group if it doesn't exist
+              if (!repoGroupExistsOnSystem) {
+                this.log(chalk.yellow(`   → Creating repo group ${repoGroup}...`));
+                if (this.createGroup(repoGroup, dryRun)) {
+                  groupsCreated++;
+                  repoGroupReady = true;
+                  this.log(chalk.green(`   ✓ Created repo group ${repoGroup}`));
+                } else {
+                  result.errors.push(`Failed to create repo group ${repoGroup}`);
+                  this.log(chalk.red(`   ✗ Failed to create repo group ${repoGroup}`));
                 }
+              }
 
-                // Add user to repo group if it exists/was created
-                if (repoGroupReady) {
-                  this.log(chalk.yellow(`   → Adding to repo group ${repoGroup}...`));
-                  if (this.addUserToGroup(user.unix_username, repoGroup, dryRun)) {
-                    result.groups.added.push(repoGroup);
-                    this.log(chalk.green(`   ✓ Added to ${repoGroup}`));
+              // Add user to repo group if it exists/was created and user is not already in it
+              if (repoGroupReady && !isInRepoGroup) {
+                this.log(chalk.yellow(`   → Adding to repo group ${repoGroup}...`));
+                if (this.addUserToGroup(user.unix_username, repoGroup, dryRun)) {
+                  result.groups.added.push(repoGroup);
+                  this.log(chalk.green(`   ✓ Added to ${repoGroup}`));
+                } else {
+                  result.errors.push(`Failed to add to repo group ${repoGroup}`);
+                  this.log(chalk.red(`   ✗ Failed to add to repo group ${repoGroup}`));
+                }
+              }
+
+              // Add daemon user to repo group
+              if (repoGroupReady && daemonUser) {
+                const daemonInRpGroup = dryRun ? false : this.isUserInGroup(daemonUser, repoGroup);
+                if (!daemonInRpGroup) {
+                  this.log(
+                    chalk.yellow(`   → Adding daemon user ${daemonUser} to ${repoGroup}...`)
+                  );
+                  if (this.addUserToGroup(daemonUser, repoGroup, dryRun)) {
+                    daemonMembershipsAdded++;
+                    this.log(chalk.green(`   ✓ Added daemon user to ${repoGroup}`));
                   } else {
-                    result.errors.push(`Failed to add to repo group ${repoGroup}`);
-                    this.log(chalk.red(`   ✗ Failed to add to repo group ${repoGroup}`));
+                    this.log(chalk.red(`   ✗ Failed to add daemon user to ${repoGroup}`));
                   }
+                } else if (verbose) {
+                  this.log(chalk.gray(`   ✓ Daemon user already in ${repoGroup}`));
                 }
               }
             }
@@ -876,6 +967,26 @@ export default class SyncUnix extends Command {
           this.log(chalk.gray(`   unix_group: ${rawRepo.unix_group}`));
           this.log(chalk.gray(`   .git path: ${gitPath}`));
           this.log(chalk.gray(`   mode: ${REPO_GIT_PERMISSION_MODE} (setgid, owner+group rwx)`));
+
+          // Ensure daemon user is in this repo group
+          if (daemonUser) {
+            const daemonInThisRepoGroup = dryRun
+              ? false
+              : this.isUserInGroup(daemonUser, rawRepo.unix_group);
+            if (!daemonInThisRepoGroup) {
+              this.log(
+                chalk.yellow(`   → Adding daemon user ${daemonUser} to ${rawRepo.unix_group}...`)
+              );
+              if (this.addUserToGroup(daemonUser, rawRepo.unix_group, dryRun)) {
+                daemonMembershipsAdded++;
+                this.log(chalk.green(`   ✓ Added daemon user to ${rawRepo.unix_group}`));
+              } else {
+                this.log(chalk.red(`   ✗ Failed to add daemon user to ${rawRepo.unix_group}`));
+              }
+            } else if (verbose) {
+              this.log(chalk.gray(`   ✓ Daemon user already in ${rawRepo.unix_group}`));
+            }
+          }
 
           if (dryRun) {
             this.log(
@@ -1069,6 +1180,9 @@ export default class SyncUnix extends Command {
       this.log(`  Users created:     ${usersCreated}${dryRunSuffix}`);
       this.log(`  Groups created:    ${groupsCreated}${dryRunSuffix}`);
       this.log(`  Memberships added: ${groupsAdded}${dryRunSuffix}`);
+      if (daemonUser) {
+        this.log(`  Daemon memberships: ${daemonMembershipsAdded}${dryRunSuffix}`);
+      }
 
       // Worktree/Repo sync stats
       this.log('');
@@ -1103,6 +1217,7 @@ export default class SyncUnix extends Command {
         usersCreated > 0 ||
         groupsAdded > 0 ||
         groupsCreated > 0 ||
+        daemonMembershipsAdded > 0 ||
         usersDeleted > 0 ||
         groupsDeleted > 0 ||
         worktreesSynced > 0 ||

@@ -705,6 +705,7 @@ async function main() {
     unixIntegrationService = createUnixIntegrationService(db, {
       enabled: unixEnabled,
       autoManageSymlinks: unixEnabled,
+      daemonUser: config.daemon?.unix_user,
     });
     console.log(
       `[Unix Integration] ${unixIntegrationService.isEnabled() ? 'Enabled' : 'Disabled'} (mode: ${config.execution?.unix_user_mode || 'simple'})`

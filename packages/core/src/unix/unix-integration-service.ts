@@ -67,6 +67,10 @@ export interface UnixIntegrationConfig {
 
   /** Whether to auto-create symlinks when ownership changes (default: true when enabled) */
   autoManageSymlinks?: boolean;
+
+  /** Unix user the daemon runs as. Added to all Unix groups to ensure daemon has access.
+   * If not set, falls back to os.userInfo().username at runtime. */
+  daemonUser?: string;
 }
 
 /**
@@ -84,7 +88,7 @@ export interface UnixOperationResult {
  * Orchestrates all Unix-level operations for Agor RBAC.
  */
 export class UnixIntegrationService {
-  private config: Required<UnixIntegrationConfig>;
+  private config: Required<Omit<UnixIntegrationConfig, 'daemonUser'>> & { daemonUser?: string };
   private executor: CommandExecutor;
   private worktreeRepo: WorktreeRepository;
   private usersRepo: UsersRepository;
@@ -95,16 +99,38 @@ export class UnixIntegrationService {
     executor: CommandExecutor,
     config: UnixIntegrationConfig = { enabled: false }
   ) {
+    // Get daemon user from config, or fall back to current process user
+    let daemonUser = config.daemonUser;
+    if (!daemonUser) {
+      try {
+        daemonUser = userInfo().username;
+      } catch {
+        // userInfo() can fail in some environments (e.g., no passwd entry)
+        daemonUser = undefined;
+      }
+    }
+
     this.config = {
       enabled: config.enabled,
       homeBase: config.homeBase || AGOR_HOME_BASE,
       autoCreateUnixUsers: config.autoCreateUnixUsers ?? false,
       autoManageSymlinks: config.autoManageSymlinks ?? config.enabled,
+      daemonUser,
     };
     this.executor = config.enabled ? executor : new NoOpExecutor();
     this.worktreeRepo = new WorktreeRepository(db);
     this.usersRepo = new UsersRepository(db);
     this.repoRepo = new RepoRepository(db);
+  }
+
+  /**
+   * Get the configured daemon user
+   *
+   * Returns the Unix user that runs the daemon process.
+   * Used to ensure daemon has access to all Unix groups.
+   */
+  getDaemonUser(): string | undefined {
+    return this.config.daemonUser;
   }
 
   /**
@@ -215,7 +241,36 @@ export class UnixIntegrationService {
       await this.setWorktreePermissions(worktreeId, worktree.path);
     }
 
+    // Add the daemon user to the worktree group so it can access the worktree
+    if (this.config.daemonUser) {
+      await this.addUnixUserToWorktreeGroup(groupName, this.config.daemonUser);
+    }
+
     return groupName;
+  }
+
+  /**
+   * Add a Unix username directly to a worktree group
+   *
+   * Used for adding the daemon user or other system users.
+   *
+   * @param groupName - Unix group name
+   * @param unixUsername - Unix username to add
+   */
+  async addUnixUserToWorktreeGroup(groupName: string, unixUsername: string): Promise<void> {
+    console.log(
+      `[UnixIntegration] Adding Unix user ${unixUsername} to worktree group ${groupName}`
+    );
+
+    // Check if already in group
+    const inGroup = await this.executor.check(
+      UnixGroupCommands.isUserInGroup(unixUsername, groupName)
+    );
+    if (inGroup) {
+      console.log(`[UnixIntegration] User ${unixUsername} already in worktree group ${groupName}`);
+    } else {
+      await this.executor.exec(UnixGroupCommands.addUserToGroup(unixUsername, groupName));
+    }
   }
 
   /**
@@ -415,16 +470,10 @@ export class UnixIntegrationService {
       await this.setRepoGitPermissions(repoId, repo.local_path);
     }
 
-    // Add the current process user to the repo group so it can run git commands
-    // The process needs access to .git for worktree creation, fetching, etc.
-    let currentUser: string | undefined;
-    try {
-      currentUser = userInfo().username;
-    } catch {
-      // userInfo() can fail in some environments
-    }
-    if (currentUser) {
-      await this.addUnixUserToRepoGroup(groupName, currentUser);
+    // Add the daemon user to the repo group so it can run git commands
+    // The daemon needs access to .git for worktree creation, fetching, etc.
+    if (this.config.daemonUser) {
+      await this.addUnixUserToRepoGroup(groupName, this.config.daemonUser);
     }
 
     return groupName;
@@ -450,40 +499,6 @@ export class UnixIntegrationService {
     } else {
       await this.executor.exec(UnixGroupCommands.addUserToGroup(unixUsername, groupName));
     }
-  }
-
-  /**
-   * Ensure the current process user is in the repo's Unix group
-   *
-   * Git commands run as the current process user and need access to .git
-   * which has mode 2770 (owner+group only). This method ensures the user
-   * running the current process has the necessary group membership.
-   *
-   * This should be called before any git operation on the repo to ensure
-   * access, even for repos created before Unix isolation was properly set up.
-   *
-   * Uses os.userInfo() for reliable user detection across execution contexts.
-   *
-   * @param repoId - Repo ID
-   */
-  async ensureProcessUserInRepoGroup(repoId: RepoID): Promise<void> {
-    const repo = await this.repoRepo.findById(repoId);
-    if (!repo?.unix_group) {
-      console.log(
-        `[UnixIntegration] No Unix group for repo ${repoId.substring(0, 8)}, skipping process user add`
-      );
-      return;
-    }
-
-    let currentUser: string;
-    try {
-      currentUser = userInfo().username;
-    } catch {
-      console.log('[UnixIntegration] Could not determine current user, skipping process user add');
-      return;
-    }
-
-    await this.addUnixUserToRepoGroup(repo.unix_group, currentUser);
   }
 
   /**
