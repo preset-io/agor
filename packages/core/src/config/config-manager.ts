@@ -335,3 +335,51 @@ export function getCredential(
     return process.env[key];
   }
 }
+
+/**
+ * Get the Unix user that the Agor daemon runs as.
+ *
+ * Resolution:
+ * 1. If daemon.unix_user is configured, use it
+ * 2. If Unix isolation enabled (worktree_rbac or unix_user_mode), require config
+ * 3. Otherwise, fall back to current process user (dev mode)
+ *
+ * @param config - Agor configuration
+ * @returns Unix username for the daemon
+ * @throws Error if Unix isolation is enabled but daemon.unix_user is not configured
+ *
+ * @example
+ * const config = await loadConfig();
+ * const daemonUser = getAgorDaemonUser(config);
+ */
+export function getAgorDaemonUser(config: AgorConfig): string {
+  // 1. If explicitly configured, always use it
+  if (config.daemon?.unix_user) {
+    return config.daemon.unix_user;
+  }
+
+  // 2. Check if Unix isolation is enabled - if so, require explicit config
+  const unixIsolationEnabled =
+    config.execution?.worktree_rbac === true ||
+    (config.execution?.unix_user_mode && config.execution.unix_user_mode !== 'simple');
+
+  if (unixIsolationEnabled) {
+    throw new Error(
+      'Unix isolation is enabled (worktree_rbac or unix_user_mode) but daemon.unix_user is not configured.\n' +
+        'Please set daemon.unix_user in ~/.agor/config.yaml to the user running the daemon.\n' +
+        'Example:\n' +
+        '  daemon:\n' +
+        '    unix_user: agor'
+    );
+  }
+
+  // 3. Fall back to current process user (dev mode on Mac/Linux without isolation)
+  const user = process.env.USER || os.userInfo().username;
+  if (!user) {
+    throw new Error(
+      'Could not determine current user and daemon.unix_user is not configured.\n' +
+        'Please set daemon.unix_user in ~/.agor/config.yaml.'
+    );
+  }
+  return user;
+}

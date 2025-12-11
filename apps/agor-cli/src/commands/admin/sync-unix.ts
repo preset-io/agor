@@ -41,7 +41,6 @@ import {
   AGOR_USERS_GROUP,
   generateRepoGroupName,
   generateWorktreeGroupName,
-  getAgorDaemonUser,
   getWorktreePermissionMode,
   REPO_GIT_PERMISSION_MODE,
   UnixGroupCommands,
@@ -384,9 +383,21 @@ export default class SyncUnix extends Command {
 
       // Load config and get daemon user
       // The daemon user must be added to all Unix groups so it can access files
-      // requireExplicit: true because this command runs under sudo (userInfo() would return 'root')
+      // Since this command runs under sudo, we MUST require explicit config
+      // (process.env.USER would return 'root' which is wrong)
       const config = await loadConfig();
-      const daemonUser = getAgorDaemonUser(config, { requireExplicit: true });
+      const daemonUser = config.daemon?.unix_user;
+
+      if (!daemonUser) {
+        this.error(
+          'daemon.unix_user is not configured.\n' +
+            'This command requires explicit configuration because it runs with elevated privileges.\n' +
+            'Please set daemon.unix_user in ~/.agor/config.yaml.\n' +
+            'Example:\n' +
+            '  daemon:\n' +
+            '    unix_user: agor'
+        );
+      }
 
       this.log(chalk.cyan(`Daemon user: ${daemonUser}\n`));
       if (verbose) {

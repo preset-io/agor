@@ -8,8 +8,6 @@
  */
 
 import { execSync } from 'node:child_process';
-import { userInfo } from 'node:os';
-import type { AgorConfig } from '../config/types.js';
 import { formatShortId } from '../lib/ids.js';
 import type { UserID, UUID } from '../types/index.js';
 
@@ -27,85 +25,6 @@ export const AGOR_DEFAULT_SHELL = '/bin/bash';
  * Agor worktrees directory name within user home
  */
 export const AGOR_WORKTREES_DIR = 'agor/worktrees';
-
-/**
- * Options for getAgorDaemonUser()
- */
-export interface GetAgorDaemonUserOptions {
-  /**
-   * Require explicit configuration of daemon.unix_user.
-   * Use this when running under sudo (like sync-unix) where
-   * process.env.USER would return 'root'.
-   */
-  requireExplicit?: boolean;
-}
-
-/**
- * Get the Unix user that the Agor daemon runs as.
- *
- * Resolution order:
- * 1. If daemon.unix_user is explicitly configured, use it
- * 2. If Unix isolation is enabled (worktree_rbac or unix_user_mode !== 'simple'),
- *    require explicit config and throw if not set
- * 3. If requireExplicit option is set, throw if not configured
- * 4. Otherwise, fall back to current process user (dev mode)
- *
- * @param config - Agor configuration
- * @param options - Options for daemon user resolution
- * @returns Unix username for the daemon
- * @throws Error if Unix isolation is enabled but daemon.unix_user is not configured
- *
- * @example
- * // In daemon startup (uses process user if no isolation)
- * const daemonUser = getAgorDaemonUser(config);
- *
- * @example
- * // In sync-unix CLI (always requires explicit config since it runs under sudo)
- * const daemonUser = getAgorDaemonUser(config, { requireExplicit: true });
- */
-export function getAgorDaemonUser(config: AgorConfig, options?: GetAgorDaemonUserOptions): string {
-  // 1. If explicitly configured, always use it
-  if (config.daemon?.unix_user) {
-    return config.daemon.unix_user;
-  }
-
-  // 2. Check if Unix isolation is enabled
-  const unixIsolationEnabled =
-    config.execution?.worktree_rbac === true ||
-    (config.execution?.unix_user_mode && config.execution.unix_user_mode !== 'simple');
-
-  if (unixIsolationEnabled) {
-    throw new Error(
-      'Unix isolation is enabled (worktree_rbac or unix_user_mode) but daemon.unix_user is not configured.\n' +
-        'Please set daemon.unix_user in ~/.agor/config.yaml to the user running the daemon.\n' +
-        'Example:\n' +
-        '  daemon:\n' +
-        '    unix_user: agor'
-    );
-  }
-
-  // 3. If requireExplicit is set (e.g., running under sudo), require config
-  if (options?.requireExplicit) {
-    throw new Error(
-      'daemon.unix_user is not configured.\n' +
-        'This command requires explicit configuration because it runs with elevated privileges.\n' +
-        'Please set daemon.unix_user in ~/.agor/config.yaml.\n' +
-        'Example:\n' +
-        '  daemon:\n' +
-        '    unix_user: agor'
-    );
-  }
-
-  // 4. Fall back to current process user (dev mode on Mac/Linux without isolation)
-  try {
-    return process.env.USER || userInfo().username;
-  } catch {
-    throw new Error(
-      'Could not determine current user and daemon.unix_user is not configured.\n' +
-        'Please set daemon.unix_user in ~/.agor/config.yaml.'
-    );
-  }
-}
 
 /**
  * Generate a default Unix username for an Agor user

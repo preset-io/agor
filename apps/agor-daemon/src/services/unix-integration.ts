@@ -10,10 +10,10 @@
  * @see context/guides/rbac-and-unix-isolation.md
  */
 
+import { getAgorDaemonUser } from '@agor/core/config';
 import type { Database } from '@agor/core/db';
 import {
   UnixIntegrationService as CoreUnixIntegrationService,
-  getAgorDaemonUser,
   SudoDirectExecutor,
   type UnixIntegrationConfig,
 } from '@agor/core/unix';
