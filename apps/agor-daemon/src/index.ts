@@ -91,6 +91,53 @@ import { SessionStatus, TaskStatus } from '@agor/core/types';
 import { buildFreshGroupsSpawnArgs } from '@agor/core/unix';
 import { NotFoundError } from '@agor/core/utils/errors';
 
+// ============================================================================
+// GLOBAL ERROR HANDLERS
+// Critical for daemon stability - prevents crashes from unhandled errors
+// ============================================================================
+
+/**
+ * Handle uncaught exceptions
+ *
+ * IMPORTANT: This catches synchronous errors that bubble up to the event loop.
+ * Without this handler, any uncaught exception kills the entire daemon process.
+ *
+ * Common causes:
+ * - Native module crashes (node-pty segfaults)
+ * - Errors in setTimeout/setInterval callbacks
+ * - Errors in event handler callbacks
+ */
+process.on('uncaughtException', (error: Error, origin: string) => {
+  console.error('💥 [FATAL] Uncaught exception:', {
+    error: error.message,
+    stack: error.stack,
+    origin,
+    timestamp: new Date().toISOString(),
+  });
+  // Log but don't exit - let the process manager (pm2, systemd, tsx watch) handle restart
+  // This gives us visibility into what's crashing the daemon
+});
+
+/**
+ * Handle unhandled promise rejections
+ *
+ * IMPORTANT: As of Node 15+, unhandled rejections terminate the process.
+ * This handler prevents that while logging the error for debugging.
+ *
+ * Common causes:
+ * - Async errors in event handlers
+ * - Missing .catch() on promises
+ * - Errors in async setTimeout callbacks
+ */
+process.on('unhandledRejection', (reason: unknown, promise: Promise<unknown>) => {
+  console.error('💥 [FATAL] Unhandled promise rejection:', {
+    reason: reason instanceof Error ? reason.message : String(reason),
+    stack: reason instanceof Error ? reason.stack : undefined,
+    timestamp: new Date().toISOString(),
+  });
+  // Don't exit - log and continue. The specific operation failed but daemon can continue.
+});
+
 /**
  * Type guard to check if result is paginated
  */
