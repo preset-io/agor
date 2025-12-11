@@ -383,3 +383,41 @@ export function getAgorDaemonUser(config: AgorConfig): string {
   }
   return user;
 }
+
+/**
+ * Get the configured daemon Unix user
+ *
+ * Returns the daemon.unix_user from config, or falls back to current process user.
+ * Used for git operations that need to run with fresh group memberships via sudo.
+ *
+ * @returns Unix username or undefined if not determinable
+ */
+export function getDaemonUser(): string | undefined {
+  try {
+    const config = loadConfigSync();
+    if (config.daemon?.unix_user) {
+      return config.daemon.unix_user;
+    }
+    // Fall back to current process user
+    return os.userInfo().username;
+  } catch {
+    // If config load fails or userInfo throws, return undefined
+    return undefined;
+  }
+}
+
+/**
+ * Check if worktree RBAC is enabled
+ *
+ * When RBAC is enabled, git operations need to run via sudo to get fresh group memberships.
+ *
+ * @returns true if worktree_rbac is enabled in config
+ */
+export function isWorktreeRbacEnabled(): boolean {
+  try {
+    const config = loadConfigSync();
+    return config.execution?.worktree_rbac === true;
+  } catch {
+    return false;
+  }
+}

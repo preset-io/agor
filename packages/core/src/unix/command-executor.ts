@@ -704,3 +704,203 @@ export function createAdminExecutor(
 
   return executor;
 }
+
+// ============================================================
+// FRESH GROUPS EXECUTION
+// ============================================================
+
+/**
+ * Escape a string for safe use in a shell command
+ *
+ * Uses single-quote escaping which is the safest approach:
+ * - Wraps string in single quotes
+ * - Escapes any single quotes within the string by ending the quoted section,
+ *   adding an escaped single quote, and starting a new quoted section
+ *
+ * Example: "hello'world" becomes "'hello'\''world'"
+ *
+ * @param arg - String to escape
+ * @returns Shell-safe escaped string
+ */
+export function escapeShellArg(arg: string): string {
+  // Single-quote the entire argument, escaping any embedded single quotes
+  // by ending the single-quoted string, adding an escaped quote, and restarting
+  return `'${arg.replace(/'/g, "'\\''")}'`;
+}
+
+/**
+ * Build a command string for execution via `sudo su - $USER -c "..."`
+ *
+ * @param command - Command to run (e.g., 'git')
+ * @param args - Arguments to pass to the command
+ * @returns Properly escaped command string for -c argument
+ */
+export function buildFreshGroupsCommand(command: string, args: string[]): string {
+  const escapedArgs = args.map(escapeShellArg).join(' ');
+  return args.length > 0 ? `${command} ${escapedArgs}` : command;
+}
+
+/**
+ * Fresh groups executor configuration
+ */
+export interface FreshGroupsExecutorConfig {
+  /** Target Unix user to run commands as */
+  targetUser: string;
+
+  /** Use -n flag to prevent password prompts (default: true) */
+  nonInteractive?: boolean;
+}
+
+/**
+ * Fresh groups command executor
+ *
+ * Executes commands via `sudo su - $USER -c "cmd"` to ensure fresh Unix group memberships.
+ *
+ * WHY THIS EXISTS:
+ * Unix groups are cached at login time. If a user is added to a group after a process
+ * starts (e.g., daemon adds itself to a newly-created worktree group), that process
+ * won't have access to the group until it gets a fresh login shell.
+ *
+ * `sudo su - $USER` creates a new login shell that re-reads /etc/group, giving the
+ * process access to all current group memberships.
+ *
+ * USE CASES:
+ * - Git operations on group-restricted .git directories
+ * - Zellij/terminal spawning with access to worktree groups
+ * - Executor process spawning with worktree access
+ *
+ * @see context/guides/rbac-and-unix-isolation.md
+ */
+export class FreshGroupsExecutor implements CommandExecutor {
+  private targetUser: string;
+  private nonInteractive: boolean;
+
+  constructor(config: FreshGroupsExecutorConfig) {
+    this.targetUser = config.targetUser;
+    this.nonInteractive = config.nonInteractive ?? true;
+  }
+
+  /**
+   * Get the target user this executor runs commands as
+   */
+  getTargetUser(): string {
+    return this.targetUser;
+  }
+
+  /**
+   * Build the sudo su command prefix
+   */
+  private buildSudoPrefix(): string[] {
+    const prefix = ['sudo'];
+    if (this.nonInteractive) {
+      prefix.push('-n');
+    }
+    prefix.push('su', '-', this.targetUser, '-c');
+    return prefix;
+  }
+
+  async exec(command: string): Promise<CommandResult> {
+    // Command is already a shell command string, pass it directly to -c
+    const sudoPrefix = this.buildSudoPrefix();
+    const fullCommand = `${sudoPrefix.slice(0, -1).join(' ')} -c ${escapeShellArg(command)}`;
+
+    console.log(`[FreshGroupsExecutor] Executing as ${this.targetUser}: ${command}`);
+
+    try {
+      const { stdout, stderr } = await execAsync(fullCommand);
+      return { stdout, stderr, exitCode: 0 };
+    } catch (error: unknown) {
+      const err = error as { stdout?: string; stderr?: string; code?: number; message?: string };
+      console.error(`[FreshGroupsExecutor] Command failed: ${command}`, err.message);
+      return {
+        stdout: err.stdout || '',
+        stderr: err.stderr || err.message || '',
+        exitCode: err.code || 1,
+      };
+    }
+  }
+
+  async execAll(commands: string[]): Promise<CommandResult> {
+    let combinedStdout = '';
+    let combinedStderr = '';
+    for (const command of commands) {
+      const result = await this.exec(command);
+      combinedStdout += result.stdout;
+      combinedStderr += result.stderr;
+      if (result.exitCode !== 0) {
+        return { stdout: combinedStdout, stderr: combinedStderr, exitCode: result.exitCode };
+      }
+    }
+    return { stdout: combinedStdout, stderr: combinedStderr, exitCode: 0 };
+  }
+
+  async execWithInput(command: string[], options: ExecWithInputOptions): Promise<CommandResult> {
+    // Build the inner command string
+    const [cmd, ...args] = command;
+    const innerCommand = buildFreshGroupsCommand(cmd, args);
+
+    console.log(`[FreshGroupsExecutor] Executing with input as ${this.targetUser}: ${cmd}`);
+
+    try {
+      // Use spawn with sudo su - user -c "command"
+      const sudoArgs = this.nonInteractive
+        ? ['-n', 'su', '-', this.targetUser, '-c', innerCommand]
+        : ['su', '-', this.targetUser, '-c', innerCommand];
+
+      return await spawnWithInput('sudo', sudoArgs, options.input);
+    } catch (error: unknown) {
+      const err = error as { stdout?: string; stderr?: string; code?: number; message?: string };
+      console.error(`[FreshGroupsExecutor] Command with input failed: ${cmd}`, err.message);
+      return {
+        stdout: err.stdout || '',
+        stderr: err.stderr || err.message || '',
+        exitCode: err.code || 1,
+      };
+    }
+  }
+
+  execSync(command: string): string {
+    const sudoPrefix = this.buildSudoPrefix();
+    const fullCommand = `${sudoPrefix.slice(0, -1).join(' ')} -c ${escapeShellArg(command)}`;
+
+    console.log(`[FreshGroupsExecutor] Executing (sync) as ${this.targetUser}: ${command}`);
+    return execSync(fullCommand, { encoding: 'utf-8' });
+  }
+
+  async check(command: string): Promise<boolean> {
+    const result = await this.exec(command);
+    return result.exitCode === 0;
+  }
+}
+
+/**
+ * Spawn arguments for running a command with fresh group memberships
+ *
+ * Returns the command and arguments array suitable for Node's spawn() or pty.spawn().
+ * This is useful when you need to spawn a process directly rather than through
+ * the executor interface.
+ *
+ * @param targetUser - Unix user to run as
+ * @param command - Command to run
+ * @param args - Arguments to pass to the command
+ * @param nonInteractive - Use -n flag to prevent password prompts (default: true)
+ * @returns Object with command and args for spawn()
+ *
+ * @example
+ * const { cmd, args } = buildFreshGroupsSpawnArgs('agorpg', 'zellij', ['attach', 'session1', '--create']);
+ * pty.spawn(cmd, args, { cwd, env });
+ */
+export function buildFreshGroupsSpawnArgs(
+  targetUser: string,
+  command: string,
+  args: string[] = [],
+  nonInteractive: boolean = true
+): { cmd: string; args: string[] } {
+  const innerCommand = buildFreshGroupsCommand(command, args);
+
+  const sudoArgs = nonInteractive
+    ? ['-n', 'su', '-', targetUser, '-c', innerCommand]
+    : ['su', '-', targetUser, '-c', innerCommand];
+
+  return { cmd: 'sudo', args: sudoArgs };
+}

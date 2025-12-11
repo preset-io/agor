@@ -32,6 +32,7 @@ import { type Database, formatShortId, UsersRepository, WorktreeRepository } fro
 import type { Application } from '@agor/core/feathers';
 import type { AuthenticatedParams, UserID, WorktreeID } from '@agor/core/types';
 import {
+  buildFreshGroupsSpawnArgs,
   buildImpersonationPrefix,
   resolveUnixUserForImpersonation,
   type UnixUserMode,
@@ -483,28 +484,32 @@ export class TerminalsService {
     //   - Session serialization to persist terminal state (useful for worktree persistence)
 
     if (finalUnixUser) {
-      // Impersonation enabled - run Zellij as specified Unix user via sudo
+      // Impersonation enabled - run Zellij as specified Unix user via sudo su -
+      // Using sudo su - (login shell) ensures fresh Unix group memberships are loaded
+      // This is critical for RBAC: users may have been recently added to worktree groups
       const targetHome = `/home/${finalUnixUser}`;
 
       console.log(`🔐 Running terminal as Unix user: ${finalUnixUser} (${impersonationReason})`);
 
-      // Build sudo args for pty.spawn (requires array, not string)
-      // CRITICAL: Use -n flag to prevent password prompts that freeze the system
-      ptyProcess = pty.spawn(
-        'sudo',
-        ['-n', '-u', finalUnixUser, 'zellij', 'attach', zellijSession, '--create'],
-        {
-          name: 'xterm-256color',
-          cols: data.cols || 80,
-          rows: data.rows || 30,
-          cwd,
-          env: {
-            ...env,
-            HOME: targetHome,
-            USER: finalUnixUser,
-          },
-        }
-      );
+      // Build spawn args using fresh groups helper for proper login shell with fresh group memberships
+      // This uses `sudo su - $USER -c "zellij ..."` instead of `sudo -u $USER zellij ...`
+      const { cmd, args } = buildFreshGroupsSpawnArgs(finalUnixUser, 'zellij', [
+        'attach',
+        zellijSession,
+        '--create',
+      ]);
+
+      ptyProcess = pty.spawn(cmd, args, {
+        name: 'xterm-256color',
+        cols: data.cols || 80,
+        rows: data.rows || 30,
+        cwd,
+        env: {
+          ...env,
+          HOME: targetHome,
+          USER: finalUnixUser,
+        },
+      });
     } else {
       // No impersonation - run Zellij as daemon user
       console.log(`🔓 Running terminal as daemon user (${impersonationReason})`);

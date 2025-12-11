@@ -88,6 +88,7 @@ import type {
   User,
 } from '@agor/core/types';
 import { SessionStatus, TaskStatus } from '@agor/core/types';
+import { buildFreshGroupsSpawnArgs } from '@agor/core/unix';
 import { NotFoundError } from '@agor/core/utils/errors';
 
 /**
@@ -501,16 +502,15 @@ async function main() {
     let spawnArgs: string[];
 
     if (executorUnixUser) {
-      // Run as different Unix user via sudo
-      spawnCommand = 'sudo';
-      spawnArgs = [
-        '-n', // Non-interactive (fail if password required)
-        '-u',
-        executorUnixUser,
-        'node',
-        ...nodeArgs,
-      ];
-      console.log(`[Daemon] Spawning executor as Unix user: ${executorUnixUser}`);
+      // Run as different Unix user via sudo su - (login shell)
+      // Using sudo su - ensures fresh Unix group memberships are loaded
+      // This is critical for RBAC: users may have been recently added to worktree groups
+      const { cmd, args } = buildFreshGroupsSpawnArgs(executorUnixUser, 'node', nodeArgs);
+      spawnCommand = cmd;
+      spawnArgs = args;
+      console.log(
+        `[Daemon] Spawning executor as Unix user: ${executorUnixUser} (with fresh groups)`
+      );
     } else {
       // Run as current user
       spawnCommand = 'node';
