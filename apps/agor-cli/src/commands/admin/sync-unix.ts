@@ -22,7 +22,7 @@
 
 import { execSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { homedir, userInfo } from 'node:os';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig } from '@agor/core/config';
 import {
@@ -383,15 +383,10 @@ export default class SyncUnix extends Command {
 
       // Load config and get daemon user
       // The daemon user must be added to all Unix groups so it can access files
+      // Note: We only use the explicitly configured daemon user - NO fallback to userInfo()
+      // because when running via sudo, userInfo() would return 'root' which is wrong
       const config = await loadConfig();
-      let daemonUser = config.daemon?.unix_user;
-      if (!daemonUser) {
-        try {
-          daemonUser = userInfo().username;
-        } catch {
-          daemonUser = undefined;
-        }
-      }
+      const daemonUser = config.daemon?.unix_user;
 
       if (daemonUser) {
         this.log(chalk.cyan(`Daemon user: ${daemonUser}\n`));
