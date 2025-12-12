@@ -101,6 +101,17 @@ if [ "$AGOR_SET_RBAC_FLAG" = "true" ] || [ -n "$AGOR_SET_UNIX_MODE" ]; then
       echo "✅ Unix user mode updated to: $AGOR_SET_UNIX_MODE"
     fi
   fi
+
+  # Set daemon.unix_user when RBAC is enabled (required for sudo impersonation)
+  # The daemon runs as 'agor' user in Docker, so git operations via sudo su need to know this
+  # Check specifically for 'unix_user:' under the daemon section (not elsewhere in the file)
+  if ! grep -A10 "^daemon:" /home/agor/.agor/config.yaml 2>/dev/null | grep -q "unix_user:"; then
+    # Add unix_user under daemon section
+    sed -i '/^daemon:/a\  unix_user: agor' /home/agor/.agor/config.yaml
+    echo "✅ Daemon Unix user set to: agor"
+  else
+    echo "✅ Daemon Unix user already configured"
+  fi
 fi
 
 # Always create/update admin user (safe: only upserts)
