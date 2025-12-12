@@ -3133,13 +3133,10 @@ async function main() {
     {
       async create(_data: unknown, params: RouteParams) {
         const id = params.route?.id;
-        console.log(`🛑 [Daemon] Stop endpoint called for session: ${id}`);
-
         if (!id) throw new Error('Session ID required');
 
         // Get session to check status
         const session = await sessionsService.get(id, params);
-        console.log(`🛑 [Daemon] Session status: ${session.status}`);
 
         // Check if session is actually running or awaiting permission
         if (
@@ -3154,7 +3151,6 @@ async function main() {
 
         // Find the currently running task(s)
         // Note: Using two separate queries to avoid $in operator which fails schema validation
-        console.log(`🛑 [Daemon] Finding running tasks for session ${id.substring(0, 8)}...`);
         let runningTasksArray: Task[] = [];
         try {
           // Query for RUNNING tasks
@@ -3185,11 +3181,8 @@ async function main() {
 
           runningTasksArray = [...runningTasks, ...awaitingTasks];
         } catch (findError) {
-          console.error(`❌ [Daemon] Failed to find running tasks:`, findError);
           throw findError;
         }
-
-        console.log(`🛑 [Daemon] Found ${runningTasksArray.length} running tasks`);
 
         if (runningTasksArray.length === 0) {
           return {
@@ -3216,12 +3209,7 @@ async function main() {
             },
             params
           );
-
-          console.log(
-            `🛑 [Daemon] Stop requested for session ${id.substring(0, 8)}, task ${latestTask.task_id.substring(0, 8)} set to STOPPING`
-          );
         } catch (error) {
-          console.error(`❌ [Daemon] Failed to set STOPPING status:`, error);
           return {
             success: false,
             reason: `Failed to update status: ${error instanceof Error ? error.message : 'Unknown error'}`,
@@ -3229,9 +3217,6 @@ async function main() {
         }
 
         // PHASE 2: Use bulletproof stop handler with ACK protocol
-        console.log(
-          `🛑 [Daemon] Calling handleStopWithAck for task ${latestTask.task_id.substring(0, 8)}...`
-        );
         const { handleStopWithAck } = await import('./services/sessions/hooks/handle-stop.js');
 
         const result = await handleStopWithAck(
@@ -3241,12 +3226,8 @@ async function main() {
           params
         );
 
-        console.log(`🛑 [Daemon] handleStopWithAck result:`, result);
-
         // PHASE 3: Handle failed stop (revert to RUNNING)
         if (!result.success) {
-          // Stop failed, revert to RUNNING
-          console.warn(`⚠️  [Daemon] Stop failed, reverting to RUNNING`);
           try {
             await tasksService.patch(latestTask.task_id, {
               status: TaskStatus.RUNNING,
