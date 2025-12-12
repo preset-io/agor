@@ -34,9 +34,9 @@ import { type Database, formatShortId, UsersRepository, WorktreeRepository } fro
 import type { Application } from '@agor/core/feathers';
 import type { AuthenticatedParams, UserID, WorktreeID } from '@agor/core/types';
 import {
-  buildFreshGroupsSpawnArgs,
-  buildImpersonationPrefix,
+  buildSpawnArgs,
   resolveUnixUserForImpersonation,
+  runAsUser,
   type UnixUserMode,
   UnixUserNotFoundError,
   validateResolvedUnixUser,
@@ -184,15 +184,11 @@ ${exportLines.join('\n')}
  */
 function zellijSessionExists(sessionName: string, asUser?: string): boolean {
   try {
-    // Use validate=false since caller already validated user exists
-    const prefix = buildImpersonationPrefix(asUser, false);
-    const cmd = `${prefix}zellij list-sessions 2>/dev/null`;
     console.log(
       `[Zellij] Checking session exists: ${sessionName} (as: ${asUser || 'daemon user'})`
     );
-    const output = execSync(cmd, {
-      encoding: 'utf-8',
-      stdio: 'pipe',
+    const output = runAsUser('zellij list-sessions 2>/dev/null', {
+      asUser,
       timeout: ZELLIJ_COMMAND_TIMEOUT_MS,
     });
     return output.includes(sessionName);
@@ -216,11 +212,9 @@ function zellijSessionExists(sessionName: string, asUser?: string): boolean {
  */
 function runZellijAction(sessionName: string, action: string, asUser?: string): void {
   try {
-    // Use validate=false since caller already validated user exists
-    const prefix = buildImpersonationPrefix(asUser, false);
-    const cmd = `${prefix}zellij --session "${sessionName}" action ${action}`;
-    execSync(cmd, {
-      stdio: 'pipe',
+    const cmd = `zellij --session "${sessionName}" action ${action}`;
+    runAsUser(cmd, {
+      asUser,
       timeout: ZELLIJ_COMMAND_TIMEOUT_MS,
     });
   } catch (error) {
@@ -246,14 +240,11 @@ function runZellijAction(sessionName: string, action: string, asUser?: string): 
  */
 function getZellijTabs(sessionName: string, asUser?: string): string[] {
   try {
-    // Use validate=false since caller already validated user exists
-    const prefix = buildImpersonationPrefix(asUser, false);
     // Use zellij action to dump layout, then parse tab names
     // This is hacky but works - alternative is to maintain our own state
-    const cmd = `${prefix}zellij --session "${sessionName}" action dump-layout 2>/dev/null`;
-    const output = execSync(cmd, {
-      encoding: 'utf-8',
-      stdio: 'pipe',
+    const cmd = `zellij --session "${sessionName}" action dump-layout 2>/dev/null`;
+    const output = runAsUser(cmd, {
+      asUser,
       timeout: ZELLIJ_COMMAND_TIMEOUT_MS,
     });
 
@@ -524,47 +515,29 @@ export class TerminalsService {
     // Wrap pty.spawn in try-catch to handle native module errors gracefully
     // node-pty is a native module that can throw synchronously on spawn failure
     try {
+      // Build spawn args - handles impersonation via sudo su - when finalUnixUser is set
+      const zellijArgs = ['attach', zellijSession, '--create'];
+      const { cmd, args } = buildSpawnArgs('zellij', zellijArgs, finalUnixUser || undefined);
+
+      // Log impersonation decision
       if (finalUnixUser) {
-        // Impersonation enabled - run Zellij as specified Unix user via sudo su -
-        // Using sudo su - (login shell) ensures fresh Unix group memberships are loaded
-        // This is critical for RBAC: users may have been recently added to worktree groups
-        const targetHome = `/home/${finalUnixUser}`;
-
         console.log(`🔐 Running terminal as Unix user: ${finalUnixUser} (${impersonationReason})`);
-
-        // Build spawn args using fresh groups helper for proper login shell with fresh group memberships
-        // This uses `sudo su - $USER -c "zellij ..."` instead of `sudo -u $USER zellij ...`
-        const { cmd, args } = buildFreshGroupsSpawnArgs(finalUnixUser, 'zellij', [
-          'attach',
-          zellijSession,
-          '--create',
-        ]);
-
-        ptyProcess = pty.spawn(cmd, args, {
-          name: 'xterm-256color',
-          cols: data.cols || 80,
-          rows: data.rows || 30,
-          cwd,
-          env: {
-            ...env,
-            HOME: targetHome,
-            USER: finalUnixUser,
-          },
-        });
       } else {
-        // No impersonation - run Zellij as daemon user
         console.log(`🔓 Running terminal as daemon user (${impersonationReason})`);
-
-        const zellijArgs = ['attach', zellijSession, '--create'];
-
-        ptyProcess = pty.spawn('zellij', zellijArgs, {
-          name: 'xterm-256color',
-          cols: data.cols || 80,
-          rows: data.rows || 30,
-          cwd,
-          env,
-        });
       }
+
+      // Build environment - override HOME/USER when impersonating
+      const spawnEnv = finalUnixUser
+        ? { ...env, HOME: `/home/${finalUnixUser}`, USER: finalUnixUser }
+        : env;
+
+      ptyProcess = pty.spawn(cmd, args, {
+        name: 'xterm-256color',
+        cols: data.cols || 80,
+        rows: data.rows || 30,
+        cwd,
+        env: spawnEnv,
+      });
     } catch (spawnError) {
       const errorMsg = spawnError instanceof Error ? spawnError.message : String(spawnError);
       console.error(`❌ [Terminal] Failed to spawn PTY for session ${zellijSession}:`, errorMsg);

@@ -88,7 +88,7 @@ import type {
   User,
 } from '@agor/core/types';
 import { SessionStatus, TaskStatus } from '@agor/core/types';
-import { buildFreshGroupsSpawnArgs } from '@agor/core/unix';
+import { buildSpawnArgs } from '@agor/core/unix';
 import { NotFoundError } from '@agor/core/utils/errors';
 
 // ============================================================================
@@ -548,20 +548,18 @@ async function main() {
     let spawnCommand: string;
     let spawnArgs: string[];
 
+    // Build spawn args - handles impersonation via sudo su - when executorUnixUser is set
+    // When impersonating, uses sudo su - (login shell) to ensure fresh Unix group memberships
+    // This is critical for RBAC: users may have been recently added to worktree groups
+    const { cmd, args } = buildSpawnArgs('node', nodeArgs, executorUnixUser || undefined);
+    spawnCommand = cmd;
+    spawnArgs = args;
+
     if (executorUnixUser) {
-      // Run as different Unix user via sudo su - (login shell)
-      // Using sudo su - ensures fresh Unix group memberships are loaded
-      // This is critical for RBAC: users may have been recently added to worktree groups
-      const { cmd, args } = buildFreshGroupsSpawnArgs(executorUnixUser, 'node', nodeArgs);
-      spawnCommand = cmd;
-      spawnArgs = args;
       console.log(
         `[Daemon] Spawning executor as Unix user: ${executorUnixUser} (with fresh groups)`
       );
     } else {
-      // Run as current user
-      spawnCommand = 'node';
-      spawnArgs = nodeArgs;
       console.log(`[Daemon] Spawning executor as current user (no impersonation)`);
     }
 
@@ -745,7 +743,7 @@ async function main() {
   // Only initialize if RBAC is enabled
   let unixIntegrationService: import('@agor/core/unix').UnixIntegrationService | null = null;
   if (worktreeRbacEnabled) {
-    const { createUnixIntegrationService, getAgorDaemonUser } = await import(
+    const { createUnixIntegrationService, requireDaemonUser } = await import(
       './services/unix-integration.js'
     );
     const unixEnabled =
@@ -753,7 +751,7 @@ async function main() {
       config.execution?.unix_user_mode !== undefined;
 
     // Get daemon user - throws if Unix isolation enabled but not configured
-    const daemonUser = getAgorDaemonUser(config);
+    const daemonUser = requireDaemonUser(config);
 
     unixIntegrationService = createUnixIntegrationService(db, {
       enabled: unixEnabled,

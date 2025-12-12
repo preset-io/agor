@@ -15,7 +15,6 @@ import {
   AGOR_DEFAULT_SHELL,
   AGOR_HOME_BASE,
   AGOR_WORKTREES_DIR,
-  buildImpersonationPrefix,
   generateUnixUsername,
   getUserHomeDir,
   getUserWorktreesDir,
@@ -325,46 +324,6 @@ describe('user-manager', () => {
 
       const { unixUserExists } = await import('./user-manager.js');
       expect(unixUserExists('nonexistent_user_xyz')).toBe(false);
-    });
-  });
-
-  // =========================================================================
-  // Impersonation Prefix
-  // =========================================================================
-
-  describe('buildImpersonationPrefix', () => {
-    it('returns empty string when username is undefined', () => {
-      expect(buildImpersonationPrefix(undefined, false)).toBe('');
-    });
-
-    it('returns empty string when username is empty', () => {
-      expect(buildImpersonationPrefix('', false)).toBe('');
-    });
-
-    it('returns sudo prefix when username provided (no validation)', () => {
-      expect(buildImpersonationPrefix('alice', false)).toBe('sudo -u alice ');
-    });
-
-    it('throws UnixUserNotFoundError when validation enabled and user missing', () => {
-      mockedExecSync.mockImplementationOnce(() => {
-        throw new Error('id: nosuchuser: no such user');
-      });
-
-      expect(() => buildImpersonationPrefix('nosuchuser', true)).toThrow(UnixUserNotFoundError);
-    });
-
-    it('UnixUserNotFoundError includes username', () => {
-      mockedExecSync.mockImplementationOnce(() => {
-        throw new Error('id: alice: no such user');
-      });
-
-      try {
-        buildImpersonationPrefix('alice', true);
-        expect.fail('Should have thrown');
-      } catch (err) {
-        expect(err).toBeInstanceOf(UnixUserNotFoundError);
-        expect((err as UnixUserNotFoundError).username).toBe('alice');
-      }
     });
   });
 

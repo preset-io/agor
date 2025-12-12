@@ -337,22 +337,52 @@ export function getCredential(
 }
 
 /**
- * Get the Unix user that the Agor daemon runs as.
+ * Get the Unix user that the Agor daemon runs as
  *
- * Resolution:
- * 1. If daemon.unix_user is configured, use it
- * 2. If Unix isolation enabled (worktree_rbac or unix_user_mode), require config
- * 3. Otherwise, fall back to current process user (dev mode)
+ * Resolution order:
+ * 1. daemon.unix_user from config (explicit configuration)
+ * 2. Current process user (development mode fallback)
  *
- * @param config - Agor configuration
- * @returns Unix username for the daemon
- * @throws Error if Unix isolation is enabled but daemon.unix_user is not configured
+ * Used for:
+ * - Git operations with fresh group memberships (sudo su -)
+ * - Unix integration service initialization
+ * - Terminal impersonation decisions
+ *
+ * @returns Unix username, or undefined if not determinable
  *
  * @example
- * const config = await loadConfig();
- * const daemonUser = getAgorDaemonUser(config);
+ * ```ts
+ * const daemonUser = getDaemonUser();
+ * if (daemonUser && isWorktreeRbacEnabled()) {
+ *   runAsUser('git status', { asUser: daemonUser });
+ * }
+ * ```
  */
-export function getAgorDaemonUser(config: AgorConfig): string {
+export function getDaemonUser(): string | undefined {
+  try {
+    const config = loadConfigSync();
+    if (config.daemon?.unix_user) {
+      return config.daemon.unix_user;
+    }
+    // Fall back to current process user (dev mode)
+    return os.userInfo().username;
+  } catch {
+    // If config load fails or userInfo throws, return undefined
+    return undefined;
+  }
+}
+
+/**
+ * Get daemon user, throwing if RBAC is enabled but user not configured
+ *
+ * Use this when initializing services that require Unix isolation.
+ * For most operations, prefer getDaemonUser() which returns undefined on failure.
+ *
+ * @param config - Agor configuration (pass pre-loaded config to avoid re-loading)
+ * @returns Unix username for the daemon
+ * @throws Error if Unix isolation is enabled but daemon.unix_user is not configured
+ */
+export function requireDaemonUser(config: AgorConfig): string {
   // 1. If explicitly configured, always use it
   if (config.daemon?.unix_user) {
     return config.daemon.unix_user;
@@ -382,28 +412,6 @@ export function getAgorDaemonUser(config: AgorConfig): string {
     );
   }
   return user;
-}
-
-/**
- * Get the configured daemon Unix user
- *
- * Returns the daemon.unix_user from config, or falls back to current process user.
- * Used for git operations that need to run with fresh group memberships via sudo.
- *
- * @returns Unix username or undefined if not determinable
- */
-export function getDaemonUser(): string | undefined {
-  try {
-    const config = loadConfigSync();
-    if (config.daemon?.unix_user) {
-      return config.daemon.unix_user;
-    }
-    // Fall back to current process user
-    return os.userInfo().username;
-  } catch {
-    // If config load fails or userInfo throws, return undefined
-    return undefined;
-  }
 }
 
 /**

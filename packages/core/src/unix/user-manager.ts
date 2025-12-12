@@ -311,49 +311,6 @@ export function unixUserExists(username: string): boolean {
 }
 
 /**
- * Build command prefix for running commands as another Unix user
- *
- * This is the central utility for user impersonation via `sudo -n -u`.
- * All code that needs to run commands as another user should use this.
- *
- * CRITICAL: Always includes -n flag to prevent password prompts that freeze the system.
- *
- * @param username - Unix username to impersonate (undefined = no impersonation)
- * @param validate - If true, throws UnixUserNotFoundError if user doesn't exist (default: true)
- * @returns Command prefix string (empty if no username, "sudo -n -u <user> " otherwise)
- * @throws UnixUserNotFoundError if validate=true and user doesn't exist
- *
- * @example
- * ```ts
- * // Run a command as another user
- * const prefix = buildImpersonationPrefix('alice');
- * execSync(`${prefix}whoami`); // Runs: sudo -n -u alice whoami
- *
- * // No impersonation
- * const prefix = buildImpersonationPrefix(undefined);
- * execSync(`${prefix}whoami`); // Runs: whoami
- *
- * // Skip validation (caller already verified)
- * const prefix = buildImpersonationPrefix('alice', false);
- * ```
- */
-export function buildImpersonationPrefix(
-  username: string | undefined,
-  validate: boolean = true
-): string {
-  if (!username) {
-    return '';
-  }
-
-  if (validate && !unixUserExists(username)) {
-    throw new UnixUserNotFoundError(username);
-  }
-
-  // CRITICAL: Use -n flag to prevent password prompts that freeze the system
-  return `sudo -n -u ${username} `;
-}
-
-/**
  * Unix user mode types
  */
 export type UnixUserMode = 'simple' | 'insulated' | 'opportunistic' | 'strict';

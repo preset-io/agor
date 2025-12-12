@@ -10,7 +10,7 @@
  * @see context/guides/rbac-and-unix-isolation.md
  */
 
-import { getAgorDaemonUser } from '@agor/core/config';
+import { requireDaemonUser } from '@agor/core/config';
 import type { Database } from '@agor/core/db';
 import {
   UnixIntegrationService as CoreUnixIntegrationService,
@@ -20,7 +20,7 @@ import {
 
 // Re-export types and helpers
 export type { UnixIntegrationConfig };
-export { getAgorDaemonUser };
+export { requireDaemonUser };
 
 /**
  * Daemon-specific configuration for Unix integration
