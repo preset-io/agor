@@ -1421,6 +1421,9 @@ async function main() {
                       worktree.worktree_id,
                       creatorId as import('@agor/core/types').UUID
                     );
+                    // Fix permissions on .git/worktrees/<name>/ directory
+                    // Git creates this with umask, so group write is missing
+                    await unixIntegrationService.fixWorktreeGitDirPermissions(worktree.worktree_id);
                   } catch (error) {
                     console.error('[Unix Integration] Failed to setup worktree group:', error);
                     // Continue - app-layer RBAC is still functional

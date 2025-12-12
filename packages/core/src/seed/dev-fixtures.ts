@@ -198,6 +198,8 @@ export async function seedDevFixtures(options: SeedOptions = {}): Promise<SeedRe
     try {
       const groupName = await unixIntegrationService.createWorktreeGroup(worktree.worktree_id);
       await unixIntegrationService.addUserToWorktreeGroup(worktree.worktree_id, userId);
+      // Fix permissions on .git/worktrees/<name>/ directory
+      await unixIntegrationService.fixWorktreeGitDirPermissions(worktree.worktree_id);
       console.log(`   Unix group: ${groupName}`);
     } catch (error) {
       console.error(

@@ -294,6 +294,10 @@ async function main() {
           // Create worktree group and add owner
           const groupName = await unixIntegrationService.createWorktreeGroup(worktree.worktree_id);
           await unixIntegrationService.addUserToWorktreeGroup(worktree.worktree_id, ownerId);
+
+          // Fix permissions on .git/worktrees/<name>/ directory
+          await unixIntegrationService.fixWorktreeGitDirPermissions(worktree.worktree_id);
+
           console.log(chalk.gray(`    Unix group: ${groupName}`));
         } catch (error) {
           console.error(

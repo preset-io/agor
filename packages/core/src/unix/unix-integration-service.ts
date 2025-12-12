@@ -544,6 +544,51 @@ export class UnixIntegrationService {
   }
 
   /**
+   * Fix permissions on a worktree's .git/worktrees/<name>/ directory
+   *
+   * When git creates a worktree, it creates a subdirectory in .git/worktrees/.
+   * Due to umask, this directory may not have group write permission even though
+   * setgid causes it to inherit the repo group. This method fixes those permissions.
+   *
+   * @param worktreeId - Worktree ID
+   */
+  async fixWorktreeGitDirPermissions(worktreeId: WorktreeID): Promise<void> {
+    const worktree = await this.worktreeRepo.findById(worktreeId);
+    if (!worktree?.repo_id) {
+      console.log(
+        `[UnixIntegration] Worktree ${worktreeId.substring(0, 8)} has no repo, skipping .git/worktrees fix`
+      );
+      return;
+    }
+
+    const repo = await this.repoRepo.findById(worktree.repo_id as RepoID);
+    if (!repo?.unix_group || !repo?.local_path) {
+      console.log(`[UnixIntegration] Repo has no Unix group or path, skipping .git/worktrees fix`);
+      return;
+    }
+
+    // The worktree's git dir is at .git/worktrees/<worktree-name>/
+    // Extract worktree name from path (last component)
+    const worktreeName = worktree.path.split('/').pop();
+    if (!worktreeName) {
+      console.log(
+        `[UnixIntegration] Could not determine worktree name from path: ${worktree.path}`
+      );
+      return;
+    }
+
+    const worktreeGitDir = `${repo.local_path}/.git/worktrees/${worktreeName}`;
+
+    console.log(
+      `[UnixIntegration] Setting .git/worktrees/${worktreeName} permissions ${REPO_GIT_PERMISSION_MODE} (group: ${repo.unix_group})`
+    );
+
+    await this.executor.execAll(
+      UnixGroupCommands.setDirectoryGroup(worktreeGitDir, repo.unix_group, REPO_GIT_PERMISSION_MODE)
+    );
+  }
+
+  /**
    * Add a user to a repo's Unix group
    *
    * Called when a user gains access to any worktree in the repo.
