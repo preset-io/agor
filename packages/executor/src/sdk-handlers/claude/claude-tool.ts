@@ -200,6 +200,7 @@ export class ClaudeTool implements ITool {
    * @param taskId - Optional task ID for linking messages
    * @param permissionMode - Optional permission mode for SDK
    * @param streamingCallbacks - Optional callbacks for real-time streaming (enables typewriter effect)
+   * @param abortController - Optional AbortController for cancellation support (passed to SDK)
    * @returns User message ID and array of assistant message IDs
    */
   async executePromptWithStreaming(
@@ -207,7 +208,8 @@ export class ClaudeTool implements ITool {
     prompt: string,
     taskId?: TaskID,
     permissionMode?: PermissionMode,
-    streamingCallbacks?: import('../base').StreamingCallbacks
+    streamingCallbacks?: import('../base').StreamingCallbacks,
+    abortController?: AbortController
   ): Promise<{
     userMessageId: MessageID;
     assistantMessageIds: MessageID[];
@@ -292,7 +294,9 @@ export class ClaudeTool implements ITool {
       sessionId,
       prompt,
       taskId,
-      mappedPermissionMode
+      mappedPermissionMode,
+      undefined, // chunkCallback (unused)
+      abortController
     )) {
       // Detect if execution was stopped early
       if (event.type === 'stopped') {

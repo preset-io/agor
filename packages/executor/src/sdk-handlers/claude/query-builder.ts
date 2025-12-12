@@ -118,13 +118,14 @@ export async function setupQuery(
     taskId?: TaskID;
     permissionMode?: PermissionMode;
     resume?: boolean;
+    abortController?: AbortController;
   } = {}
 ): Promise<{
   query: InterruptibleQuery;
   resolvedModel: string;
   getStderr: () => string;
 }> {
-  const { taskId, permissionMode, resume = true } = options;
+  const { taskId, permissionMode, resume = true, abortController } = options;
 
   const session = await deps.sessionsRepo.findById(sessionId);
   if (!session) {
@@ -247,6 +248,14 @@ export async function setupQuery(
       }
     },
   };
+
+  // Pass AbortController to SDK for proper cancellation support
+  // This is the officially supported way to stop a query mid-execution
+  // See: https://platform.claude.com/docs/en/agent-sdk/typescript
+  if (abortController) {
+    queryOptions.abortController = abortController;
+    console.log(`🛑 AbortController attached to query for cancellation support`);
+  }
 
   // Add permissionMode if provided, otherwise fall back to session's permission_config
   // For Claude Code sessions, the UI should pass Claude SDK permission modes directly:

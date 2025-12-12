@@ -22,7 +22,8 @@ export interface BaseTool {
     prompt: string,
     taskId?: TaskID,
     permissionMode?: PermissionMode,
-    callbacks?: StreamingCallbacks
+    callbacks?: StreamingCallbacks,
+    abortController?: AbortController
   ): Promise<{
     userMessageId: MessageID;
     assistantMessageIds: MessageID[];
@@ -323,12 +324,14 @@ export async function executeToolTask(params: {
 
   try {
     // Execute prompt with streaming
+    // Pass abortController directly to SDK for proper cancellation support
     const result = await tool.executePromptWithStreaming(
       sessionId,
       prompt,
       taskId,
       permissionMode,
-      ctx.callbacks
+      ctx.callbacks,
+      params.abortController
     );
 
     console.log(
