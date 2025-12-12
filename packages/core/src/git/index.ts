@@ -61,6 +61,11 @@ function ensureGitWrapper(targetUser: string): string {
   // Create wrapper script that uses sudo su - for fresh group memberships
   // The script builds a properly escaped command string using printf %q
   // which safely handles all special characters in arguments
+  //
+  // IMPORTANT: The wrapper preserves the caller's working directory.
+  // This is necessary because sudo su - creates a login shell that starts
+  // in the user's home directory, but simple-git expects commands to run
+  // in the baseDir (e.g., the repository path).
   const wrapperScript = [
     '#!/bin/bash',
     '# Agor git wrapper - runs git with fresh Unix group memberships',
@@ -73,9 +78,14 @@ function ensureGitWrapper(targetUser: string): string {
     '',
     `TARGET_USER="${targetUser}"`,
     '',
+    '# Capture the current working directory (set by simple-git baseDir)',
+    '# We need to cd to this directory because sudo su - starts in $HOME',
+    'WORK_DIR="$(pwd)"',
+    '',
     '# Build a properly escaped command string',
     '# printf %q safely escapes each argument for shell evaluation',
-    `CMD="${gitBinary}"`,
+    '# Prepend cd to the working directory',
+    `CMD="cd $(printf '%q' "$WORK_DIR") && ${gitBinary}"`,
     'for arg in "$@"; do',
     '  CMD="$CMD $(printf \'%q\' "$arg")"',
     'done',
