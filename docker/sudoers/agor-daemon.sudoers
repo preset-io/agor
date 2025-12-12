@@ -126,6 +126,7 @@ agor ALL=(ALL) NOPASSWD: /usr/bin/id *
 agor ALL=(ALL) NOPASSWD: /usr/bin/getent *
 agor ALL=(ALL) NOPASSWD: /usr/bin/readlink *
 agor ALL=(ALL) NOPASSWD: /usr/bin/find *
+agor ALL=(ALL) NOPASSWD: /usr/bin/test *
 
 
 # ============================================================================
