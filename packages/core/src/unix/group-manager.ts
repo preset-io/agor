@@ -179,14 +179,25 @@ export const UnixGroupCommands = {
    * Returns an array of commands to be executed sequentially.
    * Each command should be run with sudo separately (no sh -c wrapper needed).
    *
+   * Uses ACLs (Access Control Lists) in addition to traditional Unix permissions.
+   * ACLs provide DEFAULT permissions that automatically apply to all new files
+   * and directories, regardless of the creating process's umask. This ensures
+   * group write access is always preserved.
+   *
    * @param path - Directory path
    * @param groupName - Group to own the directory
-   * @param permissions - Permissions mode (e.g., '2775' for group-writable with setgid)
+   * @param permissions - Permissions mode (e.g., '2770' for group-writable with setgid)
    * @returns Array of command strings to execute sequentially
    */
   setDirectoryGroup: (path: string, groupName: string, permissions: string): string[] => [
+    // Set traditional Unix permissions (group ownership + setgid)
     `chgrp -R ${groupName} "${path}"`,
     `chmod -R ${permissions} "${path}"`,
+    // Set ACL: give group rwX on all existing files/dirs
+    `setfacl -R -m g:${groupName}:rwX "${path}"`,
+    // Set DEFAULT ACL: new files/dirs will automatically inherit group rwX
+    // This is the key - it overrides umask for new files
+    `setfacl -R -d -m g:${groupName}:rwX "${path}"`,
   ],
 } as const;
 

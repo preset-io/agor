@@ -205,11 +205,13 @@ describe('group-manager', () => {
     });
 
     describe('setDirectoryGroup', () => {
-      it('returns array of chgrp and chmod commands', () => {
+      it('returns array of chgrp, chmod, and setfacl commands', () => {
         const cmds = UnixGroupCommands.setDirectoryGroup('/data/project', 'developers', '2775');
         expect(cmds).toEqual([
           'chgrp -R developers "/data/project"',
           'chmod -R 2775 "/data/project"',
+          'setfacl -R -m g:developers:rwX "/data/project"',
+          'setfacl -R -d -m g:developers:rwX "/data/project"',
         ]);
       });
     });

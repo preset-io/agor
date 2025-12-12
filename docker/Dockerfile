@@ -29,6 +29,7 @@ RUN apt-get update && apt-get install -y \
   less \
   tree \
   openssh-server \
+  acl \
   && rm -rf /var/lib/apt/lists/*
 
 # Configure SSH server for multi-user testing (used in postgres profile)
