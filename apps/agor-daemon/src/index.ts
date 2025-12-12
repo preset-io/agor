@@ -3183,13 +3183,10 @@ async function main() {
     {
       async create(_data: unknown, params: RouteParams) {
         const id = params.route?.id;
-        console.log(`🛑 [Daemon] Stop endpoint called for session: ${id}`);
-
         if (!id) throw new Error('Session ID required');
 
         // Get session to check status
         const session = await sessionsService.get(id, params);
-        console.log(`🛑 [Daemon] Session status: ${session.status}`);
 
         // Check if session is actually running or awaiting permission
         if (
@@ -3270,9 +3267,6 @@ async function main() {
         }
 
         // PHASE 2: Use bulletproof stop handler with ACK protocol
-        console.log(
-          `🛑 [Daemon] Calling handleStopWithAck for task ${latestTask.task_id.substring(0, 8)}...`
-        );
         const { handleStopWithAck } = await import('./services/sessions/hooks/handle-stop.js');
 
         const result = await handleStopWithAck(
@@ -3281,8 +3275,6 @@ async function main() {
           latestTask.task_id as TaskID,
           params
         );
-
-        console.log(`🛑 [Daemon] handleStopWithAck result:`, result);
 
         // PHASE 3: Handle failed stop (revert to RUNNING)
         if (!result.success) {
