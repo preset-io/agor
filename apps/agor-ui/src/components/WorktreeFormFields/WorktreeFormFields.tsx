@@ -78,10 +78,12 @@ export const WorktreeFormFields: React.FC<WorktreeFormFieldsProps> = ({
               .toLowerCase()
               .includes(input.toLowerCase())
           }
-          options={mapToArray(repoById).map((repo: Repo) => ({
-            value: repo.repo_id,
-            label: repo.name || repo.slug,
-          }))}
+          options={mapToArray(repoById)
+            .sort((a, b) => (a.name || a.slug).localeCompare(b.name || b.slug))
+            .map((repo: Repo) => ({
+              value: repo.repo_id,
+              label: repo.name || repo.slug,
+            }))}
           onChange={onRepoChange}
         />
       </Form.Item>

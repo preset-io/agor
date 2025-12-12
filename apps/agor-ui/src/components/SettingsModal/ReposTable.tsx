@@ -75,7 +75,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({
   onUpdate,
   onDelete,
 }) => {
-  const repos = mapToArray(repoById);
+  const repos = mapToArray(repoById).sort((a, b) => a.name.localeCompare(b.name));
   const [repoModalOpen, setRepoModalOpen] = useState(false);
   const [editingRepo, setEditingRepo] = useState<Repo | null>(null);
   const [repoMode, setRepoMode] = useState<'remote' | 'local'>('remote');
