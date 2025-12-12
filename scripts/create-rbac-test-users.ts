@@ -27,7 +27,7 @@ import {
 } from '@agor/core/db';
 import { autoAssignWorktreeUniqueId } from '@agor/core/environment/variable-resolver';
 import { createWorktree } from '@agor/core/git';
-import type { UUID } from '@agor/core/types';
+import type { RepoID, UUID } from '@agor/core/types';
 import { SudoDirectExecutor, UnixIntegrationService } from '@agor/core/unix';
 import chalk from 'chalk';
 
@@ -145,6 +145,20 @@ async function main() {
   }
 
   console.log(chalk.green(`  ✓ Found agor repo (${agorRepo.repo_id.substring(0, 8)})`));
+
+  // Ensure repo has Unix group (may have been created before RBAC was enabled)
+  if (unixIntegrationService && !agorRepo.unix_group) {
+    try {
+      const groupName = await unixIntegrationService.createRepoGroup(agorRepo.repo_id as RepoID);
+      console.log(chalk.gray(`    Created missing repo Unix group: ${groupName}`));
+    } catch (error) {
+      console.error(
+        chalk.yellow(
+          `    ⚠️  Failed to create repo group: ${error instanceof Error ? error.message : String(error)}`
+        )
+      );
+    }
+  }
   console.log('');
 
   // Find default board
@@ -274,6 +288,10 @@ async function main() {
       // Unix Integration: Create group and add owner (same as daemon hook does)
       if (unixIntegrationService) {
         try {
+          // Add owner to repo group (for .git access)
+          await unixIntegrationService.addUserToRepoGroup(agorRepo.repo_id as RepoID, ownerId);
+
+          // Create worktree group and add owner
           const groupName = await unixIntegrationService.createWorktreeGroup(worktree.worktree_id);
           await unixIntegrationService.addUserToWorktreeGroup(worktree.worktree_id, ownerId);
           console.log(chalk.gray(`    Unix group: ${groupName}`));
@@ -325,16 +343,22 @@ async function main() {
           // different permission levels in the worktree_owners table
           if (additionalOwner.permission === 'all') {
             await worktreeRepo.addOwner(worktree.worktree_id, additionalUserId);
-            // Also add to Unix group
+            // Also add to Unix groups (repo + worktree)
             if (unixIntegrationService) {
               try {
+                // Add to repo group (for .git access)
+                await unixIntegrationService.addUserToRepoGroup(
+                  agorRepo.repo_id as RepoID,
+                  additionalUserId
+                );
+                // Add to worktree group
                 await unixIntegrationService.addUserToWorktreeGroup(
                   worktree.worktree_id,
                   additionalUserId
                 );
               } catch {
                 console.error(
-                  chalk.yellow(`    ⚠️  Failed to add ${additionalOwner.username} to Unix group`)
+                  chalk.yellow(`    ⚠️  Failed to add ${additionalOwner.username} to Unix groups`)
                 );
               }
             }

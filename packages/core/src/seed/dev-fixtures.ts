@@ -11,7 +11,8 @@
 
 import os from 'node:os';
 import path from 'node:path';
-import type { UUID, WorktreeID } from '@agor/core/types';
+import type { RepoID, UUID, WorktreeID } from '@agor/core/types';
+import { isWorktreeRbacEnabled, loadConfigSync } from '../config/config-manager';
 import {
   BoardObjectRepository,
   BoardRepository,
@@ -20,6 +21,7 @@ import {
 } from '../db/repositories';
 import { cloneRepo, createWorktree, getWorktreePath } from '../git';
 import { generateId } from '../lib/ids';
+import { SudoDirectExecutor, UnixIntegrationService } from '../unix';
 
 export interface SeedOptions {
   /**
@@ -69,6 +71,19 @@ export async function seedDevFixtures(options: SeedOptions = {}): Promise<SeedRe
   const worktreeRepo = new WorktreeRepository(db);
   const boardRepo = new BoardRepository(db);
   const boardObjectRepo = new BoardObjectRepository(db);
+
+  // Setup Unix integration if RBAC is enabled
+  let unixIntegrationService: UnixIntegrationService | null = null;
+  const rbacEnabled = isWorktreeRbacEnabled();
+  if (rbacEnabled) {
+    const config = loadConfigSync();
+    const daemonUser = config.daemon?.unix_user || os.userInfo().username;
+    console.log(`🔐 RBAC enabled - Unix integration active (daemon user: ${daemonUser})`);
+    unixIntegrationService = new UnixIntegrationService(db, new SudoDirectExecutor(), {
+      enabled: true,
+      daemonUser,
+    });
+  }
 
   const baseDir = options.baseDir ?? path.join(os.homedir(), '.agor', 'repos');
   const userId = (options.userId ?? 'anonymous') as UUID;
@@ -122,6 +137,19 @@ export async function seedDevFixtures(options: SeedOptions = {}): Promise<SeedRe
 
   console.log(`   ✓ Created repo: ${repo.slug} (${repo.repo_id})`);
 
+  // Unix Integration: Create repo group for .git access (same as daemon does)
+  if (unixIntegrationService) {
+    try {
+      const groupName = await unixIntegrationService.createRepoGroup(repo.repo_id as RepoID);
+      console.log(`   Unix group: ${groupName}`);
+    } catch (error) {
+      console.error(
+        `   ⚠️  Unix integration failed: ${error instanceof Error ? error.message : String(error)}`
+      );
+      // Continue - app-layer RBAC is still functional
+    }
+  }
+
   // STEP 2: Get default board
   console.log('2️⃣  Getting default board...');
   const defaultBoard = await boardRepo.getDefault();
@@ -164,6 +192,20 @@ export async function seedDevFixtures(options: SeedOptions = {}): Promise<SeedRe
 
   // Add user as owner of the worktree
   await worktreeRepo.addOwner(worktree.worktree_id, userId);
+
+  // Unix Integration: Create worktree group and add owner (same as daemon hook does)
+  if (unixIntegrationService) {
+    try {
+      const groupName = await unixIntegrationService.createWorktreeGroup(worktree.worktree_id);
+      await unixIntegrationService.addUserToWorktreeGroup(worktree.worktree_id, userId);
+      console.log(`   Unix group: ${groupName}`);
+    } catch (error) {
+      console.error(
+        `   ⚠️  Unix integration failed: ${error instanceof Error ? error.message : String(error)}`
+      );
+      // Continue - app-layer RBAC is still functional
+    }
+  }
 
   console.log(`   ✓ Created worktree: ${worktree.name} (${worktree.worktree_id})`);
 
