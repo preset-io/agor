@@ -65,7 +65,7 @@
     "@modelcontextprotocol/sdk": "^1.24.0",
     "@oclif/core": "^4.6.0",
     "@oclif/plugin-help": "^6.2.18",
-    "@openai/codex-sdk": "^0.63.0",
+    "@openai/codex-sdk": "^0.71.0",
     "@opencode-ai/sdk": "^1.0.122",
     "bcryptjs": "^2.4.3",
     "chalk": "^5.6.2",

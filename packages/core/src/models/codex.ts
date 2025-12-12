@@ -12,7 +12,11 @@ export const CODEX_MINI_MODEL = 'gpt-5-codex-mini';
 
 /** Model aliases for Codex */
 export const CODEX_MODELS = {
-  // GPT-5.1 models (latest, recommended)
+  // GPT-5.2 models (latest, recommended)
+  'gpt-5.2': 'gpt-5.2', // GPT-5.2 Thinking - best for complex tasks (400k context)
+  'gpt-5.2-pro': 'gpt-5.2-pro', // GPT-5.2 Pro - highest accuracy, xhigh reasoning
+  'gpt-5.2-instant': 'gpt-5.2-instant', // GPT-5.2 Instant - faster for writing/info seeking
+  // GPT-5.1 models
   'gpt-5.1-codex-max': 'gpt-5.1-codex-max', // Optimized for long-horizon agentic coding
   'gpt-5.1-codex': 'gpt-5.1-codex',
   'gpt-5.1-codex-mini': 'gpt-5.1-codex-mini',
@@ -30,9 +34,13 @@ const DEFAULT_CODEX_CONTEXT_LIMIT = 200_000;
 
 /**
  * Approximate context window limits for Codex-compatible OpenAI models.
- * Values mirror OpenAI's public docs (Nov 2025) and fall back to 200k if unknown.
+ * Values mirror OpenAI's public docs (Dec 2025) and fall back to 200k if unknown.
  */
 export const CODEX_CONTEXT_LIMITS: Record<string, number> = {
+  // GPT-5.2 models (400k context, 128k max output)
+  'gpt-5.2': 400_000,
+  'gpt-5.2-pro': 400_000,
+  'gpt-5.2-instant': 400_000,
   // GPT-5.1 models
   'gpt-5.1-codex-max': 200_000,
   'gpt-5.1-codex': 200_000,

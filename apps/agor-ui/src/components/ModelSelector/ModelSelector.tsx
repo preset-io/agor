@@ -22,32 +22,48 @@ export interface ModelSelectorProps {
 
 // Codex model options
 const CODEX_MODEL_OPTIONS = [
-  // GPT-5 models (current default)
+  // GPT-5.2 models (latest, recommended)
   {
-    id: 'gpt-5-codex',
-    label: 'GPT-5 Codex (Default)',
-    description: 'Optimized for software engineering',
+    id: 'gpt-5.2',
+    label: 'GPT-5.2 (Recommended)',
+    description: 'Best for complex tasks - 400k context, thinking mode',
   },
   {
-    id: 'gpt-5-codex-mini',
-    label: 'GPT-5 Codex Mini',
-    description: 'Faster, lighter model',
+    id: 'gpt-5.2-pro',
+    label: 'GPT-5.2 Pro',
+    description: 'Highest accuracy, xhigh reasoning for difficult problems',
   },
-  // GPT-5.1 models (latest - requires updated Codex CLI)
+  {
+    id: 'gpt-5.2-instant',
+    label: 'GPT-5.2 Instant',
+    description: 'Faster model for writing and information seeking',
+  },
+  // GPT-5.1 models
+  {
+    id: 'gpt-5.1-codex-max',
+    label: 'GPT-5.1 Codex Max',
+    description: 'Optimized for long-horizon agentic coding',
+  },
   {
     id: 'gpt-5.1-codex',
     label: 'GPT-5.1 Codex',
-    description: 'Latest model optimized for agentic coding tasks',
+    description: 'Optimized for agentic coding tasks',
   },
   {
     id: 'gpt-5.1-codex-mini',
     label: 'GPT-5.1 Codex Mini',
     description: 'Cost-effective variant with 4x more usage',
   },
+  // GPT-5 models (legacy)
   {
-    id: 'gpt-5.1',
-    label: 'GPT-5.1',
-    description: 'General-purpose model great for coding',
+    id: 'gpt-5-codex',
+    label: 'GPT-5 Codex',
+    description: 'Legacy model for software engineering',
+  },
+  {
+    id: 'gpt-5-codex-mini',
+    label: 'GPT-5 Codex Mini',
+    description: 'Legacy faster, lighter model',
   },
   // GPT-4o models
   { id: 'gpt-4o', label: 'GPT-4o', description: 'General purpose model' },
@@ -130,7 +146,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       if (newMode === 'alias') {
         defaultModel = modelList[0].id;
       } else if (effectiveTool === 'codex') {
-        defaultModel = 'gpt-5-codex';
+        defaultModel = 'gpt-5.2';
       } else if (effectiveTool === 'gemini') {
         defaultModel = 'gemini-2.5-flash';
       } else {
@@ -196,7 +212,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                 onChange={(e) => handleModelChange(e.target.value)}
                 placeholder={
                   effectiveTool === 'codex'
-                    ? 'e.g., gpt-5-codex'
+                    ? 'e.g., gpt-5.2'
                     : effectiveTool === 'gemini'
                       ? 'e.g., gemini-2.5-pro'
                       : 'e.g., claude-opus-4-20250514' // claude-code (opencode handled earlier)
