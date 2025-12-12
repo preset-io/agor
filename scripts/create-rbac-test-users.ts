@@ -15,7 +15,7 @@
 
 import os from 'node:os';
 import path from 'node:path';
-import { getConfigPath } from '@agor/core/config';
+import { getConfigPath, isWorktreeRbacEnabled, loadConfigSync } from '@agor/core/config';
 import {
   BoardObjectRepository,
   BoardRepository,
@@ -28,6 +28,7 @@ import {
 import { autoAssignWorktreeUniqueId } from '@agor/core/environment/variable-resolver';
 import { createWorktree } from '@agor/core/git';
 import type { UUID } from '@agor/core/types';
+import { SudoDirectExecutor, UnixIntegrationService } from '@agor/core/unix';
 import chalk from 'chalk';
 
 interface TestUser {
@@ -76,6 +77,21 @@ async function main() {
   const worktreeRepo = new WorktreeRepository(db);
   const boardRepo = new BoardRepository(db);
   const boardObjectRepo = new BoardObjectRepository(db);
+
+  // Setup Unix integration if RBAC is enabled
+  let unixIntegrationService: UnixIntegrationService | null = null;
+  const rbacEnabled = isWorktreeRbacEnabled();
+  if (rbacEnabled) {
+    const config = loadConfigSync();
+    const daemonUser = config.daemon?.unix_user || os.userInfo().username;
+    console.log(
+      chalk.cyan(`🔐 RBAC enabled - Unix integration active (daemon user: ${daemonUser})\n`)
+    );
+    unixIntegrationService = new UnixIntegrationService(db, new SudoDirectExecutor(), {
+      enabled: true,
+      daemonUser,
+    });
+  }
 
   // Create users
   console.log(chalk.bold('1. Creating users...\n'));
@@ -255,6 +271,22 @@ async function main() {
       // Add owner
       await worktreeRepo.addOwner(worktree.worktree_id, ownerId);
 
+      // Unix Integration: Create group and add owner (same as daemon hook does)
+      if (unixIntegrationService) {
+        try {
+          const groupName = await unixIntegrationService.createWorktreeGroup(worktree.worktree_id);
+          await unixIntegrationService.addUserToWorktreeGroup(worktree.worktree_id, ownerId);
+          console.log(chalk.gray(`    Unix group: ${groupName}`));
+        } catch (error) {
+          console.error(
+            chalk.yellow(
+              `    ⚠️  Unix integration failed: ${error instanceof Error ? error.message : String(error)}`
+            )
+          );
+          // Continue - app-layer RBAC is still functional
+        }
+      }
+
       // Create board object with position (spread worktrees horizontally with some jitter)
       const baseX = 0;
       const baseY = 0;
@@ -293,6 +325,19 @@ async function main() {
           // different permission levels in the worktree_owners table
           if (additionalOwner.permission === 'all') {
             await worktreeRepo.addOwner(worktree.worktree_id, additionalUserId);
+            // Also add to Unix group
+            if (unixIntegrationService) {
+              try {
+                await unixIntegrationService.addUserToWorktreeGroup(
+                  worktree.worktree_id,
+                  additionalUserId
+                );
+              } catch {
+                console.error(
+                  chalk.yellow(`    ⚠️  Failed to add ${additionalOwner.username} to Unix group`)
+                );
+              }
+            }
             console.log(
               chalk.gray(
                 `    + ${additionalOwner.username} (${additionalOwner.permission} permission)`
