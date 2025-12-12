@@ -18,7 +18,7 @@ export function useFaviconStatus(
   sessionsByWorktree: Map<string, Session[]>,
   boardObjects: BoardEntityObject[]
 ) {
-  const [baseFaviconUrl] = useState('/favicon.png');
+  const [baseFaviconUrl] = useState(`${import.meta.env.BASE_URL}favicon.png`);
   const { token } = theme.useToken();
 
   useEffect(() => {
