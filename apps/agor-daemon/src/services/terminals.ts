@@ -515,28 +515,37 @@ export class TerminalsService {
     // Wrap pty.spawn in try-catch to handle native module errors gracefully
     // node-pty is a native module that can throw synchronously on spawn failure
     try {
-      // Build spawn args - handles impersonation via sudo su - when finalUnixUser is set
-      const zellijArgs = ['attach', zellijSession, '--create'];
-      const { cmd, args } = buildSpawnArgs('zellij', zellijArgs, finalUnixUser || undefined);
-
-      // Log impersonation decision
-      if (finalUnixUser) {
-        console.log(`🔐 Running terminal as Unix user: ${finalUnixUser} (${impersonationReason})`);
-      } else {
-        console.log(`🔓 Running terminal as daemon user (${impersonationReason})`);
-      }
-
       // Build environment - override HOME/USER when impersonating
       const spawnEnv = finalUnixUser
         ? { ...env, HOME: `/home/${finalUnixUser}`, USER: finalUnixUser }
         : env;
 
+      // Build spawn args - handles impersonation via sudo su - when finalUnixUser is set
+      // IMPORTANT: When impersonating, env vars must be passed through buildSpawnArgs because
+      // sudo su - creates a fresh login shell that ignores the env passed to pty.spawn()
+      const zellijArgs = ['attach', zellijSession, '--create'];
+      const { cmd, args } = buildSpawnArgs('zellij', zellijArgs, {
+        asUser: finalUnixUser || undefined,
+        env: finalUnixUser ? spawnEnv : undefined, // Only inject when impersonating
+      });
+
+      // Log impersonation decision
+      if (finalUnixUser) {
+        console.log(
+          `🔐 Running terminal as Unix user: ${finalUnixUser} (${impersonationReason}, ${Object.keys(spawnEnv).length} env vars)`
+        );
+      } else {
+        console.log(`🔓 Running terminal as daemon user (${impersonationReason})`);
+      }
+
+      // When NOT impersonating, pass env to pty.spawn() directly
+      // When impersonating, env is already injected into the command by buildSpawnArgs
       ptyProcess = pty.spawn(cmd, args, {
         name: 'xterm-256color',
         cols: data.cols || 80,
         rows: data.rows || 30,
         cwd,
-        env: spawnEnv,
+        env: finalUnixUser ? undefined : spawnEnv,
       });
     } catch (spawnError) {
       const errorMsg = spawnError instanceof Error ? spawnError.message : String(spawnError);

@@ -545,24 +545,6 @@ async function main() {
       throw err;
     }
 
-    let spawnCommand: string;
-    let spawnArgs: string[];
-
-    // Build spawn args - handles impersonation via sudo su - when executorUnixUser is set
-    // When impersonating, uses sudo su - (login shell) to ensure fresh Unix group memberships
-    // This is critical for RBAC: users may have been recently added to worktree groups
-    const { cmd, args } = buildSpawnArgs('node', nodeArgs, executorUnixUser || undefined);
-    spawnCommand = cmd;
-    spawnArgs = args;
-
-    if (executorUnixUser) {
-      console.log(
-        `[Daemon] Spawning executor as Unix user: ${executorUnixUser} (with fresh groups)`
-      );
-    } else {
-      console.log(`[Daemon] Spawning executor as current user (no impersonation)`);
-    }
-
     // Resolve user environment variables (includes user's encrypted env vars like GITHUB_TOKEN)
     // Use the authenticated user (whoever is executing the command), not session creator
     const userId = (params as AuthenticatedParams).user?.user_id as
@@ -570,9 +552,29 @@ async function main() {
       | undefined;
     const executorEnv = await createUserProcessEnvironment(userId, db);
 
+    // Build spawn args - handles impersonation via sudo su - when executorUnixUser is set
+    // When impersonating, uses sudo su - (login shell) to ensure fresh Unix group memberships
+    // This is critical for RBAC: users may have been recently added to worktree groups
+    // IMPORTANT: When impersonating, env vars must be passed through buildSpawnArgs because
+    // sudo su - creates a fresh login shell that ignores the env passed to spawn()
+    const { cmd: spawnCommand, args: spawnArgs } = buildSpawnArgs('node', nodeArgs, {
+      asUser: executorUnixUser || undefined,
+      env: executorUnixUser ? executorEnv : undefined, // Only inject when impersonating
+    });
+
+    if (executorUnixUser) {
+      console.log(
+        `[Daemon] Spawning executor as Unix user: ${executorUnixUser} (with fresh groups and ${Object.keys(executorEnv).length} env vars)`
+      );
+    } else {
+      console.log(`[Daemon] Spawning executor as current user (no impersonation)`);
+    }
+
+    // When NOT impersonating, pass env to spawn() directly
+    // When impersonating, env is already injected into the command by buildSpawnArgs
     const executorProcess = spawn(spawnCommand, spawnArgs, {
       cwd,
-      env: executorEnv,
+      env: executorUnixUser ? undefined : executorEnv,
       stdio: ['ignore', 'pipe', 'pipe'], // Capture stdout/stderr
     });
 
