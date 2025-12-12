@@ -179,26 +179,53 @@ export const UnixGroupCommands = {
    * Returns an array of commands to be executed sequentially.
    * Each command should be run with sudo separately (no sh -c wrapper needed).
    *
-   * Uses ACLs (Access Control Lists) in addition to traditional Unix permissions.
-   * ACLs provide DEFAULT permissions that automatically apply to all new files
-   * and directories, regardless of the creating process's umask. This ensures
-   * group write access is always preserved.
+   * Uses ACLs (Access Control Lists) for permission management. ACLs provide
+   * DEFAULT permissions that automatically apply to all new files and directories,
+   * regardless of the creating process's umask. This ensures group write access
+   * is always preserved.
+   *
+   * The permissions parameter controls "others" access:
+   * - '2770' → others get no access (o::---)
+   * - '2775' → others get read/execute (o::r-x)
+   * - '2777' → others get full access (o::rwx)
    *
    * @param path - Directory path
    * @param groupName - Group to own the directory
-   * @param permissions - Permissions mode (e.g., '2770' for group-writable with setgid)
+   * @param permissions - Permissions mode (e.g., '2770' for no others access)
    * @returns Array of command strings to execute sequentially
    */
-  setDirectoryGroup: (path: string, groupName: string, permissions: string): string[] => [
-    // Set traditional Unix permissions (group ownership + setgid)
-    `chgrp -R ${groupName} "${path}"`,
-    `chmod -R ${permissions} "${path}"`,
-    // Set ACL: give group rwX on all existing files/dirs
-    `setfacl -R -m g:${groupName}:rwX "${path}"`,
-    // Set DEFAULT ACL: new files/dirs will automatically inherit group rwX
-    // This is the key - it overrides umask for new files
-    `setfacl -R -d -m g:${groupName}:rwX "${path}"`,
-  ],
+  setDirectoryGroup: (path: string, groupName: string, permissions: string): string[] => {
+    // Determine "others" ACL based on permissions mode
+    // 2770 = no others, 2775 = others r-X, 2777 = others rwX
+    // Using capital X means: execute only on directories, not files
+    const othersDigit = permissions.charAt(3); // Last digit is "others"
+    let othersAcl: string;
+    switch (othersDigit) {
+      case '7':
+        othersAcl = 'o::rwX';
+        break;
+      case '5':
+        othersAcl = 'o::rX';
+        break;
+      default:
+        othersAcl = 'o::---';
+    }
+
+    return [
+      // Set primary group ownership (visible in ls -la)
+      `chgrp -R ${groupName} "${path}"`,
+      // Set setgid bit on directories only (new files inherit group ownership)
+      `find "${path}" -type d -exec chmod g+s {} +`,
+      // ACL: owner gets full access
+      `setfacl -R -m u::rwX "${path}"`,
+      // ACL: group gets full access (rwX = rw for files, rwx for dirs)
+      `setfacl -R -m g:${groupName}:rwX "${path}"`,
+      // ACL: set "others" access based on permissions mode
+      `setfacl -R -m ${othersAcl} "${path}"`,
+      // DEFAULT ACLs for new files/dirs (inherit these permissions)
+      `setfacl -R -d -m u::rwX,g:${groupName}:rwX,${othersAcl} "${path}"`,
+    ];
+  },
 } as const;
 
 /**

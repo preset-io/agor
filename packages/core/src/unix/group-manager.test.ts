@@ -205,13 +205,39 @@ describe('group-manager', () => {
     });
 
     describe('setDirectoryGroup', () => {
-      it('returns array of chgrp, chmod, and setfacl commands', () => {
+      it('returns ACL-based commands for others read (2775)', () => {
         const cmds = UnixGroupCommands.setDirectoryGroup('/data/project', 'developers', '2775');
         expect(cmds).toEqual([
           'chgrp -R developers "/data/project"',
-          'chmod -R 2775 "/data/project"',
+          'find "/data/project" -type d -exec chmod g+s {} +',
+          'setfacl -R -m u::rwX "/data/project"',
           'setfacl -R -m g:developers:rwX "/data/project"',
-          'setfacl -R -d -m g:developers:rwX "/data/project"',
+          'setfacl -R -m o::rX "/data/project"',
+          'setfacl -R -d -m u::rwX,g:developers:rwX,o::rX "/data/project"',
+        ]);
+      });
+
+      it('returns ACL-based commands for no others access (2770)', () => {
+        const cmds = UnixGroupCommands.setDirectoryGroup('/data/secret', 'admins', '2770');
+        expect(cmds).toEqual([
+          'chgrp -R admins "/data/secret"',
+          'find "/data/secret" -type d -exec chmod g+s {} +',
+          'setfacl -R -m u::rwX "/data/secret"',
+          'setfacl -R -m g:admins:rwX "/data/secret"',
+          'setfacl -R -m o::--- "/data/secret"',
+          'setfacl -R -d -m u::rwX,g:admins:rwX,o::--- "/data/secret"',
+        ]);
+      });
+
+      it('returns ACL-based commands for full others access (2777)', () => {
+        const cmds = UnixGroupCommands.setDirectoryGroup('/data/public', 'everyone', '2777');
+        expect(cmds).toEqual([
+          'chgrp -R everyone "/data/public"',
+          'find "/data/public" -type d -exec chmod g+s {} +',
+          'setfacl -R -m u::rwX "/data/public"',
+          'setfacl -R -m g:everyone:rwX "/data/public"',
+          'setfacl -R -m o::rwX "/data/public"',
+          'setfacl -R -d -m u::rwX,g:everyone:rwX,o::rwX "/data/public"',
         ]);
       });
     });
