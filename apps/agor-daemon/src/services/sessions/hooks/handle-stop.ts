@@ -88,12 +88,14 @@ export async function handleStopWithAck(
     });
 
     // Send stop event via WebSocket
-    app.service('sessions').emit('task_stop', {
+    const stopEvent = {
       session_id: sessionId,
       task_id: taskId,
       sequence,
       timestamp: new Date().toISOString(),
-    });
+    };
+    console.log(`🛑 [Stop Handler] Emitting task_stop event:`, stopEvent);
+    app.service('sessions').emit('task_stop', stopEvent);
 
     // Wait for ACK
     ackReceived = await ackPromise;
