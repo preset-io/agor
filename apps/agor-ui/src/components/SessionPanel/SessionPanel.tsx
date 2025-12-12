@@ -353,12 +353,25 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   };
 
   const handleStop = async () => {
-    if (!session || !client || isStopping) return;
+    console.log('🛑 [Stop] handleStop called', {
+      hasSession: !!session,
+      hasClient: !!client,
+      isStopping,
+      sessionId: session?.session_id,
+      sessionStatus: session?.status,
+    });
+
+    if (!session || !client || isStopping) {
+      console.log('🛑 [Stop] Early return - conditions not met');
+      return;
+    }
 
     try {
-      await client.service(`sessions/${session.session_id}/stop`).create({});
+      console.log(`🛑 [Stop] Calling sessions/${session.session_id}/stop...`);
+      const result = await client.service(`sessions/${session.session_id}/stop`).create({});
+      console.log('🛑 [Stop] Stop request successful:', result);
     } catch (error) {
-      console.error('❌ Failed to stop execution:', error);
+      console.error('❌ [Stop] Failed to stop execution:', error);
     }
   };
 

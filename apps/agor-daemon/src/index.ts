@@ -3133,10 +3133,13 @@ async function main() {
     {
       async create(_data: unknown, params: RouteParams) {
         const id = params.route?.id;
+        console.log(`🛑 [Daemon] Stop endpoint called for session: ${id}`);
+
         if (!id) throw new Error('Session ID required');
 
         // Get session to check status
         const session = await sessionsService.get(id, params);
+        console.log(`🛑 [Daemon] Session status: ${session.status}`);
 
         // Check if session is actually running or awaiting permission
         if (
@@ -3150,17 +3153,43 @@ async function main() {
         }
 
         // Find the currently running task(s)
-        const runningTasks = await tasksService.find({
-          query: {
-            session_id: id,
-            status: { $in: [TaskStatus.RUNNING, TaskStatus.AWAITING_PERMISSION] },
-            $limit: 10,
-          },
-        });
+        // Note: Using two separate queries to avoid $in operator which fails schema validation
+        console.log(`🛑 [Daemon] Finding running tasks for session ${id.substring(0, 8)}...`);
+        let runningTasksArray: Task[] = [];
+        try {
+          // Query for RUNNING tasks
+          const runningResult = await tasksService.find({
+            query: {
+              session_id: id,
+              status: TaskStatus.RUNNING,
+              $limit: 10,
+            },
+          });
+          const runningFindResult = runningResult as Task[] | Paginated<Task>;
+          const runningTasks = isPaginated(runningFindResult)
+            ? runningFindResult.data
+            : runningFindResult;
 
-        // Extract data array if paginated
-        const findResult = runningTasks as Task[] | Paginated<Task>;
-        const runningTasksArray = isPaginated(findResult) ? findResult.data : findResult;
+          // Query for AWAITING_PERMISSION tasks
+          const awaitingResult = await tasksService.find({
+            query: {
+              session_id: id,
+              status: TaskStatus.AWAITING_PERMISSION,
+              $limit: 10,
+            },
+          });
+          const awaitingFindResult = awaitingResult as Task[] | Paginated<Task>;
+          const awaitingTasks = isPaginated(awaitingFindResult)
+            ? awaitingFindResult.data
+            : awaitingFindResult;
+
+          runningTasksArray = [...runningTasks, ...awaitingTasks];
+        } catch (findError) {
+          console.error(`❌ [Daemon] Failed to find running tasks:`, findError);
+          throw findError;
+        }
+
+        console.log(`🛑 [Daemon] Found ${runningTasksArray.length} running tasks`);
 
         if (runningTasksArray.length === 0) {
           return {
@@ -3200,6 +3229,9 @@ async function main() {
         }
 
         // PHASE 2: Use bulletproof stop handler with ACK protocol
+        console.log(
+          `🛑 [Daemon] Calling handleStopWithAck for task ${latestTask.task_id.substring(0, 8)}...`
+        );
         const { handleStopWithAck } = await import('./services/sessions/hooks/handle-stop.js');
 
         const result = await handleStopWithAck(
@@ -3208,6 +3240,8 @@ async function main() {
           latestTask.task_id as TaskID,
           params
         );
+
+        console.log(`🛑 [Daemon] handleStopWithAck result:`, result);
 
         // PHASE 3: Handle failed stop (revert to RUNNING)
         if (!result.success) {
