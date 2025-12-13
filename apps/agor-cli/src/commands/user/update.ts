@@ -38,6 +38,10 @@ export default class UserUpdate extends BaseCommand {
       description: 'New role',
       options: ['owner', 'admin', 'member', 'viewer'],
     }),
+    'force-password-change': Flags.boolean({
+      description: 'Force user to change password on next login',
+      allowNo: true, // Allows --no-force-password-change to clear the flag
+    }),
   };
 
   async run(): Promise<void> {
@@ -62,7 +66,13 @@ export default class UserUpdate extends BaseCommand {
       }
 
       // If no flags provided, prompt for what to update
-      if (!flags.email && !flags.name && !flags.password && !flags.role) {
+      if (
+        !flags.email &&
+        !flags.name &&
+        !flags.password &&
+        !flags.role &&
+        flags['force-password-change'] === undefined
+      ) {
         const { fields } = await inquirer.prompt([
           {
             type: 'checkbox',
@@ -134,11 +144,14 @@ export default class UserUpdate extends BaseCommand {
       }
 
       // Build update object
-      const updates: Partial<User> & { password?: string } = {};
+      const updates: Partial<User> & { password?: string; must_change_password?: boolean } = {};
       if (flags.email) updates.email = flags.email;
       if (flags.name) updates.name = flags.name;
       if (flags.password) updates.password = flags.password;
       if (flags.role) updates.role = flags.role as 'owner' | 'admin' | 'member' | 'viewer';
+      if (flags['force-password-change'] !== undefined) {
+        updates.must_change_password = flags['force-password-change'];
+      }
 
       if (Object.keys(updates).length === 0) {
         this.log(chalk.gray('No changes to apply'));
@@ -157,6 +170,9 @@ export default class UserUpdate extends BaseCommand {
       this.log(`  Name:  ${chalk.cyan(updatedUser.name || '(not set)')}`);
       this.log(`  Role:  ${chalk.cyan(updatedUser.role)}`);
       this.log(`  ID:    ${chalk.gray(updatedUser.user_id.substring(0, 8))}`);
+      if (updatedUser.must_change_password) {
+        this.log(`  ${chalk.yellow('⚠')} User must change password on next login`);
+      }
 
       await this.cleanupClient(client);
     } catch (error) {

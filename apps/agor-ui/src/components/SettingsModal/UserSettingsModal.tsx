@@ -2,6 +2,7 @@ import type { AgenticToolName, MCPServer, UpdateUserInput, User } from '@agor/co
 import { getDefaultPermissionMode } from '@agor/core/types';
 import {
   Button,
+  Checkbox,
   Flex,
   Form,
   Input,
@@ -79,6 +80,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         role: userData.role,
         unix_username: userData.unix_username,
         eventStreamEnabled: userData.preferences?.eventStream?.enabled ?? true,
+        must_change_password: userData.must_change_password ?? false,
       });
 
       // Initialize agentic tool forms with user's defaults
@@ -183,6 +185,10 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         };
         if (values.password?.trim()) {
           updates.password = values.password;
+        }
+        // Only admins can set must_change_password, and only for other users
+        if (currentUser?.role === 'admin' && user.user_id !== currentUser.user_id) {
+          updates.must_change_password = values.must_change_password;
         }
         onUpdate?.(user.user_id, updates);
         handleClose();
@@ -506,6 +512,13 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                     <Select.Option value="viewer">Viewer</Select.Option>
                   </Select>
                 </Form.Item>
+
+                {/* Only show for admins editing other users */}
+                {currentUser?.role === 'admin' && user && user.user_id !== currentUser.user_id && (
+                  <Form.Item name="must_change_password" valuePropName="checked">
+                    <Checkbox>Force password change on next login</Checkbox>
+                  </Form.Item>
+                )}
               </Form>
             ),
           },

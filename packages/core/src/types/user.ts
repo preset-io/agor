@@ -115,6 +115,8 @@ export interface User extends BaseUserFields {
   avatar?: string;
   preferences?: UserPreferences;
   onboarding_completed: boolean;
+  /** Force password change on next login (admin-settable, auto-cleared on password change) */
+  must_change_password: boolean;
   created_at: Date;
   updated_at?: Date;
   // Unix username for process impersonation (optional, unique, admin-managed)
@@ -138,6 +140,8 @@ export interface CreateUserInput extends Partial<BaseUserFields> {
   email: string;
   password: string;
   unix_username?: string;
+  /** Force user to change password on first login (admin-only) */
+  must_change_password?: boolean;
 }
 
 /**
@@ -149,6 +153,8 @@ export interface UpdateUserInput extends Partial<BaseUserFields> {
   preferences?: UserPreferences;
   onboarding_completed?: boolean;
   unix_username?: string;
+  /** Force user to change password on next login (admin-only) */
+  must_change_password?: boolean;
   // API keys for update (accepts plaintext, encrypted before storage)
   api_keys?: {
     ANTHROPIC_API_KEY?: string | null; // string = set key, null = clear key

@@ -580,6 +580,9 @@ export const users = pgTable(
     // Onboarding state
     onboarding_completed: t.bool('onboarding_completed').notNull().default(false),
 
+    // Force password change flag (admin-settable, auto-cleared on password change)
+    must_change_password: t.bool('must_change_password').notNull().default(false),
+
     // JSON blob for profile/preferences
     data: t
       .json<unknown>('data')

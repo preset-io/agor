@@ -39,6 +39,7 @@ export class UsersRepository implements BaseRepository<User, Partial<User>> {
       role: row.role,
       unix_username: row.unix_username ?? undefined,
       onboarding_completed: row.onboarding_completed,
+      must_change_password: row.must_change_password,
       avatar: row.data.avatar,
       preferences: row.data.preferences as User['preferences'],
       // Convert encrypted keys to boolean flags (true = key exists, false/undefined = no key)

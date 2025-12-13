@@ -1,0 +1,1 @@
+export { ForcePasswordChangeModal } from './ForcePasswordChangeModal';

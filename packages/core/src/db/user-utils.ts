@@ -89,6 +89,7 @@ export async function createUser(db: Database, data: CreateUserData): Promise<Us
     avatar: userData.avatar,
     preferences: userData.preferences,
     onboarding_completed: !!row.onboarding_completed,
+    must_change_password: !!row.must_change_password,
     created_at: row.created_at,
     updated_at: row.updated_at ?? undefined,
   };
@@ -132,6 +133,7 @@ export async function getUserByEmail(db: Database, email: string): Promise<User 
     avatar: userData.avatar,
     preferences: userData.preferences,
     onboarding_completed: !!row.onboarding_completed,
+    must_change_password: !!row.must_change_password,
     created_at: row.created_at,
     updated_at: row.updated_at ?? undefined,
   };
