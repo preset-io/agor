@@ -11,9 +11,17 @@ import type { SessionID } from '@agor/core/types';
 
 /**
  * Generate Agor session context block to append to CLAUDE.md
+ *
+ * @param sessionId - Agor session ID (internal tracking)
+ * @param sdkSessionId - Claude SDK session ID (for conversation continuity, optional)
  */
-export function generateSessionContext(sessionId: SessionID): string {
+export function generateSessionContext(sessionId: SessionID, sdkSessionId?: string): string {
   const shortId = sessionId.substring(0, 8);
+
+  let sdkSessionLine = '';
+  if (sdkSessionId) {
+    sdkSessionLine = `\n- **Claude SDK Session ID:** \`${sdkSessionId}\` (used by Claude CLI for conversation continuity)`;
+  }
 
   return `
 
@@ -23,9 +31,10 @@ export function generateSessionContext(sessionId: SessionID): string {
 
 You are currently running within **Agor** (https://agor.live), a multiplayer canvas for orchestrating AI coding agents.
 
-**Your current Agor session ID is: \`${sessionId}\`** (short: \`${shortId}\`)
+**Session IDs:**
+- **Agor Session ID:** \`${sessionId}\` (short: \`${shortId}\`) - Agor's internal session tracking${sdkSessionLine}
 
-When you see this ID referenced in prompts or tool calls, it refers to THIS session you're currently in.
+When you see these IDs referenced in prompts or tool calls, they refer to THIS session you're currently in.
 
 For more information about Agor, visit https://agor.live
 `;
@@ -36,10 +45,15 @@ For more information about Agor, visit https://agor.live
  *
  * CRITICAL: This APPENDS to existing CLAUDE.md, never replaces it!
  * This ensures we don't overwrite the Claude Code system prompt.
+ *
+ * @param worktreePath - Path to the worktree directory
+ * @param sessionId - Agor session ID
+ * @param sdkSessionId - Claude SDK session ID (optional, for conversation continuity)
  */
 export async function appendSessionContextToCLAUDEmd(
   worktreePath: string,
-  sessionId: SessionID
+  sessionId: SessionID,
+  sdkSessionId?: string
 ): Promise<void> {
   const claudeMdPath = path.join(worktreePath, 'CLAUDE.md');
 
@@ -60,7 +74,7 @@ export async function appendSessionContextToCLAUDEmd(
     }
 
     // Append session context
-    const sessionContext = generateSessionContext(sessionId);
+    const sessionContext = generateSessionContext(sessionId, sdkSessionId);
     const newContent = existingContent + sessionContext;
 
     await fs.writeFile(claudeMdPath, newContent, 'utf-8');

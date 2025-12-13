@@ -25,7 +25,7 @@ describe('generateSessionContext', () => {
     const context = generateSessionContext(sessionId);
 
     expect(context).toContain('abcd1234');
-    expect(context).toContain(`(short: \`abcd1234\`)`);
+    expect(context).toContain('short: `abcd1234`');
   });
 
   it('should include markdown formatting', () => {
@@ -35,6 +35,25 @@ describe('generateSessionContext', () => {
     expect(context).toContain('---'); // separator
     expect(context).toContain('**'); // bold
     expect(context).toContain('`'); // code blocks
+  });
+
+  it('should include SDK session ID when provided', () => {
+    const sessionId = '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f' as SessionID;
+    const sdkSessionId = 'sdk-abc123-def456';
+    const context = generateSessionContext(sessionId, sdkSessionId);
+
+    expect(context).toContain(sessionId); // Agor session ID
+    expect(context).toContain(sdkSessionId); // SDK session ID
+    expect(context).toContain('Agor Session ID');
+    expect(context).toContain('Claude SDK Session ID');
+  });
+
+  it('should not include SDK session ID line when not provided', () => {
+    const sessionId = '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f' as SessionID;
+    const context = generateSessionContext(sessionId);
+
+    expect(context).toContain(sessionId);
+    expect(context).not.toContain('Claude SDK Session ID');
   });
 });
 
