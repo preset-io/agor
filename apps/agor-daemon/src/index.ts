@@ -246,12 +246,29 @@ async function main() {
    * - users (PATCH for password change, GET for own profile)
    * - authentication (login/logout)
    * - health (public endpoint)
+   *
+   * NOTE: We fetch fresh user data from DB because JWT token may have stale must_change_password value
    */
   const enforcePasswordChange = async (context: HookContext) => {
     const user = context.params?.user as User | undefined;
 
-    // Skip if no user (anonymous/internal) or flag not set
-    if (!user || !user.must_change_password) {
+    // Skip if no user (anonymous/internal)
+    if (!user) {
+      return context;
+    }
+
+    // Fetch fresh user data from database to check current must_change_password status
+    // (JWT token may have stale data after password change)
+    let freshUser: User;
+    try {
+      freshUser = await context.app.service('users').get(user.user_id, { provider: undefined }); // internal call
+    } catch {
+      // User not found or error - skip enforcement
+      return context;
+    }
+
+    // Skip if flag not set
+    if (!freshUser.must_change_password) {
       return context;
     }
 
@@ -270,7 +287,7 @@ async function main() {
     // - PATCH own profile (to change password)
     if (context.path === 'users') {
       // Allow GET/PATCH on own user record
-      if (context.id === user.user_id) {
+      if (context.id === freshUser.user_id) {
         if (context.method === 'get') {
           return context;
         }
@@ -283,7 +300,7 @@ async function main() {
           // PATCH without password change - block
           throw new Forbidden('Password change required. Please update your password.', {
             code: 'PASSWORD_CHANGE_REQUIRED',
-            user_id: user.user_id,
+            user_id: freshUser.user_id,
           });
         }
       }
@@ -292,7 +309,7 @@ async function main() {
     // Block all other requests
     throw new Forbidden('Password change required. Please update your password.', {
       code: 'PASSWORD_CHANGE_REQUIRED',
-      user_id: user.user_id,
+      user_id: freshUser.user_id,
     });
   };
 
