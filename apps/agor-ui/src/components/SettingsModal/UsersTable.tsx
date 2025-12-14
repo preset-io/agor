@@ -2,6 +2,7 @@ import type { CreateUserInput, MCPServer, UpdateUserInput, User } from '@agor/co
 import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
 import {
   Button,
+  Checkbox,
   Flex,
   Form,
   Input,
@@ -54,6 +55,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
           emoji: values.emoji || '👤',
           role: values.role || 'member',
           unix_username: values.unix_username,
+          must_change_password: values.must_change_password || false,
         });
         form.resetFields();
         setCreateModalOpen(false);
@@ -235,6 +237,10 @@ export const UsersTable: React.FC<UsersTableProps> = ({
               <Select.Option value="member">Member</Select.Option>
               <Select.Option value="viewer">Viewer</Select.Option>
             </Select>
+          </Form.Item>
+
+          <Form.Item name="must_change_password" valuePropName="checked" initialValue={false}>
+            <Checkbox>Force password change on first login</Checkbox>
           </Form.Item>
         </Form>
       </Modal>
