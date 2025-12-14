@@ -122,6 +122,9 @@ services:
       - AGOR_USE_EXECUTOR=${AGOR_USE_EXECUTOR:-false}
       - AGOR_EXECUTOR_USERNAME=${AGOR_EXECUTOR_USERNAME:-agor_executor}
 
+      # Instance identification (optional - displayed in UI navbar)
+      - INSTANCE_LABEL=${INSTANCE_LABEL:-}
+
     depends_on:
       postgres:
         condition: service_healthy

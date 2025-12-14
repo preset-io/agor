@@ -53,6 +53,10 @@ export default class Init extends Command {
       description: 'Set daemon config values even if .agor already exists (for Docker/deployment)',
       default: false,
     }),
+    'instance-label': Flags.string({
+      description: 'Instance label for deployment identification (e.g., "staging", "prod-us-east")',
+      required: false,
+    }),
   };
 
   private async pathExists(path: string): Promise<boolean> {
@@ -665,6 +669,7 @@ export default class Init extends Command {
   private async setDaemonConfig(flags: {
     'daemon-port'?: number;
     'daemon-host'?: string;
+    'instance-label'?: string;
   }): Promise<void> {
     // Get daemon port from flag or environment variable
     const daemonPort = flags['daemon-port'] || process.env.DAEMON_PORT;
@@ -677,6 +682,13 @@ export default class Init extends Command {
     const daemonHost = flags['daemon-host'] || 'localhost';
     await setConfigValue('daemon.host', daemonHost);
     this.log(`${chalk.green('   ✓')} Set daemon.host = ${daemonHost}`);
+
+    // Get instance label from flag or environment variable
+    const instanceLabel = flags['instance-label'] || process.env.INSTANCE_LABEL;
+    if (instanceLabel) {
+      await setConfigValue('daemon.instanceLabel', instanceLabel);
+      this.log(`${chalk.green('   ✓')} Set daemon.instanceLabel = ${instanceLabel}`);
+    }
 
     // Enable authentication for Docker/deployment environments
     await setConfigValue('daemon.requireAuth', true);

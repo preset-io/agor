@@ -267,6 +267,12 @@ async function main() {
   const envUiPort = process.env.UI_PORT ? Number.parseInt(process.env.UI_PORT, 10) : undefined;
   const UI_PORT = envUiPort || config.ui?.port || 5173;
 
+  // Handle INSTANCE_LABEL env var override (for Docker deployments)
+  if (process.env.INSTANCE_LABEL) {
+    config.daemon = config.daemon || {};
+    config.daemon.instanceLabel = process.env.INSTANCE_LABEL;
+  }
+
   // Initialize Anthropic API key (extracted to setup/credentials.ts)
   // Side effect: sets process.env.ANTHROPIC_API_KEY if found in config
   initializeAnthropicApiKey(config, process.env.ANTHROPIC_API_KEY);

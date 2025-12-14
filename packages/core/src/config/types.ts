@@ -64,6 +64,14 @@ export interface AgorDaemonSettings {
    * Required when Unix isolation is enabled (worktree_rbac or unix_user_mode).
    * In dev mode without isolation, falls back to current process user. */
   unix_user?: string;
+
+  /** Instance label for deployment identification (e.g., "staging", "prod-us-east").
+   * Displayed as a Tag in the UI navbar when set. */
+  instanceLabel?: string;
+
+  /** Instance description (markdown supported).
+   * Displayed as a popover around the instance label Tag. */
+  instanceDescription?: string;
 }
 
 /**

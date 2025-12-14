@@ -10,13 +10,25 @@ import {
   UserOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import { Badge, Button, Divider, Dropdown, Layout, Space, Tooltip, theme } from 'antd';
+import {
+  Badge,
+  Button,
+  Divider,
+  Dropdown,
+  Layout,
+  Popover,
+  Space,
+  Tag,
+  Tooltip,
+  theme,
+} from 'antd';
 import { useState } from 'react';
 import { BoardSwitcher } from '../BoardSwitcher';
 import { BrandLogo } from '../BrandLogo';
 import { ConnectionStatus } from '../ConnectionStatus';
 import { Facepile } from '../Facepile';
 import { GettingStartedPopover } from '../GettingStartedPopover';
+import { MarkdownRenderer } from '../MarkdownRenderer';
 import { ThemeSwitcher } from '../ThemeSwitcher';
 
 const { Header } = Layout;
@@ -57,6 +69,10 @@ export interface AppHeaderProps {
     boardId?: BoardID,
     cursorPosition?: { x: number; y: number }
   ) => void; // Navigate to user's board
+  /** Instance label for deployment identification (displayed as a Tag) */
+  instanceLabel?: string;
+  /** Instance description (markdown) shown in popover around the instance label */
+  instanceDescription?: string;
 }
 
 export const AppHeader: React.FC<AppHeaderProps> = ({
@@ -91,6 +107,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onOpenNewWorktree,
   boardById,
   onUserClick,
+  instanceLabel,
+  instanceDescription,
 }) => {
   const { token } = theme.useToken();
   const userEmoji = user?.emoji || '👤';
@@ -168,6 +186,27 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           }}
         />
         <BrandLogo level={3} style={{ marginTop: -6 }} />
+        {instanceLabel &&
+          (instanceDescription ? (
+            <Popover
+              content={
+                <div style={{ maxWidth: 400 }}>
+                  <MarkdownRenderer content={instanceDescription} />
+                </div>
+              }
+              title={instanceLabel}
+              trigger="hover"
+              placement="bottomLeft"
+            >
+              <Tag color="blue" style={{ cursor: 'help', marginLeft: 8 }}>
+                {instanceLabel}
+              </Tag>
+            </Popover>
+          ) : (
+            <Tag color="blue" style={{ marginLeft: 8 }}>
+              {instanceLabel}
+            </Tag>
+          ))}
         <Divider type="vertical" style={{ height: 32, margin: '0 8px' }} />
         {currentBoardId && boards.length > 0 && (
           <div style={{ minWidth: 200 }}>

@@ -31,6 +31,7 @@ import {
   useAuth,
   useAuthConfig,
   useBoardActions,
+  useInstanceConfig,
   useSessionActions,
 } from './hooks';
 import { StreamdownDemoPage } from './pages/StreamdownDemoPage';
@@ -93,6 +94,9 @@ function AppContent() {
     loading: authConfigLoading,
     error: authConfigError,
   } = useAuthConfig();
+
+  // Fetch instance configuration (label, description)
+  const { config: instanceConfig } = useInstanceConfig();
 
   // Authentication
   const {
@@ -1082,6 +1086,8 @@ function AppContent() {
                 onDeleteComment={handleDeleteComment}
                 onLogout={logout}
                 onRetryConnection={retryConnection}
+                instanceLabel={instanceConfig?.instanceLabel}
+                instanceDescription={instanceConfig?.instanceDescription}
               />
             </>
           }
@@ -1151,6 +1157,8 @@ function AppContent() {
                 onDeleteComment={handleDeleteComment}
                 onLogout={logout}
                 onRetryConnection={retryConnection}
+                instanceLabel={instanceConfig?.instanceLabel}
+                instanceDescription={instanceConfig?.instanceDescription}
               />
             </>
           }
@@ -1220,6 +1228,8 @@ function AppContent() {
                 onDeleteComment={handleDeleteComment}
                 onLogout={logout}
                 onRetryConnection={retryConnection}
+                instanceLabel={instanceConfig?.instanceLabel}
+                instanceDescription={instanceConfig?.instanceDescription}
               />
             </>
           }
