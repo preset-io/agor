@@ -14,6 +14,7 @@ import {
 } from '@ant-design/icons';
 import type { FormInstance } from 'antd';
 import {
+  Alert,
   Badge,
   Button,
   Collapse,
@@ -333,6 +334,18 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
       label: <Typography.Text strong>Connection</Typography.Text>,
       children: (
         <>
+          <Alert
+            message={
+              <>
+                Use <Typography.Text code>{'{{ user.env.VAR }}'}</Typography.Text> to inject your
+                environment variables.
+              </>
+            }
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+          />
+
           <Form.Item
             label="Transport"
             name="transport"
@@ -374,6 +387,7 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                 label="URL"
                 name="url"
                 rules={mode === 'create' ? [{ required: true, message: 'Please enter a URL' }] : []}
+                tooltip="Server URL. Supports templates like {{ user.env.MCP_URL }}"
               >
                 <Input placeholder="https://mcp.example.com" />
               </Form.Item>
@@ -398,9 +412,9 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                   label="Token"
                   name="auth_token"
                   rules={[{ required: true, message: 'Please enter a bearer token' }]}
-                  tooltip="Bearer token for authentication"
+                  tooltip="Bearer token. Supports templates like {{ user.env.API_TOKEN }}"
                 >
-                  <Input.Password placeholder="Enter bearer token" />
+                  <Input.Password placeholder="{{ user.env.API_TOKEN }} or raw token" />
                 </Form.Item>
               )}
 
@@ -410,7 +424,7 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                     label="API URL"
                     name="jwt_api_url"
                     rules={[{ required: true, message: 'Please enter the API URL' }]}
-                    tooltip="URL of the JWT authentication API"
+                    tooltip="JWT auth API URL. Supports templates."
                   >
                     <Input placeholder="https://auth.example.com/token" />
                   </Form.Item>
@@ -419,18 +433,18 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                     label="API Token"
                     name="jwt_api_token"
                     rules={[{ required: true, message: 'Please enter the API token' }]}
-                    tooltip="Token for the JWT authentication API"
+                    tooltip="JWT API token. Supports templates like {{ user.env.JWT_TOKEN }}"
                   >
-                    <Input.Password placeholder="Enter API token" />
+                    <Input.Password placeholder="{{ user.env.JWT_TOKEN }} or raw token" />
                   </Form.Item>
 
                   <Form.Item
                     label="API Secret"
                     name="jwt_api_secret"
                     rules={[{ required: true, message: 'Please enter the API secret' }]}
-                    tooltip="Secret for the JWT authentication API"
+                    tooltip="JWT API secret. Supports templates like {{ user.env.JWT_SECRET }}"
                   >
-                    <Input.Password placeholder="Enter API secret" />
+                    <Input.Password placeholder="{{ user.env.JWT_SECRET }} or raw secret" />
                   </Form.Item>
                 </>
               )}
@@ -448,9 +462,12 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           <Form.Item
             label="Environment Variables"
             name="env"
-            tooltip="JSON object of environment variables"
+            tooltip="JSON object of environment variables. Values support templates like {{ user.env.VAR_NAME }}"
           >
-            <TextArea placeholder='{"API_KEY": "xxx", "ALLOWED_PATHS": "/path"}' rows={3} />
+            <TextArea
+              placeholder='{"GITHUB_TOKEN": "{{ user.env.GITHUB_TOKEN }}", "ALLOWED_PATHS": "/path"}'
+              rows={3}
+            />
           </Form.Item>
         </>
       ),

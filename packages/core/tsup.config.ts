@@ -30,6 +30,7 @@ export default defineConfig({
     'sdk/index': 'src/sdk/index.ts', // AI SDK re-exports (Claude, Codex, Gemini, OpenCode)
     'tools/mcp/jwt-auth': 'src/tools/mcp/jwt-auth.ts', // MCP JWT authentication utilities
     'unix/index': 'src/unix/index.ts', // Unix group management utilities for worktree isolation
+    'mcp/index': 'src/mcp/index.ts', // MCP template resolution utilities
   },
   format: ['cjs', 'esm'],
   dts: true,

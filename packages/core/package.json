@@ -149,6 +149,11 @@
       "types": "./dist/unix/index.d.ts",
       "import": "./dist/unix/index.js",
       "require": "./dist/unix/index.cjs"
+    },
+    "./mcp": {
+      "types": "./dist/mcp/index.d.ts",
+      "import": "./dist/mcp/index.js",
+      "require": "./dist/mcp/index.cjs"
     }
   },
   "scripts": {

@@ -376,21 +376,78 @@ PATCH  /sessions/:id/mcp-servers/:mcpId # Toggle enabled
 
 ## Security Considerations
 
-### Environment Variables
+### Environment Variables & Templating
 
-**Problem:** MCP configs often contain secrets (API keys, tokens)
+**Problem:** MCP configs often contain secrets (API keys, tokens), and in multi-user scenarios, each user needs their own credentials.
 
-**Current Solution:**
+**Solution: Handlebars Templating**
 
-- Store env vars as JSON in database
-- Support `${VAR_NAME}` syntax for variable expansion
-- Resolve from process.env at runtime
+MCP server configurations support Handlebars templates for user-scoped credential injection.
 
-**Future:**
+**Templatable Fields:**
 
-- Encrypted storage in database
-- User-scoped secrets (each user has own values)
-- Integration with secret managers
+| Field | Description |
+|-------|-------------|
+| `url` | Server URL (for HTTP/SSE transport) |
+| `env.*` | Environment variable values |
+| `auth.token` | Bearer token |
+| `auth.api_url` | JWT API URL |
+| `auth.api_token` | JWT API token |
+| `auth.api_secret` | JWT API secret |
+
+**Example:**
+
+```json
+{
+  "name": "github",
+  "transport": "http",
+  "url": "https://mcp.github.com/",
+  "env": {
+    "GITHUB_TOKEN": "{{ user.env.GITHUB_TOKEN }}"
+  },
+  "auth": {
+    "type": "bearer",
+    "token": "{{ user.env.GITHUB_TOKEN }}"
+  }
+}
+```
+
+**Template Context:**
+
+| Variable | Description |
+|----------|-------------|
+| `user.env.*` | User's environment variables (set in Settings → Users → Environment Variables) |
+
+The context is intentionally minimal (only `user.env.*`) for security:
+- MCP configs can be global-scoped (shared across users)
+- Exposing worktree/session context could leak info across user boundaries
+- The primary use case is credential injection, not dynamic configuration
+
+**How It Works:**
+
+1. Admin creates global MCP server with templated env vars
+2. Each user sets their own env vars in Settings (encrypted in database)
+3. When executor spawns, user's decrypted env vars are in `process.env`
+4. `getMcpServersForSession()` resolves templates using `process.env`
+5. Resolved config (with actual tokens) is passed to SDK
+
+**Missing Variables:**
+
+If a template references an env var the user hasn't set:
+- The value resolves to empty string
+- A warning is logged: `MCP env "GITHUB_TOKEN" resolved to empty`
+- The MCP server may fail to authenticate (expected behavior)
+
+**Logging Safety:**
+
+- MCP configs with resolved env vars are NOT logged
+- Only server names and transport types are logged for debugging
+- Location: `packages/executor/src/sdk-handlers/claude/query-builder.ts`
+
+**Implementation:**
+
+- Template resolver: `packages/core/src/mcp/template-resolver.ts`
+- Resolution point: `packages/executor/src/sdk-handlers/base/mcp-scoping.ts`
 
 ### Tool Permissions
 

@@ -9,6 +9,7 @@ export * from './config/index.js';
 export * from './db/index.js';
 export * from './git/index.js';
 export * from './lib/validation.js';
+export * from './mcp/index.js';
 // Re-export everything from submodules
 export * from './types/index.js';
 export * from './unix/index.js';

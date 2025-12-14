@@ -8,10 +8,16 @@
  * - ALL global-scoped MCPs are included in every session (available to all users)
  * - PLUS any session-scoped MCPs that are explicitly assigned to this session
  *
+ * Template Resolution:
+ * MCP server env vars can contain Handlebars templates like {{ user.env.GITHUB_TOKEN }}.
+ * Templates are resolved using process.env, which contains the user's decrypted
+ * environment variables (populated by createUserProcessEnvironment when spawning).
+ *
  * Note: owner_user_id on MCP servers is NOT used for filtering. Global MCPs are
  * truly global and available to all sessions regardless of who created them.
  */
 
+import { buildMCPTemplateContextFromEnv, resolveMcpServerTemplates } from '@agor/core/mcp';
 import type { MCPServer, SessionID } from '@agor/core/types';
 import type {
   MCPServerRepository,
@@ -114,7 +120,7 @@ export async function getMcpServersForSession(
       }
     }
 
-    // Log summary
+    // Log summary (before template resolution)
     if (servers.length > 0) {
       console.log(`   ✅ Total: ${servers.length} MCP server(s) resolved`);
       for (const { server, source } of servers) {
@@ -122,6 +128,39 @@ export async function getMcpServersForSession(
       }
     } else {
       console.log('   ℹ️  No MCP servers available for this session');
+    }
+
+    // STEP 3: Resolve templates in config fields (url, env.*, auth.*)
+    // process.env contains user's decrypted env vars (set by createUserProcessEnvironment)
+    const templateContext = buildMCPTemplateContextFromEnv(process.env);
+    let templatesResolved = 0;
+
+    const containsTemplate = (v: string | undefined) => v?.includes('{{') && v?.includes('}}');
+
+    for (let i = 0; i < servers.length; i++) {
+      const original = servers[i].server;
+
+      // Check if any templatable field contains templates
+      const envValues = Object.values(original.env ?? {}) as string[];
+      const hasEnvTemplates = envValues.some(containsTemplate);
+      const hasUrlTemplate = containsTemplate(original.url);
+      const hasAuthTemplates =
+        containsTemplate(original.auth?.token) ||
+        containsTemplate(original.auth?.api_url) ||
+        containsTemplate(original.auth?.api_token) ||
+        containsTemplate(original.auth?.api_secret);
+
+      if (hasEnvTemplates || hasUrlTemplate || hasAuthTemplates) {
+        servers[i] = {
+          ...servers[i],
+          server: resolveMcpServerTemplates(original, templateContext),
+        };
+        templatesResolved++;
+      }
+    }
+
+    if (templatesResolved > 0) {
+      console.log(`   🔧 Resolved templates in ${templatesResolved} MCP server(s)`);
     }
   } catch (error) {
     console.error('❌ Failed to resolve MCP servers:', error);

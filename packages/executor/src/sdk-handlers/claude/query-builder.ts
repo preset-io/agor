@@ -33,6 +33,24 @@ import { createCanUseToolCallback } from './permissions/permission-hooks.js';
 import { detectThinkingLevel, resolveThinkingBudget } from './thinking-detector.js';
 
 /**
+ * Summarize MCP config for logging without exposing sensitive env values.
+ * Returns a safe object showing server names and transport types only.
+ */
+function summarizeMcpConfig(
+  config: unknown
+): Record<string, { type: string; hasEnv: boolean }> | undefined {
+  if (!config || typeof config !== 'object') return undefined;
+  const summary: Record<string, { type: string; hasEnv: boolean }> = {};
+  for (const [name, server] of Object.entries(config as MCPServersConfig)) {
+    summary[name] = {
+      type: server.type || 'stdio',
+      hasEnv: !!(server.env && Object.keys(server.env).length > 0),
+    };
+  }
+  return summary;
+}
+
+/**
  * Get path to Claude Code executable
  * Uses `which claude` to find it in PATH
  */
@@ -559,9 +577,10 @@ export async function setupQuery(
           ...(queryOptions.mcpServers || {}),
           ...mcpConfig,
         };
+        // Log summary only (env values may contain secrets after template resolution)
         console.log(
-          `   🔧 MCP config being passed to SDK:`,
-          JSON.stringify(queryOptions.mcpServers, null, 2)
+          `   🔧 MCP servers configured:`,
+          JSON.stringify(summarizeMcpConfig(queryOptions.mcpServers), null, 2)
         );
         if (allowedTools.length > 0) {
           queryOptions.allowedTools = allowedTools;
@@ -577,20 +596,10 @@ export async function setupQuery(
   console.log('📤 Calling query() with:');
   console.log(`   prompt: "${prompt.substring(0, 100)}${prompt.length > 100 ? '...' : ''}"`);
   console.log(`   queryOptions keys: ${Object.keys(queryOptions).join(', ')}`);
+  // Log MCP summary only (env values may contain secrets)
   console.log(
-    `   🔍 [MCP DEBUG] queryOptions.mcpServers:`,
-    queryOptions.mcpServers ? JSON.stringify(queryOptions.mcpServers, null, 2) : 'NOT SET'
-  );
-  console.log(
-    `   Full query call:`,
-    JSON.stringify(
-      {
-        prompt,
-        queryOptions,
-      },
-      null,
-      2
-    )
+    `   MCP servers:`,
+    queryOptions.mcpServers ? JSON.stringify(summarizeMcpConfig(queryOptions.mcpServers)) : 'none'
   );
 
   let result: AsyncGenerator<unknown>;
