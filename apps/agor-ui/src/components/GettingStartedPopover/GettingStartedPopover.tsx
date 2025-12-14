@@ -222,7 +222,7 @@ export const GettingStartedPopover: React.FC<GettingStartedPopoverProps> = ({
       placement="bottomRight"
       overlayStyle={{ zIndex: 1050 }}
       styles={{
-        body: {
+        content: {
           backgroundColor: 'rgba(0, 0, 0, 0.5)',
           backdropFilter: 'blur(8px)',
         },

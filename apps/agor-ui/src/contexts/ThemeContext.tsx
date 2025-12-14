@@ -64,8 +64,7 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Get the current theme config based on mode
   const getCurrentThemeConfig = useCallback((): ThemeConfig => {
     const baseTheme: ThemeConfig = {
-      // Enable CSS variables for dynamic theming
-      cssVar: true,
+      // CSS variables are enabled by default in antd v6
       token: {
         colorPrimary: '#2e9a92', // Agor teal
         colorSuccess: '#52c41a',

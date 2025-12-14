@@ -398,7 +398,7 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
                   )
                 }
                 loading={isLoading}
-                typing={shouldUseTyping ? { step: 5, interval: 20 } : false}
+                typing={shouldUseTyping ? { effect: 'typing', step: 5, interval: 20 } : false}
                 content={
                   <CopyableContent
                     textContent={textBeforeTools.join('\n\n')}
@@ -496,7 +496,7 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
                   )
                 }
                 loading={isLoading}
-                typing={shouldUseTyping ? { step: 5, interval: 20 } : false}
+                typing={shouldUseTyping ? { effect: 'typing', step: 5, interval: 20 } : false}
                 content={
                   <CopyableContent
                     textContent={textAfterTools.join('\n\n')}

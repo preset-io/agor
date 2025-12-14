@@ -313,7 +313,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       width={1200}
       style={{ top: 40 }}
       styles={{
-        content: {
+        container: {
           padding: 0,
           overflow: 'hidden',
         },

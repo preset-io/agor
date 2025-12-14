@@ -19,7 +19,7 @@
   "dependencies": {
     "@agor/core": "workspace:*",
     "@ant-design/icons": "^6.1.0",
-    "@ant-design/x": "^1.6.1",
+    "@ant-design/x": "^2.1.1",
     "@tsparticles/engine": "^3.9.0",
     "@tsparticles/react": "^3.0.0",
     "@tsparticles/slim": "^3.9.0",
@@ -28,7 +28,7 @@
     "@xterm/addon-web-links": "^0.11.0",
     "@xterm/xterm": "^5.5.0",
     "ansi-to-react": "^6.1.6",
-    "antd": "^5.29.0",
+    "antd": "^6.0.0",
     "cronstrue": "^3.9.0",
     "emoji-picker-react": "^4.15.1",
     "emojibase": "^17.0.0",
