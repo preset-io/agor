@@ -39,9 +39,16 @@ interface UseAgorDataResult {
  * Fetch and subscribe to Agor data from daemon
  *
  * @param client - Agor client instance
+ * @param options - Optional configuration
+ * @param options.enabled - Whether to enable data fetching (default: true). Set to false to skip
+ *                          all data fetching (useful when user needs to change password first).
  * @returns Sessions, boards, loading state, and refetch function (tasks fetched just-in-time via useTasks)
  */
-export function useAgorData(client: AgorClient | null): UseAgorDataResult {
+export function useAgorData(
+  client: AgorClient | null,
+  options?: { enabled?: boolean }
+): UseAgorDataResult {
+  const enabled = options?.enabled ?? true;
   const [sessionById, setSessionById] = useState<Map<string, Session>>(new Map());
   const [sessionsByWorktree, setSessionsByWorktree] = useState<Map<string, Session[]>>(new Map());
   const [boardById, setBoardById] = useState<Map<string, Board>>(new Map());
@@ -61,7 +68,7 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
 
   // Fetch all data
   const fetchData = useCallback(async () => {
-    if (!client) {
+    if (!client || !enabled) {
       return;
     }
 
@@ -200,12 +207,12 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
     } finally {
       setLoading(false);
     }
-  }, [client]);
+  }, [client, enabled]);
 
   // Subscribe to real-time updates
   useEffect(() => {
-    if (!client) {
-      // No client = not authenticated, set loading to false
+    if (!client || !enabled) {
+      // No client or disabled = not ready for data fetch, set loading to false
       setLoading(false);
       return;
     }
@@ -684,7 +691,7 @@ export function useAgorData(client: AgorClient | null): UseAgorDataResult {
       commentsService.removeListener('updated', handleCommentPatched);
       commentsService.removeListener('removed', handleCommentRemoved);
     };
-  }, [client, fetchData, hasInitiallyFetched]);
+  }, [client, enabled, fetchData, hasInitiallyFetched]);
 
   return {
     sessionById,

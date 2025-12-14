@@ -160,13 +160,12 @@ export class UsersService {
     // Handle password separately (needs hashing)
     if (data.password) {
       updates.password = await hash(data.password, 10);
-      // Auto-clear must_change_password when password is changed
-      updates.must_change_password = false;
-    }
-
-    // Handle must_change_password flag (can be set independently by admins)
-    if (data.must_change_password !== undefined && !data.password) {
-      // Only set if not also changing password (password change auto-clears)
+      // Auto-clear must_change_password when password is changed,
+      // UNLESS explicitly set in the same request (admin reset + force change scenario)
+      // e.g., `user update --password newpass --force-password-change` should keep flag true
+      updates.must_change_password = data.must_change_password ?? false;
+    } else if (data.must_change_password !== undefined) {
+      // Handle must_change_password flag when set WITHOUT password change (admin toggle)
       updates.must_change_password = data.must_change_password;
     }
 

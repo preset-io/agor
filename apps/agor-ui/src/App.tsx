@@ -121,6 +121,7 @@ function AppContent() {
   });
 
   // Fetch data (only when connected and authenticated)
+  // Skip data fetch if user needs to change password - the ForcePasswordChangeModal will handle that
   const {
     sessionById,
     sessionsByWorktree,
@@ -134,7 +135,9 @@ function AppContent() {
     sessionMcpServerIds,
     loading,
     error: dataError,
-  } = useAgorData(connected ? client : null);
+  } = useAgorData(connected ? client : null, {
+    enabled: !user?.must_change_password,
+  });
 
   // Session actions
   const { createSession, forkSession, spawnSession, updateSession, deleteSession } =
@@ -348,8 +351,8 @@ function AppContent() {
     );
   }
 
-  // Show data error
-  if (dataError) {
+  // Show data error (but not if user needs to change password - let the modal render)
+  if (dataError && !user?.must_change_password) {
     return (
       <ConfigProvider theme={getCurrentThemeConfig()}>
         <div
