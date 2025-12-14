@@ -625,6 +625,8 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     // Store ReactFlow instance ref
     const reactFlowInstanceRef = useRef<ReactFlowInstance | null>(null);
     const reactFlowWrapperRef = useRef<HTMLDivElement | null>(null);
+    // Track when ReactFlow instance is ready (state to trigger re-renders)
+    const [isReactFlowReady, setIsReactFlowReady] = useState(false);
 
     // Track which board we last fit the view for (prevents repeated fitView on node changes)
     const lastFitBoardIdRef = useRef<string | null>(null);
@@ -1020,7 +1022,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     // biome-ignore lint/correctness/useExhaustiveDependencies: nodes.length is used to gate execution (wait for nodes to load), not to trigger re-runs
     useEffect(() => {
       // Wait for ReactFlow to be ready and nodes to be loaded
-      if (!reactFlowInstanceRef.current || nodes.length === 0) return;
+      if (!isReactFlowReady || !reactFlowInstanceRef.current || nodes.length === 0) return;
 
       // Only fit view once per board - skip if we already fit for this board
       if (board?.board_id === lastFitBoardIdRef.current) return;
@@ -1038,7 +1040,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       }, 100);
 
       return () => clearTimeout(timer);
-    }, [nodes.length, board?.board_id]); // board_id triggers check, nodes.length gates execution
+    }, [isReactFlowReady, nodes.length, board?.board_id]); // isReactFlowReady + board_id triggers check, nodes.length gates execution
 
     // Intercept onNodesChange to detect resize events
     const onNodesChange = useCallback(
@@ -1945,6 +1947,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             onPaneClick={handlePaneClick}
             onInit={(instance) => {
               reactFlowInstanceRef.current = instance;
+              setIsReactFlowReady(true);
             }}
             nodeTypes={nodeTypes}
             snapToGrid={true}
