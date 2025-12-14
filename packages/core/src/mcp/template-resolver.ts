@@ -27,19 +27,21 @@
  * ```
  *
  * Template Context:
- * - `user.env.*` - User's environment variables (from process.env in executor)
+ * - `user.env.*` - User's environment variables ONLY (not system vars)
  *
- * The context is intentionally minimal (only user.env.*) for security:
- * - MCP configs can be global-scoped (shared across users)
- * - Exposing worktree/session context could leak info across boundaries
- * - The primary use case is credential injection, not dynamic configuration
+ * Security:
+ * The context is restricted to user-defined environment variables only.
+ * This prevents global MCP configs from exfiltrating system/daemon secrets.
+ *
+ * The list of user-defined keys is communicated via AGOR_USER_ENV_KEYS env var
+ * (set by createUserProcessEnvironment when daemon spawns executor).
  *
  * Usage:
- * In the executor process, user environment variables are already available
- * in process.env (populated by createUserProcessEnvironment when spawning).
- * Use buildMCPTemplateContextFromEnv(process.env) to build the context.
+ * In the executor process, call buildMCPTemplateContextFromEnv(process.env).
+ * It will automatically filter to only user-defined variables.
  */
 
+import { AGOR_USER_ENV_KEYS_VAR } from '../config/env-resolver';
 import { renderTemplate } from '../templates/handlebars-helpers';
 import type { MCPAuth, MCPServer } from '../types';
 
@@ -54,28 +56,57 @@ export interface MCPTemplateContext {
 }
 
 /**
+ * Result of resolving templates in an MCP server configuration.
+ */
+export interface MCPTemplateResolutionResult {
+  /** Resolved server configuration (may have undefined fields if templates failed) */
+  server: MCPServer;
+  /** List of fields that had templates but resolved to empty/undefined */
+  unresolvedFields: string[];
+  /** Whether the server is usable (critical fields resolved successfully) */
+  isValid: boolean;
+  /** Human-readable error message if not valid */
+  errorMessage?: string;
+}
+
+/**
  * Build template context from process environment.
  *
- * In the executor, process.env already contains the user's decrypted
- * environment variables (merged by createUserProcessEnvironment when
- * the daemon spawns the executor).
+ * SECURITY: Only includes user-defined environment variables, not system vars.
+ * The list of user-defined keys is read from AGOR_USER_ENV_KEYS env var
+ * (set by createUserProcessEnvironment when daemon spawns executor).
+ *
+ * This prevents global MCP configs from accessing system secrets like
+ * AGOR_MASTER_SECRET, database credentials, or other daemon internals.
  *
  * @param env - Environment object (typically process.env)
- * @returns Template context for MCP config resolution
+ * @returns Template context for MCP config resolution (user vars only)
  */
 export function buildMCPTemplateContextFromEnv(
   env: NodeJS.ProcessEnv | Record<string, string | undefined>
 ): MCPTemplateContext {
-  // Filter out undefined values and convert to Record<string, string>
-  const filteredEnv: Record<string, string> = {};
-  for (const [key, value] of Object.entries(env)) {
+  // Get the list of user-defined env var keys (set by daemon)
+  const userEnvKeysStr = env[AGOR_USER_ENV_KEYS_VAR];
+  const allowedKeys = userEnvKeysStr ? new Set(userEnvKeysStr.split(',')) : new Set<string>();
+
+  // Filter to only user-defined variables
+  const userEnv: Record<string, string> = {};
+  for (const key of allowedKeys) {
+    const value = env[key];
     if (value !== undefined) {
-      filteredEnv[key] = value;
+      userEnv[key] = value;
     }
   }
+
+  if (allowedKeys.size > 0) {
+    console.log(
+      `   🔐 MCP template context: ${allowedKeys.size} user env var(s) available for templates`
+    );
+  }
+
   return {
     user: {
-      env: filteredEnv,
+      env: userEnv,
     },
   };
 }
@@ -128,40 +159,6 @@ function resolveStringValue(
 }
 
 /**
- * Resolve templates in MCP auth configuration.
- *
- * @param auth - Auth config that may contain templated values
- * @param context - Template context
- * @returns New auth object with resolved values, or undefined if auth is undefined
- */
-function resolveMcpServerAuth(
-  auth: MCPAuth | undefined,
-  context: MCPTemplateContext
-): MCPAuth | undefined {
-  if (!auth) return undefined;
-
-  const resolved: MCPAuth = { ...auth };
-
-  // Resolve bearer token
-  if (auth.token) {
-    resolved.token = resolveStringValue('auth.token', auth.token, context);
-  }
-
-  // Resolve JWT fields
-  if (auth.api_url) {
-    resolved.api_url = resolveStringValue('auth.api_url', auth.api_url, context);
-  }
-  if (auth.api_token) {
-    resolved.api_token = resolveStringValue('auth.api_token', auth.api_token, context);
-  }
-  if (auth.api_secret) {
-    resolved.api_secret = resolveStringValue('auth.api_secret', auth.api_secret, context);
-  }
-
-  return resolved;
-}
-
-/**
  * Resolve templates in MCP server env vars.
  *
  * Returns a NEW object (doesn't mutate input).
@@ -207,26 +204,115 @@ export function resolveMcpServerEnv(
  *
  * @param server - MCP server with potentially templated fields
  * @param context - Template context
- * @returns New server object with resolved values
+ * @returns Resolution result with server, validation status, and any errors
  */
 export function resolveMcpServerTemplates(
   server: MCPServer,
   context: MCPTemplateContext
-): MCPServer {
+): MCPTemplateResolutionResult {
   const resolved: MCPServer = { ...server };
+  const unresolvedFields: string[] = [];
+
+  // Track original templated fields to detect unresolved templates
+  const hadUrlTemplate = server.url && containsTemplate(server.url);
 
   // Resolve URL (for HTTP/SSE transport)
   if (server.url) {
     resolved.url = resolveStringValue('url', server.url, context);
+    if (hadUrlTemplate && !resolved.url) {
+      unresolvedFields.push('url');
+    }
   }
 
-  // Resolve env vars
-  resolved.env = resolveMcpServerEnv(server.env, context);
+  // Resolve env vars (track individual unresolved vars)
+  if (server.env) {
+    const resolvedEnv: Record<string, string> = {};
+    for (const [key, templateValue] of Object.entries(server.env)) {
+      const hadTemplate = containsTemplate(templateValue);
+      const resolvedValue = resolveStringValue(`env.${key}`, templateValue, context);
+      if (resolvedValue !== undefined) {
+        resolvedEnv[key] = resolvedValue;
+      } else if (hadTemplate) {
+        unresolvedFields.push(`env.${key}`);
+      }
+    }
+    resolved.env = Object.keys(resolvedEnv).length > 0 ? resolvedEnv : undefined;
+  }
 
   // Resolve auth fields
-  resolved.auth = resolveMcpServerAuth(server.auth, context);
+  if (server.auth) {
+    const resolvedAuth: MCPAuth = { ...server.auth };
 
-  return resolved;
+    if (server.auth.token) {
+      const hadTemplate = containsTemplate(server.auth.token);
+      resolvedAuth.token = resolveStringValue('auth.token', server.auth.token, context);
+      if (hadTemplate && !resolvedAuth.token) {
+        unresolvedFields.push('auth.token');
+      }
+    }
+    if (server.auth.api_url) {
+      const hadTemplate = containsTemplate(server.auth.api_url);
+      resolvedAuth.api_url = resolveStringValue('auth.api_url', server.auth.api_url, context);
+      if (hadTemplate && !resolvedAuth.api_url) {
+        unresolvedFields.push('auth.api_url');
+      }
+    }
+    if (server.auth.api_token) {
+      const hadTemplate = containsTemplate(server.auth.api_token);
+      resolvedAuth.api_token = resolveStringValue('auth.api_token', server.auth.api_token, context);
+      if (hadTemplate && !resolvedAuth.api_token) {
+        unresolvedFields.push('auth.api_token');
+      }
+    }
+    if (server.auth.api_secret) {
+      const hadTemplate = containsTemplate(server.auth.api_secret);
+      resolvedAuth.api_secret = resolveStringValue(
+        'auth.api_secret',
+        server.auth.api_secret,
+        context
+      );
+      if (hadTemplate && !resolvedAuth.api_secret) {
+        unresolvedFields.push('auth.api_secret');
+      }
+    }
+
+    resolved.auth = resolvedAuth;
+  }
+
+  // Determine validity - URL is critical for HTTP/SSE transports
+  const isHttpTransport = server.transport === 'http' || server.transport === 'sse';
+  const urlRequired = isHttpTransport && hadUrlTemplate;
+  const urlMissing = urlRequired && !resolved.url;
+
+  const isValid = !urlMissing;
+  let errorMessage: string | undefined;
+
+  if (!isValid) {
+    const missingVars = unresolvedFields
+      .map((f) => {
+        // Extract the template variable name for better error messages
+        let originalValue: string | undefined;
+        if (f === 'url') {
+          originalValue = server.url;
+        } else if (f.startsWith('env.')) {
+          originalValue = server.env?.[f.slice(4)];
+        } else if (f.startsWith('auth.') && server.auth) {
+          const authKey = f.slice(5) as keyof MCPAuth;
+          const authValue = server.auth[authKey];
+          originalValue = typeof authValue === 'string' ? authValue : undefined;
+        }
+        return originalValue || f;
+      })
+      .join(', ');
+    errorMessage = `MCP server "${server.name}" has unresolved required templates: ${missingVars}. Set the corresponding environment variables in your user settings.`;
+  }
+
+  return {
+    server: resolved,
+    unresolvedFields,
+    isValid,
+    errorMessage,
+  };
 }
 
 /**
@@ -234,11 +320,11 @@ export function resolveMcpServerTemplates(
  *
  * @param servers - Array of MCP servers
  * @param context - Template context
- * @returns New array with resolved servers
+ * @returns Array of resolution results
  */
 export function resolveMcpServersTemplates(
   servers: MCPServer[],
   context: MCPTemplateContext
-): MCPServer[] {
+): MCPTemplateResolutionResult[] {
   return servers.map((server) => resolveMcpServerTemplates(server, context));
 }

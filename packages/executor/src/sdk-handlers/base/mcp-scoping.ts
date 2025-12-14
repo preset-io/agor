@@ -132,12 +132,15 @@ export async function getMcpServersForSession(
 
     // STEP 3: Resolve templates in config fields (url, env.*, auth.*)
     // process.env contains user's decrypted env vars (set by createUserProcessEnvironment)
+    // SECURITY: Only user-defined vars are exposed (via AGOR_USER_ENV_KEYS)
     const templateContext = buildMCPTemplateContextFromEnv(process.env);
     let templatesResolved = 0;
+    let serversSkipped = 0;
 
     const containsTemplate = (v: string | undefined) => v?.includes('{{') && v?.includes('}}');
 
-    for (let i = 0; i < servers.length; i++) {
+    // Process servers in reverse to safely remove invalid ones
+    for (let i = servers.length - 1; i >= 0; i--) {
       const original = servers[i].server;
 
       // Check if any templatable field contains templates
@@ -151,16 +154,37 @@ export async function getMcpServersForSession(
         containsTemplate(original.auth?.api_secret);
 
       if (hasEnvTemplates || hasUrlTemplate || hasAuthTemplates) {
-        servers[i] = {
-          ...servers[i],
-          server: resolveMcpServerTemplates(original, templateContext),
-        };
-        templatesResolved++;
+        const result = resolveMcpServerTemplates(original, templateContext);
+
+        if (!result.isValid) {
+          // Remove server from list - required templates didn't resolve
+          console.warn(`   ⚠️  Skipping MCP server "${original.name}": ${result.errorMessage}`);
+          servers.splice(i, 1);
+          serversSkipped++;
+        } else {
+          servers[i] = {
+            ...servers[i],
+            server: result.server,
+          };
+          templatesResolved++;
+
+          // Log warnings for non-critical unresolved fields
+          if (result.unresolvedFields.length > 0) {
+            console.warn(
+              `   ⚠️  MCP server "${original.name}" has unresolved optional templates: ${result.unresolvedFields.join(', ')}`
+            );
+          }
+        }
       }
     }
 
     if (templatesResolved > 0) {
       console.log(`   🔧 Resolved templates in ${templatesResolved} MCP server(s)`);
+    }
+    if (serversSkipped > 0) {
+      console.log(
+        `   ⚠️  Skipped ${serversSkipped} MCP server(s) due to unresolved required templates`
+      );
     }
   } catch (error) {
     console.error('❌ Failed to resolve MCP servers:', error);

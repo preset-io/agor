@@ -5,6 +5,7 @@
 export {
   buildMCPTemplateContextFromEnv,
   type MCPTemplateContext,
+  type MCPTemplateResolutionResult,
   resolveMcpServerEnv,
   resolveMcpServersTemplates,
   resolveMcpServerTemplates,

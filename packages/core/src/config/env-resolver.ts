@@ -98,6 +98,12 @@ export function resolveSystemEnvironment(): Record<string, string> {
 }
 
 /**
+ * Special environment variable that contains comma-separated list of user-defined env var keys.
+ * Used by MCP template resolver to restrict template context to user-scoped vars only.
+ */
+export const AGOR_USER_ENV_KEYS_VAR = 'AGOR_USER_ENV_KEYS';
+
+/**
  * Create a clean environment for user processes (worktrees, terminals, etc.)
  *
  * This function:
@@ -105,6 +111,7 @@ export function resolveSystemEnvironment(): Record<string, string> {
  * 2. Filters out Agor-internal variables (NODE_ENV, AGOR_*, etc.)
  * 3. Resolves and merges user-specific encrypted environment variables
  * 4. Optionally merges additional environment variables
+ * 5. Sets AGOR_USER_ENV_KEYS with comma-separated list of user-defined var keys
  *
  * @param userId - User ID to resolve environment for (optional)
  * @param db - Database instance (required if userId provided)
@@ -140,6 +147,9 @@ export async function createUserProcessEnvironment(
     delete env[internalVar];
   }
 
+  // Track user-defined env var keys (for MCP template scoping)
+  const userEnvKeys: string[] = [];
+
   // Resolve and merge user environment variables (if userId provided)
   // Only override if values are non-empty
   if (userId && db) {
@@ -147,6 +157,7 @@ export async function createUserProcessEnvironment(
     for (const [key, value] of Object.entries(userEnv)) {
       if (value && value.trim() !== '') {
         env[key] = value;
+        userEnvKeys.push(key);
       }
     }
   }
@@ -159,6 +170,12 @@ export async function createUserProcessEnvironment(
         env[key] = value;
       }
     }
+  }
+
+  // Set AGOR_USER_ENV_KEYS to communicate user-defined var keys to child processes
+  // This is used by MCP template resolver to restrict context to user-scoped vars only
+  if (userEnvKeys.length > 0) {
+    env[AGOR_USER_ENV_KEYS_VAR] = userEnvKeys.join(',');
   }
 
   return env;
