@@ -198,12 +198,12 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
               trigger="hover"
               placement="bottomLeft"
             >
-              <Tag color="blue" style={{ cursor: 'help', marginLeft: 8 }}>
+              <Tag color="cyan" style={{ cursor: 'help', marginLeft: 8 }}>
                 {instanceLabel}
               </Tag>
             </Popover>
           ) : (
-            <Tag color="blue" style={{ marginLeft: 8 }}>
+            <Tag color="cyan" style={{ marginLeft: 8 }}>
               {instanceLabel}
             </Tag>
           ))}

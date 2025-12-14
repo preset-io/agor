@@ -1,18 +1,29 @@
 import type { AgenticToolName, MCPServer, UpdateUserInput, User } from '@agor/core/types';
 import { getDefaultPermissionMode } from '@agor/core/types';
 import {
+  CloseOutlined,
+  KeyOutlined,
+  RobotOutlined,
+  SettingOutlined,
+  SoundOutlined,
+  ThunderboltOutlined,
+} from '@ant-design/icons';
+import type { MenuProps } from 'antd';
+import {
   Button,
   Checkbox,
   Flex,
   Form,
   Input,
+  Layout,
+  Menu,
   Modal,
   Select,
   Space,
   Switch,
-  Tabs,
   Tag,
   Typography,
+  theme,
 } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
@@ -20,6 +31,8 @@ import { ApiKeyFields, type ApiKeyStatus } from '../ApiKeyFields';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { EnvVarEditor } from '../EnvVarEditor';
 import { AudioSettingsTab } from './AudioSettingsTab';
+
+const { Sider, Content } = Layout;
 
 export interface UserSettingsModalProps {
   open: boolean;
@@ -390,253 +403,353 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       case 'claude-code':
       case 'codex':
       case 'gemini':
+      case 'opencode':
         await handleAgenticConfigSave(activeTab as AgenticToolName);
         break;
     }
   };
 
+  const { token } = theme.useToken();
+
+  // Menu items for left sidebar navigation
+  const menuItems: MenuProps['items'] = [
+    {
+      key: 'profile',
+      label: 'Profile',
+      type: 'group',
+      children: [
+        {
+          key: 'general',
+          label: 'General',
+          icon: <SettingOutlined />,
+        },
+        {
+          key: 'env-vars',
+          label: 'Env Vars',
+          icon: <ThunderboltOutlined />,
+        },
+        {
+          key: 'audio',
+          label: 'Audio',
+          icon: <SoundOutlined />,
+        },
+      ],
+    },
+    {
+      key: 'agentic-tools',
+      label: 'Agentic Tools',
+      type: 'group',
+      children: [
+        {
+          key: 'api-keys',
+          label: 'API Keys',
+          icon: <KeyOutlined />,
+        },
+        {
+          key: 'claude-code',
+          label: 'Claude Code',
+          icon: <RobotOutlined />,
+        },
+        {
+          key: 'codex',
+          label: 'Codex',
+          icon: <RobotOutlined />,
+        },
+        {
+          key: 'gemini',
+          label: 'Gemini',
+          icon: <RobotOutlined />,
+        },
+        {
+          key: 'opencode',
+          label: 'OpenCode',
+          icon: <RobotOutlined />,
+        },
+      ],
+    },
+  ];
+
+  // Render content based on active section
+  const renderContent = () => {
+    switch (activeTab) {
+      case 'general':
+        return (
+          <Form form={form} layout="vertical">
+            <Form.Item label="Name" style={{ marginBottom: 24 }}>
+              <Flex gap={8}>
+                <Form.Item name="emoji" noStyle>
+                  <FormEmojiPickerInput form={form} fieldName="emoji" defaultEmoji="👤" />
+                </Form.Item>
+                <Form.Item name="name" noStyle style={{ flex: 1 }}>
+                  <Input placeholder="John Doe" style={{ flex: 1 }} />
+                </Form.Item>
+              </Flex>
+            </Form.Item>
+
+            <Form.Item
+              label="Email"
+              name="email"
+              rules={[
+                { required: true, message: 'Please enter an email' },
+                { type: 'email', message: 'Please enter a valid email' },
+              ]}
+            >
+              <Input placeholder="user@example.com" />
+            </Form.Item>
+
+            <Form.Item
+              label="Unix Username"
+              name="unix_username"
+              help={
+                currentUser?.role === 'admin'
+                  ? 'Unix user for process impersonation (alphanumeric, hyphens, underscores only)'
+                  : 'Maintained by administrators'
+              }
+              rules={[
+                {
+                  pattern: /^[a-z0-9_-]+$/,
+                  message: 'Only lowercase letters, numbers, hyphens, and underscores allowed',
+                },
+                { max: 32, message: 'Unix username must be 32 characters or less' },
+              ]}
+            >
+              <Input
+                placeholder="johnsmith"
+                maxLength={32}
+                disabled={currentUser?.role !== 'admin'}
+              />
+            </Form.Item>
+
+            <Form.Item label="Password" name="password" help="Leave blank to keep current password">
+              <Input.Password placeholder="••••••••" />
+            </Form.Item>
+
+            <Form.Item
+              label={
+                <Space size={4}>
+                  Enable Live Event Stream
+                  <Tag color={token.colorPrimary} style={{ fontSize: 10, marginLeft: 4 }}>
+                    BETA
+                  </Tag>
+                </Space>
+              }
+              name="eventStreamEnabled"
+              valuePropName="checked"
+              tooltip="Show/hide the event stream icon in the navbar. When enabled, you can view live WebSocket events for debugging."
+            >
+              <Switch />
+            </Form.Item>
+
+            <Form.Item
+              label="Role"
+              name="role"
+              rules={[{ required: true, message: 'Please select a role' }]}
+              help={currentUser?.role !== 'admin' ? 'Maintained by administrators' : undefined}
+            >
+              <Select disabled={currentUser?.role !== 'admin'}>
+                {/* <Select.Option value="owner">Owner</Select.Option> */}
+                <Select.Option value="admin">Admin</Select.Option>
+                <Select.Option value="member">Member</Select.Option>
+                <Select.Option value="viewer">Viewer</Select.Option>
+              </Select>
+            </Form.Item>
+
+            {/* Only show for admins editing other users */}
+            {currentUser?.role === 'admin' && user && user.user_id !== currentUser.user_id && (
+              <Form.Item name="must_change_password" valuePropName="checked">
+                <Checkbox>Force password change on next login</Checkbox>
+              </Form.Item>
+            )}
+          </Form>
+        );
+      case 'api-keys':
+        return (
+          <>
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
+              Per-user API keys take precedence over global settings. These keys are encrypted at
+              rest.
+            </Typography.Paragraph>
+            <ApiKeyFields
+              keyStatus={userApiKeyStatus}
+              onSave={handleApiKeySave}
+              onClear={handleApiKeyClear}
+              saving={savingApiKeys}
+            />
+          </>
+        );
+      case 'env-vars':
+        return (
+          <>
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
+              Environment variables are encrypted at rest and available to all sessions for this
+              user.
+            </Typography.Paragraph>
+            <EnvVarEditor
+              envVars={userEnvVars}
+              onSave={handleEnvVarSave}
+              onDelete={handleEnvVarDelete}
+              loading={savingEnvVars}
+            />
+          </>
+        );
+      case 'audio':
+        return <AudioSettingsTab user={user} form={audioForm} />;
+      case 'claude-code':
+      case 'codex':
+      case 'gemini':
+      case 'opencode': {
+        const toolName = activeTab as AgenticToolName;
+        const formMap = {
+          'claude-code': claudeForm,
+          codex: codexForm,
+          gemini: geminiForm,
+          opencode: opencodeForm,
+        };
+        const currentForm = formMap[toolName];
+        const displayNames: Record<AgenticToolName, string> = {
+          'claude-code': 'Claude Code',
+          codex: 'Codex',
+          gemini: 'Gemini',
+          opencode: 'OpenCode',
+        };
+        return (
+          <>
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
+              Configure default settings for {displayNames[toolName]}. These will prepopulate
+              session creation forms.
+            </Typography.Paragraph>
+            <Form form={currentForm} layout="vertical">
+              <AgenticToolConfigForm
+                agenticTool={toolName}
+                mcpServerById={mcpServerById}
+                showHelpText={false}
+              />
+            </Form>
+            <div style={{ marginTop: 16 }}>
+              <Button onClick={() => handleAgenticConfigClear(toolName)}>Clear Defaults</Button>
+            </div>
+          </>
+        );
+      }
+      default:
+        return null;
+    }
+  };
+
+  // Get title for current section
+  const getSectionTitle = () => {
+    const titles: Record<string, string> = {
+      general: 'General',
+      'api-keys': 'API Keys',
+      'env-vars': 'Environment Variables',
+      audio: 'Audio',
+      'claude-code': 'Claude Code',
+      codex: 'Codex',
+      gemini: 'Gemini',
+      opencode: 'OpenCode',
+    };
+    return titles[activeTab] || 'User Settings';
+  };
+
   return (
     <Modal
-      title="User Settings"
+      title={null}
       open={open}
-      onOk={handleModalSave}
       onCancel={handleClose}
-      okText="Save"
-      cancelText="Close"
-      confirmLoading={
-        activeTab === 'claude-code'
-          ? savingAgenticConfig['claude-code']
-          : activeTab === 'codex'
-            ? savingAgenticConfig.codex
-            : activeTab === 'gemini'
-              ? savingAgenticConfig.gemini
-              : false
+      footer={
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'flex-end',
+            gap: 8,
+            padding: '12px 24px',
+            background: token.colorBgContainer,
+          }}
+        >
+          <Button onClick={handleClose}>Close</Button>
+          <Button
+            type="primary"
+            onClick={handleModalSave}
+            loading={
+              activeTab === 'claude-code'
+                ? savingAgenticConfig['claude-code']
+                : activeTab === 'codex'
+                  ? savingAgenticConfig.codex
+                  : activeTab === 'gemini'
+                    ? savingAgenticConfig.gemini
+                    : activeTab === 'opencode'
+                      ? savingAgenticConfig.opencode
+                      : false
+            }
+          >
+            Save
+          </Button>
+        </div>
       }
+      closable
       width={900}
+      style={{ top: 40 }}
       styles={{
+        content: {
+          padding: 0,
+          overflow: 'hidden',
+        },
+        header: {
+          display: 'none',
+        },
         body: {
-          height: '500px',
-          overflowY: 'auto',
+          padding: 0,
+          height: 'calc(100vh - 280px)',
+          minHeight: 450,
+          maxHeight: 650,
+        },
+        footer: {
+          padding: 0,
+          margin: 0,
+          background: token.colorBgContainer,
+          borderTop: `1px solid ${token.colorBorderSecondary}`,
         },
       }}
+      closeIcon={<CloseOutlined />}
     >
-      <Tabs
-        activeKey={activeTab}
-        onChange={setActiveTab}
-        style={{ marginTop: 16 }}
-        items={[
-          {
-            key: 'general',
-            label: 'General',
-            children: (
-              <Form form={form} layout="vertical" style={{ paddingTop: 8 }}>
-                <Form.Item label="Name" style={{ marginBottom: 24 }}>
-                  <Flex gap={8}>
-                    <Form.Item name="emoji" noStyle>
-                      <FormEmojiPickerInput form={form} fieldName="emoji" defaultEmoji="👤" />
-                    </Form.Item>
-                    <Form.Item name="name" noStyle style={{ flex: 1 }}>
-                      <Input placeholder="John Doe" style={{ flex: 1 }} />
-                    </Form.Item>
-                  </Flex>
-                </Form.Item>
-
-                <Form.Item
-                  label="Email"
-                  name="email"
-                  rules={[
-                    { required: true, message: 'Please enter an email' },
-                    { type: 'email', message: 'Please enter a valid email' },
-                  ]}
-                >
-                  <Input placeholder="user@example.com" />
-                </Form.Item>
-
-                <Form.Item
-                  label="Unix Username"
-                  name="unix_username"
-                  help={
-                    currentUser?.role === 'admin'
-                      ? 'Unix user for process impersonation (alphanumeric, hyphens, underscores only)'
-                      : 'Maintained by administrators'
-                  }
-                  rules={[
-                    {
-                      pattern: /^[a-z0-9_-]+$/,
-                      message: 'Only lowercase letters, numbers, hyphens, and underscores allowed',
-                    },
-                    { max: 32, message: 'Unix username must be 32 characters or less' },
-                  ]}
-                >
-                  <Input
-                    placeholder="johnsmith"
-                    maxLength={32}
-                    disabled={currentUser?.role !== 'admin'}
-                  />
-                </Form.Item>
-
-                <Form.Item
-                  label="Password"
-                  name="password"
-                  help="Leave blank to keep current password"
-                >
-                  <Input.Password placeholder="••••••••" />
-                </Form.Item>
-
-                <Form.Item
-                  label={
-                    <Space size={4}>
-                      Enable Live Event Stream
-                      <Tag color="blue" style={{ fontSize: 10, marginLeft: 4 }}>
-                        BETA
-                      </Tag>
-                    </Space>
-                  }
-                  name="eventStreamEnabled"
-                  valuePropName="checked"
-                  tooltip="Show/hide the event stream icon in the navbar. When enabled, you can view live WebSocket events for debugging."
-                >
-                  <Switch />
-                </Form.Item>
-
-                <Form.Item
-                  label="Role"
-                  name="role"
-                  rules={[{ required: true, message: 'Please select a role' }]}
-                  help={currentUser?.role !== 'admin' ? 'Maintained by administrators' : undefined}
-                >
-                  <Select disabled={currentUser?.role !== 'admin'}>
-                    {/* <Select.Option value="owner">Owner</Select.Option> */}
-                    <Select.Option value="admin">Admin</Select.Option>
-                    <Select.Option value="member">Member</Select.Option>
-                    <Select.Option value="viewer">Viewer</Select.Option>
-                  </Select>
-                </Form.Item>
-
-                {/* Only show for admins editing other users */}
-                {currentUser?.role === 'admin' && user && user.user_id !== currentUser.user_id && (
-                  <Form.Item name="must_change_password" valuePropName="checked">
-                    <Checkbox>Force password change on next login</Checkbox>
-                  </Form.Item>
-                )}
-              </Form>
-            ),
-          },
-          {
-            key: 'api-keys',
-            label: 'API Keys',
-            children: (
-              <div style={{ paddingTop: 8 }}>
-                <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
-                  Per-user API keys take precedence over global settings. These keys are encrypted
-                  at rest.
-                </Typography.Paragraph>
-                <ApiKeyFields
-                  keyStatus={userApiKeyStatus}
-                  onSave={handleApiKeySave}
-                  onClear={handleApiKeyClear}
-                  saving={savingApiKeys}
-                />
-              </div>
-            ),
-          },
-          {
-            key: 'env-vars',
-            label: 'Env Vars',
-            children: (
-              <div style={{ paddingTop: 8 }}>
-                <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
-                  Environment variables are encrypted at rest and available to all sessions for this
-                  user.
-                </Typography.Paragraph>
-                <EnvVarEditor
-                  envVars={userEnvVars}
-                  onSave={handleEnvVarSave}
-                  onDelete={handleEnvVarDelete}
-                  loading={savingEnvVars}
-                />
-              </div>
-            ),
-          },
-          {
-            key: 'audio',
-            label: 'Audio',
-            children: (
-              <div style={{ paddingTop: 8 }}>
-                <AudioSettingsTab user={user} form={audioForm} />
-              </div>
-            ),
-          },
-          {
-            key: 'claude-code',
-            label: 'Claude Code',
-            children: (
-              <div style={{ paddingTop: 8 }}>
-                <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
-                  Configure default settings for Claude Code. These will prepopulate session
-                  creation forms.
-                </Typography.Paragraph>
-                <Form form={claudeForm} layout="vertical">
-                  <AgenticToolConfigForm
-                    agenticTool="claude-code"
-                    mcpServerById={mcpServerById}
-                    showHelpText={false}
-                  />
-                </Form>
-                <div style={{ marginTop: 16 }}>
-                  <Button onClick={() => handleAgenticConfigClear('claude-code')}>
-                    Clear Defaults
-                  </Button>
-                </div>
-              </div>
-            ),
-          },
-          {
-            key: 'codex',
-            label: 'Codex',
-            children: (
-              <div style={{ paddingTop: 8 }}>
-                <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
-                  Configure default settings for Codex. These will prepopulate session creation
-                  forms.
-                </Typography.Paragraph>
-                <Form form={codexForm} layout="vertical">
-                  <AgenticToolConfigForm
-                    agenticTool="codex"
-                    mcpServerById={mcpServerById}
-                    showHelpText={false}
-                  />
-                </Form>
-                <div style={{ marginTop: 16 }}>
-                  <Button onClick={() => handleAgenticConfigClear('codex')}>Clear Defaults</Button>
-                </div>
-              </div>
-            ),
-          },
-          {
-            key: 'gemini',
-            label: 'Gemini',
-            children: (
-              <div style={{ paddingTop: 8 }}>
-                <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
-                  Configure default settings for Gemini. These will prepopulate session creation
-                  forms.
-                </Typography.Paragraph>
-                <Form form={geminiForm} layout="vertical">
-                  <AgenticToolConfigForm
-                    agenticTool="gemini"
-                    mcpServerById={mcpServerById}
-                    showHelpText={false}
-                  />
-                </Form>
-                <div style={{ marginTop: 16 }}>
-                  <Button onClick={() => handleAgenticConfigClear('gemini')}>Clear Defaults</Button>
-                </div>
-              </div>
-            ),
-          },
-        ]}
-      />
+      <Layout style={{ height: '100%', background: token.colorBgContainer }}>
+        <Sider
+          width={200}
+          style={{
+            background: token.colorBgElevated,
+            borderRight: `1px solid ${token.colorBorderSecondary}`,
+            overflow: 'auto',
+            padding: '20px 0',
+          }}
+        >
+          <div
+            style={{
+              padding: '0 24px 16px',
+              fontWeight: 600,
+              fontSize: 18,
+              color: token.colorText,
+            }}
+          >
+            User Settings
+          </div>
+          <Menu
+            mode="inline"
+            selectedKeys={[activeTab]}
+            onClick={({ key }) => setActiveTab(key)}
+            items={menuItems}
+            style={{
+              border: 'none',
+              background: 'transparent',
+            }}
+          />
+        </Sider>
+        <Content style={{ padding: '24px 32px', overflow: 'auto' }}>
+          <Typography.Title level={4} style={{ marginTop: 0, marginBottom: 20 }}>
+            {getSectionTitle()}
+          </Typography.Title>
+          {renderContent()}
+        </Content>
+      </Layout>
     </Modal>
   );
 };

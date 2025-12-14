@@ -4262,6 +4262,7 @@ async function main() {
       // Basic status (always public for monitoring systems)
       // IMPORTANT: Include auth config in public response so frontend can decide
       // whether to show login page BEFORE authenticating (avoid chicken-egg problem)
+      // Also include instance label/description for UI identification
       const publicResponse = {
         status: 'ok',
         timestamp: Date.now(),
@@ -4269,6 +4270,10 @@ async function main() {
         auth: {
           requireAuth: config.daemon?.requireAuth === true,
           allowAnonymous: allowAnonymous,
+        },
+        instance: {
+          label: config.daemon?.instanceLabel,
+          description: config.daemon?.instanceDescription,
         },
       };
 

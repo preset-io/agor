@@ -32,7 +32,6 @@ import {
   useAuth,
   useAuthConfig,
   useBoardActions,
-  useInstanceConfig,
   useSessionActions,
 } from './hooks';
 import { StreamdownDemoPage } from './pages/StreamdownDemoPage';
@@ -89,15 +88,13 @@ function AppContent() {
   const { getCurrentThemeConfig } = useTheme();
   const { showSuccess, showError, showLoading, destroy } = useThemedMessage();
 
-  // Fetch daemon auth configuration
+  // Fetch daemon auth and instance configuration
   const {
     config: authConfig,
+    instanceConfig,
     loading: authConfigLoading,
     error: authConfigError,
   } = useAuthConfig();
-
-  // Fetch instance configuration (label, description)
-  const { config: instanceConfig } = useInstanceConfig();
 
   // Authentication
   const {
@@ -1105,8 +1102,8 @@ function AppContent() {
                 onDeleteComment={handleDeleteComment}
                 onLogout={logout}
                 onRetryConnection={retryConnection}
-                instanceLabel={instanceConfig?.instanceLabel}
-                instanceDescription={instanceConfig?.instanceDescription}
+                instanceLabel={instanceConfig?.label}
+                instanceDescription={instanceConfig?.description}
               />
             </>
           }
@@ -1176,8 +1173,8 @@ function AppContent() {
                 onDeleteComment={handleDeleteComment}
                 onLogout={logout}
                 onRetryConnection={retryConnection}
-                instanceLabel={instanceConfig?.instanceLabel}
-                instanceDescription={instanceConfig?.instanceDescription}
+                instanceLabel={instanceConfig?.label}
+                instanceDescription={instanceConfig?.description}
               />
             </>
           }
@@ -1247,8 +1244,8 @@ function AppContent() {
                 onDeleteComment={handleDeleteComment}
                 onLogout={logout}
                 onRetryConnection={retryConnection}
-                instanceLabel={instanceConfig?.instanceLabel}
-                instanceDescription={instanceConfig?.instanceDescription}
+                instanceLabel={instanceConfig?.label}
+                instanceDescription={instanceConfig?.description}
               />
             </>
           }

@@ -1,8 +1,8 @@
 /**
- * useAuthConfig - Fetch daemon authentication configuration
+ * useAuthConfig - Fetch daemon authentication and instance configuration
  *
- * Retrieves whether authentication is required from the daemon's health endpoint.
- * Used on app startup to determine if login page should be shown.
+ * Retrieves auth config and instance info from the daemon's health endpoint.
+ * Used on app startup to determine if login page should be shown and display instance label.
  */
 
 import { useEffect, useState } from 'react';
@@ -13,16 +13,23 @@ interface AuthConfig {
   allowAnonymous: boolean;
 }
 
+interface InstanceConfig {
+  label?: string;
+  description?: string;
+}
+
 interface HealthResponse {
   status: string;
   timestamp: number;
   version: string;
   database: string;
   auth: AuthConfig;
+  instance?: InstanceConfig;
 }
 
 export function useAuthConfig() {
   const [config, setConfig] = useState<AuthConfig | null>(null);
+  const [instanceConfig, setInstanceConfig] = useState<InstanceConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
@@ -36,11 +43,13 @@ export function useAuthConfig() {
 
         const health: HealthResponse = await response.json();
         setConfig(health.auth);
+        setInstanceConfig(health.instance ?? null);
         setError(null);
       } catch (err) {
         setError(err instanceof Error ? err : new Error(String(err)));
         // Default to requiring auth on error (secure by default)
         setConfig({ requireAuth: true, allowAnonymous: false });
+        setInstanceConfig(null);
       } finally {
         setLoading(false);
       }
@@ -49,5 +58,5 @@ export function useAuthConfig() {
     fetchAuthConfig();
   }, []);
 
-  return { config, loading, error };
+  return { config, instanceConfig, loading, error };
 }
