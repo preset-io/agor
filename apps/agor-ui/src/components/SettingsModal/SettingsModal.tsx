@@ -317,6 +317,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           padding: 0,
           overflow: 'hidden',
         },
+        container: {
+          padding: 0,
+          borderRadius: 8,
+          overflow: 'hidden',
+        },
         header: {
           display: 'none',
         },
