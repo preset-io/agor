@@ -113,6 +113,7 @@ export class CodexTool implements ITool {
    * @param taskId - Optional task ID for linking messages
    * @param permissionMode - Permission mode for tool execution ('ask' | 'auto' | 'allow-all')
    * @param streamingCallbacks - Optional callbacks for real-time streaming (enables typewriter effect)
+   * @param abortController - Optional AbortController for cancellation support
    * @returns User message ID and array of assistant message IDs
    */
   async executePromptWithStreaming(
@@ -120,7 +121,8 @@ export class CodexTool implements ITool {
     prompt: string,
     taskId?: TaskID,
     permissionMode?: PermissionMode,
-    streamingCallbacks?: StreamingCallbacks
+    streamingCallbacks?: StreamingCallbacks,
+    abortController?: AbortController
   ): Promise<CodexExecutionResult> {
     if (!this.promptService || !this.messagesRepo) {
       throw new Error('CodexTool not initialized with repositories for live execution');
@@ -152,7 +154,8 @@ export class CodexTool implements ITool {
       sessionId,
       prompt,
       taskId,
-      permissionMode
+      permissionMode,
+      abortController
     )) {
       // Detect if execution was stopped early
       if (event.type === 'stopped') {

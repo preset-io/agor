@@ -464,13 +464,15 @@ export class CodexPromptService {
    * @param prompt - User prompt
    * @param taskId - Optional task ID
    * @param permissionMode - Permission mode for tool execution ('ask' | 'auto' | 'allow-all')
+   * @param abortController - Optional AbortController for cancellation support
    * @returns Async generator of streaming events
    */
   async *promptSessionStreaming(
     sessionId: SessionID,
     prompt: string,
     taskId?: TaskID,
-    permissionMode?: PermissionMode
+    permissionMode?: PermissionMode,
+    abortController?: AbortController
   ): AsyncGenerator<CodexStreamEvent> {
     // Get session to check for existing thread ID and working directory
     const session = await this.sessionsRepo.findById(sessionId);
@@ -659,9 +661,11 @@ export class CodexPromptService {
         this.stopRequested.delete(sessionId);
       }
 
-      // Use streaming API
+      // Use streaming API with abort signal for proper cancellation support
+      // The signal is passed to Codex SDK which will throw AbortError when aborted
       console.log(`🎬 [Codex] Starting runStreamed() for session ${sessionId.substring(0, 8)}`);
-      const { events } = await thread.runStreamed(prompt);
+      const turnOptions = abortController ? { signal: abortController.signal } : undefined;
+      const { events } = await thread.runStreamed(prompt, turnOptions);
       console.log(`✅ [Codex] runStreamed() returned, starting event iteration`);
 
       const currentMessage: Array<{
@@ -814,6 +818,21 @@ export class CodexPromptService {
         }
       }
     } catch (error) {
+      // Check if this is an AbortError from AbortController.abort()
+      // This is EXPECTED during stop - the SDK throws AbortError when cancelled
+      if (
+        error instanceof Error &&
+        (error.name === 'AbortError' || error.message.includes('abort'))
+      ) {
+        console.log(
+          `🛑 [Stop] Codex query aborted for session ${sessionId.substring(0, 8)} - this is expected`
+        );
+        // Yield stopped event to signal execution was halted
+        yield { type: 'stopped', threadId: thread.id || undefined };
+        // Don't throw - this is a clean stop, not an error
+        return;
+      }
+
       console.error('❌ Codex streaming error:', error);
       throw error;
     }
@@ -879,14 +898,18 @@ export class CodexPromptService {
   /**
    * Stop currently executing task
    *
-   * Sets a stop flag that is checked in the event loop.
-   * The loop will break on the next iteration, stopping execution gracefully.
+   * Primary cancellation is handled via AbortController.signal passed to runStreamed().
+   * When the signal is aborted, the SDK throws AbortError which is caught and handled.
+   *
+   * This method sets a backup flag that is checked in the event loop (for cases where
+   * AbortController may not immediately interrupt the SDK's async iteration).
    *
    * @param sessionId - Session identifier
    * @returns Success status
    */
   stopTask(sessionId: SessionID): { success: boolean; reason?: string } {
-    // Set stop flag
+    // Set stop flag as backup mechanism
+    // Primary cancellation happens via AbortController.signal passed to SDK
     this.stopRequested.set(sessionId, true);
     console.log(`🛑 Stop requested for Codex session ${sessionId}`);
 
