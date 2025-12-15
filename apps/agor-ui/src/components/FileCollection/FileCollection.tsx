@@ -22,7 +22,7 @@ import {
 } from '@ant-design/icons';
 import { Button, Empty, Input, Spin, Tooltip, Tree } from 'antd';
 import type React from 'react';
-import { memo, useCallback, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ConceptListItem } from '../../types';
 import { useThemedMessage } from '../../utils/message';
 
@@ -341,31 +341,43 @@ const FileCollectionInner: React.FC<FileCollectionProps> = ({
     pendingSearchExpandRef.current = value;
   }, []);
 
-  // Handle expansion after treeData changes due to search
-  // This runs after treeData is computed with the new searchQuery
-  const prevTreeDataRef = useRef(treeData);
-  if (prevTreeDataRef.current !== treeData && pendingSearchExpandRef.current !== null) {
-    const searchValue = pendingSearchExpandRef.current;
-    pendingSearchExpandRef.current = null;
-
-    if (searchValue) {
-      // Expand all directories when searching
-      const allKeys = getAllKeys(treeData);
-      // Only update if keys actually changed to avoid unnecessary re-renders
-      if (
-        allKeys.length !== expandedKeys.length ||
-        !allKeys.every((k) => expandedKeys.includes(k))
-      ) {
-        setExpandedKeys(allKeys);
+  // Cleanup debounce timer on unmount to prevent setState after unmount
+  useEffect(() => {
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
       }
-    } else {
-      // Collapse all when clearing search (only if not already collapsed)
-      if (expandedKeys.length > 0) {
-        setExpandedKeys([]);
+    };
+  }, []);
+
+  // Handle expansion after treeData changes due to search
+  // Using useEffect to avoid state updates during render (React StrictMode warning)
+  const prevTreeDataRef = useRef(treeData);
+  useEffect(() => {
+    if (prevTreeDataRef.current !== treeData && pendingSearchExpandRef.current !== null) {
+      const searchValue = pendingSearchExpandRef.current;
+      pendingSearchExpandRef.current = null;
+
+      if (searchValue) {
+        // Expand all directories when searching
+        const allKeys = getAllKeys(treeData);
+        // Only update if keys actually changed to avoid unnecessary re-renders
+        setExpandedKeys((currentKeys) => {
+          if (
+            allKeys.length !== currentKeys.length ||
+            !allKeys.every((k) => currentKeys.includes(k))
+          ) {
+            return allKeys;
+          }
+          return currentKeys;
+        });
+      } else {
+        // Collapse all when clearing search (only if not already collapsed)
+        setExpandedKeys((currentKeys) => (currentKeys.length > 0 ? [] : currentKeys));
       }
     }
-  }
-  prevTreeDataRef.current = treeData;
+    prevTreeDataRef.current = treeData;
+  }, [treeData, getAllKeys]);
 
   // Handle expand/collapse - this is the user's manual expansion, don't reset it
   const handleExpand = useCallback((keys: React.Key[]) => {

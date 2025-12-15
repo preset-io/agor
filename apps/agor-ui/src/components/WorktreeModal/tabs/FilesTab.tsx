@@ -205,7 +205,10 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ worktree, client }) => {
 
 // Memoize FilesTab to prevent re-renders when parent re-renders with same worktree
 export const FilesTab = memo(FilesTabInner, (prevProps, nextProps) => {
-  // Only re-render if worktree_id changes
-  // Client reference changes shouldn't trigger re-render since we use refs
-  return prevProps.worktree.worktree_id === nextProps.worktree.worktree_id;
+  // Re-render if worktree_id changes or if client availability changes (null -> non-null or vice versa)
+  // This ensures the fetch effect runs when client becomes available
+  const clientAvailabilityChanged = (prevProps.client === null) !== (nextProps.client === null);
+  return (
+    prevProps.worktree.worktree_id === nextProps.worktree.worktree_id && !clientAvailabilityChanged
+  );
 });
