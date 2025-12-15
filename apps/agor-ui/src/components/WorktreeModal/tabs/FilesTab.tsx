@@ -1,7 +1,7 @@
 import type { AgorClient } from '@agor/core/api';
 import type { FileDetail, FileListItem, Worktree } from '@agor/core/types';
 import { Alert, message, Space } from 'antd';
-import { useEffect, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { CodePreviewModal } from '../../CodePreviewModal/CodePreviewModal';
 import type { FileItem } from '../../FileCollection/FileCollection';
 import { FileCollection } from '../../FileCollection/FileCollection';
@@ -14,7 +14,7 @@ interface FilesTabProps {
   client: AgorClient | null;
 }
 
-export const FilesTab: React.FC<FilesTabProps> = ({ worktree, client }) => {
+const FilesTabInner: React.FC<FilesTabProps> = ({ worktree, client }) => {
   const [files, setFiles] = useState<FileListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -23,6 +23,13 @@ export const FilesTab: React.FC<FilesTabProps> = ({ worktree, client }) => {
   const [selectedFile, setSelectedFile] = useState<FileDetail | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
+
+  // Store client and worktree_id in refs to keep callbacks stable
+  const clientRef = useRef(client);
+  clientRef.current = client;
+
+  const worktreeIdRef = useRef(worktree.worktree_id);
+  worktreeIdRef.current = worktree.worktree_id;
 
   // Fetch files when tab is opened
   useEffect(() => {
@@ -53,44 +60,16 @@ export const FilesTab: React.FC<FilesTabProps> = ({ worktree, client }) => {
     fetchFiles();
   }, [client, worktree.worktree_id]);
 
-  // Handle file click - preview text files or download others
-  const handleFileClick = async (file: FileItem) => {
-    if (!client) return;
-
-    // If text file under size limit, preview in modal
-    if ('isText' in file && file.isText && file.size < 1024 * 1024) {
-      try {
-        setLoadingDetail(true);
-        setModalOpen(true);
-
-        // Fetch full file detail with content
-        const detail = await client.service('file').get(file.path, {
-          query: { worktree_id: worktree.worktree_id },
-        });
-
-        setSelectedFile(detail as FileDetail);
-      } catch (err) {
-        console.error('Failed to fetch file detail:', err);
-        message.error('Failed to load file');
-        setModalOpen(false);
-      } finally {
-        setLoadingDetail(false);
-      }
-    } else {
-      // Download file directly
-      downloadFile(file);
-    }
-  };
-
-  // Download file (handles both UTF-8 text and base64 binary)
-  const downloadFile = async (file: FileItem) => {
-    if (!client) return;
+  // Download file (handles both UTF-8 text and base64 binary) - stable callback
+  const downloadFile = useCallback(async (file: FileItem) => {
+    const currentClient = clientRef.current;
+    if (!currentClient) return;
 
     try {
       message.loading({ content: 'Downloading file...', key: 'download' });
 
-      const detail = (await client.service('file').get(file.path, {
-        query: { worktree_id: worktree.worktree_id },
+      const detail = (await currentClient.service('file').get(file.path, {
+        query: { worktree_id: worktreeIdRef.current },
       })) as FileDetail;
 
       // Decode content based on encoding
@@ -128,13 +107,46 @@ export const FilesTab: React.FC<FilesTabProps> = ({ worktree, client }) => {
       console.error('Failed to download file:', err);
       message.error({ content: 'Failed to download file', key: 'download' });
     }
-  };
+  }, []);
 
-  // Handle modal close
-  const handleModalClose = () => {
+  // Handle file click - preview text files or download others - stable callback
+  const handleFileClick = useCallback(
+    async (file: FileItem) => {
+      const currentClient = clientRef.current;
+      if (!currentClient) return;
+
+      // If text file under size limit, preview in modal
+      if ('isText' in file && file.isText && file.size < 1024 * 1024) {
+        try {
+          setLoadingDetail(true);
+          setModalOpen(true);
+
+          // Fetch full file detail with content
+          const detail = await currentClient.service('file').get(file.path, {
+            query: { worktree_id: worktreeIdRef.current },
+          });
+
+          setSelectedFile(detail as FileDetail);
+        } catch (err) {
+          console.error('Failed to fetch file detail:', err);
+          message.error('Failed to load file');
+          setModalOpen(false);
+        } finally {
+          setLoadingDetail(false);
+        }
+      } else {
+        // Download file directly
+        downloadFile(file);
+      }
+    },
+    [downloadFile]
+  );
+
+  // Handle modal close - stable callback
+  const handleModalClose = useCallback(() => {
     setModalOpen(false);
     setSelectedFile(null);
-  };
+  }, []);
 
   const isMarkdown = selectedFile?.path.endsWith('.md');
   const isTruncated = files.length >= MAX_FILES;
@@ -190,3 +202,10 @@ export const FilesTab: React.FC<FilesTabProps> = ({ worktree, client }) => {
     </div>
   );
 };
+
+// Memoize FilesTab to prevent re-renders when parent re-renders with same worktree
+export const FilesTab = memo(FilesTabInner, (prevProps, nextProps) => {
+  // Only re-render if worktree_id changes
+  // Client reference changes shouldn't trigger re-render since we use refs
+  return prevProps.worktree.worktree_id === nextProps.worktree.worktree_id;
+});
