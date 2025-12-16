@@ -119,10 +119,11 @@ function escapeShellArg(arg: string): string {
 }
 
 /**
- * Escape a string for use within double quotes in a Zellij write-chars command
+ * Escape a string for use within double quotes in shell commands
+ * Used for Zellij action arguments like tab names, paths, and write-chars content
  * Must escape: backslashes, double quotes, dollar signs, backticks
  */
-function escapeForWriteChars(str: string): string {
+function escapeDoubleQuoted(str: string): string {
   return str
     .replace(/\\/g, '\\\\') // Escape backslashes first
     .replace(/"/g, '\\"') // Escape double quotes
@@ -180,7 +181,9 @@ async function zellijSessionExistsAsync(sessionName: string, asUser?: string): P
       asUser,
       timeout: ZELLIJ_COMMAND_TIMEOUT_MS,
     });
-    return output.includes(sessionName);
+    // Match exact session name by splitting lines (avoids "agor-abc" matching "agor-abcde")
+    const sessions = output.split('\n').map((line) => line.trim());
+    return sessions.includes(sessionName);
   } catch (error) {
     const isTimeout = error instanceof Error && error.message.includes('ETIMEDOUT');
     if (isTimeout) {
@@ -192,11 +195,13 @@ async function zellijSessionExistsAsync(sessionName: string, asUser?: string): P
 
 /**
  * Async run a Zellij CLI action on a specific session
+ * @param throwOnError - If true, propagates errors instead of swallowing them (use for critical operations)
  */
 async function runZellijActionAsync(
   sessionName: string,
   action: string,
-  asUser?: string
+  asUser?: string,
+  throwOnError = false
 ): Promise<void> {
   try {
     const cmd = `zellij --session "${sessionName}" action ${action}`;
@@ -213,6 +218,9 @@ async function runZellijActionAsync(
       );
     } else {
       console.warn(`⚠️ Failed to run Zellij action on ${sessionName}: ${action}\n${message}`);
+    }
+    if (throwOnError) {
+      throw error;
     }
   }
 }
@@ -337,7 +345,7 @@ async function executeInitCommands(
   const initScript = initCommands.join(' && ');
   await runZellijActionAsync(
     zellijSession,
-    `write-chars "${escapeForWriteChars(initScript)}"`,
+    `write-chars "${escapeDoubleQuoted(initScript)}"`,
     asUser
   );
   await runZellijActionAsync(zellijSession, 'write 10', asUser);
@@ -800,22 +808,33 @@ export class TerminalsService {
     await waitForReady();
 
     // Perform tab management (all async, no blocking)
+    // Escape tab name and cwd to prevent shell injection from worktree names/paths
+    const escapedTabName = escapeDoubleQuoted(tabName);
+    const escapedCwd = escapeDoubleQuoted(cwd);
+
     try {
       if (!sessionExists) {
         // First time creating session - rename first tab and set up environment
-        await runZellijActionAsync(zellijSession, `rename-tab "${tabName}"`, asUser);
+        // Use throwOnError=true for critical tab operations so failures propagate
+        await runZellijActionAsync(zellijSession, `rename-tab "${escapedTabName}"`, asUser, true);
         this.zellijCache.invalidate(zellijSession, asUser);
 
         const initCommands = buildInitCommands(envFile, cwd);
         await executeInitCommands(zellijSession, initCommands, asUser);
       } else if (needsTabCreation) {
-        // Create new tab for this worktree
+        // Create new tab for this worktree - critical operations throw on error
         await runZellijActionAsync(
           zellijSession,
-          `new-tab --name "${tabName}" --cwd "${cwd}"`,
-          asUser
+          `new-tab --name "${escapedTabName}" --cwd "${escapedCwd}"`,
+          asUser,
+          true
         );
-        await runZellijActionAsync(zellijSession, `go-to-tab-name "${tabName}"`, asUser);
+        await runZellijActionAsync(
+          zellijSession,
+          `go-to-tab-name "${escapedTabName}"`,
+          asUser,
+          true
+        );
         this.zellijCache.invalidate(zellijSession, asUser);
 
         // Small delay for tab shell to initialize
@@ -824,10 +843,15 @@ export class TerminalsService {
         const initCommands = buildInitCommands(envFile, cwd, true); // alwaysCd=true
         await executeInitCommands(zellijSession, initCommands, asUser);
       } else if (needsTabSwitch) {
-        // Switch to existing tab
-        await runZellijActionAsync(zellijSession, `go-to-tab-name "${tabName}"`, asUser);
+        // Switch to existing tab - critical operation throws on error
+        await runZellijActionAsync(
+          zellijSession,
+          `go-to-tab-name "${escapedTabName}"`,
+          asUser,
+          true
+        );
 
-        // Send Ctrl+C to clear any incomplete command, then navigate
+        // Send Ctrl+C to clear any incomplete command, then navigate (non-critical)
         await runZellijActionAsync(zellijSession, 'write 3', asUser);
         await new Promise((r) => setTimeout(r, 20));
 
@@ -835,7 +859,11 @@ export class TerminalsService {
         await executeInitCommands(zellijSession, initCommands, asUser);
       }
     } catch (error) {
-      console.warn('Failed to configure Zellij tab:', error);
+      // Log and re-throw so create() fails and UI can handle/retry
+      console.error('Failed to configure Zellij tab:', error);
+      throw new Error(
+        `Zellij tab configuration failed: ${error instanceof Error ? error.message : String(error)}`
+      );
     }
 
     return { terminalId, cwd, zellijSession, zellijReused, worktreeName };
