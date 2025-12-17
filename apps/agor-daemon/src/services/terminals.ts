@@ -56,6 +56,9 @@ function isZellijAvailable(): boolean {
   }
 }
 
+/** Module-level flag tracking if Zellij warning has been shown */
+let zellijWarningShown = false;
+
 /**
  * Write user environment variables to a shell script
  * This allows shells spawned in Zellij tabs to source the env vars
@@ -131,23 +134,31 @@ export class TerminalsService {
   private app: Application;
   private db: Database;
 
+  /** Whether Zellij is available on this system */
+  private zellijAvailable: boolean;
+
   constructor(app: Application, db: Database) {
     this.app = app;
     this.db = db;
 
-    // Verify Zellij is available - fail hard if not
-    if (!isZellijAvailable()) {
-      throw new Error(
-        '❌ Zellij is not installed or not available in PATH.\n' +
-          'Agor requires Zellij for terminal management.\n' +
-          'Please install Zellij:\n' +
-          '  - Ubuntu/Debian: curl -L https://github.com/zellij-org/zellij/releases/latest/download/zellij-x86_64-unknown-linux-musl.tar.gz | tar -xz -C /usr/local/bin\n' +
-          '  - macOS: brew install zellij\n' +
-          '  - See: https://zellij.dev/documentation/installation'
-      );
-    }
+    // Check if Zellij is available - warn but don't fail
+    this.zellijAvailable = isZellijAvailable();
 
-    console.log('\x1b[36m✅ Zellij detected\x1b[0m - persistent terminal sessions enabled');
+    if (!this.zellijAvailable) {
+      if (!zellijWarningShown) {
+        console.warn(
+          '\x1b[33m⚠️  Zellij is not installed or not available in PATH.\x1b[0m\n' +
+            'Terminal functionality will be unavailable.\n' +
+            'To enable terminals, install Zellij:\n' +
+            '  - Ubuntu/Debian: curl -L https://github.com/zellij-org/zellij/releases/latest/download/zellij-x86_64-unknown-linux-musl.tar.gz | tar -xz -C /usr/local/bin\n' +
+            '  - macOS: brew install zellij\n' +
+            '  - See: https://zellij.dev/documentation/installation'
+        );
+        zellijWarningShown = true;
+      }
+    } else {
+      console.log('\x1b[36m✅ Zellij detected\x1b[0m - persistent terminal sessions enabled');
+    }
   }
 
   /**
@@ -166,6 +177,14 @@ export class TerminalsService {
     isNew: boolean;
     worktreeName?: string;
   }> {
+    // Check if Zellij is available
+    if (!this.zellijAvailable) {
+      throw new Error(
+        'Terminal functionality is unavailable: Zellij is not installed.\n' +
+          'Please install Zellij to enable terminal support.'
+      );
+    }
+
     return this.createExecutorTerminal(
       {
         worktreeId: data.worktreeId,

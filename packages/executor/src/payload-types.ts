@@ -11,6 +11,50 @@
 import { z } from 'zod';
 
 // ═══════════════════════════════════════════════════════════
+// URL Validation
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * Validate a git-compatible URL
+ *
+ * Git supports multiple URL formats:
+ * - HTTPS: https://github.com/user/repo.git
+ * - SSH: git@github.com:user/repo.git
+ * - Git protocol: git://github.com/user/repo.git
+ * - Local path: /path/to/repo or ./relative/path
+ * - File URL: file:///path/to/repo
+ */
+function isGitUrl(value: string): boolean {
+  // HTTPS/HTTP URLs
+  if (/^https?:\/\/.+/.test(value)) return true;
+
+  // Git protocol URLs
+  if (/^git:\/\/.+/.test(value)) return true;
+
+  // SSH URLs (user@host:path/to/repo.git)
+  if (/^[\w.-]+@[\w.-]+:.+/.test(value)) return true;
+
+  // File URLs
+  if (/^file:\/\/.+/.test(value)) return true;
+
+  // Local absolute paths (Unix-style)
+  if (/^\//.test(value)) return true;
+
+  // Local relative paths
+  if (/^\.\.?\//.test(value)) return true;
+
+  return false;
+}
+
+/**
+ * Git URL schema - accepts HTTPS, SSH, git://, file://, and local paths
+ */
+const GitUrlSchema = z.string().refine(isGitUrl, {
+  message:
+    'Invalid git URL. Supported formats: https://, git://, git@host:path, file://, or local path',
+});
+
+// ═══════════════════════════════════════════════════════════
 // Shared Schemas
 // ═══════════════════════════════════════════════════════════
 
@@ -96,8 +140,8 @@ export const GitClonePayloadSchema = BasePayloadSchema.extend({
   sessionToken: z.string(),
 
   params: z.object({
-    /** Repository URL (https or ssh) */
-    url: z.string().url(),
+    /** Repository URL (https, ssh, git://, file://, or local path) */
+    url: GitUrlSchema,
 
     /** Output path for the repository (optional, defaults to AGOR_DATA_HOME/repos/) */
     outputPath: z.string().optional(),

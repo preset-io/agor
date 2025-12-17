@@ -112,13 +112,28 @@ export function createSocketIOConfig(
         const decoded = jwt.verify(token, jwtSecret, {
           issuer: 'agor',
           audience: 'https://agor.dev',
-        }) as { sub: string; type: string };
+        }) as { sub: string; type?: string; role?: string };
 
-        if (decoded.type !== 'access') {
+        // Allow both user access tokens and service tokens (used by executor)
+        const tokenType = decoded.type;
+        if (tokenType !== 'access' && tokenType !== 'service') {
           return next(new Error('Invalid token type'));
         }
 
-        // Fetch user from database
+        // Handle service tokens (used by executor for terminal streaming, git operations, etc.)
+        if (tokenType === 'service') {
+          // Service tokens don't have a user - they authenticate the executor process
+          // Mark as service connection for potential authorization checks
+          (socket as FeathersSocket).feathers = {
+            // No user - this is a service connection
+          };
+          console.log(
+            `🔐 WebSocket authenticated (service): ${socket.id} (role: ${decoded.role || 'unknown'})`
+          );
+          return next();
+        }
+
+        // Handle user access tokens - fetch user from database
         const user = await app.service('users').get(decoded.sub as import('@agor/core/types').UUID);
 
         // Attach user to socket (FeathersJS convention)
