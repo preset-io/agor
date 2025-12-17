@@ -19,7 +19,8 @@ import { z } from 'zod';
  *
  * Git supports multiple URL formats:
  * - HTTPS: https://github.com/user/repo.git
- * - SSH: git@github.com:user/repo.git
+ * - SSH (scp-style): git@github.com:user/repo.git
+ * - SSH (protocol): ssh://git@github.com/user/repo.git
  * - Git protocol: git://github.com/user/repo.git
  * - Local path: /path/to/repo or ./relative/path
  * - File URL: file:///path/to/repo
@@ -31,7 +32,10 @@ function isGitUrl(value: string): boolean {
   // Git protocol URLs
   if (/^git:\/\/.+/.test(value)) return true;
 
-  // SSH URLs (user@host:path/to/repo.git)
+  // SSH protocol URLs (ssh://git@github.com/user/repo.git)
+  if (/^ssh:\/\/.+/.test(value)) return true;
+
+  // SSH scp-style URLs (git@github.com:user/repo.git)
   if (/^[\w.-]+@[\w.-]+:.+/.test(value)) return true;
 
   // File URLs
@@ -51,7 +55,7 @@ function isGitUrl(value: string): boolean {
  */
 const GitUrlSchema = z.string().refine(isGitUrl, {
   message:
-    'Invalid git URL. Supported formats: https://, git://, git@host:path, file://, or local path',
+    'Invalid git URL. Supported formats: https://, ssh://, git://, git@host:path, file://, or local path',
 });
 
 // ═══════════════════════════════════════════════════════════

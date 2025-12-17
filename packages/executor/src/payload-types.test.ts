@@ -149,6 +149,19 @@ describe('GitClonePayloadSchema', () => {
     expect(result.params.url).toBe('git://github.com/user/repo.git');
   });
 
+  it('should parse git.clone with ssh:// protocol', () => {
+    const payload = {
+      command: 'git.clone',
+      sessionToken: 'jwt-token-here',
+      params: {
+        url: 'ssh://git@github.com/user/repo.git',
+      },
+    };
+
+    const result = GitClonePayloadSchema.parse(payload);
+    expect(result.params.url).toBe('ssh://git@github.com/user/repo.git');
+  });
+
   it('should parse git.clone with optional fields', () => {
     const payload = {
       command: 'git.clone',
