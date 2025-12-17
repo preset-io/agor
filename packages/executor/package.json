@@ -16,7 +16,8 @@
   "dependencies": {
     "@agor/core": "workspace:*",
     "@iarna/toml": "^2.2.5",
-    "@opencode-ai/sdk": "^1.0.122"
+    "@opencode-ai/sdk": "^1.0.122",
+    "zod": "^3.25.0"
   },
   "devDependencies": {
     "@types/node": "^22.19.0",
