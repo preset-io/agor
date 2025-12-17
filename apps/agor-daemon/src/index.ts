@@ -1180,6 +1180,7 @@ async function main() {
             resources: resourcesResult.resources.map((r) => ({
               name: r.name,
               uri: r.uri,
+              mimeType: r.mimeType,
             })),
             prompts: promptsResult.prompts.map((p) => ({
               name: p.name,

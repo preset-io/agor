@@ -23,6 +23,7 @@ import {
   Switch,
   Table,
   Tag,
+  Tooltip,
   Typography,
 } from 'antd';
 import { useEffect, useState } from 'react';
@@ -56,7 +57,7 @@ interface MCPServerFormFieldsProps {
     resourceCount: number;
     promptCount: number;
     tools?: Array<{ name: string; description: string }>;
-    resources?: Array<{ name: string; uri: string }>;
+    resources?: Array<{ name: string; uri: string; mimeType?: string }>;
     prompts?: Array<{ name: string; description: string }>;
   } | null;
 }
@@ -402,9 +403,15 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                           </Typography.Text>
                           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                             {testResult.tools.map((tool) => (
-                              <Tag key={tool.name} color="blue" style={{ marginBottom: 4 }}>
-                                {tool.name}
-                              </Tag>
+                              <Tooltip
+                                key={tool.name}
+                                title={tool.description || 'No description'}
+                                placement="top"
+                              >
+                                <Tag color="blue" style={{ marginBottom: 4, cursor: 'help' }}>
+                                  {tool.name}
+                                </Tag>
+                              </Tooltip>
                             ))}
                           </div>
                         </div>
@@ -419,9 +426,24 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                           </Typography.Text>
                           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                             {testResult.resources.map((resource) => (
-                              <Tag key={resource.uri} color="cyan" style={{ marginBottom: 4 }}>
-                                {resource.name}
-                              </Tag>
+                              <Tooltip
+                                key={resource.uri}
+                                title={
+                                  <div>
+                                    <div>{resource.uri}</div>
+                                    {resource.mimeType && (
+                                      <div style={{ opacity: 0.7, fontSize: 11 }}>
+                                        {resource.mimeType}
+                                      </div>
+                                    )}
+                                  </div>
+                                }
+                                placement="top"
+                              >
+                                <Tag color="cyan" style={{ marginBottom: 4, cursor: 'help' }}>
+                                  {resource.name}
+                                </Tag>
+                              </Tooltip>
                             ))}
                           </div>
                         </div>
@@ -436,9 +458,15 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                           </Typography.Text>
                           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                             {testResult.prompts.map((prompt) => (
-                              <Tag key={prompt.name} color="purple" style={{ marginBottom: 4 }}>
-                                {prompt.name}
-                              </Tag>
+                              <Tooltip
+                                key={prompt.name}
+                                title={prompt.description || 'No description'}
+                                placement="top"
+                              >
+                                <Tag color="purple" style={{ marginBottom: 4, cursor: 'help' }}>
+                                  {prompt.name}
+                                </Tag>
+                              </Tooltip>
                             ))}
                           </div>
                         </div>
@@ -496,7 +524,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     resourceCount: number;
     promptCount: number;
     tools?: Array<{ name: string; description: string }>;
-    resources?: Array<{ name: string; uri: string }>;
+    resources?: Array<{ name: string; uri: string; mimeType?: string }>;
     prompts?: Array<{ name: string; description: string }>;
   } | null>(null);
 
@@ -643,7 +671,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
         error?: string;
         capabilities?: { tools: number; resources: number; prompts: number };
         tools?: Array<{ name: string; description: string }>;
-        resources?: Array<{ name: string; uri: string }>;
+        resources?: Array<{ name: string; uri: string; mimeType?: string }>;
         prompts?: Array<{ name: string; description: string }>;
       };
 
