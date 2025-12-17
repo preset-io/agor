@@ -83,6 +83,11 @@ export type PromptPayload = z.infer<typeof PromptPayloadSchema>;
 
 /**
  * Git clone payload - clone repository with full Unix setup
+ *
+ * When createDbRecord is true (default), the executor will:
+ * 1. Clone the repository to outputPath
+ * 2. Create a repo record in the database via Feathers
+ * 3. Initialize Unix group (if RBAC enabled)
  */
 export const GitClonePayloadSchema = BasePayloadSchema.extend({
   command: z.literal('git.clone'),
@@ -94,14 +99,20 @@ export const GitClonePayloadSchema = BasePayloadSchema.extend({
     /** Repository URL (https or ssh) */
     url: z.string().url(),
 
-    /** Output path for the repository */
-    outputPath: z.string(),
+    /** Output path for the repository (optional, defaults to AGOR_DATA_HOME/repos/) */
+    outputPath: z.string().optional(),
 
     /** Branch to checkout (optional) */
     branch: z.string().optional(),
 
     /** Clone as bare repository */
     bare: z.boolean().optional(),
+
+    /** Slug for the repo (computed from URL if not provided) */
+    slug: z.string().optional(),
+
+    /** Create DB record after clone (default: true) */
+    createDbRecord: z.boolean().optional().default(true),
   }),
 });
 
@@ -113,6 +124,11 @@ export type GitClonePayload = z.infer<typeof GitClonePayloadSchema>;
 
 /**
  * Git worktree add payload - create worktree with full Unix setup
+ *
+ * When createDbRecord is true (default), the executor will:
+ * 1. Create the git worktree at worktreePath
+ * 2. Create a worktree record in the database via Feathers
+ * 3. Set up Unix group/ACLs (if RBAC enabled)
  */
 export const GitWorktreeAddPayloadSchema = BasePayloadSchema.extend({
   command: z.literal('git.worktree.add'),
@@ -121,6 +137,9 @@ export const GitWorktreeAddPayloadSchema = BasePayloadSchema.extend({
   sessionToken: z.string(),
 
   params: z.object({
+    /** Repo ID (UUID) - required for DB record creation */
+    repoId: z.string().uuid(),
+
     /** Path to the repository */
     repoPath: z.string(),
 
@@ -138,6 +157,12 @@ export const GitWorktreeAddPayloadSchema = BasePayloadSchema.extend({
 
     /** Create new branch */
     createBranch: z.boolean().optional(),
+
+    /** Board ID to associate worktree with (optional) */
+    boardId: z.string().uuid().optional(),
+
+    /** Create DB record after worktree creation (default: true) */
+    createDbRecord: z.boolean().optional().default(true),
   }),
 });
 
@@ -149,6 +174,11 @@ export type GitWorktreeAddPayload = z.infer<typeof GitWorktreeAddPayloadSchema>;
 
 /**
  * Git worktree remove payload - remove worktree and cleanup Unix resources
+ *
+ * When deleteDbRecord is true (default), the executor will:
+ * 1. Remove the git worktree from filesystem
+ * 2. Delete the worktree record from database via Feathers
+ * 3. Clean up Unix group/ACLs (if RBAC enabled)
  */
 export const GitWorktreeRemovePayloadSchema = BasePayloadSchema.extend({
   command: z.literal('git.worktree.remove'),
@@ -157,11 +187,17 @@ export const GitWorktreeRemovePayloadSchema = BasePayloadSchema.extend({
   sessionToken: z.string(),
 
   params: z.object({
+    /** Worktree ID (UUID) - required for DB record deletion */
+    worktreeId: z.string().uuid(),
+
     /** Path to the worktree to remove */
     worktreePath: z.string(),
 
     /** Force removal even if dirty */
     force: z.boolean().optional(),
+
+    /** Delete DB record after removal (default: true) */
+    deleteDbRecord: z.boolean().optional().default(true),
   }),
 });
 

@@ -7,11 +7,16 @@
  * 2. Proper isolation for RBAC-protected worktrees
  * 3. Consistent environment (credentials, env vars) resolution
  *
- * After git operations, results are reported back to the daemon via Feathers.
- * The daemon handles database record creation and Unix group setup.
+ * The executor handles the complete transaction:
+ * 1. Filesystem operations (git clone, git worktree add/remove)
+ * 2. Database record creation via Feathers services
+ * 3. Unix group/ACL setup (when RBAC is enabled)
+ *
+ * Feathers hooks handle WebSocket broadcasts automatically when records are created/updated.
  */
 
 import { cloneRepo, createWorktree, getReposDir, removeWorktree } from '@agor/core/git';
+import type { UUID } from '@agor/core/types';
 import type {
   ExecutorResult,
   GitClonePayload,
@@ -45,15 +50,51 @@ function resolveGitCredentials(): Record<string, string> {
 }
 
 /**
+ * Compute repo slug from URL
+ *
+ * Examples:
+ * - https://github.com/preset-io/agor.git -> preset-io/agor
+ * - git@github.com:preset-io/agor.git -> preset-io/agor
+ * - /local/path/to/repo -> local-path-to-repo
+ */
+function computeRepoSlug(url: string): string {
+  // Handle SSH URLs: git@github.com:org/repo.git
+  const sshMatch = url.match(/git@[^:]+:(.+?)(?:\.git)?$/);
+  if (sshMatch) {
+    return sshMatch[1];
+  }
+
+  // Handle HTTPS URLs: https://github.com/org/repo.git
+  try {
+    const parsed = new URL(url);
+    const pathname = parsed.pathname.replace(/^\//, '').replace(/\.git$/, '');
+    return pathname;
+  } catch {
+    // Not a valid URL, use the path as-is (sanitized)
+    return url.replace(/[^a-zA-Z0-9\-_]/g, '-').replace(/^-+|-+$/g, '');
+  }
+}
+
+/**
+ * Extract repo name from slug
+ */
+function extractRepoName(slug: string): string {
+  const parts = slug.split('/');
+  return parts[parts.length - 1] || slug;
+}
+
+/**
  * Handle git.clone command
  *
- * Clones a repository to the local filesystem.
- * Returns the result for the daemon to create the database record.
+ * Clones a repository to the local filesystem and creates the database record.
+ * This is a complete transaction - filesystem + DB in one atomic operation.
  */
 export async function handleGitClone(
   payload: GitClonePayload,
   options: CommandOptions
 ): Promise<ExecutorResult> {
+  const createDbRecord = payload.params.createDbRecord ?? true;
+
   // Dry run mode - just validate and return
   if (options.dryRun) {
     return {
@@ -65,6 +106,7 @@ export async function handleGitClone(
         outputPath: payload.params.outputPath,
         branch: payload.params.branch,
         bare: payload.params.bare,
+        createDbRecord,
       },
     };
   }
@@ -72,7 +114,7 @@ export async function handleGitClone(
   let client: AgorClient | null = null;
 
   try {
-    // Connect to daemon (for auth validation and potential future use)
+    // Connect to daemon
     const daemonUrl = payload.daemonUrl || 'http://localhost:3030';
     client = await createExecutorClient(daemonUrl, payload.sessionToken);
     console.log('[git.clone] Connected to daemon');
@@ -88,22 +130,49 @@ export async function handleGitClone(
 
     // Clone the repository
     console.log(`[git.clone] Cloning ${payload.params.url} to ${outputPath}...`);
-    const result = await cloneRepo({
+    const cloneResult = await cloneRepo({
       url: payload.params.url,
       targetDir: outputPath,
       bare: payload.params.bare,
       env,
     });
 
-    console.log(`[git.clone] Clone successful: ${result.path}`);
+    console.log(`[git.clone] Clone successful: ${cloneResult.path}`);
 
-    // Return the result - the daemon will create the DB record
+    // Compute slug for the repo
+    const slug = payload.params.slug || computeRepoSlug(payload.params.url);
+    const repoName = extractRepoName(slug);
+
+    // Create DB record if requested (default: true)
+    let repoId: string | undefined;
+
+    if (createDbRecord) {
+      console.log(`[git.clone] Creating repo record: slug=${slug}`);
+
+      // Create repo via Feathers service
+      // The daemon's repos service handles validation and hooks
+      const repoRecord = await client.service('repos').create({
+        repo_type: 'remote',
+        slug,
+        name: repoName,
+        remote_url: payload.params.url,
+        local_path: cloneResult.path,
+        default_branch: cloneResult.defaultBranch,
+      });
+
+      repoId = repoRecord.repo_id;
+      console.log(`[git.clone] Repo record created: ${repoId}`);
+    }
+
     return {
       success: true,
       data: {
-        path: result.path,
-        repoName: result.repoName,
-        defaultBranch: result.defaultBranch,
+        path: cloneResult.path,
+        repoName: cloneResult.repoName,
+        defaultBranch: cloneResult.defaultBranch,
+        slug,
+        repoId,
+        dbRecordCreated: createDbRecord,
       },
     };
   } catch (error) {
@@ -136,13 +205,15 @@ export async function handleGitClone(
 /**
  * Handle git.worktree.add command
  *
- * Creates a git worktree at the specified path.
- * Returns the result for the daemon to create the database record.
+ * Creates a git worktree at the specified path and creates the database record.
+ * This is a complete transaction - filesystem + DB in one atomic operation.
  */
 export async function handleGitWorktreeAdd(
   payload: GitWorktreeAddPayload,
   options: CommandOptions
 ): Promise<ExecutorResult> {
+  const createDbRecord = payload.params.createDbRecord ?? true;
+
   // Dry run mode
   if (options.dryRun) {
     return {
@@ -150,12 +221,15 @@ export async function handleGitWorktreeAdd(
       data: {
         dryRun: true,
         command: 'git.worktree.add',
+        repoId: payload.params.repoId,
         repoPath: payload.params.repoPath,
         worktreeName: payload.params.worktreeName,
         worktreePath: payload.params.worktreePath,
         branch: payload.params.branch,
         sourceBranch: payload.params.sourceBranch,
         createBranch: payload.params.createBranch,
+        boardId: payload.params.boardId,
+        createDbRecord,
       },
     };
   }
@@ -163,7 +237,7 @@ export async function handleGitWorktreeAdd(
   let client: AgorClient | null = null;
 
   try {
-    // Connect to daemon (for auth validation)
+    // Connect to daemon
     const daemonUrl = payload.daemonUrl || 'http://localhost:3030';
     client = await createExecutorClient(daemonUrl, payload.sessionToken);
     console.log('[git.worktree.add] Connected to daemon');
@@ -172,18 +246,21 @@ export async function handleGitWorktreeAdd(
     const env = resolveGitCredentials();
 
     // Get parameters
+    const repoId = payload.params.repoId;
     const worktreePath = payload.params.worktreePath;
     const repoPath = payload.params.repoPath;
-    const branch = payload.params.branch || payload.params.worktreeName;
+    const worktreeName = payload.params.worktreeName;
+    const branch = payload.params.branch || worktreeName;
     const createBranch = payload.params.createBranch ?? false;
     const sourceBranch = payload.params.sourceBranch;
+    const boardId = payload.params.boardId;
 
     console.log(`[git.worktree.add] Creating worktree at ${worktreePath}...`);
     console.log(
       `[git.worktree.add] Repo: ${repoPath}, Branch: ${branch}, CreateBranch: ${createBranch}`
     );
 
-    // Create the worktree
+    // Create the git worktree
     await createWorktree(
       repoPath,
       worktreePath,
@@ -196,14 +273,39 @@ export async function handleGitWorktreeAdd(
 
     console.log(`[git.worktree.add] Worktree created at ${worktreePath}`);
 
-    // Return the result - the daemon will create the DB record
+    // Create DB record if requested (default: true)
+    let worktreeId: string | undefined;
+
+    if (createDbRecord) {
+      console.log(`[git.worktree.add] Creating worktree record: name=${worktreeName}`);
+
+      // Create worktree via Feathers service
+      // The daemon's worktrees service handles validation, hooks, and auto-assigns worktree_unique_id
+      const worktreeRecord = await client.service('worktrees').create({
+        repo_id: repoId as UUID,
+        name: worktreeName,
+        path: worktreePath,
+        ref: branch,
+        ref_type: 'branch',
+        base_ref: sourceBranch,
+        new_branch: createBranch,
+        board_id: boardId as UUID | undefined,
+      });
+
+      worktreeId = worktreeRecord.worktree_id;
+      console.log(`[git.worktree.add] Worktree record created: ${worktreeId}`);
+    }
+
     return {
       success: true,
       data: {
         worktreePath,
+        worktreeName,
         branch,
         repoPath,
-        created: true,
+        repoId,
+        worktreeId,
+        dbRecordCreated: createDbRecord,
       },
     };
   } catch (error) {
@@ -216,6 +318,7 @@ export async function handleGitWorktreeAdd(
         code: 'GIT_WORKTREE_ADD_FAILED',
         message: errorMessage,
         details: {
+          repoId: payload.params.repoId,
           repoPath: payload.params.repoPath,
           worktreeName: payload.params.worktreeName,
           worktreePath: payload.params.worktreePath,
@@ -236,12 +339,15 @@ export async function handleGitWorktreeAdd(
 /**
  * Handle git.worktree.remove command
  *
- * Removes a worktree from the filesystem.
+ * Removes a worktree from the filesystem and deletes the database record.
+ * This is a complete transaction - filesystem + DB in one atomic operation.
  */
 export async function handleGitWorktreeRemove(
   payload: GitWorktreeRemovePayload,
   options: CommandOptions
 ): Promise<ExecutorResult> {
+  const deleteDbRecord = payload.params.deleteDbRecord ?? true;
+
   // Dry run mode
   if (options.dryRun) {
     return {
@@ -249,8 +355,10 @@ export async function handleGitWorktreeRemove(
       data: {
         dryRun: true,
         command: 'git.worktree.remove',
+        worktreeId: payload.params.worktreeId,
         worktreePath: payload.params.worktreePath,
         force: payload.params.force,
+        deleteDbRecord,
       },
     };
   }
@@ -258,11 +366,12 @@ export async function handleGitWorktreeRemove(
   let client: AgorClient | null = null;
 
   try {
-    // Connect to daemon (for auth validation)
+    // Connect to daemon
     const daemonUrl = payload.daemonUrl || 'http://localhost:3030';
     client = await createExecutorClient(daemonUrl, payload.sessionToken);
     console.log('[git.worktree.remove] Connected to daemon');
 
+    const worktreeId = payload.params.worktreeId;
     const worktreePath = payload.params.worktreePath;
 
     console.log(`[git.worktree.remove] Removing worktree at ${worktreePath}...`);
@@ -273,51 +382,62 @@ export async function handleGitWorktreeRemove(
     const { join, dirname, basename } = await import('node:path');
 
     const gitFile = join(worktreePath, '.git');
+    let filesystemRemoved = false;
 
-    if (!existsSync(gitFile)) {
-      // Worktree doesn't exist or already removed
-      console.log('[git.worktree.remove] Worktree does not exist, nothing to remove');
-      return {
-        success: true,
-        data: {
-          worktreePath,
-          removed: false,
-          reason: 'Worktree does not exist',
-        },
-      };
+    if (existsSync(gitFile)) {
+      // Read .git file to find the main repo
+      // Format: gitdir: /path/to/repo/.git/worktrees/<name>
+      const gitContent = await readFile(gitFile, 'utf-8');
+      const match = gitContent.match(/gitdir:\s*(.+)/);
+
+      if (!match) {
+        throw new Error(`Invalid .git file in worktree: ${gitFile}`);
+      }
+
+      // Extract repo path from gitdir path
+      // gitdir points to: <repo>/.git/worktrees/<name>
+      // We need: <repo>
+      const gitdirPath = match[1].trim();
+      const gitWorktreesDir = dirname(gitdirPath); // <repo>/.git/worktrees
+      const dotGitDir = dirname(gitWorktreesDir); // <repo>/.git
+      const repoPath = dirname(dotGitDir); // <repo>
+
+      const worktreeName = basename(worktreePath);
+
+      console.log(`[git.worktree.remove] Repo path: ${repoPath}, Worktree name: ${worktreeName}`);
+
+      // Remove the worktree using git
+      await removeWorktree(repoPath, worktreeName);
+      filesystemRemoved = true;
+
+      console.log(`[git.worktree.remove] Worktree removed from filesystem`);
+    } else {
+      console.log(
+        '[git.worktree.remove] Worktree does not exist on filesystem, skipping git removal'
+      );
     }
 
-    // Read .git file to find the main repo
-    // Format: gitdir: /path/to/repo/.git/worktrees/<name>
-    const gitContent = await readFile(gitFile, 'utf-8');
-    const match = gitContent.match(/gitdir:\s*(.+)/);
+    // Delete DB record if requested (default: true)
+    let dbRecordDeleted = false;
 
-    if (!match) {
-      throw new Error(`Invalid .git file in worktree: ${gitFile}`);
+    if (deleteDbRecord) {
+      console.log(`[git.worktree.remove] Deleting worktree record: ${worktreeId}`);
+
+      // Delete worktree via Feathers service
+      // The daemon's worktrees service handles cascades and hooks
+      await client.service('worktrees').remove(worktreeId);
+      dbRecordDeleted = true;
+
+      console.log(`[git.worktree.remove] Worktree record deleted`);
     }
-
-    // Extract repo path from gitdir path
-    // gitdir points to: <repo>/.git/worktrees/<name>
-    // We need: <repo>
-    const gitdirPath = match[1].trim();
-    const gitWorktreesDir = dirname(gitdirPath); // <repo>/.git/worktrees
-    const dotGitDir = dirname(gitWorktreesDir); // <repo>/.git
-    const repoPath = dirname(dotGitDir); // <repo>
-
-    const worktreeName = basename(worktreePath);
-
-    console.log(`[git.worktree.remove] Repo path: ${repoPath}, Worktree name: ${worktreeName}`);
-
-    // Remove the worktree using git
-    await removeWorktree(repoPath, worktreeName);
-
-    console.log(`[git.worktree.remove] Worktree removed successfully`);
 
     return {
       success: true,
       data: {
+        worktreeId,
         worktreePath,
-        removed: true,
+        filesystemRemoved,
+        dbRecordDeleted,
       },
     };
   } catch (error) {
@@ -330,6 +450,7 @@ export async function handleGitWorktreeRemove(
         code: 'GIT_WORKTREE_REMOVE_FAILED',
         message: errorMessage,
         details: {
+          worktreeId: payload.params.worktreeId,
           worktreePath: payload.params.worktreePath,
         },
       },
