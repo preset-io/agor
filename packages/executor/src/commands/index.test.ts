@@ -97,14 +97,6 @@ describe('executeCommand - git.clone', () => {
     });
   });
 
-  it('should return NOT_IMPLEMENTED for git.clone without dry-run', async () => {
-    const result = await executeCommand(gitClonePayload, { dryRun: false });
-
-    expect(result.success).toBe(false);
-    expect(result.error?.code).toBe('NOT_IMPLEMENTED');
-    expect(result.error?.message).toContain('git.clone');
-  });
-
   it('should include optional fields in dry-run response', async () => {
     const payloadWithOptions: GitClonePayload = {
       ...gitClonePayload,
@@ -123,6 +115,9 @@ describe('executeCommand - git.clone', () => {
       bare: true,
     });
   });
+
+  // Note: Non-dry-run tests require a running daemon and are skipped in unit tests
+  // Integration tests should cover the full git.clone flow
 });
 
 describe('executeCommand - git.worktree.add', () => {
@@ -149,12 +144,25 @@ describe('executeCommand - git.worktree.add', () => {
     });
   });
 
-  it('should return NOT_IMPLEMENTED for git.worktree.add without dry-run', async () => {
-    const result = await executeCommand(worktreeAddPayload, { dryRun: false });
+  it('should include optional fields in dry-run response', async () => {
+    const payloadWithOptions: GitWorktreeAddPayload = {
+      ...worktreeAddPayload,
+      params: {
+        ...worktreeAddPayload.params,
+        branch: 'feature-x',
+        sourceBranch: 'main',
+        createBranch: true,
+      },
+    };
 
-    expect(result.success).toBe(false);
-    expect(result.error?.code).toBe('NOT_IMPLEMENTED');
-    expect(result.error?.message).toContain('git.worktree.add');
+    const result = await executeCommand(payloadWithOptions, { dryRun: true });
+
+    expect(result.success).toBe(true);
+    expect(result.data).toMatchObject({
+      branch: 'feature-x',
+      sourceBranch: 'main',
+      createBranch: true,
+    });
   });
 });
 
@@ -176,14 +184,6 @@ describe('executeCommand - git.worktree.remove', () => {
       command: 'git.worktree.remove',
       worktreePath: worktreeRemovePayload.params.worktreePath,
     });
-  });
-
-  it('should return NOT_IMPLEMENTED for git.worktree.remove without dry-run', async () => {
-    const result = await executeCommand(worktreeRemovePayload, { dryRun: false });
-
-    expect(result.success).toBe(false);
-    expect(result.error?.code).toBe('NOT_IMPLEMENTED');
-    expect(result.error?.message).toContain('git.worktree.remove');
   });
 
   it('should include force option in dry-run response', async () => {
@@ -229,6 +229,7 @@ describe('executeCommand - zellij.attach', () => {
   it('should return NOT_IMPLEMENTED for zellij.attach without dry-run', async () => {
     const result = await executeCommand(zellijPayload, { dryRun: false });
 
+    // zellij.attach is still Phase 5 - not yet implemented
     expect(result.success).toBe(false);
     expect(result.error?.code).toBe('NOT_IMPLEMENTED');
     expect(result.error?.message).toContain('zellij.attach');
@@ -273,12 +274,13 @@ describe('executeCommand - unknown command', () => {
 });
 
 describe('executeCommand - error handling', () => {
-  // This test verifies that the command router catches and wraps errors
-  // We can't easily test this without mocking, but we verify the structure
-  it('should have proper error structure', async () => {
+  // Git commands now require daemon connection, so non-dry-run calls will fail
+  // with connection errors. This verifies error structure is correct.
+  it('should have proper error structure for git commands without daemon', async () => {
     const payload: GitClonePayload = {
       command: 'git.clone',
       sessionToken: 'jwt-token',
+      daemonUrl: 'http://localhost:99999', // Non-existent port
       params: {
         url: 'https://github.com/user/repo.git',
         outputPath: '/data/repos/repo.git',
@@ -287,7 +289,7 @@ describe('executeCommand - error handling', () => {
 
     const result = await executeCommand(payload, { dryRun: false });
 
-    // The NOT_IMPLEMENTED error should have proper structure
+    // Should fail due to connection error (no daemon running on port 99999)
     expect(result.success).toBe(false);
     expect(result.error).toBeDefined();
     expect(typeof result.error?.code).toBe('string');

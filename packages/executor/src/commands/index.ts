@@ -10,12 +10,10 @@
 import type {
   ExecutorPayload,
   ExecutorResult,
-  GitClonePayload,
-  GitWorktreeAddPayload,
-  GitWorktreeRemovePayload,
   PromptPayload,
   ZellijAttachPayload,
 } from '../payload-types.js';
+import { handleGitClone, handleGitWorktreeAdd, handleGitWorktreeRemove } from './git.js';
 
 export interface CommandOptions {
   /** Dry run mode - don't actually execute */
@@ -141,104 +139,6 @@ async function handlePromptCommand(
 }
 
 /**
- * Git clone command handler - clones repository with Unix setup
- *
- * Future implementation (Phase 3)
- */
-async function handleGitCloneCommand(
-  payload: GitClonePayload,
-  options: CommandOptions
-): Promise<ExecutorResult> {
-  if (options.dryRun) {
-    return {
-      success: true,
-      data: {
-        dryRun: true,
-        command: 'git.clone',
-        url: payload.params.url,
-        outputPath: payload.params.outputPath,
-        branch: payload.params.branch,
-        bare: payload.params.bare,
-      },
-    };
-  }
-
-  // TODO: Phase 3 implementation
-  return {
-    success: false,
-    error: {
-      code: 'NOT_IMPLEMENTED',
-      message: 'git.clone command is not yet implemented (Phase 3)',
-    },
-  };
-}
-
-/**
- * Git worktree add command handler - creates worktree with Unix setup
- *
- * Future implementation (Phase 3)
- */
-async function handleGitWorktreeAddCommand(
-  payload: GitWorktreeAddPayload,
-  options: CommandOptions
-): Promise<ExecutorResult> {
-  if (options.dryRun) {
-    return {
-      success: true,
-      data: {
-        dryRun: true,
-        command: 'git.worktree.add',
-        repoPath: payload.params.repoPath,
-        worktreeName: payload.params.worktreeName,
-        worktreePath: payload.params.worktreePath,
-        branch: payload.params.branch,
-        createBranch: payload.params.createBranch,
-      },
-    };
-  }
-
-  // TODO: Phase 3 implementation
-  return {
-    success: false,
-    error: {
-      code: 'NOT_IMPLEMENTED',
-      message: 'git.worktree.add command is not yet implemented (Phase 3)',
-    },
-  };
-}
-
-/**
- * Git worktree remove command handler - removes worktree and cleans up Unix resources
- *
- * Future implementation (Phase 3)
- */
-async function handleGitWorktreeRemoveCommand(
-  payload: GitWorktreeRemovePayload,
-  options: CommandOptions
-): Promise<ExecutorResult> {
-  if (options.dryRun) {
-    return {
-      success: true,
-      data: {
-        dryRun: true,
-        command: 'git.worktree.remove',
-        worktreePath: payload.params.worktreePath,
-        force: payload.params.force,
-      },
-    };
-  }
-
-  // TODO: Phase 3 implementation
-  return {
-    success: false,
-    error: {
-      code: 'NOT_IMPLEMENTED',
-      message: 'git.worktree.remove command is not yet implemented (Phase 3)',
-    },
-  };
-}
-
-/**
  * Zellij attach command handler - attaches to or creates Zellij session
  *
  * Future implementation (Phase 5)
@@ -276,7 +176,7 @@ async function handleZellijAttachCommand(
 // ═══════════════════════════════════════════════════════════
 
 registerCommand('prompt', handlePromptCommand);
-registerCommand('git.clone', handleGitCloneCommand);
-registerCommand('git.worktree.add', handleGitWorktreeAddCommand);
-registerCommand('git.worktree.remove', handleGitWorktreeRemoveCommand);
+registerCommand('git.clone', handleGitClone);
+registerCommand('git.worktree.add', handleGitWorktreeAdd);
+registerCommand('git.worktree.remove', handleGitWorktreeRemove);
 registerCommand('zellij.attach', handleZellijAttachCommand);
