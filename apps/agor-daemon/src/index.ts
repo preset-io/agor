@@ -88,7 +88,6 @@ import type {
   User,
 } from '@agor/core/types';
 import { SessionStatus, TaskStatus } from '@agor/core/types';
-import { buildSpawnArgs } from '@agor/core/unix';
 import { NotFoundError } from '@agor/core/utils/errors';
 
 // ============================================================================
@@ -591,26 +590,11 @@ async function main() {
 
     // Determine permission mode: explicit override > session config > 'default'
     // This ensures session settings (like bypassPermissions) are preserved unless explicitly overridden
+    // Note: 'default' is not part of the executor's Zod schema, so we convert it to undefined
     const effectivePermissionMode =
-      data.permissionMode || session.permission_config?.mode || 'default';
-
-    const nodeArgs = [
-      executorPath,
-      '--session-token',
-      sessionToken,
-      '--session-id',
-      sessionId,
-      '--task-id',
-      taskId,
-      '--prompt',
-      data.prompt,
-      '--tool',
-      session.agentic_tool,
-      '--permission-mode',
-      effectivePermissionMode,
-      '--daemon-url',
-      daemonUrl,
-    ];
+      data.permissionMode || session.permission_config?.mode || undefined;
+    const permissionModeForPayload =
+      effectivePermissionMode === 'default' ? undefined : effectivePermissionMode;
 
     // Validate Unix user exists for modes that require it
     try {
@@ -631,31 +615,56 @@ async function main() {
       | undefined;
     const executorEnv = await createUserProcessEnvironment(userId, db);
 
-    // Build spawn args - handles impersonation via sudo su - when executorUnixUser is set
-    // When impersonating, uses sudo su - (login shell) to ensure fresh Unix group memberships
-    // This is critical for RBAC: users may have been recently added to worktree groups
-    // IMPORTANT: When impersonating, env vars must be passed through buildSpawnArgs because
-    // sudo su - creates a fresh login shell that ignores the env passed to spawn()
-    const { cmd: spawnCommand, args: spawnArgs } = buildSpawnArgs('node', nodeArgs, {
+    // =========================================================================
+    // PHASE 4: JSON-OVER-STDIN WITH IMPERSONATION INSIDE EXECUTOR
+    //
+    // Instead of using buildSpawnArgs() to wrap with sudo su -, we now:
+    // 1. Spawn executor directly (daemon process -> executor process)
+    // 2. Pass asUser and env in JSON payload via stdin
+    // 3. Executor handles impersonation internally if asUser is specified
+    //
+    // Benefits:
+    // - Single isolation boundary (all sudo in executor)
+    // - Fresh group memberships (executor uses sudo su - internally)
+    // - Cleaner architecture (daemon just spawns, executor handles sudo)
+    // - k8s compatible (can use pod security context instead)
+    // =========================================================================
+
+    // Build JSON payload for executor (Phase 2 --stdin mode)
+    const executorPayload = {
+      command: 'prompt' as const,
+      sessionToken,
+      daemonUrl,
       asUser: executorUnixUser || undefined,
-      env: executorUnixUser ? executorEnv : undefined, // Only inject when impersonating
-    });
+      env: executorEnv,
+      params: {
+        sessionId,
+        taskId,
+        prompt: data.prompt,
+        tool: session.agentic_tool as 'claude-code' | 'gemini' | 'codex' | 'opencode',
+        permissionMode: permissionModeForPayload as 'ask' | 'auto' | 'allow-all' | undefined,
+        cwd,
+      },
+    };
 
     if (executorUnixUser) {
       console.log(
-        `[Daemon] Spawning executor as Unix user: ${executorUnixUser} (with fresh groups and ${Object.keys(executorEnv).length} env vars)`
+        `[Daemon] Spawning executor with asUser: ${executorUnixUser} (${Object.keys(executorEnv).length} env vars in payload)`
       );
     } else {
       console.log(`[Daemon] Spawning executor as current user (no impersonation)`);
     }
 
-    // When NOT impersonating, pass env to spawn() directly
-    // When impersonating, env is already injected into the command by buildSpawnArgs
-    const executorProcess = spawn(spawnCommand, spawnArgs, {
+    // Spawn executor with --stdin mode, pipe JSON payload via stdin
+    const executorProcess = spawn('node', [executorPath, '--stdin'], {
       cwd,
-      env: executorUnixUser ? undefined : executorEnv,
-      stdio: ['ignore', 'pipe', 'pipe'], // Capture stdout/stderr
+      env: executorEnv, // Base env for outer executor (inner executor gets env from payload)
+      stdio: ['pipe', 'pipe', 'pipe'], // Enable stdin for JSON payload
     });
+
+    // Write JSON payload to stdin
+    executorProcess.stdin?.write(JSON.stringify(executorPayload));
+    executorProcess.stdin?.end();
 
     // Log executor output
     executorProcess.stdout?.on('data', (data) => {

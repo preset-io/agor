@@ -7,10 +7,17 @@
  *
  * The executor is ephemeral and task-scoped. Each subprocess executes exactly
  * one command and then exits. Communication with daemon is via Feathers/WebSocket.
+ *
+ * IMPERSONATION (Phase 4):
+ * When asUser is specified in the payload, the executor handles impersonation
+ * internally by re-invoking itself via `sudo su - $USER`. This consolidates
+ * all sudo logic inside the executor instead of in daemon spawn.
  */
 
 import { parseArgs } from 'node:util';
+
 import { executeCommand, getRegisteredCommands } from './commands/index.js';
+import { handleImpersonation, isImpersonated } from './impersonation.js';
 import { AgorExecutor } from './index.js';
 import {
   type ExecutorPayload,
@@ -63,6 +70,26 @@ async function handleStdinMode(options: { dryRun: boolean }): Promise<void> {
   }
 
   console.log(`[executor] Received command: ${payload.command}`);
+  if (isImpersonated()) {
+    console.log(`[executor] Running as impersonated user`);
+  }
+
+  // =========================================================================
+  // IMPERSONATION CHECK (Phase 4)
+  // If asUser is specified and we're not already impersonated, re-invoke
+  // as target user and return that result.
+  // =========================================================================
+  const impersonationResult = await handleImpersonation(payload, {
+    dryRun: options.dryRun,
+  });
+
+  if (impersonationResult !== null) {
+    // Impersonation happened - output result and exit
+    console.log(JSON.stringify(impersonationResult));
+    process.exit(impersonationResult.success ? 0 : 1);
+  }
+
+  // No impersonation needed - proceed with normal execution
 
   // Special handling for prompt command - needs long-running WebSocket connection
   if (isPromptPayload(payload)) {
@@ -97,10 +124,25 @@ async function handlePromptPayload(
           taskId: payload.params.taskId,
           tool: payload.params.tool,
           cwd: payload.params.cwd,
+          envVars: payload.env ? Object.keys(payload.env).length : 0,
         },
       })
     );
     process.exit(0);
+  }
+
+  // =========================================================================
+  // APPLY ENVIRONMENT VARIABLES FROM PAYLOAD (Phase 4)
+  //
+  // When executor is re-invoked via impersonation (sudo su -), the parent
+  // process environment is lost. The daemon passes env vars in the payload,
+  // and we apply them here before starting the SDK.
+  // =========================================================================
+  if (payload.env && Object.keys(payload.env).length > 0) {
+    console.log(`[executor] Applying ${Object.keys(payload.env).length} env vars from payload`);
+    for (const [key, value] of Object.entries(payload.env)) {
+      process.env[key] = value;
+    }
   }
 
   // Validate tool using registry
