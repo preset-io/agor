@@ -564,8 +564,12 @@ async function main() {
     // DETERMINE UNIX USER FOR EXECUTOR BASED ON unix_user_mode
     // Uses centralized logic from @agor/core/unix
     // =========================================================================
-    const { resolveUnixUserForImpersonation, validateResolvedUnixUser, UnixUserNotFoundError } =
-      await import('@agor/core/unix');
+    const {
+      resolveUnixUserForImpersonation,
+      validateResolvedUnixUser,
+      UnixUserNotFoundError,
+      buildSpawnArgs,
+    } = await import('@agor/core/unix');
 
     const unixUserMode = (config.execution?.unix_user_mode ?? 'simple') as
       | 'simple'
@@ -622,26 +626,25 @@ async function main() {
     const executorEnv = await createUserProcessEnvironment(userId, db);
 
     // =========================================================================
-    // PHASE 4: JSON-OVER-STDIN WITH IMPERSONATION INSIDE EXECUTOR
+    // PHASE 4: JSON-OVER-STDIN WITH IMPERSONATION AT SPAWN
     //
-    // Instead of using buildSpawnArgs() to wrap with sudo su -, we now:
-    // 1. Spawn executor directly (daemon process -> executor process)
-    // 2. Pass asUser and env in JSON payload via stdin
-    // 3. Executor handles impersonation internally if asUser is specified
+    // Impersonation happens at spawn time using buildSpawnArgs():
+    // - When asUser is set, spawns via `sudo su - $asUser -c 'node executor --stdin'`
+    // - Executor runs directly as target user with fresh group memberships
+    // - No "node calling node" indirection
     //
     // Benefits:
-    // - Single isolation boundary (all sudo in executor)
-    // - Fresh group memberships (executor uses sudo su - internally)
-    // - Cleaner architecture (daemon just spawns, executor handles sudo)
+    // - Single spawn, not node-within-node
+    // - Fresh group memberships (login shell via `su -`)
     // - k8s compatible (can use pod security context instead)
     // =========================================================================
 
     // Build JSON payload for executor (Phase 2 --stdin mode)
+    // Note: asUser is NOT in payload - impersonation happens at spawn time
     const executorPayload = {
       command: 'prompt' as const,
       sessionToken,
       daemonUrl,
-      asUser: executorUnixUser || undefined,
       env: executorEnv,
       params: {
         sessionId,
@@ -653,18 +656,24 @@ async function main() {
       },
     };
 
+    // Build spawn command - handles impersonation via sudo su - when executorUnixUser is set
+    const { cmd, args } = buildSpawnArgs('node', [executorPath, '--stdin'], {
+      asUser: executorUnixUser || undefined,
+      env: executorUnixUser ? executorEnv : undefined, // Only inject env when impersonating
+    });
+
     if (executorUnixUser) {
       console.log(
-        `[Daemon] Spawning executor with asUser: ${executorUnixUser} (${Object.keys(executorEnv).length} env vars in payload)`
+        `[Daemon] Spawning executor as user: ${executorUnixUser} (${Object.keys(executorEnv).length} env vars)`
       );
     } else {
       console.log(`[Daemon] Spawning executor as current user (no impersonation)`);
     }
 
     // Spawn executor with --stdin mode, pipe JSON payload via stdin
-    const executorProcess = spawn('node', [executorPath, '--stdin'], {
+    const executorProcess = spawn(cmd, args, {
       cwd,
-      env: executorEnv, // Base env for outer executor (inner executor gets env from payload)
+      env: executorUnixUser ? undefined : executorEnv, // When impersonating, env is in the command
       stdio: ['pipe', 'pipe', 'pipe'], // Enable stdin for JSON payload
     });
 

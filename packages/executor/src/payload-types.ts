@@ -34,13 +34,13 @@ export type PermissionMode = z.infer<typeof PermissionModeSchema>;
 
 /**
  * Base payload - common fields for all commands
+ *
+ * NOTE: Impersonation (asUser) is NOT in the payload. It's handled at spawn time
+ * by the daemon using buildSpawnArgs(). The executor runs directly as the target user.
  */
 export const BasePayloadSchema = z.object({
   /** Executor command identifier */
   command: z.string(),
-
-  /** Unix user to impersonate (optional) */
-  asUser: z.string().optional(),
 
   /** Daemon URL for Feathers connection */
   daemonUrl: z.string().url().optional(),
@@ -351,11 +351,14 @@ export const UnixSyncUserPayloadSchema = BasePayloadSchema.extend({
 export type UnixSyncUserPayload = z.infer<typeof UnixSyncUserPayloadSchema>;
 
 // ═══════════════════════════════════════════════════════════
-// Zellij Attach Payload
+// Zellij Payloads
 // ═══════════════════════════════════════════════════════════
 
 /**
  * Zellij attach payload - attach to or create Zellij session
+ *
+ * This spawns a PTY, runs zellij attach, and streams I/O over Feathers channels.
+ * One executor per user - handles all tabs for that user.
  */
 export const ZellijAttachPayloadSchema = BasePayloadSchema.extend({
   command: z.literal('zellij.attach'),
@@ -364,21 +367,50 @@ export const ZellijAttachPayloadSchema = BasePayloadSchema.extend({
   sessionToken: z.string(),
 
   params: z.object({
-    /** Zellij session name */
+    /** User ID (for channel: user/${userId}/terminal) */
+    userId: z.string().uuid(),
+
+    /** Zellij session name (e.g., "agor-max") */
     sessionName: z.string(),
 
-    /** Working directory */
+    /** Initial working directory */
     cwd: z.string(),
 
-    /** Tab name (worktree name) */
+    /** Initial tab name (worktree name) */
     tabName: z.string().optional(),
 
-    /** Create session if doesn't exist */
-    create: z.boolean().optional(),
+    /** Terminal dimensions */
+    cols: z.number().optional().default(80),
+    rows: z.number().optional().default(24),
   }),
 });
 
 export type ZellijAttachPayload = z.infer<typeof ZellijAttachPayloadSchema>;
+
+/**
+ * Zellij tab payload - create or focus a tab in existing Zellij session
+ *
+ * Sent to running executor to manage tabs without spawning new PTY.
+ */
+export const ZellijTabPayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('zellij.tab'),
+
+  /** JWT for Feathers authentication */
+  sessionToken: z.string(),
+
+  params: z.object({
+    /** Action: create new tab or focus existing */
+    action: z.enum(['create', 'focus']),
+
+    /** Tab name (worktree name) */
+    tabName: z.string(),
+
+    /** Working directory (for 'create' action) */
+    cwd: z.string().optional(),
+  }),
+});
+
+export type ZellijTabPayload = z.infer<typeof ZellijTabPayloadSchema>;
 
 // ═══════════════════════════════════════════════════════════
 // Union Payload Type
@@ -397,6 +429,7 @@ export const ExecutorPayloadSchema = z.discriminatedUnion('command', [
   UnixSyncRepoPayloadSchema,
   UnixSyncUserPayloadSchema,
   ZellijAttachPayloadSchema,
+  ZellijTabPayloadSchema,
 ]);
 
 export type ExecutorPayload = z.infer<typeof ExecutorPayloadSchema>;
@@ -452,6 +485,7 @@ export function getSupportedCommands(): string[] {
     'unix.sync-repo',
     'unix.sync-user',
     'zellij.attach',
+    'zellij.tab',
   ];
 }
 
@@ -524,4 +558,11 @@ export function isUnixSyncUserPayload(payload: ExecutorPayload): payload is Unix
  */
 export function isZellijAttachPayload(payload: ExecutorPayload): payload is ZellijAttachPayload {
   return payload.command === 'zellij.attach';
+}
+
+/**
+ * Type guard for ZellijTabPayload
+ */
+export function isZellijTabPayload(payload: ExecutorPayload): payload is ZellijTabPayload {
+  return payload.command === 'zellij.tab';
 }

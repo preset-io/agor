@@ -7,12 +7,7 @@
  * 3. Returning an ExecutorResult
  */
 
-import type {
-  ExecutorPayload,
-  ExecutorResult,
-  PromptPayload,
-  ZellijAttachPayload,
-} from '../payload-types.js';
+import type { ExecutorPayload, ExecutorResult, PromptPayload } from '../payload-types.js';
 import {
   handleGitClone,
   handleGitWorktreeAdd,
@@ -20,6 +15,7 @@ import {
   handleGitWorktreeRemove,
 } from './git.js';
 import { handleUnixSyncRepo, handleUnixSyncUser, handleUnixSyncWorktree } from './unix.js';
+import { handleZellijAttach, handleZellijTab } from './zellij.js';
 
 export interface CommandOptions {
   /** Dry run mode - don't actually execute */
@@ -144,39 +140,6 @@ async function handlePromptCommand(
   };
 }
 
-/**
- * Zellij attach command handler - attaches to or creates Zellij session
- *
- * Future implementation (Phase 5)
- */
-async function handleZellijAttachCommand(
-  payload: ZellijAttachPayload,
-  options: CommandOptions
-): Promise<ExecutorResult> {
-  if (options.dryRun) {
-    return {
-      success: true,
-      data: {
-        dryRun: true,
-        command: 'zellij.attach',
-        sessionName: payload.params.sessionName,
-        cwd: payload.params.cwd,
-        tabName: payload.params.tabName,
-        create: payload.params.create,
-      },
-    };
-  }
-
-  // TODO: Phase 5 implementation
-  return {
-    success: false,
-    error: {
-      code: 'NOT_IMPLEMENTED',
-      message: 'zellij.attach command is not yet implemented (Phase 5)',
-    },
-  };
-}
-
 // ═══════════════════════════════════════════════════════════
 // Register All Commands
 // ═══════════════════════════════════════════════════════════
@@ -189,4 +152,5 @@ registerCommand('git.worktree.clean', handleGitWorktreeClean);
 registerCommand('unix.sync-repo', handleUnixSyncRepo);
 registerCommand('unix.sync-worktree', handleUnixSyncWorktree);
 registerCommand('unix.sync-user', handleUnixSyncUser);
-registerCommand('zellij.attach', handleZellijAttachCommand);
+registerCommand('zellij.attach', handleZellijAttach);
+registerCommand('zellij.tab', handleZellijTab);

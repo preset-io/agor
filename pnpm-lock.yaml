@@ -623,6 +623,9 @@ importers:
       '@agor/core':
         specifier: workspace:*
         version: link:../core
+      '@homebridge/node-pty-prebuilt-multiarch':
+        specifier: ^0.12.0
+        version: 0.12.0
       '@iarna/toml':
         specifier: ^2.2.5
         version: 2.2.5
@@ -1731,6 +1734,9 @@ packages:
     peerDependencies:
       react: ^18 || ^19 || ^19.0.0-rc
       react-dom: ^18 || ^19 || ^19.0.0-rc
+
+  '@homebridge/node-pty-prebuilt-multiarch@0.12.0':
+    resolution: {integrity: sha512-hJCGcfOnMeRh2KUdWPlVN/1egnfqI4yxgpDhqHSkF2DLn5fiJNdjEHHlcM1K2w9+QBmRE2D/wfmM4zUOb8aMyQ==}
 
   '@homebridge/node-pty-prebuilt-multiarch@0.13.1':
     resolution: {integrity: sha512-ccQ60nMcbEGrQh0U9E6x0ajW9qJNeazpcM/9CH6J8leyNtJgb+gu24WTBAfBUVeO486ZhscnaxLEITI2HXwhow==}
@@ -10352,6 +10358,11 @@ snapshots:
       react: 18.3.1
       react-dom: 18.3.1(react@18.3.1)
       use-sync-external-store: 1.6.0(react@18.3.1)
+
+  '@homebridge/node-pty-prebuilt-multiarch@0.12.0':
+    dependencies:
+      node-addon-api: 7.1.1
+      prebuild-install: 7.1.3
 
   '@homebridge/node-pty-prebuilt-multiarch@0.13.1':
     dependencies:

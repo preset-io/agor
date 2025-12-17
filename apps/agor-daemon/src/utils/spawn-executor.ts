@@ -4,12 +4,17 @@
  * Provides a reusable function to spawn the executor process for various commands.
  * Used by daemon services (repos, worktrees, terminals) to delegate operations
  * to the executor for proper Unix isolation.
+ *
+ * IMPERSONATION: When asUser is provided, the executor is spawned via `sudo su -`
+ * to run as the target Unix user with fresh group memberships. This is the single
+ * point where user impersonation happens - the executor itself runs as the target user.
  */
 
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { buildSpawnArgs } from '@agor/core/unix';
 import jwt from 'jsonwebtoken';
 
 /**
@@ -40,6 +45,13 @@ export interface SpawnExecutorOptions {
 
   /** Log prefix for console output */
   logPrefix?: string;
+
+  /**
+   * Unix user to run executor as (impersonation)
+   * When set, spawns via `sudo su - $asUser -c 'node executor --stdin'`
+   * This gives the executor fresh group memberships for the target user.
+   */
+  asUser?: string;
 }
 
 /**
@@ -79,6 +91,9 @@ export function findExecutorPath(): string {
  * This is a general-purpose executor spawner for synchronous operations
  * (git clone, git worktree add/remove, etc.) where we wait for completion.
  *
+ * When asUser is provided, the executor is spawned via `sudo su -` to run
+ * as the target Unix user with fresh group memberships.
+ *
  * @param payload - JSON payload matching ExecutorPayload schema
  * @param options - Spawn options
  * @returns Promise resolving to executor result
@@ -92,17 +107,27 @@ export async function spawnExecutor(
     env = process.env as Record<string, string>,
     timeout = 5 * 60 * 1000, // 5 minutes default
     logPrefix = '[Executor]',
+    asUser,
   } = options;
 
   const executorPath = findExecutorPath();
 
+  // Build spawn command - handles impersonation via sudo su - when asUser is set
+  const { cmd, args } = buildSpawnArgs('node', [executorPath, '--stdin'], {
+    asUser,
+    env: asUser ? env : undefined, // Only inject env when impersonating (sudo su - ignores spawn env)
+  });
+
+  if (asUser) {
+    console.log(`${logPrefix} Spawning executor as user: ${asUser}`);
+  }
   console.log(`${logPrefix} Spawning executor at: ${executorPath}`);
   console.log(`${logPrefix} Command: ${payload.command}`);
 
   return new Promise((resolve) => {
-    const executorProcess = spawn('node', [executorPath, '--stdin'], {
+    const executorProcess = spawn(cmd, args, {
       cwd,
-      env: { ...env },
+      env: asUser ? undefined : { ...env }, // When impersonating, env is in the command; otherwise pass to spawn
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
@@ -240,6 +265,13 @@ export interface FireAndForgetOptions {
 
   /** Log prefix for console output */
   logPrefix?: string;
+
+  /**
+   * Unix user to run executor as (impersonation)
+   * When set, spawns via `sudo su - $asUser -c 'node executor --stdin'`
+   * This gives the executor fresh group memberships for the target user.
+   */
+  asUser?: string;
 }
 
 /**
@@ -255,6 +287,9 @@ export interface FireAndForgetOptions {
  * - Communicating with daemon via Feathers WebSocket client
  * - Handling its own errors and logging
  *
+ * When asUser is provided, the executor is spawned via `sudo su -` to run
+ * as the target Unix user with fresh group memberships.
+ *
  * @param payload - JSON payload matching ExecutorPayload schema
  * @param options - Spawn options
  */
@@ -266,16 +301,26 @@ export function spawnExecutorFireAndForget(
     cwd = process.cwd(),
     env = process.env as Record<string, string>,
     logPrefix = '[Executor]',
+    asUser,
   } = options;
 
   const executorPath = findExecutorPath();
 
+  // Build spawn command - handles impersonation via sudo su - when asUser is set
+  const { cmd, args } = buildSpawnArgs('node', [executorPath, '--stdin'], {
+    asUser,
+    env: asUser ? env : undefined, // Only inject env when impersonating (sudo su - ignores spawn env)
+  });
+
+  if (asUser) {
+    console.log(`${logPrefix} 🔥 Fire-and-forget: Spawning executor as user: ${asUser}`);
+  }
   console.log(`${logPrefix} 🔥 Fire-and-forget: Spawning executor at: ${executorPath}`);
   console.log(`${logPrefix} Command: ${payload.command}`);
 
-  const executorProcess = spawn('node', [executorPath, '--stdin'], {
+  const executorProcess = spawn(cmd, args, {
     cwd,
-    env: { ...env },
+    env: asUser ? undefined : { ...env }, // When impersonating, env is in the command; otherwise pass to spawn
     stdio: ['pipe', 'inherit', 'inherit'], // stdin: pipe, stdout/stderr: inherit (show in daemon logs)
     detached: false, // Don't detach - let daemon manage lifecycle
   });
