@@ -1,16 +1,11 @@
-import type {
-  CreateMCPServerInput,
-  MCPServer,
-  ToolPermission,
-  UpdateMCPServerInput,
-} from '@agor/core/types';
+import type { CreateMCPServerInput, MCPServer, UpdateMCPServerInput } from '@agor/core/types';
 import {
+  ApiOutlined,
   DeleteOutlined,
   DownOutlined,
   EditOutlined,
   EyeOutlined,
   PlusOutlined,
-  ReloadOutlined,
 } from '@ant-design/icons';
 import type { FormInstance } from 'antd';
 import {
@@ -21,123 +16,20 @@ import {
   Descriptions,
   Form,
   Input,
-  List,
   Modal,
   Popconfirm,
   Select,
   Space,
-  Spin,
   Switch,
   Table,
   Tag,
-  Tooltip,
   Typography,
-  theme,
 } from 'antd';
 import { useEffect, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
 
 const { TextArea } = Input;
-
-// Using Typography.Text directly to avoid DOM Text interface collision
-
-interface ToolPermissionsEditorProps {
-  tools?: Array<{ name: string; description: string }>;
-  value?: Record<string, ToolPermission>;
-  onChange?: (permissions: Record<string, ToolPermission>) => void;
-}
-
-const ToolPermissionsEditor: React.FC<ToolPermissionsEditorProps> = ({
-  tools = [],
-  value = {},
-  onChange,
-}) => {
-  const { token } = theme.useToken();
-
-  const handlePermissionChange = (toolName: string, permission: ToolPermission) => {
-    const updated = { ...value, [toolName]: permission };
-    onChange?.(updated);
-  };
-
-  // Safeguard: If tools is a string (shouldn't happen but just in case), try to parse it
-  let parsedTools = tools;
-  if (typeof tools === 'string') {
-    console.error(
-      '[MCP] tools is a string, attempting to parse:',
-      (tools as string).substring(0, 100)
-    );
-    try {
-      parsedTools = JSON.parse(tools);
-    } catch (e) {
-      console.error('[MCP] Failed to parse tools string:', e);
-      parsedTools = [];
-    }
-  }
-
-  if (!parsedTools || parsedTools.length === 0) {
-    return (
-      <div
-        style={{
-          padding: '16px',
-          background: token.colorBgContainer,
-          borderRadius: token.borderRadius,
-          border: `1px solid ${token.colorBorder}`,
-        }}
-      >
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          No tools discovered yet. Click "Discover Tools" to fetch available tools from the server.
-        </Typography.Text>
-      </div>
-    );
-  }
-
-  return (
-    <List
-      size="small"
-      bordered
-      dataSource={parsedTools}
-      style={{ maxHeight: '400px', overflowY: 'auto' }}
-      renderItem={(tool) => (
-        <List.Item style={{ display: 'block' }}>
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              marginBottom: 8,
-            }}
-          >
-            <Typography.Text code strong>
-              {tool.name}
-            </Typography.Text>
-            <Select
-              size="small"
-              value={value[tool.name] || 'ask'}
-              onChange={(perm) => handlePermissionChange(tool.name, perm)}
-              style={{ width: 100 }}
-            >
-              <Select.Option value="allow">
-                <Typography.Text style={{ color: token.colorSuccess }}>Allow</Typography.Text>
-              </Select.Option>
-              <Select.Option value="ask">
-                <Typography.Text style={{ color: token.colorWarning }}>Ask</Typography.Text>
-              </Select.Option>
-              <Select.Option value="deny">
-                <Typography.Text style={{ color: token.colorError }}>Deny</Typography.Text>
-              </Select.Option>
-            </Select>
-          </div>
-          {tool.description && (
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {tool.description}
-            </Typography.Text>
-          )}
-        </List.Item>
-      )}
-    />
-  );
-};
 
 interface MCPServersTableProps {
   mcpServerById: Map<string, MCPServer>;
@@ -155,10 +47,15 @@ interface MCPServerFormFieldsProps {
   onAuthTypeChange?: (authType: 'none' | 'bearer' | 'jwt') => void;
   form: FormInstance;
   client: import('@agor/core/api').AgorClient | null;
-  serverTools?: Array<{ name: string; description: string }>;
   serverId?: string;
-  onDiscoverTools?: () => Promise<void>;
-  discovering?: boolean;
+  onTestConnection?: () => Promise<void>;
+  testing?: boolean;
+  testResult?: {
+    success: boolean;
+    toolCount: number;
+    resourceCount: number;
+    promptCount: number;
+  } | null;
 }
 
 const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
@@ -169,15 +66,15 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
   onAuthTypeChange,
   form,
   client,
-  serverTools,
   serverId,
-  onDiscoverTools,
-  discovering = false,
+  onTestConnection,
+  testing = false,
+  testResult,
 }) => {
   const { showSuccess, showError, showWarning, showInfo } = useThemedMessage();
-  const [testing, setTesting] = useState(false);
+  const [testingAuth, setTestingAuth] = useState(false);
 
-  const handleTestConnection = async () => {
+  const handleTestAuth = async () => {
     if (!client) {
       showError('Client not available');
       return;
@@ -186,7 +83,7 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
     const values = form.getFieldsValue();
     const currentAuthType = values.auth_type || authType;
 
-    setTesting(true);
+    setTestingAuth(true);
     try {
       if (currentAuthType === 'jwt') {
         const apiUrl = values.jwt_api_url;
@@ -225,7 +122,7 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       showError(`Connection test failed: ${errorMessage}`);
     } finally {
-      setTesting(false);
+      setTestingAuth(false);
     }
   };
 
@@ -451,7 +348,7 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
 
               {authType !== 'none' && (
                 <Form.Item>
-                  <Button type="default" loading={testing} onClick={handleTestConnection}>
+                  <Button type="default" loading={testingAuth} onClick={handleTestAuth}>
                     Test Authentication
                   </Button>
                 </Form.Item>
@@ -472,53 +369,38 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
         </>
       ),
     },
-    ...(mode === 'edit'
+    ...(mode === 'edit' && transport !== 'stdio'
       ? [
           {
-            key: 'tools',
-            label: (
-              <Space>
-                <Typography.Text strong>Tools</Typography.Text>
-                {serverTools && serverTools.length > 0 && (
-                  <Badge count={serverTools.length} showZero={false} />
+            key: 'test',
+            label: <Typography.Text strong>Test Connection</Typography.Text>,
+            children: (
+              <Space direction="vertical" style={{ width: '100%' }}>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  Test the connection to verify your configuration works correctly.
+                </Typography.Text>
+                <Button
+                  type="default"
+                  icon={<ApiOutlined />}
+                  onClick={onTestConnection}
+                  loading={testing}
+                  block
+                >
+                  {testing ? 'Testing...' : 'Test Connection'}
+                </Button>
+                {testResult && (
+                  <Alert
+                    type={testResult.success ? 'success' : 'error'}
+                    message={
+                      testResult.success
+                        ? `Connection successful: ${testResult.toolCount} tools, ${testResult.resourceCount} resources, ${testResult.promptCount} prompts`
+                        : 'Connection failed'
+                    }
+                    showIcon
+                    style={{ marginTop: 8 }}
+                  />
                 )}
               </Space>
-            ),
-            children: (
-              <>
-                <Space direction="vertical" style={{ width: '100%', marginBottom: 16 }}>
-                  {serverId && onDiscoverTools && !serverTools?.length && (
-                    <Button
-                      type="default"
-                      icon={<ReloadOutlined spin={discovering} />}
-                      onClick={onDiscoverTools}
-                      loading={discovering}
-                      block
-                    >
-                      {discovering ? 'Discovering...' : 'Discover Tools'}
-                    </Button>
-                  )}
-                  {serverTools && serverTools.length > 0 && (
-                    <Button
-                      type="default"
-                      icon={<ReloadOutlined spin={discovering} />}
-                      onClick={onDiscoverTools}
-                      loading={discovering}
-                      block
-                    >
-                      {discovering ? 'Refreshing...' : `Refresh (${serverTools.length} tools)`}
-                    </Button>
-                  )}
-                </Space>
-
-                <Form.Item
-                  label="Tool Permissions"
-                  name="tool_permissions"
-                  tooltip="Configure which tools require permission approval. 'Ask' prompts for each use, 'Allow' auto-approves, 'Deny' blocks the tool."
-                >
-                  <ToolPermissionsEditor tools={serverTools || []} />
-                </Form.Item>
-              </>
             ),
           },
         ]
@@ -551,18 +433,13 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   const [form] = Form.useForm();
   const [transport, setTransport] = useState<'stdio' | 'http' | 'sse'>('stdio');
   const [authType, setAuthType] = useState<'none' | 'bearer' | 'jwt'>('none');
-  const [discovering, setDiscovering] = useState(false);
-
-  // Track tool discovery status per server
-  const [discoveryStatus, setDiscoveryStatus] = useState<
-    Map<
-      string,
-      {
-        discovering: boolean;
-        lastDiscovery?: Date;
-      }
-    >
-  >(new Map());
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{
+    success: boolean;
+    toolCount: number;
+    resourceCount: number;
+    promptCount: number;
+  } | null>(null);
 
   // Sync editing server when mcpServerById updates (real-time WebSocket updates)
   useEffect(() => {
@@ -571,17 +448,11 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       if (updatedServer && updatedServer !== editingServer) {
         console.log('[MCP] Server updated via WebSocket, refreshing edit modal', {
           serverId: String(editingServer.mcp_server_id).substring(0, 8),
-          toolCount: updatedServer.tools?.length || 0,
         });
         setEditingServer(updatedServer);
-
-        // Update form with new tools data
-        form.setFieldsValue({
-          tool_permissions: updatedServer.tool_permissions || {},
-        });
       }
     }
-  }, [mcpServerById, editingServer, form]);
+  }, [mcpServerById, editingServer]);
 
   const handleCreate = () => {
     form
@@ -644,15 +515,14 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       });
   };
 
-  const handleDiscoverTools = async (serverId: string) => {
+  const handleTestConnection = async (serverId: string) => {
     if (!client) {
       showError('Client not available');
       return;
     }
 
-    // Update discovery status
-    setDiscoveryStatus((prev) => new Map(prev).set(serverId, { discovering: true }));
-    setDiscovering(true);
+    setTesting(true);
+    setTestResult(null);
 
     try {
       const data = (await client.service('mcp-servers/discover').create({
@@ -664,31 +534,27 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       };
 
       if (data.success && data.capabilities) {
+        const result = {
+          success: true,
+          toolCount: data.capabilities.tools,
+          resourceCount: data.capabilities.resources,
+          promptCount: data.capabilities.prompts,
+        };
+        setTestResult(result);
         showSuccess(
-          `Discovered ${data.capabilities.tools} tools, ${data.capabilities.resources} resources, ${data.capabilities.prompts} prompts`
+          `Connection successful: ${result.toolCount} tools, ${result.resourceCount} resources, ${result.promptCount} prompts`
         );
-
-        // Update discovery status with timestamp
-        setDiscoveryStatus((prev) =>
-          new Map(prev).set(serverId, {
-            discovering: false,
-            lastDiscovery: new Date(),
-          })
-        );
-
-        // The WebSocket event will update mcpServerById, which will trigger the useEffect above
-        // to refresh editingServer and the form
       } else {
-        showError(data.error || 'Failed to discover tools');
-        setDiscoveryStatus((prev) => new Map(prev).set(serverId, { discovering: false }));
+        setTestResult({ success: false, toolCount: 0, resourceCount: 0, promptCount: 0 });
+        showError(data.error || 'Connection test failed');
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      console.error('Discovery failed:', error);
-      showError(`Failed to discover tools: ${errorMessage}`);
-      setDiscoveryStatus((prev) => new Map(prev).set(serverId, { discovering: false }));
+      console.error('Connection test failed:', error);
+      setTestResult({ success: false, toolCount: 0, resourceCount: 0, promptCount: 0 });
+      showError(`Connection test failed: ${errorMessage}`);
     } finally {
-      setDiscovering(false);
+      setTesting(false);
     }
   };
 
@@ -696,11 +562,10 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     console.log('[MCP] handleEdit called with server:', {
       name: server.name,
       mcp_server_id: String(server.mcp_server_id).substring(0, 8),
-      tools: server.tools,
-      toolCount: server.tools?.length || 0,
     });
 
     setEditingServer(server);
+    setTestResult(null); // Reset test result when opening edit modal
     const serverAuthType = (server.auth?.type as 'none' | 'bearer' | 'jwt') || 'none';
     setAuthType(serverAuthType);
 
@@ -726,16 +591,11 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       jwt_api_url: server.auth?.api_url,
       jwt_api_token: server.auth?.api_token,
       jwt_api_secret: server.auth?.api_secret,
-      tool_permissions: server.tool_permissions || {},
     });
 
     setEditModalOpen(true);
-
-    // Auto-discovery is disabled - users can manually click "Discover Tools" if needed
-    // This prevents automatic connection attempts that might timeout
     console.log('[MCP] Edit modal opened for server:', server.name, {
       transport: server.transport,
-      toolCount: server.tools?.length || 0,
     });
   };
 
@@ -786,11 +646,6 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
         updates.auth = undefined;
       }
 
-      // Add tool permissions if present
-      if (values.tool_permissions) {
-        updates.tool_permissions = values.tool_permissions;
-      }
-
       // Save the updates
       await client.service('mcp-servers').patch(editingServer.mcp_server_id, updates);
 
@@ -803,6 +658,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       form.resetFields();
       setEditModalOpen(false);
       setEditingServer(null);
+      setTestResult(null);
     } catch (error) {
       // Validation or update failed
       console.error('Update failed:', error);
@@ -828,12 +684,12 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     if (transport === 'stdio') {
       return {
         status: 'default' as const,
-        text: 'Stdio (session-level)',
+        text: 'Local process',
         color: '#8c8c8c',
       };
     }
 
-    // For HTTP/SSE servers, check if tools have been discovered
+    // For HTTP/SSE servers, show tool count if tested
     if (toolCount > 0) {
       return {
         status: 'success' as const,
@@ -842,20 +698,10 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       };
     }
 
-    // Check if discovery is in progress
-    const status = discoveryStatus.get(server.mcp_server_id);
-    if (status?.discovering) {
-      return {
-        status: 'processing' as const,
-        text: 'Discovering...',
-        color: '#1890ff',
-      };
-    }
-
     return {
-      status: 'warning' as const,
-      text: 'Not discovered',
-      color: '#faad14',
+      status: 'default' as const,
+      text: 'Not tested',
+      color: '#8c8c8c',
     };
   };
 
@@ -912,22 +758,15 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     {
       title: 'Health',
       key: 'health',
-      width: 150,
+      width: 120,
       render: (_: unknown, server: MCPServer) => {
         const health = getServerHealth(server);
-        const transport = server.transport || (server.url ? 'http' : 'stdio');
-
         return (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <Badge status={health.status} />
             <Typography.Text style={{ fontSize: 12, color: health.color }}>
               {health.text}
             </Typography.Text>
-            {transport !== 'stdio' && !server.tools?.length && (
-              <Tooltip title="Click edit to discover tools">
-                <ReloadOutlined style={{ fontSize: 12, color: '#8c8c8c', cursor: 'help' }} />
-              </Tooltip>
-            )}
           </div>
         );
       },
@@ -1029,30 +868,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
 
       {/* Edit MCP Server Modal */}
       <Modal
-        title={
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span>Edit MCP Server</span>
-            {editingServer && (
-              <Spin spinning={discovering} size="small">
-                {editingServer.tools && editingServer.tools.length > 0 ? (
-                  <>
-                    <Badge status="success" />
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      {editingServer.tools.length} tools discovered
-                    </Typography.Text>
-                  </>
-                ) : (
-                  <>
-                    <Badge status="warning" />
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      No tools discovered
-                    </Typography.Text>
-                  </>
-                )}
-              </Spin>
-            )}
-          </div>
-        }
+        title="Edit MCP Server"
         open={editModalOpen}
         onOk={handleUpdate}
         onCancel={() => {
@@ -1060,6 +876,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
           setEditModalOpen(false);
           setEditingServer(null);
           setAuthType('none');
+          setTestResult(null);
         }}
         okText="Save"
         width={600}
@@ -1072,12 +889,12 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
             onAuthTypeChange={setAuthType}
             form={form}
             client={client}
-            serverTools={editingServer?.tools}
             serverId={editingServer?.mcp_server_id}
-            onDiscoverTools={
-              editingServer ? () => handleDiscoverTools(editingServer.mcp_server_id) : undefined
+            onTestConnection={
+              editingServer ? () => handleTestConnection(editingServer.mcp_server_id) : undefined
             }
-            discovering={discovering}
+            testing={testing}
+            testResult={testResult}
           />
         </Form>
       </Modal>
