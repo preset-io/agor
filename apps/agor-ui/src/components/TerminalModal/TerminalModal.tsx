@@ -10,10 +10,6 @@ const OSC_SEQUENCE_START = '\u001B]8;';
 const OSC_SEQUENCE_END = '\u001B]8;;\u0007';
 const BELL = '\u0007';
 
-// Feature flag for executor-based terminals
-// Can be enabled via prop or eventually via config
-const USE_EXECUTOR_TERMINAL = true;
-
 const expandOscHyperlinks = (input: string): string => {
   let output = '';
   let index = 0;
@@ -72,8 +68,6 @@ export interface TerminalModalProps {
   user?: User | null;
   worktreeId?: string; // Worktree context for Zellij integration
   initialCommands?: string[]; // Commands to execute after connection
-  /** Use executor-based terminal (channel-based I/O) instead of service-based */
-  useExecutor?: boolean;
 }
 
 export const TerminalModal: React.FC<TerminalModalProps> = ({
@@ -83,12 +77,10 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
   user,
   worktreeId,
   initialCommands = [],
-  useExecutor = USE_EXECUTOR_TERMINAL,
 }) => {
   const { modal } = App.useApp();
   const terminalDivRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
-  const [_terminalId, setTerminalId] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [sessionInfo, setSessionInfo] = useState<{
     zellijSession?: string;
@@ -106,24 +98,17 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
     if (!isAdmin) return;
 
     // Executor mode requires user to be logged in
-    if (useExecutor && !user?.user_id) {
-      console.error('[Terminal] Executor mode requires authenticated user');
+    if (!user?.user_id) {
+      console.error('[Terminal] Terminal requires authenticated user');
       return;
     }
 
     let mounted = true;
-    let currentTerminalId: string | null = null;
     let currentChannel: string | null = null;
     let transformData: (value: string) => string = (value) => value;
-    const terminalService = client.service('terminals');
     const socket = client.io;
 
-    // Cleanup functions for both modes
-    const removeServiceListeners = () => {
-      terminalService.removeListener?.('data', handleServiceData);
-      terminalService.removeListener?.('exit', handleServiceExit);
-    };
-
+    // Cleanup channel listeners
     const removeChannelListeners = () => {
       if (socket) {
         socket.off('terminal:output', handleChannelOutput);
@@ -134,30 +119,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
       }
     };
 
-    // Service-based event handlers (legacy)
-    const handleServiceData = (payload: unknown) => {
-      if (!terminalRef.current || typeof payload !== 'object' || payload === null) {
-        return;
-      }
-      const message = payload as Partial<{ terminalId: string; data: string }>;
-      if (message.terminalId === currentTerminalId && typeof message.data === 'string') {
-        terminalRef.current.write(transformData(message.data));
-      }
-    };
-
-    const handleServiceExit = (payload: unknown) => {
-      if (!terminalRef.current || typeof payload !== 'object' || payload === null) {
-        return;
-      }
-      const message = payload as Partial<{ terminalId: string; exitCode: number }>;
-      if (message.terminalId === currentTerminalId && typeof message.exitCode === 'number') {
-        terminalRef.current.writeln(`\r\n\r\n[Process exited with code ${message.exitCode}]`);
-        terminalRef.current.writeln('[Close and reopen terminal to start a new session]');
-        setIsConnected(false);
-      }
-    };
-
-    // Channel-based event handlers (executor mode)
+    // Channel-based event handlers
     const handleChannelOutput = (payload: { userId: string; data: string }) => {
       if (!terminalRef.current) return;
       if (payload.userId === user?.user_id) {
@@ -235,18 +197,17 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
       return terminal;
     };
 
-    // Setup executor-based terminal (channel I/O via Zellij)
-    const setupExecutorTerminal = async () => {
+    // Setup terminal (channel I/O via Zellij executor)
+    const setupTerminal = async () => {
       const terminal = createTerminalInstance();
 
       try {
-        // Request executor terminal from daemon
+        // Request terminal from daemon
         // This spawns an executor with zellij.attach if not already running
         const result = (await client.service('terminals').create({
           rows: 40,
           cols: 160,
           worktreeId,
-          useExecutor: true,
         })) as {
           userId: UserID;
           channel: string;
@@ -316,9 +277,9 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
 
         console.log(`[Terminal] Connected to executor terminal via channel: ${result.channel}`);
       } catch (error) {
-        console.error('Failed to create executor terminal:', error);
+        console.error('[Terminal] Failed to create terminal:', error);
         if (terminalRef.current) {
-          terminalRef.current.writeln('\r\n❌ Failed to connect to Zellij terminal');
+          terminalRef.current.writeln('\r\n❌ Failed to connect to terminal');
           terminalRef.current.writeln(
             `Error: ${error instanceof Error ? error.message : String(error)}`
           );
@@ -326,81 +287,8 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
       }
     };
 
-    // Setup service-based terminal (legacy PTY per terminal)
-    const setupServiceTerminal = async () => {
-      const terminal = createTerminalInstance();
-      terminal.writeln('🚀 Connecting to shell...');
-
-      try {
-        // Create terminal session on backend
-        const result = (await client.service('terminals').create({
-          rows: 40,
-          cols: 160,
-          worktreeId,
-        })) as {
-          terminalId: string;
-          cwd: string;
-          zellijSession: string;
-          zellijReused: boolean;
-          worktreeName?: string;
-        };
-
-        if (!mounted) {
-          // If unmounted during connection, clean up immediately
-          client.service('terminals').remove(result.terminalId).catch(console.error);
-          return;
-        }
-
-        currentTerminalId = result.terminalId;
-        setTerminalId(result.terminalId);
-        setIsConnected(true);
-        transformData = expandOscHyperlinks;
-        setSessionInfo({
-          zellijSession: result.zellijSession,
-          zellijReused: result.zellijReused,
-          worktreeName: result.worktreeName,
-        });
-        terminal.clear();
-
-        // Execute initial commands if provided
-        if (initialCommands.length > 0) {
-          for (const cmd of initialCommands) {
-            // Send command with carriage return to execute
-            client.service('terminals').patch(result.terminalId, { input: `${cmd}\r` });
-          }
-        }
-
-        // Handle user input - send to backend
-        // FeathersJS automatically uses WebSocket when available, REST as fallback
-        terminal.onData((data) => {
-          if (result.terminalId && client) {
-            client.service('terminals').patch(result.terminalId, { input: data });
-          }
-        });
-
-        // Listen for terminal output from backend
-        removeServiceListeners();
-        terminalService.on('data', handleServiceData);
-
-        // Listen for terminal exit
-        terminalService.on('exit', handleServiceExit);
-      } catch (error) {
-        console.error('Failed to create terminal:', error);
-        if (terminalRef.current) {
-          terminalRef.current.writeln('\r\n❌ Failed to connect to shell');
-          terminalRef.current.writeln(
-            `Error: ${error instanceof Error ? error.message : String(error)}`
-          );
-        }
-      }
-    };
-
-    // Choose setup based on mode
-    if (useExecutor) {
-      setupExecutorTerminal();
-    } else {
-      setupServiceTerminal();
-    }
+    // Setup terminal
+    setupTerminal();
 
     return () => {
       mounted = false;
@@ -409,22 +297,12 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
         terminalRef.current.dispose();
         terminalRef.current = null;
       }
-      // Kill backend terminal session (service mode only)
-      // In executor mode, the Zellij session persists
-      if (currentTerminalId && !useExecutor) {
-        client.service('terminals').remove(currentTerminalId).catch(console.error);
-      }
-      // Remove listeners based on mode
-      if (useExecutor) {
-        removeChannelListeners();
-      } else {
-        removeServiceListeners();
-      }
-      setTerminalId(null);
+      // Zellij session persists - just clean up listeners
+      removeChannelListeners();
       setIsConnected(false);
       setSessionInfo({});
     };
-  }, [open, client, initialCommands, isAdmin, worktreeId, useExecutor, user?.user_id]);
+  }, [open, client, initialCommands, isAdmin, worktreeId, user?.user_id]);
 
   const handleClose = () => {
     if (isConnected) {
