@@ -16,9 +16,7 @@
   },
   "dependencies": {
     "@agor/core": "workspace:*",
-    "@homebridge/node-pty-prebuilt-multiarch": "^0.13.1",
     "@modelcontextprotocol/sdk": "^1.24.0",
-    "@opencode-ai/sdk": "^1.0.122",
     "compression": "^1.8.1",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",

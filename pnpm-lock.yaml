@@ -91,15 +91,9 @@ importers:
       '@agor/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@homebridge/node-pty-prebuilt-multiarch':
-        specifier: ^0.13.1
-        version: 0.13.1
       '@modelcontextprotocol/sdk':
         specifier: ^1.24.0
         version: 1.24.0(zod@4.1.12)
-      '@opencode-ai/sdk':
-        specifier: ^1.0.122
-        version: 1.0.125
       compression:
         specifier: ^1.8.1
         version: 1.8.1
