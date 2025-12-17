@@ -138,14 +138,16 @@ export async function handleGitClone(
       console.log('[git.clone] Resolved credentials:', Object.keys(env));
     }
 
-    // Determine output path
-    const outputPath = payload.params.outputPath || getReposDir();
+    // Determine output path - only pass targetDir if explicitly specified
+    // Otherwise let cloneRepo() compute the correct path (reposDir + repoName)
+    const outputPath = payload.params.outputPath;
+    const reposDir = getReposDir();
 
     // Clone the repository
-    console.log(`[git.clone] Cloning ${payload.params.url} to ${outputPath}...`);
+    console.log(`[git.clone] Cloning ${payload.params.url} to ${outputPath || reposDir}...`);
     const cloneResult = await cloneRepo({
       url: payload.params.url,
-      targetDir: outputPath,
+      targetDir: outputPath, // undefined = let cloneRepo compute path
       bare: payload.params.bare,
       env,
     });
