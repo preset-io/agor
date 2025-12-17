@@ -55,22 +55,60 @@ export function createCanUseToolCallback(
     }>;
     message?: string;
   }> => {
-    // Auto-approve all MCP tools (tools prefixed with mcp__)
-    // Permission handling is delegated to the SDK's built-in permission system
+    // Auto-approve MCP tools only if they belong to an attached MCP server
+    // MCP tool names follow pattern: mcp__<server_name>__<tool_name>
     if (toolName.startsWith('mcp__')) {
-      console.log(`✅ [canUseTool] Auto-approving MCP tool: ${toolName}`);
-      return {
-        behavior: 'allow',
-        updatedInput: toolInput,
-        updatedPermissions: [
-          {
-            type: 'addRules',
-            rules: [{ toolName }],
-            behavior: 'allow',
-            destination: 'session',
-          },
-        ],
-      };
+      const parts = toolName.split('__');
+      if (parts.length >= 3) {
+        const serverName = parts[1]; // Extract server name from mcp__<server_name>__<tool_name>
+
+        try {
+          // Get the session's attached MCP servers
+          const sessionMCPs = await deps.sessionMCPRepo.findBySessionId(sessionId);
+          const attachedServerIds = sessionMCPs.map((s) => s.mcp_server_id);
+
+          // Look up the MCP servers to check their names
+          let serverVerified = false;
+          for (const serverId of attachedServerIds) {
+            const server = await deps.mcpServerRepo.findById(serverId);
+            if (server && server.name === serverName) {
+              serverVerified = true;
+              break;
+            }
+          }
+
+          if (serverVerified) {
+            console.log(
+              `✅ [canUseTool] Auto-approving MCP tool: ${toolName} (server "${serverName}" is attached)`
+            );
+            return {
+              behavior: 'allow',
+              updatedInput: toolInput,
+              updatedPermissions: [
+                {
+                  type: 'addRules',
+                  rules: [{ toolName }],
+                  behavior: 'allow',
+                  destination: 'session',
+                },
+              ],
+            };
+          }
+
+          console.warn(
+            `⚠️ [canUseTool] MCP tool "${toolName}" rejected: server "${serverName}" not attached to session`
+          );
+          // Fall through to normal permission flow
+        } catch (error) {
+          console.error(`[canUseTool] Error verifying MCP server for tool ${toolName}:`, error);
+          // Fall through to normal permission flow on error
+        }
+      } else {
+        console.warn(
+          `⚠️ [canUseTool] MCP tool "${toolName}" has invalid format, requiring manual approval`
+        );
+        // Fall through to normal permission flow for malformed tool names
+      }
     }
 
     // This callback fires AFTER SDK checks settings.json

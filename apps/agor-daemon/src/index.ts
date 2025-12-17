@@ -930,8 +930,58 @@ async function main() {
 
         const mcpServerRepo = new MCPServerRepository(db);
 
-        // Determine if we're testing a saved server or inline config
-        const isInlineTest = !data.mcp_server_id && data.url;
+        // SSRF Protection: Validate URLs to prevent internal network access
+        const validateUrl = (url: string): { valid: boolean; error?: string } => {
+          try {
+            const parsed = new URL(url);
+            const hostname = parsed.hostname.toLowerCase();
+
+            // Block localhost and loopback
+            if (
+              hostname === 'localhost' ||
+              hostname === '127.0.0.1' ||
+              hostname === '::1' ||
+              hostname === '0.0.0.0'
+            ) {
+              return { valid: false, error: 'Connection to localhost is not allowed' };
+            }
+
+            // Block private IP ranges (10.x.x.x, 172.16-31.x.x, 192.168.x.x)
+            const ipv4Match = hostname.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+            if (ipv4Match) {
+              const [, a, b] = ipv4Match.map(Number);
+              if (
+                a === 10 ||
+                (a === 172 && b >= 16 && b <= 31) ||
+                (a === 192 && b === 168) ||
+                a === 169 // link-local
+              ) {
+                return { valid: false, error: 'Connection to private IP addresses is not allowed' };
+              }
+            }
+
+            // Block common internal hostnames
+            if (
+              hostname.endsWith('.local') ||
+              hostname.endsWith('.internal') ||
+              hostname.endsWith('.lan')
+            ) {
+              return { valid: false, error: 'Connection to internal hostnames is not allowed' };
+            }
+
+            // Only allow http/https
+            if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+              return { valid: false, error: 'Only HTTP and HTTPS protocols are allowed' };
+            }
+
+            return { valid: true };
+          } catch {
+            return { valid: false, error: 'Invalid URL format' };
+          }
+        };
+
+        // Determine if inline config is provided (form values take precedence for testing)
+        const hasInlineConfig = !!data.url;
         let serverConfig: {
           url: string;
           transport: 'http' | 'sse' | 'stdio';
@@ -942,19 +992,54 @@ async function main() {
         };
         let serverId: string | undefined;
 
-        if (isInlineTest) {
-          // Inline config - use provided values directly
-          if (!data.url) {
-            return { success: false, error: 'URL is required for connection test' };
+        if (hasInlineConfig) {
+          // Inline config provided - use form values for testing
+          // This allows testing unsaved changes in edit mode
+          const urlValidation = validateUrl(data.url!);
+          if (!urlValidation.valid) {
+            return { success: false, error: urlValidation.error };
           }
+
           serverConfig = {
-            url: data.url,
+            url: data.url!,
             transport: data.transport || 'http',
             auth: data.auth,
             name: 'inline-test',
           };
+
+          // If mcp_server_id is also provided, we'll persist capabilities after successful test
+          // but still test using the inline config (form values)
+          if (data.mcp_server_id) {
+            // Verify user has access to this server before allowing capability persistence
+            const server = await mcpServerRepo.findById(data.mcp_server_id);
+            if (!server) {
+              return { success: false, error: 'MCP server not found' };
+            }
+
+            // SECURITY: Verify user has access to persist to this MCP server
+            if (params?.provider && params.user) {
+              const userId = params.user.user_id;
+              if (server.scope === 'global' && server.owner_user_id !== userId) {
+                return {
+                  success: false,
+                  error: 'Access denied: only server owner can update this MCP server',
+                };
+              }
+              if (server.scope === 'session') {
+                const userRole = params.user.role?.toLowerCase();
+                if (userRole !== 'admin' && userRole !== 'owner') {
+                  return {
+                    success: false,
+                    error:
+                      'Access denied: admin role required to update session-scoped MCP servers',
+                  };
+                }
+              }
+            }
+            serverId = data.mcp_server_id;
+          }
         } else if (data.mcp_server_id) {
-          // Saved server - look up from database
+          // No inline config - use saved server config
           const server = await mcpServerRepo.findById(data.mcp_server_id);
 
           if (!server) {
@@ -987,6 +1072,14 @@ async function main() {
             }
           }
 
+          // Validate the saved URL too
+          if (server.url) {
+            const urlValidation = validateUrl(server.url);
+            if (!urlValidation.valid) {
+              return { success: false, error: urlValidation.error };
+            }
+          }
+
           serverConfig = {
             url: server.url || '',
             transport: (server.transport as 'http' | 'sse') || (server.url ? 'http' : 'stdio'),
@@ -1011,7 +1104,7 @@ async function main() {
         console.log('[MCP Discovery] Starting test for:', serverConfig.name || 'inline-config');
         console.log('[MCP Discovery] URL:', serverConfig.url);
         console.log('[MCP Discovery] Transport:', serverConfig.transport);
-        console.log('[MCP Discovery] Mode:', isInlineTest ? 'inline-test' : 'saved-server');
+        console.log('[MCP Discovery] Mode:', hasInlineConfig ? 'inline-test' : 'saved-server');
 
         // Get auth headers
         const authHeaders = await resolveMCPAuthHeaders(serverConfig.auth);
