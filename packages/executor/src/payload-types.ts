@@ -382,6 +382,9 @@ export const ZellijAttachPayloadSchema = BasePayloadSchema.extend({
     /** Terminal dimensions */
     cols: z.number().optional().default(80),
     rows: z.number().optional().default(24),
+
+    /** Path to env file for shell to source (user env vars like API keys) */
+    envFile: z.string().nullable().optional(),
   }),
 });
 

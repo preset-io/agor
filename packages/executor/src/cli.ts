@@ -77,6 +77,24 @@ async function handleStdinMode(options: { dryRun: boolean }): Promise<void> {
     return;
   }
 
+  // Special handling for zellij.attach - long-running PTY session
+  // The executor must stay alive to stream PTY I/O
+  if (payload.command === 'zellij.attach') {
+    const result = await executeCommand(payload, { dryRun: options.dryRun });
+
+    // Output result as JSON to stdout (for daemon to parse)
+    console.log(JSON.stringify(result));
+
+    if (!result.success) {
+      process.exit(1);
+    }
+
+    // DON'T exit - stay alive to stream PTY I/O
+    // The PTY onExit handler will call process.exit() when done
+    console.log('[executor] Zellij attached, staying alive for PTY streaming...');
+    return;
+  }
+
   // All other commands go through the command router
   const result = await executeCommand(payload, { dryRun: options.dryRun });
 

@@ -78,11 +78,6 @@ export class ServiceJWTStrategy extends JWTStrategy {
       };
     }
 
-    console.log('[ServiceJWTStrategy] Authenticated as regular user:', {
-      // biome-ignore lint/suspicious/noExplicitAny: Feathers type compatibility
-      user_id: (result as any).user?.user_id,
-    });
-
     return result;
   }
 }

@@ -102,15 +102,20 @@ export async function spawnExecutor(
   payload: Record<string, unknown>,
   options: SpawnExecutorOptions = {}
 ): Promise<SpawnExecutorResult> {
+  const executorPath = findExecutorPath();
+
+  // Default cwd to executor package directory for proper module resolution
+  // ESM imports resolve relative to the file location, and pnpm's node_modules
+  // structure requires running from the package directory
+  const executorDir = path.dirname(path.dirname(executorPath)); // Go up from bin/agor-executor or dist/cli.js
+
   const {
-    cwd = process.cwd(),
+    cwd = executorDir,
     env = process.env as Record<string, string>,
     timeout = 5 * 60 * 1000, // 5 minutes default
     logPrefix = '[Executor]',
     asUser,
   } = options;
-
-  const executorPath = findExecutorPath();
 
   // Build spawn command - handles impersonation via sudo su - when asUser is set
   const { cmd, args } = buildSpawnArgs('node', [executorPath, '--stdin'], {
@@ -254,6 +259,25 @@ export function createServiceToken(jwtSecret: string, expiresIn?: string): strin
 }
 
 /**
+ * Generate a session token from the Feathers app
+ *
+ * Convenience function that extracts the JWT secret from the app
+ * and creates a service token.
+ *
+ * @param app - FeathersJS application with sessionTokenService
+ * @returns JWT access token
+ */
+export function generateSessionToken(app: {
+  settings: { authentication?: { secret?: string } };
+}): string {
+  const jwtSecret = app.settings.authentication?.secret;
+  if (!jwtSecret) {
+    throw new Error('JWT secret not configured in app settings');
+  }
+  return createServiceToken(jwtSecret);
+}
+
+/**
  * Options for fire-and-forget executor spawning
  */
 export interface FireAndForgetOptions {
@@ -297,14 +321,19 @@ export function spawnExecutorFireAndForget(
   payload: Record<string, unknown>,
   options: FireAndForgetOptions = {}
 ): void {
+  const executorPath = findExecutorPath();
+
+  // Default cwd to executor package directory for proper module resolution
+  // ESM imports resolve relative to the file location, and pnpm's node_modules
+  // structure requires running from the package directory
+  const executorDir = path.dirname(path.dirname(executorPath)); // Go up from bin/agor-executor or dist/cli.js
+
   const {
-    cwd = process.cwd(),
+    cwd = executorDir,
     env = process.env as Record<string, string>,
     logPrefix = '[Executor]',
     asUser,
   } = options;
-
-  const executorPath = findExecutorPath();
 
   // Build spawn command - handles impersonation via sudo su - when asUser is set
   const { cmd, args } = buildSpawnArgs('node', [executorPath, '--stdin'], {

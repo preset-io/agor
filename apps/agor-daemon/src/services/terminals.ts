@@ -24,13 +24,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-
 import {
   createUserProcessEnvironment,
   loadConfig,
   resolveUserEnvironment,
 } from '@agor/core/config';
-
 import { type Database, formatShortId, UsersRepository, WorktreeRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { AuthenticatedParams, UserID, WorktreeID } from '@agor/core/types';
@@ -42,6 +40,7 @@ import {
   validateResolvedUnixUser,
 } from '@agor/core/unix';
 import * as pty from '@homebridge/node-pty-prebuilt-multiarch';
+import { generateSessionToken, spawnExecutorFireAndForget } from '../utils/spawn-executor.js';
 
 // Promisify exec for async usage
 const execAsync = promisify(exec);
@@ -100,6 +99,7 @@ interface CreateTerminalData {
   cols?: number;
   userId?: UserID; // User context for env resolution
   worktreeId?: WorktreeID; // Worktree context for Zellij integration
+  useExecutor?: boolean; // Use executor-based terminal (channel I/O)
 }
 
 interface ResizeTerminalData {
@@ -506,17 +506,41 @@ export class TerminalsService {
 
   /**
    * Create a new terminal session
+   *
+   * Routes to executor-based terminal when useExecutor=true,
+   * otherwise uses the legacy PTY-per-terminal approach.
    */
   async create(
     data: CreateTerminalData,
     params?: AuthenticatedParams
-  ): Promise<{
-    terminalId: string;
-    cwd: string;
-    zellijSession: string;
-    zellijReused: boolean;
-    worktreeName?: string;
-  }> {
+  ): Promise<
+    | {
+        terminalId: string;
+        cwd: string;
+        zellijSession: string;
+        zellijReused: boolean;
+        worktreeName?: string;
+      }
+    | {
+        userId: UserID;
+        channel: string;
+        sessionName: string;
+        isNew: boolean;
+        worktreeName?: string;
+      }
+  > {
+    // Route to executor-based terminal if requested
+    if (data.useExecutor) {
+      return this.createExecutorTerminal(
+        {
+          worktreeId: data.worktreeId,
+          cols: data.cols,
+          rows: data.rows,
+        },
+        params
+      );
+    }
+
     const terminalId = `term-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     const authenticatedUserId = params?.user?.user_id as UserID | undefined;
     const resolvedUserId = data.userId ?? authenticatedUserId;
@@ -951,5 +975,258 @@ export class TerminalsService {
       session.pty.kill('SIGTERM');
     }
     this.sessions.clear();
+
+    // Also cleanup any executor-based terminals
+    this.cleanupExecutorTerminals();
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // EXECUTOR-BASED TERMINAL SUPPORT
+  // New architecture where executor owns the PTY and streams via channels
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Active executor processes per user
+   * Key: userId, Value: { process pid, sessionName, worktrees }
+   */
+  private executorTerminals: Map<
+    UserID,
+    {
+      sessionName: string;
+      activeWorktrees: Set<WorktreeID | 'default'>;
+      startedAt: Date;
+    }
+  > = new Map();
+
+  /**
+   * Create or join an executor-based terminal session
+   *
+   * Unlike the PTY-based create(), this:
+   * - Spawns one executor per user (not per terminal)
+   * - Uses Feathers channels for I/O (not service events)
+   * - Returns immediately (fire-and-forget spawn)
+   *
+   * The browser should join the user's terminal channel to receive output.
+   */
+  async createExecutorTerminal(
+    data: {
+      worktreeId?: WorktreeID;
+      cols?: number;
+      rows?: number;
+    },
+    params?: AuthenticatedParams
+  ): Promise<{
+    userId: UserID;
+    channel: string;
+    sessionName: string;
+    isNew: boolean;
+    worktreeName?: string;
+  }> {
+    const userId = params?.user?.user_id as UserID;
+    if (!userId) {
+      throw new Error('Authentication required for executor terminal');
+    }
+
+    // Check if user already has an executor running
+    const existing = this.executorTerminals.get(userId);
+    if (existing) {
+      // Add worktree to active set
+      const worktreeKey = data.worktreeId || 'default';
+      existing.activeWorktrees.add(worktreeKey);
+
+      // If worktree specified, tell executor to create/focus tab
+      if (data.worktreeId) {
+        const worktreeRepo = new WorktreeRepository(this.db);
+        const worktree = await worktreeRepo.findById(data.worktreeId);
+        if (worktree) {
+          // Emit tab command via channel - executor will handle it
+          this.app.io?.to(`user/${userId}/terminal`).emit('terminal:tab', {
+            userId,
+            action: 'create',
+            tabName: worktree.name,
+            cwd: worktree.path,
+          });
+
+          // Request screen redraw after a short delay to let client join channel first
+          setTimeout(() => {
+            this.app.io?.to(`user/${userId}/terminal`).emit('terminal:redraw', { userId });
+          }, 200);
+
+          return {
+            userId,
+            channel: `user/${userId}/terminal`,
+            sessionName: existing.sessionName,
+            isNew: false,
+            worktreeName: worktree.name,
+          };
+        }
+      }
+
+      // Request screen redraw after a short delay to let client join channel first
+      setTimeout(() => {
+        this.app.io?.to(`user/${userId}/terminal`).emit('terminal:redraw', { userId });
+      }, 200);
+
+      return {
+        userId,
+        channel: `user/${userId}/terminal`,
+        sessionName: existing.sessionName,
+        isNew: false,
+      };
+    }
+
+    // Resolve Unix user for impersonation
+    const config = await loadConfig();
+    const unixUserMode = config.execution?.unix_user_mode ?? 'simple';
+    const executorUser = config.execution?.executor_unix_user;
+
+    let impersonatedUser: string | null = null;
+    const usersRepo = new UsersRepository(this.db);
+    try {
+      const user = await usersRepo.findById(userId);
+      if (user?.unix_username) {
+        impersonatedUser = user.unix_username;
+      }
+    } catch (error) {
+      console.warn(`⚠️ Failed to load user ${userId}:`, error);
+    }
+
+    const impersonationResult = resolveUnixUserForImpersonation({
+      mode: unixUserMode as UnixUserMode,
+      userUnixUsername: impersonatedUser,
+      executorUnixUser: executorUser,
+    });
+
+    const finalUnixUser = impersonationResult.unixUser;
+
+    // Validate Unix user exists
+    try {
+      validateResolvedUnixUser(unixUserMode as UnixUserMode, finalUnixUser);
+    } catch (err) {
+      if (err instanceof UnixUserNotFoundError) {
+        throw new Error(`${(err as UnixUserNotFoundError).message}`);
+      }
+      throw err;
+    }
+
+    // Determine cwd and worktree info
+    let cwd = os.homedir();
+    let worktreeName: string | undefined;
+
+    if (data.worktreeId) {
+      const worktreeRepo = new WorktreeRepository(this.db);
+      const worktree = await worktreeRepo.findById(data.worktreeId);
+      if (worktree) {
+        worktreeName = worktree.name;
+        if (finalUnixUser) {
+          const symlinkPath = `/home/${finalUnixUser}/agor/worktrees/${worktree.name}`;
+          cwd = fs.existsSync(symlinkPath) ? symlinkPath : worktree.path;
+        } else {
+          cwd = worktree.path;
+        }
+      }
+    }
+
+    // Build Zellij session name
+    const userSessionSuffix = formatShortId(userId);
+    const sessionName = `agor-${userSessionSuffix}`;
+
+    // Generate session token for executor
+    const daemonUrl = `http://localhost:${config.daemon?.port || 3030}`;
+    const sessionToken = generateSessionToken(this.app);
+
+    // Get user environment and write env file for shell sourcing
+    const userEnv = await resolveUserEnvironment(userId, this.db);
+    const envFile = writeEnvFile(userId, userEnv, finalUnixUser);
+
+    // Get executor process environment (includes system vars)
+    const executorEnv = await createUserProcessEnvironment(userId, this.db);
+
+    // Spawn executor with zellij.attach command
+    spawnExecutorFireAndForget(
+      {
+        command: 'zellij.attach',
+        sessionToken,
+        daemonUrl,
+        params: {
+          userId,
+          sessionName,
+          cwd,
+          tabName: worktreeName,
+          cols: data.cols || 160,
+          rows: data.rows || 40,
+          envFile, // Pass env file path for shell to source
+        },
+      },
+      {
+        logPrefix: `[TerminalsService.executor ${userId.slice(0, 8)}]`,
+        asUser: finalUnixUser || undefined,
+        env: executorEnv,
+      }
+    );
+
+    // Track the executor
+    this.executorTerminals.set(userId, {
+      sessionName,
+      activeWorktrees: new Set([data.worktreeId || 'default']),
+      startedAt: new Date(),
+    });
+
+    return {
+      userId,
+      channel: `user/${userId}/terminal`,
+      sessionName,
+      isNew: true,
+      worktreeName,
+    };
+  }
+
+  /**
+   * Close executor terminal for a worktree
+   *
+   * If this is the last active worktree, the executor will exit naturally
+   * when the user detaches from Zellij.
+   */
+  async closeExecutorTerminal(
+    data: { worktreeId?: WorktreeID },
+    params?: AuthenticatedParams
+  ): Promise<{ closed: boolean }> {
+    const userId = params?.user?.user_id as UserID;
+    if (!userId) {
+      throw new Error('Authentication required');
+    }
+
+    const executor = this.executorTerminals.get(userId);
+    if (!executor) {
+      return { closed: false };
+    }
+
+    const worktreeKey = data.worktreeId || 'default';
+    executor.activeWorktrees.delete(worktreeKey);
+
+    // If no more active worktrees, mark executor for cleanup
+    // The executor will exit when Zellij detaches
+    if (executor.activeWorktrees.size === 0) {
+      this.executorTerminals.delete(userId);
+    }
+
+    return { closed: true };
+  }
+
+  /**
+   * Cleanup executor terminals (called on daemon shutdown)
+   */
+  private cleanupExecutorTerminals(): void {
+    // Executors manage their own lifecycle via Zellij
+    // Just clear our tracking
+    this.executorTerminals.clear();
+  }
+
+  /**
+   * Handle executor terminal exit (called from channel event)
+   */
+  handleExecutorExit(userId: UserID): void {
+    this.executorTerminals.delete(userId);
+    console.log(`[TerminalsService] Executor terminal exited for user ${userId.slice(0, 8)}`);
   }
 }

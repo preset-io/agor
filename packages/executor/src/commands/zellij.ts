@@ -41,6 +41,8 @@ interface IPty {
 let ptyProcess: IPty | null = null;
 let feathersClient: AgorClient | null = null;
 let _currentUserId: string | null = null;
+let currentPtyCols = 160;
+let currentPtyRows = 40;
 
 /**
  * Handle zellij.attach command
@@ -52,7 +54,7 @@ export async function handleZellijAttach(
   payload: ZellijAttachPayload,
   options: CommandOptions
 ): Promise<ExecutorResult> {
-  const { userId, sessionName, cwd, tabName, cols, rows } = payload.params;
+  const { userId, sessionName, cwd, tabName, cols, rows, envFile } = payload.params;
 
   // Dry run mode
   if (options.dryRun) {
@@ -121,6 +123,20 @@ export async function handleZellijAttach(
     console.log(`[zellij.attach] Spawning PTY: zellij ${zellijArgs.join(' ')}`);
     console.log(`[zellij.attach] CWD: ${cwd}, Size: ${cols}x${rows}`);
 
+    // Build clean environment for Zellij
+    // CRITICAL: Strip existing Zellij env vars to prevent "attach to current session" error
+    // This happens when executor is spawned from within a Zellij session (legacy terminal mode)
+    const cleanEnv = { ...process.env };
+    delete cleanEnv.ZELLIJ;
+    delete cleanEnv.ZELLIJ_SESSION_NAME;
+    delete cleanEnv.ZELLIJ_PANE_ID;
+
+    // Get actual home directory for current user (executor runs as impersonated user)
+    // The HOME env var may still point to daemon's home, causing permission errors
+    // when Zellij tries to write to ~/.cache/zellij/
+    const os = await import('node:os');
+    const actualHome = os.homedir();
+
     // Spawn PTY with zellij
     const pty = nodePty.spawn('zellij', zellijArgs, {
       name: 'xterm-256color',
@@ -128,14 +144,18 @@ export async function handleZellijAttach(
       rows: rows || 24,
       cwd,
       env: {
-        ...process.env,
+        ...cleanEnv,
         TERM: 'xterm-256color',
-        // Zellij session serialization - persist across attach/detach
-        ZELLIJ_SESSION_NAME: sessionName,
+        HOME: actualHome, // Ensure Zellij uses correct home for cache/config
+        XDG_CACHE_HOME: `${actualHome}/.cache`, // Explicit cache dir
+        XDG_CONFIG_HOME: `${actualHome}/.config`, // Explicit config dir
       },
     });
 
     ptyProcess = pty;
+    currentSessionName = sessionName; // Store for tab management
+    currentPtyCols = cols || 80;
+    currentPtyRows = rows || 24;
 
     console.log(`[zellij.attach] PTY spawned, PID: ${pty.pid}`);
 
@@ -178,6 +198,8 @@ export async function handleZellijAttach(
     // Listen for resize events
     socket.on('terminal:resize', (data: { userId: string; cols: number; rows: number }) => {
       if (data.userId === userId && ptyProcess) {
+        currentPtyCols = data.cols;
+        currentPtyRows = data.rows;
         ptyProcess.resize(data.cols, data.rows);
       }
     });
@@ -187,12 +209,33 @@ export async function handleZellijAttach(
       await handleTabAction(data.action, data.tabName, data.cwd);
     });
 
+    // Listen for redraw requests (when client reconnects)
+    // Trigger resize to force Zellij to redraw via SIGWINCH
+    socket.on('terminal:redraw', (data: { userId: string }) => {
+      if (data.userId === userId && ptyProcess) {
+        ptyProcess.resize(currentPtyCols, currentPtyRows);
+      }
+    });
+
     // Create initial tab if specified
     if (tabName) {
       // Wait a moment for zellij to initialize
       setTimeout(() => {
         handleTabAction('create', tabName, cwd);
       }, 500);
+    }
+
+    // Source env file after Zellij initializes (user env vars like API keys)
+    if (envFile && ptyProcess) {
+      // Wait for shell to be ready, then source env file
+      setTimeout(() => {
+        if (ptyProcess) {
+          // Source the env file silently (suppress output, ignore errors if file doesn't exist)
+          const sourceCmd = `[ -f '${envFile}' ] && source '${envFile}' 2>/dev/null; clear\r`;
+          ptyProcess.write(sourceCmd);
+          console.log(`[zellij.attach] Sourced env file: ${envFile}`);
+        }
+      }, 800); // Wait longer than tab creation to ensure shell is ready
     }
 
     // Return success - executor stays running until PTY exits
@@ -289,27 +332,101 @@ export async function handleZellijTab(
 }
 
 /**
+ * Current Zellij session name (set when attach starts)
+ */
+let currentSessionName: string | null = null;
+
+/**
+ * Query existing tab names from Zellij session
+ */
+async function queryTabNames(): Promise<string[]> {
+  if (!currentSessionName) {
+    console.warn('[zellij.tab] No session name set, cannot query tabs');
+    return [];
+  }
+
+  const sessionName = currentSessionName; // Capture for closure
+  return new Promise((resolve) => {
+    // Must specify --session to query the correct Zellij session
+    const proc = spawn('zellij', ['--session', sessionName, 'action', 'query-tab-names'], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let stdout = '';
+    proc.stdout?.on('data', (data: Buffer) => {
+      stdout += data.toString();
+    });
+
+    // Add timeout to prevent hanging
+    const timeout = setTimeout(() => {
+      proc.kill();
+      console.warn('[zellij.tab] query-tab-names timed out');
+      resolve([]);
+    }, 3000);
+
+    proc.on('exit', (code: number | null) => {
+      clearTimeout(timeout);
+      if (code === 0) {
+        const tabs = stdout
+          .split('\n')
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0);
+        resolve(tabs);
+      } else {
+        // On error, return empty - we'll try to create the tab
+        resolve([]);
+      }
+    });
+
+    proc.on('error', () => {
+      clearTimeout(timeout);
+      resolve([]);
+    });
+  });
+}
+
+/**
  * Execute a zellij action command
  *
  * Uses `zellij action` CLI to control the running session.
+ * For 'create' action, checks if tab exists first and focuses instead.
  */
 async function handleTabAction(action: string, tabName: string, cwd?: string): Promise<void> {
+  if (!currentSessionName) {
+    console.error('[zellij.tab] No session name set, cannot perform tab action');
+    return;
+  }
+
+  // For create action, check if tab already exists - if so, focus it instead
+  if (action === 'create') {
+    const existingTabs = await queryTabNames();
+    if (existingTabs.includes(tabName)) {
+      console.log(`[zellij.tab] Tab "${tabName}" already exists, focusing instead of creating`);
+      action = 'focus';
+    }
+  }
+
+  const sessionName = currentSessionName; // Capture for closure
   return new Promise((resolve, reject) => {
-    let args: string[];
+    // Build args with session specified
+    let actionArgs: string[];
 
     if (action === 'create') {
       // Create new tab with specified name and cwd
-      args = ['action', 'new-tab', '--name', tabName];
+      actionArgs = ['new-tab', '--name', tabName];
       if (cwd) {
-        args.push('--cwd', cwd);
+        actionArgs.push('--cwd', cwd);
       }
     } else if (action === 'focus') {
       // Focus existing tab by name
-      args = ['action', 'go-to-tab-name', tabName];
+      actionArgs = ['go-to-tab-name', tabName];
     } else {
       reject(new Error(`Unknown tab action: ${action}`));
       return;
     }
+
+    // Always specify --session to target correct Zellij instance
+    const args = ['--session', sessionName, 'action', ...actionArgs];
 
     console.log(`[zellij.tab] Executing: zellij ${args.join(' ')}`);
 
@@ -318,11 +435,19 @@ async function handleTabAction(action: string, tabName: string, cwd?: string): P
     });
 
     let stderr = '';
-    proc.stderr?.on('data', (data) => {
+    proc.stderr?.on('data', (data: Buffer) => {
       stderr += data.toString();
     });
 
-    proc.on('exit', (code) => {
+    // Add timeout to prevent hanging
+    const timeout = setTimeout(() => {
+      proc.kill();
+      console.error(`[zellij.tab] Tab action timed out: ${action} ${tabName}`);
+      reject(new Error(`zellij action timed out`));
+    }, 5000);
+
+    proc.on('exit', (code: number | null) => {
+      clearTimeout(timeout);
       if (code === 0) {
         console.log(`[zellij.tab] Tab action succeeded: ${action} ${tabName}`);
         resolve();
@@ -332,7 +457,8 @@ async function handleTabAction(action: string, tabName: string, cwd?: string): P
       }
     });
 
-    proc.on('error', (error) => {
+    proc.on('error', (error: Error) => {
+      clearTimeout(timeout);
       reject(error);
     });
   });
@@ -351,4 +477,5 @@ export function cleanupZellij(): void {
     feathersClient.io.disconnect();
     feathersClient = null;
   }
+  currentSessionName = null;
 }
