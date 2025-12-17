@@ -114,9 +114,11 @@ export function createSocketIOConfig(
           audience: 'https://agor.dev',
         }) as { sub: string; type?: string; role?: string };
 
-        // Allow both user access tokens and service tokens (used by executor)
+        // Allow user tokens and service tokens (used by executor)
+        // - undefined/access: User tokens (SessionTokenService doesn't set type claim)
+        // - service: Executor service tokens (for terminal streaming, git ops, etc.)
         const tokenType = decoded.type;
-        if (tokenType !== 'access' && tokenType !== 'service') {
+        if (tokenType !== undefined && tokenType !== 'access' && tokenType !== 'service') {
           return next(new Error('Invalid token type'));
         }
 

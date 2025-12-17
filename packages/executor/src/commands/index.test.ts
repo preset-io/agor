@@ -209,6 +209,7 @@ describe('executeCommand - zellij.attach', () => {
     command: 'zellij.attach',
     sessionToken: 'jwt-token',
     params: {
+      userId: '550e8400-e29b-41d4-a716-446655440000',
       sessionName: 'agor-session-123',
       cwd: '/data/agor/worktrees/repo/feature-x',
     },
@@ -221,19 +222,14 @@ describe('executeCommand - zellij.attach', () => {
     expect(result.data).toMatchObject({
       dryRun: true,
       command: 'zellij.attach',
+      userId: zellijPayload.params.userId,
       sessionName: zellijPayload.params.sessionName,
       cwd: zellijPayload.params.cwd,
     });
   });
 
-  it('should return NOT_IMPLEMENTED for zellij.attach without dry-run', async () => {
-    const result = await executeCommand(zellijPayload, { dryRun: false });
-
-    // zellij.attach is still Phase 5 - not yet implemented
-    expect(result.success).toBe(false);
-    expect(result.error?.code).toBe('NOT_IMPLEMENTED');
-    expect(result.error?.message).toContain('zellij.attach');
-  });
+  // Note: Non-dry-run execution requires daemon connection and node-pty
+  // which are not available in unit tests. Integration tests cover this.
 
   it('should include optional fields in dry-run response', async () => {
     const payloadWithOptions: ZellijAttachPayload = {
@@ -241,7 +237,8 @@ describe('executeCommand - zellij.attach', () => {
       params: {
         ...zellijPayload.params,
         tabName: 'feature-x',
-        create: true,
+        cols: 120,
+        rows: 40,
       },
     };
 
@@ -250,7 +247,8 @@ describe('executeCommand - zellij.attach', () => {
     expect(result.success).toBe(true);
     expect(result.data).toMatchObject({
       tabName: 'feature-x',
-      create: true,
+      cols: 120,
+      rows: 40,
     });
   });
 });
