@@ -55,6 +55,9 @@ interface MCPServerFormFieldsProps {
     toolCount: number;
     resourceCount: number;
     promptCount: number;
+    tools?: Array<{ name: string; description: string }>;
+    resources?: Array<{ name: string; uri: string }>;
+    prompts?: Array<{ name: string; description: string }>;
   } | null;
 }
 
@@ -366,46 +369,98 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
               rows={3}
             />
           </Form.Item>
+
+          {/* Test Connection - only for HTTP/SSE transport */}
+          {transport !== 'stdio' && (
+            <>
+              <div style={{ borderTop: '1px solid #303030', marginTop: 16, paddingTop: 16 }}>
+                <Space direction="vertical" style={{ width: '100%' }}>
+                  <Button
+                    type="default"
+                    icon={<ApiOutlined />}
+                    onClick={onTestConnection}
+                    loading={testing}
+                  >
+                    {testing ? 'Testing...' : 'Test Connection'}
+                  </Button>
+
+                  {testResult && testResult.success && (
+                    <div style={{ marginTop: 8 }}>
+                      <Alert
+                        type="success"
+                        message={`Connected: ${testResult.toolCount} tools, ${testResult.resourceCount} resources`}
+                        showIcon
+                        style={{ marginBottom: 8 }}
+                      />
+                      {testResult.tools && testResult.tools.length > 0 && (
+                        <div style={{ marginTop: 8 }}>
+                          <Typography.Text
+                            type="secondary"
+                            style={{ fontSize: 12, display: 'block', marginBottom: 4 }}
+                          >
+                            Tools:
+                          </Typography.Text>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                            {testResult.tools.map((tool) => (
+                              <Tag key={tool.name} color="blue" style={{ marginBottom: 4 }}>
+                                {tool.name}
+                              </Tag>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {testResult.resources && testResult.resources.length > 0 && (
+                        <div style={{ marginTop: 8 }}>
+                          <Typography.Text
+                            type="secondary"
+                            style={{ fontSize: 12, display: 'block', marginBottom: 4 }}
+                          >
+                            Resources:
+                          </Typography.Text>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                            {testResult.resources.map((resource) => (
+                              <Tag key={resource.uri} color="cyan" style={{ marginBottom: 4 }}>
+                                {resource.name}
+                              </Tag>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {testResult.prompts && testResult.prompts.length > 0 && (
+                        <div style={{ marginTop: 8 }}>
+                          <Typography.Text
+                            type="secondary"
+                            style={{ fontSize: 12, display: 'block', marginBottom: 4 }}
+                          >
+                            Prompts:
+                          </Typography.Text>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                            {testResult.prompts.map((prompt) => (
+                              <Tag key={prompt.name} color="purple" style={{ marginBottom: 4 }}>
+                                {prompt.name}
+                              </Tag>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {testResult && !testResult.success && (
+                    <Alert
+                      type="error"
+                      message="Connection failed"
+                      showIcon
+                      style={{ marginTop: 8 }}
+                    />
+                  )}
+                </Space>
+              </div>
+            </>
+          )}
         </>
       ),
     },
-    // Show Test Connection for HTTP/SSE transport (both create and edit modes)
-    ...(transport !== 'stdio'
-      ? [
-          {
-            key: 'test',
-            label: <Typography.Text strong>Test Connection</Typography.Text>,
-            children: (
-              <Space direction="vertical" style={{ width: '100%' }}>
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  Test the connection to verify your configuration works correctly.
-                </Typography.Text>
-                <Button
-                  type="default"
-                  icon={<ApiOutlined />}
-                  onClick={onTestConnection}
-                  loading={testing}
-                  block
-                >
-                  {testing ? 'Testing...' : 'Test Connection'}
-                </Button>
-                {testResult && (
-                  <Alert
-                    type={testResult.success ? 'success' : 'error'}
-                    message={
-                      testResult.success
-                        ? `Connection successful: ${testResult.toolCount} tools, ${testResult.resourceCount} resources, ${testResult.promptCount} prompts`
-                        : 'Connection failed'
-                    }
-                    showIcon
-                    style={{ marginTop: 8 }}
-                  />
-                )}
-              </Space>
-            ),
-          },
-        ]
-      : []),
   ];
 
   return (
@@ -440,6 +495,9 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     toolCount: number;
     resourceCount: number;
     promptCount: number;
+    tools?: Array<{ name: string; description: string }>;
+    resources?: Array<{ name: string; uri: string }>;
+    prompts?: Array<{ name: string; description: string }>;
   } | null>(null);
 
   // Sync editing server when mcpServerById updates (real-time WebSocket updates)
@@ -584,6 +642,9 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
         success: boolean;
         error?: string;
         capabilities?: { tools: number; resources: number; prompts: number };
+        tools?: Array<{ name: string; description: string }>;
+        resources?: Array<{ name: string; uri: string }>;
+        prompts?: Array<{ name: string; description: string }>;
       };
 
       if (data.success && data.capabilities) {
@@ -592,6 +653,9 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
           toolCount: data.capabilities.tools,
           resourceCount: data.capabilities.resources,
           promptCount: data.capabilities.prompts,
+          tools: data.tools,
+          resources: data.resources,
+          prompts: data.prompts,
         };
         setTestResult(result);
         showSuccess(

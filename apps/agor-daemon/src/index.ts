@@ -1172,6 +1172,19 @@ async function main() {
               resources: resourcesResult.resources.length,
               prompts: promptsResult.prompts.length,
             },
+            // Include tool/resource names for inline display
+            tools: toolsResult.tools.map((t) => ({
+              name: t.name,
+              description: t.description || '',
+            })),
+            resources: resourcesResult.resources.map((r) => ({
+              name: r.name,
+              uri: r.uri,
+            })),
+            prompts: promptsResult.prompts.map((p) => ({
+              name: p.name,
+              description: p.description || '',
+            })),
           };
         } finally {
           // Always close connection if it was established
