@@ -502,22 +502,15 @@ function AppContent() {
     if (!client) return;
 
     try {
-      showLoading('Sending prompt...', { key: 'prompt' });
-
       await client.service(`sessions/${sessionId}/prompt`).create({
         prompt,
         permissionMode,
       });
 
-      showSuccess('Response received!', { key: 'prompt' });
-
       // Clear the draft after sending
       handleClearDraft(sessionId);
     } catch (error) {
-      showError(
-        `Failed to send prompt: ${error instanceof Error ? error.message : String(error)}`,
-        { key: 'prompt' }
-      );
+      showError(`Failed to send prompt: ${error instanceof Error ? error.message : String(error)}`);
       console.error('Prompt error:', error);
     }
   };
