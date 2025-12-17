@@ -10,10 +10,15 @@
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdir, stat } from 'node:fs/promises';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { simpleGit } from 'simple-git';
-import { getDaemonUser, isWorktreeRbacEnabled } from '../config/config-manager';
+import {
+  getDaemonUser,
+  getReposDir,
+  getWorktreesDir,
+  isWorktreeRbacEnabled,
+} from '../config/config-manager';
 
 /**
  * Get git binary path
@@ -194,12 +199,8 @@ export interface CloneResult {
   defaultBranch: string;
 }
 
-/**
- * Get default Agor repos directory (~/.agor/repos)
- */
-export function getReposDir(): string {
-  return join(homedir(), '.agor', 'repos');
-}
+// Re-export path helpers from config-manager for backward compatibility
+export { getReposDir, getWorktreePath, getWorktreesDir } from '../config/config-manager';
 
 /**
  * Extract repo name from Git URL
@@ -408,20 +409,6 @@ export async function getRemoteUrl(
   } catch {
     return null;
   }
-}
-
-/**
- * Get worktrees directory (~/.agor/worktrees)
- */
-export function getWorktreesDir(): string {
-  return join(homedir(), '.agor', 'worktrees');
-}
-
-/**
- * Get path for a specific worktree
- */
-export function getWorktreePath(repoSlug: string, worktreeName: string): string {
-  return join(getWorktreesDir(), repoSlug, worktreeName);
 }
 
 export interface WorktreeInfo {
@@ -721,17 +708,17 @@ export async function deleteRepoDirectory(repoPath: string): Promise<void> {
 /**
  * Delete a worktree directory from filesystem
  *
- * Removes the worktree directory and all its contents from ~/.agor/worktrees/.
+ * Removes the worktree directory and all its contents from the worktrees directory.
  *
  * @param worktreePath - Absolute path to the worktree directory
- * @throws Error if the path is not inside ~/.agor/worktrees/ (safety check)
+ * @throws Error if the path is not inside the configured worktrees directory (safety check)
  */
 export async function deleteWorktreeDirectory(worktreePath: string): Promise<void> {
   const { rm } = await import('node:fs/promises');
   const { resolve, relative } = await import('node:path');
 
-  // Safety check: ensure we're only deleting from ~/.agor/worktrees/
-  const worktreesDir = join(homedir(), '.agor', 'worktrees');
+  // Safety check: ensure we're only deleting from configured worktrees directory
+  const worktreesDir = getWorktreesDir();
 
   // Resolve both paths to eliminate symlinks, '..' segments, etc.
   const resolvedWorktreePath = resolve(worktreePath);

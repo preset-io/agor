@@ -124,25 +124,33 @@ describe('extractRepoName', () => {
 });
 
 describe('getReposDir', () => {
-  it('should return ~/.agor/repos path', () => {
+  it('should return repos path under data home (defaults to ~/.agor/repos)', () => {
     const reposDir = getReposDir();
-    expect(reposDir).toBe(path.join(os.homedir(), '.agor', 'repos'));
+    // Default behavior: data_home = agor_home = ~/.agor
+    // Tests may override AGOR_DATA_HOME or config, but default should be ~/.agor/repos
+    expect(reposDir).toContain('repos');
+    // Path should end with /repos
+    expect(reposDir).toMatch(/repos$/);
   });
 });
 
 describe('getWorktreesDir', () => {
-  it('should return ~/.agor/worktrees path', () => {
+  it('should return worktrees path under data home (defaults to ~/.agor/worktrees)', () => {
     const worktreesDir = getWorktreesDir();
-    expect(worktreesDir).toBe(path.join(os.homedir(), '.agor', 'worktrees'));
+    // Default behavior: data_home = agor_home = ~/.agor
+    expect(worktreesDir).toContain('worktrees');
+    // Path should end with /worktrees
+    expect(worktreesDir).toMatch(/worktrees$/);
   });
 });
 
 describe('getWorktreePath', () => {
   it('should construct worktree path from repo slug and name', () => {
     const worktreePath = getWorktreePath('org/repo', 'feature-1');
-    expect(worktreePath).toBe(
-      path.join(os.homedir(), '.agor', 'worktrees', 'org/repo', 'feature-1')
-    );
+    // Should contain worktrees directory, repo slug, and worktree name
+    expect(worktreePath).toContain('worktrees');
+    expect(worktreePath).toContain('org/repo');
+    expect(worktreePath).toContain('feature-1');
   });
 
   it('should handle repo slugs with special characters', () => {

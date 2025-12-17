@@ -181,6 +181,34 @@ export interface AgorExecutionSettings {
 }
 
 /**
+ * Path configuration settings
+ *
+ * Allows separation of daemon operating files from git data files.
+ * This enables different storage backends (e.g., local SSD for daemon, EFS for worktrees).
+ *
+ * @see context/explorations/executor-expansion.md
+ */
+export interface AgorPathSettings {
+  /**
+   * Git data directory (repos, worktrees)
+   *
+   * When set, repos and worktrees are stored here instead of under agor_home.
+   * Useful for k8s deployments where worktrees need to be on shared storage (EFS).
+   *
+   * Default: same as agor_home (~/.agor)
+   *
+   * Environment variable: AGOR_DATA_HOME (takes precedence over config)
+   *
+   * @example
+   * ```yaml
+   * paths:
+   *   data_home: /data/agor
+   * ```
+   */
+  data_home?: string;
+}
+
+/**
  * Supported credential keys (enum for type safety)
  */
 export enum CredentialKey {
@@ -231,6 +259,9 @@ export interface AgorConfig {
   /** Execution isolation settings */
   execution?: AgorExecutionSettings;
 
+  /** Path configuration (data_home for repos/worktrees separation) */
+  paths?: AgorPathSettings;
+
   /** Tool credentials (API keys, tokens) */
   credentials?: AgorCredentials;
 }
@@ -247,4 +278,5 @@ export type ConfigKey =
   | `opencode.${keyof AgorOpenCodeSettings}`
   | `codex.${keyof AgorCodexSettings}`
   | `execution.${keyof AgorExecutionSettings}`
+  | `paths.${keyof AgorPathSettings}`
   | `credentials.${keyof AgorCredentials}`;

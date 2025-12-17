@@ -14,7 +14,11 @@ import {
   getConfigPath,
   getConfigValue,
   getDaemonUrl,
+  getDataHome,
   getDefaultConfig,
+  getReposDir,
+  getWorktreePath,
+  getWorktreesDir,
   initConfig,
   loadConfig,
   resolveCodexHome,
@@ -686,5 +690,210 @@ describe('getDaemonUrl', () => {
 
     const url = await getDaemonUrl();
     expect(url).toBe('https://custom-daemon.example.com:8443');
+  });
+});
+
+// =============================================================================
+// Data Home Path Resolution Tests
+// =============================================================================
+
+describe('getDataHome', () => {
+  let tempDir: string;
+  let originalEnv: NodeJS.ProcessEnv;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-test-'));
+    vi.spyOn(os, 'homedir').mockReturnValue(tempDir);
+
+    // Save original env
+    originalEnv = { ...process.env };
+    // Clear relevant env vars
+    delete process.env.AGOR_DATA_HOME;
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+
+    // Restore env
+    process.env = originalEnv;
+  });
+
+  it('should default to AGOR_HOME (~/.agor) when no config or env var set', () => {
+    const dataHome = getDataHome();
+    expect(dataHome).toBe(path.join(tempDir, '.agor'));
+  });
+
+  it('should use paths.data_home from config when set', async () => {
+    const config: AgorConfig = {
+      paths: { data_home: '/data/agor' },
+    };
+    const agorDir = path.join(tempDir, '.agor');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(path.join(agorDir, 'config.yaml'), yaml.dump(config), 'utf-8');
+
+    const dataHome = getDataHome();
+    expect(dataHome).toBe('/data/agor');
+  });
+
+  it('should expand tilde in paths.data_home', async () => {
+    const config: AgorConfig = {
+      paths: { data_home: '~/custom-data' },
+    };
+    const agorDir = path.join(tempDir, '.agor');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(path.join(agorDir, 'config.yaml'), yaml.dump(config), 'utf-8');
+
+    const dataHome = getDataHome();
+    expect(dataHome).toBe(path.join(tempDir, 'custom-data'));
+  });
+
+  it('should prioritize AGOR_DATA_HOME env var over config', async () => {
+    const config: AgorConfig = {
+      paths: { data_home: '/config-path' },
+    };
+    const agorDir = path.join(tempDir, '.agor');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(path.join(agorDir, 'config.yaml'), yaml.dump(config), 'utf-8');
+
+    process.env.AGOR_DATA_HOME = '/env-path';
+
+    const dataHome = getDataHome();
+    expect(dataHome).toBe('/env-path');
+  });
+
+  it('should expand tilde in AGOR_DATA_HOME env var', () => {
+    process.env.AGOR_DATA_HOME = '~/env-data';
+
+    const dataHome = getDataHome();
+    expect(dataHome).toBe(path.join(tempDir, 'env-data'));
+  });
+});
+
+describe('getReposDir', () => {
+  let tempDir: string;
+  let originalEnv: NodeJS.ProcessEnv;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-test-'));
+    vi.spyOn(os, 'homedir').mockReturnValue(tempDir);
+    originalEnv = { ...process.env };
+    delete process.env.AGOR_DATA_HOME;
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+    process.env = originalEnv;
+  });
+
+  it('should return repos path under data home', () => {
+    const reposDir = getReposDir();
+    expect(reposDir).toBe(path.join(tempDir, '.agor', 'repos'));
+  });
+
+  it('should use custom data_home for repos path', async () => {
+    const config: AgorConfig = {
+      paths: { data_home: '/custom/data' },
+    };
+    const agorDir = path.join(tempDir, '.agor');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(path.join(agorDir, 'config.yaml'), yaml.dump(config), 'utf-8');
+
+    const reposDir = getReposDir();
+    expect(reposDir).toBe('/custom/data/repos');
+  });
+
+  it('should use AGOR_DATA_HOME env var for repos path', () => {
+    process.env.AGOR_DATA_HOME = '/env/data';
+
+    const reposDir = getReposDir();
+    expect(reposDir).toBe('/env/data/repos');
+  });
+});
+
+describe('getWorktreesDir', () => {
+  let tempDir: string;
+  let originalEnv: NodeJS.ProcessEnv;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-test-'));
+    vi.spyOn(os, 'homedir').mockReturnValue(tempDir);
+    originalEnv = { ...process.env };
+    delete process.env.AGOR_DATA_HOME;
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+    process.env = originalEnv;
+  });
+
+  it('should return worktrees path under data home', () => {
+    const worktreesDir = getWorktreesDir();
+    expect(worktreesDir).toBe(path.join(tempDir, '.agor', 'worktrees'));
+  });
+
+  it('should use custom data_home for worktrees path', async () => {
+    const config: AgorConfig = {
+      paths: { data_home: '/custom/data' },
+    };
+    const agorDir = path.join(tempDir, '.agor');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(path.join(agorDir, 'config.yaml'), yaml.dump(config), 'utf-8');
+
+    const worktreesDir = getWorktreesDir();
+    expect(worktreesDir).toBe('/custom/data/worktrees');
+  });
+
+  it('should use AGOR_DATA_HOME env var for worktrees path', () => {
+    process.env.AGOR_DATA_HOME = '/env/data';
+
+    const worktreesDir = getWorktreesDir();
+    expect(worktreesDir).toBe('/env/data/worktrees');
+  });
+});
+
+describe('getWorktreePath', () => {
+  let tempDir: string;
+  let originalEnv: NodeJS.ProcessEnv;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-test-'));
+    vi.spyOn(os, 'homedir').mockReturnValue(tempDir);
+    originalEnv = { ...process.env };
+    delete process.env.AGOR_DATA_HOME;
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+    process.env = originalEnv;
+  });
+
+  it('should construct worktree path from repo slug and name', () => {
+    const worktreePath = getWorktreePath('org/repo', 'feature-branch');
+    expect(worktreePath).toBe(
+      path.join(tempDir, '.agor', 'worktrees', 'org/repo', 'feature-branch')
+    );
+  });
+
+  it('should use custom data_home for worktree path', async () => {
+    const config: AgorConfig = {
+      paths: { data_home: '/custom/data' },
+    };
+    const agorDir = path.join(tempDir, '.agor');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(path.join(agorDir, 'config.yaml'), yaml.dump(config), 'utf-8');
+
+    const worktreePath = getWorktreePath('org/repo', 'feature-branch');
+    expect(worktreePath).toBe('/custom/data/worktrees/org/repo/feature-branch');
+  });
+
+  it('should use AGOR_DATA_HOME env var for worktree path', () => {
+    process.env.AGOR_DATA_HOME = '/env/data';
+
+    const worktreePath = getWorktreePath('org/repo', 'feature-branch');
+    expect(worktreePath).toBe('/env/data/worktrees/org/repo/feature-branch');
   });
 });

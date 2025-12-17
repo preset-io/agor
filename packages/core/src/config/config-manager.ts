@@ -184,6 +184,7 @@ export async function getConfigValue(key: string): Promise<string | boolean | nu
     ui: { ...defaults.ui, ...config.ui },
     codex: { ...defaults.codex, ...config.codex },
     execution: { ...defaults.execution, ...config.execution },
+    paths: { ...defaults.paths, ...config.paths },
   };
 
   const parts = key.split('.');
@@ -428,4 +429,148 @@ export function isWorktreeRbacEnabled(): boolean {
   } catch {
     return false;
   }
+}
+
+// =============================================================================
+// Data Home Path Resolution
+// =============================================================================
+//
+// AGOR_HOME vs AGOR_DATA_HOME:
+//
+// AGOR_HOME (~/.agor by default):
+//   - Daemon operating files: config.yaml, agor.db, logs/
+//   - Fast local storage (SSD)
+//
+// AGOR_DATA_HOME (defaults to AGOR_HOME):
+//   - Git data: repos/, worktrees/
+//   - Can be shared storage (EFS) for k8s deployments
+//
+// Priority (highest to lowest):
+//   1. AGOR_DATA_HOME environment variable
+//   2. paths.data_home in config.yaml
+//   3. AGOR_HOME (backward compatible default)
+//
+// @see context/explorations/executor-expansion.md
+// =============================================================================
+
+/**
+ * Get Agor data home directory
+ *
+ * This is where git repos and worktrees are stored.
+ * Defaults to AGOR_HOME for backward compatibility.
+ *
+ * Resolution order:
+ * 1. AGOR_DATA_HOME environment variable (highest priority)
+ * 2. paths.data_home from config.yaml
+ * 3. AGOR_HOME (same as getAgorHome(), backward compatible)
+ *
+ * @returns Absolute path to data home directory
+ *
+ * @example
+ * ```ts
+ * // Default (no config): ~/.agor
+ * // With AGOR_DATA_HOME=/data/agor: /data/agor
+ * // With paths.data_home: /mnt/efs/agor
+ * const dataHome = getDataHome();
+ * ```
+ */
+export function getDataHome(): string {
+  // 1. Environment variable takes highest priority
+  if (process.env.AGOR_DATA_HOME) {
+    return expandHomePath(process.env.AGOR_DATA_HOME);
+  }
+
+  // 2. Check config file
+  try {
+    const config = loadConfigSync();
+    if (config.paths?.data_home) {
+      return expandHomePath(config.paths.data_home);
+    }
+  } catch {
+    // Config load failed, fall through to default
+  }
+
+  // 3. Default to AGOR_HOME (backward compatible)
+  return getAgorHome();
+}
+
+/**
+ * Get repos directory path
+ *
+ * Returns: $AGOR_DATA_HOME/repos
+ *
+ * @returns Absolute path to repos directory
+ */
+export function getReposDir(): string {
+  return path.join(getDataHome(), 'repos');
+}
+
+/**
+ * Get worktrees directory path
+ *
+ * Returns: $AGOR_DATA_HOME/worktrees
+ *
+ * @returns Absolute path to worktrees directory
+ */
+export function getWorktreesDir(): string {
+  return path.join(getDataHome(), 'worktrees');
+}
+
+/**
+ * Get path for a specific worktree
+ *
+ * Returns: $AGOR_DATA_HOME/worktrees/<repoSlug>/<worktreeName>
+ *
+ * @param repoSlug - Repository slug (e.g., "preset-io/agor")
+ * @param worktreeName - Worktree name (e.g., "feature-x")
+ * @returns Absolute path to the worktree
+ */
+export function getWorktreePath(repoSlug: string, worktreeName: string): string {
+  return path.join(getWorktreesDir(), repoSlug, worktreeName);
+}
+
+/**
+ * Get data home directory (async version)
+ *
+ * Same as getDataHome() but loads config asynchronously.
+ * Prefer this in async contexts to avoid blocking.
+ *
+ * @returns Absolute path to data home directory
+ */
+export async function getDataHomeAsync(): Promise<string> {
+  // 1. Environment variable takes highest priority
+  if (process.env.AGOR_DATA_HOME) {
+    return expandHomePath(process.env.AGOR_DATA_HOME);
+  }
+
+  // 2. Check config file
+  try {
+    const config = await loadConfig();
+    if (config.paths?.data_home) {
+      return expandHomePath(config.paths.data_home);
+    }
+  } catch {
+    // Config load failed, fall through to default
+  }
+
+  // 3. Default to AGOR_HOME (backward compatible)
+  return getAgorHome();
+}
+
+/**
+ * Get repos directory path (async version)
+ *
+ * @returns Absolute path to repos directory
+ */
+export async function getReposDirAsync(): Promise<string> {
+  return path.join(await getDataHomeAsync(), 'repos');
+}
+
+/**
+ * Get worktrees directory path (async version)
+ *
+ * @returns Absolute path to worktrees directory
+ */
+export async function getWorktreesDirAsync(): Promise<string> {
+  return path.join(await getDataHomeAsync(), 'worktrees');
 }
