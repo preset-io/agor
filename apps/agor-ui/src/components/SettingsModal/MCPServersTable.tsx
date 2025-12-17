@@ -369,7 +369,8 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
         </>
       ),
     },
-    ...(mode === 'edit' && transport !== 'stdio'
+    // Show Test Connection for HTTP/SSE transport (both create and edit modes)
+    ...(transport !== 'stdio'
       ? [
           {
             key: 'test',
@@ -515,9 +516,24 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       });
   };
 
-  const handleTestConnection = async (serverId: string) => {
+  // Test connection using current form values (not saved config)
+  // If serverId is provided, capabilities will be persisted after successful test
+  const handleTestConnection = async (serverId?: string) => {
     if (!client) {
       showError('Client not available');
+      return;
+    }
+
+    const values = form.getFieldsValue();
+
+    // Validate required fields for connection test
+    if (!values.url) {
+      showError('URL is required to test connection');
+      return;
+    }
+
+    if (values.transport === 'stdio') {
+      showError('Connection test is not available for stdio transport');
       return;
     }
 
@@ -525,9 +541,46 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     setTestResult(null);
 
     try {
-      const data = (await client.service('mcp-servers/discover').create({
-        mcp_server_id: serverId,
-      })) as {
+      // Build auth config from form values
+      let auth:
+        | {
+            type: 'none' | 'bearer' | 'jwt';
+            token?: string;
+            api_url?: string;
+            api_token?: string;
+            api_secret?: string;
+          }
+        | undefined;
+
+      if (values.auth_type && values.auth_type !== 'none') {
+        auth = { type: values.auth_type };
+        if (values.auth_type === 'bearer') {
+          auth.token = values.auth_token;
+        } else if (values.auth_type === 'jwt') {
+          auth.api_url = values.jwt_api_url;
+          auth.api_token = values.jwt_api_token;
+          auth.api_secret = values.jwt_api_secret;
+        }
+      }
+
+      // Send form values for testing (optionally with serverId to persist results)
+      const requestData: {
+        mcp_server_id?: string;
+        url: string;
+        transport: 'http' | 'sse';
+        auth?: typeof auth;
+      } = {
+        url: values.url,
+        transport: values.transport || 'http',
+        auth,
+      };
+
+      // Include server ID if editing existing server (to persist discovered capabilities)
+      if (serverId) {
+        requestData.mcp_server_id = serverId;
+      }
+
+      const data = (await client.service('mcp-servers/discover').create(requestData)) as {
         success: boolean;
         error?: string;
         capabilities?: { tools: number; resources: number; prompts: number };
@@ -849,6 +902,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
           setCreateModalOpen(false);
           setTransport('stdio');
           setAuthType('none');
+          setTestResult(null);
         }}
         okText="Create"
         width={600}
@@ -862,6 +916,9 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
             onAuthTypeChange={setAuthType}
             form={form}
             client={client}
+            onTestConnection={() => handleTestConnection()}
+            testing={testing}
+            testResult={testResult}
           />
         </Form>
       </Modal>
