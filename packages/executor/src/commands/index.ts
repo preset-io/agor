@@ -13,7 +13,13 @@ import type {
   PromptPayload,
   ZellijAttachPayload,
 } from '../payload-types.js';
-import { handleGitClone, handleGitWorktreeAdd, handleGitWorktreeRemove } from './git.js';
+import {
+  handleGitClone,
+  handleGitWorktreeAdd,
+  handleGitWorktreeClean,
+  handleGitWorktreeRemove,
+} from './git.js';
+import { handleUnixSyncRepo, handleUnixSyncUser, handleUnixSyncWorktree } from './unix.js';
 
 export interface CommandOptions {
   /** Dry run mode - don't actually execute */
@@ -179,4 +185,8 @@ registerCommand('prompt', handlePromptCommand);
 registerCommand('git.clone', handleGitClone);
 registerCommand('git.worktree.add', handleGitWorktreeAdd);
 registerCommand('git.worktree.remove', handleGitWorktreeRemove);
+registerCommand('git.worktree.clean', handleGitWorktreeClean);
+registerCommand('unix.sync-repo', handleUnixSyncRepo);
+registerCommand('unix.sync-worktree', handleUnixSyncWorktree);
+registerCommand('unix.sync-user', handleUnixSyncUser);
 registerCommand('zellij.attach', handleZellijAttachCommand);

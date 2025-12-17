@@ -87,7 +87,7 @@ export type PromptPayload = z.infer<typeof PromptPayloadSchema>;
  * When createDbRecord is true (default), the executor will:
  * 1. Clone the repository to outputPath
  * 2. Create a repo record in the database via Feathers
- * 3. Initialize Unix group (if RBAC enabled)
+ * 3. Initialize Unix group (if initUnixGroup is true)
  */
 export const GitClonePayloadSchema = BasePayloadSchema.extend({
   command: z.literal('git.clone'),
@@ -113,6 +113,12 @@ export const GitClonePayloadSchema = BasePayloadSchema.extend({
 
     /** Create DB record after clone (default: true) */
     createDbRecord: z.boolean().optional().default(true),
+
+    /** Initialize Unix group for repo isolation (default: false, requires RBAC enabled) */
+    initUnixGroup: z.boolean().optional().default(false),
+
+    /** Daemon Unix user to add to the repo group (for daemon access) */
+    daemonUser: z.string().optional(),
   }),
 });
 
@@ -123,12 +129,13 @@ export type GitClonePayload = z.infer<typeof GitClonePayloadSchema>;
 // ═══════════════════════════════════════════════════════════
 
 /**
- * Git worktree add payload - create worktree with full Unix setup
+ * Git worktree add payload - create worktree filesystem
  *
- * When createDbRecord is true (default), the executor will:
- * 1. Create the git worktree at worktreePath
- * 2. Create a worktree record in the database via Feathers
- * 3. Set up Unix group/ACLs (if RBAC enabled)
+ * The daemon creates the DB record BEFORE calling this (with filesystem_status: 'creating').
+ * The executor:
+ * 1. Creates the git worktree at worktreePath
+ * 2. Sets up Unix group/ACLs (if initUnixGroup is true)
+ * 3. Patches the worktree record to filesystem_status: 'ready' (or 'failed')
  */
 export const GitWorktreeAddPayloadSchema = BasePayloadSchema.extend({
   command: z.literal('git.worktree.add'),
@@ -137,7 +144,10 @@ export const GitWorktreeAddPayloadSchema = BasePayloadSchema.extend({
   sessionToken: z.string(),
 
   params: z.object({
-    /** Repo ID (UUID) - required for DB record creation */
+    /** Worktree ID (UUID) - DB record already exists with filesystem_status: 'creating' */
+    worktreeId: z.string().uuid(),
+
+    /** Repo ID (UUID) */
     repoId: z.string().uuid(),
 
     /** Path to the repository */
@@ -158,11 +168,17 @@ export const GitWorktreeAddPayloadSchema = BasePayloadSchema.extend({
     /** Create new branch */
     createBranch: z.boolean().optional(),
 
-    /** Board ID to associate worktree with (optional) */
-    boardId: z.string().uuid().optional(),
+    /** Initialize Unix group for worktree isolation (default: false, requires RBAC enabled) */
+    initUnixGroup: z.boolean().optional().default(false),
 
-    /** Create DB record after worktree creation (default: true) */
-    createDbRecord: z.boolean().optional().default(true),
+    /** Access level for non-owners ('none' | 'read' | 'write') */
+    othersAccess: z.enum(['none', 'read', 'write']).optional().default('read'),
+
+    /** Daemon Unix user to add to the worktree group (for daemon access) */
+    daemonUser: z.string().optional(),
+
+    /** Repo Unix group name (for fixing .git/worktrees permissions) */
+    repoUnixGroup: z.string().optional(),
   }),
 });
 
@@ -202,6 +218,137 @@ export const GitWorktreeRemovePayloadSchema = BasePayloadSchema.extend({
 });
 
 export type GitWorktreeRemovePayload = z.infer<typeof GitWorktreeRemovePayloadSchema>;
+
+// ═══════════════════════════════════════════════════════════
+// Git Worktree Clean Payload
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * Git worktree clean payload - remove untracked files and build artifacts
+ *
+ * Runs `git clean -fdx` which removes:
+ * - Untracked files and directories
+ * - Ignored files (node_modules, build artifacts, etc.)
+ *
+ * Preserves:
+ * - .git directory
+ * - Tracked files
+ * - Git state (commits, branches)
+ */
+export const GitWorktreeCleanPayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('git.worktree.clean'),
+
+  /** JWT for Feathers authentication */
+  sessionToken: z.string(),
+
+  params: z.object({
+    /** Path to the worktree to clean */
+    worktreePath: z.string(),
+  }),
+});
+
+export type GitWorktreeCleanPayload = z.infer<typeof GitWorktreeCleanPayloadSchema>;
+
+// ═══════════════════════════════════════════════════════════
+// Unix Sync Payloads - High-Level Sync Operations
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * Unix sync-worktree payload - Sync all Unix state for a worktree
+ *
+ * This is a high-level "sync" operation that handles everything:
+ * - Ensure worktree Unix group exists
+ * - Set correct permissions based on others_fs_access
+ * - Add all current owners to the worktree group
+ * - Add owners to repo group (for .git/ access)
+ * - Fix .git/worktrees/<name>/ permissions
+ * - Create symlinks in user home directories
+ *
+ * Idempotent: Safe to call multiple times. Executor figures out the delta.
+ * Fire-and-forget: Daemon calls this and returns immediately.
+ */
+export const UnixSyncWorktreePayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('unix.sync-worktree'),
+
+  /** JWT for Feathers authentication */
+  sessionToken: z.string(),
+
+  params: z.object({
+    /** Worktree ID to sync */
+    worktreeId: z.string().uuid(),
+
+    /** Daemon Unix user (added to all groups for daemon access) */
+    daemonUser: z.string().optional(),
+
+    /** If true, delete the group instead of syncing (for worktree removal) */
+    delete: z.boolean().optional(),
+  }),
+});
+
+export type UnixSyncWorktreePayload = z.infer<typeof UnixSyncWorktreePayloadSchema>;
+
+/**
+ * Unix sync-repo payload - Sync all Unix state for a repo
+ *
+ * This handles:
+ * - Ensure repo Unix group exists
+ * - Set correct permissions on .git/ directory
+ * - Add all worktree owners to repo group
+ *
+ * Idempotent: Safe to call multiple times.
+ */
+export const UnixSyncRepoPayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('unix.sync-repo'),
+
+  /** JWT for Feathers authentication */
+  sessionToken: z.string(),
+
+  params: z.object({
+    /** Repo ID to sync */
+    repoId: z.string().uuid(),
+
+    /** Daemon Unix user (added to repo group for daemon access) */
+    daemonUser: z.string().optional(),
+
+    /** If true, delete the group instead of syncing (for repo removal) */
+    delete: z.boolean().optional(),
+  }),
+});
+
+export type UnixSyncRepoPayload = z.infer<typeof UnixSyncRepoPayloadSchema>;
+
+/**
+ * Unix sync-user payload - Sync all Unix state for a user
+ *
+ * This handles:
+ * - Ensure Unix user exists with correct shell
+ * - Add to agor_users group
+ * - Sync password (if provided)
+ * - Setup home directory (~/.config/zellij, etc.)
+ * - Sync symlinks for all owned worktrees
+ */
+export const UnixSyncUserPayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('unix.sync-user'),
+
+  /** JWT for Feathers authentication */
+  sessionToken: z.string(),
+
+  params: z.object({
+    /** User ID to sync */
+    userId: z.string().uuid(),
+
+    /** Password to sync (optional, passed securely via stdin) */
+    password: z.string().optional(),
+
+    /** If true, delete the Unix user (for user removal) */
+    delete: z.boolean().optional(),
+
+    /** Also delete home directory when deleting user */
+    deleteHome: z.boolean().optional(),
+  }),
+});
+
+export type UnixSyncUserPayload = z.infer<typeof UnixSyncUserPayloadSchema>;
 
 // ═══════════════════════════════════════════════════════════
 // Zellij Attach Payload
@@ -245,6 +392,10 @@ export const ExecutorPayloadSchema = z.discriminatedUnion('command', [
   GitClonePayloadSchema,
   GitWorktreeAddPayloadSchema,
   GitWorktreeRemovePayloadSchema,
+  GitWorktreeCleanPayloadSchema,
+  UnixSyncWorktreePayloadSchema,
+  UnixSyncRepoPayloadSchema,
+  UnixSyncUserPayloadSchema,
   ZellijAttachPayloadSchema,
 ]);
 
@@ -291,7 +442,17 @@ export function parseExecutorPayload(json: string): ExecutorPayload {
  * Check if the payload command is supported
  */
 export function getSupportedCommands(): string[] {
-  return ['prompt', 'git.clone', 'git.worktree.add', 'git.worktree.remove', 'zellij.attach'];
+  return [
+    'prompt',
+    'git.clone',
+    'git.worktree.add',
+    'git.worktree.remove',
+    'git.worktree.clean',
+    'unix.sync-worktree',
+    'unix.sync-repo',
+    'unix.sync-user',
+    'zellij.attach',
+  ];
 }
 
 /**
@@ -324,6 +485,38 @@ export function isGitWorktreeRemovePayload(
   payload: ExecutorPayload
 ): payload is GitWorktreeRemovePayload {
   return payload.command === 'git.worktree.remove';
+}
+
+/**
+ * Type guard for GitWorktreeCleanPayload
+ */
+export function isGitWorktreeCleanPayload(
+  payload: ExecutorPayload
+): payload is GitWorktreeCleanPayload {
+  return payload.command === 'git.worktree.clean';
+}
+
+/**
+ * Type guard for UnixSyncWorktreePayload
+ */
+export function isUnixSyncWorktreePayload(
+  payload: ExecutorPayload
+): payload is UnixSyncWorktreePayload {
+  return payload.command === 'unix.sync-worktree';
+}
+
+/**
+ * Type guard for UnixSyncRepoPayload
+ */
+export function isUnixSyncRepoPayload(payload: ExecutorPayload): payload is UnixSyncRepoPayload {
+  return payload.command === 'unix.sync-repo';
+}
+
+/**
+ * Type guard for UnixSyncUserPayload
+ */
+export function isUnixSyncUserPayload(payload: ExecutorPayload): payload is UnixSyncUserPayload {
+  return payload.command === 'unix.sync-user';
 }
 
 /**

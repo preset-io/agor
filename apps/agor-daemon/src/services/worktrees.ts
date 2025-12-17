@@ -12,10 +12,19 @@ import { dirname, join } from 'node:path';
 import { createUserProcessEnvironment, ENVIRONMENT, PAGINATION } from '@agor/core/config';
 import { type Database, WorktreeRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import { cleanWorktree, removeWorktree } from '@agor/core/git';
-import type { BoardID, QueryParams, Repo, UUID, Worktree, WorktreeID } from '@agor/core/types';
+import type {
+  AuthenticatedParams,
+  BoardID,
+  QueryParams,
+  Repo,
+  UserID,
+  UUID,
+  Worktree,
+  WorktreeID,
+} from '@agor/core/types';
 import { getNextRunTime, validateCron } from '@agor/core/utils/cron';
 import { DrizzleService } from '../adapters/drizzle';
+import { getDaemonUrl, spawnExecutor } from '../utils/spawn-executor.js';
 
 /**
  * Worktree service params
@@ -200,6 +209,8 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
 
   /**
    * Override remove to support filesystem deletion
+   *
+   * Delegates filesystem removal to executor for Unix isolation.
    */
   async remove(id: WorktreeID, params?: WorktreeParams): Promise<Worktree> {
     const { deleteFromFilesystem } = params?.query || {};
@@ -211,21 +222,65 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     // CASCADE will clean up related comments automatically
     const result = await super.remove(id, params);
 
-    // Then remove from filesystem (slower operation, happens in background)
+    // Then remove from filesystem via executor (slower operation, happens in background)
     if (deleteFromFilesystem) {
-      // Note: We don't await this - it happens asynchronously after DB deletion
-      const repo = (await this.app.service('repos').get(worktree.repo_id, params)) as Repo;
-      console.log(`🗑️  Removing worktree from filesystem: ${worktree.path}`);
-      removeWorktree(repo.local_path, worktree.path)
-        .then(() => {
-          console.log(`✅ Worktree removed from filesystem successfully`);
-        })
-        .catch((error) => {
+      console.log(`🗑️  Spawning executor to remove worktree from filesystem: ${worktree.path}`);
+
+      // Generate session token for executor authentication
+      const userId = (params as AuthenticatedParams | undefined)?.user?.user_id as
+        | UserID
+        | undefined;
+      const appWithToken = this.app as unknown as {
+        sessionTokenService?: import('../services/session-token-service').SessionTokenService;
+      };
+
+      // Fire and forget - don't block on filesystem removal
+      (async () => {
+        try {
+          const sessionToken = appWithToken.sessionTokenService
+            ? await appWithToken.sessionTokenService.generateToken(
+                'worktree-remove',
+                userId || 'anonymous'
+              )
+            : '';
+
+          const execResult = await spawnExecutor(
+            {
+              command: 'git.worktree.remove',
+              sessionToken,
+              daemonUrl: getDaemonUrl(),
+              params: {
+                worktreeId: worktree.worktree_id,
+                worktreePath: worktree.path,
+                deleteDbRecord: false, // Already deleted above
+              },
+            },
+            {
+              logPrefix: `[WorktreesService.remove ${worktree.name}]`,
+              timeout: 2 * 60 * 1000, // 2 minutes
+            }
+          );
+
+          // Revoke session token
+          if (sessionToken) {
+            appWithToken.sessionTokenService?.revokeToken(sessionToken);
+          }
+
+          if (execResult.success) {
+            console.log(`✅ Worktree removed from filesystem successfully`);
+          } else {
+            console.error(
+              `⚠️  Executor failed to remove worktree from filesystem:`,
+              execResult.error?.message
+            );
+          }
+        } catch (error) {
           console.error(
-            `⚠️  Failed to remove worktree from filesystem:`,
+            `⚠️  Failed to spawn executor for worktree removal:`,
             error instanceof Error ? error.message : String(error)
           );
-        });
+        }
+      })();
     }
 
     return result as Worktree;
@@ -266,30 +321,97 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       }
     }
 
-    // Perform filesystem action first (before DB changes)
+    // Perform filesystem action via executor (before DB changes)
+    // Using executor ensures proper Unix isolation for file operations
+    const userId = (params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined;
+    const appWithToken = this.app as unknown as {
+      sessionTokenService?: import('../services/session-token-service').SessionTokenService;
+    };
+
     let filesRemoved = 0;
     if (filesystemAction === 'cleaned') {
-      console.log(`🧹 Cleaning worktree filesystem: ${worktree.path}`);
+      console.log(`🧹 Spawning executor to clean worktree filesystem: ${worktree.path}`);
       try {
-        const result = await cleanWorktree(worktree.path);
-        filesRemoved = result.filesRemoved;
-        console.log(`✅ Cleaned ${filesRemoved} files from ${worktree.name}`);
+        const sessionToken = appWithToken.sessionTokenService
+          ? await appWithToken.sessionTokenService.generateToken(
+              'worktree-clean',
+              userId || 'anonymous'
+            )
+          : '';
+
+        const execResult = await spawnExecutor(
+          {
+            command: 'git.worktree.clean',
+            sessionToken,
+            daemonUrl: getDaemonUrl(),
+            params: {
+              worktreePath: worktree.path,
+            },
+          },
+          {
+            logPrefix: `[WorktreesService.clean ${worktree.name}]`,
+            timeout: 5 * 60 * 1000, // 5 minutes for large worktrees
+          }
+        );
+
+        // Revoke session token
+        if (sessionToken) {
+          appWithToken.sessionTokenService?.revokeToken(sessionToken);
+        }
+
+        if (execResult.success) {
+          filesRemoved = (execResult.data as { filesRemoved?: number })?.filesRemoved ?? 0;
+          console.log(`✅ Cleaned ${filesRemoved} files from ${worktree.name}`);
+        } else {
+          console.error(`⚠️  Executor failed to clean worktree:`, execResult.error?.message);
+        }
       } catch (error) {
         console.error(
-          `⚠️  Failed to clean worktree:`,
+          `⚠️  Failed to spawn executor for worktree cleaning:`,
           error instanceof Error ? error.message : String(error)
         );
         // Continue with archive/delete even if clean fails
       }
     } else if (filesystemAction === 'deleted') {
-      console.log(`🗑️  Deleting worktree from filesystem: ${worktree.path}`);
+      console.log(`🗑️  Spawning executor to delete worktree from filesystem: ${worktree.path}`);
       try {
-        const repo = (await this.app.service('repos').get(worktree.repo_id, params)) as Repo;
-        await removeWorktree(repo.local_path, worktree.path);
-        console.log(`✅ Deleted worktree from filesystem: ${worktree.name}`);
+        const sessionToken = appWithToken.sessionTokenService
+          ? await appWithToken.sessionTokenService.generateToken(
+              'worktree-delete',
+              userId || 'anonymous'
+            )
+          : '';
+
+        const execResult = await spawnExecutor(
+          {
+            command: 'git.worktree.remove',
+            sessionToken,
+            daemonUrl: getDaemonUrl(),
+            params: {
+              worktreeId: worktree.worktree_id,
+              worktreePath: worktree.path,
+              deleteDbRecord: false, // Daemon handles DB deletion separately
+            },
+          },
+          {
+            logPrefix: `[WorktreesService.delete ${worktree.name}]`,
+            timeout: 2 * 60 * 1000, // 2 minutes
+          }
+        );
+
+        // Revoke session token
+        if (sessionToken) {
+          appWithToken.sessionTokenService?.revokeToken(sessionToken);
+        }
+
+        if (execResult.success) {
+          console.log(`✅ Deleted worktree from filesystem: ${worktree.name}`);
+        } else {
+          console.error(`⚠️  Executor failed to delete worktree:`, execResult.error?.message);
+        }
       } catch (error) {
         console.error(
-          `⚠️  Failed to delete worktree:`,
+          `⚠️  Failed to spawn executor for worktree deletion:`,
           error instanceof Error ? error.message : String(error)
         );
         // Continue with archive/delete even if filesystem deletion fails

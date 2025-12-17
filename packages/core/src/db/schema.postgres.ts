@@ -426,7 +426,7 @@ export const worktrees = pgTable(
     archived_at: t.timestamp('archived_at'),
     archived_by: varchar('archived_by', { length: 36 }),
     filesystem_status: text('filesystem_status', {
-      enum: ['preserved', 'cleaned', 'deleted'],
+      enum: ['creating', 'ready', 'failed', 'preserved', 'cleaned', 'deleted'],
     }),
 
     // RBAC: App-layer permissions (rbac.md)

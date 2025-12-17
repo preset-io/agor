@@ -3,6 +3,10 @@
  *
  * Provides REST + WebSocket API for repository management.
  * Uses DrizzleService adapter with RepoRepository.
+ *
+ * Git operations (clone, worktree add) are delegated to the executor process
+ * for proper Unix isolation. The executor handles filesystem operations while
+ * the daemon handles database records and business logic.
  */
 
 import { homedir } from 'node:os';
@@ -19,27 +23,19 @@ import {
 import { type Database, RepoRepository, WorktreeRepository } from '@agor/core/db';
 import { autoAssignWorktreeUniqueId } from '@agor/core/environment/variable-resolver';
 import type { Application } from '@agor/core/feathers';
-import {
-  cloneRepo,
-  getDefaultBranch,
-  getRemoteUrl,
-  getWorktreePath,
-  createWorktree as gitCreateWorktree,
-  isValidGitRepo,
-} from '@agor/core/git';
+import { getDefaultBranch, getRemoteUrl, getWorktreePath, isValidGitRepo } from '@agor/core/git';
 import { renderTemplate } from '@agor/core/templates/handlebars-helpers';
 import type {
   AuthenticatedParams,
   QueryParams,
   Repo,
   RepoEnvironmentConfig,
-  RepoID,
   RepoSlug,
   UserID,
   Worktree,
 } from '@agor/core/types';
-import type { UnixIntegrationService } from '@agor/core/unix';
 import { DrizzleService } from '../adapters/drizzle';
+import { getDaemonUrl, spawnExecutorFireAndForget } from '../utils/spawn-executor.js';
 
 /**
  * Repo service params
@@ -121,33 +117,21 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
   }
 
   /**
-   * Helper: Initialize repo Unix group if Unix integration is enabled
+   * Custom method: Clone repository (fire-and-forget)
    *
-   * Creates the repo group and sets .git permissions.
-   * Called after repo creation (clone or local add).
-   */
-  private async initializeRepoGroup(repoId: RepoID): Promise<void> {
-    const unixIntegration = this.app.get('unixIntegration') as UnixIntegrationService | undefined;
-    if (!unixIntegration?.isEnabled()) {
-      return;
-    }
-
-    try {
-      await unixIntegration.createRepoGroup(repoId);
-      console.log(`[Unix Integration] Created repo group for ${repoId.substring(0, 8)}`);
-    } catch (error) {
-      console.error('[Unix Integration] Failed to create repo group:', error);
-      // Don't fail the request - repo is already created, group can be synced later
-    }
-  }
-
-  /**
-   * Custom method: Clone repository
+   * Spawns executor to handle everything:
+   * - Git clone
+   * - Parse .agor.yml
+   * - Create DB record via Feathers
+   * - Initialize Unix group
+   *
+   * Returns immediately with { status: 'pending' }.
+   * Client receives 'repos.created' WebSocket event when complete.
    */
   async cloneRepository(
     data: { url: string; slug?: string; name?: string },
     params?: RepoParams
-  ): Promise<Repo> {
+  ): Promise<{ status: 'pending'; slug: string }> {
     const slug = data.slug ?? data.name;
     if (!slug) {
       throw new Error('Slug is required to clone a repository');
@@ -159,52 +143,48 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       throw new Error(`Repository '${slug}' already exists in database`);
     }
 
-    let userEnv: Record<string, string> | undefined;
+    // Resolve user environment for git credentials
+    let userEnv: Record<string, string> = {};
     const userId = (params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined;
 
     if (userId) {
-      userEnv = await resolveUserEnvironment(userId, this.db);
-    }
-    const result = await cloneRepo({
-      url: data.url,
-      bare: false,
-      env: userEnv,
-    });
-
-    // Auto-import .agor.yml if present
-    const agorYmlPath = path.join(result.path, '.agor.yml');
-    let environmentConfig: RepoEnvironmentConfig | null = null;
-
-    try {
-      environmentConfig = parseAgorYml(agorYmlPath);
-      if (environmentConfig) {
-        console.log(`✅ Loaded environment config from .agor.yml for ${slug}`);
-      }
-    } catch (error) {
-      console.warn(
-        `⚠️  Failed to parse .agor.yml for ${slug}:`,
-        error instanceof Error ? error.message : String(error)
-      );
+      userEnv = (await resolveUserEnvironment(userId, this.db)) || {};
     }
 
-    // Create database record
-    const repo = (await this.create(
+    // Generate session token for executor authentication
+    const appWithToken = this.app as unknown as {
+      sessionTokenService?: import('../services/session-token-service').SessionTokenService;
+    };
+    if (!appWithToken.sessionTokenService) {
+      throw new Error('Session token service not initialized');
+    }
+    const sessionToken = await appWithToken.sessionTokenService.generateToken(
+      'clone-operation',
+      userId || 'anonymous'
+    );
+
+    // Fire and forget - spawn executor and return immediately
+    // Executor handles EVERYTHING: git clone, .agor.yml parsing, DB record, Unix group
+    spawnExecutorFireAndForget(
       {
-        repo_type: 'remote',
-        slug,
-        name: data.name ?? result.repoName ?? slug,
-        remote_url: data.url,
-        local_path: result.path,
-        default_branch: result.defaultBranch,
-        environment_config: environmentConfig || undefined,
+        command: 'git.clone',
+        sessionToken,
+        daemonUrl: getDaemonUrl(),
+        env: userEnv,
+        params: {
+          url: data.url,
+          slug,
+          createDbRecord: true,
+          initUnixGroup: true, // Executor handles Unix group initialization
+        },
       },
-      params
-    )) as Repo;
+      {
+        logPrefix: `[clone ${slug}]`,
+      }
+    );
 
-    // Initialize Unix group for the repo (if enabled)
-    await this.initializeRepoGroup(repo.repo_id as RepoID);
-
-    return repo;
+    // Return immediately - client will receive WebSocket event when repo is created
+    return { status: 'pending', slug };
   }
 
   /**
@@ -283,14 +263,22 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       params
     )) as Repo;
 
-    // Initialize Unix group for the repo (if enabled)
-    await this.initializeRepoGroup(repo.repo_id as RepoID);
+    // TODO: Unix group initialization for local repos
+    // For local repos, Unix group init should also go through executor.
+    // Currently, local repos don't trigger git operations via executor,
+    // so we'd need a separate executor command (e.g., 'unix.init-repo-group').
+    // For now, local repos don't get Unix group isolation automatically.
+    // Use `agor admin sync-unix` to initialize groups for existing repos.
 
     return repo;
   }
 
   /**
    * Custom method: Create worktree
+   *
+   * Delegates git worktree add to executor process for Unix isolation.
+   * Executor handles filesystem operations, daemon handles DB record creation
+   * and template rendering.
    */
   async createWorktree(
     id: string,
@@ -324,44 +312,15 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       repoLocalPath: repo.local_path,
     });
 
-    let userEnv: Record<string, string> | undefined;
+    // Resolve user environment for git credentials
+    let userEnv: Record<string, string> = {};
     const userId = (params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined;
 
     if (userId) {
-      userEnv = await resolveUserEnvironment(userId, this.db);
+      userEnv = (await resolveUserEnvironment(userId, this.db)) || {};
     }
 
-    // Ensure authenticated user is in repo group BEFORE creating worktree
-    // This is required because gitCreateWorktree needs to read/write .git/config
-    // Note: The daemon user is already added to the repo group when it's created (see createRepoGroup)
-    // and by sync-unix for existing repos. Authenticated users need to be added dynamically.
-    const unixIntegration = this.app.get('unixIntegration') as UnixIntegrationService | undefined;
-    if (unixIntegration?.isEnabled() && userId) {
-      try {
-        // Add authenticated user to repo group (for their own file access)
-        await unixIntegration.addUserToRepoGroup(repo.repo_id, userId);
-        console.log(
-          `[Unix Integration] Added user ${userId.substring(0, 8)} to repo ${repo.repo_id.substring(0, 8)} group (pre-worktree-create)`
-        );
-      } catch (error) {
-        // Fail fast - without repo group access, gitCreateWorktree will fail with "permission denied"
-        throw new Error(
-          `Failed to grant repo access for worktree creation: ${error instanceof Error ? error.message : String(error)}`
-        );
-      }
-    }
-
-    await gitCreateWorktree(
-      repo.local_path,
-      worktreePath,
-      data.ref,
-      data.createBranch,
-      data.pullLatest,
-      data.sourceBranch,
-      userEnv,
-      data.refType
-    );
-
+    // Get existing worktrees to compute unique_id BEFORE creating the record
     const worktreesService = this.app.service('worktrees');
     const worktreesResult = await worktreesService.find({
       ...params,
@@ -427,6 +386,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         : undefined;
     }
 
+    // Create DB record EARLY with 'creating' status
+    // Executor will patch to 'ready' when git worktree add completes
     const worktree = (await worktreesService.create(
       {
         repo_id: repo.repo_id,
@@ -437,6 +398,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         base_ref: data.sourceBranch,
         new_branch: data.createBranch ?? false,
         worktree_unique_id: worktreeUniqueId,
+        filesystem_status: 'creating', // Will be set to 'ready' by executor
         start_command,
         stop_command,
         nuke_command,
@@ -481,6 +443,41 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       );
     }
 
+    // Fire-and-forget: spawn executor to create git worktree on filesystem
+    // Executor will patch filesystem_status to 'ready' when done (or 'failed' on error)
+    const appWithToken = this.app as unknown as {
+      sessionTokenService?: import('../services/session-token-service').SessionTokenService;
+    };
+    if (appWithToken.sessionTokenService) {
+      const sessionToken = await appWithToken.sessionTokenService.generateToken(
+        'worktree-operation',
+        userId || 'anonymous'
+      );
+
+      spawnExecutorFireAndForget(
+        {
+          command: 'git.worktree.add',
+          sessionToken,
+          daemonUrl: getDaemonUrl(),
+          env: userEnv,
+          params: {
+            worktreeId: worktree.worktree_id,
+            repoId: repo.repo_id,
+            repoPath: repo.local_path,
+            worktreeName: data.name,
+            worktreePath,
+            branch: data.ref,
+            sourceBranch: data.sourceBranch,
+            createBranch: data.createBranch,
+          },
+        },
+        { logPrefix: `[ReposService.createWorktree ${data.name}]` }
+      );
+    } else {
+      console.error('Session token service not initialized, cannot spawn executor');
+    }
+
+    // Return immediately with 'creating' status - UI will see updates via WebSocket
     return worktree;
   }
 

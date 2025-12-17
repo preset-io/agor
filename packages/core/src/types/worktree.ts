@@ -292,13 +292,21 @@ export interface Worktree {
   archived_by?: UUID;
 
   /**
-   * Filesystem state after archiving
+   * Filesystem status
    *
+   * Creation states:
+   * - 'creating': DB record created, git worktree add in progress
+   * - 'ready': Worktree fully created and ready to use
+   * - 'failed': Worktree creation failed (git worktree add error)
+   *
+   * Archive states (set when worktree is archived):
    * - 'preserved': Filesystem left untouched
    * - 'cleaned': git clean -fdx run (removes node_modules, build artifacts)
    * - 'deleted': Entire worktree directory deleted from disk
+   *
+   * Note: null/undefined means 'ready' for backward compatibility
    */
-  filesystem_status?: 'preserved' | 'cleaned' | 'deleted';
+  filesystem_status?: 'creating' | 'ready' | 'failed' | 'preserved' | 'cleaned' | 'deleted';
 
   // ===== RBAC: App-layer permissions (rbac.md) =====
 

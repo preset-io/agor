@@ -15,17 +15,30 @@
  * Feathers hooks handle WebSocket broadcasts automatically when records are created/updated.
  */
 
-import { cloneRepo, createWorktree, getReposDir, removeWorktree } from '@agor/core/git';
-import type { UUID } from '@agor/core/types';
+import { join } from 'node:path';
+import { parseAgorYml } from '@agor/core/config';
+import {
+  cleanWorktree,
+  cloneRepo,
+  createWorktree,
+  getReposDir,
+  removeWorktree,
+} from '@agor/core/git';
 import type {
   ExecutorResult,
   GitClonePayload,
   GitWorktreeAddPayload,
+  GitWorktreeCleanPayload,
   GitWorktreeRemovePayload,
 } from '../payload-types.js';
 import type { AgorClient } from '../services/feathers-client.js';
 import { createExecutorClient } from '../services/feathers-client.js';
 import type { CommandOptions } from './index.js';
+import {
+  fixWorktreeGitDirPermissions,
+  initializeRepoGroup,
+  initializeWorktreeGroup,
+} from './unix.js';
 
 /**
  * Resolve git credentials (GITHUB_TOKEN, GH_TOKEN)
@@ -145,8 +158,26 @@ export async function handleGitClone(
 
     // Create DB record if requested (default: true)
     let repoId: string | undefined;
+    let unixGroup: string | undefined;
 
     if (createDbRecord) {
+      // Parse .agor.yml for environment config (if present)
+      const agorYmlPath = join(cloneResult.path, '.agor.yml');
+      let environmentConfig: import('@agor/core/types').RepoEnvironmentConfig | null = null;
+
+      try {
+        const parsed = parseAgorYml(agorYmlPath);
+        if (parsed) {
+          environmentConfig = parsed;
+          console.log(`[git.clone] Loaded environment config from .agor.yml`);
+        }
+      } catch (error) {
+        console.warn(
+          `[git.clone] Failed to parse .agor.yml:`,
+          error instanceof Error ? error.message : String(error)
+        );
+      }
+
       console.log(`[git.clone] Creating repo record: slug=${slug}`);
 
       // Create repo via Feathers service
@@ -158,10 +189,31 @@ export async function handleGitClone(
         remote_url: payload.params.url,
         local_path: cloneResult.path,
         default_branch: cloneResult.defaultBranch,
+        ...(environmentConfig ? { environment_config: environmentConfig } : {}),
       });
 
       repoId = repoRecord.repo_id;
       console.log(`[git.clone] Repo record created: ${repoId}`);
+
+      // Initialize Unix group for repo isolation (if requested)
+      if (payload.params.initUnixGroup && repoId) {
+        try {
+          console.log(`[git.clone] Initializing Unix group for repo ${repoId.substring(0, 8)}`);
+          unixGroup = await initializeRepoGroup(
+            repoId,
+            cloneResult.path,
+            client,
+            payload.params.daemonUser
+          );
+          console.log(`[git.clone] Unix group initialized: ${unixGroup}`);
+        } catch (error) {
+          // Log but don't fail the entire operation
+          console.error(
+            `[git.clone] Failed to initialize Unix group:`,
+            error instanceof Error ? error.message : String(error)
+          );
+        }
+      }
     }
 
     return {
@@ -173,6 +225,7 @@ export async function handleGitClone(
         slug,
         repoId,
         dbRecordCreated: createDbRecord,
+        unixGroup,
       },
     };
   } catch (error) {
@@ -205,14 +258,15 @@ export async function handleGitClone(
 /**
  * Handle git.worktree.add command
  *
- * Creates a git worktree at the specified path and creates the database record.
- * This is a complete transaction - filesystem + DB in one atomic operation.
+ * Creates a git worktree at the specified path.
+ * The DB record is created by the daemon BEFORE this runs (with filesystem_status: 'creating').
+ * This handler patches the worktree to 'ready' when complete (or leaves as 'creating' on failure).
  */
 export async function handleGitWorktreeAdd(
   payload: GitWorktreeAddPayload,
   options: CommandOptions
 ): Promise<ExecutorResult> {
-  const createDbRecord = payload.params.createDbRecord ?? true;
+  const worktreeId = payload.params.worktreeId;
 
   // Dry run mode
   if (options.dryRun) {
@@ -221,6 +275,7 @@ export async function handleGitWorktreeAdd(
       data: {
         dryRun: true,
         command: 'git.worktree.add',
+        worktreeId,
         repoId: payload.params.repoId,
         repoPath: payload.params.repoPath,
         worktreeName: payload.params.worktreeName,
@@ -228,8 +283,6 @@ export async function handleGitWorktreeAdd(
         branch: payload.params.branch,
         sourceBranch: payload.params.sourceBranch,
         createBranch: payload.params.createBranch,
-        boardId: payload.params.boardId,
-        createDbRecord,
       },
     };
   }
@@ -253,14 +306,13 @@ export async function handleGitWorktreeAdd(
     const branch = payload.params.branch || worktreeName;
     const createBranch = payload.params.createBranch ?? false;
     const sourceBranch = payload.params.sourceBranch;
-    const boardId = payload.params.boardId;
 
     console.log(`[git.worktree.add] Creating worktree at ${worktreePath}...`);
     console.log(
       `[git.worktree.add] Repo: ${repoPath}, Branch: ${branch}, CreateBranch: ${createBranch}`
     );
 
-    // Create the git worktree
+    // Create the git worktree on filesystem
     await createWorktree(
       repoPath,
       worktreePath,
@@ -273,27 +325,44 @@ export async function handleGitWorktreeAdd(
 
     console.log(`[git.worktree.add] Worktree created at ${worktreePath}`);
 
-    // Create DB record if requested (default: true)
-    let worktreeId: string | undefined;
+    // Initialize Unix group for worktree isolation (if requested)
+    let unixGroup: string | undefined;
+    if (payload.params.initUnixGroup && worktreeId) {
+      try {
+        const othersAccess = payload.params.othersAccess || 'read';
+        console.log(
+          `[git.worktree.add] Initializing Unix group for worktree ${worktreeId.substring(0, 8)}`
+        );
+        unixGroup = await initializeWorktreeGroup(
+          worktreeId,
+          worktreePath,
+          othersAccess,
+          client,
+          payload.params.daemonUser
+        );
+        console.log(`[git.worktree.add] Unix group initialized: ${unixGroup}`);
 
-    if (createDbRecord) {
-      console.log(`[git.worktree.add] Creating worktree record: name=${worktreeName}`);
+        // Also fix permissions on the repo's .git/worktrees/<name>/ directory
+        if (payload.params.repoUnixGroup) {
+          await fixWorktreeGitDirPermissions(repoPath, worktreeName, payload.params.repoUnixGroup);
+        }
+      } catch (error) {
+        // Log but don't fail the entire operation
+        console.error(
+          `[git.worktree.add] Failed to initialize Unix group:`,
+          error instanceof Error ? error.message : String(error)
+        );
+      }
+    }
 
-      // Create worktree via Feathers service
-      // The daemon's worktrees service handles validation, hooks, and auto-assigns worktree_unique_id
-      const worktreeRecord = await client.service('worktrees').create({
-        repo_id: repoId as UUID,
-        name: worktreeName,
-        path: worktreePath,
-        ref: branch,
-        ref_type: 'branch',
-        base_ref: sourceBranch,
-        new_branch: createBranch,
-        board_id: boardId as UUID | undefined,
+    // Patch worktree status to 'ready' (DB record was created by daemon with 'creating')
+    if (worktreeId) {
+      console.log(`[git.worktree.add] Marking worktree ${worktreeId.substring(0, 8)} as ready`);
+      await client.service('worktrees').patch(worktreeId, {
+        filesystem_status: 'ready',
+        ...(unixGroup ? { unix_group: unixGroup } : {}),
       });
-
-      worktreeId = worktreeRecord.worktree_id;
-      console.log(`[git.worktree.add] Worktree record created: ${worktreeId}`);
+      console.log(`[git.worktree.add] Worktree marked as ready`);
     }
 
     return {
@@ -305,12 +374,27 @@ export async function handleGitWorktreeAdd(
         repoPath,
         repoId,
         worktreeId,
-        dbRecordCreated: createDbRecord,
+        unixGroup,
       },
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error('[git.worktree.add] Failed:', errorMessage);
+
+    // Try to mark worktree as failed (if we have a worktreeId and client)
+    if (worktreeId && client) {
+      try {
+        await client.service('worktrees').patch(worktreeId, {
+          filesystem_status: 'failed',
+        });
+        console.log(`[git.worktree.add] Marked worktree as failed`);
+      } catch (patchError) {
+        console.error(
+          '[git.worktree.add] Failed to mark worktree as failed:',
+          patchError instanceof Error ? patchError.message : String(patchError)
+        );
+      }
+    }
 
     return {
       success: false,
@@ -318,6 +402,7 @@ export async function handleGitWorktreeAdd(
         code: 'GIT_WORKTREE_ADD_FAILED',
         message: errorMessage,
         details: {
+          worktreeId,
           repoId: payload.params.repoId,
           repoPath: payload.params.repoPath,
           worktreeName: payload.params.worktreeName,
@@ -463,5 +548,62 @@ export async function handleGitWorktreeRemove(
         // Ignore disconnect errors
       }
     }
+  }
+}
+
+/**
+ * Handle git.worktree.clean command
+ *
+ * Removes untracked files and build artifacts from the worktree.
+ * Uses `git clean -fdx` which removes untracked files, directories,
+ * and ignored files (node_modules, build artifacts, etc.)
+ */
+export async function handleGitWorktreeClean(
+  payload: GitWorktreeCleanPayload,
+  options: CommandOptions
+): Promise<ExecutorResult> {
+  // Dry run mode
+  if (options.dryRun) {
+    return {
+      success: true,
+      data: {
+        dryRun: true,
+        command: 'git.worktree.clean',
+        worktreePath: payload.params.worktreePath,
+      },
+    };
+  }
+
+  try {
+    const worktreePath = payload.params.worktreePath;
+
+    console.log(`[git.worktree.clean] Cleaning worktree at ${worktreePath}...`);
+
+    // Clean the worktree
+    const result = await cleanWorktree(worktreePath);
+
+    console.log(`[git.worktree.clean] Cleaned ${result.filesRemoved} files from ${worktreePath}`);
+
+    return {
+      success: true,
+      data: {
+        worktreePath,
+        filesRemoved: result.filesRemoved,
+      },
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error('[git.worktree.clean] Failed:', errorMessage);
+
+    return {
+      success: false,
+      error: {
+        code: 'GIT_WORKTREE_CLEAN_FAILED',
+        message: errorMessage,
+        details: {
+          worktreePath: payload.params.worktreePath,
+        },
+      },
+    };
   }
 }

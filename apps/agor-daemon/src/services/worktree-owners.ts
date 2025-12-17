@@ -13,15 +13,19 @@
  * - Only worktree owners can manage other owners (requires 'all' permission)
  *
  * Unix Integration:
- * - When owners are added/removed, updates Unix groups and symlinks accordingly
+ * - When owners are added/removed, fire-and-forget sync to executor
  *
  * @see context/guides/rbac-and-unix-isolation.md
  */
 
 import type { WorktreeRepository } from '@agor/core/db';
 import { type Application, Forbidden, NotAuthenticated } from '@agor/core/feathers';
-import type { HookContext, RepoID, User, UUID, WorktreeID } from '@agor/core/types';
-import type { UnixIntegrationService } from '@agor/core/unix';
+import type { HookContext, User, UUID, WorktreeID } from '@agor/core/types';
+import {
+  createServiceToken,
+  getDaemonUrl,
+  spawnExecutorFireAndForget,
+} from '../utils/spawn-executor.js';
 
 interface WorktreeOwnerCreateData {
   user_id: string;
@@ -111,6 +115,16 @@ function requireWorktreeOwner(worktreeRepo: WorktreeRepository) {
 }
 
 /**
+ * Configuration options for worktree owners service
+ */
+export interface WorktreeOwnersServiceConfig {
+  /** JWT secret for creating service tokens (required for Unix integration) */
+  jwtSecret?: string;
+  /** Daemon Unix user (for group membership) */
+  daemonUser?: string;
+}
+
+/**
  * Setup worktree owners service
  *
  * Registers a single nested route: worktrees/:id/owners
@@ -118,7 +132,11 @@ function requireWorktreeOwner(worktreeRepo: WorktreeRepository) {
  * - POST /worktrees/:id/owners - Add an owner
  * - DELETE /worktrees/:id/owners/:userId - Remove an owner (userId passed as id parameter)
  */
-export function setupWorktreeOwnersService(app: Application, worktreeRepo: WorktreeRepository) {
+export function setupWorktreeOwnersService(
+  app: Application,
+  worktreeRepo: WorktreeRepository,
+  config: WorktreeOwnersServiceConfig = {}
+) {
   app.use(
     'worktrees/:id/owners',
     {
@@ -200,84 +218,72 @@ export function setupWorktreeOwnersService(app: Application, worktreeRepo: Workt
       remove: [requireWorktreeOwner(worktreeRepo)],
     },
     after: {
-      // After adding owner: add to worktree Unix group + add to repo group + create symlink
+      // After adding owner: fire-and-forget sync to executor
+      // The executor will handle adding user to worktree group, repo group, and creating symlinks
       create: [
         async (context: HookContext) => {
-          const unixIntegration = app.get('unixIntegration') as UnixIntegrationService | undefined;
-          if (!unixIntegration?.isEnabled()) {
+          // Skip if no jwtSecret (Unix integration not configured)
+          if (!config.jwtSecret) {
             return context;
           }
 
           // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
           const params = context.params as any;
           const worktreeId = params.route?.id as WorktreeID;
-          const userId = (context.data as WorktreeOwnerCreateData).user_id as UUID;
 
-          try {
-            // Add to worktree group
-            await unixIntegration.addUserToWorktreeGroup(worktreeId, userId);
-            console.log(
-              `[Unix Integration] Added user ${userId.substring(0, 8)} to worktree ${worktreeId.substring(0, 8)} group`
-            );
-
-            // Add to repo group (for .git access)
-            const worktree = await worktreeRepo.findById(worktreeId);
-            if (worktree?.repo_id) {
-              await unixIntegration.addUserToRepoGroup(worktree.repo_id as RepoID, userId);
-              console.log(
-                `[Unix Integration] Added user ${userId.substring(0, 8)} to repo ${worktree.repo_id.substring(0, 8)} group`
-              );
-            }
-          } catch (error) {
-            console.error('[Unix Integration] Failed to add user to groups:', error);
-            // Don't fail the request - app-layer ownership is already set
-          }
+          // Fire-and-forget sync to executor
+          // Syncing the worktree will pick up the new owner from the DB
+          console.log(
+            `[Unix Integration] Syncing worktree ${worktreeId.substring(0, 8)} after owner added`
+          );
+          const serviceToken = createServiceToken(config.jwtSecret);
+          spawnExecutorFireAndForget(
+            {
+              command: 'unix.sync-worktree',
+              sessionToken: serviceToken,
+              daemonUrl: getDaemonUrl(),
+              params: {
+                worktreeId,
+                daemonUser: config.daemonUser,
+              },
+            },
+            { logPrefix: '[Executor/worktree-owners.create]' }
+          );
 
           return context;
         },
       ],
-      // After removing owner: remove from worktree Unix group + conditionally remove from repo group + remove symlink
+      // After removing owner: fire-and-forget sync to executor
+      // The executor will handle removing user from groups and updating permissions
       remove: [
         async (context: HookContext) => {
-          const unixIntegration = app.get('unixIntegration') as UnixIntegrationService | undefined;
-          if (!unixIntegration?.isEnabled()) {
+          // Skip if no jwtSecret (Unix integration not configured)
+          if (!config.jwtSecret) {
             return context;
           }
 
           // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
           const params = context.params as any;
           const worktreeId = params.route?.id as WorktreeID;
-          const userId = context.id as UUID; // userId passed as id parameter
 
-          try {
-            // Remove from worktree group
-            await unixIntegration.removeUserFromWorktreeGroup(worktreeId, userId);
-            console.log(
-              `[Unix Integration] Removed user ${userId.substring(0, 8)} from worktree ${worktreeId.substring(0, 8)} group`
-            );
-
-            // Conditionally remove from repo group (only if user doesn't own any other worktrees in the repo)
-            const worktree = await worktreeRepo.findById(worktreeId);
-            if (worktree?.repo_id) {
-              const shouldRemainInRepoGroup = await unixIntegration.shouldUserBeInRepoGroup(
-                worktree.repo_id as RepoID,
-                userId
-              );
-              if (!shouldRemainInRepoGroup) {
-                await unixIntegration.removeUserFromRepoGroup(worktree.repo_id as RepoID, userId);
-                console.log(
-                  `[Unix Integration] Removed user ${userId.substring(0, 8)} from repo ${worktree.repo_id.substring(0, 8)} group`
-                );
-              } else {
-                console.log(
-                  `[Unix Integration] User ${userId.substring(0, 8)} still owns other worktrees in repo, keeping in repo group`
-                );
-              }
-            }
-          } catch (error) {
-            console.error('[Unix Integration] Failed to remove user from groups:', error);
-            // Don't fail the request - app-layer ownership is already removed
-          }
+          // Fire-and-forget sync to executor
+          // Syncing the worktree will handle the removed owner
+          console.log(
+            `[Unix Integration] Syncing worktree ${worktreeId.substring(0, 8)} after owner removed`
+          );
+          const serviceToken = createServiceToken(config.jwtSecret);
+          spawnExecutorFireAndForget(
+            {
+              command: 'unix.sync-worktree',
+              sessionToken: serviceToken,
+              daemonUrl: getDaemonUrl(),
+              params: {
+                worktreeId,
+                daemonUser: config.daemonUser,
+              },
+            },
+            { logPrefix: '[Executor/worktree-owners.remove]' }
+          );
 
           return context;
         },

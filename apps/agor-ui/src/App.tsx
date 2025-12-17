@@ -375,30 +375,7 @@ function AppContent() {
   // biome-ignore lint/suspicious/noExplicitAny: Config type from AgorApp component props
   const handleCreateSession = async (config: any, boardId: string) => {
     try {
-      let worktree_id = config.worktree_id;
-
-      // If creating a new worktree, create it first (with URLs included)
-      if (config.worktreeMode === 'new' && config.newWorktree) {
-        // Create the worktree with all metadata (URLs passed to backend)
-        const newWorktree = await handleCreateWorktree(config.newWorktree.repoId, {
-          name: config.newWorktree.name,
-          ref: config.newWorktree.ref,
-          refType: config.newWorktree.refType,
-          createBranch: config.newWorktree.createBranch,
-          sourceBranch: config.newWorktree.sourceBranch,
-          pullLatest: config.newWorktree.pullLatest,
-          issue_url: config.newWorktree.issue_url,
-          pull_request_url: config.newWorktree.pull_request_url,
-          boardId: config.newWorktree.boardId, // Pass boardId from session config
-        });
-
-        if (!newWorktree) {
-          throw new Error('Failed to create worktree');
-        }
-
-        // Use the returned worktree ID directly (no race condition!)
-        worktree_id = newWorktree.worktree_id;
-      }
+      const worktree_id = config.worktree_id;
 
       if (!worktree_id) {
         throw new Error('Worktree ID is required to create a session');

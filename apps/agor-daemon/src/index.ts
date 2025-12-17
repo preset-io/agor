@@ -50,7 +50,6 @@ import {
   Forbidden,
   feathers,
   feathersExpress,
-  JWTStrategy,
   LocalStrategy,
   NotAuthenticated,
   rest,
@@ -89,6 +88,13 @@ import type {
 } from '@agor/core/types';
 import { SessionStatus, TaskStatus } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
+
+// Executor spawning utility for fire-and-forget Unix operations
+import {
+  createServiceToken,
+  getDaemonUrl,
+  spawnExecutorFireAndForget,
+} from './utils/spawn-executor.js';
 
 // ============================================================================
 // GLOBAL ERROR HANDLERS
@@ -825,35 +831,18 @@ async function main() {
     !app.services['worktrees/:id/owners/:userId']
   ) {
     const worktreeRepo = new WorktreeRepository(db);
-    setupWorktreeOwnersService(app, worktreeRepo);
+    setupWorktreeOwnersService(app, worktreeRepo, {
+      jwtSecret,
+      daemonUser: config.daemon?.unix_user,
+    });
   }
 
-  // Initialize Unix integration service for worktree isolation
-  // This service manages Unix groups, users, symlinks, and filesystem permissions for RBAC
-  // Only initialize if RBAC is enabled
-  let unixIntegrationService: import('@agor/core/unix').UnixIntegrationService | null = null;
+  // Unix integration is now handled by the executor via fire-and-forget spawning
+  // The daemon no longer manages Unix groups/permissions directly
+  // See: packages/executor/src/commands/unix.ts for the sync implementations
   if (worktreeRbacEnabled) {
-    const { createUnixIntegrationService, requireDaemonUser } = await import(
-      './services/unix-integration.js'
-    );
-    const unixEnabled =
-      config.execution?.unix_user_mode !== 'simple' &&
-      config.execution?.unix_user_mode !== undefined;
-
-    // Get daemon user - throws if Unix isolation enabled but not configured
-    const daemonUser = requireDaemonUser(config);
-
-    unixIntegrationService = createUnixIntegrationService(db, {
-      enabled: unixEnabled,
-      autoManageSymlinks: unixEnabled,
-      daemonUser,
-    });
-    console.log(
-      `[Unix Integration] ${unixIntegrationService.isEnabled() ? 'Enabled' : 'Disabled'} (mode: ${config.execution?.unix_user_mode || 'simple'}, daemon user: ${daemonUser})`
-    );
-
-    // Register on app for access by other services (e.g., worktree-owners)
-    app.set('unixIntegration', unixIntegrationService);
+    const daemonUser = config.daemon?.unix_user || 'agor';
+    console.log(`[Unix Integration] Executor-based sync enabled (daemon user: ${daemonUser})`);
   }
 
   // Register repos service (accesses worktrees via app.service('worktrees'))
@@ -1455,7 +1444,7 @@ async function main() {
             ]
           : []),
         // Capture previous others_fs_access for comparison in after hook
-        ...(worktreeRbacEnabled && unixIntegrationService
+        ...(worktreeRbacEnabled
           ? [
               async (context: HookContext) => {
                 const patchData = context.data as Partial<import('@agor/core/types').Worktree>;
@@ -1503,21 +1492,22 @@ async function main() {
                   `[RBAC] Added creator ${creatorId.substring(0, 8)} as owner of worktree ${worktree.worktree_id.substring(0, 8)}`
                 );
 
-                // Unix Integration: Create group and add creator
-                if (unixIntegrationService) {
-                  try {
-                    await unixIntegrationService.createWorktreeGroup(worktree.worktree_id);
-                    await unixIntegrationService.addUserToWorktreeGroup(
-                      worktree.worktree_id,
-                      creatorId as import('@agor/core/types').UUID
-                    );
-                    // Fix permissions on .git/worktrees/<name>/ directory
-                    // Git creates this with umask, so group write is missing
-                    await unixIntegrationService.fixWorktreeGitDirPermissions(worktree.worktree_id);
-                  } catch (error) {
-                    console.error('[Unix Integration] Failed to setup worktree group:', error);
-                    // Continue - app-layer RBAC is still functional
-                  }
+                // Unix Integration: Fire-and-forget sync to executor
+                // The executor will handle group creation, user membership, and permissions
+                if (worktreeRbacEnabled && jwtSecret) {
+                  const serviceToken = createServiceToken(jwtSecret);
+                  spawnExecutorFireAndForget(
+                    {
+                      command: 'unix.sync-worktree',
+                      sessionToken: serviceToken,
+                      daemonUrl: getDaemonUrl(),
+                      params: {
+                        worktreeId: worktree.worktree_id,
+                        daemonUser: config.daemon?.unix_user,
+                      },
+                    },
+                    { logPrefix: '[Executor/worktree.create]' }
+                  );
                 }
 
                 return context;
@@ -1526,16 +1516,16 @@ async function main() {
           : []),
       ],
       patch: [
-        ...(worktreeRbacEnabled && unixIntegrationService
+        ...(worktreeRbacEnabled
           ? [
               async (context: HookContext) => {
-                // Unix Integration: Update Unix permissions when others_fs_access changes
+                // Unix Integration: Sync worktree permissions when others_fs_access changes
                 const params = context.params as AuthenticatedParams & {
                   _skipUnixSync?: boolean;
                   _previousOthersFsAccess?: string;
                 };
 
-                // Skip if this is a revert call from a failed chmod
+                // Skip if this is flagged to skip Unix sync
                 if (params._skipUnixSync) {
                   return context;
                 }
@@ -1549,7 +1539,7 @@ async function main() {
 
                 const worktree = context.result as import('@agor/core/types').Worktree;
 
-                // Check if the value actually changed (avoid unnecessary chmod)
+                // Check if the value actually changed (avoid unnecessary sync)
                 const previousValue = params._previousOthersFsAccess;
                 if (previousValue === worktree.others_fs_access) {
                   console.log(
@@ -1558,40 +1548,31 @@ async function main() {
                   return context;
                 }
 
-                if (!worktree.path || !worktree.unix_group) {
+                if (!worktree.path) {
                   console.log(
-                    `[Unix Integration] Worktree ${worktree.worktree_id.substring(0, 8)} has no path or unix_group, skipping permission update`
+                    `[Unix Integration] Worktree ${worktree.worktree_id.substring(0, 8)} has no path, skipping permission update`
                   );
                   return context;
                 }
 
-                try {
+                // Fire-and-forget sync to executor
+                // The executor will handle permission changes idempotently
+                if (jwtSecret) {
                   console.log(
-                    `[Unix Integration] Updating permissions for worktree ${worktree.worktree_id.substring(0, 8)} (others_fs_access: ${previousValue} -> ${worktree.others_fs_access})`
+                    `[Unix Integration] Syncing permissions for worktree ${worktree.worktree_id.substring(0, 8)} (others_fs_access: ${previousValue} -> ${worktree.others_fs_access})`
                   );
-                  await unixIntegrationService.setWorktreePermissions(
-                    worktree.worktree_id,
-                    worktree.path
-                  );
-                } catch (error) {
-                  // Security: If chmod fails, revert the DB change so UI doesn't show wrong state
-                  console.error(
-                    '[Unix Integration] Failed to update worktree permissions, reverting DB change:',
-                    error
-                  );
-                  if (previousValue !== undefined) {
-                    try {
-                      await context.service.patch(
-                        worktree.worktree_id,
-                        { others_fs_access: previousValue },
-                        { ...params, _skipUnixSync: true }
-                      );
-                    } catch (revertError) {
-                      console.error('[Unix Integration] Failed to revert DB change:', revertError);
-                    }
-                  }
-                  throw new Error(
-                    `Failed to update filesystem permissions: ${error instanceof Error ? error.message : String(error)}`
+                  const serviceToken = createServiceToken(jwtSecret);
+                  spawnExecutorFireAndForget(
+                    {
+                      command: 'unix.sync-worktree',
+                      sessionToken: serviceToken,
+                      daemonUrl: getDaemonUrl(),
+                      params: {
+                        worktreeId: worktree.worktree_id,
+                        daemonUser: config.daemon?.unix_user,
+                      },
+                    },
+                    { logPrefix: '[Executor/worktree.patch]' }
                   );
                 }
 
@@ -1601,17 +1582,28 @@ async function main() {
           : []),
       ],
       remove: [
-        ...(worktreeRbacEnabled && unixIntegrationService
+        ...(worktreeRbacEnabled
           ? [
               async (context: HookContext) => {
                 // Unix Integration: Delete Unix group when worktree is deleted
                 const worktreeId = context.id as import('@agor/core/types').WorktreeID;
 
-                try {
-                  await unixIntegrationService.deleteWorktreeGroup(worktreeId);
-                } catch (error) {
-                  console.error('[Unix Integration] Failed to delete worktree group:', error);
-                  // Continue - worktree is already deleted from database
+                // Fire-and-forget sync with delete flag to executor
+                if (jwtSecret) {
+                  const serviceToken = createServiceToken(jwtSecret);
+                  spawnExecutorFireAndForget(
+                    {
+                      command: 'unix.sync-worktree',
+                      sessionToken: serviceToken,
+                      daemonUrl: getDaemonUrl(),
+                      params: {
+                        worktreeId,
+                        daemonUser: config.daemon?.unix_user,
+                        delete: true, // Signal to delete the group instead of syncing
+                      },
+                    },
+                    { logPrefix: '[Executor/worktree.remove]' }
+                  );
                 }
 
                 return context;
@@ -1764,10 +1756,8 @@ async function main() {
       // After user create/patch: optionally ensure Unix user exists and sync password
       create: [
         async (context: HookContext) => {
-          const unixIntegration = app.get('unixIntegration') as
-            | import('@agor/core/unix').UnixIntegrationService
-            | undefined;
-          if (!unixIntegration?.isEnabled()) {
+          // Skip Unix sync if RBAC is disabled
+          if (!worktreeRbacEnabled || !jwtSecret) {
             return context;
           }
 
@@ -1776,60 +1766,58 @@ async function main() {
             return context; // No unix_username set, skip Unix user creation
           }
 
-          try {
-            await unixIntegration.ensureUnixUser(user.user_id);
-            console.log(`[Unix Integration] Ensured Unix user for: ${user.unix_username}`);
-          } catch (error) {
-            console.error('[Unix Integration] Failed to create Unix user:', error);
-            // Don't fail the request - Agor user is already created
-          }
-
-          // Sync password if plaintext is available (context.data contains original input)
+          // Get plaintext password from request data (for password sync)
           const data = context.data as { password?: string };
-          if (data?.password) {
-            try {
-              await unixIntegration.syncPassword(user.user_id, data.password);
-            } catch (error) {
-              console.error('[Unix Integration] Failed to sync password on user creation:', error);
-              // Don't fail user creation if password sync fails
-            }
-          }
+
+          // Fire-and-forget sync to executor
+          console.log(`[Unix Integration] Syncing Unix user for: ${user.unix_username}`);
+          const serviceToken = createServiceToken(jwtSecret);
+          spawnExecutorFireAndForget(
+            {
+              command: 'unix.sync-user',
+              sessionToken: serviceToken,
+              daemonUrl: getDaemonUrl(),
+              params: {
+                userId: user.user_id,
+                password: data?.password, // Pass through for password sync
+              },
+            },
+            { logPrefix: '[Executor/user.create]' }
+          );
 
           return context;
         },
       ],
       patch: [
         async (context: HookContext) => {
-          const unixIntegration = app.get('unixIntegration') as
-            | import('@agor/core/unix').UnixIntegrationService
-            | undefined;
-          if (!unixIntegration?.isEnabled()) {
+          // Skip Unix sync if RBAC is disabled
+          if (!worktreeRbacEnabled || !jwtSecret) {
             return context;
           }
 
           const data = context.data as { unix_username?: string; password?: string };
           const user = context.result as User;
 
-          // Handle unix_username changes (existing logic)
-          if (data?.unix_username) {
-            try {
-              await unixIntegration.ensureUnixUser(user.user_id);
-              console.log(`[Unix Integration] Ensured Unix user for: ${user.unix_username}`);
-            } catch (error) {
-              console.error('[Unix Integration] Failed to create Unix user:', error);
-              // Don't fail the request - Agor user is already updated
-            }
+          // Only sync if unix_username or password changed
+          if (!data?.unix_username && !data?.password) {
+            return context;
           }
 
-          // Handle password changes
-          if (data?.password) {
-            try {
-              await unixIntegration.syncPassword(user.user_id, data.password);
-            } catch (error) {
-              console.error('[Unix Integration] Failed to sync password on update:', error);
-              // Don't fail patch if password sync fails
-            }
-          }
+          // Fire-and-forget sync to executor
+          console.log(`[Unix Integration] Syncing Unix user for: ${user.unix_username}`);
+          const serviceToken = createServiceToken(jwtSecret);
+          spawnExecutorFireAndForget(
+            {
+              command: 'unix.sync-user',
+              sessionToken: serviceToken,
+              daemonUrl: getDaemonUrl(),
+              params: {
+                userId: user.user_id,
+                password: data?.password, // Pass through for password sync
+              },
+            },
+            { logPrefix: '[Executor/user.patch]' }
+          );
 
           return context;
         },
@@ -2286,11 +2274,14 @@ async function main() {
   // Configure authentication
   const authentication = new AuthenticationService(app);
 
+  // Import custom JWT strategy that handles service tokens
+  const { ServiceJWTStrategy } = await import('./auth/service-jwt-strategy.js');
+
   // Register authentication strategies
-  // NOTE: We no longer need a custom session-token strategy!
-  // Session tokens are now JWTs, so they work with the standard JWT strategy.
-  // This eliminates all the complexity of custom strategies and socket storage.
-  authentication.register('jwt', new JWTStrategy());
+  // NOTE: We use a custom ServiceJWTStrategy that handles both:
+  // 1. Regular user JWTs (standard authentication)
+  // 2. Service JWTs (for executor authentication with sub: 'executor-service')
+  authentication.register('jwt', new ServiceJWTStrategy());
   authentication.register('local', new LocalStrategy());
   authentication.register('anonymous', new AnonymousStrategy());
 
@@ -3295,37 +3286,33 @@ async function main() {
         // Find the currently running task(s)
         // Note: Using two separate queries to avoid $in operator which fails schema validation
         let runningTasksArray: Task[] = [];
-        try {
-          // Query for RUNNING tasks
-          const runningResult = await tasksService.find({
-            query: {
-              session_id: id,
-              status: TaskStatus.RUNNING,
-              $limit: 10,
-            },
-          });
-          const runningFindResult = runningResult as Task[] | Paginated<Task>;
-          const runningTasks = isPaginated(runningFindResult)
-            ? runningFindResult.data
-            : runningFindResult;
+        // Query for RUNNING tasks
+        const runningResult = await tasksService.find({
+          query: {
+            session_id: id,
+            status: TaskStatus.RUNNING,
+            $limit: 10,
+          },
+        });
+        const runningFindResult = runningResult as Task[] | Paginated<Task>;
+        const runningTasks = isPaginated(runningFindResult)
+          ? runningFindResult.data
+          : runningFindResult;
 
-          // Query for AWAITING_PERMISSION tasks
-          const awaitingResult = await tasksService.find({
-            query: {
-              session_id: id,
-              status: TaskStatus.AWAITING_PERMISSION,
-              $limit: 10,
-            },
-          });
-          const awaitingFindResult = awaitingResult as Task[] | Paginated<Task>;
-          const awaitingTasks = isPaginated(awaitingFindResult)
-            ? awaitingFindResult.data
-            : awaitingFindResult;
+        // Query for AWAITING_PERMISSION tasks
+        const awaitingResult = await tasksService.find({
+          query: {
+            session_id: id,
+            status: TaskStatus.AWAITING_PERMISSION,
+            $limit: 10,
+          },
+        });
+        const awaitingFindResult = awaitingResult as Task[] | Paginated<Task>;
+        const awaitingTasks = isPaginated(awaitingFindResult)
+          ? awaitingFindResult.data
+          : awaitingFindResult;
 
-          runningTasksArray = [...runningTasks, ...awaitingTasks];
-        } catch (findError) {
-          throw findError;
-        }
+        runningTasksArray = [...runningTasks, ...awaitingTasks];
 
         if (runningTasksArray.length === 0) {
           return {
