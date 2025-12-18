@@ -72,12 +72,113 @@ Running Agor in Kubernetes is fundamentally different from deploying static web 
 
 **Key insight**: Agor executors need access to a **shared filesystem** where git worktrees live. This is similar to how traditional development servers work, not like microservice deployments.
 
+---
+
+## Infrastructure Prerequisites
+
+Containerized Agor requires infrastructure that most organizations already have for multi-server environments. **Agor assumes this infrastructure exists - it does not provide it.**
+
+### Two Requirements
+
+| Requirement | What It Provides | Common Solutions |
+|-------------|------------------|------------------|
+| **Shared Filesystem** | Same files accessible from all nodes | EFS, NFS, GlusterFS, Ceph |
+| **Shared Identity** | UID/GID → username/groupname resolution | LDAP, Active Directory, sssd, synced files |
+
+These are standard requirements for any multi-server development environment. If your organization runs shared `/home` directories across servers, you likely already have both.
+
+### Why Shared Identity Matters
+
+A shared filesystem only stores numeric UIDs and GIDs. Without shared identity:
+
+```bash
+# What you see without identity resolution
+$ ls -la /data/agor/worktrees/myproject
+drwxrwxr-x 1001 2001 4096 Dec 18 10:00 .
+$ whoami
+1001
+
+# What you see WITH identity resolution
+$ ls -la /data/agor/worktrees/myproject
+drwxrwxr-x alice developers 4096 Dec 18 10:00 .
+$ whoami
+alice
+```
+
+Agor's Unix isolation features (per-user UIDs, per-worktree GIDs) require that containers can resolve these IDs to names.
+
+### How Identity Resolution Works
+
+Unix systems use **NSS (Name Service Switch)** to resolve identities. The `/etc/nsswitch.conf` file controls where lookups go:
+
+```bash
+# Simple setup (local files only)
+passwd:     files
+group:      files
+
+# Enterprise setup (LDAP via sssd)
+passwd:     files sss
+group:      files sss
+```
+
+When you run `ls -la` or `whoami`, the system queries NSS, which queries the configured backend (files, LDAP, etc.).
+
+### Container Identity Options
+
+For executor containers to resolve UIDs/GIDs, choose one:
+
+**Option 1: Mount host's identity files (simplest)**
+
+If your host already has identity configured, containers can use it:
+
+```yaml
+volumeMounts:
+  - name: passwd
+    mountPath: /etc/passwd
+    readOnly: true
+  - name: group
+    mountPath: /etc/group
+    readOnly: true
+volumes:
+  - name: passwd
+    hostPath:
+      path: /etc/passwd
+  - name: group
+    hostPath:
+      path: /etc/group
+```
+
+**Option 2: Mount sssd socket (if host uses LDAP/AD)**
+
+If your host runs `sssd` for LDAP/AD integration, containers can share it:
+
+```yaml
+volumeMounts:
+  - name: sssd-pipes
+    mountPath: /var/lib/sss/pipes
+  - name: nsswitch
+    mountPath: /etc/nsswitch.conf
+    subPath: nsswitch.conf
+volumes:
+  - name: sssd-pipes
+    hostPath:
+      path: /var/lib/sss/pipes
+  - name: nsswitch
+    configMap:
+      name: nsswitch-sss
+```
+
+**Option 3: Run sssd in container (most complex)**
+
+Install and configure `sssd` in executor containers to query LDAP directly.
+
 ### Recommended: Dedicated Cluster
 
 For production Agor deployments with containerized execution, we recommend:
 
 - **Dedicated Kubernetes cluster** or namespace with specialized configuration
 - **Shared filesystem** (EFS, NFS, GlusterFS) for worktree storage
+- **Shared identity** already configured at the node level
 - **Pod security policies** tuned for development workloads
 - **Longer timeouts** than typical production workloads
 
@@ -538,50 +639,66 @@ For most deployments, a single daemon replica is sufficient. Scale horizontally 
 
 ## Unix Groups and Filesystem Permissions
 
-### How Permissions Work on Shared Storage
+### How Agor Uses Unix Permissions
 
-When using shared filesystems like EFS or NFS, Unix permissions are enforced via **numeric GIDs**, not group names. This is important for containerized execution:
+Agor's isolation model assigns:
+- **One UID per user** - your Unix identity
+- **One GID per repository** - shared access for all repo collaborators
+- **One GID per worktree** - scoped access for worktree owners
 
-| Aspect | Local Mode | Containerized Mode |
-|--------|------------|-------------------|
-| Group lookup | `/etc/group` on host | Not applicable |
-| Permission enforcement | Group name → GID | GID directly |
-| Group membership | `usermod -aG` | `fsGroup` in pod spec |
+A user working on multiple worktrees will be a member of multiple groups.
 
-### Key Insight: GIDs are Filesystem-Native
+### Running as Users (Not Just UIDs)
 
-EFS and NFS store numeric UIDs/GIDs directly on the filesystem. When an executor pod runs with `fsGroup: 1001`, it can access files owned by GID 1001 regardless of whether a group with that GID exists in `/etc/group`.
+In local mode, executors run via `sudo su - {username}`, which:
+- Switches to the user's UID
+- Loads ALL their group memberships from `/etc/group`
+- Sets up their home directory and shell environment
+
+In containerized mode, we want the same behavior. The key insight: **run as the user, and their groups come with them**.
+
+### Container Security Context
+
+Kubernetes provides `supplementalGroups` for this:
 
 ```yaml
 spec:
   securityContext:
-    runAsUser: 1001    # UID for file ownership
-    runAsGroup: 1001   # Primary GID
-    fsGroup: 1001      # Supplementary GID for volume access
+    runAsUser: 1001              # User's UID
+    runAsGroup: 1001             # User's primary GID
+    supplementalGroups:          # All groups user belongs to
+      - 2001                     # repo-myproject GID
+      - 3001                     # worktree-feature-x GID
+      - 3002                     # worktree-bugfix-y GID
 ```
 
-### Ephemeral Executors and Persistent Groups
+The daemon knows the user's group memberships (from worktree ownership records) and can pass them to the executor template.
 
-Since executors are ephemeral (short-lived pods), group management works as follows:
+### With Shared Identity (Recommended)
 
-1. **Daemon creates worktree** → assigns GID, stores in database
-2. **Executor spawns** → receives GID in template variables (`{unix_user_gid}`)
-3. **Pod runs with `fsGroup`** → can read/write worktree files
-4. **Executor exits** → pod terminates, but files retain GID on filesystem
+If your infrastructure has shared identity (LDAP/sssd), containers can look up group memberships dynamically - just like local mode. The executor runs as the user, and NSS resolves their groups.
 
-The critical requirement is that **AGOR_DATA_HOME must be consistently mounted** across all executor pods. The filesystem itself maintains permission state.
+This is the cleanest approach: containers behave like any other server in your environment.
 
-### No /etc/group Sync Needed
+### Without Shared Identity (Explicit GIDs)
 
-In containerized mode, you don't need to synchronize `/etc/group` across pods. The executor image can run with a minimal user setup:
+If you can't set up shared identity, the daemon must explicitly pass all required GIDs via `supplementalGroups`. This works but:
+- Requires daemon to enumerate all user's group memberships
+- Can result in long lists of GIDs for active users
+- Less flexible than dynamic resolution
 
-```dockerfile
-# Executor Dockerfile
-FROM node:20-slim
-# No need to create groups - fsGroup handles permissions
-RUN useradd -m -u 1000 agor
-USER agor
-```
+### Template Variables for Security Context
+
+The executor command template supports these variables:
+
+| Variable | Description |
+|----------|-------------|
+| `{unix_user}` | Username |
+| `{unix_user_uid}` | User's UID |
+| `{unix_user_primary_gid}` | User's primary GID |
+| `{supplemental_gids}` | JSON array of all GIDs user needs |
+| `{repo_gid}` | Current repo's GID (if scoped) |
+| `{worktree_gid}` | Current worktree's GID (if scoped) |
 
 ---
 
