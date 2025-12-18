@@ -180,6 +180,46 @@ export class ConfigService {
       }
     }
 
+    // Allow updating IDE configuration (VS Code / code-server)
+    if (data.ide) {
+      if (!config.ide) {
+        config.ide = {};
+      }
+
+      if (data.ide.vscode) {
+        if (!config.ide.vscode) {
+          config.ide.vscode = {};
+        }
+        const { enabled, preferred_mode, remote } = data.ide.vscode;
+
+        if (enabled !== undefined) {
+          config.ide.vscode.enabled = enabled;
+        }
+        if (preferred_mode !== undefined) {
+          config.ide.vscode.preferred_mode = preferred_mode;
+        }
+        if (remote) {
+          config.ide.vscode.remote = config.ide.vscode.remote || {};
+          if (remote.host !== undefined) config.ide.vscode.remote.host = remote.host;
+          if (remote.port !== undefined) config.ide.vscode.remote.port = remote.port;
+          if (remote.user !== undefined) config.ide.vscode.remote.user = remote.user;
+          if (remote.target !== undefined) config.ide.vscode.remote.target = remote.target;
+        }
+      }
+
+      if (data.ide.code_server) {
+        if (!config.ide.code_server) {
+          config.ide.code_server = {};
+        }
+        if (data.ide.code_server.enabled !== undefined) {
+          config.ide.code_server.enabled = data.ide.code_server.enabled;
+        }
+        if (data.ide.code_server.url_template !== undefined) {
+          config.ide.code_server.url_template = data.ide.code_server.url_template;
+        }
+      }
+    }
+
     await saveConfig(config);
     console.log('[Config Service] Config saved successfully');
 

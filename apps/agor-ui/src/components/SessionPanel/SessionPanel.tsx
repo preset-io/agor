@@ -15,6 +15,7 @@ import {
   CodeOutlined,
   DeleteOutlined,
   ForkOutlined,
+  GlobalOutlined,
   SendOutlined,
   SettingOutlined,
   StopOutlined,
@@ -44,6 +45,7 @@ import {
 } from '../Pill';
 import { ThinkingModeSelector } from '../ThinkingModeSelector';
 import { ToolIcon } from '../ToolIcon';
+import { VSCodeIcon } from '../VSCodeIcon';
 import { SessionPanelContent } from './SessionPanelContent';
 
 // Re-export PermissionMode from SDK for convenience
@@ -88,6 +90,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     onUpdateSession,
     onDeleteSession: onDelete,
     onOpenTerminal,
+    onOpenVSCode,
+    onOpenCodeServer,
   } = useAppActions();
 
   // Per-session draft storage
@@ -755,6 +759,24 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                   type="text"
                   icon={<CodeOutlined />}
                   onClick={() => onOpenTerminal([`cd ${worktree.path}`], worktree.worktree_id)}
+                />
+              </Tooltip>
+            )}
+            {onOpenVSCode && worktree && (
+              <Tooltip title="Open in VS Code">
+                <Button
+                  type="text"
+                  icon={<VSCodeIcon offsetY={1} />}
+                  onClick={() => onOpenVSCode(worktree.worktree_id)}
+                />
+              </Tooltip>
+            )}
+            {onOpenCodeServer && worktree && (
+              <Tooltip title="Open code-server in browser">
+                <Button
+                  type="text"
+                  icon={<GlobalOutlined />}
+                  onClick={() => onOpenCodeServer(worktree.worktree_id)}
                 />
               </Tooltip>
             )}

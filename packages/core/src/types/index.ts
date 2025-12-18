@@ -8,6 +8,7 @@ export * from './context';
 export * from './feathers';
 export * from './file';
 export * from './id';
+export * from './ide';
 export * from './mcp';
 export * from './message';
 export * from './presence';

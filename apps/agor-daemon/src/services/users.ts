@@ -5,6 +5,10 @@
  * Only active when authentication is enabled via config.
  */
 
+import { createHash } from 'node:crypto';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { generateId } from '@agor/core';
 import { getEnvVarBlockReason, isEnvVarAllowed, validateEnvVar } from '@agor/core/config';
 import {
@@ -33,6 +37,13 @@ interface CreateUserData {
   role?: 'owner' | 'admin' | 'member' | 'viewer';
   unix_username?: string;
   must_change_password?: boolean;
+  ssh_config?: {
+    host?: string;
+    port?: number;
+    user?: string;
+    target?: string;
+    public_key?: string | null;
+  };
 }
 
 /**
@@ -58,6 +69,14 @@ interface UpdateUserData {
   env_vars?: Record<string, string | null>; // { "GITHUB_TOKEN": "ghp_...", "NPM_TOKEN": null }
   // Default agentic tool configurations
   default_agentic_config?: import('@agor/core/types').DefaultAgenticConfig;
+  // User-level SSH config (public key + host/user/port/target)
+  ssh_config?: {
+    host?: string;
+    port?: number;
+    user?: string;
+    target?: string;
+    public_key?: string | null;
+  };
 }
 
 /**
@@ -184,7 +203,8 @@ export class UsersService {
       data.preferences ||
       data.api_keys ||
       data.env_vars ||
-      data.default_agentic_config
+      data.default_agentic_config ||
+      data.ssh_config
     ) {
       const current = await this.get(id);
       const currentRow = await select(this.db).from(users).where(eq(users.user_id, id)).one();
@@ -194,6 +214,7 @@ export class UsersService {
         api_keys?: Record<string, string>;
         env_vars?: Record<string, string>;
         default_agentic_config?: import('@agor/core/types').DefaultAgenticConfig;
+        ssh_config?: import('@agor/core/types').UserSSHConfig;
       };
 
       // Handle API keys (encrypt before storage)
@@ -249,13 +270,94 @@ export class UsersService {
         }
       }
 
-      updates.data = {
+      // Handle SSH config (user-level, public key stored as-is)
+      let nextSshConfig = currentData?.ssh_config
+        ? { ...currentData.ssh_config }
+        : ({} as import('@agor/core/types').UserSSHConfig);
+      let sshConfigTouched = false;
+
+      if (data.ssh_config) {
+        const incoming = data.ssh_config;
+
+        if (incoming.host !== undefined) {
+          nextSshConfig.host = incoming.host || undefined;
+          sshConfigTouched = true;
+        }
+        if (incoming.port !== undefined) {
+          nextSshConfig.port = incoming.port ?? undefined;
+          sshConfigTouched = true;
+        }
+        if (incoming.user !== undefined) {
+          nextSshConfig.user = incoming.user || undefined;
+          sshConfigTouched = true;
+        }
+        if (incoming.target !== undefined) {
+          nextSshConfig.target = incoming.target || undefined;
+          sshConfigTouched = true;
+        }
+
+        if (incoming.public_key !== undefined) {
+          sshConfigTouched = true;
+          const marker = `agor-${id}`;
+          const sshUser = incoming.user ?? nextSshConfig.user;
+
+          if (!incoming.public_key || incoming.public_key.trim().length === 0) {
+            // Clear public key
+            delete nextSshConfig.public_key;
+            delete nextSshConfig.public_key_fingerprint;
+            const syncResult = await this.syncAuthorizedKey({
+              sshUser,
+              publicKey: null,
+              marker,
+            });
+            const clearedPath = syncResult.path ?? nextSshConfig.authorized_keys_path;
+            nextSshConfig.authorized_keys_path = clearedPath;
+            if (!syncResult.success && syncResult.error) {
+              nextSshConfig.last_authorized_keys_error = syncResult.error;
+            } else {
+              delete nextSshConfig.last_authorized_keys_error;
+            }
+          } else {
+            const trimmedKey = incoming.public_key.trim();
+            const fingerprint = this.computeSshFingerprint(trimmedKey);
+            nextSshConfig.public_key = trimmedKey;
+            nextSshConfig.public_key_fingerprint = fingerprint;
+
+            const syncResult = await this.syncAuthorizedKey({
+              sshUser,
+              publicKey: trimmedKey,
+              marker,
+            });
+            const updatedPath = syncResult.path ?? nextSshConfig.authorized_keys_path;
+            nextSshConfig.authorized_keys_path = updatedPath;
+            if (!syncResult.success && syncResult.error) {
+              nextSshConfig.last_authorized_keys_error = syncResult.error;
+            } else {
+              delete nextSshConfig.last_authorized_keys_error;
+            }
+          }
+        }
+
+        if (sshConfigTouched) {
+          nextSshConfig.updated_at = new Date();
+        }
+      }
+
+      // Remove ssh_config if completely empty to keep data lean
+      const hasSshConfig =
+        Object.values({ ...nextSshConfig }).filter((v) => v !== undefined).length > 0;
+
+      const mergedData = {
+        ...(currentData || {}),
         avatar: data.avatar ?? current.avatar,
         preferences: data.preferences ?? current.preferences,
         api_keys: Object.keys(encryptedKeys).length > 0 ? encryptedKeys : undefined,
         env_vars: Object.keys(encryptedEnvVars).length > 0 ? encryptedEnvVars : undefined,
         default_agentic_config: data.default_agentic_config ?? current.default_agentic_config,
+        ssh_config: hasSshConfig ? nextSshConfig : undefined,
       };
+
+      updates.data = mergedData;
     }
 
     const row = await update(this.db, users)
@@ -357,6 +459,79 @@ export class UsersService {
   }
 
   /**
+   * Compute SSH public key fingerprint (SHA256)
+   */
+  private computeSshFingerprint(publicKey: string): string {
+    const parts = publicKey.trim().split(/\s+/);
+    if (parts.length < 2) {
+      throw new Error('Invalid SSH public key format');
+    }
+    const keyData = parts[1];
+    const decoded = Buffer.from(keyData, 'base64');
+    const digest = createHash('sha256').update(decoded).digest('base64');
+    return `SHA256:${digest}`;
+  }
+
+  /**
+   * Resolve authorized_keys path for a given SSH user
+   */
+  private resolveAuthorizedKeysPath(sshUser?: string): string | null {
+    if (!sshUser || sshUser.trim().length === 0) return null;
+    const username = sshUser.trim();
+    const current = os.userInfo().username;
+
+    let home: string;
+    if (username === current) {
+      home = os.homedir();
+    } else if (process.platform === 'darwin') {
+      home = path.join('/Users', username);
+    } else {
+      home = path.join('/home', username);
+    }
+
+    return path.join(home, '.ssh', 'authorized_keys');
+  }
+
+  /**
+   * Add/replace/remove a public key in authorized_keys for a given SSH user.
+   * Uses a marker to ensure idempotency.
+   */
+  private async syncAuthorizedKey(options: {
+    sshUser?: string;
+    publicKey: string | null;
+    marker: string;
+  }): Promise<{ success: boolean; path?: string; error?: string }> {
+    const authPath = this.resolveAuthorizedKeysPath(options.sshUser);
+    if (!authPath) {
+      return { success: false, error: 'Missing SSH user, cannot write authorized_keys' };
+    }
+
+    try {
+      await fs.mkdir(path.dirname(authPath), { recursive: true });
+      const existing = await fs.readFile(authPath, 'utf-8').catch(() => '');
+      const lines = existing.split(/\r?\n/).filter((line) => line.trim().length > 0);
+
+      // Remove previous entries with the same marker
+      const filtered = lines.filter((line) => !line.includes(options.marker));
+
+      if (options.publicKey) {
+        const keyLine = `${options.publicKey.trim().replace(/\s+/g, ' ')} ${options.marker}`;
+        filtered.push(keyLine);
+      }
+
+      const output = filtered.join('\n').trimEnd() + (filtered.length ? '\n' : '');
+      await fs.writeFile(authPath, output, { mode: 0o600 });
+      return { success: true, path: authPath };
+    } catch (err) {
+      return {
+        success: false,
+        path: authPath,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+
+  /**
    * Convert database row to User type
    *
    * @param row - Database row
@@ -372,6 +547,7 @@ export class UsersService {
       api_keys?: Record<string, string>; // Encrypted keys
       env_vars?: Record<string, string>; // Encrypted env vars
       default_agentic_config?: import('@agor/core/types').DefaultAgenticConfig;
+      ssh_config?: import('@agor/core/types').UserSSHConfig;
     };
 
     const user: User & { password?: string } = {
@@ -401,6 +577,14 @@ export class UsersService {
         : undefined,
       // Return default agentic config
       default_agentic_config: data.default_agentic_config,
+      ssh_config: data.ssh_config
+        ? {
+            ...data.ssh_config,
+            updated_at: data.ssh_config.updated_at
+              ? new Date(data.ssh_config.updated_at)
+              : undefined,
+          }
+        : undefined,
     };
 
     // Include password for authentication (FeathersJS LocalStrategy needs this)

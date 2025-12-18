@@ -110,6 +110,16 @@ export function getDefaultConfig(): AgorConfig {
       session_token_max_uses: 1, // Single-use tokens
       sync_unix_passwords: true, // Default: sync passwords to Unix
     },
+    ide: {
+      vscode: {
+        enabled: true,
+        preferred_mode: 'remote-ssh',
+      },
+      code_server: {
+        enabled: false,
+        url_template: undefined,
+      },
+    },
   };
 }
 
@@ -184,6 +194,22 @@ export async function getConfigValue(key: string): Promise<string | boolean | nu
     ui: { ...defaults.ui, ...config.ui },
     codex: { ...defaults.codex, ...config.codex },
     execution: { ...defaults.execution, ...config.execution },
+    ide: {
+      ...defaults.ide,
+      ...config.ide,
+      vscode: {
+        ...defaults.ide?.vscode,
+        ...config.ide?.vscode,
+        remote: {
+          ...defaults.ide?.vscode?.remote,
+          ...config.ide?.vscode?.remote,
+        },
+      },
+      code_server: {
+        ...defaults.ide?.code_server,
+        ...config.ide?.code_server,
+      },
+    },
     paths: { ...defaults.paths, ...config.paths },
   };
 
@@ -212,25 +238,26 @@ export async function setConfigValue(key: string, value: string | boolean | numb
   const parts = key.split('.');
 
   if (parts.length === 1) {
-    // Top-level key - not supported (all config is nested)
     throw new Error(
       `Top-level config keys not supported. Use format: section.key (e.g., defaults.${parts[0]})`
     );
   }
 
-  // Nested key (e.g., "credentials.ANTHROPIC_API_KEY")
-  const section = parts[0];
-
-  if (!(config as UnknownJson)[section]) {
-    (config as UnknownJson)[section] = {};
+  let target: UnknownJson = config;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const segment = parts[i];
+    if (
+      !target ||
+      typeof target !== 'object' ||
+      target[segment] === null ||
+      typeof target[segment] !== 'object'
+    ) {
+      target[segment] = {};
+    }
+    target = target[segment];
   }
 
-  // Only support one level of nesting
-  if (parts.length === 2) {
-    (config as UnknownJson)[section][parts[1]] = value;
-  } else {
-    throw new Error(`Nested keys beyond one level not supported: ${key}`);
-  }
+  target[parts[parts.length - 1]] = value;
 
   await saveConfig(config);
 }
@@ -245,17 +272,32 @@ export async function unsetConfigValue(key: string): Promise<void> {
   const parts = key.split('.');
 
   if (parts.length === 1) {
-    // Top-level key - not supported
     throw new Error(`Top-level config keys not supported. Use format: section.key`);
   }
 
-  if (parts.length === 2) {
-    const section = parts[0];
-    const subKey = parts[1];
-
-    if ((config as UnknownJson)[section] && subKey in (config as UnknownJson)[section]) {
-      delete (config as UnknownJson)[section][subKey];
+  let cursor: UnknownJson = config;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const segment = parts[i];
+    if (
+      !cursor ||
+      typeof cursor !== 'object' ||
+      cursor[segment] === null ||
+      typeof cursor[segment] !== 'object'
+    ) {
+      cursor = null;
+      break;
     }
+
+    if (i === parts.length - 2) {
+      const container = cursor[segment];
+      const lastKey = parts[parts.length - 1];
+      if (container && typeof container === 'object' && lastKey in container) {
+        delete container[lastKey];
+      }
+      break;
+    }
+
+    cursor = cursor[segment];
   }
 
   await saveConfig(config);

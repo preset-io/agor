@@ -357,6 +357,7 @@ async function main() {
 
   // Create Feathers app
   const app = feathersExpress(feathers());
+  app.set('agorConfig', config);
 
   // Configure CORS based on deployment environment (extracted to setup/cors.ts)
   const { origin: corsOrigin } = buildCorsConfig({
@@ -4208,6 +4209,57 @@ async function main() {
     } as any,
     {
       find: { role: 'member', action: 'check worktree health' },
+    },
+    requireAuth
+  );
+
+  // POST /worktrees-open-vscode - Generate VS Code deep link (socket/HTTP friendly)
+  registerAuthenticatedRoute(
+    app,
+    '/worktrees-open-vscode',
+    {
+      async create(data: { worktreeId?: string; executeLocally?: boolean }, params: RouteParams) {
+        if (!data?.worktreeId) {
+          throw new Error('worktreeId is required');
+        }
+
+        if (data.executeLocally) {
+          const result = await worktreesService.executeVSCodeLocally(
+            data.worktreeId as import('@agor/core/types').WorktreeID,
+            params
+          );
+          return { success: true, message: result };
+        }
+
+        return worktreesService.getVSCodeTarget(
+          data.worktreeId as import('@agor/core/types').WorktreeID,
+          params
+        );
+      },
+    },
+    {
+      create: { role: 'member', action: 'open worktrees in VS Code' },
+    },
+    requireAuth
+  );
+
+  // POST /worktrees-open-codeserver - Generate code-server URL (socket/HTTP friendly)
+  registerAuthenticatedRoute(
+    app,
+    '/worktrees-open-codeserver',
+    {
+      async create(data: { worktreeId?: string }, params: RouteParams) {
+        if (!data?.worktreeId) {
+          throw new Error('worktreeId is required');
+        }
+        return worktreesService.getCodeServerTarget(
+          data.worktreeId as import('@agor/core/types').WorktreeID,
+          params
+        );
+      },
+    },
+    {
+      create: { role: 'member', action: 'open worktrees in code-server' },
     },
     requireAuth
   );

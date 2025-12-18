@@ -33,6 +33,8 @@ export interface AppActionsContextValue {
   onOpenSettings?: (sessionId: string) => void;
   onOpenWorktree?: (worktreeId: string) => void;
   onOpenTerminal?: (commands: string[], worktreeId?: string) => void;
+  onOpenVSCode?: (worktreeId: string) => void;
+  onOpenCodeServer?: (worktreeId: string) => void;
 }
 
 const AppActionsContext = createContext<AppActionsContextValue | undefined>(undefined);

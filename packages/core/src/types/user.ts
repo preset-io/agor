@@ -108,6 +108,21 @@ export interface BaseUserFields {
 }
 
 /**
+ * User-level SSH / VS Code connection configuration
+ */
+export interface UserSSHConfig {
+  host?: string;
+  port?: number;
+  user?: string;
+  target?: string;
+  public_key?: string | null;
+  public_key_fingerprint?: string;
+  authorized_keys_path?: string;
+  last_authorized_keys_error?: string;
+  updated_at?: Date;
+}
+
+/**
  * User type - Authentication and authorization
  */
 export interface User extends BaseUserFields {
@@ -131,6 +146,8 @@ export interface User extends BaseUserFields {
   env_vars?: Record<string, boolean>; // { "GITHUB_TOKEN": true, "NPM_TOKEN": false }
   // Default agentic tool configuration (prepopulates session creation forms)
   default_agentic_config?: DefaultAgenticConfig;
+  // User-level SSH / VS Code configuration
+  ssh_config?: UserSSHConfig;
 }
 
 /**
@@ -142,6 +159,14 @@ export interface CreateUserInput extends Partial<BaseUserFields> {
   unix_username?: string;
   /** Force user to change password on first login (admin-only) */
   must_change_password?: boolean;
+  ssh_config?: {
+    host?: string;
+    port?: number;
+    user?: string;
+    target?: string;
+    /** Provide .pub content; set null/empty to clear */
+    public_key?: string | null;
+  };
 }
 
 /**
@@ -165,4 +190,13 @@ export interface UpdateUserInput extends Partial<BaseUserFields> {
   env_vars?: Record<string, string | null>; // { "GITHUB_TOKEN": "ghp_...", "NPM_TOKEN": null }
   // Default agentic tool configuration
   default_agentic_config?: DefaultAgenticConfig;
+  // SSH config for update
+  ssh_config?: {
+    host?: string;
+    port?: number;
+    user?: string;
+    target?: string;
+    /** Provide .pub content; set null/empty to clear */
+    public_key?: string | null;
+  };
 }

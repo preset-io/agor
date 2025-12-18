@@ -114,6 +114,8 @@ interface SessionCanvasProps {
     }
   ) => void;
   onOpenTerminal?: (commands: string[], worktreeId?: string) => void;
+  onOpenVSCode?: (worktreeId: string) => void;
+  onOpenCodeServer?: (worktreeId: string) => void;
   onStartEnvironment?: (worktreeId: string) => void;
   onStopEnvironment?: (worktreeId: string) => void;
   onViewLogs?: (worktreeId: string) => void;
@@ -185,6 +187,8 @@ interface WorktreeNodeData {
   ) => void;
   onOpenSettings?: (worktreeId: string) => void;
   onOpenTerminal?: (commands: string[], worktreeId?: string) => void;
+  onOpenVSCode?: (worktreeId: string) => void;
+  onOpenCodeServer?: (worktreeId: string) => void;
   onStartEnvironment?: (worktreeId: string) => void;
   onStopEnvironment?: (worktreeId: string) => void;
   onViewLogs?: (worktreeId: string) => void;
@@ -217,6 +221,8 @@ const WorktreeNode = ({ data }: { data: WorktreeNodeData }) => {
         onArchiveOrDelete={data.onArchiveOrDelete}
         onOpenSettings={data.onOpenSettings}
         onOpenTerminal={data.onOpenTerminal}
+        onOpenVSCode={data.onOpenVSCode}
+        onOpenCodeServer={data.onOpenCodeServer}
         onStartEnvironment={data.onStartEnvironment}
         onStopEnvironment={data.onStopEnvironment}
         onViewLogs={data.onViewLogs}
@@ -271,6 +277,8 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       onOpenWorktree,
       onArchiveOrDeleteWorktree,
       onOpenTerminal,
+      onOpenVSCode,
+      onOpenCodeServer,
       onStartEnvironment,
       onStopEnvironment,
       onViewLogs,
@@ -577,6 +585,8 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             onArchiveOrDelete: onArchiveOrDeleteWorktree,
             onOpenSettings: onOpenWorktree,
             onOpenTerminal,
+            onOpenVSCode,
+            onOpenCodeServer,
             onStartEnvironment,
             onStopEnvironment,
             onViewLogs,
@@ -608,6 +618,8 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       onArchiveOrDeleteWorktree,
       onOpenWorktree,
       onOpenTerminal,
+      onOpenVSCode,
+      onOpenCodeServer,
       onStartEnvironment,
       onStopEnvironment,
       onViewLogs,

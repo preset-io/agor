@@ -2,7 +2,7 @@
  * `agor user create` - Create a new user
  */
 
-import type { CreateUserInput, UserRole } from '@agor/core/types';
+import type { CreateUserInput, User, UserRole } from '@agor/core/types';
 import { Flags } from '@oclif/core';
 import chalk from 'chalk';
 import inquirer from 'inquirer';
@@ -108,7 +108,8 @@ export default class UserCreate extends BaseCommand {
         role: flags.role as UserRole,
         must_change_password: flags['force-password-change'],
       };
-      const user = await client.service('users').create(userData);
+      // Cast to Partial<User> to satisfy service typing
+      const user = await client.service('users').create(userData as Partial<User>);
 
       this.log(`${chalk.green('✓')} User created successfully`);
       this.log('');

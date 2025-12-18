@@ -57,6 +57,14 @@ export class UsersRepository implements BaseRepository<User, Partial<User>> {
           ) as Record<string, boolean>)
         : undefined,
       default_agentic_config: row.data.default_agentic_config as User['default_agentic_config'],
+      ssh_config: row.data.ssh_config
+        ? {
+            ...row.data.ssh_config,
+            updated_at: row.data.ssh_config.updated_at
+              ? new Date(row.data.ssh_config.updated_at)
+              : undefined,
+          }
+        : undefined,
     };
   }
 
@@ -92,6 +100,7 @@ export class UsersRepository implements BaseRepository<User, Partial<User>> {
         api_keys: user.api_keys_raw,
         env_vars: undefined, // Not implemented yet
         default_agentic_config: user.default_agentic_config,
+        ssh_config: user.ssh_config,
       },
     };
   }

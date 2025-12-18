@@ -2,6 +2,8 @@
  * Agor Configuration Types
  */
 
+import type { VSCodeOpenMode } from '../types/ide';
+
 /**
  * Type for user-provided JSON data where structure is unknown or dynamic
  *
@@ -209,6 +211,68 @@ export interface AgorPathSettings {
 }
 
 /**
+ * Remote SSH configuration for VS Code integration
+ */
+export interface AgorIDESSHSettings {
+  /** Hostname or IP address reachable from the developer's machine */
+  host?: string;
+
+  /** SSH port (default: 22) */
+  port?: number;
+
+  /** SSH username to connect with */
+  user?: string;
+
+  /**
+   * Optional Remote SSH target label (defaults to `${user}@${host}`)
+   *
+   * This value is used in the vscode:// deep link (ssh-remote+target).
+   * Configure it to match the entry inside ~/.ssh/config if using an alias.
+   */
+  target?: string;
+}
+
+/**
+ * code-server integration settings
+ */
+export interface AgorIDECodeServerSettings {
+  /** Enable or disable code-server integration (default: false) */
+  enabled?: boolean;
+
+  /**
+   * URL template used to open the workspace in code-server.
+   * Handlebars context: { worktree, repo }
+   * Example: "https://codeserver.example.com/?folder={{encodeURIComponent worktree.path}}"
+   */
+  url_template?: string;
+}
+
+/**
+ * VS Code integration settings
+ */
+export interface AgorIDEVSCodeSettings {
+  /** Enable or disable VS Code integration (default: true) */
+  enabled?: boolean;
+
+  /** Preferred connection mode when multiple are configured */
+  preferred_mode?: VSCodeOpenMode;
+
+  /** Remote SSH configuration for vscode:// links */
+  remote?: AgorIDESSHSettings;
+}
+
+/**
+ * IDE integration settings
+ */
+export interface AgorIDESettings {
+  /** VS Code specific configuration */
+  vscode?: AgorIDEVSCodeSettings;
+
+  /** code-server (web) integration */
+  code_server?: AgorIDECodeServerSettings;
+}
+
+/**
  * Supported credential keys (enum for type safety)
  */
 export enum CredentialKey {
@@ -259,6 +323,9 @@ export interface AgorConfig {
   /** Execution isolation settings */
   execution?: AgorExecutionSettings;
 
+  /** IDE/Editor integration settings */
+  ide?: AgorIDESettings;
+
   /** Path configuration (data_home for repos/worktrees separation) */
   paths?: AgorPathSettings;
 
@@ -278,5 +345,9 @@ export type ConfigKey =
   | `opencode.${keyof AgorOpenCodeSettings}`
   | `codex.${keyof AgorCodexSettings}`
   | `execution.${keyof AgorExecutionSettings}`
+  | `ide.${keyof AgorIDESettings}`
+  | `ide.vscode.${keyof AgorIDEVSCodeSettings}`
+  | `ide.vscode.remote.${keyof AgorIDESSHSettings}`
+  | `ide.code_server.${keyof AgorIDECodeServerSettings}`
   | `paths.${keyof AgorPathSettings}`
   | `credentials.${keyof AgorCredentials}`;

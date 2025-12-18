@@ -60,6 +60,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const [geminiForm] = Form.useForm();
   const [opencodeForm] = Form.useForm();
   const [audioForm] = Form.useForm();
+  const [sshForm] = Form.useForm();
 
   // API key management state
   const [userApiKeyStatus, setUserApiKeyStatus] = useState<ApiKeyStatus>({
@@ -129,8 +130,16 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         volume: audioPrefs?.volume ?? 50,
         minDurationSeconds: audioPrefs?.minDurationSeconds ?? 5,
       });
+
+      sshForm.setFieldsValue({
+        sshHost: userData.ssh_config?.host,
+        sshPort: userData.ssh_config?.port,
+        sshUser: userData.ssh_config?.user,
+        sshTarget: userData.ssh_config?.target,
+        sshPublicKey: userData.ssh_config?.public_key,
+      });
     },
-    [form, claudeForm, codexForm, geminiForm, audioForm]
+    [form, claudeForm, codexForm, geminiForm, audioForm, sshForm]
   );
 
   // Initialize when modal opens with user data
@@ -172,6 +181,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     claudeForm.resetFields();
     codexForm.resetFields();
     geminiForm.resetFields();
+    sshForm.resetFields();
     setActiveTab('general');
     onClose();
   };

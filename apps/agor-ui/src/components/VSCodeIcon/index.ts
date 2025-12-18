@@ -1,0 +1,1 @@
+export { VSCodeIcon } from './VSCodeIcon';

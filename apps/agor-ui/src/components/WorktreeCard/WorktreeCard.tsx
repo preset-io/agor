@@ -8,6 +8,7 @@ import {
   DragOutlined,
   EditOutlined,
   ForkOutlined,
+  GlobalOutlined,
   PlusOutlined,
   PushpinFilled,
   SubnodeOutlined,
@@ -26,6 +27,7 @@ import { CreatedByTag } from '../metadata';
 import { IssuePill, PullRequestPill } from '../Pill';
 import { TaskStatusIcon } from '../TaskStatusIcon';
 import { ToolIcon } from '../ToolIcon';
+import { VSCodeIcon } from '../VSCodeIcon';
 import { buildSessionTree, type SessionTreeNode } from './buildSessionTree';
 
 const _WORKTREE_CARD_MAX_WIDTH = 600;
@@ -68,6 +70,8 @@ interface WorktreeCardProps {
   ) => void;
   onOpenSettings?: (worktreeId: string) => void;
   onOpenTerminal?: (commands: string[], worktreeId?: string) => void;
+  onOpenVSCode?: (worktreeId: string) => void;
+  onOpenCodeServer?: (worktreeId: string) => void;
   onStartEnvironment?: (worktreeId: string) => void;
   onStopEnvironment?: (worktreeId: string) => void;
   onViewLogs?: (worktreeId: string) => void;
@@ -96,6 +100,8 @@ const WorktreeCardComponent = ({
   onArchiveOrDelete,
   onOpenSettings,
   onOpenTerminal,
+  onOpenVSCode,
+  onOpenCodeServer,
   onStartEnvironment,
   onStopEnvironment,
   onViewLogs,
@@ -551,6 +557,32 @@ const WorktreeCardComponent = ({
                   onOpenTerminal([`cd ${worktree.path}`], worktree.worktree_id);
                 }}
                 title="Open terminal in worktree directory"
+              />
+            )}
+            {onOpenVSCode && (
+              <Button
+                type="text"
+                size="small"
+                icon={<VSCodeIcon offsetY={0} />}
+                disabled={connectionDisabled}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpenVSCode(worktree.worktree_id);
+                }}
+                title="Open in VS Code"
+              />
+            )}
+            {onOpenCodeServer && (
+              <Button
+                type="text"
+                size="small"
+                icon={<GlobalOutlined />}
+                disabled={connectionDisabled}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpenCodeServer(worktree.worktree_id);
+                }}
+                title="Open in code-server (browser)"
               />
             )}
             {onOpenSettings && (

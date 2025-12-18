@@ -9,20 +9,33 @@ import { type ChildProcess, spawn } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { createUserProcessEnvironment, ENVIRONMENT, PAGINATION } from '@agor/core/config';
+import {
+  type AgorConfig,
+  type AgorIDESSHSettings,
+  type AgorIDEVSCodeSettings,
+  createUserProcessEnvironment,
+  ENVIRONMENT,
+  PAGINATION,
+} from '@agor/core/config';
 import { type Database, WorktreeRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
   BoardID,
+  CodeServerOpenResult,
   QueryParams,
   Repo,
+  User,
   UserID,
+  UserSSHConfig,
   UUID,
+  VSCodeOpenMode,
+  VSCodeOpenResult,
   Worktree,
   WorktreeID,
 } from '@agor/core/types';
 import { getNextRunTime, validateCron } from '@agor/core/utils/cron';
+import Handlebars from 'handlebars';
 import { DrizzleService } from '../adapters/drizzle';
 import { getDaemonUrl, spawnExecutor } from '../utils/spawn-executor.js';
 
@@ -54,6 +67,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
   private worktreeRepo: WorktreeRepository;
   private db: Database;
   private app: Application;
+  private config: AgorConfig;
   private processes = new Map<WorktreeID, ManagedProcess>();
   // Cache board-objects service reference (lazy-loaded to avoid circular deps)
   private boardObjectsService?: {
@@ -62,7 +76,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     remove: (id: string) => Promise<unknown>;
   };
 
-  constructor(db: Database, app: Application) {
+  constructor(db: Database, app: Application, config: AgorConfig) {
     const worktreeRepo = new WorktreeRepository(db);
     super(worktreeRepo, {
       id: 'worktree_id',
@@ -76,6 +90,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     this.worktreeRepo = worktreeRepo;
     this.db = db;
     this.app = app;
+    this.config = config;
   }
 
   /**
@@ -956,7 +971,6 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
    */
   async checkHealth(id: WorktreeID, params?: WorktreeParams): Promise<Worktree> {
     const worktree = await this.get(id, params);
-    const _repo = (await this.app.service('repos').get(worktree.repo_id, params)) as Repo;
 
     // Only check health for 'running' or 'starting' status
     const currentStatus = worktree.environment_instance?.status;
@@ -1071,6 +1085,249 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
           },
         },
         params
+      );
+    }
+  }
+
+  /**
+   * Custom method: Generate VS Code deep link for this worktree
+   */
+  async getVSCodeTarget(id: WorktreeID, params?: WorktreeParams): Promise<VSCodeOpenResult> {
+    const worktree = await this.get(id, params);
+    const vscodeConfig = this.config.ide?.vscode;
+    const currentUserId = (params as WorktreeParams & { user?: { user_id?: UserID } })?.user
+      ?.user_id;
+    const userSshConfig = currentUserId
+      ? await this.getUserSshConfig(currentUserId).catch(() => undefined)
+      : undefined;
+
+    if (vscodeConfig?.enabled === false) {
+      return {
+        enabled: false,
+        reason: 'VS Code integration disabled via ide.vscode.enabled=false',
+      };
+    }
+
+    const modeOrder = this.getVSCodeModeOrder(vscodeConfig);
+    let fallbackReason: string | undefined;
+
+    for (const mode of modeOrder) {
+      if (mode === 'remote-ssh') {
+        const effectiveRemote = this.mergeRemoteConfig(vscodeConfig?.remote, userSshConfig);
+        const remoteResult = this.buildRemoteVSCodeResult(effectiveRemote, worktree.path);
+        if (remoteResult) return remoteResult;
+        if (effectiveRemote) {
+          const missingFields: string[] = [];
+          if (!effectiveRemote.host)
+            missingFields.push('SSH host (user settings or ide.vscode.remote.host)');
+          if (!effectiveRemote.user)
+            missingFields.push('SSH user (user settings or ide.vscode.remote.user)');
+          if (missingFields.length > 0) {
+            fallbackReason = `Remote SSH configuration incomplete (${missingFields.join(', ')})`;
+          }
+        }
+      } else if (mode === 'local') {
+        return this.buildLocalVSCodeResult(worktree.path, fallbackReason);
+      }
+    }
+
+    // Final fallback: local open
+    return this.buildLocalVSCodeResult(worktree.path, fallbackReason);
+  }
+
+  /**
+   * Preferred VS Code mode ordering
+   */
+  private getVSCodeModeOrder(config?: AgorIDEVSCodeSettings): VSCodeOpenMode[] {
+    const baseOrder: VSCodeOpenMode[] = ['remote-ssh', 'local'];
+    const preferred = config?.preferred_mode;
+    if (!preferred) {
+      return baseOrder;
+    }
+    return [preferred, ...baseOrder.filter((mode) => mode !== preferred)];
+  }
+
+  /**
+   * Merge global remote config with user-level SSH config (user overrides)
+   */
+  private mergeRemoteConfig(
+    globalRemote: AgorIDESSHSettings | undefined,
+    userSsh?: UserSSHConfig
+  ): AgorIDESSHSettings | undefined {
+    const userOverrides =
+      userSsh?.host !== undefined ||
+      userSsh?.port !== undefined ||
+      userSsh?.user !== undefined ||
+      userSsh?.target !== undefined;
+
+    const merged: AgorIDESSHSettings = {
+      host: userSsh?.host ?? globalRemote?.host,
+      port: userSsh?.port ?? globalRemote?.port,
+      user: userSsh?.user ?? globalRemote?.user,
+      target: userOverrides ? userSsh?.target || undefined : globalRemote?.target,
+    };
+
+    const hasValue =
+      merged.host !== undefined ||
+      merged.port !== undefined ||
+      merged.user !== undefined ||
+      merged.target !== undefined;
+    return hasValue ? merged : undefined;
+  }
+
+  /**
+   * Fetch user-level SSH configuration (if available)
+   */
+  private async getUserSshConfig(userId: UserID): Promise<UserSSHConfig | undefined> {
+    try {
+      const usersService = this.app.service('users') as unknown as {
+        get: (id: UserID, params?: WorktreeParams) => Promise<User>;
+      };
+      const user = await usersService.get(userId, { provider: undefined } as WorktreeParams);
+      return user?.ssh_config;
+    } catch (error) {
+      console.warn(`[WorktreesService] Failed to load user SSH config for ${userId}:`, error);
+      return undefined;
+    }
+  }
+
+  /**
+   * Encode filesystem path for vscode:// URIs
+   */
+  private getPathSuffix(path: string): string {
+    const normalized = path.replace(/\\/g, '/');
+    const segments = normalized.split('/').filter((segment) => segment.length > 0);
+    if (segments.length === 0) {
+      return '/';
+    }
+    return `/${segments.map((segment) => encodeURIComponent(segment)).join('/')}`;
+  }
+
+  /**
+   * Build vscode://vscode-remote/tunnel URI when VS Code Tunnel configured
+   */
+  /**
+   * Build vscode://file URI for local fallback
+   */
+  private buildLocalVSCodeResult(path: string, reason?: string): VSCodeOpenResult {
+    const pathSuffix = this.getPathSuffix(path);
+    return {
+      enabled: true,
+      mode: 'local',
+      uri: `vscode://file${pathSuffix}`,
+      reason,
+    };
+  }
+
+  /**
+   * Build vscode://vscode-remote URI for Remote SSH (if configured)
+   */
+  private buildRemoteVSCodeResult(
+    remote: AgorIDESSHSettings | undefined,
+    path: string
+  ): VSCodeOpenResult | null {
+    if (!remote || !remote.host || !remote.user) {
+      return null;
+    }
+
+    const host = remote.host;
+    const user = remote.user;
+    const port = remote.port ?? 22;
+    const pathSuffix = this.getPathSuffix(path);
+    const targetLabel =
+      remote.target && remote.target.trim().length > 0
+        ? remote.target.trim()
+        : `${user}@${host}${port !== 22 ? `:${port}` : ''}`;
+
+    const uri = `vscode://vscode-remote/ssh-remote+${targetLabel}${pathSuffix}`;
+    const sshCommand = port === 22 ? `ssh ${user}@${host}` : `ssh -p ${port} ${user}@${host}`;
+
+    return {
+      enabled: true,
+      mode: 'remote-ssh',
+      uri,
+      sshCommand,
+      targetLabel,
+    };
+  }
+
+  /**
+   * Custom method: Generate code-server (web) URL for this worktree
+   */
+  async getCodeServerTarget(
+    id: WorktreeID,
+    params?: WorktreeParams
+  ): Promise<CodeServerOpenResult> {
+    const worktree = await this.get(id, params);
+    const codeServerConfig = this.config.ide?.code_server;
+
+    if (codeServerConfig?.enabled === false) {
+      return {
+        enabled: false,
+        reason: 'code-server integration disabled (ide.code_server.enabled=false)',
+      };
+    }
+
+    const template = codeServerConfig?.url_template?.trim();
+    if (!template) {
+      return {
+        enabled: false,
+        reason: 'ide.code_server.url_template not configured',
+      };
+    }
+
+    const repo = (await this.app.service('repos').get(worktree.repo_id, params)) as Repo;
+
+    try {
+      const compiled = Handlebars.compile(template, { noEscape: true });
+      const url = compiled({ worktree, repo });
+      if (!url || typeof url !== 'string') {
+        return {
+          enabled: false,
+          reason: 'code-server URL template did not produce a valid string',
+        };
+      }
+      return { enabled: true, url };
+    } catch (error) {
+      const reason =
+        error instanceof Error
+          ? error.message
+          : 'code-server URL template rendering failed (unknown error)';
+      return { enabled: false, reason };
+    }
+  }
+
+  /**
+   * Execute VS Code locally on the daemon machine
+   * Opens the worktree directory using the 'code' CLI command
+   */
+  async executeVSCodeLocally(id: WorktreeID, params?: WorktreeParams): Promise<string> {
+    const worktree = await this.get(id, params);
+
+    try {
+      console.log(`📝 Opening worktree ${worktree.name} in VS Code locally: ${worktree.path}`);
+
+      // Execute the 'code' command with the worktree path
+      const command = `code "${worktree.path}"`;
+
+      // Execute synchronously without waiting for output
+      // This will trigger VS Code to open in the background
+      const { exec } = await import('node:child_process');
+      exec(command, (error, stdout, stderr) => {
+        if (error) {
+          console.error(`Failed to execute code command for ${worktree.name}:`, error);
+          throw error;
+        }
+        if (stderr) {
+          console.warn(`code command stderr for ${worktree.name}:`, stderr);
+        }
+      });
+
+      return `Executed 'code ${worktree.path}' command on daemon machine`;
+    } catch (error) {
+      console.error(`Failed to open VS Code locally for ${worktree.name}:`, error);
+      throw new Error(
+        `Failed to open VS Code locally: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   }
@@ -1203,5 +1460,6 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
  * Service factory function
  */
 export function createWorktreesService(db: Database, app: Application): WorktreesService {
-  return new WorktreesService(db, app);
+  const config = app.get('agorConfig') as AgorConfig | undefined;
+  return new WorktreesService(db, app, config || {});
 }

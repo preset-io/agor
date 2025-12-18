@@ -125,6 +125,14 @@ export function registerHandlebarsHelpers(): void {
       .join(replace);
   });
 
+  /**
+   * Encode URI component
+   * Usage: {{encodeURIComponent worktree.path}}
+   */
+  Handlebars.registerHelper('encodeURIComponent', (value: unknown): string => {
+    return encodeURIComponent(String(value ?? ''));
+  });
+
   // ===== Conditional Helpers =====
 
   /**

@@ -30,6 +30,7 @@ import type { WorktreeUpdate } from '../WorktreeModal/tabs/GeneralTab';
 import { AboutTab } from './AboutTab';
 import { AgenticToolsSection } from './AgenticToolsSection';
 import { BoardsTable } from './BoardsTable';
+import { IDETab } from './IDETab';
 import { MCPServersTable } from './MCPServersTable';
 import { ReposTable } from './ReposTable';
 import { UsersTable } from './UsersTable';
@@ -194,6 +195,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           icon: <ApiOutlined />,
         },
         {
+          key: 'ide',
+          label: 'IDE / VS Code',
+          icon: <InfoCircleOutlined />,
+        },
+        {
           key: 'agentic-tools',
           label: 'Agentic Tools',
           icon: <RobotOutlined />,
@@ -276,6 +282,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             onDelete={onDeleteMCPServer}
           />
         );
+      case 'ide':
+        return <IDETab client={client} />;
       case 'agentic-tools':
         return <AgenticToolsSection client={client} />;
       case 'users':

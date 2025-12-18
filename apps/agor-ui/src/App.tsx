@@ -86,7 +86,7 @@ function DeviceRouter() {
 function AppContent() {
   const { token } = theme.useToken();
   const { getCurrentThemeConfig } = useTheme();
-  const { showSuccess, showError, showLoading, destroy } = useThemedMessage();
+  const { showSuccess, showError, showLoading, showWarning, destroy } = useThemedMessage();
 
   // Fetch daemon auth and instance configuration
   const {
@@ -802,6 +802,109 @@ function AppContent() {
     }
   };
 
+  const handleOpenVSCode = async (worktreeId: string) => {
+    if (!client) return;
+    const key = `open-vscode-${worktreeId}`;
+    try {
+      showLoading('Preparing VS Code connection...', { key });
+      const result = await client.service('worktrees-open-vscode').create({ worktreeId });
+
+      if (!result || !result.enabled) {
+        const reason = result?.reason || 'VS Code integration is not configured';
+        showError(reason, { key });
+        return;
+      }
+
+      // Local development: execute code command directly
+      if (result.mode === 'local') {
+        try {
+          // Execute code command via backend to open worktree directory
+          await client.service('worktrees-open-vscode').create({
+            worktreeId,
+            executeLocally: true,
+          });
+          showSuccess('Executed code command locally to open worktree', { key });
+          return;
+        } catch (error) {
+          console.error('Failed to execute code command:', error);
+          // If execution fails, continue to try browser URI
+        }
+      }
+
+      // Non-local mode: use browser URI
+      if (!result.uri) {
+        const reason = result?.reason || 'VS Code URI is not available';
+        showError(reason, { key });
+        return;
+      }
+
+      const openLink = (uri: string) => {
+        if (typeof document === 'undefined') return;
+        const anchor = document.createElement('a');
+        anchor.href = uri;
+        anchor.style.display = 'none';
+        anchor.rel = 'noreferrer';
+        document.body.appendChild(anchor);
+        anchor.click();
+        document.body.removeChild(anchor);
+      };
+
+      const uriWithNewWindow = result.uri
+        ? `${result.uri}${result.uri.includes('?') ? '&' : '?'}windowId=agor-${Date.now()}`
+        : undefined;
+
+      if (uriWithNewWindow) {
+        openLink(uriWithNewWindow);
+      }
+
+      const successMessage =
+        result.mode === 'remote-ssh'
+          ? 'VS Code Remote SSH triggered'
+          : 'VS Code opening worktree locally';
+      showSuccess(successMessage, { key });
+
+      if (result.reason) {
+        showWarning(result.reason);
+      }
+    } catch (error) {
+      showError(
+        `Failed to open VS Code: ${error instanceof Error ? error.message : String(error)}`,
+        {
+          key,
+        }
+      );
+    }
+  };
+
+  const handleOpenCodeServer = async (worktreeId: string) => {
+    if (!client) return;
+    const key = `open-codeserver-${worktreeId}`;
+    try {
+      showLoading('Preparing code-server link...', { key });
+      const result = await client.service('worktrees-open-codeserver').create({ worktreeId });
+
+      if (!result || !result.enabled || !result.url) {
+        const reason = result?.reason || 'code-server integration is not configured';
+        showError(reason, { key });
+        return;
+      }
+
+      window.open(result.url, '_blank', 'noopener');
+      showSuccess('Opened code-server in browser', { key });
+
+      if (result.reason) {
+        showWarning(result.reason);
+      }
+    } catch (error) {
+      showError(
+        `Failed to open code-server: ${error instanceof Error ? error.message : String(error)}`,
+        {
+          key,
+        }
+      );
+    }
+  };
+
   // Handle MCP server CRUD
   const handleCreateMCPServer = async (data: CreateMCPServerInput) => {
     if (!client) return;
@@ -1054,6 +1157,8 @@ function AppContent() {
                 onUnarchiveWorktree={handleUnarchiveWorktree}
                 onUpdateWorktree={handleUpdateWorktree}
                 onCreateWorktree={handleCreateWorktree}
+                onOpenVSCode={handleOpenVSCode}
+                onOpenCodeServer={handleOpenCodeServer}
                 onStartEnvironment={handleStartEnvironment}
                 onStopEnvironment={handleStopEnvironment}
                 onNukeEnvironment={handleNukeEnvironment}
@@ -1125,6 +1230,8 @@ function AppContent() {
                 onUnarchiveWorktree={handleUnarchiveWorktree}
                 onUpdateWorktree={handleUpdateWorktree}
                 onCreateWorktree={handleCreateWorktree}
+                onOpenVSCode={handleOpenVSCode}
+                onOpenCodeServer={handleOpenCodeServer}
                 onStartEnvironment={handleStartEnvironment}
                 onStopEnvironment={handleStopEnvironment}
                 onNukeEnvironment={handleNukeEnvironment}
@@ -1196,6 +1303,8 @@ function AppContent() {
                 onUnarchiveWorktree={handleUnarchiveWorktree}
                 onUpdateWorktree={handleUpdateWorktree}
                 onCreateWorktree={handleCreateWorktree}
+                onOpenVSCode={handleOpenVSCode}
+                onOpenCodeServer={handleOpenCodeServer}
                 onStartEnvironment={handleStartEnvironment}
                 onStopEnvironment={handleStopEnvironment}
                 onNukeEnvironment={handleNukeEnvironment}

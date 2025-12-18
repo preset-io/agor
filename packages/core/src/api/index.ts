@@ -8,6 +8,7 @@ import type {
   AuthenticationResult,
   Board,
   BoardExportBlob,
+  CodeServerOpenResult,
   ContextFileDetail,
   ContextFileListItem,
   MCPServer,
@@ -16,6 +17,7 @@ import type {
   Session,
   Task,
   User,
+  VSCodeOpenResult,
   Worktree,
 } from '@agor/core/types';
 import authentication from '@feathersjs/authentication-client';
@@ -46,6 +48,8 @@ export interface ServiceTypes {
   repos: Repo;
   'repos/local': Repo;
   worktrees: Worktree;
+  'worktrees-open-vscode': VSCodeOpenResult;
+  'worktrees-open-codeserver': import('../types/ide').CodeServerOpenResult;
   users: User;
   'mcp-servers': MCPServer;
   context: ContextFileListItem | ContextFileDetail; // GET /context returns list, GET /context/:path returns detail
@@ -257,6 +261,16 @@ export interface WorktreesService extends AgorService<Worktree> {
   checkHealth(id: string, params?: Params): Promise<Worktree>;
 
   /**
+   * Generate VS Code target (tunnel / SSH / local)
+   */
+  getVSCodeTarget(id: string, params?: Params): Promise<VSCodeOpenResult>;
+
+  /**
+   * Generate code-server URL for browser-based IDE
+   */
+  getCodeServerTarget(id: string, params?: Params): Promise<CodeServerOpenResult>;
+
+  /**
    * Archive or delete a worktree with filesystem cleanup options
    */
   archiveOrDelete(
@@ -272,6 +286,20 @@ export interface WorktreesService extends AgorService<Worktree> {
    * Unarchive a worktree
    */
   unarchive(id: string, options?: { boardId?: string }, params?: Params): Promise<Worktree>;
+}
+
+/**
+ * Service for opening VS Code with a worktree
+ */
+export interface WorktreesOpenVSCodeService {
+  create(data: { worktreeId: string }, params?: Params): Promise<VSCodeOpenResult>;
+}
+
+/**
+ * Service for opening code-server with a worktree
+ */
+export interface WorktreesOpenCodeServerService {
+  create(data: { worktreeId: string }, params?: Params): Promise<CodeServerOpenResult>;
 }
 
 /**
@@ -292,6 +320,10 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   // Bulk operation endpoints
   service(path: 'messages/bulk'): MessagesService;
   service(path: 'tasks/bulk'): TasksService;
+
+  // IDE integration endpoints
+  service(path: 'worktrees-open-vscode'): WorktreesOpenVSCodeService;
+  service(path: 'worktrees-open-codeserver'): WorktreesOpenCodeServerService;
 
   // Standard services (CRUD only)
   service(path: 'users'): AgorService<User>;
