@@ -420,18 +420,11 @@ export const TaskBlock = React.memo<TaskBlockProps>(
 
         {/* Right column: Content */}
         <Flex vertical flex={1} style={{ minWidth: 0 }}>
-          <Flex
-            align="center"
-            wrap
-            gap={token.sizeUnit / 2}
-            style={{ marginBottom: token.sizeUnit }}
-          >
-            <Typography.Text>
-              {typeof task.description === 'string'
-                ? task.description || 'User Prompt'
-                : 'User Prompt'}
-            </Typography.Text>
-          </Flex>
+          <Typography.Text ellipsis style={{ marginBottom: token.sizeUnit }}>
+            {typeof task.description === 'string'
+              ? task.description || 'User Prompt'
+              : 'User Prompt'}
+          </Typography.Text>
 
           {/* Task metadata */}
           <Flex wrap gap={token.sizeUnit}>

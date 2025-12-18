@@ -1,9 +1,19 @@
-/* Global styles for Agor UI */
-
 /* Import Inter font from Bunny Fonts CDN (privacy-friendly, GDPR compliant) */
 /* Weights: 400 (regular), 500 (medium), 600 (semibold) */
 /* Total size: ~75KB for Latin subset, cached across sites */
 @import url("https://fonts.bunny.net/css?family=inter:400,500,600&display=swap");
+
+/* Global styles for Agor UI */
+
+/* Fix Ant Design Collapse header title overflow for ellipsis truncation */
+.ant-collapse-header {
+  overflow: hidden;
+}
+
+.ant-collapse-header .ant-collapse-title {
+  overflow: hidden;
+  min-width: 0;
+}
 
 /* Blinking cursor animation for streaming messages */
 @keyframes blink {
