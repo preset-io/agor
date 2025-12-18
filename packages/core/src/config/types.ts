@@ -45,6 +45,20 @@ export interface AgorDaemonSettings {
   /** Daemon host (default: localhost) */
   host?: string;
 
+  /**
+   * Public URL for executors to reach the daemon.
+   *
+   * In local mode, defaults to `http://localhost:{port}`.
+   * In containerized (k8s) mode, should be the internal service URL.
+   *
+   * @example
+   * ```yaml
+   * daemon:
+   *   public_url: http://agor-daemon.agor.svc.cluster.local:3030
+   * ```
+   */
+  public_url?: string;
+
   /** Allow anonymous access (default: true for local mode) */
   allowAnonymous?: boolean;
 
@@ -178,6 +192,53 @@ export interface AgorExecutionSettings {
 
   /** Sync web passwords to Unix user passwords (default: true). When enabled, passwords are synced on user creation/update. */
   sync_unix_passwords?: boolean;
+
+  /**
+   * Executor command template for remote/containerized execution.
+   *
+   * When null/undefined (default), executors are spawned as local subprocesses.
+   * When set, the template is used to spawn executors in containers/pods.
+   *
+   * Template variables (substituted at spawn time):
+   * - {task_id} - Unique task identifier (for pod naming)
+   * - {command} - Executor command (prompt, git.clone, etc.)
+   * - {unix_user} - Target Unix username
+   * - {unix_user_uid} - Target Unix UID (for runAsUser)
+   * - {unix_user_gid} - Target Unix GID (for fsGroup)
+   * - {session_id} - Session ID (if available)
+   * - {worktree_id} - Worktree ID (if available)
+   *
+   * The template command receives JSON payload via stdin and should pipe it
+   * to `agor-executor --stdin`.
+   *
+   * @example Kubernetes execution
+   * ```yaml
+   * executor_command_template: |
+   *   kubectl run executor-{task_id} \
+   *     --image=ghcr.io/preset-io/agor-executor:latest \
+   *     --rm -i --restart=Never \
+   *     --overrides='{
+   *       "spec": {
+   *         "securityContext": {
+   *           "runAsUser": {unix_user_uid},
+   *           "fsGroup": {unix_user_gid}
+   *         }
+   *       }
+   *     }' \
+   *     -- agor-executor --stdin
+   * ```
+   *
+   * @example Docker execution
+   * ```yaml
+   * executor_command_template: |
+   *   docker run --rm -i \
+   *     --user {unix_user_uid}:{unix_user_gid} \
+   *     -v /data/agor:/data/agor \
+   *     ghcr.io/preset-io/agor-executor:latest \
+   *     agor-executor --stdin
+   * ```
+   */
+  executor_command_template?: string;
 }
 
 /**

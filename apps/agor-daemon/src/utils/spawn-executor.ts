@@ -1,13 +1,21 @@
 /**
  * Executor Spawning Utility
  *
- * Provides a reusable function to spawn the executor process for various commands.
- * Used by daemon services (repos, worktrees, terminals) to delegate operations
- * to the executor for proper Unix isolation.
+ * Provides a single function to spawn the executor process for all commands.
+ * Used by daemon services (repos, worktrees, terminals, tasks) to delegate
+ * operations to the executor for proper Unix isolation.
+ *
+ * DESIGN PHILOSOPHY:
+ * - All spawns are fire-and-forget (daemon doesn't wait for results)
+ * - Executor handles its own logging, status updates, and notifications via Feathers
+ * - Executor connects back to daemon via WebSocket for real-time communication
+ *
+ * EXECUTION MODES:
+ * 1. Local subprocess (default): Spawns executor as a child process
+ * 2. Templated/remote: Uses executor_command_template for k8s/docker/remote execution
  *
  * IMPERSONATION: When asUser is provided, the executor is spawned via `sudo su -`
- * to run as the target Unix user with fresh group memberships. This is the single
- * point where user impersonation happens - the executor itself runs as the target user.
+ * to run as the target Unix user with fresh group memberships.
  */
 
 import { spawn } from 'node:child_process';
@@ -18,16 +26,49 @@ import { buildSpawnArgs } from '@agor/core/unix';
 import jwt from 'jsonwebtoken';
 
 /**
- * Result from executor spawning
+ * Module-level daemon URL configuration.
+ * Set once at daemon startup via configureDaemonUrl().
+ * Used by getDaemonUrl() for all executor payloads.
  */
-export interface SpawnExecutorResult {
-  success: boolean;
-  data?: Record<string, unknown>;
-  error?: {
-    code: string;
-    message: string;
-    details?: Record<string, unknown>;
-  };
+let configuredDaemonUrl: string | null = null;
+
+/**
+ * Configure the daemon URL for executor payloads.
+ * Call this once at daemon startup.
+ *
+ * @param url - The URL executors should use to reach the daemon
+ *              (e.g., "http://agor-daemon.agor.svc.cluster.local:3030" for k8s)
+ */
+export function configureDaemonUrl(url: string): void {
+  configuredDaemonUrl = url;
+  console.log(`[Executor] Daemon URL configured: ${url}`);
+}
+
+/**
+ * Template variables for executor command template substitution.
+ * These are substituted into the executor_command_template at spawn time.
+ */
+export interface ExecutorTemplateVariables {
+  /** Unique task identifier (for pod/container naming) */
+  task_id?: string;
+
+  /** Executor command (prompt, git.clone, etc.) */
+  command?: string;
+
+  /** Target Unix username */
+  unix_user?: string;
+
+  /** Target Unix UID (for runAsUser in k8s) */
+  unix_user_uid?: number;
+
+  /** Target Unix GID (for fsGroup in k8s) */
+  unix_user_gid?: number;
+
+  /** Session ID (if available) */
+  session_id?: string;
+
+  /** Worktree ID (if available) */
+  worktree_id?: string;
 }
 
 /**
@@ -40,9 +81,6 @@ export interface SpawnExecutorOptions {
   /** Environment variables for executor process */
   env?: Record<string, string>;
 
-  /** Timeout in milliseconds (default: 5 minutes) */
-  timeout?: number;
-
   /** Log prefix for console output */
   logPrefix?: string;
 
@@ -52,6 +90,70 @@ export interface SpawnExecutorOptions {
    * This gives the executor fresh group memberships for the target user.
    */
   asUser?: string;
+
+  /**
+   * Executor command template for remote/containerized execution.
+   * When provided, uses template substitution instead of local subprocess.
+   * Takes precedence over local spawning.
+   */
+  executorCommandTemplate?: string;
+
+  /**
+   * Template variables for substitution in executor_command_template.
+   * Used when executorCommandTemplate is provided.
+   */
+  templateVariables?: ExecutorTemplateVariables;
+}
+
+/**
+ * Substitute template variables in the executor command template.
+ *
+ * Replaces placeholders like {task_id}, {unix_user}, etc. with actual values.
+ * Unknown placeholders are left as-is (for safety).
+ *
+ * @param template - The command template with {variable} placeholders
+ * @param variables - The values to substitute
+ * @returns The template with variables substituted
+ */
+export function substituteTemplateVariables(
+  template: string,
+  variables: ExecutorTemplateVariables
+): string {
+  let result = template;
+
+  // Substitute each known variable
+  const substitutions: Record<string, string | number | undefined> = {
+    task_id: variables.task_id,
+    command: variables.command,
+    unix_user: variables.unix_user,
+    unix_user_uid: variables.unix_user_uid,
+    unix_user_gid: variables.unix_user_gid,
+    session_id: variables.session_id,
+    worktree_id: variables.worktree_id,
+  };
+
+  for (const [key, value] of Object.entries(substitutions)) {
+    if (value !== undefined) {
+      // Replace all occurrences of {key} with the value
+      const placeholder = new RegExp(`\\{${key}\\}`, 'g');
+      result = result.replace(placeholder, String(value));
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Generate a unique task ID for executor pod/container naming.
+ * Uses a short random string that's safe for k8s resource names.
+ */
+export function generateTaskId(): string {
+  // Generate 8 character hex string (32 bits of entropy)
+  const bytes = new Uint8Array(4);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
 }
 
 /**
@@ -86,22 +188,50 @@ export function findExecutorPath(): string {
 }
 
 /**
- * Spawn executor process with JSON payload via stdin
+ * Spawn executor process with JSON payload via stdin (fire-and-forget)
  *
- * This is a general-purpose executor spawner for synchronous operations
- * (git clone, git worktree add/remove, etc.) where we wait for completion.
+ * This is the SINGLE entry point for all executor spawning. It:
+ * - Returns immediately after spawning (does NOT wait for completion)
+ * - Supports both local subprocess and templated (k8s/docker) execution
+ * - Logs stdout/stderr to daemon logs
  *
- * When asUser is provided, the executor is spawned via `sudo su -` to run
- * as the target Unix user with fresh group memberships.
+ * The executor is responsible for:
+ * - Completing all operations (git, DB updates, Unix groups)
+ * - Communicating with daemon via Feathers WebSocket client
+ * - Handling its own errors, logging, and status updates
+ * - Emitting events that the UI can display as toasts
  *
  * @param payload - JSON payload matching ExecutorPayload schema
  * @param options - Spawn options
- * @returns Promise resolving to executor result
  */
-export async function spawnExecutor(
+export function spawnExecutor(
   payload: Record<string, unknown>,
   options: SpawnExecutorOptions = {}
-): Promise<SpawnExecutorResult> {
+): void {
+  const { executorCommandTemplate, templateVariables, logPrefix = '[Executor]' } = options;
+
+  // Decide execution mode: templated or local
+  if (executorCommandTemplate) {
+    spawnExecutorWithTemplate(payload, {
+      ...options,
+      executorCommandTemplate,
+      templateVariables: {
+        command: payload.command as string,
+        task_id: generateTaskId(),
+        ...templateVariables,
+      },
+      logPrefix,
+    });
+  } else {
+    spawnExecutorLocal(payload, options);
+  }
+}
+
+/**
+ * Spawn executor as a local subprocess.
+ * stdout/stderr are inherited so logs appear in daemon output.
+ */
+function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExecutorOptions): void {
   const executorPath = findExecutorPath();
 
   // Default cwd to executor package directory for proper module resolution
@@ -112,7 +242,6 @@ export async function spawnExecutor(
   const {
     cwd = executorDir,
     env = process.env as Record<string, string>,
-    timeout = 5 * 60 * 1000, // 5 minutes default
     logPrefix = '[Executor]',
     asUser,
   } = options;
@@ -129,101 +258,121 @@ export async function spawnExecutor(
   console.log(`${logPrefix} Spawning executor at: ${executorPath}`);
   console.log(`${logPrefix} Command: ${payload.command}`);
 
-  return new Promise((resolve) => {
-    const executorProcess = spawn(cmd, args, {
-      cwd,
-      env: asUser ? undefined : { ...env }, // When impersonating, env is in the command; otherwise pass to spawn
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-
-    // Collect stdout and stderr
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
-
-    executorProcess.stdout?.on('data', (data) => {
-      stdoutChunks.push(data);
-      // Also log in real-time
-      console.log(`${logPrefix} ${data.toString().trim()}`);
-    });
-
-    executorProcess.stderr?.on('data', (data) => {
-      stderrChunks.push(data);
-      console.error(`${logPrefix} ${data.toString().trim()}`);
-    });
-
-    // Set up timeout
-    const timeoutId = setTimeout(() => {
-      console.error(`${logPrefix} Timeout after ${timeout}ms, killing process`);
-      executorProcess.kill('SIGTERM');
-      resolve({
-        success: false,
-        error: {
-          code: 'EXECUTOR_TIMEOUT',
-          message: `Executor timed out after ${timeout}ms`,
-          details: { command: payload.command },
-        },
-      });
-    }, timeout);
-
-    executorProcess.on('error', (error) => {
-      clearTimeout(timeoutId);
-      console.error(`${logPrefix} Spawn error:`, error.message);
-      resolve({
-        success: false,
-        error: {
-          code: 'EXECUTOR_SPAWN_FAILED',
-          message: error.message,
-        },
-      });
-    });
-
-    executorProcess.on('exit', (code) => {
-      clearTimeout(timeoutId);
-
-      const stdout = Buffer.concat(stdoutChunks).toString('utf-8').trim();
-      const stderr = Buffer.concat(stderrChunks).toString('utf-8').trim();
-
-      console.log(`${logPrefix} Exited with code ${code}`);
-
-      if (code === 0) {
-        // Try to parse JSON result from stdout
-        // The executor outputs the result as the last line of JSON
-        const lines = stdout.split('\n');
-        const lastLine = lines[lines.length - 1];
-
-        try {
-          const result = JSON.parse(lastLine);
-          resolve(result);
-        } catch {
-          // Not JSON, return raw output
-          resolve({
-            success: true,
-            data: { stdout, exitCode: code },
-          });
-        }
-      } else {
-        resolve({
-          success: false,
-          error: {
-            code: 'EXECUTOR_FAILED',
-            message: `Executor exited with code ${code}`,
-            details: { stdout, stderr, exitCode: code },
-          },
-        });
-      }
-    });
-
-    // Write JSON payload to stdin
-    executorProcess.stdin?.write(JSON.stringify(payload));
-    executorProcess.stdin?.end();
+  const executorProcess = spawn(cmd, args, {
+    cwd,
+    env: asUser ? undefined : { ...env }, // When impersonating, env is in the command; otherwise pass to spawn
+    stdio: ['pipe', 'inherit', 'inherit'], // stdin: pipe, stdout/stderr: inherit (show in daemon logs)
+    detached: false, // Don't detach - let daemon manage lifecycle
   });
+
+  // Log if process fails to spawn
+  executorProcess.on('error', (error) => {
+    console.error(`${logPrefix} Spawn error:`, error.message);
+  });
+
+  // Log when process exits (for debugging)
+  executorProcess.on('exit', (code) => {
+    if (code === 0) {
+      console.log(`${logPrefix} Executor completed successfully`);
+    } else {
+      console.error(`${logPrefix} Executor exited with code ${code}`);
+    }
+  });
+
+  // Write JSON payload to stdin and close it
+  executorProcess.stdin?.write(JSON.stringify(payload));
+  executorProcess.stdin?.end();
 }
 
 /**
- * Get daemon URL from environment or config
+ * Spawn executor using a command template (for k8s, docker, etc.).
+ *
+ * The template is executed via `sh -c` with the JSON payload piped to stdin.
+ * stdout/stderr are captured and logged (since kubectl needs to pipe them back).
+ *
+ * @example kubectl template
+ * ```
+ * kubectl run executor-{task_id} \
+ *   --image=ghcr.io/preset-io/agor-executor:latest \
+ *   --rm -i --restart=Never \
+ *   -- agor-executor --stdin
+ * ```
  */
-export function getDaemonUrl(port?: number): string {
-  const effectivePort = port || process.env.PORT || '3030';
+function spawnExecutorWithTemplate(
+  payload: Record<string, unknown>,
+  options: SpawnExecutorOptions & {
+    executorCommandTemplate: string;
+    templateVariables: ExecutorTemplateVariables;
+  }
+): void {
+  const { executorCommandTemplate, templateVariables, logPrefix = '[Executor]' } = options;
+
+  // Substitute template variables
+  const command = substituteTemplateVariables(executorCommandTemplate, templateVariables);
+
+  console.log(`${logPrefix} Templated execution mode`);
+  console.log(`${logPrefix} Task ID: ${templateVariables.task_id}`);
+  console.log(`${logPrefix} Command: ${payload.command}`);
+  console.log(`${logPrefix} Template command (first 200 chars): ${command.slice(0, 200)}...`);
+
+  // Execute the template command via sh -c
+  // Use pipe for stdout/stderr so we can capture kubectl output and log it
+  const executorProcess = spawn('sh', ['-c', command], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+
+  // Log stdout in real-time
+  executorProcess.stdout?.on('data', (data) => {
+    console.log(`${logPrefix} ${data.toString().trim()}`);
+  });
+
+  // Log stderr in real-time
+  executorProcess.stderr?.on('data', (data) => {
+    console.error(`${logPrefix} ${data.toString().trim()}`);
+  });
+
+  // Log if process fails to spawn
+  executorProcess.on('error', (error) => {
+    console.error(`${logPrefix} Spawn error:`, error.message);
+  });
+
+  // Log when process exits
+  executorProcess.on('exit', (code) => {
+    if (code === 0) {
+      console.log(
+        `${logPrefix} Executor completed successfully (task: ${templateVariables.task_id})`
+      );
+    } else {
+      console.error(
+        `${logPrefix} Executor exited with code ${code} (task: ${templateVariables.task_id})`
+      );
+    }
+  });
+
+  // Write JSON payload to stdin and close it
+  executorProcess.stdin?.write(JSON.stringify(payload));
+  executorProcess.stdin?.end();
+}
+
+/**
+ * Get daemon URL for executor communication.
+ *
+ * Priority:
+ * 1. Module-level configured URL (set via configureDaemonUrl at startup)
+ * 2. Environment variable PORT with localhost
+ * 3. Default localhost:3030
+ *
+ * In containerized (k8s) mode, configureDaemonUrl() should be called at startup
+ * with the internal service URL (e.g., http://agor-daemon.agor.svc.cluster.local:3030)
+ */
+export function getDaemonUrl(): string {
+  // Use configured URL if set (for k8s/containerized mode)
+  if (configuredDaemonUrl) {
+    return configuredDaemonUrl;
+  }
+
+  // Otherwise, use localhost with port from env or default
+  const effectivePort = process.env.PORT || '3030';
   return `http://localhost:${effectivePort}`;
 }
 
@@ -277,100 +426,76 @@ export function generateSessionToken(app: {
   return createServiceToken(jwtSecret);
 }
 
+// ============================================================================
+// Config-aware executor spawning
+// ============================================================================
+
 /**
- * Options for fire-and-forget executor spawning
+ * Configuration for executor spawning.
+ * Loaded from ~/.agor/config.yaml execution section.
  */
-export interface FireAndForgetOptions {
-  /** Working directory for executor process */
-  cwd?: string;
-
-  /** Environment variables for executor process */
-  env?: Record<string, string>;
-
-  /** Log prefix for console output */
-  logPrefix?: string;
-
-  /**
-   * Unix user to run executor as (impersonation)
-   * When set, spawns via `sudo su - $asUser -c 'node executor --stdin'`
-   * This gives the executor fresh group memberships for the target user.
-   */
-  asUser?: string;
+export interface ExecutorConfig {
+  /** Executor command template for containerized execution */
+  executor_command_template?: string;
+  /** Unix user to run executors as */
+  executor_unix_user?: string;
 }
 
 /**
- * Spawn executor process and return immediately (fire-and-forget)
+ * Create a configured spawn function with execution settings baked in.
  *
- * Unlike spawnExecutor(), this function:
- * - Does NOT wait for the process to complete
- * - Does NOT parse stdout for results
- * - Returns immediately after spawning
+ * This factory creates a spawn function that automatically includes
+ * the executor_command_template from config. Use this when you have
+ * access to config at initialization time.
  *
- * The executor is responsible for:
- * - Completing all operations (git, DB updates, Unix groups)
- * - Communicating with daemon via Feathers WebSocket client
- * - Handling its own errors and logging
+ * @example
+ * ```typescript
+ * const config = await loadConfig();
+ * const spawn = createConfiguredSpawner(config.execution);
  *
- * When asUser is provided, the executor is spawned via `sudo su -` to run
- * as the target Unix user with fresh group memberships.
- *
- * @param payload - JSON payload matching ExecutorPayload schema
- * @param options - Spawn options
+ * // Now spawn automatically uses template if configured
+ * spawn({ command: 'prompt', ... }, { logPrefix: '[Task]' });
+ * ```
  */
-export function spawnExecutorFireAndForget(
-  payload: Record<string, unknown>,
-  options: FireAndForgetOptions = {}
-): void {
-  const executorPath = findExecutorPath();
-
-  // Default cwd to executor package directory for proper module resolution
-  // ESM imports resolve relative to the file location, and pnpm's node_modules
-  // structure requires running from the package directory
-  const executorDir = path.dirname(path.dirname(executorPath)); // Go up from bin/agor-executor or dist/cli.js
-
-  const {
-    cwd = executorDir,
-    env = process.env as Record<string, string>,
-    logPrefix = '[Executor]',
-    asUser,
-  } = options;
-
-  // Build spawn command - handles impersonation via sudo su - when asUser is set
-  const { cmd, args } = buildSpawnArgs('node', [executorPath, '--stdin'], {
-    asUser,
-    env: asUser ? env : undefined, // Only inject env when impersonating (sudo su - ignores spawn env)
-  });
-
-  if (asUser) {
-    console.log(`${logPrefix} 🔥 Fire-and-forget: Spawning executor as user: ${asUser}`);
-  }
-  console.log(`${logPrefix} 🔥 Fire-and-forget: Spawning executor at: ${executorPath}`);
-  console.log(`${logPrefix} Command: ${payload.command}`);
-
-  const executorProcess = spawn(cmd, args, {
-    cwd,
-    env: asUser ? undefined : { ...env }, // When impersonating, env is in the command; otherwise pass to spawn
-    stdio: ['pipe', 'inherit', 'inherit'], // stdin: pipe, stdout/stderr: inherit (show in daemon logs)
-    detached: false, // Don't detach - let daemon manage lifecycle
-  });
-
-  // Log if process fails to spawn
-  executorProcess.on('error', (error) => {
-    console.error(`${logPrefix} ❌ Spawn error:`, error.message);
-  });
-
-  // Log when process exits (for debugging)
-  executorProcess.on('exit', (code) => {
-    if (code === 0) {
-      console.log(`${logPrefix} ✅ Executor completed successfully`);
-    } else {
-      console.error(`${logPrefix} ❌ Executor exited with code ${code}`);
-    }
-  });
-
-  // Write JSON payload to stdin and close it
-  executorProcess.stdin?.write(JSON.stringify(payload));
-  executorProcess.stdin?.end();
-
-  // Return immediately - don't wait for process to complete
+export function createConfiguredSpawner(executionConfig?: ExecutorConfig) {
+  return function configuredSpawnExecutor(
+    payload: Record<string, unknown>,
+    options: Omit<SpawnExecutorOptions, 'executorCommandTemplate'> = {}
+  ): void {
+    spawnExecutor(payload, {
+      ...options,
+      executorCommandTemplate: executionConfig?.executor_command_template,
+      asUser: options.asUser ?? executionConfig?.executor_unix_user,
+    });
+  };
 }
+
+// ============================================================================
+// DEPRECATED: Legacy exports for backward compatibility during migration
+// These will be removed once all callers are updated
+// ============================================================================
+
+/**
+ * @deprecated Use spawnExecutor instead. This alias exists for backward compatibility.
+ */
+export const spawnExecutorFireAndForget = spawnExecutor;
+
+/**
+ * @deprecated SpawnExecutorResult is no longer used since we don't wait for results.
+ * Kept for backward compatibility during migration.
+ */
+export interface SpawnExecutorResult {
+  success: boolean;
+  data?: Record<string, unknown>;
+  error?: {
+    code: string;
+    message: string;
+    details?: Record<string, unknown>;
+  };
+}
+
+/**
+ * @deprecated FireAndForgetOptions is now just SpawnExecutorOptions.
+ * Kept for backward compatibility during migration.
+ */
+export type FireAndForgetOptions = SpawnExecutorOptions;

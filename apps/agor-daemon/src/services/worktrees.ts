@@ -222,7 +222,8 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     // CASCADE will clean up related comments automatically
     const result = await super.remove(id, params);
 
-    // Then remove from filesystem via executor (slower operation, happens in background)
+    // Then remove from filesystem via executor (fire-and-forget)
+    // Executor handles its own logging and error reporting via Feathers
     if (deleteFromFilesystem) {
       console.log(`🗑️  Spawning executor to remove worktree from filesystem: ${worktree.path}`);
 
@@ -234,17 +235,11 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
         sessionTokenService?: import('../services/session-token-service').SessionTokenService;
       };
 
-      // Fire and forget - don't block on filesystem removal
-      (async () => {
-        try {
-          const sessionToken = appWithToken.sessionTokenService
-            ? await appWithToken.sessionTokenService.generateToken(
-                'worktree-remove',
-                userId || 'anonymous'
-              )
-            : '';
-
-          const execResult = await spawnExecutor(
+      // Generate token and spawn executor (fire-and-forget)
+      appWithToken.sessionTokenService
+        ?.generateToken('worktree-remove', userId || 'anonymous')
+        .then((sessionToken) => {
+          spawnExecutor(
             {
               command: 'git.worktree.remove',
               sessionToken,
@@ -257,30 +252,15 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
             },
             {
               logPrefix: `[WorktreesService.remove ${worktree.name}]`,
-              timeout: 2 * 60 * 1000, // 2 minutes
             }
           );
-
-          // Revoke session token
-          if (sessionToken) {
-            appWithToken.sessionTokenService?.revokeToken(sessionToken);
-          }
-
-          if (execResult.success) {
-            console.log(`✅ Worktree removed from filesystem successfully`);
-          } else {
-            console.error(
-              `⚠️  Executor failed to remove worktree from filesystem:`,
-              execResult.error?.message
-            );
-          }
-        } catch (error) {
+        })
+        .catch((error) => {
           console.error(
-            `⚠️  Failed to spawn executor for worktree removal:`,
+            `⚠️  Failed to generate session token for worktree removal:`,
             error instanceof Error ? error.message : String(error)
           );
-        }
-      })();
+        });
     }
 
     return result as Worktree;
@@ -321,101 +301,66 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       }
     }
 
-    // Perform filesystem action via executor (before DB changes)
+    // Perform filesystem action via executor (fire-and-forget)
+    // Executor handles its own logging and error reporting via Feathers
     // Using executor ensures proper Unix isolation for file operations
     const userId = (params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined;
     const appWithToken = this.app as unknown as {
       sessionTokenService?: import('../services/session-token-service').SessionTokenService;
     };
 
-    let filesRemoved = 0;
     if (filesystemAction === 'cleaned') {
       console.log(`🧹 Spawning executor to clean worktree filesystem: ${worktree.path}`);
-      try {
-        const sessionToken = appWithToken.sessionTokenService
-          ? await appWithToken.sessionTokenService.generateToken(
-              'worktree-clean',
-              userId || 'anonymous'
-            )
-          : '';
-
-        const execResult = await spawnExecutor(
-          {
-            command: 'git.worktree.clean',
-            sessionToken,
-            daemonUrl: getDaemonUrl(),
-            params: {
-              worktreePath: worktree.path,
+      appWithToken.sessionTokenService
+        ?.generateToken('worktree-clean', userId || 'anonymous')
+        .then((sessionToken) => {
+          spawnExecutor(
+            {
+              command: 'git.worktree.clean',
+              sessionToken,
+              daemonUrl: getDaemonUrl(),
+              params: {
+                worktreePath: worktree.path,
+              },
             },
-          },
-          {
-            logPrefix: `[WorktreesService.clean ${worktree.name}]`,
-            timeout: 5 * 60 * 1000, // 5 minutes for large worktrees
-          }
-        );
-
-        // Revoke session token
-        if (sessionToken) {
-          appWithToken.sessionTokenService?.revokeToken(sessionToken);
-        }
-
-        if (execResult.success) {
-          filesRemoved = (execResult.data as { filesRemoved?: number })?.filesRemoved ?? 0;
-          console.log(`✅ Cleaned ${filesRemoved} files from ${worktree.name}`);
-        } else {
-          console.error(`⚠️  Executor failed to clean worktree:`, execResult.error?.message);
-        }
-      } catch (error) {
-        console.error(
-          `⚠️  Failed to spawn executor for worktree cleaning:`,
-          error instanceof Error ? error.message : String(error)
-        );
-        // Continue with archive/delete even if clean fails
-      }
+            {
+              logPrefix: `[WorktreesService.clean ${worktree.name}]`,
+            }
+          );
+        })
+        .catch((error) => {
+          console.error(
+            `⚠️  Failed to generate session token for worktree cleaning:`,
+            error instanceof Error ? error.message : String(error)
+          );
+        });
     } else if (filesystemAction === 'deleted') {
       console.log(`🗑️  Spawning executor to delete worktree from filesystem: ${worktree.path}`);
-      try {
-        const sessionToken = appWithToken.sessionTokenService
-          ? await appWithToken.sessionTokenService.generateToken(
-              'worktree-delete',
-              userId || 'anonymous'
-            )
-          : '';
-
-        const execResult = await spawnExecutor(
-          {
-            command: 'git.worktree.remove',
-            sessionToken,
-            daemonUrl: getDaemonUrl(),
-            params: {
-              worktreeId: worktree.worktree_id,
-              worktreePath: worktree.path,
-              deleteDbRecord: false, // Daemon handles DB deletion separately
+      appWithToken.sessionTokenService
+        ?.generateToken('worktree-delete', userId || 'anonymous')
+        .then((sessionToken) => {
+          spawnExecutor(
+            {
+              command: 'git.worktree.remove',
+              sessionToken,
+              daemonUrl: getDaemonUrl(),
+              params: {
+                worktreeId: worktree.worktree_id,
+                worktreePath: worktree.path,
+                deleteDbRecord: false, // Daemon handles DB deletion separately
+              },
             },
-          },
-          {
-            logPrefix: `[WorktreesService.delete ${worktree.name}]`,
-            timeout: 2 * 60 * 1000, // 2 minutes
-          }
-        );
-
-        // Revoke session token
-        if (sessionToken) {
-          appWithToken.sessionTokenService?.revokeToken(sessionToken);
-        }
-
-        if (execResult.success) {
-          console.log(`✅ Deleted worktree from filesystem: ${worktree.name}`);
-        } else {
-          console.error(`⚠️  Executor failed to delete worktree:`, execResult.error?.message);
-        }
-      } catch (error) {
-        console.error(
-          `⚠️  Failed to spawn executor for worktree deletion:`,
-          error instanceof Error ? error.message : String(error)
-        );
-        // Continue with archive/delete even if filesystem deletion fails
-      }
+            {
+              logPrefix: `[WorktreesService.delete ${worktree.name}]`,
+            }
+          );
+        })
+        .catch((error) => {
+          console.error(
+            `⚠️  Failed to generate session token for worktree deletion:`,
+            error instanceof Error ? error.message : String(error)
+          );
+        });
     }
 
     // Metadata action: archive or delete

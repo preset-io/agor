@@ -91,6 +91,7 @@ import { NotFoundError } from '@agor/core/utils/errors';
 
 // Executor spawning utility for fire-and-forget Unix operations
 import {
+  configureDaemonUrl,
   createServiceToken,
   getDaemonUrl,
   spawnExecutorFireAndForget,
@@ -558,7 +559,10 @@ async function main() {
 
     console.log(`[Daemon] Using executor at: ${executorPath}`);
 
-    const daemonUrl = `http://localhost:${DAEMON_PORT}`;
+    // Configure daemon URL for executor payloads
+    // Uses config.daemon.public_url if set (for k8s), otherwise defaults to localhost
+    const daemonUrl = config.daemon?.public_url || `http://localhost:${DAEMON_PORT}`;
+    configureDaemonUrl(daemonUrl);
 
     // =========================================================================
     // DETERMINE UNIX USER FOR EXECUTOR BASED ON unix_user_mode

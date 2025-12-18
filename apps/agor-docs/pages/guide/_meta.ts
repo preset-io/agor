@@ -23,4 +23,5 @@ export default {
     title: 'Deployment',
   },
   'multiplayer-unix-isolation': 'Full Multiplayer Mode',
+  'containerized-execution': 'Containerized Execution',
 };
