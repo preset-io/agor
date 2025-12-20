@@ -28,11 +28,8 @@ export class ServiceJWTStrategy extends JWTStrategy {
    */
   // biome-ignore lint/suspicious/noExplicitAny: Feathers type compatibility
   async getEntity(id: string, params: Params): Promise<any> {
-    console.log('[ServiceJWTStrategy] getEntity() called:', { sub: id });
-
     // Check if this is a service token
     if (id === 'executor-service') {
-      console.log('[ServiceJWTStrategy] Service token detected, returning synthetic service user');
       return {
         user_id: 'executor-service',
         email: 'executor@agor.internal',
@@ -43,7 +40,6 @@ export class ServiceJWTStrategy extends JWTStrategy {
     }
 
     // Regular user token - use standard lookup
-    console.log('[ServiceJWTStrategy] Regular user token, calling parent getEntity()');
     return super.getEntity(id, params);
   }
 
@@ -55,8 +51,6 @@ export class ServiceJWTStrategy extends JWTStrategy {
    */
   // biome-ignore lint/suspicious/noExplicitAny: Feathers type compatibility
   async authenticate(authentication: any, params: any): Promise<any> {
-    console.log('[ServiceJWTStrategy] authenticate() called');
-
     // Call parent to verify JWT signature and get payload
     const result = await super.authenticate(authentication, params);
 
@@ -64,8 +58,6 @@ export class ServiceJWTStrategy extends JWTStrategy {
     const payload = result.authentication?.payload as { sub?: string; type?: string } | undefined;
 
     if (payload?.type === 'service' && payload?.sub === 'executor-service') {
-      console.log('[ServiceJWTStrategy] Authenticated as service account');
-
       // Override user in result with service account
       return {
         ...result,

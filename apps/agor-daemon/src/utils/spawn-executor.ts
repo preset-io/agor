@@ -103,6 +103,12 @@ export interface SpawnExecutorOptions {
    * Used when executorCommandTemplate is provided.
    */
   templateVariables?: ExecutorTemplateVariables;
+
+  /**
+   * Callback when executor process exits.
+   * Used to clean up resources when executor terminates.
+   */
+  onExit?: (code: number | null) => void;
 }
 
 /**
@@ -270,13 +276,15 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
     console.error(`${logPrefix} Spawn error:`, error.message);
   });
 
-  // Log when process exits (for debugging)
+  // Log when process exits (for debugging) and call onExit callback
   executorProcess.on('exit', (code) => {
     if (code === 0) {
       console.log(`${logPrefix} Executor completed successfully`);
     } else {
       console.error(`${logPrefix} Executor exited with code ${code}`);
     }
+    // Call onExit callback if provided (for cleanup)
+    options.onExit?.(code);
   });
 
   // Write JSON payload to stdin and close it

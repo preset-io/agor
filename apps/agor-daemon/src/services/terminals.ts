@@ -378,6 +378,8 @@ export class TerminalsService {
         logPrefix: `[TerminalsService.executor ${userId.slice(0, 8)}]`,
         asUser: finalUnixUser || undefined,
         env: executorEnv,
+        // Clean up map when executor exits (handles crashes too)
+        onExit: () => this.handleExecutorExit(userId),
       }
     );
 

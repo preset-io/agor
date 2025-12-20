@@ -97,6 +97,19 @@ export async function handleZellijAttach(
     const socket = feathersClient.io;
     socket.emit('join', `user/${userId}/terminal`);
 
+    // Handle socket disconnect gracefully
+    // This happens when daemon restarts (watch mode) - just exit cleanly
+    // A new executor will be spawned when user reopens terminal
+    socket.on('disconnect', (reason: string) => {
+      console.log(`[zellij.attach] Socket disconnected: ${reason}`);
+      // Clean up and exit gracefully instead of crashing
+      if (ptyProcess) {
+        ptyProcess.kill();
+        ptyProcess = null;
+      }
+      process.exit(0);
+    });
+
     // Import node-pty dynamically (native module)
     // Using @homebridge/node-pty-prebuilt-multiarch for consistency with daemon
     const nodePty = (await import('@homebridge/node-pty-prebuilt-multiarch')) as {
@@ -113,15 +126,8 @@ export async function handleZellijAttach(
       ) => IPty;
     };
 
-    // Build zellij command
+    // Build zellij command - config path added after fs/actualHome are defined below
     const zellijArgs = ['attach', sessionName, '--create'];
-    if (tabName) {
-      // Create initial tab with name if specified
-      // Note: Zellij doesn't support --tab-name on attach, we'll create it after
-    }
-
-    console.log(`[zellij.attach] Spawning PTY: zellij ${zellijArgs.join(' ')}`);
-    console.log(`[zellij.attach] CWD: ${cwd}, Size: ${cols}x${rows}`);
 
     // Build clean environment for Zellij
     // CRITICAL: Strip existing Zellij env vars to prevent "attach to current session" error
@@ -131,11 +137,43 @@ export async function handleZellijAttach(
     delete cleanEnv.ZELLIJ_SESSION_NAME;
     delete cleanEnv.ZELLIJ_PANE_ID;
 
-    // Get actual home directory for current user (executor runs as impersonated user)
-    // The HOME env var may still point to daemon's home, causing permission errors
-    // when Zellij tries to write to ~/.cache/zellij/
-    const os = await import('node:os');
-    const actualHome = os.homedir();
+    // Get actual home directory and shell for current user from passwd
+    // os.homedir() doesn't work correctly with sudo impersonation - it returns the original user's home
+    // We must use getent passwd to get the correct values for the impersonated user
+    const fs = await import('node:fs');
+    const { execSync } = await import('node:child_process');
+
+    let actualHome = '/tmp'; // Fallback
+    let userShell = '/bin/bash'; // Fallback
+    try {
+      const passwdEntry = execSync(`getent passwd $(whoami)`, { encoding: 'utf-8' }).trim();
+      const fields = passwdEntry.split(':');
+      // passwd format: name:password:uid:gid:gecos:home:shell
+      if (fields.length >= 6 && fields[5]) {
+        actualHome = fields[5];
+      }
+      if (fields.length >= 7 && fields[6]) {
+        userShell = fields[6];
+      }
+    } catch (err) {
+      console.error(`[zellij.attach] Failed to get user info from passwd:`, err);
+    }
+    console.log(`[zellij.attach] User home: ${actualHome}, shell: ${userShell}`);
+
+    // Ensure Zellij cache directory exists - useradd -m creates home but not .cache/zellij
+    // Zellij needs this for plugin data, session info, and session serialization
+    const zellijCacheDir = `${actualHome}/.cache/zellij`;
+    if (!fs.existsSync(zellijCacheDir)) {
+      console.log(`[zellij.attach] Creating Zellij cache directory: ${zellijCacheDir}`);
+      fs.mkdirSync(zellijCacheDir, { recursive: true });
+    }
+
+    // Zellij will use ~/.config/zellij/config.kdl by default
+    // The docker entrypoint copies Agor's default config there on user creation
+    // Users can customize their config as needed
+
+    console.log(`[zellij.attach] Spawning PTY: zellij ${zellijArgs.join(' ')}`);
+    console.log(`[zellij.attach] CWD: ${cwd}, Size: ${cols}x${rows}`);
 
     // Spawn PTY with zellij
     const pty = nodePty.spawn('zellij', zellijArgs, {
@@ -146,6 +184,7 @@ export async function handleZellijAttach(
       env: {
         ...cleanEnv,
         TERM: 'xterm-256color',
+        SHELL: userShell, // Explicit shell - Zellij needs this to spawn terminal panes
         HOME: actualHome, // Ensure Zellij uses correct home for cache/config
         XDG_CACHE_HOME: `${actualHome}/.cache`, // Explicit cache dir
         XDG_CONFIG_HOME: `${actualHome}/.config`, // Explicit config dir
