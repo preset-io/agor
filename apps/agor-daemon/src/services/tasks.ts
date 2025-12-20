@@ -159,19 +159,28 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
       if (task.session_id && this.app) {
         try {
-          // ATOMICALLY update session status to IDLE and set ready_for_prompt
-          // This ensures WebSocket events are emitted immediately via FeathersJS service layer
+          // For STOPPED tasks: The stop handler (handle-stop.ts) controls session state.
+          // It sets ready_for_prompt=false to prevent auto-queue-processing after user-initiated stop.
+          // We should NOT override that here to avoid race conditions.
+          //
+          // For COMPLETED/FAILED tasks: Normal completion - set ready_for_prompt=true
+          // to allow auto-queue-processing of any pending messages.
+          const isUserInitiatedStop = data.status === TaskStatus.STOPPED;
+
+          // ATOMICALLY update session status to IDLE
+          // Only set ready_for_prompt for non-stop completions to avoid racing with stop handler
           await this.app.service('sessions').patch(
             task.session_id,
             {
               status: 'idle',
-              ready_for_prompt: true,
+              // Don't set ready_for_prompt for STOPPED - stop handler controls this
+              ...(isUserInitiatedStop ? {} : { ready_for_prompt: true }),
             },
             params
           );
 
           console.log(
-            `✅ [TasksService] Session ${task.session_id.substring(0, 8)} status updated to IDLE (task ${task.task_id.substring(0, 8)} ${data.status})`
+            `✅ [TasksService] Session ${task.session_id.substring(0, 8)} status updated to IDLE (task ${task.task_id.substring(0, 8)} ${data.status})${isUserInitiatedStop ? ' [stop handler controls ready_for_prompt]' : ''}`
           );
 
           // Check if session has parent and queue callback

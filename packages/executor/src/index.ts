@@ -98,8 +98,11 @@ export class AgorExecutor {
       }) => {
         console.log('[executor] Received task_stop event:', data);
 
-        // Only check session_id - task_id may differ if session continued with new messages
-        if (data.session_id === this.config.sessionId) {
+        // CRITICAL: Must check BOTH session_id AND task_id
+        // Each executor handles exactly one task. Stop signals for other tasks
+        // in the same session should be ignored to prevent race conditions where
+        // a stale stop signal stops a newly-spawned executor.
+        if (data.session_id === this.config.sessionId && data.task_id === this.config.taskId) {
           // IMMEDIATELY send acknowledgment (before stopping)
           try {
             // biome-ignore lint/suspicious/noExplicitAny: Feathers types don't support custom events
