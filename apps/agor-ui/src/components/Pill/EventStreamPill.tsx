@@ -6,8 +6,9 @@
  */
 
 import type { AntdIconProps } from '@ant-design/icons/lib/components/AntdIcon';
-import { message, Popover, Tag } from 'antd';
+import { message, Popover } from 'antd';
 import type React from 'react';
+import { Tag } from '../Tag';
 
 export interface EventStreamPillProps {
   /** Full ID to copy to clipboard */

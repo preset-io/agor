@@ -37,11 +37,12 @@ import {
 } from '@ant-design/icons';
 import type { ThoughtChainProps } from '@ant-design/x';
 import { ThoughtChain } from '@ant-design/x';
-import { Popover, Space, Spin, Tag, Tooltip, Typography, theme } from 'antd';
+import { Popover, Space, Spin, Tooltip, Typography, theme } from 'antd';
 import React, { useMemo, useState } from 'react';
 import { copyToClipboard } from '../../utils/clipboard';
 import { CollapsibleText } from '../CollapsibleText';
 import { CopyableContent } from '../CopyableContent';
+import { Tag } from '../Tag';
 import { ToolUseRenderer } from '../ToolUseRenderer';
 
 interface ToolUseBlock {

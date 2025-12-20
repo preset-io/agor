@@ -6,7 +6,8 @@ import {
   MessageOutlined,
   ToolOutlined,
 } from '@ant-design/icons';
-import { List, Space, Tag, Tooltip, Typography, theme } from 'antd';
+import { List, Space, Tooltip, Typography, theme } from 'antd';
+import { Tag } from '../Tag';
 import { TaskStatusIcon } from '../TaskStatusIcon';
 
 const { useToken } = theme;

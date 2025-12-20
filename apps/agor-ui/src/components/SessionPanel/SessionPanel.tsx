@@ -566,7 +566,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             justifyContent: 'space-between',
           }}
         >
-          <Space size={0} wrap>
+          <Space size={4} wrap>
             {footerTimerTask && (
               <TimerPill
                 status={footerTimerTask.status}

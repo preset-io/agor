@@ -1,9 +1,10 @@
 import type { Repo } from '@agor/core/types';
 import { DeleteOutlined, EditOutlined, FolderOutlined, PlusOutlined } from '@ant-design/icons';
 import type { RadioChangeEvent } from 'antd';
-import { Button, Card, Empty, Form, Input, Modal, Radio, Space, Tag, Typography } from 'antd';
+import { Button, Card, Empty, Form, Input, Modal, Radio, Space, Typography } from 'antd';
 import { useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
+import { Tag } from '../Tag';
 
 // Using Typography.Text directly to avoid DOM Text interface collision
 

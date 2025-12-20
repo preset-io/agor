@@ -6,8 +6,9 @@
  */
 
 import { CheckCircleOutlined, LoadingOutlined } from '@ant-design/icons';
-import { Space, Tag, Typography } from 'antd';
+import { Space, Typography } from 'antd';
 import type { ToolExecution } from '../../hooks/useTaskEvents';
+import { Tag } from '../Tag';
 
 interface ToolExecutingIndicatorProps {
   toolsExecuting: ToolExecution[];

@@ -32,7 +32,7 @@ import {
   UpOutlined,
 } from '@ant-design/icons';
 import { Bubble } from '@ant-design/x';
-import { Collapse, Flex, Spin, Tag, Typography, theme } from 'antd';
+import { Collapse, Flex, Spin, Typography, theme } from 'antd';
 import React, { useMemo } from 'react';
 import type { StreamingMessage } from '../../hooks/useStreamingMessages';
 import { useTaskEvents } from '../../hooks/useTaskEvents';
@@ -54,6 +54,7 @@ import {
   ToolCountPill,
 } from '../Pill';
 import { StickyTodoRenderer } from '../StickyTodoRenderer';
+import { Tag } from '../Tag';
 import { TaskStatusIcon } from '../TaskStatusIcon';
 import ToolExecutingIndicator from '../ToolExecutingIndicator';
 import { ToolIcon } from '../ToolIcon';

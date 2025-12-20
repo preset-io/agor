@@ -1,6 +1,7 @@
 import { CheckCircleOutlined, LoadingOutlined, WarningOutlined } from '@ant-design/icons';
-import { Space, Tag, Tooltip } from 'antd';
+import { Space, Tooltip } from 'antd';
 import { useEffect, useState } from 'react';
+import { Tag } from '../Tag';
 
 export interface ConnectionStatusProps {
   connected: boolean;

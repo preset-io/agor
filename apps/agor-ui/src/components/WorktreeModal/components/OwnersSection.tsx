@@ -11,9 +11,10 @@
 import type { AgorClient } from '@agor/core/api';
 import type { User, Worktree, WorktreePermissionLevel } from '@agor/core/types';
 import { UserOutlined } from '@ant-design/icons';
-import { Button, Form, Select, Space, Tag, Typography } from 'antd';
+import { Button, Form, Select, Space, Typography } from 'antd';
 import { useEffect, useState } from 'react';
 import { useThemedMessage } from '../../../utils/message';
+import { Tag } from '../../Tag';
 
 interface OwnersSectionProps {
   worktree: Worktree;

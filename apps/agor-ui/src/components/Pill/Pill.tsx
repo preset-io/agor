@@ -19,9 +19,10 @@ import {
   ThunderboltOutlined,
   ToolOutlined,
 } from '@ant-design/icons';
-import { Collapse, Popover, Tag, Tooltip, theme } from 'antd';
+import { Collapse, Popover, Tooltip, theme } from 'antd';
 import type React from 'react';
 import { copyToClipboard } from '../../utils/clipboard';
+import { Tag } from '../Tag';
 
 /**
  * Standardized color palette for pills/badges

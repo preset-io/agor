@@ -1,5 +1,6 @@
-import { Card, Space, Tag, Typography } from 'antd';
+import { Card, Space, Typography } from 'antd';
 import type { AgenticToolOption } from '../../types';
+import { Tag } from '../Tag';
 import { ToolIcon } from '../ToolIcon';
 
 export interface AgentSelectionCardProps {

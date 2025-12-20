@@ -7,11 +7,12 @@
 
 import type { Repo, Session, User, Worktree } from '@agor/core/types';
 import { CopyOutlined, FolderOutlined } from '@ant-design/icons';
-import { Button, Space, Tag, Typography, theme } from 'antd';
+import { Button, Space, Typography, theme } from 'antd';
 import type React from 'react';
 import { copyToClipboard } from '../../utils/clipboard';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { CreatedByTag } from '../metadata';
+import { Tag } from '../Tag';
 import { ToolIcon } from '../ToolIcon';
 import { ForkPill, PILL_COLORS, RepoPill, SpawnPill, StatusPill } from './Pill';
 

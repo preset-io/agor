@@ -1,10 +1,11 @@
 import type { AgorClient } from '@agor/core/api';
 import type { Board, Repo, Session, User, Worktree } from '@agor/core/types';
 import { DeleteOutlined, FolderOutlined, LinkOutlined } from '@ant-design/icons';
-import { Button, Descriptions, Form, Input, Select, Space, Tag, Typography } from 'antd';
+import { Button, Descriptions, Form, Input, Select, Space, Typography } from 'antd';
 import { useEffect, useState } from 'react';
 import { useThemedMessage } from '../../../utils/message';
 import { ArchiveDeleteWorktreeModal } from '../../ArchiveDeleteWorktreeModal';
+import { Tag } from '../../Tag';
 import { OwnersSection } from '../components/OwnersSection';
 
 const { TextArea } = Input;

@@ -10,9 +10,10 @@ import {
   PauseCircleOutlined,
   StopOutlined,
 } from '@ant-design/icons';
-import { Tag, Tooltip, theme } from 'antd';
+import { Tooltip, theme } from 'antd';
 import type React from 'react';
 import { useEffect, useMemo, useState } from 'react';
+import { Tag } from '../Tag';
 import { PILL_COLORS } from './Pill';
 
 type TimerStatus = TaskStatusValue | SessionStatusValue | 'pending';

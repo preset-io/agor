@@ -1,6 +1,7 @@
 import { CheckCircleOutlined, CloseCircleOutlined, DeleteOutlined } from '@ant-design/icons';
-import { Button, Input, Space, Tag, Typography, theme } from 'antd';
+import { Button, Input, Space, Typography, theme } from 'antd';
 import { useState } from 'react';
+import { Tag } from './Tag';
 
 const { Text, Link } = Typography;
 

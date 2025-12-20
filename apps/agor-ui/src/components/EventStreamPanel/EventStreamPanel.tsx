@@ -13,11 +13,12 @@ import {
   PauseOutlined,
   PlayCircleOutlined,
 } from '@ant-design/icons';
-import { Badge, Button, Checkbox, Empty, Select, Space, Tag, Typography, theme } from 'antd';
+import { Badge, Button, Checkbox, Empty, Select, Space, Typography, theme } from 'antd';
 import { useMemo, useState } from 'react';
 import { useAppActions } from '../../contexts/AppActionsContext';
 import { useAppData } from '../../contexts/AppDataContext';
 import type { SocketEvent } from '../../hooks/useEventStream';
+import { Tag } from '../Tag';
 import { EventItem, type WorktreeActions } from './EventItem';
 
 const { Text, Title } = Typography;

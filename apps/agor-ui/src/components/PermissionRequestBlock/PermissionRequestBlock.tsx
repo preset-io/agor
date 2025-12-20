@@ -15,9 +15,10 @@ import {
   PermissionStatus,
 } from '@agor/core/types';
 import { CheckOutlined, CloseOutlined, LockOutlined } from '@ant-design/icons';
-import { Button, Card, Descriptions, Radio, Select, Space, Tag, Typography, theme } from 'antd';
+import { Button, Card, Descriptions, Radio, Select, Space, Typography, theme } from 'antd';
 import type React from 'react';
 import { useState } from 'react';
+import { Tag } from '../Tag';
 
 const { Title, Paragraph } = Typography;
 

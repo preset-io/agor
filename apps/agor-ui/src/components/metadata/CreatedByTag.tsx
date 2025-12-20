@@ -1,5 +1,5 @@
 import type { User } from '@agor/core/types';
-import { Tag } from 'antd';
+import { Tag } from '../Tag';
 import { UserAvatar } from './UserAvatar';
 
 export interface CreatedByTagProps {

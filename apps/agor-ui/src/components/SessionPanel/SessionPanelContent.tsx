@@ -7,7 +7,7 @@ import {
   VerticalAlignBottomOutlined,
   VerticalAlignTopOutlined,
 } from '@ant-design/icons';
-import { App, Button, Divider, Space, Tag, Tooltip, Typography, theme } from 'antd';
+import { App, Button, Divider, Space, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { useAppActions } from '../../contexts/AppActionsContext';
 import { useAppData } from '../../contexts/AppDataContext';
@@ -15,6 +15,7 @@ import { ConversationView } from '../ConversationView';
 import { EnvironmentPill } from '../EnvironmentPill';
 import { ForkSpawnModal } from '../ForkSpawnModal';
 import { IssuePill, PullRequestPill, RepoPill } from '../Pill';
+import { Tag } from '../Tag';
 
 export interface SessionPanelContentProps {
   client: AgorClient | null;

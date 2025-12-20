@@ -10,10 +10,11 @@ import {
   PushpinFilled,
   SettingOutlined,
 } from '@ant-design/icons';
-import { App, Button, Card, Collapse, Space, Tag, Typography } from 'antd';
+import { App, Button, Card, Collapse, Space, Typography } from 'antd';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
 import { CreatedByTag } from '../metadata';
+import { Tag } from '../Tag';
 import TaskListItem from '../TaskListItem';
 import { TaskStatusIcon } from '../TaskStatusIcon';
 import { ToolIcon } from '../ToolIcon';

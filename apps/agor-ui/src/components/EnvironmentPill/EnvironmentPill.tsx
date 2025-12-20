@@ -10,8 +10,9 @@ import {
   StopOutlined,
   WarningOutlined,
 } from '@ant-design/icons';
-import { Button, Space, Spin, Tag, Tooltip, theme } from 'antd';
+import { Button, Space, Spin, Tooltip, theme } from 'antd';
 import { getEnvironmentState } from '../../utils/environmentState';
+import { Tag } from '../Tag';
 
 interface EnvironmentPillProps {
   repo: Repo; // Need repo for environment_config

@@ -1,6 +1,7 @@
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
-import { Button, Input, Space, Table, Tag, Typography } from 'antd';
+import { Button, Input, Space, Table, Typography } from 'antd';
 import { useState } from 'react';
+import { Tag } from './Tag';
 
 const { Text } = Typography;
 

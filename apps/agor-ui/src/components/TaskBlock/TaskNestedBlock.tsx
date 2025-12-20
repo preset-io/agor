@@ -7,10 +7,11 @@
 
 import type { Message } from '@agor/core/types';
 import { DownOutlined, RightOutlined, ThunderboltOutlined } from '@ant-design/icons';
-import { Collapse, Space, Tag, Typography, theme } from 'antd';
+import { Collapse, Space, Typography, theme } from 'antd';
 import type React from 'react';
 import { useMemo, useState } from 'react';
 import { AgentChain } from '../AgentChain';
+import { Tag } from '../Tag';
 
 const { Text } = Typography;
 
