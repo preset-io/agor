@@ -102,7 +102,7 @@ const CODEX_MODES: {
   },
 ];
 
-// Gemini permission modes (Google Gemini SDK)
+// Gemini permission modes (Google Gemini SDK - native ApprovalMode values)
 const GEMINI_MODES: {
   mode: PermissionMode;
   label: string;
@@ -118,14 +118,14 @@ const GEMINI_MODES: {
     color: '#f5222d', // Red
   },
   {
-    mode: 'acceptEdits',
+    mode: 'autoEdit',
     label: 'autoEdit',
     description: 'Auto-approve file edits, ask for shell/web tools',
     icon: <EditOutlined />,
     color: '#52c41a', // Green
   },
   {
-    mode: 'bypassPermissions',
+    mode: 'yolo',
     label: 'yolo',
     description: 'Allow all operations without prompting',
     icon: <UnlockOutlined />,
@@ -133,8 +133,7 @@ const GEMINI_MODES: {
   },
 ];
 
-// OpenCode permission modes (OpenCode API)
-// OpenCode auto-approves by default; these modes control approval behavior
+// OpenCode permission modes (uses Gemini-like modes since OpenCode auto-approves)
 const OPENCODE_MODES: {
   mode: PermissionMode;
   label: string;
@@ -144,21 +143,21 @@ const OPENCODE_MODES: {
 }[] = [
   {
     mode: 'default',
-    label: 'ask',
+    label: 'default',
     description: 'Prompt for approval before each operation',
     icon: <LockOutlined />,
     color: '#f5222d', // Red
   },
   {
-    mode: 'acceptEdits',
-    label: 'auto-approve',
+    mode: 'autoEdit',
+    label: 'autoEdit',
     description: 'Auto-approve all operations (recommended)',
     icon: <EditOutlined />,
     color: '#52c41a', // Green
   },
   {
-    mode: 'bypassPermissions',
-    label: 'bypass',
+    mode: 'yolo',
+    label: 'yolo',
     description: 'Fully bypass all permission checks',
     icon: <UnlockOutlined />,
     color: '#faad14', // Orange/yellow
@@ -229,8 +228,9 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
           ? OPENCODE_MODES
           : CLAUDE_CODE_MODES;
 
-  // Get default value based on agentic tool type
-  const defaultValue = agentic_tool === 'codex' ? 'auto' : 'acceptEdits';
+  // Get default value based on agentic tool type (native SDK modes)
+  const defaultValue =
+    agentic_tool === 'codex' ? 'auto' : agentic_tool === 'gemini' ? 'autoEdit' : 'acceptEdits'; // Claude Code default
   const effectiveValue = value || defaultValue;
 
   // Compact mode: render as Select dropdown(s)

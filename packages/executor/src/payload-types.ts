@@ -70,10 +70,30 @@ export type ToolType = z.infer<typeof ToolTypeSchema>;
 
 /**
  * Permission modes for agent execution
- * Note: 'default' is intentionally not included - if not specified,
- * the executor will use its default behavior (undefined)
+ *
+ * Union of all native SDK permission modes - no mapping needed.
+ * Each agent uses its own subset directly.
+ *
+ * Claude Code: default, acceptEdits, bypassPermissions, plan, dontAsk
+ * Gemini: default, autoEdit, yolo
+ * Codex: ask, auto, on-failure, allow-all
  */
-export const PermissionModeSchema = z.enum(['ask', 'auto', 'allow-all']);
+export const PermissionModeSchema = z.enum([
+  // Claude Code native modes
+  'default',
+  'acceptEdits',
+  'bypassPermissions',
+  'plan',
+  'dontAsk',
+  // Gemini native modes
+  'autoEdit',
+  'yolo',
+  // Codex native modes
+  'ask',
+  'auto',
+  'on-failure',
+  'allow-all',
+]);
 export type PermissionMode = z.infer<typeof PermissionModeSchema>;
 
 // ═══════════════════════════════════════════════════════════

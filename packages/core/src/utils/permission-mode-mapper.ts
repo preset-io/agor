@@ -1,8 +1,14 @@
 /**
  * Permission Mode Mapper
  *
- * Maps unified PermissionMode values to agent-specific permission configurations.
- * This allows agents to use a consistent permission vocabulary across different tools.
+ * Each agent now uses its native permission modes directly.
+ * This mapper is only needed for cross-agent operations (e.g., spawning a Codex
+ * session from a Claude session with equivalent permissions).
+ *
+ * Native modes by agent:
+ * - Claude Code: default, acceptEdits, bypassPermissions, plan, dontAsk
+ * - Gemini: default, autoEdit, yolo
+ * - Codex: ask, auto, on-failure, allow-all
  *
  * See: context/explorations/mcp-session-management.md for full specification
  */
@@ -10,17 +16,14 @@
 import type { AgenticToolName, PermissionMode } from '../types';
 
 /**
- * Maps a unified PermissionMode to the appropriate agent-specific configuration.
+ * Maps a permission mode when spawning a child session of a different agent type.
  *
- * Different agentic tools use different permission systems:
- * - Claude Code/Gemini: Single mode string
- * - Codex: Dual config (sandboxMode + approvalPolicy)
+ * For same-agent operations, modes pass through unchanged.
+ * For cross-agent operations, maps to the closest equivalent in the target agent.
  *
- * This function provides graceful fallbacks for invalid/incompatible modes.
- *
- * @param mode - The unified permission mode
+ * @param mode - The source permission mode
  * @param agenticTool - The target agentic tool
- * @returns The mapped permission mode (may differ from input if incompatible)
+ * @returns The mapped permission mode for the target agent
  */
 export function mapPermissionMode(
   mode: PermissionMode,
@@ -28,42 +31,93 @@ export function mapPermissionMode(
 ): PermissionMode {
   switch (agenticTool) {
     case 'claude-code':
-    case 'gemini':
-      // Claude/Gemini support: default, acceptEdits, bypassPermissions, plan
-      // Map Codex-specific modes to closest equivalents
+      // Claude Code native modes: default, acceptEdits, bypassPermissions, plan, dontAsk
       switch (mode) {
-        case 'ask':
-          return 'default'; // Codex 'ask' → Claude 'default' (ask for each tool)
-        case 'auto':
-          return 'acceptEdits'; // Codex 'auto' → Claude 'acceptEdits' (auto-approve safe ops)
-        case 'on-failure':
-          return 'acceptEdits'; // Codex 'on-failure' → Claude 'acceptEdits' (closest match)
-        case 'allow-all':
-          return 'bypassPermissions'; // Codex 'allow-all' → Claude 'bypassPermissions'
-        default:
-          // default, acceptEdits, bypassPermissions, plan - pass through
+        // Native Claude modes - pass through
+        case 'default':
+        case 'acceptEdits':
+        case 'bypassPermissions':
+        case 'plan':
+        case 'dontAsk':
           return mode;
+        // Gemini modes → Claude equivalents
+        case 'autoEdit':
+          return 'acceptEdits';
+        case 'yolo':
+          return 'bypassPermissions';
+        // Codex modes → Claude equivalents
+        case 'ask':
+          return 'default';
+        case 'auto':
+          return 'acceptEdits';
+        case 'on-failure':
+          return 'acceptEdits';
+        case 'allow-all':
+          return 'bypassPermissions';
+        default:
+          return 'acceptEdits'; // Safe default
+      }
+
+    case 'gemini':
+    case 'opencode':
+      // Gemini native modes: default, autoEdit, yolo
+      switch (mode) {
+        // Native Gemini modes - pass through
+        case 'default':
+        case 'autoEdit':
+        case 'yolo':
+          return mode;
+        // Claude modes → Gemini equivalents
+        case 'acceptEdits':
+          return 'autoEdit';
+        case 'bypassPermissions':
+        case 'dontAsk':
+          return 'yolo';
+        case 'plan':
+          return 'default'; // Plan mode → restrictive
+        // Codex modes → Gemini equivalents
+        case 'ask':
+          return 'default';
+        case 'auto':
+          return 'autoEdit';
+        case 'on-failure':
+          return 'autoEdit';
+        case 'allow-all':
+          return 'yolo';
+        default:
+          return 'autoEdit'; // Safe default
       }
 
     case 'codex':
-      // Codex supports: ask, auto, on-failure, allow-all
-      // Map Claude-specific modes to closest equivalents
+      // Codex native modes: ask, auto, on-failure, allow-all
       switch (mode) {
-        case 'default':
-          return 'ask'; // Claude 'default' → Codex 'ask' (ask for each tool)
-        case 'acceptEdits':
-          return 'auto'; // Claude 'acceptEdits' → Codex 'auto' (auto-approve safe ops)
-        case 'bypassPermissions':
-          return 'allow-all'; // Claude 'bypassPermissions' → Codex 'allow-all'
-        case 'plan':
-          return 'ask'; // Claude 'plan' → Codex 'ask' (most restrictive, since plan is Claude-specific)
-        default:
-          // ask, auto, on-failure, allow-all - pass through
+        // Native Codex modes - pass through
+        case 'ask':
+        case 'auto':
+        case 'on-failure':
+        case 'allow-all':
           return mode;
+        // Claude modes → Codex equivalents
+        case 'default':
+          return 'ask';
+        case 'acceptEdits':
+          return 'auto';
+        case 'bypassPermissions':
+        case 'dontAsk':
+          return 'allow-all';
+        case 'plan':
+          return 'ask';
+        // Gemini modes → Codex equivalents
+        case 'autoEdit':
+          return 'auto';
+        case 'yolo':
+          return 'allow-all';
+        default:
+          return 'auto'; // Safe default
       }
 
     default:
-      // Unknown tool - return mode as-is (graceful degradation)
+      // Unknown tool - return mode as-is
       return mode;
   }
 }

@@ -13,6 +13,7 @@ import { GoogleGenAI } from '@google/genai';
  * Models are fetched dynamically from the Gemini API when possible.
  */
 export type GeminiModel =
+  | 'gemini-3-flash' // Latest Flash model (Dec 2025) - fast, capable, great value
   | 'gemini-3-pro' // Latest and most intelligent (Nov 2025+, requires waitlist/Ultra subscription)
   | 'gemini-2.5-pro' // Most capable 2.5 model, complex reasoning (SWE-bench: 63.8%)
   | 'gemini-2.5-flash' // Balanced cost/capability, agentic tasks
@@ -43,6 +44,13 @@ export const GEMINI_MODELS: Record<
     useCase: string;
   }
 > = {
+  'gemini-3-flash': {
+    name: 'Gemini 3 Flash',
+    description: 'Latest Flash model - fast responses with strong capabilities',
+    inputPrice: 'TBD',
+    outputPrice: 'TBD',
+    useCase: 'General coding tasks, fast iteration, great price-to-performance',
+  },
   'gemini-3-pro': {
     name: 'Gemini 3 Pro',
     description: 'Latest and most intelligent model (requires Ultra subscription or waitlist)',
@@ -109,6 +117,7 @@ const DEFAULT_GEMINI_CONTEXT_LIMIT = 1_048_576;
  * Reference: https://ai.google.dev/gemini-api/docs/models/gemini
  */
 export const GEMINI_CONTEXT_LIMITS: Record<string, number> = {
+  'gemini-3-flash': 1_048_576,
   'gemini-3-pro': 1_048_576,
   'gemini-2.5-pro': 1_048_576,
   'gemini-2.5-flash': 1_048_576,

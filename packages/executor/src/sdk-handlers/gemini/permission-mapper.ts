@@ -1,47 +1,52 @@
 /**
- * Permission Mode Mapper - Pure utility for mapping Agor permission modes to Gemini ApprovalMode
+ * Permission Mode Mapper - Maps native Gemini permission modes to SDK ApprovalMode
+ *
+ * Since we now use native SDK modes directly, this is a simple 1:1 mapping.
  */
 
 import { Gemini } from '@agor/core/sdk';
-import type { PermissionMode } from '@agor/core/types';
+import type { GeminiPermissionMode } from '@agor/core/types';
+import { getDefaultPermissionMode } from '@agor/core/types';
 
 /**
- * Map Agor permission mode to Gemini ApprovalMode
+ * The default Gemini permission mode, used for fallback.
+ * Centralized in @agor/core to ensure consistency across the app.
+ */
+export const GEMINI_DEFAULT_PERMISSION_MODE = getDefaultPermissionMode(
+  'gemini'
+) as GeminiPermissionMode;
+
+/**
+ * Map Gemini permission mode to SDK ApprovalMode
  *
- * Agor permission modes:
- * - 'default' | 'ask': Prompt for each tool use (most restrictive)
- * - 'acceptEdits' | 'auto': Auto-accept file edits, ask for other tools (recommended)
- * - 'bypassPermissions' | 'allow-all': Allow all operations without prompting
- * - 'plan': Plan mode (not applicable to Gemini, uses default)
- * - 'on-failure': Codex-specific mode (not applicable to Gemini, uses default)
+ * Gemini native modes (from UI/API):
+ * - 'default': Prompt for each tool use (ApprovalMode.DEFAULT)
+ * - 'autoEdit': Auto-approve file edits only (ApprovalMode.AUTO_EDIT)
+ * - 'yolo': Auto-approve all operations (ApprovalMode.YOLO)
  *
- * Gemini ApprovalMode:
- * - DEFAULT: Prompt for each tool use
- * - AUTO_EDIT: Auto-approve file edits only (currently disabled - see note below)
- * - YOLO: Auto-approve all operations
+ * For unknown/legacy modes, falls back to the centralized default from core.
  *
- * @param permissionMode - Agor permission mode
- * @returns Gemini ApprovalMode
+ * @param permissionMode - Native Gemini permission mode
+ * @returns Gemini SDK ApprovalMode
  */
 export function mapPermissionMode(
-  permissionMode: PermissionMode
+  permissionMode: GeminiPermissionMode | string | undefined
 ): (typeof Gemini.ApprovalMode)[keyof typeof Gemini.ApprovalMode] {
   switch (permissionMode) {
     case 'default':
-    case 'ask':
-      return Gemini.ApprovalMode.DEFAULT; // Prompt for each tool use
+      return Gemini.ApprovalMode.DEFAULT;
 
-    case 'acceptEdits':
-    case 'auto':
-      // TEMPORARY: Map to YOLO since AUTO_EDIT blocks shell commands in non-interactive mode
-      // TODO: Implement proper approval handling for AUTO_EDIT mode
-      return Gemini.ApprovalMode.YOLO; // Auto-approve all operations (was: AUTO_EDIT)
+    case 'autoEdit':
+      // Note: AUTO_EDIT may block shell commands in non-interactive mode
+      // Consider using 'yolo' if you need shell access
+      return Gemini.ApprovalMode.AUTO_EDIT;
 
-    case 'bypassPermissions':
-    case 'allow-all':
-      return Gemini.ApprovalMode.YOLO; // Auto-approve all operations
+    case 'yolo':
+      return Gemini.ApprovalMode.YOLO;
 
     default:
-      return Gemini.ApprovalMode.DEFAULT;
+      // Fallback to centralized default for unknown/legacy modes
+      // This ensures consistency with UI and other parts of the app
+      return mapPermissionMode(GEMINI_DEFAULT_PERMISSION_MODE);
   }
 }

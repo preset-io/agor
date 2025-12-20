@@ -26,11 +26,20 @@ export type SessionStatus = (typeof SessionStatus)[keyof typeof SessionStatus];
 /**
  * Permission mode controls how agentic tools handle execution approvals
  *
+ * This is a union of all native SDK permission modes. Each agent uses its own
+ * subset - no mapping/translation needed at the executor level.
+ *
  * Claude Code modes (Claude Agent SDK):
  * - default: Prompt for each tool use (most restrictive)
  * - acceptEdits: Auto-accept file edits, ask for other tools (recommended)
  * - bypassPermissions: Allow all operations without prompting
  * - plan: Plan mode (generate plan without executing)
+ * - dontAsk: Legacy mode for backward compatibility
+ *
+ * Gemini modes (Gemini CLI SDK - ApprovalMode):
+ * - default: Prompt for each tool use (ApprovalMode.DEFAULT)
+ * - autoEdit: Auto-approve file edits only (ApprovalMode.AUTO_EDIT)
+ * - yolo: Auto-approve all operations (ApprovalMode.YOLO)
  *
  * Codex modes (OpenAI Codex SDK):
  * - ask: Require approval for every tool use (read-only/suggest mode)
@@ -39,10 +48,16 @@ export type SessionStatus = (typeof SessionStatus)[keyof typeof SessionStatus];
  * - allow-all: Auto-approve all operations (full-auto mode)
  */
 export type PermissionMode =
+  // Claude Code native modes
   | 'default'
   | 'acceptEdits'
   | 'bypassPermissions'
   | 'plan'
+  | 'dontAsk'
+  // Gemini native modes
+  | 'autoEdit'
+  | 'yolo'
+  // Codex native modes
   | 'ask'
   | 'auto'
   | 'on-failure'
@@ -61,19 +76,22 @@ export type {
 /**
  * Get the default permission mode for a given agentic tool
  *
- * Each agentic tool has different permission mode capabilities and recommended defaults:
+ * Returns the native SDK default for each tool:
  * - Claude Code: 'acceptEdits' (auto-accept file edits, prompt for other tools)
- * - Cursor: 'acceptEdits' (same as Claude Code)
+ * - Gemini: 'autoEdit' (native ApprovalMode.AUTO_EDIT - auto-approve file edits)
  * - Codex: 'auto' (auto-approve safe operations, ask for dangerous ones)
- * - Gemini: 'acceptEdits' (same as Claude Code)
- * - OpenCode: 'acceptEdits' (auto-approve via server SDK settings)
+ * - OpenCode: 'autoEdit' (auto-approve, similar to Gemini)
  */
 export function getDefaultPermissionMode(agenticTool: AgenticToolName): PermissionMode {
   switch (agenticTool) {
+    case 'gemini':
+      return 'autoEdit'; // Native Gemini SDK mode
     case 'codex':
-      return 'auto';
+      return 'auto'; // Native Codex SDK mode
+    case 'opencode':
+      return 'autoEdit'; // OpenCode auto-approves, similar to Gemini
     default:
-      return 'acceptEdits';
+      return 'acceptEdits'; // Claude Code native mode
   }
 }
 

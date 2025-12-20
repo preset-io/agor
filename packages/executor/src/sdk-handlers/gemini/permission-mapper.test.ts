@@ -1,89 +1,88 @@
 import { Gemini } from '@agor/core/sdk';
-import type { PermissionMode } from '@agor/core/types';
+import type { GeminiPermissionMode } from '@agor/core/types';
+import { getDefaultPermissionMode } from '@agor/core/types';
 
 const { ApprovalMode } = Gemini;
 
 import { describe, expect, it } from 'vitest';
-import { mapPermissionMode } from './permission-mapper.js';
+import { GEMINI_DEFAULT_PERMISSION_MODE, mapPermissionMode } from './permission-mapper.js';
 
 describe('mapPermissionMode', () => {
-  describe('Basic Mappings', () => {
+  describe('Native Gemini Mode Mappings', () => {
     it('should map "default" to ApprovalMode.DEFAULT', () => {
       expect(mapPermissionMode('default')).toBe(ApprovalMode.DEFAULT);
     });
 
-    it('should map "ask" to ApprovalMode.DEFAULT', () => {
-      expect(mapPermissionMode('ask')).toBe(ApprovalMode.DEFAULT);
+    it('should map "autoEdit" to ApprovalMode.AUTO_EDIT', () => {
+      expect(mapPermissionMode('autoEdit')).toBe(ApprovalMode.AUTO_EDIT);
     });
 
-    it('should map "acceptEdits" to ApprovalMode.YOLO (temporary mapping)', () => {
-      // NOTE: Currently mapped to YOLO as per TODO in source
-      expect(mapPermissionMode('acceptEdits')).toBe(ApprovalMode.YOLO);
-    });
-
-    it('should map "auto" to ApprovalMode.YOLO (temporary mapping)', () => {
-      // NOTE: Currently mapped to YOLO as per TODO in source
-      expect(mapPermissionMode('auto')).toBe(ApprovalMode.YOLO);
-    });
-
-    it('should map "bypassPermissions" to ApprovalMode.YOLO', () => {
-      expect(mapPermissionMode('bypassPermissions')).toBe(ApprovalMode.YOLO);
-    });
-
-    it('should map "allow-all" to ApprovalMode.YOLO', () => {
-      expect(mapPermissionMode('allow-all')).toBe(ApprovalMode.YOLO);
+    it('should map "yolo" to ApprovalMode.YOLO', () => {
+      expect(mapPermissionMode('yolo')).toBe(ApprovalMode.YOLO);
     });
   });
 
-  describe('Unknown and Cross-Tool Modes', () => {
-    it('should default to ApprovalMode.DEFAULT for unknown modes', () => {
-      expect(mapPermissionMode('unknown-mode' as PermissionMode)).toBe(ApprovalMode.DEFAULT);
+  describe('Centralized Default', () => {
+    it('should export GEMINI_DEFAULT_PERMISSION_MODE matching core getDefaultPermissionMode', () => {
+      expect(GEMINI_DEFAULT_PERMISSION_MODE).toBe(getDefaultPermissionMode('gemini'));
+      expect(GEMINI_DEFAULT_PERMISSION_MODE).toBe('autoEdit');
     });
 
-    it('should map "on-failure" mode (Codex-specific) to DEFAULT', () => {
-      // on-failure is not explicitly handled in Gemini, should use default
-      expect(mapPermissionMode('on-failure' as PermissionMode)).toBe(ApprovalMode.DEFAULT);
+    it('should fallback to centralized default for unknown modes', () => {
+      const expectedDefault = mapPermissionMode(GEMINI_DEFAULT_PERMISSION_MODE);
+      expect(mapPermissionMode('unknown-mode')).toBe(expectedDefault);
     });
 
-    it('should map "plan" mode (Claude-specific) to DEFAULT', () => {
-      // plan is not explicitly handled in Gemini, should use default
-      expect(mapPermissionMode('plan' as PermissionMode)).toBe(ApprovalMode.DEFAULT);
+    it('should fallback to centralized default for undefined', () => {
+      const expectedDefault = mapPermissionMode(GEMINI_DEFAULT_PERMISSION_MODE);
+      expect(mapPermissionMode(undefined)).toBe(expectedDefault);
+    });
+
+    it('should fallback to centralized default for empty string', () => {
+      const expectedDefault = mapPermissionMode(GEMINI_DEFAULT_PERMISSION_MODE);
+      expect(mapPermissionMode('')).toBe(expectedDefault);
     });
   });
 
-  describe('Edge Cases', () => {
-    it('should handle null permission mode with default', () => {
-      expect(mapPermissionMode(null as any)).toBe(ApprovalMode.DEFAULT);
+  describe('Legacy Mode Fallback', () => {
+    it('should fallback to centralized default for legacy "acceptEdits" mode', () => {
+      // Legacy Claude Code mode should fallback to Gemini default
+      const expectedDefault = mapPermissionMode(GEMINI_DEFAULT_PERMISSION_MODE);
+      expect(mapPermissionMode('acceptEdits')).toBe(expectedDefault);
     });
 
-    it('should handle undefined permission mode with default', () => {
-      expect(mapPermissionMode(undefined as any)).toBe(ApprovalMode.DEFAULT);
+    it('should fallback to centralized default for legacy "bypassPermissions" mode', () => {
+      // Legacy Claude Code mode should fallback to Gemini default
+      const expectedDefault = mapPermissionMode(GEMINI_DEFAULT_PERMISSION_MODE);
+      expect(mapPermissionMode('bypassPermissions')).toBe(expectedDefault);
     });
 
-    it('should handle empty string permission mode with default', () => {
-      expect(mapPermissionMode('' as any)).toBe(ApprovalMode.DEFAULT);
+    it('should fallback to centralized default for legacy "ask" mode', () => {
+      // Legacy Codex mode should fallback to Gemini default
+      const expectedDefault = mapPermissionMode(GEMINI_DEFAULT_PERMISSION_MODE);
+      expect(mapPermissionMode('ask')).toBe(expectedDefault);
     });
 
-    it('should handle case-sensitive permission modes', () => {
-      // These should not match and return default
-      expect(mapPermissionMode('ASK' as any)).toBe(ApprovalMode.DEFAULT);
-      expect(mapPermissionMode('Default' as any)).toBe(ApprovalMode.DEFAULT);
-      expect(mapPermissionMode('ALLOW-ALL' as any)).toBe(ApprovalMode.DEFAULT);
+    it('should fallback to centralized default for legacy "allow-all" mode', () => {
+      // Legacy Codex mode should fallback to Gemini default
+      const expectedDefault = mapPermissionMode(GEMINI_DEFAULT_PERMISSION_MODE);
+      expect(mapPermissionMode('allow-all')).toBe(expectedDefault);
+    });
+  });
+
+  describe('Case Sensitivity', () => {
+    it('should be case-sensitive (wrong case returns centralized default)', () => {
+      const expectedDefault = mapPermissionMode(GEMINI_DEFAULT_PERMISSION_MODE);
+      // These should not match and return the centralized default
+      expect(mapPermissionMode('DEFAULT')).toBe(expectedDefault);
+      expect(mapPermissionMode('AutoEdit')).toBe(expectedDefault);
+      expect(mapPermissionMode('YOLO')).toBe(expectedDefault);
     });
   });
 
   describe('Comprehensive Coverage', () => {
-    it('should handle all Agor PermissionMode values', () => {
-      const modes: PermissionMode[] = [
-        'default',
-        'acceptEdits',
-        'bypassPermissions',
-        'plan',
-        'ask',
-        'auto',
-        'on-failure',
-        'allow-all',
-      ];
+    it('should handle all native Gemini permission modes', () => {
+      const modes: GeminiPermissionMode[] = ['default', 'autoEdit', 'yolo'];
 
       for (const mode of modes) {
         const result = mapPermissionMode(mode);
@@ -92,20 +91,10 @@ describe('mapPermissionMode', () => {
     });
 
     it('should return consistent mappings for same input', () => {
-      const result1 = mapPermissionMode('ask');
-      const result2 = mapPermissionMode('ask');
+      const result1 = mapPermissionMode('autoEdit');
+      const result2 = mapPermissionMode('autoEdit');
       expect(result1).toBe(result2);
-      expect(result1).toBe(ApprovalMode.DEFAULT);
-    });
-
-    it('should be a pure function (no side effects)', () => {
-      const mode: PermissionMode = 'auto';
-      const result1 = mapPermissionMode(mode);
-      const result2 = mapPermissionMode(mode);
-      const result3 = mapPermissionMode(mode);
-
-      expect(result1).toBe(result2);
-      expect(result2).toBe(result3);
+      expect(result1).toBe(ApprovalMode.AUTO_EDIT);
     });
   });
 
@@ -116,35 +105,27 @@ describe('mapPermissionMode', () => {
       expect(result).toBe('default');
     });
 
+    it('should return valid ApprovalMode.AUTO_EDIT value', () => {
+      const result = mapPermissionMode('autoEdit');
+      expect(result).toBe(ApprovalMode.AUTO_EDIT);
+      expect(result).toBe('autoEdit');
+    });
+
     it('should return valid ApprovalMode.YOLO value', () => {
-      const result = mapPermissionMode('allow-all');
+      const result = mapPermissionMode('yolo');
       expect(result).toBe(ApprovalMode.YOLO);
       expect(result).toBe('yolo');
     });
   });
 
-  describe('Security and Safety', () => {
-    it('should default to most restrictive mode for unknown inputs', () => {
-      const unknownInputs = ['malicious-input', 'bypass-all', 'sudo', 'root', '../../etc/passwd'];
+  describe('Security', () => {
+    it('should fallback to centralized default for unknown/malicious inputs', () => {
+      const unknownInputs = ['malicious-input', 'bypass-all', 'sudo', 'root'];
+      const expectedDefault = mapPermissionMode(GEMINI_DEFAULT_PERMISSION_MODE);
 
       for (const input of unknownInputs) {
-        const result = mapPermissionMode(input as PermissionMode);
-        expect(result).toBe(ApprovalMode.DEFAULT);
-      }
-    });
-
-    it('should not allow privilege escalation through typos', () => {
-      // Common typos should default to safest mode
-      const typos = [
-        'allowAll', // camelCase instead of kebab-case
-        'allow_all', // snake_case instead of kebab-case
-        'allowall', // no separator
-        'allow all', // space instead of hyphen
-      ];
-
-      for (const typo of typos) {
-        const result = mapPermissionMode(typo as PermissionMode);
-        expect(result).toBe(ApprovalMode.DEFAULT);
+        const result = mapPermissionMode(input);
+        expect(result).toBe(expectedDefault);
       }
     });
   });

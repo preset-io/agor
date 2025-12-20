@@ -8,6 +8,7 @@
  * Available Gemini models (2025)
  */
 export type GeminiModel =
+  | 'gemini-3-flash' // Latest Flash model (Dec 2025) - fast, capable, great value
   | 'gemini-2.5-pro' // Most capable, complex reasoning (SWE-bench: 63.8%)
   | 'gemini-2.5-flash' // Balanced cost/capability, agentic tasks
   | 'gemini-2.5-flash-lite'; // High throughput, low cost, simple tasks
@@ -33,6 +34,13 @@ export const GEMINI_MODELS: Record<
     useCase: string;
   }
 > = {
+  'gemini-3-flash': {
+    name: 'Gemini 3 Flash',
+    description: 'Latest Flash model - fast responses with strong capabilities',
+    inputPrice: 'TBD',
+    outputPrice: 'TBD',
+    useCase: 'General coding tasks, fast iteration, great price-to-performance',
+  },
   'gemini-2.5-pro': {
     name: 'Gemini 2.5 Pro',
     description: 'Most capable model for complex reasoning and multi-step tasks',
@@ -64,6 +72,7 @@ const DEFAULT_GEMINI_CONTEXT_LIMIT = 1_048_576;
  * Reference: https://ai.google.dev/gemini-api/docs/models/gemini
  */
 export const GEMINI_CONTEXT_LIMITS: Record<string, number> = {
+  'gemini-3-flash': 1_048_576,
   'gemini-2.5-pro': 1_048_576,
   'gemini-2.5-flash': 1_048_576,
   'gemini-2.5-flash-lite': 1_048_576,

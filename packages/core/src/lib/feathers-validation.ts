@@ -45,12 +45,18 @@ export const CommonSchemas = {
     Type.Literal('opencode'),
   ]),
 
-  // Permission mode enum
+  // Permission mode enum - union of all native SDK modes
   permissionMode: Type.Union([
+    // Claude Code native modes
     Type.Literal('default'),
     Type.Literal('acceptEdits'),
     Type.Literal('bypassPermissions'),
     Type.Literal('plan'),
+    Type.Literal('dontAsk'),
+    // Gemini native modes
+    Type.Literal('autoEdit'),
+    Type.Literal('yolo'),
+    // Codex native modes
     Type.Literal('ask'),
     Type.Literal('auto'),
     Type.Literal('on-failure'),

@@ -1,17 +1,26 @@
 /**
  * Permission Mode Mapper Tests
+ *
+ * Tests cross-agent permission mode mapping. Each agent now uses native modes,
+ * and this mapper only comes into play when spawning sessions of different types.
  */
 
 import { describe, expect, it } from 'vitest';
 import { mapPermissionMode, mapToCodexPermissionConfig } from './permission-mode-mapper';
 
 describe('mapPermissionMode', () => {
-  describe('Claude Code / Cursor / Gemini', () => {
+  describe('Claude Code', () => {
     it('passes through native Claude modes unchanged', () => {
       expect(mapPermissionMode('default', 'claude-code')).toBe('default');
       expect(mapPermissionMode('acceptEdits', 'claude-code')).toBe('acceptEdits');
       expect(mapPermissionMode('bypassPermissions', 'claude-code')).toBe('bypassPermissions');
       expect(mapPermissionMode('plan', 'claude-code')).toBe('plan');
+      expect(mapPermissionMode('dontAsk', 'claude-code')).toBe('dontAsk');
+    });
+
+    it('maps Gemini modes to Claude equivalents', () => {
+      expect(mapPermissionMode('autoEdit', 'claude-code')).toBe('acceptEdits');
+      expect(mapPermissionMode('yolo', 'claude-code')).toBe('bypassPermissions');
     });
 
     it('maps Codex modes to Claude equivalents', () => {
@@ -20,9 +29,32 @@ describe('mapPermissionMode', () => {
       expect(mapPermissionMode('on-failure', 'claude-code')).toBe('acceptEdits');
       expect(mapPermissionMode('allow-all', 'claude-code')).toBe('bypassPermissions');
     });
+  });
 
-    it('works the same for Gemini', () => {
-      expect(mapPermissionMode('auto', 'gemini')).toBe('acceptEdits');
+  describe('Gemini / OpenCode', () => {
+    it('passes through native Gemini modes unchanged', () => {
+      expect(mapPermissionMode('default', 'gemini')).toBe('default');
+      expect(mapPermissionMode('autoEdit', 'gemini')).toBe('autoEdit');
+      expect(mapPermissionMode('yolo', 'gemini')).toBe('yolo');
+    });
+
+    it('maps Claude modes to Gemini equivalents', () => {
+      expect(mapPermissionMode('acceptEdits', 'gemini')).toBe('autoEdit');
+      expect(mapPermissionMode('bypassPermissions', 'gemini')).toBe('yolo');
+      expect(mapPermissionMode('dontAsk', 'gemini')).toBe('yolo');
+      expect(mapPermissionMode('plan', 'gemini')).toBe('default');
+    });
+
+    it('maps Codex modes to Gemini equivalents', () => {
+      expect(mapPermissionMode('ask', 'gemini')).toBe('default');
+      expect(mapPermissionMode('auto', 'gemini')).toBe('autoEdit');
+      expect(mapPermissionMode('on-failure', 'gemini')).toBe('autoEdit');
+      expect(mapPermissionMode('allow-all', 'gemini')).toBe('yolo');
+    });
+
+    it('works the same for OpenCode', () => {
+      expect(mapPermissionMode('autoEdit', 'opencode')).toBe('autoEdit');
+      expect(mapPermissionMode('acceptEdits', 'opencode')).toBe('autoEdit');
     });
   });
 
@@ -38,7 +70,13 @@ describe('mapPermissionMode', () => {
       expect(mapPermissionMode('default', 'codex')).toBe('ask');
       expect(mapPermissionMode('acceptEdits', 'codex')).toBe('auto');
       expect(mapPermissionMode('bypassPermissions', 'codex')).toBe('allow-all');
-      expect(mapPermissionMode('plan', 'codex')).toBe('ask'); // Most restrictive for Claude-specific mode
+      expect(mapPermissionMode('dontAsk', 'codex')).toBe('allow-all');
+      expect(mapPermissionMode('plan', 'codex')).toBe('ask');
+    });
+
+    it('maps Gemini modes to Codex equivalents', () => {
+      expect(mapPermissionMode('autoEdit', 'codex')).toBe('auto');
+      expect(mapPermissionMode('yolo', 'codex')).toBe('allow-all');
     });
   });
 });
@@ -83,5 +121,17 @@ describe('mapToCodexPermissionConfig', () => {
     const bypassConfig = mapToCodexPermissionConfig('bypassPermissions');
     expect(bypassConfig.sandboxMode).toBe('workspace-write');
     expect(bypassConfig.approvalPolicy).toBe('never');
+  });
+
+  it('maps Gemini modes through conversion', () => {
+    // autoEdit → auto → workspace-write + on-request
+    const autoEditConfig = mapToCodexPermissionConfig('autoEdit');
+    expect(autoEditConfig.sandboxMode).toBe('workspace-write');
+    expect(autoEditConfig.approvalPolicy).toBe('on-request');
+
+    // yolo → allow-all → workspace-write + never
+    const yoloConfig = mapToCodexPermissionConfig('yolo');
+    expect(yoloConfig.sandboxMode).toBe('workspace-write');
+    expect(yoloConfig.approvalPolicy).toBe('never');
   });
 });

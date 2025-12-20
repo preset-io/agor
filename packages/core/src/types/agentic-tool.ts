@@ -54,9 +54,12 @@ export type ClaudeCodePermissionMode =
 /**
  * Gemini permission modes (via Gemini CLI SDK)
  *
- * Unified permission model - single mode controls tool approval behavior.
+ * Native SDK ApprovalMode values:
+ * - default: Prompt for each tool use (ApprovalMode.DEFAULT)
+ * - autoEdit: Auto-approve file edits only (ApprovalMode.AUTO_EDIT)
+ * - yolo: Auto-approve all operations (ApprovalMode.YOLO)
  */
-export type GeminiPermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions';
+export type GeminiPermissionMode = 'default' | 'autoEdit' | 'yolo';
 
 /**
  * OpenCode permission modes (via OpenCode server SDK)
