@@ -159,23 +159,6 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
       if (task.session_id && this.app) {
         try {
-          // CRITICAL: Only update session status if this is the LATEST task.
-          // If a newer task has started (e.g., user sent a new prompt after stopping),
-          // we should NOT set the session to IDLE - that would break the running task.
-          const session = await this.app.service('sessions').get(task.session_id, params);
-          const latestTaskId = session.tasks?.[session.tasks.length - 1];
-
-          if (latestTaskId && latestTaskId !== task.task_id) {
-            console.log(
-              `⏭️ [TasksService] Skipping session IDLE update - task ${task.task_id.substring(0, 8)} is not the latest (latest: ${latestTaskId.substring(0, 8)})`
-            );
-            // Skip session status update, but still process callbacks for subsessions
-            if (session.genealogy?.parent_session_id) {
-              await this.queueParentCallback(task, session, params);
-            }
-            return result;
-          }
-
           // For STOPPED tasks: The stop handler (handle-stop.ts) controls session state.
           // It sets ready_for_prompt=false to prevent auto-queue-processing after user-initiated stop.
           // We should NOT override that here to avoid race conditions.
@@ -200,7 +183,8 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
             `✅ [TasksService] Session ${task.session_id.substring(0, 8)} status updated to IDLE (task ${task.task_id.substring(0, 8)} ${data.status})${isUserInitiatedStop ? ' [stop handler controls ready_for_prompt]' : ''}`
           );
 
-          // Check if session has parent and queue callback (session already fetched above)
+          // Check if session has parent and queue callback
+          const session = await this.app.service('sessions').get(task.session_id, params);
           if (session.genealogy?.parent_session_id) {
             await this.queueParentCallback(task, session, params);
 
