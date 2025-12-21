@@ -141,7 +141,26 @@ export async function handleStopWithAck(
     console.error(`❌ [Stop Handler] Failed to receive ACK after ${MAX_RETRIES} attempts`);
 
     // Safety net: Force update task and session to stopped/idle
+    // BUT FIRST: Check if session is still in STOPPING state.
+    // If a new task started while we were waiting for ACK, session will be RUNNING
+    // and we should NOT force it to IDLE (that would break the new task).
     try {
+      const currentSession = await app.service('sessions').get(sessionId);
+      if (currentSession.status !== SessionStatus.STOPPING) {
+        console.warn(
+          `⚠️  [Stop Handler] Session ${sessionId.substring(0, 8)} is no longer STOPPING (now ${currentSession.status}), skipping force-stop`
+        );
+        // Still update the task to STOPPED (it's the old task that never ACKed)
+        await app.service('tasks').patch(taskId, {
+          status: TaskStatus.STOPPED,
+          completed_at: new Date().toISOString(),
+        });
+        return {
+          success: true,
+          reason: 'Task force-stopped but session already moved on to new task',
+        };
+      }
+
       await app.service('tasks').patch(taskId, {
         status: TaskStatus.STOPPED,
         completed_at: new Date().toISOString(),
@@ -194,7 +213,25 @@ export async function handleStopWithAck(
     );
 
     // Safety net: Force update even though we got ACK
+    // BUT FIRST: Check if session is still in STOPPING state.
+    // If a new task started while we were waiting, session will be RUNNING.
     try {
+      const currentSession = await app.service('sessions').get(sessionId);
+      if (currentSession.status !== SessionStatus.STOPPING) {
+        console.warn(
+          `⚠️  [Stop Handler] Session ${sessionId.substring(0, 8)} is no longer STOPPING (now ${currentSession.status}), skipping force-stop`
+        );
+        // Still update the task to STOPPED
+        await app.service('tasks').patch(taskId, {
+          status: TaskStatus.STOPPED,
+          completed_at: new Date().toISOString(),
+        });
+        return {
+          success: true,
+          reason: 'Task force-stopped but session already moved on to new task',
+        };
+      }
+
       await app.service('tasks').patch(taskId, {
         status: TaskStatus.STOPPED,
         completed_at: new Date().toISOString(),
