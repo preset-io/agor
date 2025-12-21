@@ -159,6 +159,22 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
       if (task.session_id && this.app) {
         try {
+          // CRITICAL: Check if THIS task is still the current/latest task before updating session
+          // If a new task has started, we must NOT set the session to IDLE
+          const session = await this.app.service('sessions').get(task.session_id, params);
+          const latestTaskId = session.tasks?.[session.tasks.length - 1];
+
+          if (latestTaskId && latestTaskId !== task.task_id) {
+            console.log(
+              `⏭️ [TasksService] Skipping session IDLE update - task ${task.task_id.substring(0, 8)} is not the latest (latest: ${latestTaskId.substring(0, 8)})`
+            );
+            // Still process parent callbacks for subsessions (task completed, parent needs to know)
+            if (session.genealogy?.parent_session_id) {
+              await this.queueParentCallback(task, session, params);
+            }
+            return result;
+          }
+
           // For STOPPED tasks: The stop handler (handle-stop.ts) controls session state.
           // It sets ready_for_prompt=false to prevent auto-queue-processing after user-initiated stop.
           // We should NOT override that here to avoid race conditions.
@@ -183,8 +199,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
             `✅ [TasksService] Session ${task.session_id.substring(0, 8)} status updated to IDLE (task ${task.task_id.substring(0, 8)} ${data.status})${isUserInitiatedStop ? ' [stop handler controls ready_for_prompt]' : ''}`
           );
 
-          // Check if session has parent and queue callback
-          const session = await this.app.service('sessions').get(task.session_id, params);
+          // Session already fetched above, reuse it for parent callback check
           if (session.genealogy?.parent_session_id) {
             await this.queueParentCallback(task, session, params);
 

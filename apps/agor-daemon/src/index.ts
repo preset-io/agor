@@ -702,9 +702,18 @@ async function main() {
       // This is a fallback in case the task status update didn't trigger session status change
       if (code === 0) {
         try {
-          // Check if session is still in RUNNING state before updating
+          // CRITICAL: Check if THIS task is still the current/latest task before updating
+          // If a new task has started while this executor was exiting, we must NOT
+          // set the session to IDLE - that would break the running task.
           const currentSession = await app.service('sessions').get(sessionId, params);
-          if (currentSession.status === SessionStatus.RUNNING) {
+          const latestTaskId = currentSession.tasks?.[currentSession.tasks.length - 1];
+
+          if (latestTaskId && latestTaskId !== taskId) {
+            console.log(
+              `⏭️ [Executor] Task ${taskId.slice(0, 8)} is not the latest (latest: ${latestTaskId.slice(0, 8)}), skipping IDLE update`
+            );
+            // Skip the update - a newer task owns the session state
+          } else if (currentSession.status === SessionStatus.RUNNING) {
             await app.service('sessions').patch(
               sessionId,
               {
