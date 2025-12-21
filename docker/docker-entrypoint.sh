@@ -38,10 +38,18 @@ while [ ! -f "/app/packages/core/dist/api/index.d.ts" ] || [ ! -f "/app/packages
 done
 echo "✅ @agor/core build ready"
 
-# Build executor package (needed for spawning executor subprocess)
-echo "🔄 Building @agor/executor..."
-pnpm --filter @agor/executor build
-echo "✅ @agor/executor build ready"
+# Start @agor/executor in watch mode (for hot-reload during development)
+# Like core, we need an initial build before the daemon can spawn executors
+echo "🔄 Starting @agor/executor watch mode..."
+pnpm --filter @agor/executor dev &
+EXECUTOR_PID=$!
+
+# Wait for initial executor build to complete
+echo "⏳ Waiting for @agor/executor initial build..."
+while [ ! -f "/app/packages/executor/dist/index.js" ] || [ ! -f "/app/packages/executor/dist/cli.js" ]; do
+  sleep 0.1
+done
+echo "✅ @agor/executor build ready (watching for changes)"
 
 # Fix volume permissions (volumes may be created with wrong ownership)
 # Only chown .agor directory (not .ssh which is mounted read-only)
@@ -163,6 +171,7 @@ sleep 3
 echo "🎨 Starting UI on port ${UI_PORT:-5173}..."
 VITE_DAEMON_PORT="${DAEMON_PORT:-3030}" pnpm --filter agor-ui dev --host 0.0.0.0 --port "${UI_PORT:-5173}"
 
-# If UI exits, kill both daemon and core watch
+# If UI exits, kill daemon, executor watch, and core watch
 kill $DAEMON_PID 2>/dev/null || true
+kill $EXECUTOR_PID 2>/dev/null || true
 kill $CORE_PID 2>/dev/null || true
