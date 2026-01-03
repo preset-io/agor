@@ -65,8 +65,14 @@ RUN npm install -g \
   @openai/codex@0.69.0 \
   opencode-ai@latest
 
-# Create non-root 'agor' user (main application user)
-RUN useradd -m -s /bin/bash agor && \
+# Arguments for matching host user UID/GID (default to 1000)
+ARG UID=1000
+ARG GID=1000
+
+# Rename existing 'node' user to 'agor' and switch UID/GID to match host
+# This is critical for bind mount permissions on Linux
+RUN usermod -l agor -d /home/agor -m -u ${UID} node && \
+    groupmod -n agor -g ${GID} node && \
     # Grant passwordless sudo for fixing volume permissions and executor spawning
     echo "agor ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/agor && \
     chmod 0440 /etc/sudoers.d/agor && \

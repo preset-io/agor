@@ -1,0 +1,3 @@
+services:
+  agor-dev:
+    user: "${UID:-1000}:${GID:-1000}"

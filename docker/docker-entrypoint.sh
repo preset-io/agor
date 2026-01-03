@@ -10,8 +10,13 @@ echo "✅ Using pre-built dependencies from Docker image"
 # Fix permissions for build output directories only (not the entire /app tree!)
 # The bind mount (.:/app) is read-only for most files - we only need write access to dist/
 echo "🔧 Ensuring write access to build output directories..."
-sudo chown -R agor:agor /app/packages/*/dist /app/apps/*/dist 2>/dev/null || true
-echo "✅ Build directories writable"
+# Try to sudo chown if possible (non-interactive), but don't fail if not.
+if sudo -n true 2>/dev/null; then
+  sudo -n chown -R agor:agor /app/packages/*/dist /app/apps/*/dist 2>/dev/null || true
+  echo "✅ Build directories writable"
+else
+  echo "⚠️ sudo not available, skipping permission fix (this is expected if running as correct user)"
+fi
 
 # Skip husky in Docker (git hooks run on host, not in container)
 # Also avoids "fatal: not a git repository" error with worktrees where .git is a file, not a directory
