@@ -775,11 +775,16 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       // Build auth config from form values
       let auth:
         | {
-            type: 'none' | 'bearer' | 'jwt';
+            type: 'none' | 'bearer' | 'jwt' | 'oauth';
             token?: string;
             api_url?: string;
             api_token?: string;
             api_secret?: string;
+            oauth_token_url?: string;
+            oauth_client_id?: string;
+            oauth_client_secret?: string;
+            oauth_scope?: string;
+            oauth_grant_type?: string;
           }
         | undefined;
 
@@ -791,6 +796,12 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
           auth.api_url = values.jwt_api_url;
           auth.api_token = values.jwt_api_token;
           auth.api_secret = values.jwt_api_secret;
+        } else if (values.auth_type === 'oauth') {
+          auth.oauth_token_url = values.oauth_token_url;
+          auth.oauth_client_id = values.oauth_client_id;
+          auth.oauth_client_secret = values.oauth_client_secret;
+          auth.oauth_scope = values.oauth_scope;
+          auth.oauth_grant_type = values.oauth_grant_type;
         }
       }
 

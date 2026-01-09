@@ -962,11 +962,16 @@ async function main() {
         url?: string;
         transport?: 'http' | 'sse';
         auth?: {
-          type: 'none' | 'bearer' | 'jwt';
+          type: 'none' | 'bearer' | 'jwt' | 'oauth';
           token?: string;
           api_url?: string;
           api_token?: string;
           api_secret?: string;
+          oauth_token_url?: string;
+          oauth_client_id?: string;
+          oauth_client_secret?: string;
+          oauth_scope?: string;
+          oauth_grant_type?: string;
         };
       },
       params?: AuthenticatedParams
