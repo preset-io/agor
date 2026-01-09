@@ -340,15 +340,47 @@ export async function fetchOAuthToken(
 /**
  * Infer OAuth token URL from MCP server URL
  *
- * Tries common OAuth token endpoint patterns.
+ * Tries common OAuth token endpoint patterns based on the MCP URL path structure.
+ * Common patterns:
+ * - /oauth/token (standard OAuth 2.0)
+ * - /token (simplified path)
+ * - Same path as MCP with /oauth/token suffix (e.g., /mcp -> /mcp/oauth/token)
  *
- * @param mcpUrl - MCP server URL
- * @returns Inferred token URL
+ * @param mcpUrl - MCP server URL (e.g., "https://example.com/mcp")
+ * @returns Inferred token URL (e.g., "https://example.com/oauth/token")
+ *
+ * @example
+ * inferOAuthTokenUrl("https://api.example.com/mcp")
+ * // Returns: "https://api.example.com/oauth/token"
+ *
+ * @example
+ * inferOAuthTokenUrl("https://example.com/v1/mcp")
+ * // Returns: "https://example.com/oauth/token"
  */
 export function inferOAuthTokenUrl(mcpUrl: string): string {
   try {
     const url = new URL(mcpUrl);
-    // Default to /oauth/token at the same origin
+
+    // Strategy 1: If MCP is at /mcp, try /oauth/token at root
+    // Most common pattern: MCP at /mcp, OAuth at /oauth/token
+    if (url.pathname === '/mcp' || url.pathname.endsWith('/mcp')) {
+      return `${url.origin}/oauth/token`;
+    }
+
+    // Strategy 2: If MCP is in a versioned path (e.g., /v1/mcp), use root /oauth/token
+    if (url.pathname.match(/^\/v\d+\//)) {
+      return `${url.origin}/oauth/token`;
+    }
+
+    // Strategy 3: Try token endpoint relative to MCP path
+    // e.g., /services/mcp -> /services/oauth/token
+    const pathParts = url.pathname.split('/').filter(Boolean);
+    if (pathParts.length > 1) {
+      pathParts.pop(); // Remove last segment (e.g., "mcp")
+      return `${url.origin}/${pathParts.join('/')}/oauth/token`;
+    }
+
+    // Strategy 4: Default to /oauth/token at origin
     return `${url.origin}/oauth/token`;
   } catch {
     return '';
@@ -358,7 +390,20 @@ export function inferOAuthTokenUrl(mcpUrl: string): string {
 /**
  * Clear cached OAuth token for specific credentials
  *
- * @param config - OAuth config to clear (optional, clears all if not provided)
+ * Use this when you need to force token refresh, such as when:
+ * - Credentials have been updated
+ * - Token has been revoked server-side
+ * - User is switching accounts
+ *
+ * @param config - OAuth config to clear (optional, clears all tokens if not provided)
+ *
+ * @example
+ * // Clear specific server's token
+ * clearOAuthCache({ token_url: "https://api.example.com/oauth/token", client_id: "..." })
+ *
+ * @example
+ * // Clear all cached tokens (e.g., on logout)
+ * clearOAuthCache()
  */
 export function clearOAuthCache(config?: OAuthConfig): void {
   if (config) {
@@ -370,7 +415,18 @@ export function clearOAuthCache(config?: OAuthConfig): void {
 }
 
 /**
- * Get cache statistics for debugging
+ * Get OAuth token cache statistics for debugging and monitoring
+ *
+ * Useful for:
+ * - Monitoring cache efficiency
+ * - Debugging token expiry issues
+ * - Understanding token refresh patterns
+ *
+ * @returns Object with totalEntries, validEntries, and expiredEntries counts
+ *
+ * @example
+ * const stats = getOAuthCacheStats();
+ * console.log(`Cache: ${stats.validEntries}/${stats.totalEntries} valid tokens`);
  */
 export function getOAuthCacheStats(): {
   totalEntries: number;

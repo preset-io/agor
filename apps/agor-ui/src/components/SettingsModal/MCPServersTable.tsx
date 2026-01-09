@@ -32,6 +32,122 @@ import { useThemedMessage } from '@/utils/message';
 
 const { TextArea } = Input;
 
+/**
+ * Check if a value contains a template variable (e.g., {{ user.env.VAR }})
+ */
+function isTemplateValue(value: string | undefined): boolean {
+  if (!value) return false;
+  return value.includes('{{') && value.includes('}}');
+}
+
+/**
+ * Extract OAuth configuration from form values
+ * Only includes fields that have actual values (not empty or template-only)
+ */
+function extractOAuthConfig(values: Record<string, unknown>): {
+  oauth_token_url?: string;
+  oauth_client_id?: string;
+  oauth_client_secret?: string;
+  oauth_scope?: string;
+  oauth_grant_type?: string;
+} {
+  const config: {
+    oauth_token_url?: string;
+    oauth_client_id?: string;
+    oauth_client_secret?: string;
+    oauth_scope?: string;
+    oauth_grant_type?: string;
+  } = {};
+
+  // Only include token URL if it's provided (can be template or real value)
+  if (values.oauth_token_url && typeof values.oauth_token_url === 'string') {
+    config.oauth_token_url = values.oauth_token_url;
+  }
+
+  // Only include client ID if it's provided
+  if (values.oauth_client_id && typeof values.oauth_client_id === 'string') {
+    config.oauth_client_id = values.oauth_client_id;
+  }
+
+  // Only include client secret if it's provided
+  if (values.oauth_client_secret && typeof values.oauth_client_secret === 'string') {
+    config.oauth_client_secret = values.oauth_client_secret;
+  }
+
+  // Only include scope if it's provided
+  if (values.oauth_scope && typeof values.oauth_scope === 'string') {
+    config.oauth_scope = values.oauth_scope;
+  }
+
+  // Grant type defaults to client_credentials
+  config.oauth_grant_type =
+    typeof values.oauth_grant_type === 'string' ? values.oauth_grant_type : 'client_credentials';
+
+  return config;
+}
+
+/**
+ * Extract OAuth configuration for testing (excludes template values for credentials)
+ * Template values in credentials can't be tested directly as they need resolution
+ */
+function extractOAuthConfigForTesting(values: Record<string, unknown>): {
+  mcp_url: string;
+  token_url?: string;
+  client_id?: string;
+  client_secret?: string;
+  scope?: string;
+  grant_type?: string;
+} | null {
+  if (!values.url || typeof values.url !== 'string') {
+    return null;
+  }
+
+  const config: {
+    mcp_url: string;
+    token_url?: string;
+    client_id?: string;
+    client_secret?: string;
+    scope?: string;
+    grant_type?: string;
+  } = {
+    mcp_url: values.url,
+  };
+
+  // Include token URL even if it's a template (will be resolved server-side or auto-detected)
+  if (values.oauth_token_url && typeof values.oauth_token_url === 'string') {
+    config.token_url = values.oauth_token_url;
+  }
+
+  // Only include credentials if they're NOT templates (templates can't be tested directly)
+  if (
+    values.oauth_client_id &&
+    typeof values.oauth_client_id === 'string' &&
+    !isTemplateValue(values.oauth_client_id)
+  ) {
+    config.client_id = values.oauth_client_id;
+  }
+
+  if (
+    values.oauth_client_secret &&
+    typeof values.oauth_client_secret === 'string' &&
+    !isTemplateValue(values.oauth_client_secret)
+  ) {
+    config.client_secret = values.oauth_client_secret;
+  }
+
+  // Include scope if provided
+  if (values.oauth_scope && typeof values.oauth_scope === 'string') {
+    config.scope = values.oauth_scope;
+  }
+
+  // Include grant type if provided
+  if (values.oauth_grant_type && typeof values.oauth_grant_type === 'string') {
+    config.grant_type = values.oauth_grant_type;
+  }
+
+  return config;
+}
+
 interface MCPServersTableProps {
   mcpServerById: Map<string, MCPServer>;
   client: import('@agor/core/api').AgorClient | null;
@@ -112,40 +228,10 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           showError(data.error || 'JWT authentication failed');
         }
       } else if (currentAuthType === 'oauth') {
-        const mcpUrl = values.url;
-        if (!mcpUrl) {
+        const requestData = extractOAuthConfigForTesting(values);
+        if (!requestData) {
           showWarning('Please enter MCP URL first to test OAuth authentication');
           return;
-        }
-
-        // Use Feathers client for authenticated request with debug info
-        // Only send OAuth credentials if they're actually provided (not template strings)
-        const requestData: {
-          mcp_url: string;
-          token_url?: string;
-          client_id?: string;
-          client_secret?: string;
-          scope?: string;
-          grant_type?: string;
-        } = {
-          mcp_url: mcpUrl,
-        };
-
-        // Only include OAuth fields if they have real values (not templates)
-        if (values.oauth_token_url && !values.oauth_token_url.includes('{{')) {
-          requestData.token_url = values.oauth_token_url;
-        }
-        if (values.oauth_client_id && !values.oauth_client_id.includes('{{')) {
-          requestData.client_id = values.oauth_client_id;
-        }
-        if (values.oauth_client_secret && !values.oauth_client_secret.includes('{{')) {
-          requestData.client_secret = values.oauth_client_secret;
-        }
-        if (values.oauth_scope) {
-          requestData.scope = values.oauth_scope;
-        }
-        if (values.oauth_grant_type) {
-          requestData.grant_type = values.oauth_grant_type;
         }
 
         const data = (await client.service('mcp-servers/test-oauth').create(requestData)) as {
@@ -455,11 +541,10 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                     label="Grant Type"
                     name="oauth_grant_type"
                     initialValue="client_credentials"
-                    tooltip="OAuth grant type (usually 'client_credentials' for MCP services)"
+                    tooltip="OAuth grant type - only 'client_credentials' is currently supported for MCP services"
                   >
-                    <Select allowClear>
+                    <Select disabled>
                       <Select.Option value="client_credentials">Client Credentials</Select.Option>
-                      <Select.Option value="password">Password</Select.Option>
                     </Select>
                   </Form.Item>
 
@@ -705,20 +790,9 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
             data.auth.api_token = values.jwt_api_token;
             data.auth.api_secret = values.jwt_api_secret;
           } else if (values.auth_type === 'oauth') {
-            // Only include OAuth fields if provided
-            if (values.oauth_token_url) {
-              data.auth.oauth_token_url = values.oauth_token_url;
-            }
-            if (values.oauth_client_id) {
-              data.auth.oauth_client_id = values.oauth_client_id;
-            }
-            if (values.oauth_client_secret) {
-              data.auth.oauth_client_secret = values.oauth_client_secret;
-            }
-            if (values.oauth_scope) {
-              data.auth.oauth_scope = values.oauth_scope;
-            }
-            data.auth.oauth_grant_type = values.oauth_grant_type || 'client_credentials';
+            // Extract OAuth config using helper (only includes non-empty fields)
+            const oauthConfig = extractOAuthConfig(values);
+            Object.assign(data.auth, oauthConfig);
           }
         }
 
@@ -797,11 +871,9 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
           auth.api_token = values.jwt_api_token;
           auth.api_secret = values.jwt_api_secret;
         } else if (values.auth_type === 'oauth') {
-          auth.oauth_token_url = values.oauth_token_url;
-          auth.oauth_client_id = values.oauth_client_id;
-          auth.oauth_client_secret = values.oauth_client_secret;
-          auth.oauth_scope = values.oauth_scope;
-          auth.oauth_grant_type = values.oauth_grant_type;
+          // Extract OAuth config using helper
+          const oauthConfig = extractOAuthConfig(values);
+          Object.assign(auth, oauthConfig);
         }
       }
 
@@ -949,20 +1021,9 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
           updates.auth.api_token = values.jwt_api_token;
           updates.auth.api_secret = values.jwt_api_secret;
         } else if (values.auth_type === 'oauth') {
-          // Only include OAuth fields if provided
-          if (values.oauth_token_url) {
-            updates.auth.oauth_token_url = values.oauth_token_url;
-          }
-          if (values.oauth_client_id) {
-            updates.auth.oauth_client_id = values.oauth_client_id;
-          }
-          if (values.oauth_client_secret) {
-            updates.auth.oauth_client_secret = values.oauth_client_secret;
-          }
-          if (values.oauth_scope) {
-            updates.auth.oauth_scope = values.oauth_scope;
-          }
-          updates.auth.oauth_grant_type = values.oauth_grant_type || 'client_credentials';
+          // Extract OAuth config using helper (only includes non-empty fields)
+          const oauthConfig = extractOAuthConfig(values);
+          Object.assign(updates.auth, oauthConfig);
         }
       } else {
         updates.auth = undefined;

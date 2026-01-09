@@ -15,6 +15,22 @@ export interface OAuthMetadata {
   bearer_methods_supported?: string[];
 }
 
+interface CachedAuthCodeToken {
+  token: string;
+  expiresAt: number;
+  fetchedAt: number;
+}
+
+// Cache tokens from Authorization Code flow (per resource metadata URL)
+// Key is the resource metadata URL to avoid cross-tenant leakage
+const authCodeTokenCache = new Map<string, CachedAuthCodeToken>();
+
+// Default token validity: 1 hour if not specified by OAuth server
+const DEFAULT_AUTHCODE_TOKEN_TTL_SECONDS = 3600;
+
+// Buffer before expiry to avoid using soon-to-expire tokens
+const EXPIRY_BUFFER_SECONDS = 60;
+
 export interface AuthorizationServerMetadata {
   issuer: string;
   authorization_endpoint: string;
@@ -136,7 +152,7 @@ function startCallbackServer(port: number = 0): Promise<{
       }
     });
 
-    server.listen(port, () => {
+    server.listen(port, '127.0.0.1', () => {
       const address = server.address();
       if (!address || typeof address === 'string') {
         reject(new Error('Failed to start callback server'));
@@ -147,7 +163,7 @@ function startCallbackServer(port: number = 0): Promise<{
       resolve({
         server,
         port: actualPort,
-        url: `http://localhost:${actualPort}/oauth/callback`,
+        url: `http://127.0.0.1:${actualPort}/oauth/callback`,
         waitForCallback: () => callbackPromise,
       });
     });
@@ -158,10 +174,21 @@ function startCallbackServer(port: number = 0): Promise<{
 
 /**
  * Open browser for user authentication
+ *
+ * @param url - URL to open in browser
+ * @throws Error with helpful message if browser fails to open
  */
 async function openBrowser(url: string): Promise<void> {
-  const open = (await import('open')).default;
-  await open(url);
+  try {
+    const open = (await import('open')).default;
+    await open(url);
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Failed to open browser automatically: ${errorMessage}\n\n` +
+        `Please open this URL manually in your browser:\n${url}`
+    );
+  }
 }
 
 /**
@@ -199,6 +226,9 @@ async function exchangeCodeForToken(
 /**
  * Perform MCP OAuth 2.1 Authorization Code flow with PKCE
  *
+ * Uses token caching to avoid repeated browser-based authentication flows.
+ * Tokens are cached per resource metadata URL with automatic expiry handling.
+ *
  * @param wwwAuthenticateHeader - The WWW-Authenticate header from 401 response
  * @param clientId - OAuth client ID (optional, generated if not provided)
  * @param onBrowserOpen - Callback when browser is opened (for UI notification)
@@ -218,6 +248,18 @@ export async function performMCPOAuthFlow(
   }
 
   console.log('[MCP OAuth] Resource metadata URL:', metadataUrl);
+
+  // Check cache first
+  const cached = authCodeTokenCache.get(metadataUrl);
+  if (cached && cached.expiresAt > Date.now()) {
+    const ttlRemaining = Math.floor((cached.expiresAt - Date.now()) / 1000);
+    console.log(`[MCP OAuth] Using cached token (valid for ${ttlRemaining}s)`);
+    return cached.token;
+  }
+
+  if (cached) {
+    console.log('[MCP OAuth] Cached token expired, performing new OAuth flow');
+  }
 
   // Step 2: Fetch Protected Resource Metadata (RFC 9728)
   const resourceMetadata = await fetchResourceMetadata(metadataUrl);
@@ -242,68 +284,85 @@ export async function performMCPOAuthFlow(
   const callback = await startCallbackServer();
   console.log('[MCP OAuth] Callback server listening on:', callback.url);
 
-  // Step 5: Generate PKCE challenge
-  const pkce = generatePKCE();
+  try {
+    // Step 5: Generate PKCE challenge
+    const pkce = generatePKCE();
 
-  // Generate client_id if not provided
-  const actualClientId = clientId || crypto.randomUUID();
+    // Generate client_id if not provided
+    const actualClientId = clientId || crypto.randomUUID();
 
-  // Generate state for CSRF protection
-  const state = crypto.randomUUID();
+    // Generate state for CSRF protection
+    const state = crypto.randomUUID();
 
-  // Step 6: Build authorization URL
-  const authUrl = new URL(authServerMetadata.authorization_endpoint);
-  authUrl.searchParams.set('response_type', 'code');
-  authUrl.searchParams.set('client_id', actualClientId);
-  authUrl.searchParams.set('redirect_uri', callback.url);
-  authUrl.searchParams.set('code_challenge', pkce.challenge);
-  authUrl.searchParams.set('code_challenge_method', 'S256');
-  authUrl.searchParams.set('state', state);
+    // Step 6: Build authorization URL
+    const authUrl = new URL(authServerMetadata.authorization_endpoint);
+    authUrl.searchParams.set('response_type', 'code');
+    authUrl.searchParams.set('client_id', actualClientId);
+    authUrl.searchParams.set('redirect_uri', callback.url);
+    authUrl.searchParams.set('code_challenge', pkce.challenge);
+    authUrl.searchParams.set('code_challenge_method', 'S256');
+    authUrl.searchParams.set('state', state);
 
-  // Add scopes if available
-  if (resourceMetadata.scopes_supported && resourceMetadata.scopes_supported.length > 0) {
-    authUrl.searchParams.set('scope', resourceMetadata.scopes_supported.join(' '));
+    // Add scopes if available
+    if (resourceMetadata.scopes_supported && resourceMetadata.scopes_supported.length > 0) {
+      authUrl.searchParams.set('scope', resourceMetadata.scopes_supported.join(' '));
+    }
+
+    console.log('[MCP OAuth] Opening browser for user authentication...');
+    console.log('[MCP OAuth] Authorization URL:', authUrl.toString());
+
+    // Step 7: Open browser
+    if (onBrowserOpen) {
+      onBrowserOpen(authUrl.toString());
+    }
+    await openBrowser(authUrl.toString());
+
+    // Step 8: Wait for callback
+    console.log('[MCP OAuth] Waiting for user to complete authentication...');
+    const callbackResult = await callback.waitForCallback();
+
+    // Verify state
+    if (callbackResult.state !== state) {
+      throw new Error('State mismatch - possible CSRF attack');
+    }
+
+    if (!callbackResult.code) {
+      throw new Error('No authorization code received');
+    }
+
+    console.log('[MCP OAuth] Authorization code received, exchanging for token...');
+
+    // Step 9: Exchange code for token
+    const tokenResponse = await exchangeCodeForToken(
+      authServerMetadata.token_endpoint,
+      callbackResult.code,
+      callback.url,
+      pkce.verifier,
+      actualClientId
+    );
+
+    console.log('[MCP OAuth] Access token received successfully');
+
+    // Step 10: Cache token
+    const expiresInSeconds = tokenResponse.expires_in || DEFAULT_AUTHCODE_TOKEN_TTL_SECONDS;
+    const expiresAt = Date.now() + (expiresInSeconds - EXPIRY_BUFFER_SECONDS) * 1000;
+    const fetchedAt = Date.now();
+
+    authCodeTokenCache.set(metadataUrl, {
+      token: tokenResponse.access_token,
+      expiresAt,
+      fetchedAt,
+    });
+
+    console.log(
+      `[MCP OAuth] Token cached for ${expiresInSeconds}s (${EXPIRY_BUFFER_SECONDS}s buffer)`
+    );
+
+    return tokenResponse.access_token;
+  } finally {
+    // Always close callback server, even on error
+    callback.server.close();
   }
-
-  console.log('[MCP OAuth] Opening browser for user authentication...');
-  console.log('[MCP OAuth] Authorization URL:', authUrl.toString());
-
-  // Step 7: Open browser
-  if (onBrowserOpen) {
-    onBrowserOpen(authUrl.toString());
-  }
-  await openBrowser(authUrl.toString());
-
-  // Step 8: Wait for callback
-  console.log('[MCP OAuth] Waiting for user to complete authentication...');
-  const callbackResult = await callback.waitForCallback();
-
-  // Close callback server
-  callback.server.close();
-
-  // Verify state
-  if (callbackResult.state !== state) {
-    throw new Error('State mismatch - possible CSRF attack');
-  }
-
-  if (!callbackResult.code) {
-    throw new Error('No authorization code received');
-  }
-
-  console.log('[MCP OAuth] Authorization code received, exchanging for token...');
-
-  // Step 9: Exchange code for token
-  const tokenResponse = await exchangeCodeForToken(
-    authServerMetadata.token_endpoint,
-    callbackResult.code,
-    callback.url,
-    pkce.verifier,
-    actualClientId
-  );
-
-  console.log('[MCP OAuth] Access token received successfully');
-
-  return tokenResponse.access_token;
 }
 
 /**
@@ -311,4 +370,48 @@ export async function performMCPOAuthFlow(
  */
 export function isOAuthRequired(status: number, headers: Headers): boolean {
   return status === 401 && headers.get('www-authenticate')?.includes('resource_metadata=') === true;
+}
+
+/**
+ * Clear cached OAuth tokens from Authorization Code flow
+ *
+ * Useful when switching accounts or forcing re-authentication.
+ *
+ * @param metadataUrl - Optional metadata URL to clear specific token, clears all if not provided
+ */
+export function clearAuthCodeTokenCache(metadataUrl?: string): void {
+  if (metadataUrl) {
+    authCodeTokenCache.delete(metadataUrl);
+  } else {
+    authCodeTokenCache.clear();
+  }
+}
+
+/**
+ * Get Authorization Code token cache statistics for debugging
+ *
+ * @returns Cache statistics including total, valid, and expired entries
+ */
+export function getAuthCodeTokenCacheStats(): {
+  totalEntries: number;
+  validEntries: number;
+  expiredEntries: number;
+} {
+  const now = Date.now();
+  let validEntries = 0;
+  let expiredEntries = 0;
+
+  for (const cached of authCodeTokenCache.values()) {
+    if (cached.expiresAt > now) {
+      validEntries++;
+    } else {
+      expiredEntries++;
+    }
+  }
+
+  return {
+    totalEntries: authCodeTokenCache.size,
+    validEntries,
+    expiredEntries,
+  };
 }
