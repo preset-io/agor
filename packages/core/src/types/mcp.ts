@@ -34,13 +34,20 @@ export type MCPSource = 'user' | 'imported' | 'agor';
  * MCP server authentication configuration
  */
 export interface MCPAuth {
-  type: 'none' | 'bearer' | 'jwt';
+  type: 'none' | 'bearer' | 'jwt' | 'oauth';
   // Bearer token
   token?: string;
   // JWT config
   api_url?: string;
   api_token?: string;
   api_secret?: string;
+  // OAuth 2.0 config
+  oauth_token_url?: string;
+  oauth_client_id?: string;
+  oauth_client_secret?: string;
+  oauth_scope?: string;
+  oauth_grant_type?: string;
+  // Common
   insecure?: boolean;
 }
 

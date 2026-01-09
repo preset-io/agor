@@ -6,6 +6,7 @@
  */
 
 import type { MCPAuth } from '../../types/mcp';
+import { fetchOAuthToken, inferOAuthTokenUrl } from './oauth-auth';
 
 interface JWTConfig {
   api_url: string;
@@ -137,10 +138,12 @@ export async function getMCPRemoteArgsWithJWT(
  * Build Authorization headers for an MCP server based on its auth config.
  *
  * @param auth - MCP authentication configuration
+ * @param mcpUrl - MCP server URL (used for OAuth token URL auto-detection)
  * @returns Header map including Authorization when applicable
  */
 export async function resolveMCPAuthHeaders(
-  auth?: MCPAuth
+  auth?: MCPAuth,
+  mcpUrl?: string
 ): Promise<Record<string, string> | undefined> {
   if (!auth || auth.type === 'none') {
     return undefined;
@@ -173,6 +176,44 @@ export async function resolveMCPAuthHeaders(
     return {
       Authorization: `Bearer ${token}`,
     };
+  }
+
+  if (auth.type === 'oauth') {
+    // If no credentials provided, skip OAuth (MCP server will handle auth via protocol)
+    if (!auth.oauth_client_id && !auth.oauth_client_secret) {
+      console.log('[OAuth] No credentials provided - MCP server will handle authentication');
+      return undefined;
+    }
+
+    // Auto-detect token URL if not provided
+    let tokenUrl = auth.oauth_token_url;
+    if (!tokenUrl && mcpUrl) {
+      tokenUrl = inferOAuthTokenUrl(mcpUrl);
+      console.log(`[OAuth] Auto-detected token URL: ${tokenUrl}`);
+    }
+
+    if (!tokenUrl) {
+      console.warn('[OAuth] Token URL could not be determined');
+      return undefined;
+    }
+
+    try {
+      const { token } = await fetchOAuthToken({
+        token_url: tokenUrl,
+        client_id: auth.oauth_client_id,
+        client_secret: auth.oauth_client_secret,
+        scope: auth.oauth_scope,
+        grant_type: auth.oauth_grant_type,
+        insecure: auth.insecure,
+      });
+
+      return {
+        Authorization: `Bearer ${token}`,
+      };
+    } catch (error) {
+      console.warn('[OAuth] Token fetch failed:', error instanceof Error ? error.message : error);
+      return undefined;
+    }
   }
 
   return undefined;

@@ -145,6 +145,16 @@
       "import": "./dist/tools/mcp/jwt-auth.js",
       "require": "./dist/tools/mcp/jwt-auth.cjs"
     },
+    "./tools/mcp/oauth-auth": {
+      "types": "./dist/tools/mcp/oauth-auth.d.ts",
+      "import": "./dist/tools/mcp/oauth-auth.js",
+      "require": "./dist/tools/mcp/oauth-auth.cjs"
+    },
+    "./tools/mcp/oauth-mcp-transport": {
+      "types": "./dist/tools/mcp/oauth-mcp-transport.d.ts",
+      "import": "./dist/tools/mcp/oauth-mcp-transport.js",
+      "require": "./dist/tools/mcp/oauth-mcp-transport.cjs"
+    },
     "./unix": {
       "types": "./dist/unix/index.d.ts",
       "import": "./dist/unix/index.js",
@@ -197,6 +207,7 @@
     "cronstrue": "^3.9.0",
     "drizzle-orm": "^0.44.7",
     "js-yaml": "^4.1.1",
+    "open": "^11.0.0",
     "postgres": "^3.4.7",
     "simple-git": "^3.30.0",
     "socket.io-client": "^4.8.1",

@@ -111,6 +111,70 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
         } else {
           showError(data.error || 'JWT authentication failed');
         }
+      } else if (currentAuthType === 'oauth') {
+        const mcpUrl = values.url;
+        if (!mcpUrl) {
+          showWarning('Please enter MCP URL first to test OAuth authentication');
+          return;
+        }
+
+        // Use Feathers client for authenticated request with debug info
+        // Only send OAuth credentials if they're actually provided (not template strings)
+        const requestData: {
+          mcp_url: string;
+          token_url?: string;
+          client_id?: string;
+          client_secret?: string;
+          scope?: string;
+          grant_type?: string;
+        } = {
+          mcp_url: mcpUrl,
+        };
+
+        // Only include OAuth fields if they have real values (not templates)
+        if (values.oauth_token_url && !values.oauth_token_url.includes('{{')) {
+          requestData.token_url = values.oauth_token_url;
+        }
+        if (values.oauth_client_id && !values.oauth_client_id.includes('{{')) {
+          requestData.client_id = values.oauth_client_id;
+        }
+        if (values.oauth_client_secret && !values.oauth_client_secret.includes('{{')) {
+          requestData.client_secret = values.oauth_client_secret;
+        }
+        if (values.oauth_scope) {
+          requestData.scope = values.oauth_scope;
+        }
+        if (values.oauth_grant_type) {
+          requestData.grant_type = values.oauth_grant_type;
+        }
+
+        const data = (await client.service('mcp-servers/test-oauth').create(requestData)) as {
+          success: boolean;
+          error?: string;
+          tokenValid?: boolean;
+          mcpStatus?: number;
+          mcpStatusText?: string;
+          tokenUrlSource?: string;
+          debugInfo?: unknown;
+        };
+
+        if (data.success) {
+          let message = 'OAuth authentication successful';
+          if (data.tokenUrlSource === 'auto-detected') {
+            message += ' (token URL auto-detected)';
+          }
+          if (data.mcpStatus !== undefined) {
+            message += ` | MCP server responded with ${data.mcpStatus}`;
+          }
+          showSuccess(message);
+
+          // Log debug info to console for troubleshooting
+          if (data.debugInfo) {
+            console.log('[OAuth Debug]', data.debugInfo);
+          }
+        } else {
+          showError(data.error || 'OAuth authentication failed');
+        }
       } else if (currentAuthType === 'bearer') {
         const token = values.auth_token;
         if (token) {
@@ -300,11 +364,14 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                 tooltip="Authentication method for the MCP server"
               >
                 <Select
-                  onChange={(value) => onAuthTypeChange?.(value as 'none' | 'bearer' | 'jwt')}
+                  onChange={(value) =>
+                    onAuthTypeChange?.(value as 'none' | 'bearer' | 'jwt' | 'oauth')
+                  }
                 >
                   <Select.Option value="none">None</Select.Option>
                   <Select.Option value="bearer">Bearer Token</Select.Option>
                   <Select.Option value="jwt">JWT</Select.Option>
+                  <Select.Option value="oauth">OAuth 2.0</Select.Option>
                 </Select>
               </Form.Item>
 
@@ -347,6 +414,69 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                   >
                     <Input.Password placeholder="{{ user.env.JWT_SECRET }} or raw secret" />
                   </Form.Item>
+                </>
+              )}
+
+              {authType === 'oauth' && (
+                <>
+                  <Form.Item
+                    label="Token URL"
+                    name="oauth_token_url"
+                    tooltip="OAuth 2.0 token endpoint. Leave empty to auto-detect from MCP URL (e.g., <mcp-url>/oauth/token)"
+                  >
+                    <Input placeholder="Auto-detect or {{ user.env.OAUTH_TOKEN_URL }}" allowClear />
+                  </Form.Item>
+
+                  <Form.Item
+                    label="Client ID"
+                    name="oauth_client_id"
+                    tooltip="OAuth client ID. Supports templates like {{ user.env.OAUTH_CLIENT_ID }}"
+                  >
+                    <Input placeholder="{{ user.env.OAUTH_CLIENT_ID }}" allowClear />
+                  </Form.Item>
+
+                  <Form.Item
+                    label="Client Secret"
+                    name="oauth_client_secret"
+                    tooltip="OAuth client secret. Supports templates like {{ user.env.OAUTH_CLIENT_SECRET }}"
+                  >
+                    <Input.Password placeholder="{{ user.env.OAUTH_CLIENT_SECRET }}" allowClear />
+                  </Form.Item>
+
+                  <Form.Item
+                    label="Scope"
+                    name="oauth_scope"
+                    tooltip="Optional: OAuth scopes (space-separated, e.g., 'read write')"
+                  >
+                    <Input placeholder="Leave empty or specify scopes" allowClear />
+                  </Form.Item>
+
+                  <Form.Item
+                    label="Grant Type"
+                    name="oauth_grant_type"
+                    initialValue="client_credentials"
+                    tooltip="OAuth grant type (usually 'client_credentials' for MCP services)"
+                  >
+                    <Select allowClear>
+                      <Select.Option value="client_credentials">Client Credentials</Select.Option>
+                      <Select.Option value="password">Password</Select.Option>
+                    </Select>
+                  </Form.Item>
+
+                  <Alert
+                    message="OAuth Configuration Tips"
+                    description={
+                      <ul style={{ margin: 0, paddingLeft: 20, fontSize: 12 }}>
+                        <li>All OAuth fields are optional</li>
+                        <li>Token URL will auto-detect if not specified</li>
+                        <li>Use env vars: OAUTH_CLIENT_ID, OAUTH_CLIENT_SECRET</li>
+                        <li>Set env vars in User Settings → Environment Variables</li>
+                      </ul>
+                    }
+                    type="info"
+                    showIcon
+                    style={{ marginBottom: 16 }}
+                  />
                 </>
               )}
 
@@ -574,6 +704,21 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
             data.auth.api_url = values.jwt_api_url;
             data.auth.api_token = values.jwt_api_token;
             data.auth.api_secret = values.jwt_api_secret;
+          } else if (values.auth_type === 'oauth') {
+            // Only include OAuth fields if provided
+            if (values.oauth_token_url) {
+              data.auth.oauth_token_url = values.oauth_token_url;
+            }
+            if (values.oauth_client_id) {
+              data.auth.oauth_client_id = values.oauth_client_id;
+            }
+            if (values.oauth_client_secret) {
+              data.auth.oauth_client_secret = values.oauth_client_secret;
+            }
+            if (values.oauth_scope) {
+              data.auth.oauth_scope = values.oauth_scope;
+            }
+            data.auth.oauth_grant_type = values.oauth_grant_type || 'client_credentials';
           }
         }
 
@@ -711,7 +856,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
 
     setEditingServer(server);
     setTestResult(null); // Reset test result when opening edit modal
-    const serverAuthType = (server.auth?.type as 'none' | 'bearer' | 'jwt') || 'none';
+    const serverAuthType = (server.auth?.type as 'none' | 'bearer' | 'jwt' | 'oauth') || 'none';
     setAuthType(serverAuthType);
 
     // Set transport state for conditional rendering
@@ -736,6 +881,12 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       jwt_api_url: server.auth?.api_url,
       jwt_api_token: server.auth?.api_token,
       jwt_api_secret: server.auth?.api_secret,
+      oauth_token_url: server.auth?.oauth_token_url,
+      oauth_client_id: server.auth?.oauth_client_id,
+      oauth_client_secret: server.auth?.oauth_client_secret,
+      oauth_scope: server.auth?.oauth_scope,
+      oauth_grant_type: server.auth?.oauth_grant_type || 'client_credentials',
+      tool_permissions: server.tool_permissions || {},
     });
 
     setEditModalOpen(true);
@@ -786,6 +937,21 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
           updates.auth.api_url = values.jwt_api_url;
           updates.auth.api_token = values.jwt_api_token;
           updates.auth.api_secret = values.jwt_api_secret;
+        } else if (values.auth_type === 'oauth') {
+          // Only include OAuth fields if provided
+          if (values.oauth_token_url) {
+            updates.auth.oauth_token_url = values.oauth_token_url;
+          }
+          if (values.oauth_client_id) {
+            updates.auth.oauth_client_id = values.oauth_client_id;
+          }
+          if (values.oauth_client_secret) {
+            updates.auth.oauth_client_secret = values.oauth_client_secret;
+          }
+          if (values.oauth_scope) {
+            updates.auth.oauth_scope = values.oauth_scope;
+          }
+          updates.auth.oauth_grant_type = values.oauth_grant_type || 'client_credentials';
         }
       } else {
         updates.auth = undefined;

@@ -11,6 +11,10 @@
  * - `auth.api_url` - JWT API URL
  * - `auth.api_token` - JWT API token
  * - `auth.api_secret` - JWT API secret
+ * - `auth.oauth_token_url` - OAuth token endpoint URL
+ * - `auth.oauth_client_id` - OAuth client ID
+ * - `auth.oauth_client_secret` - OAuth client secret
+ * - `auth.oauth_scope` - OAuth scopes
  *
  * Example:
  * ```json
@@ -198,6 +202,10 @@ export function resolveMcpServerEnv(
  * - `auth.api_url` - JWT API URL
  * - `auth.api_token` - JWT API token
  * - `auth.api_secret` - JWT API secret
+ * - `auth.oauth_token_url` - OAuth token endpoint URL
+ * - `auth.oauth_client_id` - OAuth client ID
+ * - `auth.oauth_client_secret` - OAuth client secret
+ * - `auth.oauth_scope` - OAuth scopes
  *
  * Returns a NEW server object with resolved values.
  * Does not mutate the input server.
@@ -274,6 +282,56 @@ export function resolveMcpServerTemplates(
       if (hadTemplate && !resolvedAuth.api_secret) {
         unresolvedFields.push('auth.api_secret');
       }
+    }
+
+    // OAuth 2.0 fields (all optional - don't default to env vars, don't track as unresolved)
+    if (server.auth.type === 'oauth') {
+      // OAuth token URL (optional - can be auto-detected)
+      if (server.auth.oauth_token_url) {
+        const _hadTemplate = containsTemplate(server.auth.oauth_token_url);
+        resolvedAuth.oauth_token_url = resolveStringValue(
+          'auth.oauth_token_url',
+          server.auth.oauth_token_url,
+          context
+        );
+        // Don't track as unresolved - it's optional
+      }
+
+      // OAuth client ID (optional - only resolve if provided)
+      if (server.auth.oauth_client_id) {
+        const _hadTemplate = containsTemplate(server.auth.oauth_client_id);
+        resolvedAuth.oauth_client_id = resolveStringValue(
+          'auth.oauth_client_id',
+          server.auth.oauth_client_id,
+          context
+        );
+        // Don't track as unresolved - it's optional
+      }
+
+      // OAuth client secret (optional - only resolve if provided)
+      if (server.auth.oauth_client_secret) {
+        const _hadTemplate = containsTemplate(server.auth.oauth_client_secret);
+        resolvedAuth.oauth_client_secret = resolveStringValue(
+          'auth.oauth_client_secret',
+          server.auth.oauth_client_secret,
+          context
+        );
+        // Don't track as unresolved - it's optional
+      }
+
+      // OAuth scope (optional)
+      if (server.auth.oauth_scope) {
+        const _hadTemplate = containsTemplate(server.auth.oauth_scope);
+        resolvedAuth.oauth_scope = resolveStringValue(
+          'auth.oauth_scope',
+          server.auth.oauth_scope,
+          context
+        );
+        // Don't track as unresolved - it's optional
+      }
+
+      // Grant type defaults to client_credentials if not provided
+      resolvedAuth.oauth_grant_type = server.auth.oauth_grant_type || 'client_credentials';
     }
 
     resolved.auth = resolvedAuth;
