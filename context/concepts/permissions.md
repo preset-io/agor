@@ -12,8 +12,9 @@ Agor respects permissions at three levels (in order of precedence):
 
 1. **User-level** (`~/.claude/settings.json`) - SDK checks first
 2. **Project-level** (`.claude/settings.json`) - SDK checks second
-3. **Session-level** (SDK's session memory) - SDK checks third
-4. **Agor UI prompt** - Only shown if no rule matched above
+3. **Local-level** (`.claude/settings.local.json`) - SDK checks third (gitignored)
+4. **Session-level** (SDK's session memory) - SDK checks fourth
+5. **Agor UI prompt** - Only shown if no rule matched above
 
 ### SDK Integration
 
@@ -36,8 +37,9 @@ Agor uses the SDK's `canUseTool` callback, which fires **AFTER** the SDK has alr
 │  ┌────────────────────────────────────────────────────┐    │
 │  │ 1. SDK checks ~/.claude/settings.json               │    │
 │  │ 2. SDK checks .claude/settings.json                 │    │
-│  │ 3. SDK checks session-level rules                   │    │
-│  │ 4. If no match → calls canUseTool callback          │    │
+│  │ 3. SDK checks .claude/settings.local.json           │    │
+│  │ 4. SDK checks session-level rules                   │    │
+│  │ 5. If no match → calls canUseTool callback          │    │
 │  └────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────┘
                               ↓
@@ -363,6 +365,19 @@ Agor respects Claude CLI's standard settings.json format:
 }
 ```
 
+### Local Settings (`.claude/settings.local.json`)
+
+Developer-specific overrides that are **gitignored**. Use for personal tool permissions without affecting the team.
+
+```json
+{
+  "permissions": {
+    "allow": ["Bash"],
+    "deny": []
+  }
+}
+```
+
 **Wildcards supported:**
 
 ```json
@@ -424,6 +439,7 @@ Allow changing permission mode from UI:
 
 - `~/.claude/settings.json` - User-level permissions (SDK reads)
 - `.claude/settings.json` - Project-level permissions (SDK reads/writes)
+- `.claude/settings.local.json` - Local permissions, gitignored (SDK reads/writes)
 
 ## References
 
