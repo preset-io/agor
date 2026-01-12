@@ -25,7 +25,7 @@ import {
   Typography,
 } from 'antd';
 import { useMemo, useState } from 'react';
-import { mapToArray } from '@/utils/mapHelpers';
+import { mapToSortedArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { JSONEditor, validateJSON } from '../JSONEditor';
@@ -424,7 +424,9 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
       </div>
 
       <Table
-        dataSource={mapToArray(boardById)}
+        dataSource={mapToSortedArray(boardById, (a, b) =>
+          a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+        )}
         columns={columns}
         rowKey="board_id"
         pagination={false}
