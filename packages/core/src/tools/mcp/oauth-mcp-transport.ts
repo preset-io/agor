@@ -35,10 +35,23 @@ export interface AuthorizationServerMetadata {
   issuer: string;
   authorization_endpoint: string;
   token_endpoint: string;
+  registration_endpoint?: string; // RFC 7591 Dynamic Client Registration
   scopes_supported?: string[];
   response_types_supported?: string[];
   grant_types_supported?: string[];
   code_challenge_methods_supported?: string[];
+}
+
+export interface DynamicClientRegistrationResponse {
+  client_id: string;
+  client_secret?: string;
+  client_id_issued_at?: number;
+  client_secret_expires_at?: number;
+  redirect_uris?: string[];
+  token_endpoint_auth_method?: string;
+  grant_types?: string[];
+  response_types?: string[];
+  client_name?: string;
 }
 
 export interface OAuthTokenResponse {
@@ -79,6 +92,76 @@ async function fetchResourceMetadata(metadataUrl: string): Promise<OAuthMetadata
     );
   }
   return (await response.json()) as OAuthMetadata;
+}
+
+// Cache for dynamically registered clients (per authorization server)
+const dynamicClientCache = new Map<
+  string,
+  { client_id: string; client_secret?: string; redirect_uri: string }
+>();
+
+/**
+ * Perform Dynamic Client Registration (RFC 7591)
+ *
+ * Registers a new OAuth client with the authorization server.
+ * Results are cached per authorization server to avoid repeated registrations.
+ */
+async function registerDynamicClient(
+  registrationEndpoint: string,
+  redirectUri: string,
+  clientName: string = 'Agor MCP Client'
+): Promise<DynamicClientRegistrationResponse> {
+  // Check cache first
+  const cacheKey = registrationEndpoint;
+  const cached = dynamicClientCache.get(cacheKey);
+  if (cached && cached.redirect_uri === redirectUri) {
+    console.log('[MCP OAuth] Using cached dynamic client registration');
+    return { client_id: cached.client_id, client_secret: cached.client_secret };
+  }
+
+  console.log('[MCP OAuth] Performing Dynamic Client Registration at:', registrationEndpoint);
+
+  const registrationRequest = {
+    client_name: clientName,
+    redirect_uris: [redirectUri],
+    grant_types: ['authorization_code', 'refresh_token'],
+    response_types: ['code'],
+    token_endpoint_auth_method: 'none', // Public client (no client_secret)
+  };
+
+  const response = await fetch(registrationEndpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify(registrationRequest),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(
+      `Dynamic Client Registration failed (${response.status}): ${errorText}\n\n` +
+        'The MCP server may not support Dynamic Client Registration. ' +
+        'You may need to manually register an OAuth client and provide the client_id.'
+    );
+  }
+
+  const result = (await response.json()) as DynamicClientRegistrationResponse;
+
+  // Cache the result
+  dynamicClientCache.set(cacheKey, {
+    client_id: result.client_id,
+    client_secret: result.client_secret,
+    redirect_uri: redirectUri,
+  });
+
+  console.log('[MCP OAuth] Dynamic client registered:', {
+    client_id: result.client_id,
+    client_name: result.client_name,
+  });
+
+  return result;
 }
 
 /**
@@ -199,20 +282,28 @@ async function exchangeCodeForToken(
   code: string,
   redirectUri: string,
   codeVerifier: string,
-  clientId: string
+  clientId: string,
+  clientSecret?: string
 ): Promise<OAuthTokenResponse> {
+  const body: Record<string, string> = {
+    grant_type: 'authorization_code',
+    code,
+    redirect_uri: redirectUri,
+    client_id: clientId,
+    code_verifier: codeVerifier,
+  };
+
+  // Add client_secret if provided (confidential client)
+  if (clientSecret) {
+    body.client_secret = clientSecret;
+  }
+
   const response = await fetch(tokenEndpoint, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
     },
-    body: new URLSearchParams({
-      grant_type: 'authorization_code',
-      code,
-      redirect_uri: redirectUri,
-      client_id: clientId,
-      code_verifier: codeVerifier,
-    }).toString(),
+    body: new URLSearchParams(body).toString(),
   });
 
   if (!response.ok) {
@@ -288,8 +379,47 @@ export async function performMCPOAuthFlow(
     // Step 5: Generate PKCE challenge
     const pkce = generatePKCE();
 
-    // Generate client_id if not provided
-    const actualClientId = clientId || crypto.randomUUID();
+    // Step 5.5: Get or register client_id
+    let actualClientId = clientId;
+    let clientSecret: string | undefined;
+
+    if (!actualClientId) {
+      // Check if server supports Dynamic Client Registration (RFC 7591)
+      if (authServerMetadata.registration_endpoint) {
+        console.log('[MCP OAuth] Server supports Dynamic Client Registration');
+        const registration = await registerDynamicClient(
+          authServerMetadata.registration_endpoint,
+          callback.url,
+          'Agor MCP Client'
+        );
+        actualClientId = registration.client_id;
+        clientSecret = registration.client_secret;
+      } else {
+        // No DCR support and no client_id provided - check for well-known MCP registration endpoint
+        // Some MCP servers use /register at the auth server URL
+        const mcpRegisterEndpoint = `${authServerUrl}/register`;
+        console.log('[MCP OAuth] Trying MCP-style registration endpoint:', mcpRegisterEndpoint);
+
+        try {
+          const registration = await registerDynamicClient(
+            mcpRegisterEndpoint,
+            callback.url,
+            'Agor MCP Client'
+          );
+          actualClientId = registration.client_id;
+          clientSecret = registration.client_secret;
+        } catch (regError) {
+          throw new Error(
+            'OAuth client_id is required but the authorization server does not support ' +
+              'Dynamic Client Registration.\n\n' +
+              'Please provide a client_id in the MCP server configuration, or contact the ' +
+              'server administrator to register an OAuth client.\n\n' +
+              `Server: ${authServerUrl}\n` +
+              `Registration error: ${regError instanceof Error ? regError.message : String(regError)}`
+          );
+        }
+      }
+    }
 
     // Generate state for CSRF protection
     const state = crypto.randomUUID();
@@ -338,7 +468,8 @@ export async function performMCPOAuthFlow(
       callbackResult.code,
       callback.url,
       pkce.verifier,
-      actualClientId
+      actualClientId,
+      clientSecret
     );
 
     console.log('[MCP OAuth] Access token received successfully');
@@ -370,6 +501,61 @@ export async function performMCPOAuthFlow(
  */
 export function isOAuthRequired(status: number, headers: Headers): boolean {
   return status === 401 && headers.get('www-authenticate')?.includes('resource_metadata=') === true;
+}
+
+/**
+ * Get a cached OAuth 2.1 token for an MCP URL
+ *
+ * This checks all cached tokens and returns a valid one if the metadata URL
+ * matches or contains the MCP URL's origin.
+ *
+ * @param mcpUrl - The MCP server URL to find a cached token for
+ * @returns The cached token if valid, undefined otherwise
+ */
+export function getCachedOAuth21Token(mcpUrl: string): string | undefined {
+  const now = Date.now();
+
+  console.log('[OAuth 2.1 Cache] Looking for token for MCP URL:', mcpUrl);
+  console.log('[OAuth 2.1 Cache] Cache size:', authCodeTokenCache.size);
+
+  let mcpOrigin: string;
+  try {
+    mcpOrigin = new URL(mcpUrl).origin;
+    console.log('[OAuth 2.1 Cache] MCP origin:', mcpOrigin);
+  } catch (e) {
+    console.log('[OAuth 2.1 Cache] Invalid MCP URL:', e);
+    return undefined;
+  }
+
+  // Check all cached tokens for a match
+  for (const [metadataUrl, cached] of authCodeTokenCache.entries()) {
+    console.log('[OAuth 2.1 Cache] Checking cache entry:', metadataUrl);
+    console.log('[OAuth 2.1 Cache] Token expires at:', new Date(cached.expiresAt).toISOString());
+    console.log('[OAuth 2.1 Cache] Current time:', new Date(now).toISOString());
+
+    // Check if token is still valid
+    if (cached.expiresAt <= now) {
+      console.log('[OAuth 2.1 Cache] Token expired, skipping');
+      continue;
+    }
+
+    // Check if the metadata URL is from the same origin as the MCP URL
+    try {
+      const metadataOrigin = new URL(metadataUrl).origin;
+      console.log('[OAuth 2.1 Cache] Metadata origin:', metadataOrigin);
+      console.log('[OAuth 2.1 Cache] Origins match:', metadataOrigin === mcpOrigin);
+
+      if (metadataOrigin === mcpOrigin || metadataUrl.includes(mcpOrigin)) {
+        console.log('[OAuth 2.1 Cache] ✅ Found cached token for:', mcpOrigin);
+        return cached.token;
+      }
+    } catch (e) {
+      console.log('[OAuth 2.1 Cache] Invalid metadata URL:', e);
+    }
+  }
+
+  console.log('[OAuth 2.1 Cache] ❌ No matching token found');
+  return undefined;
 }
 
 /**

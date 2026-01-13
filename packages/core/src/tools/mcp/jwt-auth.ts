@@ -7,6 +7,7 @@
 
 import type { MCPAuth } from '../../types/mcp';
 import { fetchOAuthToken, inferOAuthTokenUrl } from './oauth-auth';
+import { getCachedOAuth21Token } from './oauth-mcp-transport';
 
 interface JWTConfig {
   api_url: string;
@@ -179,9 +180,19 @@ export async function resolveMCPAuthHeaders(
   }
 
   if (auth.type === 'oauth') {
-    // If no credentials provided, skip OAuth (MCP server will handle auth via protocol)
+    // If no credentials provided, check for cached OAuth 2.1 token from browser flow
     if (!auth.oauth_client_id && !auth.oauth_client_secret) {
-      console.log('[OAuth] No credentials provided - MCP server will handle authentication');
+      if (mcpUrl) {
+        const cachedToken = getCachedOAuth21Token(mcpUrl);
+        if (cachedToken) {
+          console.log('[OAuth 2.1] Using cached token from browser flow');
+          return {
+            Authorization: `Bearer ${cachedToken}`,
+          };
+        }
+      }
+      console.log('[OAuth] No credentials and no cached token - authentication may fail');
+      console.log('[OAuth] Use "Start OAuth Flow" button to authenticate via browser first');
       return undefined;
     }
 

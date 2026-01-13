@@ -160,12 +160,13 @@ interface MCPServerFormFieldsProps {
   mode: 'create' | 'edit';
   transport?: 'stdio' | 'http' | 'sse';
   onTransportChange?: (transport: 'stdio' | 'http' | 'sse') => void;
-  authType?: 'none' | 'bearer' | 'jwt';
-  onAuthTypeChange?: (authType: 'none' | 'bearer' | 'jwt') => void;
+  authType?: 'none' | 'bearer' | 'jwt' | 'oauth';
+  onAuthTypeChange?: (authType: 'none' | 'bearer' | 'jwt' | 'oauth') => void;
   form: FormInstance;
   client: import('@agor/core/api').AgorClient | null;
   serverId?: string;
   onTestConnection?: () => Promise<void>;
+  onSaveFirst?: () => Promise<string | null>; // Save server first, returns new server ID or null on failure
   testing?: boolean;
   testResult?: {
     success: boolean;
@@ -188,16 +189,88 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
   client,
   serverId,
   onTestConnection,
+  onSaveFirst,
   testing = false,
   testResult,
 }) => {
   const { showSuccess, showError, showWarning, showInfo } = useThemedMessage();
   const [testingAuth, setTestingAuth] = useState(false);
+  const [oauthBrowserFlowAvailable, setOauthBrowserFlowAvailable] = useState(false);
+  const [startingOAuthFlow, setStartingOAuthFlow] = useState(false);
+
+  // Start the browser-based OAuth 2.1 flow
+  const handleStartOAuthFlow = async () => {
+    if (!client) {
+      showError('Client not available');
+      return;
+    }
+
+    // Track the effective server ID (may be set after saving)
+    let effectiveServerId = serverId;
+
+    // If no serverId and we have onSaveFirst callback, save the server first
+    if (!effectiveServerId && onSaveFirst) {
+      showInfo('Saving MCP server before testing...');
+      const newServerId = await onSaveFirst();
+      if (!newServerId) {
+        showError('Failed to save MCP server');
+        return;
+      }
+      effectiveServerId = newServerId;
+      // Server is now saved, continue with the test
+    }
+
+    const values = form.getFieldsValue();
+    const requestData = extractOAuthConfigForTesting(values);
+    if (!requestData) {
+      showError('MCP URL is required');
+      return;
+    }
+
+    setStartingOAuthFlow(true);
+    try {
+      showInfo('Opening browser for OAuth authentication...');
+
+      const data = (await client.service('mcp-servers/test-oauth').create({
+        ...requestData,
+        mcp_server_id: effectiveServerId, // Pass server ID so token is saved to DB
+        start_browser_flow: true,
+      })) as {
+        success: boolean;
+        error?: string;
+        message?: string;
+        tokenValid?: boolean;
+        mcpStatus?: number;
+      };
+
+      if (data.success) {
+        showSuccess(data.message || 'OAuth 2.1 authentication successful!');
+        setOauthBrowserFlowAvailable(false); // Hide the button after success
+      } else {
+        showError(data.error || 'OAuth flow failed');
+      }
+    } catch (error) {
+      showError(`OAuth flow error: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setStartingOAuthFlow(false);
+    }
+  };
 
   const handleTestAuth = async () => {
     if (!client) {
       showError('Client not available');
       return;
+    }
+
+    // If no serverId and we have onSaveFirst callback, save the server first
+    if (!serverId && onSaveFirst) {
+      showInfo('Saving MCP server before testing...');
+      const newServerId = await onSaveFirst();
+      if (!newServerId) {
+        showError('Failed to save MCP server');
+        return;
+      }
+      // Server is now saved, continue with the test
     }
 
     const values = form.getFieldsValue();
@@ -237,29 +310,62 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
         const data = (await client.service('mcp-servers/test-oauth').create(requestData)) as {
           success: boolean;
           error?: string;
+          message?: string;
+          oauthType?: string;
           tokenValid?: boolean;
           mcpStatus?: number;
           mcpStatusText?: string;
           tokenUrlSource?: string;
+          requiresBrowserFlow?: boolean;
+          metadataUrl?: string;
+          authorizationServers?: string[];
+          wwwAuthenticate?: string;
+          responseHeaders?: Record<string, string>;
+          hint?: string;
           debugInfo?: unknown;
         };
 
-        if (data.success) {
-          let message = 'OAuth authentication successful';
-          if (data.tokenUrlSource === 'auto-detected') {
-            message += ' (token URL auto-detected)';
-          }
-          if (data.mcpStatus !== undefined) {
-            message += ` | MCP server responded with ${data.mcpStatus}`;
-          }
-          showSuccess(message);
+        // Log full response for debugging
+        console.log('[OAuth Test Response]', data);
 
-          // Log debug info to console for troubleshooting
+        if (data.success) {
+          if (data.requiresBrowserFlow) {
+            // OAuth 2.1 detected but needs browser authentication
+            setOauthBrowserFlowAvailable(true);
+            showInfo(
+              data.message ||
+                'OAuth 2.1 detected. Click "Start OAuth Flow" to authenticate in browser.'
+            );
+          } else if (data.oauthType === 'none') {
+            setOauthBrowserFlowAvailable(false);
+            showSuccess('MCP server accessible without authentication');
+          } else {
+            let message = data.message || 'OAuth authentication successful';
+            if (data.tokenUrlSource === 'auto-detected') {
+              message += ' (token URL auto-detected)';
+            }
+            if (data.mcpStatus !== undefined) {
+              message += ` | MCP server responded with ${data.mcpStatus}`;
+            }
+            showSuccess(message);
+          }
+
           if (data.debugInfo) {
             console.log('[OAuth Debug]', data.debugInfo);
           }
         } else {
-          showError(data.error || 'OAuth authentication failed');
+          // Show detailed error with hints
+          let errorMsg = data.error || 'OAuth authentication failed';
+          if (data.hint) {
+            errorMsg += `\n\nHint: ${data.hint}`;
+          }
+          if (data.wwwAuthenticate) {
+            console.log('[OAuth] WWW-Authenticate header:', data.wwwAuthenticate);
+          }
+          if (data.responseHeaders) {
+            console.log('[OAuth] Response headers:', data.responseHeaders);
+          }
+          showError(errorMsg);
         }
       } else if (currentAuthType === 'bearer') {
         const token = values.auth_token;
@@ -450,14 +556,36 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                 tooltip="Authentication method for the MCP server"
               >
                 <Select
-                  onChange={(value) =>
-                    onAuthTypeChange?.(value as 'none' | 'bearer' | 'jwt' | 'oauth')
-                  }
+                  onChange={(value) => {
+                    // Reset OAuth flow state when changing auth type
+                    setOauthBrowserFlowAvailable(false);
+
+                    // Clear fields from other auth types to prevent validation issues
+                    if (value !== 'jwt') {
+                      form.setFieldsValue({
+                        jwt_api_url: undefined,
+                        jwt_api_token: undefined,
+                        jwt_api_secret: undefined,
+                      });
+                    }
+                    if (value !== 'bearer') {
+                      form.setFieldsValue({ auth_token: undefined });
+                    }
+                    if (value !== 'oauth') {
+                      form.setFieldsValue({
+                        oauth_token_url: undefined,
+                        oauth_client_id: undefined,
+                        oauth_client_secret: undefined,
+                        oauth_scope: undefined,
+                      });
+                    }
+                    onAuthTypeChange?.(value as 'none' | 'bearer' | 'jwt' | 'oauth');
+                  }}
                 >
                   <Select.Option value="none">None</Select.Option>
                   <Select.Option value="bearer">Bearer Token</Select.Option>
                   <Select.Option value="jwt">JWT</Select.Option>
-                  <Select.Option value="oauth">OAuth 2.0</Select.Option>
+                  <Select.Option value="oauth">OAuth 2.1</Select.Option>
                 </Select>
               </Form.Item>
 
@@ -465,7 +593,11 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                 <Form.Item
                   label="Token"
                   name="auth_token"
-                  rules={[{ required: true, message: 'Please enter a bearer token' }]}
+                  rules={
+                    authType === 'bearer'
+                      ? [{ required: true, message: 'Please enter a bearer token' }]
+                      : []
+                  }
                   tooltip="Bearer token. Supports templates like {{ user.env.API_TOKEN }}"
                 >
                   <Input.Password placeholder="{{ user.env.API_TOKEN }} or raw token" />
@@ -477,7 +609,11 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                   <Form.Item
                     label="API URL"
                     name="jwt_api_url"
-                    rules={[{ required: true, message: 'Please enter the API URL' }]}
+                    rules={
+                      authType === 'jwt'
+                        ? [{ required: true, message: 'Please enter the API URL' }]
+                        : []
+                    }
                     tooltip="JWT auth API URL. Supports templates."
                   >
                     <Input placeholder="https://auth.example.com/token" />
@@ -486,7 +622,11 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                   <Form.Item
                     label="API Token"
                     name="jwt_api_token"
-                    rules={[{ required: true, message: 'Please enter the API token' }]}
+                    rules={
+                      authType === 'jwt'
+                        ? [{ required: true, message: 'Please enter the API token' }]
+                        : []
+                    }
                     tooltip="JWT API token. Supports templates like {{ user.env.JWT_TOKEN }}"
                   >
                     <Input.Password placeholder="{{ user.env.JWT_TOKEN }} or raw token" />
@@ -495,7 +635,11 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                   <Form.Item
                     label="API Secret"
                     name="jwt_api_secret"
-                    rules={[{ required: true, message: 'Please enter the API secret' }]}
+                    rules={
+                      authType === 'jwt'
+                        ? [{ required: true, message: 'Please enter the API secret' }]
+                        : []
+                    }
                     tooltip="JWT API secret. Supports templates like {{ user.env.JWT_SECRET }}"
                   >
                     <Input.Password placeholder="{{ user.env.JWT_SECRET }} or raw secret" />
@@ -508,7 +652,7 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                   <Form.Item
                     label="Token URL"
                     name="oauth_token_url"
-                    tooltip="OAuth 2.0 token endpoint. Leave empty to auto-detect from MCP URL (e.g., <mcp-url>/oauth/token)"
+                    tooltip="OAuth token endpoint. Leave empty for auto-discovery (OAuth 2.1 RFC 9728)"
                   >
                     <Input placeholder="Auto-detect or {{ user.env.OAUTH_TOKEN_URL }}" allowClear />
                   </Form.Item>
@@ -541,7 +685,7 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                     label="Grant Type"
                     name="oauth_grant_type"
                     initialValue="client_credentials"
-                    tooltip="OAuth grant type - only 'client_credentials' is currently supported for MCP services"
+                    tooltip="OAuth grant type for Client Credentials flow. OAuth 2.1 auto-discovery uses Authorization Code with PKCE instead."
                   >
                     <Select disabled>
                       <Select.Option value="client_credentials">Client Credentials</Select.Option>
@@ -549,13 +693,15 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                   </Form.Item>
 
                   <Alert
-                    message="OAuth Configuration Tips"
+                    message="OAuth 2.1 Auto-Discovery"
                     description={
                       <ul style={{ margin: 0, paddingLeft: 20, fontSize: 12 }}>
-                        <li>All OAuth fields are optional</li>
-                        <li>Token URL will auto-detect if not specified</li>
-                        <li>Use env vars: OAUTH_CLIENT_ID, OAUTH_CLIENT_SECRET</li>
-                        <li>Set env vars in User Settings → Environment Variables</li>
+                        <li>
+                          All fields are optional - OAuth 2.1 servers advertise their endpoints
+                        </li>
+                        <li>MCP server returns metadata URL in WWW-Authenticate header</li>
+                        <li>Browser opens automatically for user authentication (PKCE flow)</li>
+                        <li>Only fill Client ID/Secret for legacy Client Credentials flow</li>
                       </ul>
                     }
                     type="info"
@@ -567,9 +713,20 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
 
               {authType !== 'none' && (
                 <Form.Item>
-                  <Button type="default" loading={testingAuth} onClick={handleTestAuth}>
-                    Test Authentication
-                  </Button>
+                  <Space>
+                    <Button type="default" loading={testingAuth} onClick={handleTestAuth}>
+                      Test Authentication
+                    </Button>
+                    {authType === 'oauth' && oauthBrowserFlowAvailable && (
+                      <Button
+                        type="primary"
+                        loading={startingOAuthFlow}
+                        onClick={handleStartOAuthFlow}
+                      >
+                        Start OAuth Flow
+                      </Button>
+                    )}
+                  </Space>
                 </Form.Item>
               )}
             </>
@@ -723,7 +880,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   onUpdate,
   onDelete,
 }) => {
-  const { showSuccess, showError } = useThemedMessage();
+  const { showSuccess, showError, showInfo } = useThemedMessage();
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [viewModalOpen, setViewModalOpen] = useState(false);
@@ -731,7 +888,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   const [viewingServer, setViewingServer] = useState<MCPServer | null>(null);
   const [form] = Form.useForm();
   const [transport, setTransport] = useState<'stdio' | 'http' | 'sse'>('stdio');
-  const [authType, setAuthType] = useState<'none' | 'bearer' | 'jwt'>('none');
+  const [authType, setAuthType] = useState<'none' | 'bearer' | 'jwt' | 'oauth'>('none');
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{
     success: boolean;
@@ -821,8 +978,84 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       });
   };
 
+  // Save the MCP server from form values, returns new server ID or null on failure
+  const saveServerFromForm = async (): Promise<string | null> => {
+    if (!client) {
+      showError('Client not available');
+      return null;
+    }
+
+    try {
+      const values = await form.validateFields();
+
+      const data: CreateMCPServerInput = {
+        name: values.name,
+        display_name: values.display_name,
+        description: values.description,
+        transport: values.transport,
+        scope: values.scope || 'global',
+        enabled: values.enabled ?? true,
+        source: 'user',
+      };
+
+      // Add transport-specific fields
+      if (values.transport === 'stdio') {
+        data.command = values.command;
+        data.args = values.args?.split(',').map((arg: string) => arg.trim()) || [];
+      } else {
+        data.url = values.url;
+      }
+
+      // Add auth config if present
+      if (values.auth_type && values.auth_type !== 'none') {
+        data.auth = {
+          type: values.auth_type,
+        };
+        if (values.auth_type === 'bearer') {
+          data.auth.token = values.auth_token;
+        } else if (values.auth_type === 'jwt') {
+          data.auth.api_url = values.jwt_api_url;
+          data.auth.api_token = values.jwt_api_token;
+          data.auth.api_secret = values.jwt_api_secret;
+        } else if (values.auth_type === 'oauth') {
+          const oauthConfig = extractOAuthConfig(values);
+          Object.assign(data.auth, oauthConfig);
+        }
+      }
+
+      // Add env vars if present
+      if (values.env) {
+        try {
+          data.env = JSON.parse(values.env);
+        } catch {
+          // Invalid JSON, skip
+        }
+      }
+
+      // Create the server via API
+      const newServer = (await client.service('mcp-servers').create(data)) as MCPServer;
+      showSuccess(`MCP server "${data.name}" saved`);
+
+      // Update local state to switch to edit mode
+      setEditingServer(newServer);
+      setCreateModalOpen(false);
+      setEditModalOpen(true);
+
+      // Also notify parent callback
+      onCreate?.(data);
+
+      return newServer.mcp_server_id;
+    } catch (error) {
+      console.error('Save failed:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Failed to save server';
+      showError(errorMessage);
+      return null;
+    }
+  };
+
   // Test connection using current form values (not saved config)
   // If serverId is provided, capabilities will be persisted after successful test
+  // If no serverId, saves the server first then tests
   const handleTestConnection = async (serverId?: string) => {
     if (!client) {
       showError('Client not available');
@@ -840,6 +1073,17 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     if (values.transport === 'stdio') {
       showError('Connection test is not available for stdio transport');
       return;
+    }
+
+    // If no serverId, save the server first
+    let effectiveServerId = serverId;
+    if (!effectiveServerId) {
+      showInfo('Saving MCP server before testing...');
+      effectiveServerId = (await saveServerFromForm()) || undefined;
+      if (!effectiveServerId) {
+        // Save failed, error already shown
+        return;
+      }
     }
 
     setTesting(true);
@@ -889,9 +1133,9 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
         auth,
       };
 
-      // Include server ID if editing existing server (to persist discovered capabilities)
-      if (serverId) {
-        requestData.mcp_server_id = serverId;
+      // Include server ID to persist discovered capabilities
+      if (effectiveServerId) {
+        requestData.mcp_server_id = effectiveServerId;
       }
 
       const data = (await client.service('mcp-servers/discover').create(requestData)) as {
@@ -1247,6 +1491,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
             form={form}
             client={client}
             onTestConnection={() => handleTestConnection()}
+            onSaveFirst={saveServerFromForm}
             testing={testing}
             testResult={testResult}
           />

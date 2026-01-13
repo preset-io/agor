@@ -47,6 +47,10 @@ export interface MCPAuth {
   oauth_client_secret?: string;
   oauth_scope?: string;
   oauth_grant_type?: string;
+  // OAuth 2.1 runtime tokens (obtained via browser flow)
+  oauth_access_token?: string;
+  oauth_token_expires_at?: number; // Unix timestamp in milliseconds
+  oauth_refresh_token?: string;
   // Common
   insecure?: boolean;
 }

@@ -93,8 +93,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/core
       '@modelcontextprotocol/sdk':
-        specifier: ^1.24.0
-        version: 1.24.0(zod@4.1.12)
+        specifier: ^1.25.2
+        version: 1.25.2(hono@4.11.4)(zod@4.1.12)
       compression:
         specifier: ^1.8.1
         version: 1.8.1
@@ -535,10 +535,10 @@ importers:
         version: 5.0.37(typescript@5.9.3)
       '@google/gemini-cli-core':
         specifier: ^0.21.3
-        version: 0.21.3(@opentelemetry/core@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/resources@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-metrics@2.0.1(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.0.1(@opentelemetry/api@1.9.0))
+        version: 0.21.3(@opentelemetry/core@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/resources@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-metrics@2.0.1(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.0.1(@opentelemetry/api@1.9.0))(hono@4.11.4)
       '@google/genai':
         specifier: ^1.34.0
-        version: 1.34.0(@modelcontextprotocol/sdk@1.24.0(zod@4.1.12))
+        version: 1.34.0(@modelcontextprotocol/sdk@1.25.2(hono@4.11.4)(zod@4.1.12))
       '@iarna/toml':
         specifier: ^2.2.5
         version: 2.2.5
@@ -569,6 +569,9 @@ importers:
       js-yaml:
         specifier: ^4.1.1
         version: 4.1.1
+      open:
+        specifier: ^11.0.0
+        version: 11.0.0
       postgres:
         specifier: ^3.4.7
         version: 3.4.7
@@ -1729,6 +1732,12 @@ packages:
     resolution: {integrity: sha512-ccQ60nMcbEGrQh0U9E6x0ajW9qJNeazpcM/9CH6J8leyNtJgb+gu24WTBAfBUVeO486ZhscnaxLEITI2HXwhow==}
     engines: {node: '>=18.0.0 <25.0.0'}
 
+  '@hono/node-server@1.19.8':
+    resolution: {integrity: sha512-0/g2lIOPzX8f3vzW1ggQgvG5mjtFBDBHFAzI5SFAi2DzSqS9luJwqg9T6O/gKYLi+inS7eNxBeIFkkghIPvrMA==}
+    engines: {node: '>=18.14.1'}
+    peerDependencies:
+      hono: ^4
+
   '@iarna/toml@2.2.5':
     resolution: {integrity: sha512-trnsAYxU3xnS1gPHPyU961coFyLkh4gAD/0zQ5mymY4yOZ+CYvsPqUbOFSw0aDM4y0tV7tiFxL/1XfXPNC6IPg==}
 
@@ -2146,6 +2155,16 @@ packages:
 
   '@modelcontextprotocol/sdk@1.24.0':
     resolution: {integrity: sha512-D8h5KXY2vHFW8zTuxn2vuZGN0HGrQ5No6LkHwlEA9trVgNdPL3TF1dSqKA7Dny6BbBYKSW/rOBDXdC8KJAjUCg==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      '@cfworker/json-schema': ^4.1.1
+      zod: ^3.25.0
+    peerDependenciesMeta:
+      '@cfworker/json-schema':
+        optional: true
+
+  '@modelcontextprotocol/sdk@1.25.2':
+    resolution: {integrity: sha512-LZFeo4F9M5qOhC/Uc1aQSrBHxMrvxett+9KLHt7OhcExtoiRN9DKgbZffMP/nxjutWDQpfMDfP3nkHI4X9ijww==}
     engines: {node: '>=18'}
     peerDependencies:
       '@cfworker/json-schema': ^4.1.1
@@ -4926,6 +4945,10 @@ packages:
     resolution: {integrity: sha512-WY/3TUME0x3KPYdRRxEJJvXRHV4PyPoUsxtZa78lwItwRQRHhd2U9xOscaT/YTf8uCXIAjeJOFBVEh/7FtD8Xg==}
     engines: {node: '>=18'}
 
+  default-browser@5.4.0:
+    resolution: {integrity: sha512-XDuvSq38Hr1MdN47EDvYtx3U0MTqpCEn+F6ft8z2vYDzMrvQhVp0ui9oQdqW3MvK3vqUETglt1tVGgjLuJ5izg==}
+    engines: {node: '>=18'}
+
   defer-to-connect@2.0.1:
     resolution: {integrity: sha512-4tvttepXG1VaYGrRibk5EwJd1t4udunSOVMdLSAL6mId1ix438oPwPZMALY41FCijukO1L0twNcGsdzS7dHgDg==}
     engines: {node: '>=10'}
@@ -5783,6 +5806,10 @@ packages:
   highlightjs-vue@1.0.0:
     resolution: {integrity: sha512-PDEfEF102G23vHmPhLyPboFCD+BkMGu+GuJe2d9/eH4FsCwvgBpnc9n0pGE+ffKdph38s6foEZiEjdgHdzp+IA==}
 
+  hono@4.11.4:
+    resolution: {integrity: sha512-U7tt8JsyrxSRKspfhtLET79pU8K+tInj5QZXs1jSugO1Vq5dFj3kmZsRldo29mTBfcjDRVRXrEZ6LS63Cog9ZA==}
+    engines: {node: '>=16.9.0'}
+
   hosted-git-info@7.0.2:
     resolution: {integrity: sha512-puUZAUKT5m8Zzvs72XWy3HtvVbTWljRE66cP60bxJzAqf2DgICo7lYTY2IHUmLnNpjYvw5bvmoHvPc0QO2a62w==}
     engines: {node: ^16.14.0 || >=18.0.0}
@@ -5966,6 +5993,10 @@ packages:
   is-hexadecimal@2.0.1:
     resolution: {integrity: sha512-DgZQp241c8oO6cA1SbTEWiXeoxV42vlcJxgH+B3hi1AiqqKruZR3ZGF8In3fj4+/y/7rHvlOZLZtgJ/4ttYGZg==}
 
+  is-in-ssh@1.0.0:
+    resolution: {integrity: sha512-jYa6Q9rH90kR1vKB6NM7qqd1mge3Fx4Dhw5TVlK1MUBqhEOuCagrEHMevNuCcbECmXZ0ThXkRm+Ymr51HwEPAw==}
+    engines: {node: '>=20'}
+
   is-inside-container@1.0.0:
     resolution: {integrity: sha512-KIYLCCJghfHZxqjYBE7rEy0OBuTd5xCHS7tHVgvCLkx7StIoaxwNW3hCALgEUjFfeRk+MG/Qxmp/vtETEF3tRA==}
     engines: {node: '>=14.16'}
@@ -6109,6 +6140,9 @@ packages:
 
   json-schema-traverse@1.0.0:
     resolution: {integrity: sha512-NM8/P9n3XjXhIZn1lLhkFaACTOURQXjWhV4BA/RnOv8xvgqtqpAX9IO4mRQxSx1Rlo4tqzeqb0sOlruaOy3dug==}
+
+  json-schema-typed@8.0.2:
+    resolution: {integrity: sha512-fQhoXdcvc3V28x7C7BMs4P5+kNlgUURe2jmUT1T//oBRMDrqy1QPelJimwZGo7Hg9VPV3EQV5Bnq4hbFy2vetA==}
 
   json2mq@0.2.0:
     resolution: {integrity: sha512-SzoRg7ux5DWTII9J2qkrZrqV1gt+rTaoufMxEzXbS26Uid0NwaJd123HcoB80TgubEppxxIGdNxCx50fEoEWQA==}
@@ -6876,6 +6910,10 @@ packages:
     resolution: {integrity: sha512-YgBpdJHPyQ2UE5x+hlSXcnejzAvD0b22U2OuAP+8OnlJT+PjWPxtgmGqKKc+RgTM63U9gN0YzrYc71R2WT/hTA==}
     engines: {node: '>=18'}
 
+  open@11.0.0:
+    resolution: {integrity: sha512-smsWv2LzFjP03xmvFoJ331ss6h+jixfA4UUV/Bsiyuu4YJPfN+FIQGOIiv4w9/+MoHkfkJ22UIaQWRVFRfH6Vw==}
+    engines: {node: '>=20'}
+
   open@8.4.2:
     resolution: {integrity: sha512-7x81NCL719oNbsq/3mh+hVrAWmFuEYUqrq/Iw3kUzH8ReypT9QQ0BLoJS7/G9k6N81XjW4qHWtjWwe/9eLy1EQ==}
     engines: {node: '>=12'}
@@ -7068,6 +7106,10 @@ packages:
   postgres@3.4.7:
     resolution: {integrity: sha512-Jtc2612XINuBjIl/QTWsV5UvE8UHuNblcO3vVADSrKsrc6RqGX6lOW1cEo3CM2v0XG4Nat8nI+YM7/f26VxXLw==}
     engines: {node: '>=12'}
+
+  powershell-utils@0.1.0:
+    resolution: {integrity: sha512-dM0jVuXJPsDN6DvRpea484tCUaMiXWjuCn++HGTqUWzGDjv5tZkEZldAJ/UMlqRYGFrD/etByo4/xOuC/snX2A==}
+    engines: {node: '>=20'}
 
   prebuild-install@7.1.3:
     resolution: {integrity: sha512-8Mf2cbV7x1cXPUILADGI3wuhfqWvtiLA1iclTDbFRZkgRQS0NqsPZphna9V+HyTEadheuPmjaJMsbzKQFOzLug==}
@@ -8577,6 +8619,10 @@ packages:
     resolution: {integrity: sha512-h3Fbisa2nKGPxCpm89Hk33lBLsnaGBvctQopaBSOW/uIs6FTe1ATyAnKFJrzVs9vpGdsTe73WF3V4lIsk4Gacw==}
     engines: {node: '>=18'}
 
+  wsl-utils@0.3.1:
+    resolution: {integrity: sha512-g/eziiSUNBSsdDJtCLB8bdYEUMj4jR7AGeUo96p/3dTafgjHhpF4RiCFPiRILwjQoDXx5MqkBr4fwWtR3Ky4Wg==}
+    engines: {node: '>=20'}
+
   xdg-basedir@5.1.0:
     resolution: {integrity: sha512-GCPAHLvrIH13+c0SuacwvRYj2SxJXQ4kaVTT5xgL3kPrz56XxkF21IGhjSE1+W0aw7gpBWRGXLCPnPby6lSpmQ==}
     engines: {node: '>=12'}
@@ -10018,10 +10064,10 @@ snapshots:
       '@google-cloud/logging': 11.2.1
       '@google-cloud/opentelemetry-cloud-monitoring-exporter': 0.21.0(@opentelemetry/api@1.9.0)(@opentelemetry/core@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/resources@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-metrics@2.0.1(@opentelemetry/api@1.9.0))
       '@google-cloud/opentelemetry-cloud-trace-exporter': 3.0.0(@opentelemetry/api@1.9.0)(@opentelemetry/core@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/resources@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.0.1(@opentelemetry/api@1.9.0))
-      '@google/genai': 1.34.0(@modelcontextprotocol/sdk@1.24.0(zod@3.25.76))
+      '@google/genai': 1.34.0(@modelcontextprotocol/sdk@1.25.2(zod@3.25.76))
       '@iarna/toml': 2.2.5
       '@joshua.litt/get-ripgrep': 0.0.3
-      '@modelcontextprotocol/sdk': 1.24.0(zod@3.25.76)
+      '@modelcontextprotocol/sdk': 1.25.2(zod@3.25.76)
       '@opentelemetry/api': 1.9.0
       '@opentelemetry/exporter-logs-otlp-grpc': 0.203.0(@opentelemetry/api@1.9.0)
       '@opentelemetry/exporter-logs-otlp-http': 0.203.0(@opentelemetry/api@1.9.0)
@@ -10080,6 +10126,7 @@ snapshots:
       - '@types/emscripten'
       - bufferutil
       - encoding
+      - hono
       - supports-color
       - tree-sitter
       - utf-8-validate
@@ -10089,10 +10136,10 @@ snapshots:
       '@google-cloud/logging': 11.2.1
       '@google-cloud/opentelemetry-cloud-monitoring-exporter': 0.21.0(@opentelemetry/api@1.9.0)(@opentelemetry/core@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/resources@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-metrics@2.0.1(@opentelemetry/api@1.9.0))
       '@google-cloud/opentelemetry-cloud-trace-exporter': 3.0.0(@opentelemetry/api@1.9.0)(@opentelemetry/core@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/resources@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.0.1(@opentelemetry/api@1.9.0))
-      '@google/genai': 1.34.0(@modelcontextprotocol/sdk@1.24.0(zod@3.25.76))
+      '@google/genai': 1.34.0(@modelcontextprotocol/sdk@1.25.2(zod@3.25.76))
       '@iarna/toml': 2.2.5
       '@joshua.litt/get-ripgrep': 0.0.3
-      '@modelcontextprotocol/sdk': 1.24.0(zod@3.25.76)
+      '@modelcontextprotocol/sdk': 1.25.2(zod@3.25.76)
       '@opentelemetry/api': 1.9.0
       '@opentelemetry/exporter-logs-otlp-grpc': 0.203.0(@opentelemetry/api@1.9.0)
       '@opentelemetry/exporter-logs-otlp-http': 0.203.0(@opentelemetry/api@1.9.0)
@@ -10151,6 +10198,79 @@ snapshots:
       - '@types/emscripten'
       - bufferutil
       - encoding
+      - hono
+      - supports-color
+      - tree-sitter
+      - utf-8-validate
+
+  '@google/gemini-cli-core@0.21.3(@opentelemetry/core@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/resources@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-metrics@2.0.1(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.0.1(@opentelemetry/api@1.9.0))(hono@4.11.4)':
+    dependencies:
+      '@google-cloud/logging': 11.2.1
+      '@google-cloud/opentelemetry-cloud-monitoring-exporter': 0.21.0(@opentelemetry/api@1.9.0)(@opentelemetry/core@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/resources@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-metrics@2.0.1(@opentelemetry/api@1.9.0))
+      '@google-cloud/opentelemetry-cloud-trace-exporter': 3.0.0(@opentelemetry/api@1.9.0)(@opentelemetry/core@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/resources@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.0.1(@opentelemetry/api@1.9.0))
+      '@google/genai': 1.34.0(@modelcontextprotocol/sdk@1.25.2(hono@4.11.4)(zod@4.1.12))
+      '@iarna/toml': 2.2.5
+      '@joshua.litt/get-ripgrep': 0.0.3
+      '@modelcontextprotocol/sdk': 1.25.2(hono@4.11.4)(zod@3.25.76)
+      '@opentelemetry/api': 1.9.0
+      '@opentelemetry/exporter-logs-otlp-grpc': 0.203.0(@opentelemetry/api@1.9.0)
+      '@opentelemetry/exporter-logs-otlp-http': 0.203.0(@opentelemetry/api@1.9.0)
+      '@opentelemetry/exporter-metrics-otlp-grpc': 0.203.0(@opentelemetry/api@1.9.0)
+      '@opentelemetry/exporter-metrics-otlp-http': 0.203.0(@opentelemetry/api@1.9.0)
+      '@opentelemetry/exporter-trace-otlp-grpc': 0.203.0(@opentelemetry/api@1.9.0)
+      '@opentelemetry/exporter-trace-otlp-http': 0.203.0(@opentelemetry/api@1.9.0)
+      '@opentelemetry/instrumentation-http': 0.203.0(@opentelemetry/api@1.9.0)
+      '@opentelemetry/resource-detector-gcp': 0.40.3(@opentelemetry/api@1.9.0)
+      '@opentelemetry/sdk-node': 0.203.0(@opentelemetry/api@1.9.0)
+      '@types/glob': 8.1.0
+      '@types/html-to-text': 9.0.4
+      '@xterm/headless': 5.5.0
+      ajv: 8.17.1
+      ajv-formats: 3.0.1(ajv@8.17.1)
+      chardet: 2.1.1
+      diff: 7.0.0
+      dotenv: 17.2.3
+      fast-levenshtein: 2.0.6
+      fast-uri: 3.1.0
+      fdir: 6.5.0(picomatch@4.0.3)
+      fzf: 0.5.2
+      glob: 11.1.0
+      google-auth-library: 9.15.1
+      html-to-text: 9.0.5
+      https-proxy-agent: 7.0.6
+      ignore: 7.0.5
+      marked: 15.0.12
+      mime: 4.0.7
+      mnemonist: 0.40.3
+      open: 10.2.0
+      picomatch: 4.0.3
+      read-package-up: 11.0.0
+      shell-quote: 1.8.3
+      simple-git: 3.30.0
+      strip-ansi: 7.1.2
+      tree-sitter-bash: 0.25.0
+      undici: 7.16.0
+      web-tree-sitter: 0.25.10
+      ws: 8.18.3
+      zod: 3.25.76
+    optionalDependencies:
+      '@lydell/node-pty': 1.1.0
+      '@lydell/node-pty-darwin-arm64': 1.1.0
+      '@lydell/node-pty-darwin-x64': 1.1.0
+      '@lydell/node-pty-linux-x64': 1.1.0
+      '@lydell/node-pty-win32-arm64': 1.1.0
+      '@lydell/node-pty-win32-x64': 1.1.0
+      node-pty: 1.0.0
+    transitivePeerDependencies:
+      - '@cfworker/json-schema'
+      - '@opentelemetry/core'
+      - '@opentelemetry/resources'
+      - '@opentelemetry/sdk-metrics'
+      - '@opentelemetry/sdk-trace-base'
+      - '@types/emscripten'
+      - bufferutil
+      - encoding
+      - hono
       - supports-color
       - tree-sitter
       - utf-8-validate
@@ -10166,12 +10286,23 @@ snapshots:
       - supports-color
       - utf-8-validate
 
-  '@google/genai@1.34.0(@modelcontextprotocol/sdk@1.24.0(zod@4.1.12))':
+  '@google/genai@1.34.0(@modelcontextprotocol/sdk@1.25.2(hono@4.11.4)(zod@4.1.12))':
     dependencies:
       google-auth-library: 10.5.0
       ws: 8.18.3
     optionalDependencies:
-      '@modelcontextprotocol/sdk': 1.24.0(zod@4.1.12)
+      '@modelcontextprotocol/sdk': 1.25.2(hono@4.11.4)(zod@4.1.12)
+    transitivePeerDependencies:
+      - bufferutil
+      - supports-color
+      - utf-8-validate
+
+  '@google/genai@1.34.0(@modelcontextprotocol/sdk@1.25.2(zod@3.25.76))':
+    dependencies:
+      google-auth-library: 10.5.0
+      ws: 8.18.3
+    optionalDependencies:
+      '@modelcontextprotocol/sdk': 1.25.2(zod@3.25.76)
     transitivePeerDependencies:
       - bufferutil
       - supports-color
@@ -10210,6 +10341,10 @@ snapshots:
     dependencies:
       node-addon-api: 7.1.1
       prebuild-install: 7.1.3
+
+  '@hono/node-server@1.19.8(hono@4.11.4)':
+    dependencies:
+      hono: 4.11.4
 
   '@iarna/toml@2.2.5': {}
 
@@ -10796,8 +10931,9 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@modelcontextprotocol/sdk@1.24.0(zod@4.1.12)':
+  '@modelcontextprotocol/sdk@1.25.2(hono@4.11.4)(zod@3.25.76)':
     dependencies:
+      '@hono/node-server': 1.19.8(hono@4.11.4)
       ajv: 8.17.1
       ajv-formats: 3.0.1(ajv@8.17.1)
       content-type: 1.0.5
@@ -10808,11 +10944,57 @@ snapshots:
       express: 5.2.1
       express-rate-limit: 7.5.1(express@5.2.1)
       jose: 6.1.3
+      json-schema-typed: 8.0.2
+      pkce-challenge: 5.0.1
+      raw-body: 3.0.2
+      zod: 3.25.76
+      zod-to-json-schema: 3.25.0(zod@3.25.76)
+    transitivePeerDependencies:
+      - hono
+      - supports-color
+
+  '@modelcontextprotocol/sdk@1.25.2(hono@4.11.4)(zod@4.1.12)':
+    dependencies:
+      '@hono/node-server': 1.19.8(hono@4.11.4)
+      ajv: 8.17.1
+      ajv-formats: 3.0.1(ajv@8.17.1)
+      content-type: 1.0.5
+      cors: 2.8.5
+      cross-spawn: 7.0.6
+      eventsource: 3.0.7
+      eventsource-parser: 3.0.6
+      express: 5.2.1
+      express-rate-limit: 7.5.1(express@5.2.1)
+      jose: 6.1.3
+      json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
       raw-body: 3.0.2
       zod: 4.1.12
       zod-to-json-schema: 3.25.0(zod@4.1.12)
     transitivePeerDependencies:
+      - hono
+      - supports-color
+
+  '@modelcontextprotocol/sdk@1.25.2(zod@3.25.76)':
+    dependencies:
+      '@hono/node-server': 1.19.8(hono@4.11.4)
+      ajv: 8.17.1
+      ajv-formats: 3.0.1(ajv@8.17.1)
+      content-type: 1.0.5
+      cors: 2.8.5
+      cross-spawn: 7.0.6
+      eventsource: 3.0.7
+      eventsource-parser: 3.0.6
+      express: 5.2.1
+      express-rate-limit: 7.5.1(express@5.2.1)
+      jose: 6.1.3
+      json-schema-typed: 8.0.2
+      pkce-challenge: 5.0.1
+      raw-body: 3.0.2
+      zod: 3.25.76
+      zod-to-json-schema: 3.25.0(zod@3.25.76)
+    transitivePeerDependencies:
+      - hono
       - supports-color
 
   '@napi-rs/simple-git-android-arm-eabi@0.1.22':
@@ -13324,6 +13506,7 @@ snapshots:
       - encoding
       - expo-sqlite
       - gel
+      - hono
       - knex
       - kysely
       - mysql2
@@ -14143,6 +14326,11 @@ snapshots:
   default-browser-id@5.0.0: {}
 
   default-browser@5.2.1:
+    dependencies:
+      bundle-name: 4.1.0
+      default-browser-id: 5.0.0
+
+  default-browser@5.4.0:
     dependencies:
       bundle-name: 4.1.0
       default-browser-id: 5.0.0
@@ -15264,6 +15452,8 @@ snapshots:
 
   highlightjs-vue@1.0.0: {}
 
+  hono@4.11.4: {}
+
   hosted-git-info@7.0.2:
     dependencies:
       lru-cache: 10.4.3
@@ -15462,6 +15652,8 @@ snapshots:
 
   is-hexadecimal@2.0.1: {}
 
+  is-in-ssh@1.0.0: {}
+
   is-inside-container@1.0.0:
     dependencies:
       is-docker: 3.0.0
@@ -15597,6 +15789,8 @@ snapshots:
       ts-algebra: 2.0.0
 
   json-schema-traverse@1.0.0: {}
+
+  json-schema-typed@8.0.2: {}
 
   json2mq@0.2.0:
     dependencies:
@@ -16744,6 +16938,15 @@ snapshots:
       is-inside-container: 1.0.0
       wsl-utils: 0.1.0
 
+  open@11.0.0:
+    dependencies:
+      default-browser: 5.4.0
+      define-lazy-prop: 3.0.0
+      is-in-ssh: 1.0.0
+      is-inside-container: 1.0.0
+      powershell-utils: 0.1.0
+      wsl-utils: 0.3.1
+
   open@8.4.2:
     dependencies:
       define-lazy-prop: 2.0.0
@@ -16944,6 +17147,8 @@ snapshots:
       source-map-js: 1.2.1
 
   postgres@3.4.7: {}
+
+  powershell-utils@0.1.0: {}
 
   prebuild-install@7.1.3:
     dependencies:
@@ -18827,6 +19032,11 @@ snapshots:
   wsl-utils@0.1.0:
     dependencies:
       is-wsl: 3.1.0
+
+  wsl-utils@0.3.1:
+    dependencies:
+      is-wsl: 3.1.0
+      powershell-utils: 0.1.0
 
   xdg-basedir@5.1.0: {}
 

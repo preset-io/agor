@@ -98,6 +98,147 @@ import {
 } from './utils/spawn-executor.js';
 
 // ============================================================================
+// OAuth 2.1 Token Cache (daemon-level, shared between test-oauth and discover)
+// ============================================================================
+// This cache stores OAuth 2.1 tokens obtained via browser flow so they can be
+// used by the discover endpoint for MCP connection testing.
+// Tokens are also persisted to the database for cross-process access.
+interface CachedOAuth21Token {
+  token: string;
+  expiresAt: number;
+  mcpOrigin: string;
+}
+const oauth21TokenCache = new Map<string, CachedOAuth21Token>();
+
+function cacheOAuth21Token(mcpUrl: string, token: string, expiresInSeconds: number): void {
+  const origin = new URL(mcpUrl).origin;
+  const expiresAt = Date.now() + (expiresInSeconds - 60) * 1000; // 60s buffer
+  oauth21TokenCache.set(origin, { token, expiresAt, mcpOrigin: origin });
+  console.log(`[OAuth 2.1 Cache] Token cached for ${origin}, expires in ${expiresInSeconds}s`);
+}
+
+/**
+ * Save OAuth 2.1 token to the database for a specific MCP server
+ * This allows tokens to persist across daemon restarts and be used by other processes
+ */
+async function saveOAuth21TokenToDB(
+  mcpServerRepo: MCPServerRepository,
+  serverId: string,
+  token: string,
+  expiresInSeconds: number
+): Promise<void> {
+  const expiresAt = Date.now() + (expiresInSeconds - 60) * 1000; // 60s buffer
+  const server = await mcpServerRepo.findById(serverId);
+  if (!server) {
+    console.log(`[OAuth 2.1 DB] Server ${serverId} not found, skipping token save`);
+    return;
+  }
+
+  // Update the server's auth config with the new token
+  const currentAuth = server.auth || { type: 'oauth' as const };
+
+  await mcpServerRepo.update(serverId, {
+    auth: {
+      ...currentAuth,
+      type: 'oauth',
+      oauth_access_token: token,
+      oauth_token_expires_at: expiresAt,
+    },
+  });
+  console.log(
+    `[OAuth 2.1 DB] Token saved for server ${serverId}, expires at ${new Date(expiresAt).toISOString()}`
+  );
+}
+
+/**
+ * Get OAuth 2.1 token from in-memory cache
+ */
+function getOAuth21Token(mcpUrl: string): string | undefined {
+  const origin = new URL(mcpUrl).origin;
+  const cached = oauth21TokenCache.get(origin);
+  if (!cached) {
+    console.log(`[OAuth 2.1 Cache] No token found for ${origin}`);
+    return undefined;
+  }
+  if (cached.expiresAt <= Date.now()) {
+    console.log(`[OAuth 2.1 Cache] Token expired for ${origin}`);
+    oauth21TokenCache.delete(origin);
+    return undefined;
+  }
+  console.log(`[OAuth 2.1 Cache] Found valid token for ${origin}`);
+  return cached.token;
+}
+
+/**
+ * Get OAuth 2.1 token from database for a specific MCP server
+ */
+async function getOAuth21TokenFromDB(
+  mcpServerRepo: MCPServerRepository,
+  serverId: string
+): Promise<string | undefined> {
+  const server = await mcpServerRepo.findById(serverId);
+  if (!server) {
+    console.log(`[OAuth 2.1 DB] Server ${serverId} not found`);
+    return undefined;
+  }
+
+  const auth = server.auth;
+  if (!auth || auth.type !== 'oauth') {
+    console.log(`[OAuth 2.1 DB] Server ${serverId} is not OAuth type`);
+    return undefined;
+  }
+
+  const token = auth.oauth_access_token;
+  const expiresAt = auth.oauth_token_expires_at;
+
+  if (!token) {
+    console.log(`[OAuth 2.1 DB] No token stored for server ${serverId}`);
+    return undefined;
+  }
+
+  if (expiresAt && expiresAt <= Date.now()) {
+    console.log(`[OAuth 2.1 DB] Token expired for server ${serverId}`);
+    return undefined;
+  }
+
+  console.log(`[OAuth 2.1 DB] Found valid token for server ${serverId}`);
+  return token;
+}
+
+/**
+ * Get OAuth 2.1 token from database by MCP URL (searches all servers)
+ */
+async function getOAuth21TokenFromDBByUrl(
+  mcpServerRepo: MCPServerRepository,
+  mcpUrl: string
+): Promise<{ token: string; serverId: string } | undefined> {
+  // Find all MCP servers and check if any match this URL
+  const servers = await mcpServerRepo.findAll();
+  const targetOrigin = new URL(mcpUrl).origin;
+
+  for (const server of servers) {
+    const serverUrl = server.url;
+    if (!serverUrl) continue;
+
+    try {
+      const serverOrigin = new URL(serverUrl).origin;
+      if (serverOrigin === targetOrigin) {
+        const token = await getOAuth21TokenFromDB(mcpServerRepo, server.mcp_server_id);
+        if (token) {
+          return { token, serverId: server.mcp_server_id };
+        }
+      }
+    } catch {
+      // Invalid URL, skip
+    }
+  }
+
+  console.log(`[OAuth 2.1 DB] No valid token found for URL ${mcpUrl}`);
+  return undefined;
+}
+// ============================================================================
+
+// ============================================================================
 // GLOBAL ERROR HANDLERS
 // Critical for daemon stability - prevents crashes from unhandled errors
 // ============================================================================
@@ -950,6 +1091,329 @@ async function main() {
     },
   });
 
+  // OAuth 2.0/2.1 test endpoint for MCP servers (server-side to avoid CORS)
+  // Supports both:
+  // - OAuth 2.1 with auto-discovery (RFC 9728) - browser-based Authorization Code flow with PKCE
+  // - OAuth 2.0 Client Credentials flow - machine-to-machine with client_id/secret
+  app.use('/mcp-servers/test-oauth', {
+    async create(data: {
+      mcp_url: string;
+      mcp_server_id?: string; // Optional: if provided, token will be saved to DB
+      token_url?: string;
+      client_id?: string;
+      client_secret?: string;
+      scope?: string;
+      grant_type?: string;
+      start_browser_flow?: boolean; // If true, initiate browser-based OAuth flow
+    }) {
+      // Create repo for DB token storage
+      const mcpServerRepo = new MCPServerRepository(db);
+      try {
+        // Step 1: Probe the MCP URL to check if it requires OAuth 2.1 (RFC 9728)
+        // OAuth 2.1 servers return 401 with WWW-Authenticate header containing resource_metadata
+        console.log('[OAuth Test] Probing MCP URL:', data.mcp_url);
+
+        let probeResponse: Response;
+        try {
+          probeResponse = await fetch(data.mcp_url, {
+            method: 'GET',
+            headers: { Accept: 'application/json' },
+          });
+        } catch (fetchError) {
+          return {
+            success: false,
+            error: `Failed to connect to MCP server: ${fetchError instanceof Error ? fetchError.message : String(fetchError)}`,
+          };
+        }
+
+        const wwwAuthenticate = probeResponse.headers.get('www-authenticate');
+
+        // Log all headers for debugging
+        const allHeaders: Record<string, string> = {};
+        probeResponse.headers.forEach((value, key) => {
+          allHeaders[key] = value;
+        });
+        console.log('[OAuth Test] Probe response:', {
+          status: probeResponse.status,
+          statusText: probeResponse.statusText,
+          headers: allHeaders,
+        });
+
+        // Check for OAuth 2.1 auto-discovery (RFC 9728)
+        // The WWW-Authenticate header should contain: Bearer resource_metadata="<url>"
+        const hasResourceMetadata = wwwAuthenticate?.includes('resource_metadata=');
+
+        if (probeResponse.status === 401 && hasResourceMetadata) {
+          console.log('[OAuth Test] OAuth 2.1 auto-discovery detected');
+
+          // Extract resource metadata URL from WWW-Authenticate header
+          const metadataMatch = wwwAuthenticate!.match(/resource_metadata="([^"]+)"/);
+          const metadataUrl = metadataMatch ? metadataMatch[1] : null;
+
+          if (!metadataUrl) {
+            return {
+              success: false,
+              error: 'OAuth 2.1 detected but resource_metadata URL could not be parsed',
+              oauthType: 'oauth2.1',
+              wwwAuthenticate,
+            };
+          }
+
+          // If start_browser_flow is true, perform the full OAuth flow with browser
+          if (data.start_browser_flow) {
+            console.log('[OAuth Test] Starting browser-based OAuth 2.1 flow...');
+
+            const { performMCPOAuthFlow } = await import(
+              '@agor/core/tools/mcp/oauth-mcp-transport'
+            );
+
+            try {
+              const token = await performMCPOAuthFlow(
+                wwwAuthenticate!,
+                data.client_id, // Optional client_id
+                (url) => console.log('[OAuth Test] Browser opening:', url)
+              );
+
+              // Test the token against the MCP server
+              // Cache the token at daemon level for discover endpoint to use
+              // Default to 1 hour if we don't have exact expiry (the transport caches with real expiry)
+              cacheOAuth21Token(data.mcp_url, token, 3600);
+
+              // Also save to database if we have a server ID (for cross-process access)
+              if (data.mcp_server_id) {
+                await saveOAuth21TokenToDB(mcpServerRepo, data.mcp_server_id, token, 3600);
+              }
+
+              const testResponse = await fetch(data.mcp_url, {
+                method: 'GET',
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                  Accept: 'application/json',
+                },
+              });
+
+              return {
+                success: true,
+                oauthType: 'oauth2.1',
+                message: 'OAuth 2.1 authentication successful!',
+                tokenValid: true,
+                mcpStatus: testResponse.status,
+                mcpStatusText: testResponse.statusText,
+              };
+            } catch (flowError) {
+              return {
+                success: false,
+                error: `OAuth 2.1 browser flow failed: ${flowError instanceof Error ? flowError.message : String(flowError)}`,
+                oauthType: 'oauth2.1',
+              };
+            }
+          }
+
+          // Just validate the metadata endpoints without starting browser flow
+          try {
+            const metadataResponse = await fetch(metadataUrl);
+            if (!metadataResponse.ok) {
+              return {
+                success: false,
+                error: `OAuth resource metadata endpoint returned ${metadataResponse.status}`,
+                oauthType: 'oauth2.1',
+                metadataUrl,
+                requiresBrowserFlow: true,
+              };
+            }
+
+            const metadata = (await metadataResponse.json()) as {
+              authorization_servers?: string[];
+              scopes_supported?: string[];
+            };
+
+            if (!metadata.authorization_servers || metadata.authorization_servers.length === 0) {
+              return {
+                success: false,
+                error: 'OAuth resource metadata missing authorization_servers',
+                oauthType: 'oauth2.1',
+                metadataUrl,
+                metadata,
+              };
+            }
+
+            // Try to fetch authorization server metadata
+            const authServerUrl = metadata.authorization_servers[0];
+            let authServerMetadata: {
+              authorization_endpoint?: string;
+              token_endpoint?: string;
+              registration_endpoint?: string;
+            } | null = null;
+
+            // Try OIDC discovery first, then OAuth 2.0 discovery
+            for (const wellKnownPath of [
+              '/.well-known/openid-configuration',
+              '/.well-known/oauth-authorization-server',
+            ]) {
+              try {
+                const authMetaResponse = await fetch(`${authServerUrl}${wellKnownPath}`);
+                if (authMetaResponse.ok) {
+                  authServerMetadata = (await authMetaResponse.json()) as {
+                    authorization_endpoint?: string;
+                    token_endpoint?: string;
+                    registration_endpoint?: string;
+                  };
+                  console.log('[OAuth Test] Auth server metadata:', authServerMetadata);
+                  break;
+                }
+              } catch {
+                // Try next
+              }
+            }
+
+            return {
+              success: true,
+              oauthType: 'oauth2.1',
+              message: authServerMetadata?.registration_endpoint
+                ? 'OAuth 2.1 auto-discovery successful (DCR supported). Click "Start OAuth Flow" to authenticate.'
+                : 'OAuth 2.1 auto-discovery successful. Click "Start OAuth Flow" to authenticate.',
+              metadataUrl,
+              authorizationServers: metadata.authorization_servers,
+              scopesSupported: metadata.scopes_supported,
+              authServerMetadata: authServerMetadata
+                ? {
+                    authorizationEndpoint: authServerMetadata.authorization_endpoint,
+                    tokenEndpoint: authServerMetadata.token_endpoint,
+                    registrationEndpoint: authServerMetadata.registration_endpoint,
+                  }
+                : null,
+              supportsDynamicClientRegistration: !!authServerMetadata?.registration_endpoint,
+              requiresBrowserFlow: true,
+            };
+          } catch (metadataError) {
+            return {
+              success: false,
+              error: `Failed to fetch OAuth metadata: ${metadataError instanceof Error ? metadataError.message : String(metadataError)}`,
+              oauthType: 'oauth2.1',
+              metadataUrl,
+            };
+          }
+        }
+
+        // If server responded with 200 or other non-401 status, OAuth may not be required
+        if (probeResponse.ok) {
+          return {
+            success: true,
+            oauthType: 'none',
+            message: 'MCP server accessible without authentication',
+            mcpStatus: probeResponse.status,
+          };
+        }
+
+        // Check if it's a 401 without standard OAuth 2.1 headers
+        // Some servers may need manual OAuth configuration or different auth
+        if (probeResponse.status === 401) {
+          // Try to get more info from the response body
+          let responseBody = '';
+          try {
+            responseBody = await probeResponse.text();
+          } catch {
+            // Ignore
+          }
+
+          // Fall back to Client Credentials flow if credentials provided
+          if (data.client_id && data.client_secret) {
+            console.log('[OAuth Test] Using Client Credentials flow');
+            const { fetchOAuthToken, inferOAuthTokenUrl } = await import(
+              '@agor/core/tools/mcp/oauth-auth'
+            );
+
+            // Determine token URL
+            let tokenUrl = data.token_url;
+            let tokenUrlSource: 'provided' | 'auto-detected' = 'provided';
+
+            if (!tokenUrl) {
+              tokenUrl = inferOAuthTokenUrl(data.mcp_url);
+              tokenUrlSource = 'auto-detected';
+              if (!tokenUrl) {
+                return {
+                  success: false,
+                  error: 'Could not auto-detect OAuth token URL. Please provide it explicitly.',
+                  oauthType: 'client_credentials',
+                };
+              }
+            }
+
+            const { token, debugInfo } = await fetchOAuthToken(
+              {
+                token_url: tokenUrl,
+                client_id: data.client_id,
+                client_secret: data.client_secret,
+                scope: data.scope,
+                grant_type: data.grant_type || 'client_credentials',
+              },
+              true
+            );
+
+            // Test token against MCP server
+            let mcpStatus: number | undefined;
+            let mcpStatusText: string | undefined;
+
+            try {
+              const mcpResponse = await fetch(data.mcp_url, {
+                method: 'GET',
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                  Accept: 'application/json',
+                },
+              });
+              mcpStatus = mcpResponse.status;
+              mcpStatusText = mcpResponse.statusText;
+            } catch (mcpError) {
+              mcpStatusText = mcpError instanceof Error ? mcpError.message : 'Connection failed';
+            }
+
+            return {
+              success: true,
+              oauthType: 'client_credentials',
+              tokenValid: true,
+              tokenUrlSource,
+              mcpStatus,
+              mcpStatusText,
+              debugInfo,
+            };
+          }
+
+          // No OAuth 2.1 auto-discovery and no credentials
+          return {
+            success: false,
+            error: `Server requires authentication (401) but no OAuth 2.1 auto-discovery headers found.`,
+            oauthType: 'unknown',
+            mcpStatus: probeResponse.status,
+            wwwAuthenticate: wwwAuthenticate || '<not present>',
+            responseHeaders: allHeaders,
+            responseBody: responseBody.substring(0, 500),
+            hint: 'The server may require: (1) OAuth 2.1 setup on server side, (2) Client Credentials with explicit token URL, or (3) Different auth method.',
+          };
+        }
+
+        // Other error status
+        return {
+          success: false,
+          error: `MCP server returned ${probeResponse.status} ${probeResponse.statusText}`,
+          mcpStatus: probeResponse.status,
+        };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+  });
+
+  // Require authentication for test-oauth endpoint to prevent abuse
+  app.service('mcp-servers/test-oauth').hooks({
+    before: {
+      create: [requireAuth],
+    },
+  });
+
   // Discover/Test MCP server capabilities endpoint
   // Accepts either:
   // - mcp_server_id: Test saved server config and persist discovered capabilities
@@ -1072,23 +1536,24 @@ async function main() {
             }
 
             // SECURITY: Verify user has access to persist to this MCP server
+            // Allow: server owner, or admin/owner role
             if (params?.provider && params.user) {
               const userId = params.user.user_id;
-              if (server.scope === 'global' && server.owner_user_id !== userId) {
+              const userRole = params.user.role?.toLowerCase();
+              const isAdmin = userRole === 'admin' || userRole === 'owner';
+              const isOwner = server.owner_user_id === userId;
+
+              if (server.scope === 'global' && !isOwner && !isAdmin) {
                 return {
                   success: false,
-                  error: 'Access denied: only server owner can update this MCP server',
+                  error: 'Access denied: only server owner or admin can update this MCP server',
                 };
               }
-              if (server.scope === 'session') {
-                const userRole = params.user.role?.toLowerCase();
-                if (userRole !== 'admin' && userRole !== 'owner') {
-                  return {
-                    success: false,
-                    error:
-                      'Access denied: admin role required to update session-scoped MCP servers',
-                  };
-                }
+              if (server.scope === 'session' && !isAdmin) {
+                return {
+                  success: false,
+                  error: 'Access denied: admin role required to update session-scoped MCP servers',
+                };
               }
             }
             serverId = data.mcp_server_id;
@@ -1103,27 +1568,27 @@ async function main() {
 
           // SECURITY: Verify user has access to this MCP server
           // Skip authorization for internal calls (params.provider is falsy)
+          // Allow: server owner, or admin/owner role
           if (params?.provider && params.user) {
             const userId = params.user.user_id;
+            const userRole = params.user.role?.toLowerCase();
+            const isAdmin = userRole === 'admin' || userRole === 'owner';
+            const isOwner = server.owner_user_id === userId;
 
-            // For global servers, only the owner can discover them
-            if (server.scope === 'global' && server.owner_user_id !== userId) {
+            // For global servers, allow owner or admin
+            if (server.scope === 'global' && !isOwner && !isAdmin) {
               return {
                 success: false,
-                error: 'Access denied: only server owner can discover this MCP server',
+                error: 'Access denied: only server owner or admin can discover this MCP server',
               };
             }
 
             // For session-scoped servers, require admin role
-            if (server.scope === 'session') {
-              const userRole = params.user.role?.toLowerCase();
-              if (userRole !== 'admin' && userRole !== 'owner') {
-                return {
-                  success: false,
-                  error:
-                    'Access denied: admin role required to discover session-scoped MCP servers',
-                };
-              }
+            if (server.scope === 'session' && !isAdmin) {
+              return {
+                success: false,
+                error: 'Access denied: admin role required to discover session-scoped MCP servers',
+              };
             }
           }
 
@@ -1161,8 +1626,81 @@ async function main() {
         console.log('[MCP Discovery] Transport:', serverConfig.transport);
         console.log('[MCP Discovery] Mode:', hasInlineConfig ? 'inline-test' : 'saved-server');
 
-        // Get auth headers
-        const authHeaders = await resolveMCPAuthHeaders(serverConfig.auth);
+        // Get auth headers (pass MCP URL for OAuth 2.1 token lookup)
+        let authHeaders = await resolveMCPAuthHeaders(serverConfig.auth, serverConfig.url);
+
+        // If no auth headers and auth type is oauth, try to get/obtain OAuth 2.1 token
+        if (!authHeaders && serverConfig.auth?.type === 'oauth' && serverConfig.url) {
+          // First check daemon-level cache
+          let cachedToken = getOAuth21Token(serverConfig.url);
+
+          // If no in-memory cache, check database for stored token
+          if (!cachedToken && serverId) {
+            console.log('[MCP Discovery] Checking database for stored OAuth token...');
+            cachedToken = await getOAuth21TokenFromDB(mcpServerRepo, serverId);
+            if (cachedToken) {
+              // Also populate in-memory cache
+              cacheOAuth21Token(serverConfig.url, cachedToken, 3600);
+            }
+          }
+
+          // If still no token, check database by URL (for inline-test mode)
+          if (!cachedToken && !serverId) {
+            console.log('[MCP Discovery] Checking database by URL for stored OAuth token...');
+            const dbResult = await getOAuth21TokenFromDBByUrl(mcpServerRepo, serverConfig.url);
+            if (dbResult) {
+              cachedToken = dbResult.token;
+              // Also populate in-memory cache
+              cacheOAuth21Token(serverConfig.url, cachedToken, 3600);
+            }
+          }
+
+          if (!cachedToken) {
+            // No cached token - probe the URL to see if it needs OAuth 2.1
+            console.log('[MCP Discovery] No cached token, probing for OAuth 2.1...');
+            try {
+              const probeResponse = await fetch(serverConfig.url, {
+                method: 'GET',
+                headers: { Accept: 'application/json' },
+              });
+
+              const wwwAuthenticate = probeResponse.headers.get('www-authenticate');
+
+              if (probeResponse.status === 401 && wwwAuthenticate?.includes('resource_metadata=')) {
+                console.log('[MCP Discovery] OAuth 2.1 detected, starting browser flow...');
+
+                // Import and run the OAuth 2.1 flow
+                const { performMCPOAuthFlow } = await import(
+                  '@agor/core/tools/mcp/oauth-mcp-transport'
+                );
+
+                const token = await performMCPOAuthFlow(
+                  wwwAuthenticate,
+                  undefined, // Let it use DCR
+                  (url) => console.log('[MCP Discovery] Browser opening:', url)
+                );
+
+                // Cache the token in memory
+                cacheOAuth21Token(serverConfig.url, token, 3600);
+
+                // Save to database if we have a server ID
+                if (serverId) {
+                  await saveOAuth21TokenToDB(mcpServerRepo, serverId, token, 3600);
+                }
+
+                cachedToken = token;
+              }
+            } catch (oauthError) {
+              console.error('[MCP Discovery] OAuth 2.1 flow failed:', oauthError);
+            }
+          }
+
+          if (cachedToken) {
+            console.log('[MCP Discovery] Using OAuth 2.1 token');
+            authHeaders = { Authorization: `Bearer ${cachedToken}` };
+          }
+        }
+
         console.log('[MCP Discovery] Auth headers present:', !!authHeaders);
         if (authHeaders) {
           console.log('[MCP Discovery] Auth headers keys:', Object.keys(authHeaders));
@@ -1176,8 +1714,55 @@ async function main() {
           Object.assign(headers, authHeaders);
         }
 
+        // Workaround for MCP SDK session ID bug:
+        // The SDK captures session ID from response but doesn't include it in subsequent requests.
+        // We manually track and inject the session ID.
+        let capturedSessionId: string | undefined;
+
+        const sessionAwareFetch: typeof fetch = async (input, init) => {
+          // Inject session ID into request if we have one
+          if (capturedSessionId && init?.headers) {
+            const headersObj =
+              init.headers instanceof Headers
+                ? Object.fromEntries(init.headers.entries())
+                : (init.headers as Record<string, string>);
+
+            // Only add if not already present
+            if (!headersObj['mcp-session-id']) {
+              console.log('[MCP Discovery] Injecting session ID into request:', capturedSessionId);
+              init = {
+                ...init,
+                headers: {
+                  ...headersObj,
+                  'mcp-session-id': capturedSessionId,
+                },
+              };
+            }
+          }
+
+          const response = await fetch(input, init);
+
+          // Capture session ID from response
+          const sessionId = response.headers.get('mcp-session-id');
+          if (sessionId) {
+            capturedSessionId = sessionId;
+            console.log('[MCP Discovery] Captured session ID:', sessionId);
+          }
+
+          console.log(
+            '[MCP Discovery] Response:',
+            response.status,
+            response.statusText,
+            'session-id:',
+            sessionId || '<none>'
+          );
+
+          return response;
+        };
+
         // Create Streamable HTTP transport (supports both SSE and regular HTTP)
         const httpTransport = new StreamableHTTPClientTransport(new URL(serverConfig.url), {
+          fetch: sessionAwareFetch,
           requestInit: {
             headers,
           },
@@ -1224,6 +1809,12 @@ async function main() {
           connected = true;
           console.log('[MCP Discovery] ✅ Successfully connected!');
 
+          // Debug: Log session ID to verify SDK is managing it correctly
+          console.log(
+            '[MCP Discovery] Transport session ID:',
+            httpTransport.sessionId || '<none captured>'
+          );
+
           // List capabilities with timeout (10s should be plenty for most servers)
           const listTimeout = new Promise<never>((_, reject) => {
             setTimeout(() => {
@@ -1259,9 +1850,18 @@ async function main() {
           }>;
 
           console.log('[MCP Discovery] Listing tools...');
+          console.log(
+            '[MCP Discovery] Transport session ID before listTools:',
+            httpTransport.sessionId || '<none>'
+          );
           const toolsResult = (await Promise.race([
             client.listTools().catch((err) => {
               console.error('[MCP Discovery] ❌ listTools() failed:', err.message);
+              console.error('[MCP Discovery] Full error:', err);
+              console.error(
+                '[MCP Discovery] Session ID at failure:',
+                httpTransport.sessionId || '<none>'
+              );
               throw err;
             }),
             listTimeout,
