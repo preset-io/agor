@@ -180,12 +180,25 @@ export async function resolveMCPAuthHeaders(
   }
 
   if (auth.type === 'oauth') {
-    // If no credentials provided, check for cached OAuth 2.1 token from browser flow
+    // Priority 1: Check for database-stored OAuth 2.1 token (persisted from browser flow)
+    if (auth.oauth_access_token) {
+      // Check if token is expired
+      if (auth.oauth_token_expires_at && auth.oauth_token_expires_at <= Date.now()) {
+        console.log('[OAuth 2.1] Database token expired, will try other methods');
+      } else {
+        console.log('[OAuth 2.1] Using database-stored token');
+        return {
+          Authorization: `Bearer ${auth.oauth_access_token}`,
+        };
+      }
+    }
+
+    // Priority 2: Check for in-memory cached token from browser flow
     if (!auth.oauth_client_id && !auth.oauth_client_secret) {
       if (mcpUrl) {
         const cachedToken = getCachedOAuth21Token(mcpUrl);
         if (cachedToken) {
-          console.log('[OAuth 2.1] Using cached token from browser flow');
+          console.log('[OAuth 2.1] Using in-memory cached token from browser flow');
           return {
             Authorization: `Bearer ${cachedToken}`,
           };

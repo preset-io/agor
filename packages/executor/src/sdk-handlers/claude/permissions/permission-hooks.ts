@@ -62,6 +62,25 @@ export function createCanUseToolCallback(
       if (parts.length >= 3) {
         const serverName = parts[1]; // Extract server name from mcp__<server_name>__<tool_name>
 
+        // Built-in "agor" server is always auto-approved (it's added dynamically, not in DB)
+        if (serverName === 'agor') {
+          console.log(
+            `✅ [canUseTool] Auto-approving MCP tool: ${toolName} (built-in "agor" server)`
+          );
+          return {
+            behavior: 'allow',
+            updatedInput: toolInput,
+            updatedPermissions: [
+              {
+                type: 'addRules',
+                rules: [{ toolName }],
+                behavior: 'allow',
+                destination: 'session',
+              },
+            ],
+          };
+        }
+
         try {
           // Get the session's attached MCP servers
           const sessionMCPs = await deps.sessionMCPRepo.findBySessionId(sessionId);
