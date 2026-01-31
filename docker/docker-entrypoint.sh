@@ -7,15 +7,27 @@ echo "🚀 Starting Agor development environment..."
 # No pnpm install needed at runtime - this is the key to fast startups!
 echo "✅ Using pre-built dependencies from Docker image"
 
-# Fix permissions for build output directories only (not the entire /app tree!)
-# The bind mount (.:/app) is read-only for most files - we only need write access to dist/
-echo "🔧 Ensuring write access to build output directories..."
-# Try to sudo chown if possible (non-interactive), but don't fail if not.
+# Fix permissions for build tools (tsup, tsc, vite need write access to package roots)
+# The bind mount (.:/app) may have restrictive permissions from host filesystem
+# Build tools write temp files (tsup.config.bundled_*.mjs, .vite/, etc.) to package roots
+#
+# IMPORTANT: This is a workaround for UID/GID mismatch between host and container
+# For best performance, rebuild the image with matching UID/GID:
+#   UID=$(id -u) GID=$(id -g) docker compose build
+echo "🔧 Ensuring write access for build tools..."
 if sudo -n true 2>/dev/null; then
-  sudo -n chown -R agor:agor /app/packages/*/dist /app/apps/*/dist 2>/dev/null || true
-  echo "✅ Build directories writable"
+  # Chown all package/app directories (non-recursive, globs are fast without -R)
+  sudo -n chown agor:agor /app/packages/* /app/apps/* 2>/dev/null || true
+
+  # Create and chown all dist directories
+  sudo -n mkdir -p /app/packages/*/dist /app/apps/*/dist
+  sudo -n chown agor:agor /app/packages/*/dist /app/apps/*/dist
+
+  echo "✅ Build directories ready"
 else
-  echo "⚠️ sudo not available, skipping permission fix (this is expected if running as correct user)"
+  # Fallback: try without sudo (might work depending on host permissions)
+  mkdir -p /app/packages/*/dist /app/apps/*/dist 2>/dev/null || true
+  echo "⚠️  Build directories created (sudo not available, may have permission issues)"
 fi
 
 # Skip husky in Docker (git hooks run on host, not in container)
