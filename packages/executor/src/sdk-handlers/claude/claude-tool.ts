@@ -490,7 +490,7 @@ export class ClaudeTool implements ITool {
           event.role === MessageRole.ASSISTANT
         ) {
           const streamEndTime = Date.now();
-          streamingCallbacks.onStreamEnd(currentTextMessageId);
+          await streamingCallbacks.onStreamEnd(currentTextMessageId);
           const totalTime = streamEndTime - streamStartTime;
           const streamingTime = firstTokenTime ? streamEndTime - firstTokenTime : 0;
           console.debug(
