@@ -14,6 +14,7 @@ docker compose up
 ```
 
 **Notes:**
+
 - The `--profile postgres` flag is not needed because `.env.postgres` already sets `COMPOSE_PROFILES=postgres`.
 - **First-time setup:** If you see a schema error about missing RBAC columns, drop the PostgreSQL volume and start fresh (see Troubleshooting section).
 
@@ -59,7 +60,7 @@ docker compose up
 - **2222** - SSH (for multi-user testing)
 - **5432** - PostgreSQL (internal, not exposed by default)
 
-*Note: Different ports than default (3030/5173) to allow running alongside SQLite mode*
+_Note: Different ports than default (3030/5173) to allow running alongside SQLite mode_
 
 ---
 
@@ -205,23 +206,22 @@ SEED=true
 
 ### Environment Variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `AGOR_RBAC_ENABLED` | `true` | Enable RBAC feature flag |
-| `AGOR_UNIX_USER_MODE` | `insulated` | Unix integration mode (simple/insulated/opportunistic/strict) |
-| `CREATE_RBAC_TEST_USERS` | `true` | Create alice & bob on startup |
-| `SSH_PORT` | `2222` | Host port for SSH access |
-| `DAEMON_PORT` | `4091` | Daemon API port |
-| `UI_PORT` | `6091` | UI development server port |
+| Variable                 | Default     | Description                                     |
+| ------------------------ | ----------- | ----------------------------------------------- |
+| `AGOR_RBAC_ENABLED`      | `true`      | Enable RBAC feature flag                        |
+| `AGOR_UNIX_USER_MODE`    | `insulated` | Unix integration mode (simple/insulated/strict) |
+| `CREATE_RBAC_TEST_USERS` | `true`      | Create alice & bob on startup                   |
+| `SSH_PORT`               | `2222`      | Host port for SSH access                        |
+| `DAEMON_PORT`            | `4091`      | Daemon API port                                 |
+| `UI_PORT`                | `6091`      | UI development server port                      |
 
 ### Unix User Modes
 
-| Mode | Unix Groups | Filesystem Perms | Process Impersonation | Use Case |
-|------|-------------|------------------|----------------------|----------|
-| `simple` | ❌ | ❌ | ❌ | Testing RBAC without Unix integration |
-| `insulated` | ✅ | ✅ | ❌ | **Default** - Filesystem isolation via groups |
-| `opportunistic` | ✅ | ✅ | ✅ (best effort) | Audit trails + graceful degradation |
-| `strict` | ✅ | ✅ | ✅ (required) | Compliance environments |
+| Mode        | Unix Groups | Filesystem Perms | Process Impersonation | Use Case                                      |
+| ----------- | ----------- | ---------------- | --------------------- | --------------------------------------------- |
+| `simple`    | ❌          | ❌               | ❌                    | Testing RBAC without Unix integration         |
+| `insulated` | ✅          | ✅               | ❌                    | **Default** - Filesystem isolation via groups |
+| `strict`    | ✅          | ✅               | ✅ (required)         | Compliance environments                       |
 
 ---
 
@@ -302,6 +302,7 @@ docker exec agor-unix-user-always-agor-dev-1 \
 ### Unix Groups Not Created
 
 Unix group creation is not yet fully implemented. The current setup:
+
 - ✅ Creates Unix users (alice, bob)
 - ✅ Creates Agor app users
 - ✅ Creates worktrees with ownership in database
@@ -310,6 +311,7 @@ Unix group creation is not yet fully implemented. The current setup:
 - ❌ Symlink creation in `~/agor/worktrees/` (planned)
 
 **Next steps for full Unix integration:**
+
 1. Implement Unix group creation in `UnixIntegrationService`
 2. Hook into worktree creation/ownership changes
 3. Sync filesystem permissions based on RBAC
@@ -364,16 +366,16 @@ docker compose --profile postgres down -v --rmi all --remove-orphans
 
 ## Comparison with SQLite Mode
 
-| Feature | SQLite (default) | PostgreSQL + RBAC |
-|---------|------------------|-------------------|
-| **Database** | SQLite file | PostgreSQL server |
-| **Users** | admin only | admin, alice, bob |
-| **RBAC** | Disabled | Enabled |
-| **Unix Integration** | No | Yes (insulated mode) |
-| **SSH Access** | No | Yes (port 2222) |
-| **Multi-user** | No | Yes |
-| **Ports** | 3030 (daemon), 5173 (UI) | 4091 (daemon), 6091 (UI) |
-| **Use Case** | Solo development | RBAC testing, multi-user |
+| Feature              | SQLite (default)         | PostgreSQL + RBAC        |
+| -------------------- | ------------------------ | ------------------------ |
+| **Database**         | SQLite file              | PostgreSQL server        |
+| **Users**            | admin only               | admin, alice, bob        |
+| **RBAC**             | Disabled                 | Enabled                  |
+| **Unix Integration** | No                       | Yes (insulated mode)     |
+| **SSH Access**       | No                       | Yes (port 2222)          |
+| **Multi-user**       | No                       | Yes                      |
+| **Ports**            | 3030 (daemon), 5173 (UI) | 4091 (daemon), 6091 (UI) |
+| **Use Case**         | Solo development         | RBAC testing, multi-user |
 
 ---
 
@@ -390,6 +392,7 @@ docker compose --profile postgres down -v --rmi all --remove-orphans
 ## Support
 
 For issues or questions:
+
 - Check logs: `docker logs agor-unix-user-always-agor-dev-1`
 - GitHub Issues: https://github.com/preset-io/agor/issues
 - Documentation: https://agor.live

@@ -40,13 +40,13 @@
 
 ### Key Design Decisions
 
-| Decision | Choice | Rationale |
-|----------|--------|-----------|
-| **Executor interface** | JSON-over-stdin | Private API semantics, type-safe, no escaping issues |
-| **Lifecycle model** | Short-lived, ephemeral | Aligns with k8s pods, clean isolation |
-| **Impersonation boundary** | Inside executor | Single sudo boundary, cleaner architecture |
-| **Directory separation** | AGOR_HOME vs AGOR_DATA_HOME | Enables shared storage (EFS), local daemon config |
-| **Remote execution** | Command template | Admin-configurable, flexible deployment |
+| Decision                   | Choice                      | Rationale                                            |
+| -------------------------- | --------------------------- | ---------------------------------------------------- |
+| **Executor interface**     | JSON-over-stdin             | Private API semantics, type-safe, no escaping issues |
+| **Lifecycle model**        | Short-lived, ephemeral      | Aligns with k8s pods, clean isolation                |
+| **Impersonation boundary** | Inside executor             | Single sudo boundary, cleaner architecture           |
+| **Directory separation**   | AGOR_HOME vs AGOR_DATA_HOME | Enables shared storage (EFS), local daemon config    |
+| **Remote execution**       | Command template            | Admin-configurable, flexible deployment              |
 
 ### What This Enables
 
@@ -81,19 +81,19 @@
 
 ### What Executor Handles Today
 
-| Operation | Location | Impersonation Point |
-|-----------|----------|-------------------|
+| Operation     | Location             | Impersonation Point                 |
+| ------------- | -------------------- | ----------------------------------- |
 | Agent prompts | `packages/executor/` | Daemon spawn via `buildSpawnArgs()` |
 
 ### What Daemon Handles Directly (To Be Moved)
 
-| Operation | Location | Impersonation Point |
-|-----------|----------|-------------------|
+| Operation        | Location                | Impersonation Point              |
+| ---------------- | ----------------------- | -------------------------------- |
 | Zellij terminals | `services/terminals.ts` | PTY spawn via `buildSpawnArgs()` |
-| Git clone | `@agor/core/git` | sudo wrapper script |
-| Git worktree | `@agor/core/git` | sudo wrapper script |
-| Unix groups | `@agor/core/unix` | `SudoCliExecutor` |
-| ACL management | `@agor/core/unix` | `SudoCliExecutor` |
+| Git clone        | `@agor/core/git`        | sudo wrapper script              |
+| Git worktree     | `@agor/core/git`        | sudo wrapper script              |
+| Unix groups      | `@agor/core/unix`       | `SudoCliExecutor`                |
+| ACL management   | `@agor/core/unix`       | `SudoCliExecutor`                |
 
 ### Current Problems
 
@@ -206,6 +206,7 @@
 ### Motivation
 
 **Current:** `~/.agor/` contains everything mixed together:
+
 - `config.yaml` (daemon config)
 - `agor.db` (database)
 - `repos/` (git repositories)
@@ -213,6 +214,7 @@
 - `logs/` (daemon logs)
 
 **Problem:** Can't separate daemon from data storage. In k8s:
+
 - Daemon runs in a pod with local SSD for config/db
 - Worktrees should be on shared storage (EFS) for executor pods to access
 
@@ -268,9 +270,9 @@ paths:
   data_home: /data/agor/
 
   # Explicit overrides (rarely needed)
-  repos_dir: /data/agor/repos/       # Default: $AGOR_DATA_HOME/repos/
-  worktrees_dir: /data/agor/worktrees/  # Default: $AGOR_DATA_HOME/worktrees/
-  zellij_dir: /data/agor/zellij/     # Default: $AGOR_DATA_HOME/zellij/
+  repos_dir: /data/agor/repos/ # Default: $AGOR_DATA_HOME/repos/
+  worktrees_dir: /data/agor/worktrees/ # Default: $AGOR_DATA_HOME/worktrees/
+  zellij_dir: /data/agor/zellij/ # Default: $AGOR_DATA_HOME/zellij/
 ```
 
 ### Environment Variables
@@ -297,11 +299,11 @@ AGOR_DATA_HOME=/data/agor
 
 ### Why JSON-over-stdin?
 
-| Approach | Pros | Cons |
-|----------|------|------|
-| **CLI args** | Human-debuggable | Escaping hell, limited structure |
-| **JSON in arg** | Structured | Still needs shell escaping |
-| **JSON via stdin** | No escaping, type-safe, template-friendly | Less debuggable |
+| Approach           | Pros                                      | Cons                             |
+| ------------------ | ----------------------------------------- | -------------------------------- |
+| **CLI args**       | Human-debuggable                          | Escaping hell, limited structure |
+| **JSON in arg**    | Structured                                | Still needs shell escaping       |
+| **JSON via stdin** | No escaping, type-safe, template-friendly | Less debuggable                  |
 
 **Decision:** JSON-over-stdin because executor is a **private API**, not a user-facing CLI.
 
@@ -566,6 +568,7 @@ async function readStdin(): Promise<string> {
 **Purpose:** Execute agent SDK prompt (current executor behavior)
 
 **Lifecycle:**
+
 1. Daemon creates Task record, generates session token
 2. Daemon spawns executor with prompt payload
 3. Executor connects to daemon via Feathers WebSocket
@@ -583,6 +586,7 @@ async function readStdin(): Promise<string> {
 **Purpose:** Clone a git repository with full Unix setup
 
 **Lifecycle:**
+
 1. Daemon validates request, generates session token
 2. Daemon spawns executor with git.clone payload
 3. Executor connects to daemon, authenticates
@@ -601,6 +605,7 @@ async function readStdin(): Promise<string> {
 **Purpose:** Create a git worktree with full Unix setup
 
 **Lifecycle:**
+
 1. Daemon validates request, generates session token
 2. Daemon spawns executor with git.worktree.add payload
 3. Executor connects to daemon, authenticates
@@ -619,6 +624,7 @@ async function readStdin(): Promise<string> {
 **Purpose:** Remove a git worktree and cleanup Unix resources
 
 **Lifecycle:**
+
 1. Daemon validates request, generates session token
 2. Daemon spawns executor with git.worktree.remove payload
 3. Executor connects to daemon, authenticates
@@ -633,6 +639,7 @@ async function readStdin(): Promise<string> {
 **Purpose:** Attach to or create Zellij session
 
 **Lifecycle:**
+
 1. Daemon spawns executor with zellij.attach payload
 2. Executor connects to daemon, authenticates
 3. Executor resolves user env vars via `config/resolve-api-key`
@@ -651,6 +658,7 @@ async function readStdin(): Promise<string> {
 **Decision:** Unix operations are internal to git operations, not standalone commands.
 
 **Rationale:**
+
 - Unix ops are always in service of git (repo groups, worktree ACLs)
 - Bundling them reduces round-trips and ensures atomic transactions
 - Executor handles sudo internally via impersonation
@@ -776,29 +784,33 @@ async function spawnWithTemplate(
 ### k8s Deployment Considerations
 
 **Shared Storage:**
+
 - `AGOR_DATA_HOME` mounted as PVC (EFS, NFS, etc.)
 - All executor pods mount same PVC
 - Worktrees accessible from any pod
 
 **Network:**
+
 - Executor pods need access to daemon (for `prompt` command)
 - Use k8s Service for daemon discovery
 - Or pass explicit `daemonUrl` in payload
 
 **Security:**
+
 - Pod security context sets Unix user
 - Service account for k8s API access (if needed)
 - Network policies for egress (API providers only)
 
 **Resource Limits:**
+
 ```yaml
 resources:
   limits:
-    cpu: "2"
-    memory: "4Gi"
+    cpu: '2'
+    memory: '4Gi'
   requests:
-    cpu: "500m"
-    memory: "1Gi"
+    cpu: '500m'
+    memory: '1Gi'
 ```
 
 ---
@@ -852,10 +864,7 @@ export async function withImpersonation<T>(
   return result;
 }
 
-async function runAsUser(
-  asUser: string,
-  payload: ExecutorPayload
-): Promise<any> {
+async function runAsUser(asUser: string, payload: ExecutorPayload): Promise<any> {
   // Build command: sudo su - $USER -c 'agor-executor --stdin'
   const cmd = 'sudo';
   const args = [
@@ -883,15 +892,15 @@ async function runAsUser(
 
 ### Which Commands Need Impersonation
 
-| Command | Impersonation | Reason |
-|---------|--------------|--------|
-| `prompt` | User's Unix user | Agent runs in user's context |
-| `git.clone` | Daemon user | Repo owned by daemon |
-| `git.worktree.add` | Daemon user | Sets up group permissions |
-| `git.worktree.remove` | Daemon user | Removes group |
-| `unix.group.*` | Root (sudo) | Group management |
-| `unix.acl.*` | Root (sudo) | ACL management |
-| `zellij.attach` | User's Unix user | Terminal in user's context |
+| Command               | Impersonation    | Reason                       |
+| --------------------- | ---------------- | ---------------------------- |
+| `prompt`              | User's Unix user | Agent runs in user's context |
+| `git.clone`           | Daemon user      | Repo owned by daemon         |
+| `git.worktree.add`    | Daemon user      | Sets up group permissions    |
+| `git.worktree.remove` | Daemon user      | Removes group                |
+| `unix.group.*`        | Root (sudo)      | Group management             |
+| `unix.acl.*`          | Root (sudo)      | ACL management               |
+| `zellij.attach`       | User's Unix user | Terminal in user's context   |
 
 ### Sudo Configuration
 
@@ -974,12 +983,14 @@ Note: `serialize_on_disconnect` is not a real Zellij option - serialization happ
 ### State Persistence
 
 **What gets serialized:**
+
 - Tab layout and names
 - Pane arrangement
 - Scroll buffer (limited)
 - Working directories
 
 **What doesn't persist:**
+
 - Running processes (killed on disconnect)
 - Environment variables
 - Unsaved file changes
@@ -1115,8 +1126,7 @@ paths:
 execution:
   # Unix user mode for impersonation
   # simple: no impersonation
-  # insulated: requires unix_username
-  # opportunistic: uses unix_username if available
+  # insulated: uses executor_unix_user
   # strict: requires unix_username, errors if missing
   unix_user_mode: simple
 
@@ -1201,14 +1211,14 @@ AGOR_DAEMON_HOST=0.0.0.0
 
 ### Threat Mitigation
 
-| Threat | Mitigation |
-|--------|-----------|
-| Database exfiltration | Executor has no DB connection |
-| API key theft | Keys requested just-in-time, not stored |
-| Cross-user access | Unix user separation, ACLs |
-| Filesystem traversal | Worktree-scoped execution |
-| Session hijacking | Opaque session tokens, short expiry |
-| Remote code execution | Executor runs in isolation |
+| Threat                | Mitigation                              |
+| --------------------- | --------------------------------------- |
+| Database exfiltration | Executor has no DB connection           |
+| API key theft         | Keys requested just-in-time, not stored |
+| Cross-user access     | Unix user separation, ACLs              |
+| Filesystem traversal  | Worktree-scoped execution               |
+| Session hijacking     | Opaque session tokens, short expiry     |
+| Remote code execution | Executor runs in isolation              |
 
 ---
 
@@ -1226,6 +1236,7 @@ session_folder "/data/agor/zellij/sessions"  // Under AGOR_DATA_HOME
 ```
 
 The previous concern ("stale tabs reappear after deletion") was because we were fighting serialization. With the executor model, we embrace it:
+
 - Executor exits when modal closes
 - Zellij serializes current state to disk
 - Next attach restores from serialized state
@@ -1263,6 +1274,7 @@ Zellij serializes: tab layout, pane arrangement, scroll buffer (limited by `scro
 ```
 
 **Key insight:** Executor already uses Feathers extensively for `prompt` command:
+
 - `messages.create()` - creating messages
 - `tasks.patch()` - updating task status
 - `sessions.get/patch()` - session management
@@ -1271,12 +1283,12 @@ Zellij serializes: tab layout, pane arrangement, scroll buffer (limited by `scro
 
 **Same pattern for all commands:**
 
-| Command | Executor does | Via Feathers |
-|---------|--------------|--------------|
-| `prompt` | SDK execution | messages.create, tasks.patch, streaming events |
-| `git.clone` | Clone + Unix setup | repos.create() |
-| `git.worktree.*` | Worktree + Unix setup | worktrees.create/remove() |
-| `zellij.attach` | PTY attachment | (events for terminal state) |
+| Command          | Executor does         | Via Feathers                                   |
+| ---------------- | --------------------- | ---------------------------------------------- |
+| `prompt`         | SDK execution         | messages.create, tasks.patch, streaming events |
+| `git.clone`      | Clone + Unix setup    | repos.create()                                 |
+| `git.worktree.*` | Worktree + Unix setup | worktrees.create/remove()                      |
+| `zellij.attach`  | PTY attachment        | (events for terminal state)                    |
 
 **Unix operations are internal to git operations** - not separate commands:
 
@@ -1285,7 +1297,7 @@ Zellij serializes: tab layout, pane arrangement, scroll buffer (limited by `scro
 async function executeGitClone(payload: GitClonePayload, client: AgorClient) {
   // 1. Resolve credentials
   const token = await client.service('config/resolve-api-key').create({
-    credential_key: 'GITHUB_TOKEN'
+    credential_key: 'GITHUB_TOKEN',
   });
 
   // 2. Git clone
@@ -1322,10 +1334,12 @@ async function executeGitClone(payload: GitClonePayload, client: AgorClient) {
 **Decision:** Template variables include Unix user info; admin configures pod security context.
 
 The executor payload includes `asUser` field. Template variables expose:
+
 - `{unix_user}` - username string
 - `{unix_user_uid}` - numeric UID (for pod security context)
 
 Admin template example:
+
 ```yaml
 executor_command_template: |
   kubectl run executor-{task_id} \
@@ -1344,6 +1358,7 @@ executor_command_template: |
 ```
 
 This approach:
+
 - Keeps executor code platform-agnostic
 - Lets admins handle platform-specific user mapping
 - Works with k8s RBAC and pod security policies
@@ -1353,17 +1368,20 @@ This approach:
 **Decision:** All filesystem/SDK operations go through executor, even locally.
 
 Even in simplest local setup:
+
 ```
 Daemon → spawn('agor-executor', ['--stdin']) → pipe JSON → read stdout
 ```
 
 Benefits:
+
 - **Consistent code path** - same logic for local and remote
 - **Testable** - can test executor in isolation
 - **Future-proof** - switching to remote execution is just config change
 - **Security** - isolation boundary is always in place
 
 The `executor_command_template` config controls **how** executor is spawned, not **whether**:
+
 - `null` (default) → local subprocess
 - Template string → parsed and executed (k8s, docker, SSH, etc.)
 
@@ -1374,6 +1392,7 @@ The `executor_command_template` config controls **how** executor is spawned, not
 **How it works:**
 
 1. **Daemon generates JWT** with standard claims:
+
    ```typescript
    {
      sub: userId,           // User identity
@@ -1386,10 +1405,11 @@ The `executor_command_template` config controls **how** executor is spawned, not
    ```
 
 2. **Executor authenticates** via Feathers' standard JWT strategy:
+
    ```typescript
    await client.authenticate({
      strategy: 'jwt',
-     accessToken: sessionToken
+     accessToken: sessionToken,
    });
    ```
 
@@ -1404,11 +1424,11 @@ The `executor_command_template` config controls **how** executor is spawned, not
 
 **Considerations for production:**
 
-| Concern | Mitigation |
-|---------|-----------|
-| Token in network | Use TLS (WSS) in production |
-| Token lifetime | Consider shorter expiry (1h instead of 24h) for executor tokens |
-| Multi-daemon revocation | For HA, use Redis-backed token tracking (future) |
+| Concern                 | Mitigation                                                      |
+| ----------------------- | --------------------------------------------------------------- |
+| Token in network        | Use TLS (WSS) in production                                     |
+| Token lifetime          | Consider shorter expiry (1h instead of 24h) for executor tokens |
+| Multi-daemon revocation | For HA, use Redis-backed token tracking (future)                |
 
 **Current implementation location:** `apps/agor-daemon/src/services/session-token-service.ts`
 
@@ -1419,11 +1439,13 @@ The `executor_command_template` config controls **how** executor is spawned, not
 **Question:** All executor commands need Feathers WebSocket to daemon. How to ensure connectivity?
 
 **Considerations:**
+
 - Daemon URL passed in payload (`daemonUrl` field)
 - In k8s, daemon needs to be exposed as a Service
 - Latency for streaming (especially for `prompt` command)
 
 **Resolution:** This is a deployment configuration concern:
+
 - Document k8s Service requirements
 - Recommend internal ClusterIP service for executor→daemon
 - Recommend Ingress only for external UI access
@@ -1433,6 +1455,7 @@ The `executor_command_template` config controls **how** executor is spawned, not
 **Question:** Agent sessions can run 20-40 minutes. k8s pod timeouts?
 
 **Resolution:** Admin responsibility. Typical configurations:
+
 - Pod `activeDeadlineSeconds`: 3600 (1 hour) or more
 - No resource limits that cause OOM
 - Spot instance interruption handling (if applicable)
@@ -1440,6 +1463,7 @@ The `executor_command_template` config controls **how** executor is spawned, not
 ### Q3: Simplified command set
 
 **Resolved:** Unix operations are internal to git commands. Final command set:
+
 - `prompt` - agent SDK execution
 - `git.clone` - clone + Unix setup + DB record
 - `git.worktree.add` - worktree + Unix setup + DB record

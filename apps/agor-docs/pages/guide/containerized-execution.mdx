@@ -46,14 +46,14 @@ Agor's architecture separates the **daemon** (orchestration layer) from the **ex
 
 ### What the Executor Does
 
-| Command | Purpose |
-|---------|---------|
-| `prompt` | Execute agent SDK (Claude Code, Gemini, Codex) |
-| `git.clone` | Clone repository with Unix group setup |
-| `git.worktree.add` | Create git worktree with permissions |
-| `git.worktree.remove` | Remove worktree and cleanup |
-| `zellij.attach` | Attach to terminal session |
-| `unix.sync-*` | Synchronize Unix users/groups |
+| Command               | Purpose                                        |
+| --------------------- | ---------------------------------------------- |
+| `prompt`              | Execute agent SDK (Claude Code, Gemini, Codex) |
+| `git.clone`           | Clone repository with Unix group setup         |
+| `git.worktree.add`    | Create git worktree with permissions           |
+| `git.worktree.remove` | Remove worktree and cleanup                    |
+| `zellij.attach`       | Attach to terminal session                     |
+| `unix.sync-*`         | Synchronize Unix users/groups                  |
 
 ---
 
@@ -63,12 +63,12 @@ Agor's architecture separates the **daemon** (orchestration layer) from the **ex
 
 Running Agor in Kubernetes is fundamentally different from deploying static web applications:
 
-| Static Deploys | Agor Dev Environments |
-|----------------|----------------------|
+| Static Deploys       | Agor Dev Environments   |
+| -------------------- | ----------------------- |
 | Immutable containers | Interactive development |
-| No shared state | Shared git worktrees |
-| Scale out replicas | User-specific sessions |
-| Ephemeral storage | Persistent filesystem |
+| No shared state      | Shared git worktrees    |
+| Scale out replicas   | User-specific sessions  |
+| Ephemeral storage    | Persistent filesystem   |
 
 **Key insight**: Agor executors need access to a **shared filesystem** where git worktrees live. This is similar to how traditional development servers work, not like microservice deployments.
 
@@ -80,10 +80,10 @@ Containerized Agor requires infrastructure that most organizations already have 
 
 ### Two Requirements
 
-| Requirement | What It Provides | Common Solutions |
-|-------------|------------------|------------------|
-| **Shared Filesystem** | Same files accessible from all nodes | EFS, NFS, GlusterFS, Ceph |
-| **Shared Identity** | UID/GID → username/groupname resolution | LDAP, Active Directory, sssd, synced files |
+| Requirement           | What It Provides                        | Common Solutions                           |
+| --------------------- | --------------------------------------- | ------------------------------------------ |
+| **Shared Filesystem** | Same files accessible from all nodes    | EFS, NFS, GlusterFS, Ceph                  |
+| **Shared Identity**   | UID/GID → username/groupname resolution | LDAP, Active Directory, sssd, synced files |
 
 These are standard requirements for any multi-server development environment. If your organization runs shared `/home` directories across servers, you likely already have both.
 
@@ -247,8 +247,8 @@ provisioner: efs.csi.aws.com
 parameters:
   provisioningMode: efs-ap
   fileSystemId: fs-xxxxxxxxx
-  directoryPerms: "755"
-  basePath: "/agor"
+  directoryPerms: '755'
+  basePath: '/agor'
 reclaimPolicy: Retain
 volumeBindingMode: Immediate
 
@@ -260,7 +260,7 @@ metadata:
   name: agor-data
 spec:
   accessModes:
-    - ReadWriteMany  # Critical: multiple pods need access
+    - ReadWriteMany # Critical: multiple pods need access
   storageClassName: agor-efs
   resources:
     requests:
@@ -342,15 +342,15 @@ execution:
 
 ### Template Variables
 
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `{task_id}` | Unique task identifier (auto-generated) | `a1b2c3d4` |
-| `{command}` | Executor command | `prompt`, `git.clone` |
-| `{unix_user}` | Target Unix username | `agor_alice` |
-| `{unix_user_uid}` | Target Unix UID | `1001` |
-| `{unix_user_gid}` | Target Unix GID | `1001` |
-| `{session_id}` | Agor session ID (if available) | `01abc123...` |
-| `{worktree_id}` | Worktree ID (if available) | `01xyz789...` |
+| Variable          | Description                             | Example               |
+| ----------------- | --------------------------------------- | --------------------- |
+| `{task_id}`       | Unique task identifier (auto-generated) | `a1b2c3d4`            |
+| `{command}`       | Executor command                        | `prompt`, `git.clone` |
+| `{unix_user}`     | Target Unix username                    | `agor_alice`          |
+| `{unix_user_uid}` | Target Unix UID                         | `1001`                |
+| `{unix_user_gid}` | Target Unix GID                         | `1001`                |
+| `{session_id}`    | Agor session ID (if available)          | `01abc123...`         |
+| `{worktree_id}`   | Worktree ID (if available)              | `01xyz789...`         |
 
 ### How It Works
 
@@ -373,6 +373,7 @@ The daemon **never waits** for executor completion. This is critical for:
 - **Resilience**: Executor failures don't block daemon
 
 The executor is responsible for:
+
 - **Status updates**: Updating task/session status via Feathers API
 - **Error reporting**: Logging and broadcasting errors via WebSocket
 - **Database operations**: All mutations happen in the executor
@@ -402,7 +403,7 @@ spec:
     - name: executor
       securityContext:
         # Read-only root filesystem where possible
-        readOnlyRootFilesystem: false  # Agents need /tmp
+        readOnlyRootFilesystem: false # Agents need /tmp
 
         # Drop all capabilities except what's needed
         capabilities:
@@ -414,11 +415,11 @@ spec:
 
 In containerized environments, Unix users map differently:
 
-| Local Execution | Container Execution |
-|-----------------|---------------------|
-| `sudo su - agor_alice` | `runAsUser: 1001` |
-| Fresh group memberships | `fsGroup: 1001` |
-| Full Unix user exists | UID mapping only |
+| Local Execution         | Container Execution |
+| ----------------------- | ------------------- |
+| `sudo su - agor_alice`  | `runAsUser: 1001`   |
+| Fresh group memberships | `fsGroup: 1001`     |
+| Full Unix user exists   | UID mapping only    |
 
 For full Unix isolation in containers, consider:
 
@@ -444,23 +445,23 @@ spec:
     - name: executor
       resources:
         requests:
-          cpu: "500m"
-          memory: "1Gi"
+          cpu: '500m'
+          memory: '1Gi'
         limits:
-          cpu: "4"
-          memory: "8Gi"  # Agents can be memory-intensive
+          cpu: '4'
+          memory: '8Gi' # Agents can be memory-intensive
 ```
 
 ### Command-Specific Timeouts
 
 Different executor commands have different timeout needs:
 
-| Command | Typical Duration | Recommended Timeout |
-|---------|-----------------|---------------------|
-| `prompt` | 5-60 minutes | 2 hours |
-| `git.clone` | 1-10 minutes | 30 minutes |
-| `git.worktree.add` | 1-30 seconds | 5 minutes |
-| `zellij.attach` | Session duration | 8 hours |
+| Command            | Typical Duration | Recommended Timeout |
+| ------------------ | ---------------- | ------------------- |
+| `prompt`           | 5-60 minutes     | 2 hours             |
+| `git.clone`        | 1-10 minutes     | 30 minutes          |
+| `git.worktree.add` | 1-30 seconds     | 5 minutes           |
+| `zellij.attach`    | Session duration | 8 hours             |
 
 ### Timeout Configuration
 
@@ -504,7 +505,7 @@ spec:
   ports:
     - port: 3030
       targetPort: 3030
-  type: ClusterIP  # Internal only for executors
+  type: ClusterIP # Internal only for executors
 
 ---
 # Ingress for external UI access
@@ -543,12 +544,12 @@ Executor receives daemon URL in payload:
 
 Executors need outbound access to:
 
-| Service | Purpose |
-|---------|---------|
-| `api.anthropic.com` | Claude API |
-| `api.openai.com` | OpenAI/Codex API |
-| `generativelanguage.googleapis.com` | Gemini API |
-| `github.com`, `gitlab.com` | Git operations |
+| Service                             | Purpose          |
+| ----------------------------------- | ---------------- |
+| `api.anthropic.com`                 | Claude API       |
+| `api.openai.com`                    | OpenAI/Codex API |
+| `generativelanguage.googleapis.com` | Gemini API       |
+| `github.com`, `gitlab.com`          | Git operations   |
 
 Configure NetworkPolicy or egress controls accordingly.
 
@@ -630,6 +631,7 @@ HA support is not built into Agor configuration today. To implement HA:
 3. Use a load balancer (sticky sessions optional with Redis)
 
 **References:**
+
 - [FeathersJS Scaling Guide](https://feathersjs.com/guides/advanced/scaling)
 - [Socket.io Redis Adapter](https://socket.io/docs/v4/redis-adapter/)
 
@@ -642,6 +644,7 @@ For most deployments, a single daemon replica is sufficient. Scale horizontally 
 ### How Agor Uses Unix Permissions
 
 Agor's isolation model assigns:
+
 - **One UID per user** - your Unix identity
 - **One GID per repository** - shared access for all repo collaborators
 - **One GID per worktree** - scoped access for worktree owners
@@ -651,6 +654,7 @@ A user working on multiple worktrees will be a member of multiple groups.
 ### Running as Users (Not Just UIDs)
 
 In local mode, executors run via `sudo su - {username}`, which:
+
 - Switches to the user's UID
 - Loads ALL their group memberships from `/etc/group`
 - Sets up their home directory and shell environment
@@ -664,12 +668,12 @@ Kubernetes provides `supplementalGroups` for this:
 ```yaml
 spec:
   securityContext:
-    runAsUser: 1001              # User's UID
-    runAsGroup: 1001             # User's primary GID
-    supplementalGroups:          # All groups user belongs to
-      - 2001                     # repo-myproject GID
-      - 3001                     # worktree-feature-x GID
-      - 3002                     # worktree-bugfix-y GID
+    runAsUser: 1001 # User's UID
+    runAsGroup: 1001 # User's primary GID
+    supplementalGroups: # All groups user belongs to
+      - 2001 # repo-myproject GID
+      - 3001 # worktree-feature-x GID
+      - 3002 # worktree-bugfix-y GID
 ```
 
 The daemon knows the user's group memberships (from worktree ownership records) and can pass them to the executor template.
@@ -683,6 +687,7 @@ This is the cleanest approach: containers behave like any other server in your e
 ### Without Shared Identity (Explicit GIDs)
 
 If you can't set up shared identity, the daemon must explicitly pass all required GIDs via `supplementalGroups`. This works but:
+
 - Requires daemon to enumerate all user's group memberships
 - Can result in long lists of GIDs for active users
 - Less flexible than dynamic resolution
@@ -691,14 +696,14 @@ If you can't set up shared identity, the daemon must explicitly pass all require
 
 The executor command template supports these variables:
 
-| Variable | Description |
-|----------|-------------|
-| `{unix_user}` | Username |
-| `{unix_user_uid}` | User's UID |
-| `{unix_user_primary_gid}` | User's primary GID |
-| `{supplemental_gids}` | JSON array of all GIDs user needs |
-| `{repo_gid}` | Current repo's GID (if scoped) |
-| `{worktree_gid}` | Current worktree's GID (if scoped) |
+| Variable                  | Description                        |
+| ------------------------- | ---------------------------------- |
+| `{unix_user}`             | Username                           |
+| `{unix_user_uid}`         | User's UID                         |
+| `{unix_user_primary_gid}` | User's primary GID                 |
+| `{supplemental_gids}`     | JSON array of all GIDs user needs  |
+| `{repo_gid}`              | Current repo's GID (if scoped)     |
+| `{worktree_gid}`          | Current worktree's GID (if scoped) |
 
 ---
 
@@ -777,6 +782,7 @@ Use Podman for rootless container execution within pods.
 ### Recommendation
 
 For production deployments, **Option A (Kubernetes-native)** is recommended:
+
 - No privileged containers required
 - Better resource isolation
 - Consistent with cluster security policies
@@ -809,14 +815,14 @@ kind: Deployment
 metadata:
   name: agor-daemon
 spec:
-  replicas: 1  # Single daemon
+  replicas: 1 # Single daemon
   template:
     spec:
       serviceAccountName: agor-daemon
       containers:
         - name: daemon
           image: ghcr.io/preset-io/agor:latest
-          command: ["agor", "daemon", "start"]
+          command: ['agor', 'daemon', 'start']
           volumeMounts:
             - name: config
               mountPath: /home/agor/.agor
@@ -842,7 +848,7 @@ spec:
       containers:
         - name: executor
           image: ghcr.io/preset-io/agor-executor:latest
-          command: ["sleep", "infinity"]  # Warm pool
+          command: ['sleep', 'infinity'] # Warm pool
           volumeMounts:
             - name: data
               mountPath: /data/agor
@@ -856,12 +862,12 @@ Note: Pre-warmed executors require custom orchestration to reuse pods.
 
 ### Metrics to Track
 
-| Metric | Description |
-|--------|-------------|
-| `agor_executor_spawn_total` | Total executor spawns |
+| Metric                           | Description                  |
+| -------------------------------- | ---------------------------- |
+| `agor_executor_spawn_total`      | Total executor spawns        |
 | `agor_executor_duration_seconds` | Execution duration histogram |
-| `agor_executor_failures_total` | Failed executions |
-| `agor_prompt_tokens_total` | Token usage by session |
+| `agor_executor_failures_total`   | Failed executions            |
+| `agor_prompt_tokens_total`       | Token usage by session       |
 
 ### Pod Events
 
@@ -874,6 +880,7 @@ kubectl get events --field-selector involvedObject.name=executor-abc123
 ### Logging
 
 Executor logs appear in:
+
 - Pod stdout/stderr (captured by Kubernetes)
 - Daemon logs (spawn events, timeouts)
 
@@ -895,6 +902,7 @@ kubectl describe pod executor-abc123
 ```
 
 Common causes:
+
 - Insufficient resources (request more CPU/memory)
 - PVC not bound (check EFS provisioning)
 - Node selector mismatch
@@ -906,6 +914,7 @@ kubectl exec -it executor-abc123 -- ls -la /data/agor/worktrees
 ```
 
 Verify:
+
 - `fsGroup` matches worktree group
 - EFS access point configured correctly
 - PVC mounted with correct permissions
@@ -913,11 +922,13 @@ Verify:
 ### Executor Timeout
 
 Check daemon logs:
+
 ```bash
 kubectl logs -f deployment/agor-daemon | grep "EXECUTOR_TIMEOUT"
 ```
 
 Solutions:
+
 - Increase `activeDeadlineSeconds`
 - Increase daemon spawn timeout
 - Check network connectivity to APIs
@@ -925,12 +936,14 @@ Solutions:
 ### WebSocket Connection Failed
 
 Verify daemon is accessible from executor pods:
+
 ```bash
 kubectl exec -it executor-abc123 -- \
   curl -s http://agor-daemon:3030/health
 ```
 
 Check:
+
 - Service exists and has endpoints
 - NetworkPolicy allows traffic
 - Daemon pod is healthy
@@ -962,6 +975,7 @@ ln -s /data/agor/worktrees ~/.agor/worktrees
 ### Step 3: Test Local with New Paths
 
 Verify everything works before adding containerization:
+
 ```bash
 agor repo list
 agor worktree list
@@ -990,6 +1004,7 @@ execution:
 ### Step 5: Test Single Executor
 
 Spawn one executor pod manually:
+
 ```bash
 kubectl run test-executor \
   --image=ghcr.io/preset-io/agor-executor:latest \

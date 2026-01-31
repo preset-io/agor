@@ -29,16 +29,16 @@ This is inefficient and requires SDK-specific knowledge in the query layer.
 
 ### What Exists
 
-| Component | Status | Location |
-|-----------|--------|----------|
-| Task type with `normalized_sdk_response` | ✅ Defined | `packages/core/src/types/task.ts:70-80` |
-| `ClaudeCodeNormalizer` | ✅ Implemented | `packages/executor/src/sdk-handlers/claude/normalizer.ts` |
-| `CodexNormalizer` | ✅ Implemented | `packages/executor/src/sdk-handlers/codex/normalizer.ts` |
-| `GeminiNormalizer` | ✅ Implemented | `packages/executor/src/sdk-handlers/gemini/normalizer.ts` |
-| `INormalizer` interface | ✅ Defined | `packages/executor/src/sdk-handlers/base/normalizer.interface.ts` |
-| Database schema column | ❌ Missing | `packages/core/src/db/schema.sqlite.ts` |
-| Repository storage | ❌ Missing | `packages/core/src/db/repositories/tasks.ts` |
-| Executor calling normalizers | ❌ Missing | `packages/executor/src/handlers/sdk/base-executor.ts` |
+| Component                                | Status         | Location                                                          |
+| ---------------------------------------- | -------------- | ----------------------------------------------------------------- |
+| Task type with `normalized_sdk_response` | ✅ Defined     | `packages/core/src/types/task.ts:70-80`                           |
+| `ClaudeCodeNormalizer`                   | ✅ Implemented | `packages/executor/src/sdk-handlers/claude/normalizer.ts`         |
+| `CodexNormalizer`                        | ✅ Implemented | `packages/executor/src/sdk-handlers/codex/normalizer.ts`          |
+| `GeminiNormalizer`                       | ✅ Implemented | `packages/executor/src/sdk-handlers/gemini/normalizer.ts`         |
+| `INormalizer` interface                  | ✅ Defined     | `packages/executor/src/sdk-handlers/base/normalizer.interface.ts` |
+| Database schema column                   | ❌ Missing     | `packages/core/src/db/schema.sqlite.ts`                           |
+| Repository storage                       | ❌ Missing     | `packages/core/src/db/repositories/tasks.ts`                      |
+| Executor calling normalizers             | ❌ Missing     | `packages/executor/src/handlers/sdk/base-executor.ts`             |
 
 ### Data Flow (Current - Broken)
 
@@ -121,24 +121,23 @@ export interface NormalizedTokenUsage {
 ### Step 1: Add Column to Database Schema
 
 **Files to modify:**
+
 - `packages/core/src/db/schema.sqlite.ts`
 - `packages/core/src/db/schema.postgres.ts`
 
 ```typescript
 // In tasks table data JSON column:
-data: t
-  .json<unknown>('data')
-  .$type<{
-    // ... existing fields ...
+data: t.json<unknown>('data').$type<{
+  // ... existing fields ...
 
-    // Raw SDK response - single source of truth for token accounting
-    raw_sdk_response?: Task['raw_sdk_response'];
+  // Raw SDK response - single source of truth for token accounting
+  raw_sdk_response?: Task['raw_sdk_response'];
 
-    // NEW: Normalized SDK response - computed by executor at task completion
-    normalized_sdk_response?: Task['normalized_sdk_response'];
+  // NEW: Normalized SDK response - computed by executor at task completion
+  normalized_sdk_response?: Task['normalized_sdk_response'];
 
-    // ... rest of fields ...
-  }>()
+  // ... rest of fields ...
+}>();
 ```
 
 **Migration:** Not strictly required since it's inside the JSON column, but the TypeScript type needs updating.
@@ -276,6 +275,7 @@ Based on code analysis, `raw_sdk_response` flows through:
 **Finding the gap:** Need to trace where `rawSdkResponse` from tool result gets saved to task.
 
 Looking at `base-executor.ts:333`:
+
 ```typescript
 await client.service('tasks').patch(taskId, patchData);
 ```
@@ -285,8 +285,9 @@ The `patchData` only includes `status`, `completed_at`, and `git_state`. It does
 **This is the bug location.** The `raw_sdk_response` is being captured by tools but never patched to the task.
 
 Wait - let me check the leaderboard query again:
+
 ```typescript
-jsonExtract(this.db, tasks.data, 'raw_sdk_response.tokenUsage.input_tokens')
+jsonExtract(this.db, tasks.data, 'raw_sdk_response.tokenUsage.input_tokens');
 ```
 
 This implies `raw_sdk_response` IS in the database somehow. Let me check if there's another patch location...
@@ -294,6 +295,7 @@ This implies `raw_sdk_response` IS in the database somehow. Let me check if ther
 Actually, looking more carefully at the leaderboard query structure - it's querying `raw_sdk_response.tokenUsage.X` which suggests the data IS stored but in a specific format that includes a `tokenUsage` wrapper.
 
 **Key Insight:** The leaderboard is querying a path that includes `tokenUsage` as a key inside `raw_sdk_response`. This means either:
+
 1. Some tools store a pre-normalized format with `tokenUsage` key, OR
 2. The raw SDK responses naturally have a `tokenUsage` field
 
@@ -340,25 +342,31 @@ The schema TypeScript type needs updating for type safety, but no SQL migration 
 ## Related Files
 
 **Types:**
+
 - `packages/core/src/types/task.ts` - Task type definition
 
 **Normalizers:**
+
 - `packages/executor/src/sdk-handlers/base/normalizer.interface.ts` - Interface
 - `packages/executor/src/sdk-handlers/claude/normalizer.ts` - Claude
 - `packages/executor/src/sdk-handlers/codex/normalizer.ts` - Codex
 - `packages/executor/src/sdk-handlers/gemini/normalizer.ts` - Gemini
 
 **Schema:**
+
 - `packages/core/src/db/schema.sqlite.ts` - SQLite schema
 - `packages/core/src/db/schema.postgres.ts` - Postgres schema
 
 **Repository:**
+
 - `packages/core/src/db/repositories/tasks.ts` - Task CRUD
 
 **Executor:**
+
 - `packages/executor/src/handlers/sdk/base-executor.ts` - Task completion
 
 **UI (already ready):**
+
 - `apps/agor-ui/src/components/TaskBlock/TaskBlock.tsx`
 - `apps/agor-ui/src/components/SessionPanel/SessionPanel.tsx`
 - `apps/agor-ui/src/components/Pill/Pill.tsx`
@@ -370,6 +378,7 @@ The schema TypeScript type needs updating for type safety, but no SQL migration 
 **Status: ✅ IMPLEMENTED**
 
 The accounting feature is now complete:
+
 - ✅ Types defined (`packages/core/src/types/task.ts`)
 - ✅ Normalizers implemented (Claude, Codex, Gemini)
 - ✅ UI coded (TaskBlock, SessionPanel, Pill)

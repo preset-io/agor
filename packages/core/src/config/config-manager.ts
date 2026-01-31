@@ -39,6 +39,24 @@ async function ensureAgorHome(): Promise<void> {
 }
 
 /**
+ * Validate config and throw helpful errors for deprecated/invalid settings
+ */
+function validateConfig(config: AgorConfig): void {
+  // Check for deprecated 'opportunistic' unix_user_mode
+  const mode = config.execution?.unix_user_mode;
+  if (mode === ('opportunistic' as never)) {
+    throw new Error(
+      `Config error: 'opportunistic' unix_user_mode has been deprecated.\n` +
+        `Please update your config to use one of:\n` +
+        `  - 'insulated': Filesystem isolation via Unix groups (recommended)\n` +
+        `  - 'strict': Full process impersonation required\n` +
+        `\n` +
+        `To update: agor config set execution.unix_user_mode insulated`
+    );
+  }
+}
+
+/**
  * Load config from ~/.agor/config.yaml
  *
  * Returns default config if file doesn't exist.
@@ -49,7 +67,9 @@ export async function loadConfig(): Promise<AgorConfig> {
   try {
     const content = await fs.readFile(configPath, 'utf-8');
     const config = yaml.load(content) as AgorConfig;
-    return config || {};
+    const finalConfig = config || {};
+    validateConfig(finalConfig);
+    return finalConfig;
   } catch (error) {
     // File doesn't exist or parse error - return default config
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -437,7 +457,7 @@ export function isWorktreeRbacEnabled(): boolean {
  * Check if Unix user impersonation is enabled
  *
  * Returns true when unix_user_mode is set to anything other than 'simple'
- * (i.e., 'insulated', 'opportunistic', or 'strict')
+ * (i.e., 'insulated' or 'strict')
  */
 export function isUnixImpersonationEnabled(): boolean {
   try {

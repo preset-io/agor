@@ -313,7 +313,7 @@ export function unixUserExists(username: string): boolean {
 /**
  * Unix user mode types
  */
-export type UnixUserMode = 'simple' | 'insulated' | 'opportunistic' | 'strict';
+export type UnixUserMode = 'simple' | 'insulated' | 'strict';
 
 /**
  * Result of resolving which Unix user to impersonate
@@ -351,11 +351,10 @@ export interface ResolveImpersonationOptions {
  * @example
  * ```ts
  * const result = resolveUnixUserForImpersonation({
- *   mode: 'opportunistic',
+ *   mode: 'strict',
  *   userUnixUsername: 'alice',
- *   executorUnixUser: 'agor_executor',
  * });
- * // result.unixUser = 'alice' (if exists) or 'agor_executor' (if alice doesn't exist)
+ * // result.unixUser = 'alice' (throws if alice doesn't exist)
  * ```
  */
 export function resolveUnixUserForImpersonation(
@@ -378,27 +377,6 @@ export function resolveUnixUserForImpersonation(
         reason: executorUnixUser
           ? `insulated mode - using executor: ${executorUnixUser}`
           : 'insulated mode - no executor configured',
-      };
-
-    case 'opportunistic':
-      // Use user's unix_username if set AND exists, else fall back to executor
-      if (userUnixUsername && unixUserExists(userUnixUsername)) {
-        return {
-          unixUser: userUnixUsername,
-          reason: `opportunistic mode - using unix_username: ${userUnixUsername}`,
-        };
-      }
-      if (executorUnixUser && unixUserExists(executorUnixUser)) {
-        return {
-          unixUser: executorUnixUser,
-          reason: userUnixUsername
-            ? `opportunistic mode - unix user ${userUnixUsername} not found, using executor: ${executorUnixUser}`
-            : `opportunistic mode - no unix_username, using executor: ${executorUnixUser}`,
-        };
-      }
-      return {
-        unixUser: null,
-        reason: 'opportunistic mode - no valid unix user available',
       };
 
     case 'strict':
@@ -427,14 +405,13 @@ export function resolveUnixUserForImpersonation(
  * Validate that a resolved Unix user exists (for strict/insulated modes)
  *
  * Call this after resolveUnixUserForImpersonation for modes that require validation.
- * Opportunistic mode already validates during resolution, so skip for that mode.
  *
  * @param mode - Unix user mode
  * @param unixUser - Resolved Unix user (from resolveUnixUserForImpersonation)
  * @throws Error with user-friendly message if user doesn't exist
  */
 export function validateResolvedUnixUser(mode: UnixUserMode, unixUser: string | null): void {
-  // Only validate for strict/insulated - opportunistic already validated during resolution
+  // Only validate for strict/insulated modes
   if ((mode === 'strict' || mode === 'insulated') && unixUser) {
     if (!unixUserExists(unixUser)) {
       throw new UnixUserNotFoundError(

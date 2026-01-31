@@ -380,81 +380,6 @@ describe('user-manager', () => {
       });
     });
 
-    describe('opportunistic mode', () => {
-      it('uses user unix_username when it exists', () => {
-        mockedExecSync.mockReturnValueOnce(Buffer.from('')); // user exists
-
-        const result = resolveUnixUserForImpersonation({
-          mode: 'opportunistic',
-          userUnixUsername: 'alice',
-          executorUnixUser: 'executor',
-        });
-
-        expect(result.unixUser).toBe('alice');
-        expect(result.reason).toContain('alice');
-      });
-
-      it('falls back to executor when user does not exist', () => {
-        mockedExecSync
-          .mockImplementationOnce(() => {
-            throw new Error('no such user');
-          }) // alice doesn't exist
-          .mockReturnValueOnce(Buffer.from('')); // executor exists
-
-        const result = resolveUnixUserForImpersonation({
-          mode: 'opportunistic',
-          userUnixUsername: 'alice',
-          executorUnixUser: 'executor',
-        });
-
-        expect(result.unixUser).toBe('executor');
-        expect(result.reason).toContain('alice');
-        expect(result.reason).toContain('not found');
-        expect(result.reason).toContain('executor');
-      });
-
-      it('falls back to executor when no user unix_username', () => {
-        mockedExecSync.mockReturnValueOnce(Buffer.from('')); // executor exists
-
-        const result = resolveUnixUserForImpersonation({
-          mode: 'opportunistic',
-          userUnixUsername: undefined,
-          executorUnixUser: 'executor',
-        });
-
-        expect(result.unixUser).toBe('executor');
-      });
-
-      it('returns null when neither user nor executor exist', () => {
-        mockedExecSync
-          .mockImplementationOnce(() => {
-            throw new Error('no such user');
-          })
-          .mockImplementationOnce(() => {
-            throw new Error('no such user');
-          });
-
-        const result = resolveUnixUserForImpersonation({
-          mode: 'opportunistic',
-          userUnixUsername: 'alice',
-          executorUnixUser: 'executor',
-        });
-
-        expect(result.unixUser).toBeNull();
-        expect(result.reason).toContain('no valid unix user');
-      });
-
-      it('returns null when no users configured at all', () => {
-        const result = resolveUnixUserForImpersonation({
-          mode: 'opportunistic',
-          userUnixUsername: undefined,
-          executorUnixUser: undefined,
-        });
-
-        expect(result.unixUser).toBeNull();
-      });
-    });
-
     describe('strict mode', () => {
       it('uses user unix_username when provided', () => {
         const result = resolveUnixUserForImpersonation({
@@ -526,11 +451,6 @@ describe('user-manager', () => {
     it('does nothing for simple mode', () => {
       expect(() => validateResolvedUnixUser('simple', 'alice')).not.toThrow();
       expect(() => validateResolvedUnixUser('simple', null)).not.toThrow();
-    });
-
-    it('does nothing for opportunistic mode (already validated)', () => {
-      expect(() => validateResolvedUnixUser('opportunistic', 'alice')).not.toThrow();
-      expect(() => validateResolvedUnixUser('opportunistic', null)).not.toThrow();
     });
 
     it('validates user exists for strict mode', () => {

@@ -584,7 +584,6 @@ async function main() {
     const unixUserMode = (config.execution?.unix_user_mode ?? 'simple') as
       | 'simple'
       | 'insulated'
-      | 'opportunistic'
       | 'strict';
     const configExecutorUser = config.execution?.executor_unix_user;
     const sessionUnixUser = session.unix_username;
