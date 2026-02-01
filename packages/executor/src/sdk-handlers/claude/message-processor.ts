@@ -131,7 +131,17 @@ export interface ProcessorOptions {
   existingSdkSessionId?: string;
   enableTokenStreaming?: boolean;
   idleTimeoutMs?: number;
+  /**
+   * Minimum chunk size in characters before emitting to prevent tiny/out-of-order chunks
+   * @default 20
+   */
+  minChunkSize?: number;
 }
+
+/**
+ * Streaming chunk configuration
+ */
+const DEFAULT_MIN_CHUNK_SIZE = 20; // Accumulate at least 20 chars before emitting
 
 /**
  * Processor state
@@ -146,6 +156,7 @@ interface ProcessorState {
   resolvedModel?: string;
   enableTokenStreaming: boolean;
   idleTimeoutMs: number;
+  minChunkSize: number;
   // Track current content blocks for tool_complete events
   contentBlockStack: Array<{
     index: number;
@@ -155,6 +166,9 @@ interface ProcessorState {
   }>;
   // Counter for throttling tool input chunk logging
   toolInputChunkCount: number;
+  // Text chunk accumulation buffer
+  textChunkBuffer: string;
+  textChunkBufferSize: number;
 }
 
 /**
@@ -176,8 +190,11 @@ export class SDKMessageProcessor {
       lastAssistantMessageTime: Date.now(),
       enableTokenStreaming: options.enableTokenStreaming ?? true,
       idleTimeoutMs: options.idleTimeoutMs ?? 30000, // 30s default
+      minChunkSize: options.minChunkSize ?? DEFAULT_MIN_CHUNK_SIZE,
       contentBlockStack: [],
       toolInputChunkCount: 0,
+      textChunkBuffer: '',
+      textChunkBufferSize: 0,
     };
   }
 
@@ -432,12 +449,25 @@ export class SDKMessageProcessor {
         | undefined;
       if (delta?.type === 'text_delta') {
         const textChunk = delta.text as string;
-        events.push({
-          type: 'partial',
-          textChunk,
-          agentSessionId: this.state.capturedAgentSessionId,
-          resolvedModel: this.state.resolvedModel,
-        });
+
+        // Accumulate chunk in buffer
+        this.state.textChunkBuffer += textChunk;
+        this.state.textChunkBufferSize += textChunk.length;
+
+        // Emit buffered chunk if we've reached minimum size
+        if (this.state.textChunkBufferSize >= this.state.minChunkSize) {
+          events.push({
+            type: 'partial',
+            textChunk: this.state.textChunkBuffer,
+            agentSessionId: this.state.capturedAgentSessionId,
+            resolvedModel: this.state.resolvedModel,
+          });
+
+          // Reset buffer after emitting
+          this.state.textChunkBuffer = '';
+          this.state.textChunkBufferSize = 0;
+        }
+        // Otherwise, chunk is buffered and will be emitted later
       } else if (delta?.type === 'thinking_delta') {
         const thinkingChunk = delta.thinking as string;
         console.debug(`🧠 Thinking chunk: ${thinkingChunk.substring(0, 50)}...`);
@@ -462,6 +492,23 @@ export class SDKMessageProcessor {
 
       // Find the block that just completed
       const completedBlock = this.state.contentBlockStack.find((b) => b.index === blockIndex);
+
+      // Flush any remaining buffered text when a text block ends
+      if (completedBlock?.type === 'text' && this.state.textChunkBufferSize > 0) {
+        console.debug(
+          `🔄 Flushing remaining ${this.state.textChunkBufferSize} chars from buffer (text block ended)`
+        );
+        events.push({
+          type: 'partial',
+          textChunk: this.state.textChunkBuffer,
+          agentSessionId: this.state.capturedAgentSessionId,
+          resolvedModel: this.state.resolvedModel,
+        });
+
+        // Reset buffer
+        this.state.textChunkBuffer = '';
+        this.state.textChunkBufferSize = 0;
+      }
 
       if (completedBlock?.type === 'tool_use') {
         console.debug(`🏁 Tool complete: ${completedBlock.toolName} (${completedBlock.toolUseId})`);
@@ -488,6 +535,23 @@ export class SDKMessageProcessor {
 
     // Message stop event
     if (event?.type === 'message_stop') {
+      // Flush any remaining buffered text when message ends (safety net)
+      if (this.state.textChunkBufferSize > 0) {
+        console.debug(
+          `🔄 Flushing remaining ${this.state.textChunkBufferSize} chars from buffer (message ended)`
+        );
+        events.push({
+          type: 'partial',
+          textChunk: this.state.textChunkBuffer,
+          agentSessionId: this.state.capturedAgentSessionId,
+          resolvedModel: this.state.resolvedModel,
+        });
+
+        // Reset buffer
+        this.state.textChunkBuffer = '';
+        this.state.textChunkBufferSize = 0;
+      }
+
       console.debug(`🏁 Message complete`);
       events.push({
         type: 'message_complete',
