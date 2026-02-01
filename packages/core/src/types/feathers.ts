@@ -61,6 +61,39 @@ export interface AuthenticatedParams extends Params {
   user?: AuthenticatedUser;
 }
 
+/**
+ * Extended params with RBAC cache properties
+ *
+ * Used by worktree-authorization hooks to cache loaded entities and permissions
+ * to avoid redundant database queries within a hook chain.
+ *
+ * @example
+ * ```ts
+ * // In loadWorktree hook
+ * function loadWorktree(worktreeRepo: WorktreeRepository) {
+ *   return async (context: HookContext) => {
+ *     const worktree = await worktreeRepo.findById(worktreeId);
+ *     const isOwner = await worktreeRepo.isOwner(worktree.worktree_id, userId);
+ *
+ *     // Cache for downstream hooks (type-safe!)
+ *     const rbacParams = context.params as RBACParams;
+ *     rbacParams.worktree = worktree;
+ *     rbacParams.isWorktreeOwner = isOwner;
+ *   };
+ * }
+ * ```
+ */
+export interface RBACParams extends AuthenticatedParams {
+  /** Cached worktree from loadWorktree/loadSessionWorktree hooks */
+  worktree?: import('./worktree').Worktree;
+  /** Cached ownership status for current user */
+  isWorktreeOwner?: boolean;
+  /** Cached session from loadSession/loadSessionWorktree hooks */
+  session?: import('./session').Session;
+  /** Cached session ID from resolveSessionContext hook */
+  sessionId?: string;
+}
+
 // ============================================================================
 // Query Parameter Types
 // ============================================================================
@@ -121,7 +154,7 @@ export interface QueryParams<T = unknown> extends Params {
  * ```
  */
 export interface CreateHookContext<T = unknown> extends FeathersHookContext {
-  params: AuthenticatedParams;
+  params: RBACParams;
   data: T | T[];
 }
 
@@ -134,7 +167,7 @@ export interface CreateHookContext<T = unknown> extends FeathersHookContext {
  * @template T - Entity type
  */
 export interface HookContext<T = unknown> extends FeathersHookContext {
-  params: AuthenticatedParams;
+  params: RBACParams;
   data?: Partial<T> | Partial<T>[];
 }
 

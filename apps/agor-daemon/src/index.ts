@@ -202,13 +202,14 @@ import {
   ensureCanView,
   ensureSessionImmutability,
   ensureWorktreePermission,
-  filterWorktreesByPermission,
   loadSession,
   loadSessionWorktree,
   loadWorktree,
   loadWorktreeFromSession,
   PERMISSION_RANK,
   resolveSessionContext,
+  scopeSessionQuery,
+  scopeWorktreeQuery,
   setSessionUnixUsername,
   validateSessionUnixUsername,
 } from './utils/worktree-authorization';
@@ -633,7 +634,7 @@ async function main() {
     const userId = (params as AuthenticatedParams).user?.user_id as
       | import('@agor/core/types').UserID
       | undefined;
-    let executorEnv = await createUserProcessEnvironment(userId, db);
+    const executorEnv = await createUserProcessEnvironment(userId, db);
 
     // Add DAEMON_URL to environment so executor can connect back
     executorEnv.DAEMON_URL = daemonUrl;
@@ -1367,6 +1368,7 @@ async function main() {
   // Requires worktree_id query parameter
   const worktreeRepository = new WorktreeRepository(db);
   const usersRepository = new UsersRepository(db);
+  const sessionsRepository = new SessionRepository(db);
   app.use('/context', createContextService(worktreeRepository));
 
   // Register file service (read-only filesystem browser for all worktree files)
@@ -1629,6 +1631,10 @@ async function main() {
         ...getReadAuthHooks(),
         ...(allowAnonymous ? [] : [requireMinimumRole('member', 'access worktrees')]),
       ],
+      find: [
+        // RBAC: Optimized SQL-based filtering (single query with JOIN, no N+1)
+        ...(worktreeRbacEnabled ? [scopeWorktreeQuery(worktreeRepository)] : []),
+      ],
       get: [
         ...(worktreeRbacEnabled
           ? [
@@ -1674,9 +1680,6 @@ async function main() {
       ],
     },
     after: {
-      find: [
-        ...(worktreeRbacEnabled ? [filterWorktreesByPermission(worktreeRepository)] : []), // Filter results by permission
-      ],
       create: [
         ...(worktreeRbacEnabled
           ? [
@@ -2043,6 +2046,10 @@ async function main() {
         // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type compatibility
         (validateQuery as any)(sessionQueryValidator),
         ...getReadAuthHooks(),
+      ],
+      find: [
+        // RBAC: Optimized SQL-based filtering (single query with JOIN on worktrees, no N+1)
+        ...(worktreeRbacEnabled ? [scopeSessionQuery(sessionsRepository)] : []),
       ],
       get: [
         ...(worktreeRbacEnabled

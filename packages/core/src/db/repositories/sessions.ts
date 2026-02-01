@@ -6,11 +6,17 @@
 
 import type { Session, UUID } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
-import { eq, like, or, sql } from 'drizzle-orm';
+import { and, eq, like, or, sql } from 'drizzle-orm';
 import { formatShortId, generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
-import { type SessionInsert, type SessionRow, sessions } from '../schema';
+import {
+  type SessionInsert,
+  type SessionRow,
+  sessions,
+  worktreeOwners,
+  worktrees,
+} from '../schema';
 import {
   AmbiguousIdError,
   type BaseRepository,
@@ -441,5 +447,41 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         error
       );
     }
+  }
+
+  /**
+   * Find all sessions in worktrees accessible to a user (optimized RBAC query)
+   *
+   * Uses INNER JOIN + LEFT JOIN to filter sessions by worktree access in one query
+   * instead of N+1. Returns sessions where user is a worktree owner OR worktree.others_can
+   * allows at least 'view' access.
+   *
+   * NOTE: This method should only be called when RBAC is enabled. When RBAC is disabled,
+   * the scopeSessionQuery hook is not registered, so default Feathers query is used
+   * (which returns all sessions without filtering).
+   *
+   * @param userId - User ID to check access for
+   * @returns Array of accessible sessions
+   */
+  async findAccessibleSessions(userId: UUID): Promise<Session[]> {
+    const rows = await select(this.db)
+      .from(sessions)
+      .innerJoin(worktrees, eq(sessions.worktree_id, worktrees.worktree_id))
+      .leftJoin(
+        worktreeOwners,
+        and(
+          eq(worktreeOwners.worktree_id, worktrees.worktree_id),
+          eq(worktreeOwners.user_id, userId)
+        )
+      )
+      .where(
+        sql`(
+          ${worktreeOwners.user_id} IS NOT NULL
+          OR ${worktrees.others_can} IN ('view', 'prompt', 'all')
+        )`
+      )
+      .all();
+
+    return rows.map((row: SessionRow) => this.rowToSession(row));
   }
 }

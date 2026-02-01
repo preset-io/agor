@@ -388,4 +388,38 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
 
     return ownersByWorktree;
   }
+
+  /**
+   * Find all worktrees accessible to a user (optimized RBAC query)
+   *
+   * Uses LEFT JOIN to check ownership in one query instead of N+1.
+   * Returns worktrees where user is an owner OR others_can allows at least 'view' access.
+   *
+   * NOTE: This method should only be called when RBAC is enabled. When RBAC is disabled,
+   * the scopeWorktreeQuery hook is not registered, so default Feathers query is used
+   * (which returns all worktrees without filtering).
+   *
+   * @param userId - User ID to check access for
+   * @returns Array of accessible worktrees
+   */
+  async findAccessibleWorktrees(userId: UUID): Promise<Worktree[]> {
+    const rows = await select(this.db)
+      .from(worktrees)
+      .leftJoin(
+        worktreeOwners,
+        and(
+          eq(worktreeOwners.worktree_id, worktrees.worktree_id),
+          eq(worktreeOwners.user_id, userId)
+        )
+      )
+      .where(
+        sql`(
+          ${worktreeOwners.user_id} IS NOT NULL
+          OR ${worktrees.others_can} IN ('view', 'prompt', 'all')
+        )`
+      )
+      .all();
+
+    return rows.map((row: WorktreeRow) => this.rowToWorktree(row));
+  }
 }
