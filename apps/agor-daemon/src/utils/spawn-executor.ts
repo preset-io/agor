@@ -256,16 +256,14 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
   // When impersonated, executor can't access /home/agorpg/.agor/config.yaml
   const daemonUrl = getDaemonUrl();
 
-  // When impersonating, only pass essential env vars (not all 77!)
-  // This keeps the sudo command manageable and avoids hitting command length limits
+  // When impersonating, pass minimal env vars and let sudo set HOME correctly
   const essentialEnv: Record<string, string> = asUser
     ? Object.fromEntries(
         Object.entries({
           DAEMON_URL: daemonUrl,
           PATH: env.PATH || '/usr/local/bin:/usr/bin:/bin',
           NODE_ENV: env.NODE_ENV,
-          HOME: env.HOME,
-          // API keys
+          // HOME: not set - sudo will set it to the target user's home directory
           ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY,
           OPENAI_API_KEY: env.OPENAI_API_KEY,
           GOOGLE_API_KEY: env.GOOGLE_API_KEY,

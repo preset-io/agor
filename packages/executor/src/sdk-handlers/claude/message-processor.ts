@@ -191,8 +191,8 @@ export class SDKMessageProcessor {
     this.state.messageCount++;
     this.state.lastActivityTime = Date.now();
 
-    // Log message type for debugging (sample every 10th to reduce verbosity)
-    if (this.state.messageCount % 10 === 0) {
+    // Log message type for debugging (skip stream_event as it's too verbose)
+    if (this.state.messageCount % 10 === 0 && msg.type !== 'stream_event') {
       console.debug(`📨 SDK message ${this.state.messageCount}: type=${msg.type}`);
     }
 

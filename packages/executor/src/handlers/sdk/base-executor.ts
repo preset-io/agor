@@ -129,9 +129,6 @@ export function createStreamingCallbacks(
       const sequence = _sequenceOverride !== undefined ? _sequenceOverride : currentSeq;
       sequenceCounters.set(message_id, sequence + 1);
 
-      console.log(
-        `[${toolName}] Streaming chunk: ${message_id.substring(0, 8)}, seq: ${sequence}, length: ${chunk.length}`
-      );
       await broadcastEvent('streaming:chunk', {
         message_id,
         session_id: currentSessionId,
