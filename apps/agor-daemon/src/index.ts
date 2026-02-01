@@ -2020,7 +2020,9 @@ async function main() {
   // This prevents unauthenticated sockets from receiving sensitive data
   app.publish((data, context) => {
     // Skip logging for streaming events (too verbose) and internal events without path/method
-    const isStreamingEvent = context.path === 'messages' && context.event?.startsWith('streaming:');
+    const isStreamingEvent =
+      context.path === 'messages/streaming' ||
+      (context.path === 'messages' && context.event?.startsWith('streaming:'));
     if (context.path && context.method && !isStreamingEvent) {
       console.log(
         `📡 [Publish] ${context.path} ${context.method}`,
