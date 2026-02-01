@@ -633,16 +633,12 @@ export class GeminiPromptService {
     // Configure Agor MCP server (self-access to daemon) - only if MCP is enabled
     if (this.mcpEnabled !== false) {
       const mcpToken = session.mcp_token;
-      console.log(`🔍 [MCP DEBUG] Checking for MCP token in session ${sessionId.substring(0, 8)}`);
-      console.log(
-        `   session.mcp_token: ${mcpToken ? `${mcpToken.substring(0, 16)}...` : 'NOT FOUND'}`
-      );
 
       if (mcpToken) {
         // Get daemon URL from config (supports Codespaces auto-detection)
         const daemonUrl = await getDaemonUrl();
 
-        console.log(`🔌 Configuring Agor MCP server (self-access to daemon)`);
+        console.log(`🔌 Configuring Agor MCP server at ${daemonUrl}/mcp`);
         // Use httpUrl parameter for HTTP transport
         mcpServersConfig.agor = new Gemini.MCPServerConfig(
           undefined, // command
@@ -653,12 +649,10 @@ export class GeminiPromptService {
           `${daemonUrl}/mcp?sessionToken=${mcpToken}`, // httpUrl
           {} // headers
         );
-        console.log(
-          `   Agor MCP URL: ${daemonUrl}/mcp?sessionToken=${mcpToken.substring(0, 16)}...`
-        );
       } else {
-        console.warn(`⚠️  No MCP token found for session ${sessionId.substring(0, 8)}`);
-        console.warn(`   Session will not have access to Agor MCP tools`);
+        console.warn(
+          `⚠️  No MCP token found for session ${sessionId.substring(0, 8)} - MCP tools unavailable`
+        );
       }
     } else {
       console.log(`🔒 Agor MCP server disabled - skipping MCP configuration`);

@@ -43,33 +43,6 @@ Agor is a collaborative workspace where multiple AI agents can work together on 
   {{/if}}
   {{/if}}
 
-### Available Agor MCP Tools
-
-You have access to powerful Agor MCP tools for self-awareness and coordination:
-
-**Session & Context:**
-
-- `mcp__agor__agor_sessions_get_current()` - Get your current session details
-- `mcp__agor__agor_sessions_get(sessionId)` - Get info about any session
-- `mcp__agor__agor_sessions_list()` - List all sessions
-
-**Worktrees & Repositories:**
-
-- `mcp__agor__agor_worktrees_get(worktreeId)` - Get worktree information
-- `mcp__agor__agor_worktrees_list()` - List all worktrees
-
-**Multi-Agent Coordination:**
-
-- `mcp__agor__agor_sessions_spawn(prompt, ...)` - Spawn a child agent session
-- `mcp__agor__agor_sessions_prompt(sessionId, prompt, mode)` - Prompt another session
-
-**Task Management:**
-
-- `mcp__agor__agor_tasks_list(sessionId)` - List tasks in a session
-- `mcp__agor__agor_tasks_get(taskId)` - Get task details
-
-Use these tools to understand your environment, coordinate with other agents, or spawn subsessions for complex tasks.
-
 ### Key Concepts
 
 - **Sessions** represent individual agent conversations with full genealogy (fork/spawn relationships)

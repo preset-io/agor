@@ -489,16 +489,12 @@ export async function setupQuery(
   // Configure Agor MCP server (self-access to daemon) - only if MCP is enabled
   if (deps.mcpEnabled !== false) {
     const mcpToken = session.mcp_token;
-    console.log(`🔍 [MCP DEBUG] Checking for MCP token in session ${sessionId.substring(0, 8)}`);
-    console.log(
-      `   session.mcp_token: ${mcpToken ? `${mcpToken.substring(0, 16)}...` : 'NOT FOUND'}`
-    );
 
     if (mcpToken) {
       // Get daemon URL from config (supports Codespaces auto-detection)
       const daemonUrl = await getDaemonUrl();
 
-      console.log(`🔌 Configuring Agor MCP server (self-access to daemon)`);
+      console.log(`🔌 Configuring Agor MCP server at ${daemonUrl}/mcp`);
       const mcpConfig = {
         agor: {
           type: 'http' as const,
@@ -506,14 +502,11 @@ export async function setupQuery(
         },
       };
       queryOptions.mcpServers = mcpConfig;
-      console.log(`   MCP server config:`, JSON.stringify(mcpConfig, null, 2));
-      console.log(`   Full URL: ${daemonUrl}/mcp?sessionToken=${mcpToken.substring(0, 16)}...`);
     } else {
-      console.warn(`⚠️  No MCP token found for session ${sessionId.substring(0, 8)}`);
-      console.warn(`   Session will not have access to Agor MCP tools`);
+      console.warn(
+        `⚠️  No MCP token found for session ${sessionId.substring(0, 8)} - MCP tools unavailable`
+      );
     }
-  } else {
-    console.log(`🔒 Agor MCP server disabled - skipping MCP configuration`);
   }
 
   // Fetch and configure MCP servers for this session
