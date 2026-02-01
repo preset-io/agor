@@ -164,8 +164,6 @@ interface ProcessorState {
     toolUseId?: string;
     toolName?: string;
   }>;
-  // Counter for throttling tool input chunk logging
-  toolInputChunkCount: number;
   // Text chunk accumulation buffer
   textChunkBuffer: string;
   textChunkBufferSize: number;
@@ -192,7 +190,6 @@ export class SDKMessageProcessor {
       idleTimeoutMs: options.idleTimeoutMs ?? 30000, // 30s default
       minChunkSize: options.minChunkSize ?? DEFAULT_MIN_CHUNK_SIZE,
       contentBlockStack: [],
-      toolInputChunkCount: 0,
       textChunkBuffer: '',
       textChunkBufferSize: 0,
     };
@@ -410,7 +407,6 @@ export class SDKMessageProcessor {
       if (block?.type === 'tool_use') {
         const toolName = block.name as string;
         const toolId = block.id as string;
-        console.debug(`🔧 Tool start: ${toolName} (${toolId})`);
 
         // Track this tool use block
         this.state.contentBlockStack.push({
@@ -470,19 +466,14 @@ export class SDKMessageProcessor {
         // Otherwise, chunk is buffered and will be emitted later
       } else if (delta?.type === 'thinking_delta') {
         const thinkingChunk = delta.thinking as string;
-        console.debug(`🧠 Thinking chunk: ${thinkingChunk.substring(0, 50)}...`);
         events.push({
           type: 'thinking_partial',
           thinkingChunk,
           agentSessionId: this.state.capturedAgentSessionId,
         });
       } else if (delta?.type === 'input_json_delta') {
-        // Tool input is being streamed - log every 10th chunk only (reduce verbosity)
+        // Tool input is being streamed (no logging - reduces noise)
         // Could emit tool_input_chunk event if we want to show tool args as they build
-        this.state.toolInputChunkCount++;
-        if (this.state.toolInputChunkCount % 10 === 0) {
-          console.debug(`🔧 Tool input chunk (${this.state.toolInputChunkCount})`);
-        }
       }
     }
 
@@ -494,14 +485,12 @@ export class SDKMessageProcessor {
       const completedBlock = this.state.contentBlockStack.find((b) => b.index === blockIndex);
 
       if (completedBlock?.type === 'tool_use') {
-        console.debug(`🏁 Tool complete: ${completedBlock.toolName} (${completedBlock.toolUseId})`);
         events.push({
           type: 'tool_complete',
           toolUseId: completedBlock.toolUseId!,
           agentSessionId: this.state.capturedAgentSessionId,
         });
       } else if (completedBlock?.type === 'thinking') {
-        console.debug(`🧠 Thinking block ${blockIndex} complete`);
         events.push({
           type: 'thinking_complete',
           agentSessionId: this.state.capturedAgentSessionId,

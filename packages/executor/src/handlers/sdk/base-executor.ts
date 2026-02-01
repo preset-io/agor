@@ -140,7 +140,6 @@ export function createStreamingCallbacks(
       // Get final sequence number for this message
       const finalSequence = sequenceCounters.get(message_id) || 0;
 
-      console.log(`[${toolName}] Stream ended: ${message_id}, final seq: ${finalSequence}`);
       await broadcastEvent('streaming:end', {
         message_id,
         session_id: currentSessionId,
