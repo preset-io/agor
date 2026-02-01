@@ -39,13 +39,31 @@ import { mapPermissionMode } from './permission-mapper.js';
 import { extractGeminiTokenUsage } from './usage.js';
 
 /**
- * Safely stringify an object, handling circular references
+ * Safely stringify an object, handling circular references and edge cases
  * Uses a WeakSet to track seen objects and replaces circular refs with a descriptive string
+ *
+ * @example
+ * // Circular reference handling
+ * const obj = { a: 1 };
+ * obj.self = obj;
+ * safeStringify(obj); // '{"a":1,"self":"[Circular Reference]"}'
+ *
+ * @example
+ * // BigInt serialization
+ * safeStringify({ count: 123n }); // '{"count":"123"}'
+ *
+ * @param obj - Any value to stringify (typically an object)
+ * @returns JSON string with circular references replaced by "[Circular Reference]"
  */
 function safeStringify(obj: unknown): string {
   const seen = new WeakSet();
 
   return JSON.stringify(obj, (key, value) => {
+    // Handle BigInt serialization (would throw TypeError otherwise)
+    if (typeof value === 'bigint') {
+      return value.toString();
+    }
+
     // Handle non-object values normally
     if (typeof value !== 'object' || value === null) {
       return value;
