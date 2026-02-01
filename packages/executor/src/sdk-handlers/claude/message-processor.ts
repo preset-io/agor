@@ -493,21 +493,6 @@ export class SDKMessageProcessor {
       // Find the block that just completed
       const completedBlock = this.state.contentBlockStack.find((b) => b.index === blockIndex);
 
-      // Flush any remaining buffered text when a text block ends
-      // This ensures we emit partial content before the complete message arrives
-      if (completedBlock?.type === 'text' && this.state.textChunkBufferSize > 0) {
-        events.push({
-          type: 'partial',
-          textChunk: this.state.textChunkBuffer,
-          agentSessionId: this.state.capturedAgentSessionId,
-          resolvedModel: this.state.resolvedModel,
-        });
-
-        // Reset buffer for next text block
-        this.state.textChunkBuffer = '';
-        this.state.textChunkBufferSize = 0;
-      }
-
       if (completedBlock?.type === 'tool_use') {
         console.debug(`🏁 Tool complete: ${completedBlock.toolName} (${completedBlock.toolUseId})`);
         events.push({
