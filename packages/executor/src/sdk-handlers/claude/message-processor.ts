@@ -494,10 +494,8 @@ export class SDKMessageProcessor {
       const completedBlock = this.state.contentBlockStack.find((b) => b.index === blockIndex);
 
       // Flush any remaining buffered text when a text block ends
+      // This ensures we emit partial content before the complete message arrives
       if (completedBlock?.type === 'text' && this.state.textChunkBufferSize > 0) {
-        console.debug(
-          `🔄 Flushing remaining ${this.state.textChunkBufferSize} chars from buffer (text block ended)`
-        );
         events.push({
           type: 'partial',
           textChunk: this.state.textChunkBuffer,
@@ -505,7 +503,7 @@ export class SDKMessageProcessor {
           resolvedModel: this.state.resolvedModel,
         });
 
-        // Reset buffer
+        // Reset buffer for next text block
         this.state.textChunkBuffer = '';
         this.state.textChunkBufferSize = 0;
       }
@@ -535,31 +533,17 @@ export class SDKMessageProcessor {
 
     // Message stop event
     if (event?.type === 'message_stop') {
-      // Flush any remaining buffered text when message ends (safety net)
-      if (this.state.textChunkBufferSize > 0) {
-        console.debug(
-          `🔄 Flushing remaining ${this.state.textChunkBufferSize} chars from buffer (message ended)`
-        );
-        events.push({
-          type: 'partial',
-          textChunk: this.state.textChunkBuffer,
-          agentSessionId: this.state.capturedAgentSessionId,
-          resolvedModel: this.state.resolvedModel,
-        });
-
-        // Reset buffer
-        this.state.textChunkBuffer = '';
-        this.state.textChunkBufferSize = 0;
-      }
-
       console.debug(`🏁 Message complete`);
       events.push({
         type: 'message_complete',
         agentSessionId: this.state.capturedAgentSessionId,
       });
 
-      // Clear content block stack for next message
+      // Clear content block stack and buffer for next message
+      // Note: Any unbuffered text will be in the complete message (safety net)
       this.state.contentBlockStack = [];
+      this.state.textChunkBuffer = '';
+      this.state.textChunkBufferSize = 0;
     }
 
     return events;
