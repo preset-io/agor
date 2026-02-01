@@ -16,16 +16,21 @@ echo "✅ Using pre-built dependencies from Docker image"
 #   UID=$(id -u) GID=$(id -g) docker compose build
 echo "🔧 Ensuring write access for build tools..."
 if sudo -n true 2>/dev/null; then
-  # Chown all package/app directories (non-recursive, globs are fast without -R)
+  # Clean and recreate dist directories with correct ownership
+  # This prevents EACCES errors when tsup tries to unlink old files
+  sudo -n rm -rf /app/packages/*/dist /app/apps/*/dist 2>/dev/null || true
+  sudo -n mkdir -p /app/packages/core/dist /app/packages/executor/dist /app/apps/agor-daemon/dist /app/apps/agor-cli/dist /app/apps/agor-ui/dist
+
+  # Chown all package/app directories (non-recursive for speed)
   sudo -n chown agor:agor /app/packages/* /app/apps/* 2>/dev/null || true
 
-  # Create and chown all dist directories
-  sudo -n mkdir -p /app/packages/*/dist /app/apps/*/dist
-  sudo -n chown agor:agor /app/packages/*/dist /app/apps/*/dist
+  # Chown dist directories recursively (in case they have nested files)
+  sudo -n chown -R agor:agor /app/packages/*/dist /app/apps/*/dist
 
   echo "✅ Build directories ready"
 else
   # Fallback: try without sudo (might work depending on host permissions)
+  rm -rf /app/packages/*/dist /app/apps/*/dist 2>/dev/null || true
   mkdir -p /app/packages/*/dist /app/apps/*/dist 2>/dev/null || true
   echo "⚠️  Build directories created (sudo not available, may have permission issues)"
 fi
@@ -35,38 +40,59 @@ fi
 # If you need hooks in the container, run `pnpm husky install` manually after startup
 echo "⏭️  Skipping husky install (git hooks run on host, not in container)"
 
-# Start @agor/core in watch mode FIRST (for hot-reload during development)
-# We start this early and wait for initial build before running CLI commands
-echo "🔄 Starting @agor/core watch mode..."
+# Build packages sequentially to avoid race conditions
+# Strategy: Do blocking builds first, THEN start watch modes
+# This ensures all type definitions are ready before dependent packages compile
+
+# Step 1: Build @agor/core (blocking, no watch)
+echo "🔨 Building @agor/core (initial build)..."
+pnpm --filter @agor/core build
+
+# CRITICAL: Wait for DTS files to actually exist
+# tsup with dts:true uses rollup-plugin-dts which runs async after main build
+# The build command can exit before .d.ts files are fully written
+echo "⏳ Waiting for @agor/core type definitions to be written..."
+MAX_WAIT=30
+WAITED=0
+while [ ! -f "/app/packages/core/dist/api/index.d.ts" ] || [ ! -f "/app/packages/core/dist/types/index.d.ts" ]; do
+  if [ $WAITED -ge $MAX_WAIT ]; then
+    echo "❌ Timeout waiting for type definitions!"
+    exit 1
+  fi
+  sleep 0.5
+  WAITED=$((WAITED + 1))
+done
+echo "✅ @agor/core initial build complete (including type definitions)"
+
+# Step 2: Build @agor/executor (blocking, no watch)
+# Now safe because @agor/core types are fully available
+echo "🔨 Building @agor/executor (initial build)..."
+pnpm --filter @agor/executor build
+
+# Wait for executor DTS files too
+echo "⏳ Waiting for @agor/executor type definitions to be written..."
+MAX_WAIT=30
+WAITED=0
+while [ ! -f "/app/packages/executor/dist/index.d.ts" ]; do
+  if [ $WAITED -ge $MAX_WAIT ]; then
+    echo "❌ Timeout waiting for executor type definitions!"
+    exit 1
+  fi
+  sleep 0.5
+  WAITED=$((WAITED + 1))
+done
+echo "✅ @agor/executor initial build complete (including type definitions)"
+
+# Step 3: Start watch modes in background (for hot-reload during development)
+# Now both packages are fully built, watch mode just handles incremental changes
+echo "🔄 Starting watch modes for hot-reload..."
 pnpm --filter @agor/core dev &
 CORE_PID=$!
 
-# Wait for initial watch build to complete
-# tsup --watch does a full build on startup, then watches for changes
-# IMPORTANT: Wait for .d.ts files too, not just .js files (needed for TypeScript packages)
-echo "⏳ Waiting for @agor/core initial build..."
-while [ ! -f "/app/packages/core/dist/index.js" ] || [ ! -f "/app/packages/core/dist/utils/logger.js" ] || [ ! -f "/app/packages/core/dist/index.d.ts" ]; do
-  sleep 0.1
-done
-echo "⏳ Waiting for @agor/core type definitions..."
-# Wait for critical type definitions including database types (needed for migrations)
-while [ ! -f "/app/packages/core/dist/api/index.d.ts" ] || [ ! -f "/app/packages/core/dist/db/index.d.ts" ]; do
-  sleep 0.1
-done
-echo "✅ @agor/core build ready"
-
-# Start @agor/executor in watch mode (for hot-reload during development)
-# Like core, we need an initial build before the daemon can spawn executors
-echo "🔄 Starting @agor/executor watch mode..."
 pnpm --filter @agor/executor dev &
 EXECUTOR_PID=$!
 
-# Wait for initial executor build to complete
-echo "⏳ Waiting for @agor/executor initial build..."
-while [ ! -f "/app/packages/executor/dist/index.js" ] || [ ! -f "/app/packages/executor/dist/cli.js" ]; do
-  sleep 0.1
-done
-echo "✅ @agor/executor build ready (watching for changes)"
+echo "✅ Watch modes started (core and executor will rebuild on file changes)"
 
 # Fix volume permissions (volumes may be created with wrong ownership)
 # Only chown .agor directory (not .ssh which is mounted read-only)
