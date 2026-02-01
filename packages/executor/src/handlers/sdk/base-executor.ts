@@ -7,7 +7,14 @@
 
 import { type ApiKeyName, resolveApiKey } from '@agor/core/config';
 import { getGitState } from '@agor/core/git';
-import type { MessageID, PermissionMode, SessionID, Task, TaskID } from '@agor/core/types';
+import type {
+  MessageID,
+  PermissionMode,
+  SessionID,
+  StreamingEventType,
+  Task,
+  TaskID,
+} from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
 import { normalizeRawSdkResponse } from '../../sdk-handlers/normalizer-factory.js';
@@ -96,17 +103,7 @@ export function createStreamingCallbacks(
   const sequenceCounters = new Map<string, number>();
 
   // Helper to broadcast streaming events via custom route
-  const broadcastEvent = async (
-    event:
-      | 'streaming:start'
-      | 'streaming:chunk'
-      | 'streaming:end'
-      | 'streaming:error'
-      | 'thinking:start'
-      | 'thinking:chunk'
-      | 'thinking:end',
-    data: Record<string, unknown>
-  ) => {
+  const broadcastEvent = async (event: StreamingEventType, data: Record<string, unknown>) => {
     await client.service('/messages/streaming').create({
       event,
       data,

@@ -87,6 +87,7 @@ import type {
   PermissionRequestContent,
   Session,
   SessionID,
+  StreamingEventType,
   Task,
   TaskID,
   User,
@@ -802,6 +803,7 @@ async function main() {
       'createMany',
     ],
     events: [
+      // Streaming events (see StreamingEventType in @agor/core/types/message.ts)
       'streaming:start',
       'streaming:chunk',
       'streaming:end',
@@ -2822,14 +2824,7 @@ async function main() {
     {
       async create(
         data: {
-          event:
-            | 'streaming:start'
-            | 'streaming:chunk'
-            | 'streaming:end'
-            | 'streaming:error'
-            | 'thinking:start'
-            | 'thinking:chunk'
-            | 'thinking:end';
+          event: StreamingEventType;
           data: Record<string, unknown>;
         },
         params: RouteParams
