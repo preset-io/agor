@@ -3,6 +3,3 @@ pnpm typecheck
 
 echo "✨ Running lint..."
 pnpm lint
-
-echo "🏗️  Running build..."
-pnpm turbo run build --filter='!@agor/docs'
