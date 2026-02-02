@@ -260,20 +260,20 @@ export async function handleGitClone(
 /**
  * Render environment command templates with full context including GID
  *
- * Fetches worktree and repo from database, gets GID from Unix group,
+ * Fetches worktree and repo from database, gets GID from Unix group (if available),
  * and renders all environment templates with complete context.
  *
  * @param client - Feathers client
  * @param worktreeId - Worktree ID
  * @param repoId - Repo ID
- * @param unixGroup - Unix group name (to look up GID)
+ * @param unixGroup - Unix group name (to look up GID), undefined if RBAC disabled
  * @returns Rendered template fields
  */
 async function renderEnvironmentTemplates(
   client: AgorClient,
   worktreeId: string,
   repoId: string,
-  unixGroup: string
+  unixGroup: string | undefined
 ): Promise<{
   start_command?: string;
   stop_command?: string;
@@ -295,16 +295,16 @@ async function renderEnvironmentTemplates(
     return {};
   }
 
-  // Look up GID from Unix group
-  const unixGid = getGidFromGroupName(unixGroup);
+  // Look up GID from Unix group (only if group was created)
+  const unixGid = unixGroup ? getGidFromGroupName(unixGroup) : undefined;
 
-  // Build template context with full information including GID
+  // Build template context with full information including GID (if available)
   const templateContext = {
     worktree: {
       unique_id: worktree.worktree_unique_id,
       name: worktree.name,
       path: worktree.path,
-      gid: unixGid, // Now available since Unix group was just created
+      gid: unixGid, // Available when Unix groups are enabled, undefined otherwise
     },
     repo: {
       slug: repo.slug,
@@ -447,7 +447,9 @@ export async function handleGitWorktreeAdd(
       }
     }
 
-    // Render environment command templates now that Unix group is created and GID is available
+    // Render environment command templates (after Unix group creation if applicable)
+    // Templates should be rendered regardless of RBAC status, but GID will only be available
+    // when Unix groups are enabled
     let renderedTemplates:
       | {
           start_command?: string;
@@ -459,11 +461,10 @@ export async function handleGitWorktreeAdd(
         }
       | undefined;
 
-    if (worktreeId && unixGroup) {
+    if (worktreeId) {
       try {
-        console.log(
-          `[git.worktree.add] Rendering environment templates with GID for worktree ${worktreeId.substring(0, 8)}`
-        );
+        const logSuffix = unixGroup ? `with GID for worktree ${worktreeId.substring(0, 8)}` : `for worktree ${worktreeId.substring(0, 8)} (no Unix group)`;
+        console.log(`[git.worktree.add] Rendering environment templates ${logSuffix}`);
         renderedTemplates = await renderEnvironmentTemplates(client, worktreeId, repoId, unixGroup);
         console.log(`[git.worktree.add] Templates rendered successfully`);
       } catch (error) {
