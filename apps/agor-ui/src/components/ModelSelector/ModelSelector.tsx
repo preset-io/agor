@@ -1,10 +1,8 @@
 import { AVAILABLE_CLAUDE_MODEL_ALIASES, GEMINI_MODELS, type GeminiModel } from '@agor/core/models';
 import { InfoCircleOutlined } from '@ant-design/icons';
-import { Input, Radio, Select, Space, Tooltip, Typography } from 'antd';
+import { Input, Radio, Select, Space, Tooltip } from 'antd';
 import { useState } from 'react';
 import { type OpenCodeModelConfig, OpenCodeModelSelector } from './OpenCodeModelSelector';
-
-const { Link } = Typography;
 
 export interface ModelConfig {
   mode: 'alias' | 'exact';
