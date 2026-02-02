@@ -463,7 +463,9 @@ export async function handleGitWorktreeAdd(
 
     if (worktreeId) {
       try {
-        const logSuffix = unixGroup ? `with GID for worktree ${worktreeId.substring(0, 8)}` : `for worktree ${worktreeId.substring(0, 8)} (no Unix group)`;
+        const logSuffix = unixGroup
+          ? `with GID for worktree ${worktreeId.substring(0, 8)}`
+          : `for worktree ${worktreeId.substring(0, 8)} (no Unix group)`;
         console.log(`[git.worktree.add] Rendering environment templates ${logSuffix}`);
         renderedTemplates = await renderEnvironmentTemplates(client, worktreeId, repoId, unixGroup);
         console.log(`[git.worktree.add] Templates rendered successfully`);
