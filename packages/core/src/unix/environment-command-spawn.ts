@@ -25,8 +25,8 @@ export interface SpawnEnvironmentCommandOptions {
   worktree: Worktree;
   /** Database instance (for user lookup and config) */
   db: Database;
-  /** Command type for logging (default: 'environment') */
-  commandType?: EnvironmentCommandType;
+  /** Command type for logging */
+  commandType: EnvironmentCommandType;
   /** stdio configuration (default: 'inherit') */
   stdio?: SpawnOptions['stdio'];
 }
@@ -51,7 +51,7 @@ export interface SpawnEnvironmentCommandOptions {
 export async function spawnEnvironmentCommand(
   options: SpawnEnvironmentCommandOptions
 ): Promise<ChildProcess> {
-  const { command, worktree, db, commandType = 'environment', stdio = 'inherit' } = options;
+  const { command, worktree, db, commandType, stdio = 'inherit' } = options;
 
   const logPrefix = `[Environment.${commandType} ${worktree.name}]`;
 
@@ -98,10 +98,12 @@ export async function spawnEnvironmentCommand(
   });
 
   // Spawn the command
+  // When not impersonating (simple mode), buildSpawnArgs returns the raw command string,
+  // so we need shell: true to handle multi-word commands like "docker compose up -d"
   return spawn(cmd, args, {
     cwd: worktree.path,
     env: asUser ? undefined : env, // Use process env if not impersonating
     stdio,
-    shell: false, // buildSpawnArgs already wraps in bash -c
+    shell: !asUser, // Use shell for simple mode, buildSpawnArgs wraps sudo in bash -c
   });
 }
