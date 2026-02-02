@@ -15,6 +15,8 @@ export default class UserUpdate extends BaseCommand {
     '<%= config.bin %> <%= command.id %> test@example.com --name "New Name"',
     '<%= config.bin %> <%= command.id %> 0199d1bd --role member',
     '<%= config.bin %> <%= command.id %> test@example.com --password newpassword123',
+    '<%= config.bin %> <%= command.id %> test@example.com --unix-username testuser',
+    '<%= config.bin %> <%= command.id %> 0199d1bd --force-password-change',
   ];
 
   static args = {
@@ -37,6 +39,9 @@ export default class UserUpdate extends BaseCommand {
     role: Flags.string({
       description: 'New role',
       options: ['owner', 'admin', 'member', 'viewer'],
+    }),
+    'unix-username': Flags.string({
+      description: 'New Unix username for shell access',
     }),
     'force-password-change': Flags.boolean({
       description: 'Force user to change password on next login',
@@ -71,6 +76,7 @@ export default class UserUpdate extends BaseCommand {
         !flags.name &&
         !flags.password &&
         !flags.role &&
+        !flags['unix-username'] &&
         flags['force-password-change'] === undefined
       ) {
         const { fields } = await inquirer.prompt([
@@ -83,6 +89,8 @@ export default class UserUpdate extends BaseCommand {
               { name: 'Name', value: 'name' },
               { name: 'Password', value: 'password' },
               { name: 'Role', value: 'role' },
+              { name: 'Unix Username', value: 'unix_username' },
+              { name: 'Force Password Change', value: 'force_password_change' },
             ],
           },
         ]);
@@ -134,6 +142,20 @@ export default class UserUpdate extends BaseCommand {
             choices: ['owner', 'admin', 'member', 'viewer'],
             default: user.role,
           },
+          {
+            type: 'input',
+            name: 'unix_username',
+            message: 'New Unix username:',
+            when: fields.includes('unix_username'),
+            default: user.unix_username,
+          },
+          {
+            type: 'confirm',
+            name: 'force_password_change',
+            message: 'Force user to change password on next login?',
+            when: fields.includes('force_password_change'),
+            default: user.must_change_password,
+          },
         ]);
 
         // Apply answers to flags
@@ -141,14 +163,22 @@ export default class UserUpdate extends BaseCommand {
         if (answers.name) flags.name = answers.name;
         if (answers.password) flags.password = answers.password;
         if (answers.role) flags.role = answers.role;
+        if (answers.unix_username) flags['unix-username'] = answers.unix_username;
+        if (answers.force_password_change !== undefined)
+          flags['force-password-change'] = answers.force_password_change;
       }
 
       // Build update object
-      const updates: Partial<User> & { password?: string; must_change_password?: boolean } = {};
+      const updates: Partial<User> & {
+        password?: string;
+        must_change_password?: boolean;
+        unix_username?: string;
+      } = {};
       if (flags.email) updates.email = flags.email;
       if (flags.name) updates.name = flags.name;
       if (flags.password) updates.password = flags.password;
       if (flags.role) updates.role = flags.role as 'owner' | 'admin' | 'member' | 'viewer';
+      if (flags['unix-username']) updates.unix_username = flags['unix-username'];
       if (flags['force-password-change'] !== undefined) {
         updates.must_change_password = flags['force-password-change'];
       }
@@ -166,10 +196,11 @@ export default class UserUpdate extends BaseCommand {
 
       this.log(`${chalk.green('✓')} User updated successfully`);
       this.log('');
-      this.log(`  Email: ${chalk.cyan(updatedUser.email)}`);
-      this.log(`  Name:  ${chalk.cyan(updatedUser.name || '(not set)')}`);
-      this.log(`  Role:  ${chalk.cyan(updatedUser.role)}`);
-      this.log(`  ID:    ${chalk.gray(updatedUser.user_id.substring(0, 8))}`);
+      this.log(`  Email:         ${chalk.cyan(updatedUser.email)}`);
+      this.log(`  Name:          ${chalk.cyan(updatedUser.name || '(not set)')}`);
+      this.log(`  Role:          ${chalk.cyan(updatedUser.role)}`);
+      this.log(`  Unix Username: ${chalk.cyan(updatedUser.unix_username || '(not set)')}`);
+      this.log(`  ID:            ${chalk.gray(updatedUser.user_id.substring(0, 8))}`);
       if (updatedUser.must_change_password) {
         this.log(`  ${chalk.yellow('⚠')} User must change password on next login`);
       }

@@ -755,9 +755,57 @@ export function setupMCPRoutes(app: Application): void {
               },
             },
             {
+              name: 'agor_users_update',
+              description:
+                'Update any user account (admin operation). Only updates fields that are provided. Can update email, name, role, password, unix_username, must_change_password, emoji, and avatar.',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  userId: {
+                    type: 'string',
+                    description: 'User ID to update (UUIDv7 or short ID)',
+                  },
+                  email: {
+                    type: 'string',
+                    description: 'New email address (optional)',
+                  },
+                  name: {
+                    type: 'string',
+                    description: 'New display name (optional)',
+                  },
+                  password: {
+                    type: 'string',
+                    description: 'New password (optional, will be hashed)',
+                  },
+                  role: {
+                    type: 'string',
+                    enum: ['owner', 'admin', 'member', 'viewer'],
+                    description: 'New user role (optional)',
+                  },
+                  unix_username: {
+                    type: 'string',
+                    description: 'New Unix username for shell access (optional)',
+                  },
+                  must_change_password: {
+                    type: 'boolean',
+                    description: 'Force user to change password on next login (optional)',
+                  },
+                  emoji: {
+                    type: 'string',
+                    description: 'User emoji (optional, single emoji character)',
+                  },
+                  avatar: {
+                    type: 'string',
+                    description: 'Avatar URL (optional)',
+                  },
+                },
+                required: ['userId'],
+              },
+            },
+            {
               name: 'agor_user_create',
               description:
-                'Create a new user account. Requires email and password. Optionally set name, emoji, avatar, and role.',
+                'Create a new user account. Requires email and password. Optionally set name, emoji, avatar, unix_username, must_change_password, and role.',
               inputSchema: {
                 type: 'object',
                 properties: {
@@ -781,6 +829,16 @@ export function setupMCPRoutes(app: Application): void {
                   avatar: {
                     type: 'string',
                     description: 'Avatar URL (optional)',
+                  },
+                  unix_username: {
+                    type: 'string',
+                    description:
+                      'Unix username for shell access (optional, defaults to email prefix if not specified)',
+                  },
+                  must_change_password: {
+                    type: 'boolean',
+                    description:
+                      'Force user to change password on first login (optional, defaults to false)',
                   },
                   role: {
                     type: 'string',
@@ -2173,6 +2231,55 @@ export function setupMCPRoutes(app: Application): void {
               },
             ],
           };
+        } else if (name === 'agor_users_update') {
+          // Update any user (admin operation)
+          if (!args?.userId) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message: 'Invalid params: userId is required',
+              },
+            });
+          }
+
+          // Build update object - only include fields that are provided
+          const updateData: Record<string, unknown> = {};
+          if (args?.email !== undefined) updateData.email = args.email;
+          if (args?.name !== undefined) updateData.name = args.name;
+          if (args?.password !== undefined) updateData.password = args.password;
+          if (args?.role !== undefined) updateData.role = args.role;
+          if (args?.unix_username !== undefined) updateData.unix_username = args.unix_username;
+          if (args?.must_change_password !== undefined)
+            updateData.must_change_password = args.must_change_password;
+          if (args?.emoji !== undefined) updateData.emoji = args.emoji;
+          if (args?.avatar !== undefined) updateData.avatar = args.avatar;
+
+          if (Object.keys(updateData).length === 0) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message:
+                  'Invalid params: at least one field must be provided to update (email, name, password, role, unix_username, must_change_password, emoji, avatar)',
+              },
+            });
+          }
+
+          console.log(`📝 MCP updating user ${args.userId.substring(0, 8)}`);
+          const updatedUser = await app.service('users').patch(args.userId, updateData);
+          console.log(`✅ User updated`);
+
+          mcpResponse = {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(updatedUser, null, 2),
+              },
+            ],
+          };
         } else if (name === 'agor_user_create') {
           // Create a new user
           if (!args?.email) {
@@ -2207,6 +2314,9 @@ export function setupMCPRoutes(app: Application): void {
           if (args?.name !== undefined) createData.name = args.name;
           if (args?.emoji !== undefined) createData.emoji = args.emoji;
           if (args?.avatar !== undefined) createData.avatar = args.avatar;
+          if (args?.unix_username !== undefined) createData.unix_username = args.unix_username;
+          if (args?.must_change_password !== undefined)
+            createData.must_change_password = args.must_change_password;
           if (args?.role !== undefined) createData.role = args.role;
 
           const newUser = await app.service('users').create(createData);

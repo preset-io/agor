@@ -14,7 +14,8 @@ export default class UserCreate extends BaseCommand {
   static examples = [
     '<%= config.bin %> <%= command.id %>',
     '<%= config.bin %> <%= command.id %> --email admin@localhost --name Admin',
-    '<%= config.bin %> <%= command.id %> --email max@example.com --role admin',
+    '<%= config.bin %> <%= command.id %> --email max@example.com --role admin --unix-username max',
+    '<%= config.bin %> <%= command.id %> --email max@example.com --force-password-change',
   ];
 
   static flags = {
@@ -34,6 +35,10 @@ export default class UserCreate extends BaseCommand {
       description: 'User role',
       options: [/* 'owner', */ 'admin', 'member', 'viewer'], // owner role unused
       default: 'admin',
+    }),
+    'unix-username': Flags.string({
+      description: 'Unix username for shell access (defaults to email prefix)',
+      required: false,
     }),
     'force-password-change': Flags.boolean({
       description: 'Force user to change password on first login',
@@ -106,16 +111,18 @@ export default class UserCreate extends BaseCommand {
         password,
         name: name || undefined,
         role: flags.role as UserRole,
+        unix_username: flags['unix-username'],
         must_change_password: flags['force-password-change'],
       };
       const user = await client.service('users').create(userData);
 
       this.log(`${chalk.green('✓')} User created successfully`);
       this.log('');
-      this.log(`  Email: ${chalk.cyan(user.email)}`);
-      this.log(`  Name:  ${chalk.cyan(user.name || '(not set)')}`);
-      this.log(`  Role:  ${chalk.cyan(user.role)}`);
-      this.log(`  ID:    ${chalk.gray(user.user_id.substring(0, 8))}`);
+      this.log(`  Email:         ${chalk.cyan(user.email)}`);
+      this.log(`  Name:          ${chalk.cyan(user.name || '(not set)')}`);
+      this.log(`  Role:          ${chalk.cyan(user.role)}`);
+      this.log(`  Unix Username: ${chalk.cyan(user.unix_username || '(not set)')}`);
+      this.log(`  ID:            ${chalk.gray(user.user_id.substring(0, 8))}`);
       if (user.must_change_password) {
         this.log(`  ${chalk.yellow('⚠')} User must change password on first login`);
       }
