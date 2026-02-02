@@ -9,7 +9,7 @@ import type { ChildProcess } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { createUserProcessEnvironment, ENVIRONMENT, PAGINATION } from '@agor/core/config';
+import { ENVIRONMENT, PAGINATION } from '@agor/core/config';
 import { type Database, WorktreeRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type {
@@ -634,32 +634,16 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       );
       await mkdir(dirname(logPath), { recursive: true });
 
-      // Create clean environment for user process (filters Agor-internal vars like NODE_ENV)
-      const env = await createUserProcessEnvironment(worktree.created_by, this.db);
-
-      // Load config for Unix impersonation settings
-      const { loadConfig } = await import('@agor/core/config');
-      const config = await loadConfig();
-
-      // Look up user's unix_username for impersonation
-      const { UsersRepository } = await import('@agor/core/db');
-      const usersRepo = new UsersRepository(this.db);
-      const user = await usersRepo.findById(worktree.created_by);
-
       // Execute command and wait for it to complete
       // The command should start services and return (e.g., docker-compose up -d)
-      await new Promise<void>((resolve, reject) => {
-        const childProcess = spawnEnvironmentCommand({
-          command,
-          cwd: worktree.path,
-          env,
-          unixUserMode: config.execution?.unix_user_mode,
-          userUnixUsername: user?.unix_username,
-          executorUnixUser: config.execution?.executor_unix_user,
-          stdio: 'inherit',
-          logPrefix: `[Environment.start ${worktree.name}]`,
-        });
+      const childProcess = await spawnEnvironmentCommand({
+        command,
+        worktree,
+        db: this.db,
+        commandType: 'start',
+      });
 
+      await new Promise<void>((resolve, reject) => {
         childProcess.on('exit', (code: number | null) => {
           if (code === 0) {
             console.log(`✅ Start command completed successfully for ${worktree.name}`);
@@ -731,31 +715,15 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
 
         console.log(`🛑 Stopping environment for worktree ${worktree.name}: ${command}`);
 
-        // Create clean environment for user process (filters Agor-internal vars like NODE_ENV)
-        const env = await createUserProcessEnvironment(worktree.created_by, this.db);
-
-        // Load config for Unix impersonation settings
-        const { loadConfig } = await import('@agor/core/config');
-        const config = await loadConfig();
-
-        // Look up user's unix_username for impersonation
-        const { UsersRepository } = await import('@agor/core/db');
-        const usersRepo = new UsersRepository(this.db);
-        const user = await usersRepo.findById(worktree.created_by);
-
         // Execute down command
-        await new Promise<void>((resolve, reject) => {
-          const stopProcess = spawnEnvironmentCommand({
-            command,
-            cwd: worktree.path,
-            env,
-            unixUserMode: config.execution?.unix_user_mode,
-            userUnixUsername: user?.unix_username,
-            executorUnixUser: config.execution?.executor_unix_user,
-            stdio: 'inherit',
-            logPrefix: `[Environment.stop ${worktree.name}]`,
-          });
+        const stopProcess = await spawnEnvironmentCommand({
+          command,
+          worktree,
+          db: this.db,
+          commandType: 'stop',
+        });
 
+        await new Promise<void>((resolve, reject) => {
           stopProcess.on('exit', (code: number | null) => {
             if (code === 0) {
               resolve();
@@ -861,31 +829,15 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       console.log(`💣 NUKING environment for worktree ${worktree.name}: ${command}`);
       console.warn('⚠️  This is a destructive operation!');
 
-      // Create clean environment for user process (filters Agor-internal vars like NODE_ENV)
-      const env = await createUserProcessEnvironment(worktree.created_by, this.db);
-
-      // Load config for Unix impersonation settings
-      const { loadConfig } = await import('@agor/core/config');
-      const config = await loadConfig();
-
-      // Look up user's unix_username for impersonation
-      const { UsersRepository } = await import('@agor/core/db');
-      const usersRepo = new UsersRepository(this.db);
-      const user = await usersRepo.findById(worktree.created_by);
-
       // Execute nuke command
-      await new Promise<void>((resolve, reject) => {
-        const nukeProcess = spawnEnvironmentCommand({
-          command,
-          cwd: worktree.path,
-          env,
-          unixUserMode: config.execution?.unix_user_mode,
-          userUnixUsername: user?.unix_username,
-          executorUnixUser: config.execution?.executor_unix_user,
-          stdio: 'inherit',
-          logPrefix: `[Environment.nuke ${worktree.name}]`,
-        });
+      const nukeProcess = await spawnEnvironmentCommand({
+        command,
+        worktree,
+        db: this.db,
+        commandType: 'nuke',
+      });
 
+      await new Promise<void>((resolve, reject) => {
         nukeProcess.on('exit', (code: number | null) => {
           if (code === 0) {
             resolve();
@@ -1089,35 +1041,20 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
 
       console.log(`📋 Fetching logs for worktree ${worktree.name}: ${command}`);
 
-      // Create clean environment for user process (filters Agor-internal vars like NODE_ENV)
-      const env = await createUserProcessEnvironment(worktree.created_by, this.db);
-
-      // Load config for Unix impersonation settings
-      const { loadConfig } = await import('@agor/core/config');
-      const config = await loadConfig();
-
-      // Look up user's unix_username for impersonation
-      const { UsersRepository } = await import('@agor/core/db');
-      const usersRepo = new UsersRepository(this.db);
-      const user = await usersRepo.findById(worktree.created_by);
-
       // Execute command with timeout and output limits
+      const childProcess = await spawnEnvironmentCommand({
+        command,
+        worktree,
+        db: this.db,
+        commandType: 'logs',
+        stdio: 'pipe', // Need to capture output for logs
+      });
+
       const result = await new Promise<{
         stdout: string;
         stderr: string;
         truncated: boolean;
       }>((resolve, reject) => {
-        const childProcess = spawnEnvironmentCommand({
-          command,
-          cwd: worktree.path,
-          env,
-          unixUserMode: config.execution?.unix_user_mode,
-          userUnixUsername: user?.unix_username,
-          executorUnixUser: config.execution?.executor_unix_user,
-          stdio: 'pipe', // Need to capture output for logs
-          logPrefix: `[Environment.logs ${worktree.name}]`,
-        });
-
         let stdout = '';
         let stderr = '';
         let truncated = false;

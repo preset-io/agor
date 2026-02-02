@@ -6,63 +6,75 @@
  */
 
 import { type ChildProcess, type SpawnOptions, spawn } from 'node:child_process';
+import { createUserProcessEnvironment } from '../config/index.js';
+import type { Database } from '../db/index.js';
+import { UsersRepository } from '../db/repositories/index.js';
+import type { Worktree } from '../types/index.js';
 import { buildSpawnArgs } from './run-as-user.js';
-import {
-  resolveUnixUserForImpersonation,
-  type UnixUserMode,
-  validateResolvedUnixUser,
-} from './user-manager.js';
+import { resolveUnixUserForImpersonation, validateResolvedUnixUser } from './user-manager.js';
+
+/**
+ * Environment command types for logging
+ */
+export type EnvironmentCommandType = 'start' | 'stop' | 'nuke' | 'logs' | 'health';
 
 export interface SpawnEnvironmentCommandOptions {
   /** The shell command to execute */
   command: string;
-  /** Working directory for the command */
-  cwd: string;
-  /** Environment variables to pass to the command */
-  env: Record<string, string>;
-  /** Unix user mode (simple/insulated/strict) */
-  unixUserMode?: UnixUserMode;
-  /** User's unix_username (for resolving impersonation in strict mode) */
-  userUnixUsername?: string | null;
-  /** Executor unix username (for insulated mode) */
-  executorUnixUser?: string | null;
+  /** The worktree this command is running for */
+  worktree: Worktree;
+  /** Database instance (for user lookup and config) */
+  db: Database;
+  /** Command type for logging (default: 'environment') */
+  commandType?: EnvironmentCommandType;
   /** stdio configuration (default: 'inherit') */
   stdio?: SpawnOptions['stdio'];
-  /** Log prefix for console output (default: '[Environment]') */
-  logPrefix?: string;
 }
 
 /**
  * Spawn an environment command with conditional Unix impersonation
  *
+ * Automatically handles:
+ * - Loading Unix user mode config
+ * - Looking up user's unix_username
+ * - Creating clean user process environment
+ * - Resolving impersonation based on mode
+ *
  * Behavior based on unix_user_mode:
  * - simple: No impersonation, run as daemon user
  * - insulated: Run as executor_unix_user (if configured)
- * - strict: Run as user's unix_username (requires userUnixUsername to be provided)
+ * - strict: Run as user's unix_username
  *
  * @param options - Spawn configuration
  * @returns Child process
  */
-export function spawnEnvironmentCommand(options: SpawnEnvironmentCommandOptions): ChildProcess {
-  const {
-    command,
-    cwd,
-    env,
-    unixUserMode = 'simple',
-    userUnixUsername,
-    executorUnixUser,
-    stdio = 'inherit',
-    logPrefix = '[Environment]',
-  } = options;
+export async function spawnEnvironmentCommand(
+  options: SpawnEnvironmentCommandOptions
+): Promise<ChildProcess> {
+  const { command, worktree, db, commandType = 'environment', stdio = 'inherit' } = options;
+
+  const logPrefix = `[Environment.${commandType} ${worktree.name}]`;
+
+  // Load config for Unix impersonation settings
+  const { loadConfig } = await import('../config/config-manager.js');
+  const config = await loadConfig();
+  const unixUserMode = config.execution?.unix_user_mode ?? 'simple';
+
+  // Create clean environment for user process
+  const env = await createUserProcessEnvironment(worktree.created_by, db);
 
   // Resolve impersonation user
   let asUser: string | undefined;
 
   if (unixUserMode !== 'simple') {
+    // Look up user's unix_username
+    const usersRepo = new UsersRepository(db);
+    const user = await usersRepo.findById(worktree.created_by);
+
     const impersonationResult = resolveUnixUserForImpersonation({
       mode: unixUserMode,
-      userUnixUsername: userUnixUsername ?? undefined,
-      executorUnixUser: executorUnixUser ?? undefined,
+      userUnixUsername: user?.unix_username,
+      executorUnixUser: config.execution?.executor_unix_user,
     });
 
     asUser = impersonationResult.unixUser ?? undefined;
@@ -87,7 +99,7 @@ export function spawnEnvironmentCommand(options: SpawnEnvironmentCommandOptions)
 
   // Spawn the command
   return spawn(cmd, args, {
-    cwd,
+    cwd: worktree.path,
     env: asUser ? undefined : env, // Use process env if not impersonating
     stdio,
     shell: false, // buildSpawnArgs already wraps in bash -c
