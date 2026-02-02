@@ -5,7 +5,7 @@
  * Uses DrizzleService adapter with WorktreeRepository.
  */
 
-import { type ChildProcess, spawn } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -22,6 +22,7 @@ import type {
   Worktree,
   WorktreeID,
 } from '@agor/core/types';
+import { spawnEnvironmentCommand } from '@agor/core/unix';
 import { getNextRunTime, validateCron } from '@agor/core/utils/cron';
 import { DrizzleService } from '../adapters/drizzle';
 import { getDaemonUrl, spawnExecutor } from '../utils/spawn-executor.js';
@@ -636,17 +637,30 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       // Create clean environment for user process (filters Agor-internal vars like NODE_ENV)
       const env = await createUserProcessEnvironment(worktree.created_by, this.db);
 
+      // Load config for Unix impersonation settings
+      const { loadConfig } = await import('@agor/core/config');
+      const config = await loadConfig();
+
+      // Look up user's unix_username for impersonation
+      const { UsersRepository } = await import('@agor/core/db');
+      const usersRepo = new UsersRepository(this.db);
+      const user = await usersRepo.findById(worktree.created_by);
+
       // Execute command and wait for it to complete
       // The command should start services and return (e.g., docker-compose up -d)
       await new Promise<void>((resolve, reject) => {
-        const childProcess = spawn(command, {
+        const childProcess = spawnEnvironmentCommand({
+          command,
           cwd: worktree.path,
-          shell: true,
-          stdio: 'inherit', // Show output directly in daemon logs
-          env, // Pass clean environment without Agor-internal variables
+          env,
+          unixUserMode: config.execution?.unix_user_mode,
+          userUnixUsername: user?.unix_username,
+          executorUnixUser: config.execution?.executor_unix_user,
+          stdio: 'inherit',
+          logPrefix: `[Environment.start ${worktree.name}]`,
         });
 
-        childProcess.on('exit', (code) => {
+        childProcess.on('exit', (code: number | null) => {
           if (code === 0) {
             console.log(`✅ Start command completed successfully for ${worktree.name}`);
             resolve();
@@ -655,7 +669,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
           }
         });
 
-        childProcess.on('error', reject);
+        childProcess.on('error', (error: Error) => reject(error));
       });
 
       // Use static app_url (initialized from template at worktree creation)
@@ -720,16 +734,29 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
         // Create clean environment for user process (filters Agor-internal vars like NODE_ENV)
         const env = await createUserProcessEnvironment(worktree.created_by, this.db);
 
+        // Load config for Unix impersonation settings
+        const { loadConfig } = await import('@agor/core/config');
+        const config = await loadConfig();
+
+        // Look up user's unix_username for impersonation
+        const { UsersRepository } = await import('@agor/core/db');
+        const usersRepo = new UsersRepository(this.db);
+        const user = await usersRepo.findById(worktree.created_by);
+
         // Execute down command
         await new Promise<void>((resolve, reject) => {
-          const stopProcess = spawn(command, {
+          const stopProcess = spawnEnvironmentCommand({
+            command,
             cwd: worktree.path,
-            shell: true,
+            env,
+            unixUserMode: config.execution?.unix_user_mode,
+            userUnixUsername: user?.unix_username,
+            executorUnixUser: config.execution?.executor_unix_user,
             stdio: 'inherit',
-            env, // Pass clean environment without Agor-internal variables
+            logPrefix: `[Environment.stop ${worktree.name}]`,
           });
 
-          stopProcess.on('exit', (code) => {
+          stopProcess.on('exit', (code: number | null) => {
             if (code === 0) {
               resolve();
             } else {
@@ -737,7 +764,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
             }
           });
 
-          stopProcess.on('error', reject);
+          stopProcess.on('error', (error: Error) => reject(error));
         });
       } else {
         // No down command - kill the managed process if we have it
@@ -837,16 +864,29 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       // Create clean environment for user process (filters Agor-internal vars like NODE_ENV)
       const env = await createUserProcessEnvironment(worktree.created_by, this.db);
 
+      // Load config for Unix impersonation settings
+      const { loadConfig } = await import('@agor/core/config');
+      const config = await loadConfig();
+
+      // Look up user's unix_username for impersonation
+      const { UsersRepository } = await import('@agor/core/db');
+      const usersRepo = new UsersRepository(this.db);
+      const user = await usersRepo.findById(worktree.created_by);
+
       // Execute nuke command
       await new Promise<void>((resolve, reject) => {
-        const nukeProcess = spawn(command, {
+        const nukeProcess = spawnEnvironmentCommand({
+          command,
           cwd: worktree.path,
-          shell: true,
+          env,
+          unixUserMode: config.execution?.unix_user_mode,
+          userUnixUsername: user?.unix_username,
+          executorUnixUser: config.execution?.executor_unix_user,
           stdio: 'inherit',
-          env, // Pass clean environment without Agor-internal variables
+          logPrefix: `[Environment.nuke ${worktree.name}]`,
         });
 
-        nukeProcess.on('exit', (code) => {
+        nukeProcess.on('exit', (code: number | null) => {
           if (code === 0) {
             resolve();
           } else {
@@ -854,7 +894,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
           }
         });
 
-        nukeProcess.on('error', reject);
+        nukeProcess.on('error', (error: Error) => reject(error));
       });
 
       // Clean up any managed process references
@@ -1052,16 +1092,30 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       // Create clean environment for user process (filters Agor-internal vars like NODE_ENV)
       const env = await createUserProcessEnvironment(worktree.created_by, this.db);
 
+      // Load config for Unix impersonation settings
+      const { loadConfig } = await import('@agor/core/config');
+      const config = await loadConfig();
+
+      // Look up user's unix_username for impersonation
+      const { UsersRepository } = await import('@agor/core/db');
+      const usersRepo = new UsersRepository(this.db);
+      const user = await usersRepo.findById(worktree.created_by);
+
       // Execute command with timeout and output limits
       const result = await new Promise<{
         stdout: string;
         stderr: string;
         truncated: boolean;
       }>((resolve, reject) => {
-        const childProcess = spawn(command, {
+        const childProcess = spawnEnvironmentCommand({
+          command,
           cwd: worktree.path,
-          shell: true,
-          env, // Pass clean environment without Agor-internal variables
+          env,
+          unixUserMode: config.execution?.unix_user_mode,
+          userUnixUsername: user?.unix_username,
+          executorUnixUser: config.execution?.executor_unix_user,
+          stdio: 'pipe', // Need to capture output for logs
+          logPrefix: `[Environment.logs ${worktree.name}]`,
         });
 
         let stdout = '';
@@ -1092,7 +1146,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
           stderr += data.toString();
         });
 
-        childProcess.on('exit', (code) => {
+        childProcess.on('exit', (code: number | null) => {
           clearTimeout(timeout);
           if (code === 0 || stdout.length > 0) {
             resolve({ stdout, stderr, truncated });
@@ -1101,7 +1155,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
           }
         });
 
-        childProcess.on('error', (error) => {
+        childProcess.on('error', (error: Error) => {
           clearTimeout(timeout);
           reject(error);
         });

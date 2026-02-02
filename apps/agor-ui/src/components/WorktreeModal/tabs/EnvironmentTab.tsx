@@ -298,6 +298,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
         unique_id: worktree.worktree_unique_id,
         name: worktree.name,
         path: worktree.path,
+        gid: (worktree as { data?: { unix_gid?: number } }).data?.unix_gid,
       },
       repo: {
         slug: repo.slug,
