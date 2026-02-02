@@ -386,14 +386,14 @@ MCP server configurations support Handlebars templates for user-scoped credentia
 
 **Templatable Fields:**
 
-| Field | Description |
-|-------|-------------|
-| `url` | Server URL (for HTTP/SSE transport) |
-| `env.*` | Environment variable values |
-| `auth.token` | Bearer token |
-| `auth.api_url` | JWT API URL |
-| `auth.api_token` | JWT API token |
-| `auth.api_secret` | JWT API secret |
+| Field             | Description                         |
+| ----------------- | ----------------------------------- |
+| `url`             | Server URL (for HTTP/SSE transport) |
+| `env.*`           | Environment variable values         |
+| `auth.token`      | Bearer token                        |
+| `auth.api_url`    | JWT API URL                         |
+| `auth.api_token`  | JWT API token                       |
+| `auth.api_secret` | JWT API secret                      |
 
 **Example:**
 
@@ -414,11 +414,12 @@ MCP server configurations support Handlebars templates for user-scoped credentia
 
 **Template Context:**
 
-| Variable | Description |
-|----------|-------------|
+| Variable     | Description                                                                    |
+| ------------ | ------------------------------------------------------------------------------ |
 | `user.env.*` | User's environment variables (set in Settings → Users → Environment Variables) |
 
 The context is intentionally minimal (only `user.env.*`) for security:
+
 - MCP configs can be global-scoped (shared across users)
 - Exposing worktree/session context could leak info across user boundaries
 - The primary use case is credential injection, not dynamic configuration
@@ -434,6 +435,7 @@ The context is intentionally minimal (only `user.env.*`) for security:
 **Missing Variables:**
 
 If a template references an env var the user hasn't set:
+
 - The value resolves to empty string
 - A warning is logged: `MCP env "GITHUB_TOKEN" resolved to empty`
 - The MCP server may fail to authenticate (expected behavior)

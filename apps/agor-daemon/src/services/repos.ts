@@ -15,6 +15,7 @@ import {
   extractSlugFromUrl,
   isValidGitUrl,
   isValidSlug,
+  isWorktreeRbacEnabled,
   PAGINATION,
   parseAgorYml,
   resolveUserEnvironment,
@@ -24,7 +25,6 @@ import { type Database, RepoRepository, WorktreeRepository } from '@agor/core/db
 import { autoAssignWorktreeUniqueId } from '@agor/core/environment/variable-resolver';
 import type { Application } from '@agor/core/feathers';
 import { getDefaultBranch, getRemoteUrl, getWorktreePath, isValidGitRepo } from '@agor/core/git';
-import { renderTemplate } from '@agor/core/templates/handlebars-helpers';
 import type {
   AuthenticatedParams,
   QueryParams,
@@ -333,61 +333,18 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     ) as Worktree[];
 
     const worktreeUniqueId = autoAssignWorktreeUniqueId(existingWorktrees);
-    let start_command: string | undefined;
-    let stop_command: string | undefined;
-    let nuke_command: string | undefined;
-    let health_check_url: string | undefined;
-    let app_url: string | undefined;
-    let logs_command: string | undefined;
 
-    if (repo.environment_config) {
-      const templateContext = {
-        worktree: {
-          unique_id: worktreeUniqueId,
-          name: data.name,
-          path: worktreePath,
-        },
-        repo: {
-          slug: repo.slug,
-        },
-        custom: {},
-      };
-
-      const safeRenderTemplate = (template: string, fieldName: string): string | undefined => {
-        try {
-          return renderTemplate(template, templateContext);
-        } catch (err) {
-          console.warn(`Failed to render ${fieldName} for ${data.name}:`, err);
-          return undefined;
-        }
-      };
-      start_command = repo.environment_config.up_command
-        ? safeRenderTemplate(repo.environment_config.up_command, 'start_command')
-        : undefined;
-
-      stop_command = repo.environment_config.down_command
-        ? safeRenderTemplate(repo.environment_config.down_command, 'stop_command')
-        : undefined;
-
-      nuke_command = repo.environment_config.nuke_command
-        ? safeRenderTemplate(repo.environment_config.nuke_command, 'nuke_command')
-        : undefined;
-
-      health_check_url = repo.environment_config.health_check?.url_template
-        ? safeRenderTemplate(repo.environment_config.health_check.url_template, 'health_check_url')
-        : undefined;
-
-      app_url = repo.environment_config.app_url_template
-        ? safeRenderTemplate(repo.environment_config.app_url_template, 'app_url')
-        : undefined;
-
-      logs_command = repo.environment_config.logs_command
-        ? safeRenderTemplate(repo.environment_config.logs_command, 'logs_command')
-        : undefined;
-    }
+    // NOTE: Environment command templates (start_command, stop_command, etc.) are NOT
+    // rendered here. They will be rendered by the executor after Unix groups are created
+    // and GID is available, ensuring {{worktree.gid}} is populated in templates.
+    // See: packages/executor/src/commands/git.ts:renderEnvironmentTemplates()
 
     // Create DB record EARLY with 'creating' status
-    // Executor will patch to 'ready' when git worktree add completes
+    // Executor will:
+    // 1. Create git worktree on filesystem
+    // 2. Initialize Unix groups (if RBAC enabled)
+    // 3. Render environment templates with full context including GID
+    // 4. Patch worktree to 'ready' with rendered templates
     const worktree = (await worktreesService.create(
       {
         repo_id: repo.repo_id,
@@ -399,12 +356,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         new_branch: data.createBranch ?? false,
         worktree_unique_id: worktreeUniqueId,
         filesystem_status: 'creating', // Will be set to 'ready' by executor
-        start_command,
-        stop_command,
-        nuke_command,
-        health_check_url,
-        app_url,
-        logs_command,
+        // Environment templates will be rendered by executor after Unix group creation
         sessions: [],
         last_used: new Date().toISOString(),
         issue_url: data.issue_url,
@@ -416,10 +368,23 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     )) as Worktree;
 
     // Add creating user as owner of the worktree
+    let creatorUnixUsername: string | undefined;
     if (userId) {
       const worktreeRepo = new WorktreeRepository(this.db);
       await worktreeRepo.addOwner(worktree.worktree_id, userId);
       console.log(`✓ Added user ${userId.substring(0, 8)} as owner of worktree ${worktree.name}`);
+
+      // Fetch creator's Unix username for group assignment
+      try {
+        const usersService = this.app.service('users');
+        const creator = await usersService.get(userId);
+        creatorUnixUsername = creator.unix_username || undefined;
+        if (creatorUnixUsername) {
+          console.log(`✓ Creator Unix username: ${creatorUnixUsername}`);
+        }
+      } catch (_error) {
+        console.warn(`⚠️  Could not fetch Unix username for user ${userId.substring(0, 8)}`);
+      }
     }
 
     if (data.boardId) {
@@ -454,6 +419,11 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         userId || 'anonymous'
       );
 
+      // Check if Unix group isolation should be initialized
+      const rbacEnabled = isWorktreeRbacEnabled();
+      const { getDaemonUser } = await import('@agor/core/config');
+      const daemonUser = getDaemonUser();
+
       spawnExecutorFireAndForget(
         {
           command: 'git.worktree.add',
@@ -469,6 +439,12 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             branch: data.ref,
             sourceBranch: data.sourceBranch,
             createBranch: data.createBranch,
+            // Unix group isolation (only when RBAC is enabled)
+            initUnixGroup: rbacEnabled,
+            othersAccess: worktree.others_fs_access || 'read', // Default to read access
+            daemonUser,
+            repoUnixGroup: repo.unix_group,
+            creatorUnixUsername, // Creator will be added to worktree group
           },
         },
         { logPrefix: `[ReposService.createWorktree ${data.name}]` }

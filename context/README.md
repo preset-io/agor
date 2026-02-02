@@ -66,6 +66,7 @@ Development standards and best practices:
 Experimental ideas and designs not yet crystallized into concepts. These represent active thinking and may graduate to `concepts/` when ready:
 
 **Executor Isolation (Active)**
+
 - **[executor-isolation.md](explorations/executor-isolation.md)** - Daemon/executor process separation for security
 - **[executor-feathers-architecture.md](explorations/executor-feathers-architecture.md)** - Refactoring from IPC to WebSocket communication
 - **[executor-implementation-plan.md](explorations/executor-implementation-plan.md)** - Phased implementation plan
@@ -74,12 +75,15 @@ Experimental ideas and designs not yet crystallized into concepts. These represe
 - **[unix-user-modes.md](explorations/unix-user-modes.md)** - Progressive Unix isolation modes
 
 **Multi-Agent Orchestration**
+
 - **[parent-session-callbacks.md](explorations/parent-session-callbacks.md)** - Notifying parent sessions on child completion
 
 **UI/UX Enhancements**
+
 - **[text-highlights.md](explorations/text-highlights.md)** - Text highlighting features
 
 **Infrastructure**
+
 - **[ide-integration.md](explorations/ide-integration.md)** - Remote SSH vs code-server for IDE support
 - **[knowledge-graph.md](explorations/knowledge-graph.md)** - Knowledge graph for codebase understanding
 

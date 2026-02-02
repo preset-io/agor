@@ -12,17 +12,20 @@ The `loadSessionWorktree` authorization hook requires `session_id` to check RBAC
 `loadSessionWorktree` is used in **11 different hook configurations**:
 
 ### Messages Service
+
 - `messages.get` - ✅ Uses `context.id` (message_id), can load session_id from existing record
 - `messages.create` - ✅ Requires `session_id` in data
 - `messages.patch` - ⚠️ **VULNERABLE** - session_id not always in patch data
 - `messages.remove` - ⚠️ **VULNERABLE** - session_id not in params
 
 ### Sessions Service
+
 - `sessions.get` - ✅ Uses `context.id` directly as session_id
 - `sessions.patch` - ✅ Uses `context.id` directly as session_id
 - `sessions.remove` - ✅ Uses `context.id` directly as session_id
 
 ### Tasks Service
+
 - `tasks.get` - ✅ Uses `context.id` (task_id), can load session_id from existing record
 - `tasks.create` - ✅ Requires `session_id` in data
 - `tasks.patch` - ⚠️ **VULNERABLE** - session_id not in patch data (CONFIRMED BUG)
@@ -31,9 +34,11 @@ The `loadSessionWorktree` authorization hook requires `session_id` to check RBAC
 ## Patch Call Patterns
 
 ### Executor (Internal) - Tasks
+
 **All vulnerable** - none pass session_id:
 
 1. **Base executor success** (`packages/executor/src/handlers/sdk/base-executor.ts:362`)
+
    ```typescript
    await client.service('tasks').patch(taskId, {
      status: 'completed',
@@ -43,6 +48,7 @@ The `loadSessionWorktree` authorization hook requires `session_id` to check RBAC
    ```
 
 2. **Base executor failure** (`packages/executor/src/handlers/sdk/base-executor.ts:401`)
+
    ```typescript
    await client.service('tasks').patch(taskId, {
      status: 'failed',
@@ -52,11 +58,12 @@ The `loadSessionWorktree` authorization hook requires `session_id` to check RBAC
    ```
 
 3. **OpenCode completion** (`packages/executor/src/handlers/sdk/opencode.ts:144`)
+
    ```typescript
    await client.service('tasks').patch(taskId, {
      status: 'completed',
      completed_at: '...',
-     model: '...'
+     model: '...',
    });
    ```
 
@@ -64,13 +71,15 @@ The `loadSessionWorktree` authorization hook requires `session_id` to check RBAC
    - All patch without session_id
 
 ### Daemon Internal - Tasks
+
 **All vulnerable** - internal calls from hooks:
 
 1. **Stop handler forced stop** (`apps/agor-daemon/src/services/sessions/hooks/handle-stop.ts:115`)
+
    ```typescript
    await app.service('tasks').patch(taskId, {
      status: TaskStatus.STOPPED,
-     completed_at: '...'
+     completed_at: '...',
    });
    ```
 
@@ -78,6 +87,7 @@ The `loadSessionWorktree` authorization hook requires `session_id` to check RBAC
    - Same pattern
 
 ### Daemon Internal - Sessions
+
 **All safe** - internal calls use `provider: undefined` or include all context:
 
 1. **Task completion** (`apps/agor-daemon/src/services/tasks.ts:118, 163, 394`)
@@ -86,7 +96,9 @@ The `loadSessionWorktree` authorization hook requires `session_id` to check RBAC
 4. **OpenCode session ID** (`packages/executor/src/handlers/sdk/opencode.ts:90`)
 
 ### Frontend - All Safe
+
 Frontend calls typically:
+
 - Update worktrees/boards (not subject to loadSessionWorktree)
 - Update sessions by ID (session_id = context.id, always works)
 - Config updates (no RBAC)
@@ -104,15 +116,17 @@ Frontend calls typically:
 ### Why Sessions Work
 
 Sessions service patches work because:
+
 ```typescript
 if (context.path === 'sessions') {
-  sessionId = context.id as string;  // ✅ Direct mapping
+  sessionId = context.id as string; // ✅ Direct mapping
 }
 ```
 
 ### Why Tasks/Messages Don't Work
 
 Tasks/Messages need to look up session_id:
+
 ```typescript
 else {
   // For tasks/messages, session_id should be in data/query
@@ -125,11 +139,13 @@ else {
 ### Option 1: Require session_id in All Patches (Frontend/Executor)
 
 **Pros:**
+
 - Explicit context passing
 - No extra DB queries
 - Clear contract
 
 **Cons:**
+
 - Requires updating ~10+ call sites
 - Frontend doesn't always have session_id readily available
 - Executor would need to pass redundant data (already knows task_id)
@@ -138,6 +154,7 @@ else {
 ### Option 2: Load Existing Record When Needed (Current Fix)
 
 **Pros:**
+
 - ✅ Backwards compatible
 - ✅ Works with existing call sites
 - ✅ Centralized in one hook
@@ -145,6 +162,7 @@ else {
 - Minimal performance impact (only 1 extra query per patch when needed)
 
 **Cons:**
+
 - Extra DB query for patch/remove operations
 - Slightly more complex hook logic
 - Could theoretically bypass if record deleted between get/patch (extremely rare)
@@ -154,10 +172,12 @@ else {
 **Idea**: Load task/message in a separate hook BEFORE loadSessionWorktree, cache on context.
 
 **Pros:**
+
 - Explicit record loading
 - Could be reused by other hooks
 
 **Cons:**
+
 - More hooks = more complexity
 - Still requires DB query
 - Harder to reason about hook order
@@ -169,9 +189,11 @@ else {
 **Issue**: Executor uses `provider: 'rest'` so it goes through hooks for auditing/consistency.
 
 **Pros:**
+
 - No changes needed if executor bypassed hooks
 
 **Cons:**
+
 - ❌ Loses audit trail
 - ❌ Loses consistency checks
 - ❌ Executor should respect RBAC like any other client
@@ -197,6 +219,7 @@ if (!sessionId && (context.method === 'patch' || context.method === 'remove')) {
 ```
 
 **Why this works:**
+
 1. ✅ For tasks: Already implemented and working
 2. ✅ For messages: Same pattern, will work identically
 3. ✅ For sessions: Not needed (session_id = context.id)
@@ -228,16 +251,19 @@ if (!sessionId && (context.method === 'patch' || context.method === 'remove')) {
 ## Testing Strategy
 
 ### Unit Tests
+
 - Mock service.get() in hook
 - Verify session_id extracted correctly
 - Test error handling when get() fails
 
 ### Integration Tests
+
 - Create task → patch without session_id → verify no error
 - Create message → patch without session_id → verify no error
 - Create message → delete → verify no error
 
 ### Manual Testing
+
 - ✅ Create session as Alice
 - ✅ Run executor to completion
 - Test message updates through frontend

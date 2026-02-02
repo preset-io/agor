@@ -7,54 +7,84 @@ echo "🚀 Starting Agor development environment..."
 # No pnpm install needed at runtime - this is the key to fast startups!
 echo "✅ Using pre-built dependencies from Docker image"
 
-# Fix permissions for build output directories only (not the entire /app tree!)
-# The bind mount (.:/app) is read-only for most files - we only need write access to dist/
-echo "🔧 Ensuring write access to build output directories..."
-sudo chown -R agor:agor /app/packages/*/dist /app/apps/*/dist 2>/dev/null || true
-echo "✅ Build directories writable"
+# Fix home directory permissions (volumes may have wrong UID/GID from previous builds)
+echo "🔧 Fixing home directory permissions..."
+mkdir -p /home/agor/.agor /home/agor/.cache
+sudo chown -R agor:agor /home/agor 2>/dev/null || true
 
-# Skip husky in Docker (git hooks run on host, not in container)
-# Also avoids "fatal: not a git repository" error with worktrees where .git is a file, not a directory
-# If you need hooks in the container, run `pnpm husky install` manually after startup
-echo "⏭️  Skipping husky install (git hooks run on host, not in container)"
+# Setup agor_executor home (for Unix isolation when executor_unix_user is configured)
+sudo mkdir -p /home/agor_executor/.cache /home/agor_executor/.agor
+sudo chown -R agor_executor:agor_executor /home/agor_executor 2>/dev/null || true
+echo "✅ Home directory permissions fixed"
 
-# Start @agor/core in watch mode FIRST (for hot-reload during development)
-# We start this early and wait for initial build before running CLI commands
-echo "🔄 Starting @agor/core watch mode..."
+# Fix build directory permissions (clean stale dist files with wrong ownership)
+echo "🔧 Ensuring write access for build tools..."
+if sudo -n true 2>/dev/null; then
+  # Clean and recreate dist directories with correct ownership
+  # This prevents EACCES errors when tsup tries to unlink old files
+  sudo -n rm -rf /app/packages/*/dist /app/apps/*/dist 2>/dev/null || true
+  sudo -n mkdir -p /app/packages/core/dist /app/packages/executor/dist /app/apps/agor-daemon/dist /app/apps/agor-cli/dist /app/apps/agor-ui/dist
+
+  # Chown all package/app directories (non-recursive for speed)
+  sudo -n chown agor:agor /app/packages/* /app/apps/* 2>/dev/null || true
+
+  # Chown dist directories recursively (in case they have nested files)
+  sudo -n chown -R agor:agor /app/packages/*/dist /app/apps/*/dist
+
+  echo "✅ Build directories ready"
+else
+  # Fallback: try without sudo (might work depending on host permissions)
+  rm -rf /app/packages/*/dist /app/apps/*/dist 2>/dev/null || true
+  mkdir -p /app/packages/*/dist /app/apps/*/dist 2>/dev/null || true
+  echo "⚠️  Build directories created (sudo not available, may have permission issues)"
+fi
+
+# Skip husky (git hooks run on host, not in container)
+echo "⏭️  Skipping husky install"
+
+# Build packages sequentially with blocking builds to avoid race conditions
+echo "🔨 Building @agor/core (initial build)..."
+pnpm --filter @agor/core build
+
+# Wait for DTS files (tsup's rollup-plugin-dts runs async after main build)
+echo "⏳ Waiting for @agor/core type definitions..."
+MAX_WAIT=30
+WAITED=0
+while [ ! -f "/app/packages/core/dist/api/index.d.ts" ] || [ ! -f "/app/packages/core/dist/types/index.d.ts" ]; do
+  if [ $WAITED -ge $MAX_WAIT ]; then
+    echo "❌ Timeout waiting for type definitions!"
+    exit 1
+  fi
+  sleep 0.5
+  WAITED=$((WAITED + 1))
+done
+echo "✅ @agor/core initial build complete (including type definitions)"
+
+echo "🔨 Building @agor/executor (initial build)..."
+pnpm --filter @agor/executor build
+
+echo "⏳ Waiting for @agor/executor type definitions..."
+MAX_WAIT=30
+WAITED=0
+while [ ! -f "/app/packages/executor/dist/index.d.ts" ]; do
+  if [ $WAITED -ge $MAX_WAIT ]; then
+    echo "❌ Timeout waiting for executor type definitions!"
+    exit 1
+  fi
+  sleep 0.5
+  WAITED=$((WAITED + 1))
+done
+echo "✅ @agor/executor initial build complete (including type definitions)"
+
+# Start watch modes for hot-reload
+echo "🔄 Starting watch modes..."
 pnpm --filter @agor/core dev &
 CORE_PID=$!
 
-# Wait for initial watch build to complete
-# tsup --watch does a full build on startup, then watches for changes
-# IMPORTANT: Wait for .d.ts files too, not just .js files (needed for TypeScript packages)
-echo "⏳ Waiting for @agor/core initial build..."
-while [ ! -f "/app/packages/core/dist/index.js" ] || [ ! -f "/app/packages/core/dist/utils/logger.js" ] || [ ! -f "/app/packages/core/dist/index.d.ts" ]; do
-  sleep 0.1
-done
-echo "⏳ Waiting for @agor/core type definitions..."
-# Wait for critical type definitions including database types (needed for migrations)
-while [ ! -f "/app/packages/core/dist/api/index.d.ts" ] || [ ! -f "/app/packages/core/dist/db/index.d.ts" ]; do
-  sleep 0.1
-done
-echo "✅ @agor/core build ready"
-
-# Start @agor/executor in watch mode (for hot-reload during development)
-# Like core, we need an initial build before the daemon can spawn executors
-echo "🔄 Starting @agor/executor watch mode..."
 pnpm --filter @agor/executor dev &
 EXECUTOR_PID=$!
 
-# Wait for initial executor build to complete
-echo "⏳ Waiting for @agor/executor initial build..."
-while [ ! -f "/app/packages/executor/dist/index.js" ] || [ ! -f "/app/packages/executor/dist/cli.js" ]; do
-  sleep 0.1
-done
-echo "✅ @agor/executor build ready (watching for changes)"
-
-# Fix volume permissions (volumes may be created with wrong ownership)
-# Only chown .agor directory (not .ssh which is mounted read-only)
-mkdir -p /home/agor/.agor
-sudo chown -R agor:agor /home/agor/.agor
+echo "✅ Watch modes started (core and executor will rebuild on file changes)"
 
 # Initialize database and configure daemon settings for Docker
 # (idempotent: creates database on first run, preserves JWT secrets on subsequent runs)

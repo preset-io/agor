@@ -5,11 +5,11 @@
  * Uses DrizzleService adapter with WorktreeRepository.
  */
 
-import { type ChildProcess, spawn } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { createUserProcessEnvironment, ENVIRONMENT, PAGINATION } from '@agor/core/config';
+import { ENVIRONMENT, PAGINATION } from '@agor/core/config';
 import { type Database, WorktreeRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type {
@@ -22,6 +22,7 @@ import type {
   Worktree,
   WorktreeID,
 } from '@agor/core/types';
+import { spawnEnvironmentCommand } from '@agor/core/unix';
 import { getNextRunTime, validateCron } from '@agor/core/utils/cron';
 import { DrizzleService } from '../adapters/drizzle';
 import { getDaemonUrl, spawnExecutor } from '../utils/spawn-executor.js';
@@ -633,20 +634,17 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       );
       await mkdir(dirname(logPath), { recursive: true });
 
-      // Create clean environment for user process (filters Agor-internal vars like NODE_ENV)
-      const env = await createUserProcessEnvironment(worktree.created_by, this.db);
-
       // Execute command and wait for it to complete
       // The command should start services and return (e.g., docker-compose up -d)
-      await new Promise<void>((resolve, reject) => {
-        const childProcess = spawn(command, {
-          cwd: worktree.path,
-          shell: true,
-          stdio: 'inherit', // Show output directly in daemon logs
-          env, // Pass clean environment without Agor-internal variables
-        });
+      const childProcess = await spawnEnvironmentCommand({
+        command,
+        worktree,
+        db: this.db,
+        commandType: 'start',
+      });
 
-        childProcess.on('exit', (code) => {
+      await new Promise<void>((resolve, reject) => {
+        childProcess.on('exit', (code: number | null) => {
           if (code === 0) {
             console.log(`✅ Start command completed successfully for ${worktree.name}`);
             resolve();
@@ -655,7 +653,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
           }
         });
 
-        childProcess.on('error', reject);
+        childProcess.on('error', (error: Error) => reject(error));
       });
 
       // Use static app_url (initialized from template at worktree creation)
@@ -717,19 +715,16 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
 
         console.log(`🛑 Stopping environment for worktree ${worktree.name}: ${command}`);
 
-        // Create clean environment for user process (filters Agor-internal vars like NODE_ENV)
-        const env = await createUserProcessEnvironment(worktree.created_by, this.db);
-
         // Execute down command
-        await new Promise<void>((resolve, reject) => {
-          const stopProcess = spawn(command, {
-            cwd: worktree.path,
-            shell: true,
-            stdio: 'inherit',
-            env, // Pass clean environment without Agor-internal variables
-          });
+        const stopProcess = await spawnEnvironmentCommand({
+          command,
+          worktree,
+          db: this.db,
+          commandType: 'stop',
+        });
 
-          stopProcess.on('exit', (code) => {
+        await new Promise<void>((resolve, reject) => {
+          stopProcess.on('exit', (code: number | null) => {
             if (code === 0) {
               resolve();
             } else {
@@ -737,7 +732,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
             }
           });
 
-          stopProcess.on('error', reject);
+          stopProcess.on('error', (error: Error) => reject(error));
         });
       } else {
         // No down command - kill the managed process if we have it
@@ -834,19 +829,16 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       console.log(`💣 NUKING environment for worktree ${worktree.name}: ${command}`);
       console.warn('⚠️  This is a destructive operation!');
 
-      // Create clean environment for user process (filters Agor-internal vars like NODE_ENV)
-      const env = await createUserProcessEnvironment(worktree.created_by, this.db);
-
       // Execute nuke command
-      await new Promise<void>((resolve, reject) => {
-        const nukeProcess = spawn(command, {
-          cwd: worktree.path,
-          shell: true,
-          stdio: 'inherit',
-          env, // Pass clean environment without Agor-internal variables
-        });
+      const nukeProcess = await spawnEnvironmentCommand({
+        command,
+        worktree,
+        db: this.db,
+        commandType: 'nuke',
+      });
 
-        nukeProcess.on('exit', (code) => {
+      await new Promise<void>((resolve, reject) => {
+        nukeProcess.on('exit', (code: number | null) => {
           if (code === 0) {
             resolve();
           } else {
@@ -854,7 +846,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
           }
         });
 
-        nukeProcess.on('error', reject);
+        nukeProcess.on('error', (error: Error) => reject(error));
       });
 
       // Clean up any managed process references
@@ -1049,21 +1041,20 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
 
       console.log(`📋 Fetching logs for worktree ${worktree.name}: ${command}`);
 
-      // Create clean environment for user process (filters Agor-internal vars like NODE_ENV)
-      const env = await createUserProcessEnvironment(worktree.created_by, this.db);
-
       // Execute command with timeout and output limits
+      const childProcess = await spawnEnvironmentCommand({
+        command,
+        worktree,
+        db: this.db,
+        commandType: 'logs',
+        stdio: 'pipe', // Need to capture output for logs
+      });
+
       const result = await new Promise<{
         stdout: string;
         stderr: string;
         truncated: boolean;
       }>((resolve, reject) => {
-        const childProcess = spawn(command, {
-          cwd: worktree.path,
-          shell: true,
-          env, // Pass clean environment without Agor-internal variables
-        });
-
         let stdout = '';
         let stderr = '';
         let truncated = false;
@@ -1092,7 +1083,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
           stderr += data.toString();
         });
 
-        childProcess.on('exit', (code) => {
+        childProcess.on('exit', (code: number | null) => {
           clearTimeout(timeout);
           if (code === 0 || stdout.length > 0) {
             resolve({ stdout, stderr, truncated });
@@ -1101,7 +1092,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
           }
         });
 
-        childProcess.on('error', (error) => {
+        childProcess.on('error', (error: Error) => {
           clearTimeout(timeout);
           reject(error);
         });

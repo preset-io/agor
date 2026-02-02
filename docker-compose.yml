@@ -80,6 +80,12 @@ services:
       context: .
       dockerfile: docker/Dockerfile
       target: development
+      args:
+        UID: ${UID:-1000}
+        GID: ${GID:-1000}
+    # Ensure we run as the 'agor' user (defined in Dockerfile)
+    # This is critical for sudo access and permission handling in entrypoint
+    user: agor
     # No container_name - allows multiple instances via docker compose -p flag
     ports:
       # Expose daemon port (so browser can connect) - configurable via DAEMON_PORT

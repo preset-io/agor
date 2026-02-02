@@ -138,6 +138,7 @@ agor ALL=(ALL) NOPASSWD: /usr/bin/test *
 4. **Defense in depth** - App layer validates before sudo, OS layer enforces after
 
 **Customization:**
+
 - Replace `agor` with your daemon username if different (e.g., `agorpg` for PostgreSQL deployments)
 - The file is well-commented; read through it before deploying
 
@@ -149,7 +150,7 @@ Enable the worktree RBAC feature flag:
 # ~/.agor/config.yaml
 execution:
   worktree_rbac: true
-  unix_user_mode: full  # Options: simple, full
+  unix_user_mode: full # Options: simple, full
 ```
 
 ### 5. Observability Setup
@@ -165,7 +166,7 @@ logging:
 
 metrics:
   enabled: true
-  port: 9090  # Prometheus metrics endpoint
+  port: 9090 # Prometheus metrics endpoint
 ```
 
 ---
@@ -190,11 +191,11 @@ Each worktree gets:
 
 ### Permission Levels
 
-| Level | Can View | Can Prompt | Can Modify Settings |
-|-------|----------|------------|---------------------|
-| view | Yes | No | No |
-| prompt | Yes | Yes | No |
-| all | Yes | Yes | Yes |
+| Level  | Can View | Can Prompt | Can Modify Settings |
+| ------ | -------- | ---------- | ------------------- |
+| view   | Yes      | No         | No                  |
+| prompt | Yes      | Yes        | No                  |
+| all    | Yes      | Yes        | Yes                 |
 
 ---
 
@@ -203,6 +204,7 @@ Each worktree gets:
 ### Daemon Can't Create Users
 
 Check sudoers configuration:
+
 ```bash
 sudo -l -U agor
 ```
@@ -210,6 +212,7 @@ sudo -l -U agor
 ### Permission Denied on Worktree
 
 Verify group membership:
+
 ```bash
 id username
 ls -la /path/to/worktree
@@ -218,6 +221,7 @@ ls -la /path/to/worktree
 ### Session Fails to Start
 
 Check if user is in `agor_users` group:
+
 ```bash
 getent group agor_users
 ```

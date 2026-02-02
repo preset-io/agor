@@ -5,7 +5,7 @@
  */
 
 import type { UUID, Worktree, WorktreeID } from '@agor/core/types';
-import { and, eq, inArray, like, sql } from 'drizzle-orm';
+import { and, eq, getTableColumns, inArray, isNotNull, like, or, sql } from 'drizzle-orm';
 import { formatShortId, generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
@@ -94,8 +94,8 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
       archived_at: worktree.archived_at ? new Date(worktree.archived_at) : null,
       archived_by: worktree.archived_by ?? null,
       filesystem_status: worktree.filesystem_status ?? null,
-      // RBAC fields (explicit null to ensure they're included in updates)
-      others_can: worktree.others_can ?? null,
+      // RBAC fields (default 'view' for others_can matches schema default)
+      others_can: worktree.others_can ?? 'view',
       others_fs_access: worktree.others_fs_access ?? null,
       unix_group: worktree.unix_group ?? null,
       data: {
@@ -387,5 +387,39 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
     }
 
     return ownersByWorktree;
+  }
+
+  /**
+   * Find all worktrees accessible to a user (optimized RBAC query)
+   *
+   * Uses LEFT JOIN to check ownership in one query instead of N+1.
+   * Returns worktrees where user is an owner OR others_can allows at least 'view' access.
+   *
+   * NOTE: This method should only be called when RBAC is enabled. When RBAC is disabled,
+   * the scopeWorktreeQuery hook is not registered, so default Feathers query is used
+   * (which returns all worktrees without filtering).
+   *
+   * @param userId - User ID to check access for
+   * @returns Array of accessible worktrees
+   */
+  async findAccessibleWorktrees(userId: UUID): Promise<Worktree[]> {
+    const rows = await select(this.db, getTableColumns(worktrees))
+      .from(worktrees)
+      .leftJoin(
+        worktreeOwners,
+        and(
+          eq(worktreeOwners.worktree_id, worktrees.worktree_id),
+          eq(worktreeOwners.user_id, userId)
+        )
+      )
+      .where(
+        or(
+          isNotNull(worktreeOwners.user_id),
+          inArray(worktrees.others_can, ['view', 'prompt', 'all'])
+        )
+      )
+      .all();
+
+    return rows.map((row: WorktreeRow) => this.rowToWorktree(row));
   }
 }

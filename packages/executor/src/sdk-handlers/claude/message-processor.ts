@@ -131,7 +131,17 @@ export interface ProcessorOptions {
   existingSdkSessionId?: string;
   enableTokenStreaming?: boolean;
   idleTimeoutMs?: number;
+  /**
+   * Minimum chunk size in characters before emitting to prevent tiny/out-of-order chunks
+   * @default 20
+   */
+  minChunkSize?: number;
 }
+
+/**
+ * Streaming chunk configuration
+ */
+const DEFAULT_MIN_CHUNK_SIZE = 20; // Accumulate at least 20 chars before emitting
 
 /**
  * Processor state
@@ -146,6 +156,7 @@ interface ProcessorState {
   resolvedModel?: string;
   enableTokenStreaming: boolean;
   idleTimeoutMs: number;
+  minChunkSize: number;
   // Track current content blocks for tool_complete events
   contentBlockStack: Array<{
     index: number;
@@ -153,8 +164,9 @@ interface ProcessorState {
     toolUseId?: string;
     toolName?: string;
   }>;
-  // Counter for throttling tool input chunk logging
-  toolInputChunkCount: number;
+  // Text chunk accumulation buffer
+  textChunkBuffer: string;
+  textChunkBufferSize: number;
 }
 
 /**
@@ -176,8 +188,10 @@ export class SDKMessageProcessor {
       lastAssistantMessageTime: Date.now(),
       enableTokenStreaming: options.enableTokenStreaming ?? true,
       idleTimeoutMs: options.idleTimeoutMs ?? 30000, // 30s default
+      minChunkSize: options.minChunkSize ?? DEFAULT_MIN_CHUNK_SIZE,
       contentBlockStack: [],
-      toolInputChunkCount: 0,
+      textChunkBuffer: '',
+      textChunkBufferSize: 0,
     };
   }
 
@@ -191,8 +205,8 @@ export class SDKMessageProcessor {
     this.state.messageCount++;
     this.state.lastActivityTime = Date.now();
 
-    // Log message type for debugging (sample every 10th to reduce verbosity)
-    if (this.state.messageCount % 10 === 0) {
+    // Log message type for debugging (skip stream_event as it's too verbose)
+    if (this.state.messageCount % 10 === 0 && msg.type !== 'stream_event') {
       console.debug(`📨 SDK message ${this.state.messageCount}: type=${msg.type}`);
     }
 
@@ -393,7 +407,6 @@ export class SDKMessageProcessor {
       if (block?.type === 'tool_use') {
         const toolName = block.name as string;
         const toolId = block.id as string;
-        console.debug(`🔧 Tool start: ${toolName} (${toolId})`);
 
         // Track this tool use block
         this.state.contentBlockStack.push({
@@ -432,27 +445,35 @@ export class SDKMessageProcessor {
         | undefined;
       if (delta?.type === 'text_delta') {
         const textChunk = delta.text as string;
-        events.push({
-          type: 'partial',
-          textChunk,
-          agentSessionId: this.state.capturedAgentSessionId,
-          resolvedModel: this.state.resolvedModel,
-        });
+
+        // Accumulate chunk in buffer
+        this.state.textChunkBuffer += textChunk;
+        this.state.textChunkBufferSize += textChunk.length;
+
+        // Emit buffered chunk if we've reached minimum size
+        if (this.state.textChunkBufferSize >= this.state.minChunkSize) {
+          events.push({
+            type: 'partial',
+            textChunk: this.state.textChunkBuffer,
+            agentSessionId: this.state.capturedAgentSessionId,
+            resolvedModel: this.state.resolvedModel,
+          });
+
+          // Reset buffer after emitting
+          this.state.textChunkBuffer = '';
+          this.state.textChunkBufferSize = 0;
+        }
+        // Otherwise, chunk is buffered and will be emitted later
       } else if (delta?.type === 'thinking_delta') {
         const thinkingChunk = delta.thinking as string;
-        console.debug(`🧠 Thinking chunk: ${thinkingChunk.substring(0, 50)}...`);
         events.push({
           type: 'thinking_partial',
           thinkingChunk,
           agentSessionId: this.state.capturedAgentSessionId,
         });
       } else if (delta?.type === 'input_json_delta') {
-        // Tool input is being streamed - log every 10th chunk only (reduce verbosity)
+        // Tool input is being streamed (no logging - reduces noise)
         // Could emit tool_input_chunk event if we want to show tool args as they build
-        this.state.toolInputChunkCount++;
-        if (this.state.toolInputChunkCount % 10 === 0) {
-          console.debug(`🔧 Tool input chunk (${this.state.toolInputChunkCount})`);
-        }
       }
     }
 
@@ -464,14 +485,12 @@ export class SDKMessageProcessor {
       const completedBlock = this.state.contentBlockStack.find((b) => b.index === blockIndex);
 
       if (completedBlock?.type === 'tool_use') {
-        console.debug(`🏁 Tool complete: ${completedBlock.toolName} (${completedBlock.toolUseId})`);
         events.push({
           type: 'tool_complete',
           toolUseId: completedBlock.toolUseId!,
           agentSessionId: this.state.capturedAgentSessionId,
         });
       } else if (completedBlock?.type === 'thinking') {
-        console.debug(`🧠 Thinking block ${blockIndex} complete`);
         events.push({
           type: 'thinking_complete',
           agentSessionId: this.state.capturedAgentSessionId,
@@ -494,8 +513,11 @@ export class SDKMessageProcessor {
         agentSessionId: this.state.capturedAgentSessionId,
       });
 
-      // Clear content block stack for next message
+      // Clear content block stack and buffer for next message
+      // Note: Any unbuffered text will be in the complete message (safety net)
       this.state.contentBlockStack = [];
+      this.state.textChunkBuffer = '';
+      this.state.textChunkBufferSize = 0;
     }
 
     return events;

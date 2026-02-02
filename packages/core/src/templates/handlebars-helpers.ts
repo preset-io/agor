@@ -198,10 +198,11 @@ export function registerHandlebarsHelpers(): void {
  * Render a Handlebars template with given context
  *
  * Automatically registers helpers if not already registered.
+ * Never throws - returns empty string on error (with console warning).
  *
  * @param templateString - Handlebars template string
  * @param context - Template context variables
- * @returns Rendered string
+ * @returns Rendered string, or empty string if rendering fails
  */
 export function renderTemplate(templateString: string, context: Record<string, unknown>): string {
   try {
@@ -209,7 +210,9 @@ export function renderTemplate(templateString: string, context: Record<string, u
     return template(context);
   } catch (error) {
     console.error('❌ Handlebars template error:', error);
-    throw error;
+    console.error('Template:', templateString);
+    console.error('Context keys:', Object.keys(context));
+    return ''; // Return empty string instead of throwing
   }
 }
 
@@ -220,6 +223,7 @@ export function renderTemplate(templateString: string, context: Record<string, u
  * - {{worktree.unique_id}} - Auto-assigned unique number (1, 2, 3, ...)
  * - {{worktree.name}} - Worktree name (slug format)
  * - {{worktree.path}} - Absolute path to worktree directory
+ * - {{worktree.gid}} - Unix GID of worktree's unix_group (if captured)
  * - {{repo.slug}} - Repository slug
  * - {{custom.*}} - Any custom context from worktree.custom_context
  */
@@ -229,6 +233,7 @@ export function buildWorktreeContext(worktree: {
   path: string;
   repo_slug?: string;
   custom_context?: Record<string, unknown>;
+  unix_gid?: number;
 }): Record<string, unknown> {
   return {
     // Scoped entities (accessible as {{entity.property}})
@@ -236,6 +241,7 @@ export function buildWorktreeContext(worktree: {
       unique_id: worktree.worktree_unique_id,
       name: worktree.name,
       path: worktree.path,
+      gid: worktree.unix_gid,
     },
     repo: {
       slug: worktree.repo_slug || '',

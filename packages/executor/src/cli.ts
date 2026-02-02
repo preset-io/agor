@@ -250,6 +250,10 @@ function printUsage(): void {
 }
 
 async function main() {
+  // Register Handlebars helpers ONCE at startup (needed for template rendering)
+  const { registerHandlebarsHelpers } = await import('@agor/core/templates/handlebars-helpers');
+  registerHandlebarsHelpers();
+
   // Parse command-line arguments
   const { values } = parseArgs({
     options: {

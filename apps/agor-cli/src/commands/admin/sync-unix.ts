@@ -1,9 +1,6 @@
 /**
  * Admin Command: Sync Unix Users and Groups
  *
- * PRIVILEGED OPERATION - Must be called via sudo:
- *   sudo agor admin sync-unix
- *
  * Full sync of Unix users and groups with the Agor database. This command
  * ensures all users, groups, and permissions are correctly configured.
  *

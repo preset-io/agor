@@ -63,6 +63,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
         title: data.prompt.substring(0, 100), // First 100 chars as title
         description: data.prompt,
         worktree_id: parent.worktree_id,
+        unix_username: parent.unix_username, // Inherit parent's unix_username for consistent execution context
         git_state: { ...parent.git_state },
         genealogy: {
           forked_from_session_id: parent.session_id,
@@ -227,6 +228,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
         title: data.title || data.prompt.substring(0, 100), // Use provided title or first 100 chars
         description: finalPrompt, // Use final prompt with extra instructions if provided
         worktree_id: parent.worktree_id,
+        unix_username: parent.unix_username, // Inherit parent's unix_username for consistent execution context
         git_state: { ...parent.git_state },
         genealogy: {
           parent_session_id: parent.session_id,

@@ -26,4 +26,4 @@ services:
       - CREATE_RBAC_TEST_USERS=${CREATE_RBAC_TEST_USERS:-true}
 
     # Use PostgreSQL+RBAC-specific entrypoint
-    entrypoint: ["/usr/local/bin/docker-entrypoint-postgres.sh"]
+    entrypoint: ['/usr/local/bin/docker-entrypoint-postgres.sh']

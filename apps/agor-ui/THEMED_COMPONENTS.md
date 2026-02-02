@@ -5,6 +5,7 @@ This document outlines the proper way to use themed UI components in the Agor UI
 ## ⚠️ DO NOT Use Raw Ant Design APIs
 
 **NEVER** import or use these directly:
+
 - ❌ `Modal.confirm()`, `Modal.info()`, `Modal.warning()`, `Modal.error()`, `Modal.success()`
 - ❌ `message.success()`, `message.error()`, `message.warning()`, `message.info()`, `message.loading()`
 - ❌ Direct imports: `import { Modal, message } from 'antd'` (for these specific APIs)
@@ -40,6 +41,7 @@ function MyComponent() {
 ```
 
 **Available methods:**
+
 - `confirm(options)` - Confirmation dialog
 - `info(options)` - Information dialog
 - `warning(options)` - Warning dialog
@@ -70,6 +72,7 @@ function MyComponent() {
 ```
 
 **Available methods:**
+
 - `showSuccess(content, options?)` - Success message
 - `showError(content, options?)` - Error message (longer duration by default)
 - `showWarning(content, options?)` - Warning message
@@ -78,6 +81,7 @@ function MyComponent() {
 - `destroy(key?)` - Dismiss a message
 
 **Features:**
+
 - ✨ Automatic dark mode theming
 - 📋 Copy-to-clipboard on all messages (click the copy icon)
 - ⏱️ Smart durations (errors last longer for copying)
@@ -124,11 +128,12 @@ import { Modal, message } from 'antd';
 
 export const BadComponent = () => {
   const handleDelete = () => {
-    Modal.confirm({  // ❌ Bypasses theming
+    Modal.confirm({
+      // ❌ Bypasses theming
       title: 'Delete?',
       onOk: () => {
         deleteItem();
-        message.success('Deleted!');  // ❌ No copy-to-clipboard
+        message.success('Deleted!'); // ❌ No copy-to-clipboard
       },
     });
   };
@@ -138,6 +143,7 @@ export const BadComponent = () => {
 ## Code Review Checklist
 
 When reviewing PRs, check for:
+
 - [ ] No direct `Modal.confirm/info/warning/error/success` calls
 - [ ] No direct `message.success/error/warning/info` calls
 - [ ] All modals use `useThemedModal()`
@@ -150,6 +156,7 @@ When reviewing PRs, check for:
 If you find code using raw APIs:
 
 1. Add the import:
+
    ```tsx
    import { useThemedModal } from '@/utils/modal';
    // or
@@ -157,12 +164,14 @@ If you find code using raw APIs:
    ```
 
 2. Call the hook at the component level:
+
    ```tsx
    const { confirm } = useThemedModal();
    const { showSuccess } = useThemedMessage();
    ```
 
 3. Replace the calls:
+
    ```tsx
    // Before
    Modal.confirm({ ... })
@@ -176,11 +185,12 @@ If you find code using raw APIs:
 4. Remove the unused imports:
    ```tsx
    // Remove these from antd imports
-   import { Modal, message } from 'antd';  // ❌
+   import { Modal, message } from 'antd'; // ❌
    ```
 
 ---
 
 **Questions?** Check the implementations in:
+
 - `apps/agor-ui/src/utils/modal.tsx`
 - `apps/agor-ui/src/utils/message.tsx`

@@ -52,8 +52,9 @@ export interface StreamingCallbacks {
    *
    * @param messageId - Message being streamed
    * @param chunk - Text chunk (3-10 words recommended)
+   * @param sequence - Monotonically increasing sequence number for ordering (optional)
    */
-  onStreamChunk(messageId: MessageID, chunk: string): Promise<void>;
+  onStreamChunk(messageId: MessageID, chunk: string, sequence?: number): Promise<void>;
 
   /**
    * Called when streaming completes successfully

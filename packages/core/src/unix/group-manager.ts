@@ -106,49 +106,53 @@ export function isValidRepoGroupName(groupName: string): boolean {
 export const AGOR_USERS_GROUP = 'agor_users';
 
 /**
- * Unix group management commands (to be executed via sudo)
+ * Unix group management commands
  *
- * These are shell command strings that should be executed with elevated privileges.
- * The daemon should call these via `sudo agor admin <command>` to maintain security.
+ * Commands are returned as shell strings with sudo already included where needed.
+ * Privileged commands (groupadd, usermod, etc.) include `sudo -n` for passwordless execution.
+ * Read-only commands (getent, id) run without sudo.
+ *
+ * The executor's runCommand() function executes these strings directly without modification.
  */
 export const UnixGroupCommands = {
   /**
    * Create a new Unix group
    *
    * @param groupName - Name of the group to create
-   * @returns Command string
+   * @returns Command string with sudo
    */
-  createGroup: (groupName: string) => `groupadd ${groupName}`,
+  createGroup: (groupName: string) => `sudo -n groupadd ${groupName}`,
 
   /**
    * Delete a Unix group
    *
    * @param groupName - Name of the group to delete
-   * @returns Command string
+   * @returns Command string with sudo
    */
-  deleteGroup: (groupName: string) => `groupdel ${groupName}`,
+  deleteGroup: (groupName: string) => `sudo -n groupdel ${groupName}`,
 
   /**
    * Add user to a Unix group
    *
    * @param username - Unix username to add
    * @param groupName - Group to add user to
-   * @returns Command string
+   * @returns Command string with sudo
    */
-  addUserToGroup: (username: string, groupName: string) => `usermod -aG ${groupName} ${username}`,
+  addUserToGroup: (username: string, groupName: string) =>
+    `sudo -n usermod -aG ${groupName} ${username}`,
 
   /**
    * Remove user from a Unix group
    *
    * @param username - Unix username to remove
    * @param groupName - Group to remove user from
-   * @returns Command string
+   * @returns Command string with sudo
    */
   removeUserFromGroup: (username: string, groupName: string) =>
-    `gpasswd -d ${username} ${groupName}`,
+    `sudo -n gpasswd -d ${username} ${groupName}`,
 
   /**
-   * Check if a group exists
+   * Check if a group exists (read-only, no sudo needed)
    *
    * @param groupName - Group name to check
    * @returns Command string (exits 0 if exists, 1 if not)
@@ -156,7 +160,7 @@ export const UnixGroupCommands = {
   groupExists: (groupName: string) => `getent group ${groupName} > /dev/null`,
 
   /**
-   * Check if a user is in a group
+   * Check if a user is in a group (read-only, no sudo needed)
    *
    * @param username - Unix username
    * @param groupName - Group name
@@ -166,7 +170,7 @@ export const UnixGroupCommands = {
     `id -nG ${username} | grep -qw ${groupName}`,
 
   /**
-   * List all members of a group
+   * List all members of a group (read-only, no sudo needed)
    *
    * @param groupName - Group name
    * @returns Command string (outputs comma-separated usernames)
@@ -177,7 +181,7 @@ export const UnixGroupCommands = {
    * Set directory group ownership and permissions
    *
    * Returns an array of commands to be executed sequentially.
-   * Each command should be run with sudo separately (no sh -c wrapper needed).
+   * Each command includes `sudo -n` for privileged execution.
    *
    * Uses ACLs (Access Control Lists) for permission management. ACLs provide
    * DEFAULT permissions that automatically apply to all new files and directories,
@@ -192,7 +196,7 @@ export const UnixGroupCommands = {
    * @param path - Directory path
    * @param groupName - Group to own the directory
    * @param permissions - Permissions mode (e.g., '2770' for no others access)
-   * @returns Array of command strings to execute sequentially
+   * @returns Array of command strings with sudo to execute sequentially
    */
   setDirectoryGroup: (path: string, groupName: string, permissions: string): string[] => {
     // Determine "others" ACL based on permissions mode
@@ -213,17 +217,18 @@ export const UnixGroupCommands = {
 
     return [
       // Set primary group ownership (visible in ls -la)
-      `chgrp -R ${groupName} "${path}"`,
+      `sudo -n chgrp -R ${groupName} "${path}"`,
       // Set setgid bit on directories only (new files inherit group ownership)
-      `find "${path}" -type d -exec chmod g+s {} +`,
+      // Note: find runs without sudo (just traversing), chmod inside -exec uses sudo
+      `find "${path}" -type d -exec sudo -n chmod g+s {} +`,
       // ACL: owner gets full access
-      `setfacl -R -m u::rwX "${path}"`,
+      `sudo -n setfacl -R -m u::rwX "${path}"`,
       // ACL: group gets full access (rwX = rw for files, rwx for dirs)
-      `setfacl -R -m g:${groupName}:rwX "${path}"`,
+      `sudo -n setfacl -R -m g:${groupName}:rwX "${path}"`,
       // ACL: set "others" access based on permissions mode
-      `setfacl -R -m ${othersAcl} "${path}"`,
+      `sudo -n setfacl -R -m ${othersAcl} "${path}"`,
       // DEFAULT ACLs for new files/dirs (inherit these permissions)
-      `setfacl -R -d -m u::rwX,g:${groupName}:rwX,${othersAcl} "${path}"`,
+      `sudo -n setfacl -R -d -m u::rwX,g:${groupName}:rwX,${othersAcl} "${path}"`,
     ];
   },
 } as const;

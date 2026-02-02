@@ -1,157 +1,158 @@
 /**
- * MCP Session Tokens
+ * MCP Session Tokens (Deterministic JWT-based)
  *
- * Simple token generation and validation for MCP authentication.
- * Tokens are session-specific and map to a user + session.
+ * Generates deterministic JWT tokens for internal MCP authentication.
+ * Tokens are derived from session ID + user ID + daemon secret, making them:
+ * - Reproducible (same session always gets same token)
+ * - Stateless (no database or in-memory storage needed)
+ * - Restart-safe (daemon restarts don't invalidate tokens)
+ * - Session-scoped (each session has unique token)
+ *
+ * Security: Designed for internal localhost/same-workspace communication only.
+ * Uses HS256 (HMAC-SHA256) with daemon's internal secret.
  */
 
-import { randomBytes } from 'node:crypto';
 import type { Application } from '@agor/core/feathers';
 import type { SessionID, UserID } from '@agor/core/types';
+import jwt from 'jsonwebtoken';
 
 interface SessionTokenData {
   userId: UserID;
   sessionId: SessionID;
-  createdAt: number;
 }
 
 /**
- * In-memory token store
- * TODO: Move to database for production
- */
-const tokenStore = new Map<string, SessionTokenData>();
-
-/**
- * Reverse lookup: session ID to token
- */
-const sessionToTokenStore = new Map<SessionID, string>();
-
-/**
- * Generate a session token for MCP access
+ * Generate deterministic MCP session token for internal daemon communication.
+ *
+ * Uses JWT with HS256 algorithm and no timestamp (iat removed) to ensure
+ * the same session+user always produces the same token.
  *
  * @param userId - User ID
  * @param sessionId - Session ID
- * @returns Session token string
+ * @param daemonSecret - JWT secret from app settings
+ * @returns Deterministic JWT token string
  */
-export function generateSessionToken(userId: UserID, sessionId: SessionID): string {
-  // Generate random token
-  const token = randomBytes(32).toString('hex');
+export function generateSessionToken(
+  userId: UserID,
+  sessionId: SessionID,
+  daemonSecret: string
+): string {
+  // Generate deterministic JWT (no timestamp for reproducibility)
+  const token = jwt.sign(
+    {
+      sub: sessionId, // Subject = session ID
+      uid: userId, // Custom claim for user
+      aud: 'agor:mcp:internal', // Audience = internal MCP only
+      // NO iat (issued at) - this ensures determinism
+    },
+    daemonSecret,
+    {
+      algorithm: 'HS256',
+      noTimestamp: true, // Critical: makes token deterministic
+    }
+  );
 
-  // Store token data
-  tokenStore.set(token, {
-    userId,
-    sessionId,
-    createdAt: Date.now(),
-  });
-
-  // Store reverse lookup
-  sessionToTokenStore.set(sessionId, token);
-
-  console.log(`🎫 Generated MCP session token for session ${sessionId.substring(0, 8)}`);
+  console.log(`🎫 Generated deterministic MCP token for session ${sessionId.substring(0, 8)}`);
 
   return token;
 }
 
 /**
- * Validate a session token
+ * Validate an MCP session token and extract session/user context.
  *
- * @param app - FeathersJS application instance
- * @param token - Session token to validate
- * @returns Token data if valid, null if invalid
+ * Verifies JWT signature and extracts sessionId + userId from claims.
+ * No database lookup needed - validation is purely cryptographic.
+ *
+ * @param app - FeathersJS application instance (used to get JWT secret)
+ * @param token - JWT token to validate
+ * @returns Token data if valid, null if invalid or expired
  */
 export async function validateSessionToken(
   app: Application,
   token: string
 ): Promise<SessionTokenData | null> {
-  // Check in-memory store first (fast path)
-  const memoryData = tokenStore.get(token);
-
-  if (memoryData) {
-    // Check if token is expired (24 hours)
-    const maxAge = 24 * 60 * 60 * 1000; // 24 hours
-    if (Date.now() - memoryData.createdAt > maxAge) {
-      tokenStore.delete(token);
-      sessionToTokenStore.delete(memoryData.sessionId);
+  try {
+    // Get JWT secret from app settings
+    const jwtSecret = app.settings.authentication?.secret;
+    if (!jwtSecret) {
+      console.error('❌ JWT secret not configured in app settings');
       return null;
     }
-    return memoryData;
-  }
 
-  // Not in memory - check database (slow path, survives daemon restarts)
-  // Query directly by mcp_token for O(1) lookup instead of loading all sessions
-  try {
-    const result = await app.service('sessions').find({
-      query: { mcp_token: token, $limit: 1 },
-      provider: undefined, // Internal call, bypass external-only hooks
-    });
+    // Verify and decode JWT
+    const payload = jwt.verify(token, jwtSecret, {
+      audience: 'agor:mcp:internal',
+      algorithms: ['HS256'],
+    }) as {
+      sub: SessionID;
+      uid: UserID;
+      aud: string;
+    };
 
-    const sessions = result.data || result;
-    const session = Array.isArray(sessions) && sessions.length > 0 ? sessions[0] : null;
-
-    if (session) {
-      // Found in database - restore to memory
-      const data: SessionTokenData = {
-        userId: session.created_by as UserID,
-        sessionId: session.session_id,
-        createdAt: new Date(session.created_at).getTime(),
-      };
-
-      // Check if expired
-      const maxAge = 24 * 60 * 60 * 1000;
-      if (Date.now() - data.createdAt > maxAge) {
-        return null;
-      }
-
-      // Restore to memory for future fast lookups
-      tokenStore.set(token, data);
-      sessionToTokenStore.set(session.session_id, token);
-
-      console.log(
-        `♻️  Restored MCP token from database for session ${session.session_id.substring(0, 8)}`
-      );
-      return data;
-    }
+    // Extract session and user from claims
+    return {
+      sessionId: payload.sub,
+      userId: payload.uid,
+    };
   } catch (error) {
-    console.error('Failed to check database for token:', error);
+    // JWT verification failed (invalid signature, wrong audience, etc.)
+    if (error instanceof jwt.JsonWebTokenError) {
+      console.warn(`⚠️  Invalid MCP token: ${error.message}`);
+    } else {
+      console.error('❌ Token validation error:', error);
+    }
+    return null;
   }
-
-  return null;
 }
 
 /**
- * Get token for a session
+ * Get token for a session (generates deterministically).
+ *
+ * Since tokens are deterministic, we can always regenerate them
+ * instead of looking them up.
  *
  * @param sessionId - Session ID
- * @returns Token string if exists, undefined otherwise
+ * @param userId - User ID
+ * @param daemonSecret - JWT secret
+ * @returns Token string
  */
-export function getTokenForSession(sessionId: SessionID): string | undefined {
-  return sessionToTokenStore.get(sessionId);
+export function getTokenForSession(
+  sessionId: SessionID,
+  userId: UserID,
+  daemonSecret: string
+): string {
+  return generateSessionToken(userId, sessionId, daemonSecret);
 }
 
 /**
- * Revoke a session token
+ * Revoke a session token.
  *
- * @param token - Token to revoke
+ * Note: With deterministic tokens, we can't truly "revoke" a token
+ * without maintaining a blocklist. For now, this is a no-op.
+ *
+ * True revocation would require:
+ * 1. Maintaining a blocklist of revoked tokens in DB
+ * 2. Checking blocklist during validation
+ * 3. Or rotating the daemon secret (invalidates ALL tokens)
+ *
+ * @param token - Token to revoke (currently no-op)
  */
 export function revokeSessionToken(token: string): void {
-  const data = tokenStore.get(token);
-  if (data) {
-    sessionToTokenStore.delete(data.sessionId);
-  }
-  tokenStore.delete(token);
+  console.warn(
+    '⚠️  revokeSessionToken called but deterministic tokens cannot be revoked. ' +
+      'To revoke access, delete the session or rotate the daemon secret.'
+  );
+  // No-op: deterministic tokens can't be revoked without a blocklist
 }
 
 /**
- * Clean up expired tokens (should be called periodically)
+ * Clean up expired tokens.
+ *
+ * Note: With deterministic stateless tokens, there's nothing to clean up.
+ * Token expiration would need to be implemented via JWT 'exp' claim if needed.
+ *
+ * Currently a no-op for backward compatibility.
  */
 export function cleanupExpiredTokens(): void {
-  const maxAge = 24 * 60 * 60 * 1000; // 24 hours
-  const now = Date.now();
-
-  for (const [token, data] of tokenStore.entries()) {
-    if (now - data.createdAt > maxAge) {
-      sessionToTokenStore.delete(data.sessionId);
-      tokenStore.delete(token);
-    }
-  }
+  // No-op: no in-memory storage to clean up
 }

@@ -173,3 +173,18 @@ export interface Message {
 export type MessageCreate = Omit<Message, 'message_id'> & {
   message_id?: MessageID;
 };
+
+/**
+ * Streaming event types
+ *
+ * These events are broadcast by the executor to the daemon via /messages/streaming
+ * and relayed to connected clients via Socket.io for real-time message updates.
+ */
+export type StreamingEventType =
+  | 'streaming:start'
+  | 'streaming:chunk'
+  | 'streaming:end'
+  | 'streaming:error'
+  | 'thinking:start'
+  | 'thinking:chunk'
+  | 'thinking:end';

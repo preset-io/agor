@@ -2,8 +2,14 @@
  * `agor db status` - Show applied database migrations
  */
 
-import { createDatabase, getDatabaseUrl, isSQLiteDatabase, sql } from '@agor/core/db';
-import { Command } from '@oclif/core';
+import {
+  checkMigrationStatus,
+  createDatabase,
+  getDatabaseUrl,
+  isSQLiteDatabase,
+  sql,
+} from '@agor/core/db';
+import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
 
 /**
@@ -14,21 +20,21 @@ interface QueryResult {
   rowCount?: number;
 }
 
-/**
- * Migration row from __drizzle_migrations table
- */
-interface MigrationRow {
-  hash: string;
-  created_at: number;
-}
-
 export default class DbStatus extends Command {
   static description = 'Show applied database migrations';
 
   static examples = ['<%= config.bin %> <%= command.id %>'];
 
+  static flags = {
+    verbose: Flags.boolean({
+      char: 'v',
+      description: 'Show detailed migration information including hashes and pending migrations',
+      default: false,
+    }),
+  };
+
   async run(): Promise<void> {
-    await this.parse(DbStatus);
+    const { flags } = await this.parse(DbStatus);
 
     try {
       // Determine database URL using centralized logic
@@ -36,55 +42,76 @@ export default class DbStatus extends Command {
       const dbUrl = getDatabaseUrl();
       const db = createDatabase({ url: dbUrl });
 
-      // Check if migrations table exists
-      const tableCheck = isSQLiteDatabase(db)
-        ? await db.run(
-            sql`SELECT name FROM sqlite_master WHERE type='table' AND name='__drizzle_migrations'`
-          )
-        : await db.execute(
-            sql`SELECT table_name as name FROM information_schema.tables WHERE table_schema = 'drizzle' AND table_name = '__drizzle_migrations'`
-          );
+      // Use comprehensive migration status check
+      const status = await checkMigrationStatus(db);
 
-      // Handle different return types: SQLite returns {rows: [...]}, PostgreSQL returns [...]
-      const tableCheckRows = isSQLiteDatabase(db)
-        ? (tableCheck as QueryResult).rows
-        : (tableCheck as unknown[]);
-
-      if (tableCheckRows.length === 0) {
+      if (status.applied.length === 0 && status.pending.length === 0) {
         this.log(
           `${chalk.yellow('⚠')} No migrations table found. Run ${chalk.cyan('agor db migrate')} to initialize.`
         );
-        return;
+        process.exit(0);
       }
 
-      // Query Drizzle's tracking table
-      const result = isSQLiteDatabase(db)
-        ? await db.run(
-            sql`SELECT hash, created_at FROM __drizzle_migrations ORDER BY created_at ASC`
-          )
-        : await db.execute(
-            sql`SELECT hash, created_at FROM drizzle.__drizzle_migrations ORDER BY created_at ASC`
-          );
-
-      // Handle different return types: SQLite returns {rows: [...]}, PostgreSQL returns [...]
-      const rows = isSQLiteDatabase(db) ? (result as QueryResult).rows : (result as unknown[]);
-
-      if (rows.length === 0) {
-        this.log('No migrations applied yet');
-        return;
+      // Show applied migrations
+      if (status.applied.length > 0) {
+        this.log(chalk.bold('\nApplied migrations:\n'));
+        for (const tag of status.applied) {
+          this.log(`  ${chalk.green('✓')} ${tag}`);
+        }
+        this.log(`\n${chalk.bold(`Total: ${status.applied.length} migration(s)`)}`);
+      } else {
+        this.log(chalk.yellow('No migrations applied yet'));
       }
 
-      this.log(chalk.bold('\nApplied migrations:\n'));
-      rows.forEach((row: unknown) => {
-        const migration = row as MigrationRow;
-        const date = new Date(Number(migration.created_at));
-        const formattedDate = date.toLocaleString();
+      // Show pending migrations
+      if (status.hasPending) {
+        this.log('');
+        this.log(chalk.yellow(chalk.bold('⚠️  Pending migrations:\n')));
+        for (const tag of status.pending) {
+          this.log(`  ${chalk.yellow('•')} ${tag}`);
+        }
+        this.log('');
+        this.log(chalk.dim(`Run ${chalk.cyan('agor db migrate')} to apply pending migrations.`));
+      }
+
+      // Verbose mode: show hashes and detailed info
+      if (flags.verbose) {
+        this.log('');
+        this.log(chalk.bold('Detailed information:'));
+        this.log('');
+
+        // Query Drizzle's tracking table for hash details
+        const result = isSQLiteDatabase(db)
+          ? await db.run(sql`SELECT id, hash, created_at FROM __drizzle_migrations ORDER BY id ASC`)
+          : await db.execute(
+              sql`SELECT id, hash, created_at FROM drizzle.__drizzle_migrations ORDER BY id ASC`
+            );
+
+        const rows = isSQLiteDatabase(db) ? (result as QueryResult).rows : (result as unknown[]);
+
         this.log(
-          `  ${chalk.green('✓')} ${chalk.cyan(migration.hash)} ${chalk.dim(`(${formattedDate})`)}`
+          `${chalk.dim('Database contains')} ${rows.length} ${chalk.dim('migration record(s)')}`
         );
-      });
+        this.log(
+          `${chalk.dim('Journal expects')} ${status.applied.length + status.pending.length} ${chalk.dim('migration(s)')}`
+        );
+        this.log('');
 
-      this.log(`\n${chalk.bold(`Total: ${rows.length} migration(s)`)}`);
+        if (rows.length > 0) {
+          this.log(chalk.dim('Migration hashes in database:'));
+          rows.forEach((row: unknown, index: number) => {
+            const migration = row as { id: number; hash: string; created_at: number };
+            const date = new Date(Number(migration.created_at));
+            const formattedDate = date.toLocaleString();
+            this.log(
+              `  ${chalk.dim(`#${migration.id}:`)} ${migration.hash.substring(0, 12)}... ${chalk.dim(`(${formattedDate})`)}`
+            );
+          });
+        }
+      }
+
+      // Force exit to close database connections (postgres-js keeps connections open)
+      process.exit(0);
     } catch (error) {
       this.error(
         `Failed to get migration status: ${error instanceof Error ? error.message : String(error)}`

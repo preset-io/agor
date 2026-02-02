@@ -13,7 +13,12 @@ import { patchConsole } from '@agor/core/utils/logger';
 
 patchConsole();
 
-import { createUserProcessEnvironment, loadConfig, type UnknownJson } from '@agor/core/config';
+import {
+  createUserProcessEnvironment,
+  isUnixImpersonationEnabled,
+  loadConfig,
+  type UnknownJson,
+} from '@agor/core/config';
 import { buildCorsConfig } from './setup/cors.js';
 import { initializeAnthropicApiKey } from './setup/credentials.js';
 import { initializeDatabase } from './setup/database.js';
@@ -82,6 +87,7 @@ import type {
   PermissionRequestContent,
   Session,
   SessionID,
+  StreamingEventType,
   Task,
   TaskID,
   User,
@@ -337,13 +343,14 @@ import {
   ensureCanView,
   ensureSessionImmutability,
   ensureWorktreePermission,
-  filterWorktreesByPermission,
   loadSession,
   loadSessionWorktree,
   loadWorktree,
   loadWorktreeFromSession,
   PERMISSION_RANK,
   resolveSessionContext,
+  scopeSessionQuery,
+  scopeWorktreeQuery,
   setSessionUnixUsername,
   validateSessionUnixUsername,
 } from './utils/worktree-authorization';
@@ -720,7 +727,6 @@ async function main() {
     const unixUserMode = (config.execution?.unix_user_mode ?? 'simple') as
       | 'simple'
       | 'insulated'
-      | 'opportunistic'
       | 'strict';
     const configExecutorUser = config.execution?.executor_unix_user;
     const sessionUnixUser = session.unix_username;
@@ -769,31 +775,21 @@ async function main() {
     const userId = (params as AuthenticatedParams).user?.user_id as
       | import('@agor/core/types').UserID
       | undefined;
-    let executorEnv = await createUserProcessEnvironment(userId, db);
+    const executorEnv = await createUserProcessEnvironment(userId, db);
 
     // Add DAEMON_URL to environment so executor can connect back
     executorEnv.DAEMON_URL = daemonUrl;
 
-    // When impersonating, reduce env vars to essential ones only
-    // (impersonated executor can't read daemon user's config.yaml)
+    // When impersonating, override HOME to use impersonated user's home directory
     if (executorUnixUser) {
       // Get impersonated user's home directory from /etc/passwd
       const userHomeDir = execSync(`getent passwd "${executorUnixUser}" | cut -d: -f6`, {
         encoding: 'utf8',
       }).trim();
 
-      executorEnv = Object.fromEntries(
-        Object.entries({
-          DAEMON_URL: executorEnv.DAEMON_URL,
-          PATH: executorEnv.PATH || '/usr/local/bin:/usr/bin:/bin',
-          NODE_ENV: executorEnv.NODE_ENV,
-          HOME: userHomeDir || executorEnv.HOME, // Use impersonated user's home, fallback to daemon user's
-          // API keys
-          ANTHROPIC_API_KEY: executorEnv.ANTHROPIC_API_KEY,
-          OPENAI_API_KEY: executorEnv.OPENAI_API_KEY,
-          GOOGLE_API_KEY: executorEnv.GOOGLE_API_KEY,
-        }).filter(([_, v]) => v !== undefined)
-      );
+      // Override HOME with impersonated user's home directory
+      // Keep everything else from createUserProcessEnvironment (user env vars, API keys, etc.)
+      executorEnv.HOME = userHomeDir || executorEnv.HOME;
     }
 
     // =========================================================================
@@ -836,11 +832,6 @@ async function main() {
 
     if (executorUnixUser) {
       console.log(`[Daemon] Spawning executor as user: ${executorUnixUser}`);
-      console.log(`[Daemon] DAEMON_URL: ${executorEnv.DAEMON_URL}`);
-      console.log(
-        `[Daemon] Env vars (${Object.keys(executorEnv).length}): ${Object.keys(executorEnv).join(', ')}`
-      );
-      console.log(`[Daemon] Full command: ${cmd} ${args.join(' ')}`);
     } else {
       console.log(`[Daemon] Spawning executor as current user (no impersonation)`);
     }
@@ -954,6 +945,7 @@ async function main() {
       'createMany',
     ],
     events: [
+      // Streaming events (see StreamingEventType in @agor/core/types/message.ts)
       'streaming:start',
       'streaming:chunk',
       'streaming:end',
@@ -1981,6 +1973,7 @@ async function main() {
   // Requires worktree_id query parameter
   const worktreeRepository = new WorktreeRepository(db);
   const usersRepository = new UsersRepository(db);
+  const sessionsRepository = new SessionRepository(db);
   app.use('/context', createContextService(worktreeRepository));
 
   // Register file service (read-only filesystem browser for all worktree files)
@@ -2243,6 +2236,10 @@ async function main() {
         ...getReadAuthHooks(),
         ...(allowAnonymous ? [] : [requireMinimumRole('member', 'access worktrees')]),
       ],
+      find: [
+        // RBAC: Optimized SQL-based filtering (single query with JOIN, no N+1)
+        ...(worktreeRbacEnabled ? [scopeWorktreeQuery(worktreeRepository)] : []),
+      ],
       get: [
         ...(worktreeRbacEnabled
           ? [
@@ -2288,9 +2285,6 @@ async function main() {
       ],
     },
     after: {
-      find: [
-        ...(worktreeRbacEnabled ? [filterWorktreesByPermission(worktreeRepository)] : []), // Filter results by permission
-      ],
       create: [
         ...(worktreeRbacEnabled
           ? [
@@ -2308,23 +2302,9 @@ async function main() {
                   `[RBAC] Added creator ${creatorId.substring(0, 8)} as owner of worktree ${worktree.worktree_id.substring(0, 8)}`
                 );
 
-                // Unix Integration: Fire-and-forget sync to executor
-                // The executor will handle group creation, user membership, and permissions
-                if (worktreeRbacEnabled && jwtSecret) {
-                  const serviceToken = createServiceToken(jwtSecret);
-                  spawnExecutorFireAndForget(
-                    {
-                      command: 'unix.sync-worktree',
-                      sessionToken: serviceToken,
-                      daemonUrl: getDaemonUrl(),
-                      params: {
-                        worktreeId: worktree.worktree_id,
-                        daemonUser: config.daemon?.unix_user,
-                      },
-                    },
-                    { logPrefix: '[Executor/worktree.create]' }
-                  );
-                }
+                // NOTE: unix.sync-worktree is NOT spawned here to avoid race conditions.
+                // git.worktree.add executor handles Unix group creation synchronously.
+                // unix.sync-worktree is only used when owners are added/removed AFTER creation.
 
                 return context;
               },
@@ -2596,6 +2576,7 @@ async function main() {
               params: {
                 userId: user.user_id,
                 password: data?.password, // Pass through for password sync
+                configureGitSafeDirectory: isUnixImpersonationEnabled(), // Configure git when impersonating
               },
             },
             { logPrefix: '[Executor/user.create]' }
@@ -2630,6 +2611,7 @@ async function main() {
               params: {
                 userId: user.user_id,
                 password: data?.password, // Pass through for password sync
+                configureGitSafeDirectory: isUnixImpersonationEnabled(), // Configure git when impersonating
               },
             },
             { logPrefix: '[Executor/user.patch]' }
@@ -2645,8 +2627,11 @@ async function main() {
   // SECURITY: Only connections in 'authenticated' channel (joined on login) receive events
   // This prevents unauthenticated sockets from receiving sensitive data
   app.publish((data, context) => {
-    // Skip logging for internal events without path/method (e.g., repository-triggered events)
-    if (context.path && context.method) {
+    // Skip logging for streaming events (too verbose) and internal events without path/method
+    const isStreamingEvent =
+      context.path === 'messages/streaming' ||
+      (context.path === 'messages' && context.event?.startsWith('streaming:'));
+    if (context.path && context.method && !isStreamingEvent) {
       console.log(
         `📡 [Publish] ${context.path} ${context.method}`,
         context.id
@@ -2666,6 +2651,10 @@ async function main() {
         // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type compatibility
         (validateQuery as any)(sessionQueryValidator),
         ...getReadAuthHooks(),
+      ],
+      find: [
+        // RBAC: Optimized SQL-based filtering (single query with JOIN on worktrees, no N+1)
+        ...(worktreeRbacEnabled ? [scopeSessionQuery(sessionsRepository)] : []),
       ],
       get: [
         ...(worktreeRbacEnabled
@@ -2782,6 +2771,39 @@ async function main() {
       ],
     },
     after: {
+      get: [
+        async (context) => {
+          // Regenerate MCP token for fetched session (deterministic, no DB storage)
+          if (config.daemon?.mcpEnabled === false) {
+            return context;
+          }
+
+          const { generateSessionToken } = await import('./mcp/tokens.js');
+          const session = context.result as Session;
+          const userId = session.created_by || 'anonymous';
+
+          const jwtSecret = app.settings.authentication?.secret;
+          if (!jwtSecret) {
+            console.error('❌ JWT secret not configured - cannot generate MCP token');
+            return context;
+          }
+
+          const mcpToken = generateSessionToken(
+            userId as import('@agor/core/types').UserID,
+            session.session_id,
+            jwtSecret
+          );
+
+          console.log(
+            `🔄 Regenerated MCP token for session ${session.session_id.substring(0, 8)}: ${mcpToken.substring(0, 16)}...`
+          );
+
+          // Add token to result (not stored in DB, regenerated on-demand)
+          context.result = { ...session, mcp_token: mcpToken };
+
+          return context;
+        },
+      ],
       create: [
         async (context) => {
           // Skip MCP setup if MCP server is disabled
@@ -2789,25 +2811,31 @@ async function main() {
             return context;
           }
 
-          // Generate MCP session token for this session
+          // Generate MCP session token for this session (deterministic JWT)
           const { generateSessionToken } = await import('./mcp/tokens.js');
           const session = context.result as Session;
           const userId = session.created_by || 'anonymous';
 
+          // Get JWT secret from app settings
+          const jwtSecret = app.settings.authentication?.secret;
+          if (!jwtSecret) {
+            console.error('❌ JWT secret not configured - cannot generate MCP token');
+            return context;
+          }
+
           const mcpToken = generateSessionToken(
             userId as import('@agor/core/types').UserID,
-            session.session_id
+            session.session_id,
+            jwtSecret
           );
 
           console.log(
             `🎫 MCP token for session ${session.session_id.substring(0, 8)}: ${mcpToken.substring(0, 16)}...`
           );
 
-          // Store token in session record
-          await app.service('sessions').patch(session.session_id, {
-            mcp_token: mcpToken,
-          });
-          console.log(`💾 Stored MCP token in session record`);
+          // No need to store token in database - it's deterministic!
+          // Token can be regenerated on demand using same inputs.
+          console.log(`✨ Using deterministic MCP token (no DB storage needed)`);
 
           // Note: We no longer auto-attach global MCP servers to sessions.
           // Instead, getMcpServersForSession() will automatically provide ALL
@@ -3450,33 +3478,13 @@ async function main() {
     {
       async create(
         data: {
-          event:
-            | 'streaming:start'
-            | 'streaming:chunk'
-            | 'streaming:end'
-            | 'streaming:error'
-            | 'thinking:start'
-            | 'thinking:chunk'
-            | 'thinking:end';
+          event: StreamingEventType;
           data: Record<string, unknown>;
         },
         params: RouteParams
       ) {
-        // Security: Verify session ownership before broadcasting
-        // Extract session_id from event data
-        const sessionId = data.data.session_id as SessionID | undefined;
-
-        if (!sessionId) {
-          throw new Error('session_id is required in streaming event data');
-        }
-
-        // Load session via service to ensure authorization hooks run
-        try {
-          await app.service('sessions').get(sessionId, params);
-        } catch (_error) {
-          // If user doesn't have access to session, reject the broadcast
-          throw new Error('Unauthorized: cannot broadcast events for this session');
-        }
+        // Security: requireAuth hook already validated the session token (JWT)
+        // No additional authorization check needed here
 
         // Broadcast event using app.service().emit() which triggers app.publish()
         app.service('messages').emit(data.event, data.data);

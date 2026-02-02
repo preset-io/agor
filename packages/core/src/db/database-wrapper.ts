@@ -250,6 +250,10 @@ function wrapQuery(query: DrizzleQuery, db: Database): any {
     set: (...args: unknown[]) => wrapQuery((query as any).set(...args), db),
     // biome-ignore lint/suspicious/noExplicitAny: These methods accept varying argument types from Drizzle
     values: (...args: unknown[]) => wrapQuery((query as any).values(...args), db),
+    // biome-ignore lint/suspicious/noExplicitAny: These methods accept varying argument types from Drizzle
+    innerJoin: (...args: unknown[]) => wrapQuery((query as any).innerJoin(...args), db),
+    // biome-ignore lint/suspicious/noExplicitAny: These methods accept varying argument types from Drizzle
+    leftJoin: (...args: unknown[]) => wrapQuery((query as any).leftJoin(...args), db),
   };
 }
 

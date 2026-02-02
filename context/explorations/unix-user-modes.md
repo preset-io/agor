@@ -19,16 +19,18 @@ Agor's Unix isolation strategy combines **OS-level security** (Unix users, group
 **Critical insight:** A session's `created_by` field is immutable and determines execution context forever.
 
 **Why?**
+
 - Claude SDK stores session state in `~/.claude/` for the session creator
 - Session continuity requires consistent user context
 - Credentials (SSH keys, tokens) come from session creator's home
 
 **Implications:**
+
 ```typescript
 // Sessions table
 interface Session {
   session_id: SessionID;
-  created_by: UserID;  // ← IMMUTABLE, set on creation
+  created_by: UserID; // ← IMMUTABLE, set on creation
   worktree_id: WorktreeID;
   // ...
 }
@@ -41,6 +43,7 @@ interface Session {
 ```
 
 **This means:**
+
 - You can't "transfer" a session to another user
 - Prompting someone else's session runs in THEIR context
 - App-layer tracks "who prompted" separately from "who owns the session"
@@ -50,11 +53,13 @@ interface Session {
 ### 2. Worktrees Have Unix Groups & Multiple Owners
 
 **Model:** Each worktree gets:
+
 1. **App-layer owners** (many-to-many via `worktree_owners` table)
 2. **Unix group** (e.g., `agor_wt_abc123`)
 3. **Filesystem permissions** controlled by that group
 
 **Ownership mechanics:**
+
 ```bash
 # When worktree created
 sudo groupadd agor_wt_abc123
@@ -69,6 +74,7 @@ sudo gpasswd -d agor_bob agor_wt_abc123
 ```
 
 **Non-owner access:**
+
 - Controlled by `others_can` field (app-layer) AND `others_fs_access` (OS-layer)
 - `others_fs_access`: `none` | `read` | `write`
 
@@ -84,6 +90,7 @@ sudo chmod 2750 /path/to/worktree  # Group only, no others
 ```
 
 **Admin operations via dedicated tools:**
+
 ```bash
 # Daemon calls admin tools (requires sudoers config for self-hosted)
 sudo agor admin create-worktree-group <worktree-id>
@@ -100,6 +107,7 @@ agor ALL=(root) NOPASSWD: /usr/local/bin/agor admin *
 ### 3. Home Directory Organization
 
 **User home layout:**
+
 ```
 /home/agor_alice/
   agor/
@@ -112,11 +120,13 @@ agor ALL=(root) NOPASSWD: /usr/local/bin/agor admin *
 ```
 
 **Rationale:**
+
 - `~/agor/worktrees/` makes worktrees visible for SSH/IDE access
 - Symlinks created/destroyed automatically as ownership changes
 - Repos are NOT symlinked (agor-managed, users shouldn't touch)
 
 **Implementation:**
+
 ```typescript
 // When Alice added as worktree owner
 async function addWorktreeOwner(worktreeId: WorktreeID, userId: UserID) {
@@ -143,25 +153,28 @@ async function addWorktreeOwner(worktreeId: WorktreeID, userId: UserID) {
 
 ---
 
-## The Four Unix Modes
+## The Three Unix Modes
 
 ### Mode 1: Simple (Default)
 
 **Use case:** Single-user dev, quick start, no setup
 
 **Behavior:**
+
 - Daemon runs as its own Unix user (or dev user)
 - All SDK execution runs as daemon user
 - All terminals run as daemon user
 - No impersonation, no Unix groups
 
 **Config:**
+
 ```yaml
 execution:
   unix_user_mode: simple
 ```
 
 **Implications:**
+
 - ✅ Zero setup
 - ⚠️ No credential isolation
 - ⚠️ All users share same `$HOME`
@@ -175,6 +188,7 @@ execution:
 **Use case:** Shared dev with basic isolation from daemon
 
 **Behavior:**
+
 - Daemon runs as dedicated Unix user (`agor`)
 - All SDK execution runs as **single executor user** (`agor_executor`)
 - All terminals run as **single executor user**
@@ -182,6 +196,7 @@ execution:
 - Worktree groups created, but all users share executor context
 
 **Config:**
+
 ```yaml
 execution:
   unix_user_mode: insulated
@@ -189,6 +204,7 @@ execution:
 ```
 
 **Setup:**
+
 ```bash
 # Create users
 sudo useradd -r -s /bin/bash -d /opt/agor agor
@@ -202,6 +218,7 @@ EOF
 ```
 
 **Implications:**
+
 - ✅ Daemon isolated from execution
 - ✅ DB/secrets safe from agent code
 - ⚠️ No per-user isolation (everyone shares `agor_executor` home)
@@ -209,84 +226,38 @@ EOF
 
 ---
 
-### Mode 3: Opportunistic (Recommended)
-
-**Use case:** Multi-user environments with flexible per-user isolation
-
-**Behavior:**
-- Daemon runs as dedicated user
-- SDK execution: uses `session.created_by.unix_username` if set, else `executor_unix_user`
-- Terminals: uses authenticated user's `unix_username` if set, else `executor_unix_user`
-- Worktree groups created, owners added to groups
-- Home symlinks created for users with `unix_username`
-
-**Config:**
-```yaml
-execution:
-  unix_user_mode: opportunistic
-  executor_unix_user: agor_executor  # Fallback
-```
-
-**Setup:**
-Same as insulated, plus wildcard impersonation:
-```bash
-sudo tee /etc/sudoers.d/agor <<'EOF'
-agor ALL=(agor_*) NOPASSWD: /usr/local/bin/agor-executor, /usr/bin/zellij
-agor ALL=(root) NOPASSWD: /usr/local/bin/agor admin *
-EOF
-```
-
-**Per-user setup:**
-```bash
-# Admin creates Unix user when needed
-sudo useradd -m -s /bin/bash agor_alice
-agor user link alice@example.com agor_alice
-```
-
-**User scenarios:**
-
-| User | `unix_username` | Session Execution | Terminal | Home Symlinks |
-|------|-----------------|-------------------|----------|---------------|
-| Alice | `agor_alice` | As `agor_alice` | As `agor_alice` | ✅ Created |
-| Bob | `null` | As `agor_executor` | As `agor_executor` | ❌ None |
-
-**Implications:**
-- ✅ Best of both worlds (isolation when needed, fallback when not)
-- ✅ Non-breaking (works for all users)
-- ✅ Progressive enhancement
-- ✅ Full worktree groups + FS permissions
-- ⚠️ Mixed security model
-
----
-
-### Mode 4: Strict
+### Mode 3: Strict
 
 **Use case:** Enterprise/compliance environments
 
 **Behavior:**
+
 - Every user MUST have `unix_username` set
 - Refuses to run sessions/terminals if `unix_username` is null
 - Full worktree groups + FS permissions
 - Maximum isolation
 
 **Config:**
+
 ```yaml
 execution:
   unix_user_mode: strict
 ```
 
 **Enforcement:**
+
 ```typescript
 // SDK execution
 if (mode === 'strict' && !sessionCreator.unix_username) {
   throw new Error(
     `Strict mode requires unix_username for ${sessionCreator.email}. ` +
-    `Admin must run: sudo agor user setup-unix ${sessionCreator.email}`
+      `Admin must run: sudo agor user setup-unix ${sessionCreator.email}`
   );
 }
 ```
 
 **Implications:**
+
 - ✅ Maximum isolation
 - ✅ Clear security model
 - ✅ Audit trail per Unix user
@@ -320,9 +291,6 @@ async function determineSessionExecutionUser(
 
     case 'insulated':
       return config.execution!.executor_unix_user;
-
-    case 'opportunistic':
-      return creator.unix_username ?? config.execution!.executor_unix_user;
 
     case 'strict':
       if (!creator.unix_username) {
@@ -367,7 +335,7 @@ await tasksRepo.create({
   task_id: newTaskId,
   session_id: sessionId,
   created_by: currentUser.user_id, // Bob
-  prompt: "...",
+  prompt: '...',
 });
 
 // But execution uses Alice's context:
@@ -378,6 +346,7 @@ await tasksRepo.create({
 ```
 
 **Why this matters:**
+
 - Session continuity (Claude SDK state)
 - Credential consistency (always Alice's keys)
 - Clear execution model (session creator owns the context)
@@ -394,9 +363,9 @@ interface Worktree {
   worktree_id: WorktreeID;
   name: string;
   path: string;
-  unix_group?: string;  // e.g., 'agor_wt_abc123' (null in simple mode)
-  others_can: 'view' | 'prompt' | 'all';  // App-layer permission
-  others_fs_access: 'none' | 'read' | 'write';  // OS-layer permission
+  unix_group?: string; // e.g., 'agor_wt_abc123' (null in simple mode)
+  others_can: 'view' | 'prompt' | 'all'; // App-layer permission
+  others_fs_access: 'none' | 'read' | 'write'; // OS-layer permission
   // ...
 }
 
@@ -410,6 +379,7 @@ interface WorktreeOwner {
 ### Lifecycle
 
 **1. Worktree creation:**
+
 ```typescript
 async function createWorktree(name: string, path: string, creatorId: UserID) {
   const worktreeId = generateWorktreeId();
@@ -440,6 +410,7 @@ async function createWorktree(name: string, path: string, creatorId: UserID) {
 ```
 
 **2. Adding owner:**
+
 ```typescript
 async function addWorktreeOwner(worktreeId: WorktreeID, userId: UserID) {
   const worktree = await worktreesRepo.findById(worktreeId);
@@ -450,7 +421,7 @@ async function addWorktreeOwner(worktreeId: WorktreeID, userId: UserID) {
 
   const mode = config.execution?.unix_user_mode ?? 'simple';
 
-  if (mode === 'opportunistic' || mode === 'strict') {
+  if (mode === 'strict') {
     if (user.unix_username && worktree.unix_group) {
       // Add to Unix group
       await execSudo(['usermod', '-aG', worktree.unix_group, user.unix_username]);
@@ -466,21 +437,22 @@ async function addWorktreeOwner(worktreeId: WorktreeID, userId: UserID) {
 ```
 
 **3. Removing owner:**
+
 ```typescript
 async function removeWorktreeOwner(worktreeId: WorktreeID, userId: UserID) {
   const worktree = await worktreesRepo.findById(worktreeId);
   const user = await usersRepo.findById(userId);
 
   // Remove app-layer ownership
-  await db.delete(worktreeOwnersTable)
-    .where(and(
-      eq(worktreeOwnersTable.worktree_id, worktreeId),
-      eq(worktreeOwnersTable.user_id, userId)
-    ));
+  await db
+    .delete(worktreeOwnersTable)
+    .where(
+      and(eq(worktreeOwnersTable.worktree_id, worktreeId), eq(worktreeOwnersTable.user_id, userId))
+    );
 
   const mode = config.execution?.unix_user_mode ?? 'simple';
 
-  if (mode === 'opportunistic' || mode === 'strict') {
+  if (mode === 'strict') {
     if (user.unix_username && worktree.unix_group) {
       // Remove from Unix group via admin tool
       await execAdminTool('remove-worktree-owner', worktreeId, userId);
@@ -494,6 +466,7 @@ async function removeWorktreeOwner(worktreeId: WorktreeID, userId: UserID) {
 ```
 
 **4. Changing non-owner access:**
+
 ```typescript
 async function updateWorktreeAccess(
   worktreeId: WorktreeID,
@@ -523,14 +496,15 @@ async function updateWorktreeAccess(
 
 ### Two-Layer Model
 
-| Layer | Enforces | Implementation | Bypass |
-|-------|----------|----------------|--------|
-| **App-layer** | Who can view/prompt/modify via API | FeathersJS hooks | Daemon internal calls |
-| **OS-layer** | Who can read/write files on disk | Unix groups + chmod | Direct filesystem access |
+| Layer         | Enforces                           | Implementation      | Bypass                   |
+| ------------- | ---------------------------------- | ------------------- | ------------------------ |
+| **App-layer** | Who can view/prompt/modify via API | FeathersJS hooks    | Daemon internal calls    |
+| **OS-layer**  | Who can read/write files on disk   | Unix groups + chmod | Direct filesystem access |
 
 ### Interaction
 
 **Scenario 1: Bob tries to read Alice's worktree (not an owner, `others_can=view`)**
+
 - **App-layer:** ✅ Allowed (can read via API)
 - **OS-layer:** Depends on `others_fs_access`
   - `none`: ❌ Denied (file reads fail)
@@ -538,27 +512,32 @@ async function updateWorktreeAccess(
   - `write`: ✅ Allowed
 
 **Scenario 2: Bob tries to prompt Alice's session (not an owner, `others_can=prompt`)**
+
 - **App-layer:** ✅ Allowed (can create tasks)
 - **Execution:** Runs as **Alice's unix user** (session.created_by)
 - **OS-layer:** Uses Alice's permissions (Bob's FS access irrelevant)
 
 **Scenario 3: Carol tries to modify worktree (not an owner, `others_can=view`)**
+
 - **App-layer:** ❌ Denied (Feathers hook throws Forbidden)
 - **OS-layer:** Never reached (API blocks it first)
 
 ### Why Both Layers?
 
 **App-layer alone is insufficient:**
+
 - Users can SSH into the box and access files directly
 - Motivated users can bypass API
 - Need OS-level enforcement for real security
 
 **OS-layer alone is insufficient:**
+
 - Can't model app-level concepts (sessions, tasks)
 - Can't enforce "view but not prompt" distinction
 - Need app-layer for UX (clear errors, permissions UI)
 
 **Together:**
+
 - App-layer provides UX and fine-grained control
 - OS-layer provides security boundary
 - Defense in depth
@@ -568,6 +547,7 @@ async function updateWorktreeAccess(
 ## Implementation Checklist
 
 ### Phase 1: Core Infrastructure
+
 - [ ] Add `unix_user_mode` config field
 - [ ] Update `User` model (remove unused fields like `unix_uid`, keep `unix_username`)
 - [ ] Add `unix_group`, `others_fs_access` to `Worktree` model
@@ -575,6 +555,7 @@ async function updateWorktreeAccess(
 - [ ] Implement `execSudo()` helper for controlled privilege escalation
 
 ### Phase 2: Worktree Groups
+
 - [ ] Implement `createWorktreeGroup()` - group creation on worktree create
 - [ ] Implement `addWorktreeOwner()` - usermod, symlink creation
 - [ ] Implement `removeWorktreeOwner()` - gpasswd, symlink removal
@@ -582,18 +563,21 @@ async function updateWorktreeAccess(
 - [ ] Add worktree deletion cleanup (remove group, clean symlinks)
 
 ### Phase 3: Session Execution
+
 - [ ] Update SDK execution to use `session.created_by` (not task creator)
 - [ ] Implement `determineSessionExecutionUser()`
 - [ ] Update executor spawning (sudo impersonation)
 - [ ] Update terminal spawning (use authenticated user, not session creator)
 
 ### Phase 4: RBAC Integration
+
 - [ ] Extend FeathersJS hooks for worktree ownership checks
 - [ ] Implement `ensureWorktreePermission()` hook helper
 - [ ] Apply hooks to `worktrees`, `sessions`, `tasks`, `messages` services
 - [ ] Add owner management endpoints (`PATCH /worktrees/:id/owners`)
 
 ### Phase 5: CLI & Setup
+
 - [ ] `agor user link <email> <unix-user>` - link user
 - [ ] `sudo agor user setup-unix <email>` - create + link
 - [ ] `agor setup sudoers [--mode]` - generate snippet
@@ -603,6 +587,7 @@ async function updateWorktreeAccess(
 - [ ] `agor worktree set-access <worktree> <mode>` - change access
 
 ### Phase 6: UI
+
 - [ ] Worktree owners management (add/remove)
 - [ ] `others_can` selector
 - [ ] `others_fs_access` selector
@@ -622,6 +607,7 @@ B. No symlinks (repos are agor-managed, don't expose)
 C. Allow fetch through daemon, but not direct access
 
 **Recommendation:** B - Don't symlink repos
+
 - Repos are implementation detail
 - Users work in worktrees, not repos
 - Fetching happens via daemon API
@@ -637,6 +623,7 @@ B. First wins, second gets numbered: `my-app`, `my-app-2`
 C. Use full path structure: `org/repo/worktree-name`
 
 **Recommendation:** A - Suffix with short ID
+
 - Unambiguous
 - Stable (doesn't depend on creation order)
 - Easy to implement
@@ -651,21 +638,20 @@ const symlinkPath = `/home/${user.unix_username}/agor/worktrees/${symlinkName}`;
 **Scenario:** Delete Agor user who owns worktrees
 
 **Recommendation:** Prevent deletion if user owns worktrees (or sessions)
+
 ```typescript
 async function deleteUser(userId: UserID) {
   const ownedWorktrees = await worktreesRepo.findByOwner(userId);
   if (ownedWorktrees.length > 0) {
     throw new Error(
-      `Cannot delete user: owns ${ownedWorktrees.length} worktrees. ` +
-      `Transfer ownership first.`
+      `Cannot delete user: owns ${ownedWorktrees.length} worktrees. ` + `Transfer ownership first.`
     );
   }
 
   const sessions = await sessionsRepo.findByCreator(userId);
   if (sessions.length > 0) {
     throw new Error(
-      `Cannot delete user: created ${sessions.length} sessions. ` +
-      `Archive sessions first.`
+      `Cannot delete user: created ${sessions.length} sessions. ` + `Archive sessions first.`
     );
   }
 
@@ -676,8 +662,8 @@ async function deleteUser(userId: UserID) {
   if (user.unix_username) {
     console.warn(
       `Unix user ${user.unix_username} still exists. ` +
-      `Archive: sudo tar -czf /var/backups/${user.unix_username}.tar.gz /home/${user.unix_username}\n` +
-      `Delete: sudo userdel -r ${user.unix_username}`
+        `Archive: sudo tar -czf /var/backups/${user.unix_username}.tar.gz /home/${user.unix_username}\n` +
+        `Delete: sudo userdel -r ${user.unix_username}`
     );
   }
 }
@@ -690,11 +676,12 @@ async function deleteUser(userId: UserID) {
 **Question:** Does it allow creating NEW sessions?
 
 **Recommendation:** Yes, but session creator becomes the execution user
+
 ```typescript
 // Bob creates session in Alice's worktree (others_can=prompt)
 const session = await sessionsRepo.create({
   worktree_id: aliceWorktree.worktree_id,
-  created_by: bob.user_id,  // Bob is session creator
+  created_by: bob.user_id, // Bob is session creator
   // ...
 });
 
@@ -704,6 +691,7 @@ const session = await sessionsRepo.create({
 ```
 
 **This makes sense:**
+
 - Session is Bob's, not Alice's
 - Bob can prompt his own session
 - Alice can also prompt Bob's session (if owners_can allows)
@@ -714,13 +702,13 @@ const session = await sessionsRepo.create({
 
 ### What Each Mode Protects
 
-| Threat | Simple | Insulated | Opportunistic | Strict |
-|--------|--------|-----------|---------------|--------|
-| DB access from agent code | ❌ | ✅ | ✅ | ✅ |
-| Credential theft (Alice → Bob) | ❌ | ❌ | ✅ | ✅ |
-| File access (Alice → Bob worktree) | ❌ | ⚠️ (app-layer) | ✅ (Unix groups) | ✅ (Unix groups) |
-| Session state leakage | ❌ | ❌ | ✅ | ✅ |
-| Audit trail | ⚠️ | ⚠️ | ✅ | ✅ |
+| Threat                             | Simple | Insulated        | Strict           |
+| ---------------------------------- | ------ | ---------------- | ---------------- |
+| DB access from agent code          | ❌     | ✅               | ✅               |
+| Credential theft (Alice → Bob)     | ❌     | ❌               | ✅               |
+| File access (Alice → Bob worktree) | ❌     | ✅ (Unix groups) | ✅ (Unix groups) |
+| Session state leakage              | ❌     | ❌               | ✅               |
+| Audit trail                        | ⚠️     | ⚠️               | ✅               |
 
 ### Sudoers Requirements Summary
 
@@ -731,12 +719,13 @@ const session = await sessionsRepo.create({
 agor ALL=(agor_executor) NOPASSWD: /usr/local/bin/agor-executor, /usr/bin/zellij
 agor ALL=(root) NOPASSWD: /usr/local/bin/agor admin *
 
-# Opportunistic/Strict mode (allow impersonating any user):
+# Strict mode (allow impersonating any user):
 agor ALL=(ALL) NOPASSWD: /usr/local/bin/agor-executor, /usr/bin/zellij
 agor ALL=(root) NOPASSWD: /usr/local/bin/agor admin *
 ```
 
 **Admin tools handle all privileged operations:**
+
 - `agor admin create-worktree-group <worktree-id>`
 - `agor admin add-worktree-owner <worktree-id> <user-id>`
 - `agor admin remove-worktree-owner <worktree-id> <user-id>`
@@ -759,6 +748,7 @@ agor ALL=(root) NOPASSWD: /usr/local/bin/agor admin *
    - Existing sessions work as before
 
 2. **Opt-in upgrade to insulated**
+
    ```bash
    agor config set execution.unix_user_mode insulated
    agor config set execution.executor_unix_user agor_executor
@@ -766,9 +756,10 @@ agor ALL=(root) NOPASSWD: /usr/local/bin/agor admin *
    sudo visudo -cf /tmp/sudoers.agor && sudo mv /tmp/sudoers.agor /etc/sudoers.d/agor
    ```
 
-3. **Upgrade to opportunistic (per-user as needed)**
+3. **Upgrade to strict (per-user as needed)**
+
    ```bash
-   agor config set execution.unix_user_mode opportunistic
+   agor config set execution.unix_user_mode strict
    sudo agor user setup-unix alice@example.com
    ```
 
@@ -789,40 +780,48 @@ agor ALL=(root) NOPASSWD: /usr/local/bin/agor admin *
 ## Key Design Decisions (Final)
 
 ### 1. **Root Operations:** Admin tools only, daemon stays unprivileged
+
 - Daemon calls `sudo agor admin <command>` for privileged ops
 - Self-hosted: sudoers config required
 - Agor Cloud: control plane handles this (secret sauce)
 
 ### 2. **Repo Access:** World-writable by default (start simple)
+
 - Users/agents need write access for fetch/rebase
 - Start with `chmod 2777` on repos
 - Upgrade to per-repo groups if security requires it
 - Risk acceptable (remote copy exists, can rebuild)
 
 ### 3. **Audit Logging:** Defer to later
+
 - Not critical for MVP
 - Add when compliance/enterprise requires it
 
 ### 4. **Unix Usernames:** No prefix required
+
 - Better UX for SSH/IDE: `ssh alice@server` not `ssh agor_alice@server`
 - Cleaner home paths: `/home/alice` not `/home/agor_alice`
-- Sudoers uses `ALL` for opportunistic/strict modes
+- Sudoers uses `ALL` for strict mode
 
 ### 5. **Session Immutability:** No transfer, ever
+
 - Session creator owns execution context forever
 - Cross-user prompting works (Bob prompts Alice's session → runs as Alice)
 - Export to markdown if session creator leaves
 
 ### 6. **Worktree Groups:** Keep `agor_wt_` prefix
+
 - Namespaced, no conflicts with user groups
 - Per-worktree isolation via Unix groups
 
 ### 7. **Home Organization:** `~/agor/worktrees/` only
+
 - Symlinks to owned worktrees
 - No repo symlinks (access via worktree `.git`)
 - Symlink naming: `<name>-<short-id>` for uniqueness
 
 ### 8. **Default Permissions:** `others_fs_access = read`
+
 - Balances collaboration and security
 - Owners can adjust as needed
 
@@ -835,11 +834,13 @@ agor ALL=(root) NOPASSWD: /usr/local/bin/agor admin *
 **Decision:** Daemon NEVER gets root permissions. Admin tools run as root.
 
 **Rationale:**
+
 - Agor Cloud will have control plane handling this (secret sauce)
 - Self-hosted admins use dedicated root-level CLI tools
 - Clean separation: daemon unprivileged, admin tools privileged
 
 **Implementation:**
+
 ```bash
 # Admin commands (must run as root)
 sudo agor admin add-worktree-owner <worktree-id> <user-id>
@@ -854,6 +855,7 @@ sudo agor admin delete-worktree-group <worktree-id>
 
 **Setup for self-hosted:**
 Admin must configure sudoers to allow daemon to call these specific admin tools:
+
 ```bash
 # /etc/sudoers.d/agor
 agor ALL=(root) NOPASSWD: /usr/local/bin/agor admin add-worktree-owner *
@@ -863,6 +865,7 @@ agor ALL=(root) NOPASSWD: /usr/local/bin/agor admin delete-worktree-group *
 ```
 
 **Benefits:**
+
 - Clear security boundary (admin tools are the only privileged code)
 - Easier to audit (small surface area)
 - Cloud deployment can replace with control plane API calls
@@ -883,6 +886,7 @@ agor ALL=(root) NOPASSWD: /usr/local/bin/agor admin delete-worktree-group *
 **Decision:** Users need WRITE access to repos (not just read)
 
 **Rationale:**
+
 - Agents may need to fetch/rebase: "please agent, fetch latest and rebase"
 - Users may want to rebase manually via SSH/IDE
 - Git operations (fetch, rebase, etc.) modify `.git/` directory
@@ -894,6 +898,7 @@ agor ALL=(root) NOPASSWD: /usr/local/bin/agor admin delete-worktree-group *
 **Implementation:**
 
 **Option A: Symlink repos in user homes (allows SSH/IDE access)**
+
 ```
 /home/agor_alice/
   agor/
@@ -905,6 +910,7 @@ agor ALL=(root) NOPASSWD: /usr/local/bin/agor admin delete-worktree-group *
 ```
 
 **Option B: No symlinks, users access via worktree paths**
+
 ```
 # User can still access repo through worktree's .git
 cd ~/agor/worktrees/my-project-abc123/
@@ -913,6 +919,7 @@ git rebase origin/main
 ```
 
 **Recommendation:** Start with Option B (no repo symlinks)
+
 - Worktree `.git` points to repo, so git commands work
 - Less complexity (no extra symlinks to manage)
 - Can add Option A later if users request direct repo access
@@ -922,6 +929,7 @@ git rebase origin/main
 **Key insight:** Repos need to be writable by ALL worktree owners across ALL worktrees that use the repo.
 
 **Problem:** A repo can have multiple worktrees with different ownership
+
 ```
 Repo: preset-io/agor
   Worktree 1 (main): owned by Alice, Bob
@@ -932,6 +940,7 @@ Repo: preset-io/agor
 **Solution:** Use compound group or most permissive group
 
 **Option A: Single group per repo (union of all worktree owners)**
+
 ```bash
 # Create repo group (union of all worktree groups)
 groupadd agor_repo_preset-io-agor
@@ -948,6 +957,7 @@ chmod -R 2775 /var/agor/repos/preset-io-agor
 ```
 
 **Option B: World-writable repos (simpler, less secure)**
+
 ```bash
 # Anyone can write (simpler, acceptable if all users trusted)
 chown -R agor:agor /var/agor/repos/preset-io-agor
@@ -957,6 +967,7 @@ chmod -R 2777 /var/agor/repos/preset-io-agor
 **Recommendation:** Start with Option B (simpler), upgrade to Option A when security requires it
 
 **Admin tool responsibility:**
+
 ```bash
 # When worktree owner added/removed:
 sudo agor admin update-repo-permissions <repo-slug>
@@ -966,20 +977,23 @@ sudo agor admin update-repo-permissions <repo-slug>
 **Risk mitigation strategies:**
 
 **Strategy 1: Trust + Documentation (Start here)**
+
 - Document safe practices ("don't run git gc manually")
 - Git is resilient (atomic refs, content-addressed objects)
 - Remote is always safe fallback
 - Periodic `git fsck` in background
 
 **Strategy 2: MCP Tools for Safe Operations (Add incrementally)**
+
 ```typescript
 // Expose blessed git operations via MCP
-agor_git_fetch(repo_slug, remote) // Fetch with validation
-agor_git_rebase(worktree_id, branch) // Rebase with checks
-agor_git_validate(repo_slug) // Run git fsck
+agor_git_fetch(repo_slug, remote); // Fetch with validation
+agor_git_rebase(worktree_id, branch); // Rebase with checks
+agor_git_validate(repo_slug); // Run git fsck
 ```
 
 **Strategy 3: Auto-Recovery (Future)**
+
 - Detect corruption via periodic fsck
 - Auto-rebuild from remote if needed
 - Notify users when recovery happens
@@ -993,6 +1007,7 @@ agor_git_validate(repo_slug) // Run git fsck
 **Current design:** Sessions are immutable to creator, no transfer
 
 **Rationale:**
+
 - Session state lives in creator's ~/.claude/
 - Transfer would require copying state (complex, lossy)
 - Better to start fresh session if creator leaves
@@ -1006,11 +1021,13 @@ agor_git_validate(repo_slug) // Run git fsck
 **Decision:** No required prefix (e.g., `agor_` not required)
 
 **Rationale:**
+
 - Users SSH/IDE into their accounts with standard usernames
 - Better UX: `ssh alice@agor-server` vs `ssh agor_alice@agor-server`
 - Cleaner home paths: `/home/alice` vs `/home/agor_alice`
 
 **Sudoers implications:**
+
 ```bash
 # Can't use prefix pattern anymore
 # Option A: List users explicitly (updated when users added)
@@ -1033,6 +1050,7 @@ agor ALL=(ALL) NOPASSWD: /usr/local/bin/agor-executor, /usr/bin/zellij
 ### 6. Multiple Worktrees with Same Name
 
 **Current approach:** Suffix symlinks with short ID
+
 ```
 ~/agor/worktrees/
   my-app-abc123/  → /var/agor/worktrees/wt-abc123/my-app
@@ -1046,6 +1064,7 @@ agor ALL=(ALL) NOPASSWD: /usr/local/bin/agor-executor, /usr/bin/zellij
 ### 7. Non-Owner FS Access Defaults
 
 **Recommendation:** `others_fs_access` defaults to `read`
+
 - Balances collaboration and security
 - Owners can tighten to `none` or loosen to `write`
 
@@ -1056,6 +1075,7 @@ agor ALL=(ALL) NOPASSWD: /usr/local/bin/agor-executor, /usr/bin/zellij
 **Decision:** Defer to later (not critical for MVP)
 
 **When to add:**
+
 - Compliance requirements emerge
 - Multi-tenant deployments
 - Enterprise customers request it

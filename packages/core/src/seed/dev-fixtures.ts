@@ -21,7 +21,7 @@ import {
 } from '../db/repositories';
 import { cloneRepo, createWorktree, getWorktreePath } from '../git';
 import { generateId } from '../lib/ids';
-import { SudoDirectExecutor, UnixIntegrationService } from '../unix';
+import { DirectExecutor, UnixIntegrationService } from '../unix';
 
 export interface SeedOptions {
   /**
@@ -79,7 +79,7 @@ export async function seedDevFixtures(options: SeedOptions = {}): Promise<SeedRe
     const config = loadConfigSync();
     const daemonUser = config.daemon?.unix_user || os.userInfo().username;
     console.log(`🔐 RBAC enabled - Unix integration active (daemon user: ${daemonUser})`);
-    unixIntegrationService = new UnixIntegrationService(db, new SudoDirectExecutor(), {
+    unixIntegrationService = new UnixIntegrationService(db, new DirectExecutor(), {
       enabled: true,
       daemonUser,
     });

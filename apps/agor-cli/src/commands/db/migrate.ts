@@ -43,7 +43,7 @@ export default class DbMigrate extends Command {
         status.applied.forEach((tag) => {
           this.log(`  ${chalk.dim('•')} ${tag}`);
         });
-        return;
+        process.exit(0);
       }
 
       // Show pending migrations
@@ -127,6 +127,9 @@ export default class DbMigrate extends Command {
       this.log('');
       this.log('You can now start the daemon with:');
       this.log(chalk.cyan('  agor daemon start'));
+
+      // Force exit to close database connections (postgres-js keeps connections open)
+      process.exit(0);
     } catch (error) {
       this.error(
         `Failed to run migrations: ${error instanceof Error ? error.message : String(error)}`

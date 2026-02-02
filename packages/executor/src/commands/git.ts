@@ -258,6 +258,95 @@ export async function handleGitClone(
 }
 
 /**
+ * Render environment command templates with full context including GID
+ *
+ * Fetches worktree and repo from database, gets GID from Unix group (if available),
+ * and renders all environment templates with complete context.
+ *
+ * @param client - Feathers client
+ * @param worktreeId - Worktree ID
+ * @param repoId - Repo ID
+ * @param unixGroup - Unix group name (to look up GID), undefined if RBAC disabled
+ * @returns Rendered template fields
+ */
+async function renderEnvironmentTemplates(
+  client: AgorClient,
+  worktreeId: string,
+  repoId: string,
+  unixGroup: string | undefined
+): Promise<{
+  start_command?: string;
+  stop_command?: string;
+  nuke_command?: string;
+  health_check_url?: string;
+  app_url?: string;
+  logs_command?: string;
+}> {
+  // Import dependencies dynamically
+  const { renderTemplate } = await import('@agor/core/templates/handlebars-helpers');
+  const { getGidFromGroupName } = await import('@agor/core/unix');
+
+  // Fetch worktree and repo from database
+  const worktree = await client.service('worktrees').get(worktreeId);
+  const repo = await client.service('repos').get(repoId);
+
+  // Check if repo has environment config
+  if (!repo.environment_config) {
+    return {};
+  }
+
+  // Look up GID from Unix group (only if group was created)
+  const unixGid = unixGroup ? getGidFromGroupName(unixGroup) : undefined;
+
+  // Build template context with full information including GID (if available)
+  const templateContext = {
+    worktree: {
+      unique_id: worktree.worktree_unique_id,
+      name: worktree.name,
+      path: worktree.path,
+      gid: unixGid, // Available when Unix groups are enabled, undefined otherwise
+    },
+    repo: {
+      slug: repo.slug,
+    },
+    custom: worktree.custom_context || {},
+  };
+
+  const safeRenderTemplate = (template: string, fieldName: string): string | undefined => {
+    try {
+      return renderTemplate(template, templateContext);
+    } catch (err) {
+      console.warn(
+        `[renderEnvironmentTemplates] Failed to render ${fieldName} for ${worktree.name}:`,
+        err
+      );
+      return undefined;
+    }
+  };
+
+  return {
+    start_command: repo.environment_config.up_command
+      ? safeRenderTemplate(repo.environment_config.up_command, 'start_command')
+      : undefined,
+    stop_command: repo.environment_config.down_command
+      ? safeRenderTemplate(repo.environment_config.down_command, 'stop_command')
+      : undefined,
+    nuke_command: repo.environment_config.nuke_command
+      ? safeRenderTemplate(repo.environment_config.nuke_command, 'nuke_command')
+      : undefined,
+    health_check_url: repo.environment_config.health_check?.url_template
+      ? safeRenderTemplate(repo.environment_config.health_check.url_template, 'health_check_url')
+      : undefined,
+    app_url: repo.environment_config.app_url_template
+      ? safeRenderTemplate(repo.environment_config.app_url_template, 'app_url')
+      : undefined,
+    logs_command: repo.environment_config.logs_command
+      ? safeRenderTemplate(repo.environment_config.logs_command, 'logs_command')
+      : undefined,
+  };
+}
+
+/**
  * Handle git.worktree.add command
  *
  * Creates a git worktree at the specified path.
@@ -340,7 +429,8 @@ export async function handleGitWorktreeAdd(
           worktreePath,
           othersAccess,
           client,
-          payload.params.daemonUser
+          payload.params.daemonUser,
+          payload.params.creatorUnixUsername
         );
         console.log(`[git.worktree.add] Unix group initialized: ${unixGroup}`);
 
@@ -357,12 +447,44 @@ export async function handleGitWorktreeAdd(
       }
     }
 
+    // Render environment command templates (after Unix group creation if applicable)
+    // Templates should be rendered regardless of RBAC status, but GID will only be available
+    // when Unix groups are enabled
+    let renderedTemplates:
+      | {
+          start_command?: string;
+          stop_command?: string;
+          nuke_command?: string;
+          health_check_url?: string;
+          app_url?: string;
+          logs_command?: string;
+        }
+      | undefined;
+
+    if (worktreeId) {
+      try {
+        const logSuffix = unixGroup
+          ? `with GID for worktree ${worktreeId.substring(0, 8)}`
+          : `for worktree ${worktreeId.substring(0, 8)} (no Unix group)`;
+        console.log(`[git.worktree.add] Rendering environment templates ${logSuffix}`);
+        renderedTemplates = await renderEnvironmentTemplates(client, worktreeId, repoId, unixGroup);
+        console.log(`[git.worktree.add] Templates rendered successfully`);
+      } catch (error) {
+        console.error(
+          `[git.worktree.add] Failed to render templates:`,
+          error instanceof Error ? error.message : String(error)
+        );
+        // Don't fail the entire operation if template rendering fails
+      }
+    }
+
     // Patch worktree status to 'ready' (DB record was created by daemon with 'creating')
     if (worktreeId) {
       console.log(`[git.worktree.add] Marking worktree ${worktreeId.substring(0, 8)} as ready`);
       await client.service('worktrees').patch(worktreeId, {
         filesystem_status: 'ready',
         ...(unixGroup ? { unix_group: unixGroup } : {}),
+        ...(renderedTemplates || {}),
       });
       console.log(`[git.worktree.add] Worktree marked as ready`);
     }

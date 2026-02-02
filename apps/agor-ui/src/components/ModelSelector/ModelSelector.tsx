@@ -1,10 +1,8 @@
 import { AVAILABLE_CLAUDE_MODEL_ALIASES, GEMINI_MODELS, type GeminiModel } from '@agor/core/models';
 import { InfoCircleOutlined } from '@ant-design/icons';
-import { Input, Radio, Select, Space, Tooltip, Typography } from 'antd';
+import { Input, Radio, Select, Space, Tooltip } from 'antd';
 import { useState } from 'react';
 import { type OpenCodeModelConfig, OpenCodeModelSelector } from './OpenCodeModelSelector';
-
-const { Link } = Typography;
 
 export interface ModelConfig {
   mode: 'alias' | 'exact';
@@ -221,19 +219,21 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
               />
               <div style={{ marginTop: 8, fontSize: 12, color: 'rgba(255, 255, 255, 0.45)' }}>
                 Enter any model ID to pin to a specific version.{' '}
-                <Link
+                <a
                   href={
                     effectiveTool === 'codex'
                       ? 'https://platform.openai.com/docs/models'
                       : effectiveTool === 'gemini'
                         ? 'https://ai.google.dev/gemini-api/docs/models'
-                        : 'https://docs.anthropic.com/en/docs/about-claude/models' // claude-code (opencode handled earlier)
+                        : 'https://platform.claude.com/docs/en/about-claude/models' // claude-code (opencode handled earlier)
                   }
                   target="_blank"
-                  style={{ fontSize: 12 }}
+                  rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  style={{ fontSize: 12, color: '#1677ff' }}
                 >
                   View available models
-                </Link>
+                </a>
               </div>
             </div>
           )}

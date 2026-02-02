@@ -62,7 +62,7 @@
     "@homebridge/node-pty-prebuilt-multiarch": "^0.13.1",
     "@iarna/toml": "^2.2.5",
     "@libsql/client": "^0.15.15",
-    "@modelcontextprotocol/sdk": "^1.24.0",
+    "@modelcontextprotocol/sdk": "^1.25.2",
     "@oclif/core": "^4.6.0",
     "@oclif/plugin-help": "^6.2.18",
     "@openai/codex-sdk": "^0.71.0",

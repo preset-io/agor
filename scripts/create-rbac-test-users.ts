@@ -28,7 +28,7 @@ import {
 import { autoAssignWorktreeUniqueId } from '@agor/core/environment/variable-resolver';
 import { createWorktree } from '@agor/core/git';
 import type { RepoID, UUID } from '@agor/core/types';
-import { SudoDirectExecutor, UnixIntegrationService } from '@agor/core/unix';
+import { DirectExecutor, UnixIntegrationService } from '@agor/core/unix';
 import chalk from 'chalk';
 
 interface TestUser {
@@ -87,7 +87,7 @@ async function main() {
     console.log(
       chalk.cyan(`🔐 RBAC enabled - Unix integration active (daemon user: ${daemonUser})\n`)
     );
-    unixIntegrationService = new UnixIntegrationService(db, new SudoDirectExecutor(), {
+    unixIntegrationService = new UnixIntegrationService(db, new DirectExecutor(), {
       enabled: true,
       daemonUser,
     });

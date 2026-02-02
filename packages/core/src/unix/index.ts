@@ -8,8 +8,12 @@
 
 // Command execution abstraction (for admin CLI commands)
 export * from './command-executor.js';
+// Environment command spawn utilities
+export * from './environment-command-spawn.js';
 // Worktree group management
 export * from './group-manager.js';
+// ID lookup utilities
+export * from './id-lookups.js';
 // Central command execution as another user (preferred API)
 export * from './run-as-user.js';
 // Symlink management

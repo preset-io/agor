@@ -39,6 +39,47 @@ import { mapPermissionMode } from './permission-mapper.js';
 import { extractGeminiTokenUsage } from './usage.js';
 
 /**
+ * Safely stringify an object, handling circular references and edge cases
+ * Uses a WeakSet to track seen objects and replaces circular refs with a descriptive string
+ *
+ * @example
+ * // Circular reference handling
+ * const obj = { a: 1 };
+ * obj.self = obj;
+ * safeStringify(obj); // '{"a":1,"self":"[Circular Reference]"}'
+ *
+ * @example
+ * // BigInt serialization
+ * safeStringify({ count: 123n }); // '{"count":"123"}'
+ *
+ * @param obj - Any value to stringify (typically an object)
+ * @returns JSON string with circular references replaced by "[Circular Reference]"
+ */
+function safeStringify(obj: unknown): string {
+  const seen = new WeakSet();
+
+  return JSON.stringify(obj, (key, value) => {
+    // Handle BigInt serialization (would throw TypeError otherwise)
+    if (typeof value === 'bigint') {
+      return value.toString();
+    }
+
+    // Handle non-object values normally
+    if (typeof value !== 'object' || value === null) {
+      return value;
+    }
+
+    // Detect circular references
+    if (seen.has(value)) {
+      return '[Circular Reference]';
+    }
+
+    seen.add(value);
+    return value;
+  });
+}
+
+/**
  * GeminiClient with internal config property exposed
  * The SDK doesn't expose this in types, but we need it for executeToolCall()
  * Note: config is private in GeminiClient, so we use unknown cast
@@ -394,16 +435,17 @@ export class GeminiPromptService {
                 : response;
 
             // Sanitize response to remove circular references (common with file system tools)
-            // JSON.parse(JSON.stringify()) handles circular refs by throwing, so catch and stringify
+            // JSON.parse(JSON.stringify()) handles circular refs by throwing, so catch and stringify safely
             let sanitizedOutput = responseOutput;
             try {
               sanitizedOutput = JSON.parse(JSON.stringify(responseOutput));
             } catch (_circularError) {
-              // If circular reference detected, convert to string
+              // If circular reference detected, use safe stringify that handles circular refs
               console.warn(
-                `[Gemini Loop] Tool ${toolCall.name} response has circular reference, converting to string`
+                `[Gemini Loop] Tool ${toolCall.name} response has circular reference, using safe stringify`
               );
-              sanitizedOutput = String(responseOutput);
+              // Parse the safe stringified version to ensure it's a proper JSON object
+              sanitizedOutput = JSON.parse(safeStringify(responseOutput));
             }
 
             functionResponseParts.push({
@@ -415,10 +457,12 @@ export class GeminiPromptService {
           } catch (error) {
             console.error(`[Gemini Loop] Error executing tool ${toolCall.name}:`, error);
             // On error, create a function response part with the error
+            // Use safe serialization for error objects as they may have circular refs
+            const errorMessage = error instanceof Error ? error.message : String(error);
             functionResponseParts.push({
               functionResponse: {
                 name: toolCall.name,
-                response: { error: String(error) },
+                response: { error: errorMessage },
               },
             } as Part);
           }
@@ -633,16 +677,12 @@ export class GeminiPromptService {
     // Configure Agor MCP server (self-access to daemon) - only if MCP is enabled
     if (this.mcpEnabled !== false) {
       const mcpToken = session.mcp_token;
-      console.log(`🔍 [MCP DEBUG] Checking for MCP token in session ${sessionId.substring(0, 8)}`);
-      console.log(
-        `   session.mcp_token: ${mcpToken ? `${mcpToken.substring(0, 16)}...` : 'NOT FOUND'}`
-      );
 
       if (mcpToken) {
         // Get daemon URL from config (supports Codespaces auto-detection)
         const daemonUrl = await getDaemonUrl();
 
-        console.log(`🔌 Configuring Agor MCP server (self-access to daemon)`);
+        console.log(`🔌 Configuring Agor MCP server at ${daemonUrl}/mcp`);
         // Use httpUrl parameter for HTTP transport
         mcpServersConfig.agor = new Gemini.MCPServerConfig(
           undefined, // command
@@ -653,12 +693,10 @@ export class GeminiPromptService {
           `${daemonUrl}/mcp?sessionToken=${mcpToken}`, // httpUrl
           {} // headers
         );
-        console.log(
-          `   Agor MCP URL: ${daemonUrl}/mcp?sessionToken=${mcpToken.substring(0, 16)}...`
-        );
       } else {
-        console.warn(`⚠️  No MCP token found for session ${sessionId.substring(0, 8)}`);
-        console.warn(`   Session will not have access to Agor MCP tools`);
+        console.warn(
+          `⚠️  No MCP token found for session ${sessionId.substring(0, 8)} - MCP tools unavailable`
+        );
       }
     } else {
       console.log(`🔒 Agor MCP server disabled - skipping MCP configuration`);

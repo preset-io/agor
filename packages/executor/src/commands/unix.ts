@@ -26,6 +26,7 @@ import {
   getWorktreePermissionMode,
   REPO_GIT_PERMISSION_MODE,
   UnixGroupCommands,
+  UnixUserCommands,
 } from '@agor/core/unix';
 import type {
   ExecutorResult,
@@ -45,6 +46,9 @@ const execAsync = promisify(exec);
 
 /**
  * Execute a shell command
+ *
+ * NOTE: Commands from UnixGroupCommands already include `sudo -n` where needed.
+ * This function simply executes the command string as-is.
  */
 async function runCommand(
   command: string,
@@ -63,6 +67,9 @@ async function runCommand(
 
 /**
  * Execute a command and check if it succeeds (returns true/false)
+ *
+ * NOTE: Commands from UnixGroupCommands already include `sudo -n` where needed.
+ * This function simply executes the command string as-is.
  */
 async function checkCommand(command: string): Promise<boolean> {
   try {
@@ -489,8 +496,8 @@ export async function handleUnixSyncUser(
 
         // Delete the user
         const deleteCmd = payload.params.deleteHome
-          ? `userdel -r ${unixUsername}`
-          : `userdel ${unixUsername}`;
+          ? UnixUserCommands.deleteUserWithHome(unixUsername)
+          : UnixUserCommands.deleteUser(unixUsername);
         await runCommand(deleteCmd);
         console.log(`[unix.sync-user] Deleted Unix user ${unixUsername}`);
       }
@@ -503,7 +510,7 @@ export async function handleUnixSyncUser(
     const userExists = await checkCommand(`id ${unixUsername} > /dev/null 2>&1`);
     if (!userExists) {
       // Create user with home directory
-      await runCommand(`useradd -m -s /bin/bash ${unixUsername}`);
+      await runCommand(UnixUserCommands.createUser(unixUsername));
       console.log(`[unix.sync-user] Created Unix user ${unixUsername}`);
     }
 
@@ -521,6 +528,38 @@ export async function handleUnixSyncUser(
     if (!inAgorGroup) {
       await runCommand(UnixGroupCommands.addUserToGroup(unixUsername, AGOR_USERS_GROUP));
       console.log(`[unix.sync-user] Added ${unixUsername} to ${AGOR_USERS_GROUP}`);
+    }
+
+    // Configure git safe.directory for worktrees (if requested by daemon)
+    // This prevents "dubious ownership" errors when user runs git commands
+    // in worktrees owned by the daemon user (only needed when unix impersonation is enabled)
+    if (payload.params.configureGitSafeDirectory) {
+      try {
+        const worktreesPattern = '/var/lib/agor/home/agorpg/.agor/worktrees/*/*';
+
+        // Check if safe.directory is already configured (idempotent)
+        let existingEntries: string[] = [];
+        try {
+          const checkCmd = `sudo -u ${unixUsername} git config --global --get-all safe.directory`;
+          const { stdout } = await execAsync(checkCmd);
+          existingEntries = stdout ? stdout.split('\n').filter(Boolean) : [];
+        } catch {
+          // Config doesn't exist yet, that's fine
+        }
+
+        if (!existingEntries.includes(worktreesPattern)) {
+          // Add wildcard safe.directory for all worktrees
+          await runCommand(
+            `sudo -u ${unixUsername} git config --global --add safe.directory '${worktreesPattern}'`
+          );
+          console.log(`[unix.sync-user] Configured git safe.directory for ${unixUsername}`);
+        } else {
+          console.log(`[unix.sync-user] git safe.directory already configured for ${unixUsername}`);
+        }
+      } catch (error) {
+        // Non-fatal - log warning and continue
+        console.warn(`[unix.sync-user] Failed to configure git safe.directory:`, error);
+      }
     }
 
     // Sync password if provided
@@ -623,7 +662,8 @@ export async function initializeWorktreeGroup(
   worktreePath: string,
   othersAccess: 'none' | 'read' | 'write',
   client: AgorClient,
-  daemonUser?: string
+  daemonUser?: string,
+  creatorUnixUsername?: string
 ): Promise<string> {
   const groupName = generateWorktreeGroupName(worktreeId as WorktreeID);
 
@@ -649,6 +689,17 @@ export async function initializeWorktreeGroup(
     if (!inGroup) {
       await runCommand(UnixGroupCommands.addUserToGroup(daemonUser, groupName));
       console.log(`[unix] Added daemon user ${daemonUser} to group ${groupName}`);
+    }
+  }
+
+  // Add creator to group if provided (worktree owner gets access)
+  if (creatorUnixUsername) {
+    const inGroup = await checkCommand(
+      UnixGroupCommands.isUserInGroup(creatorUnixUsername, groupName)
+    );
+    if (!inGroup) {
+      await runCommand(UnixGroupCommands.addUserToGroup(creatorUnixUsername, groupName));
+      console.log(`[unix] Added creator ${creatorUnixUsername} to group ${groupName}`);
     }
   }
 

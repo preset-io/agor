@@ -3,18 +3,22 @@
  *
  * Enforces app-layer permissions for worktrees and their nested resources (sessions/tasks/messages).
  *
- * NOTE: This file uses `as any` casts for Feathers hook context.params extensions.
- * This is necessary because the FeathersJS type system doesn't support custom properties on context.params.
- * All `any` uses are isolated to safe type assertions for custom properties we add to the context.
+ * Uses RBACParams to provide type-safe access to cached RBAC entities (worktree, session, ownership).
+ * This avoids redundant database queries within hook chains.
  *
  * @see context/explorations/rbac.md
  * @see context/explorations/unix-user-modes.md
  */
 
-// biome-ignore lint/suspicious/noExplicitAny: File uses type assertions for Feathers context extensions
-import type { WorktreeRepository } from '@agor/core/db';
+import type { SessionRepository, WorktreeRepository } from '@agor/core/db';
 import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
-import type { HookContext, UUID, Worktree, WorktreePermissionLevel } from '@agor/core/types';
+import type {
+  HookContext,
+  Session,
+  UUID,
+  Worktree,
+  WorktreePermissionLevel,
+} from '@agor/core/types';
 
 /**
  * Permission level hierarchy (for comparisons)
@@ -133,17 +137,12 @@ export function loadWorktree(worktreeRepo: WorktreeRepository, worktreeIdField =
     }
 
     // Check ownership
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
-    const userId = (context.params as any).user?.user_id;
-    const isOwner = userId
-      ? await worktreeRepo.isOwner(worktree.worktree_id, userId as UUID)
-      : false;
+    const userId = context.params.user?.user_id as UUID | undefined;
+    const isOwner = userId ? await worktreeRepo.isOwner(worktree.worktree_id, userId) : false;
 
-    // Cache on context (use any to bypass type checking for custom properties)
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
-    (context.params as any).worktree = worktree;
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
-    (context.params as any).isWorktreeOwner = isOwner;
+    // Cache on context for downstream hooks (type-safe via RBACParams)
+    context.params.worktree = worktree;
+    context.params.isWorktreeOwner = isOwner;
 
     return context;
   };
@@ -176,17 +175,14 @@ export function ensureWorktreePermission(
     }
 
     // Worktree and ownership should have been cached by loadWorktree hook
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
-    const worktree = (context.params as any).worktree;
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
-    const isOwner = (context.params as any).isWorktreeOwner ?? false;
+    const worktree = context.params.worktree;
+    const isOwner = context.params.isWorktreeOwner ?? false;
 
     if (!worktree) {
       throw new Error('loadWorktree hook must run before ensureWorktreePermission');
     }
 
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
-    const userId = (context.params as any).user.user_id;
+    const userId = context.params.user.user_id as UUID;
 
     if (!hasWorktreePermission(worktree, userId, isOwner, requiredLevel)) {
       const effectiveLevel = resolveWorktreePermission(worktree, userId, isOwner);
@@ -200,16 +196,13 @@ export function ensureWorktreePermission(
 }
 
 /**
- * Scope worktree query to only return authorized worktrees
+ * Scope worktree query to only return authorized worktrees (OPTIMIZED SQL VERSION)
  *
- * Injects filters into context.params.query so find() only returns worktrees
- * the user can access (owner OR others_can >= 'view').
+ * Replaces the default find() query with an optimized SQL query that uses JOIN
+ * to filter worktrees by access in a single database query instead of N+1 queries.
  *
- * This is more complex than simple ownership checks because we need to join
- * with worktree_owners table and apply OR logic.
- *
- * For now, we'll implement this as a post-filter in the service hook.
- * In the future, we can optimize this with a custom SQL query.
+ * This is a BEFORE hook that modifies the query to use the repository's
+ * findAccessibleWorktrees method which does a LEFT JOIN with worktree_owners.
  *
  * @param worktreeRepo - WorktreeRepository instance
  * @returns Feathers hook
@@ -221,26 +214,131 @@ export function scopeWorktreeQuery(worktreeRepo: WorktreeRepository) {
       return context;
     }
 
-    // For now, we'll rely on the service to filter results
-    // The service will need to load all worktrees and filter based on ownership
-    // This is not ideal for performance, but we can optimize later with custom SQL
+    const userId = context.params.user?.user_id as UUID | undefined;
+    if (!userId) {
+      // Not authenticated - return empty results
+      context.result = {
+        total: 0,
+        limit: 0,
+        skip: 0,
+        data: [],
+      };
+      return context;
+    }
 
-    // Cache the repository on context for the service to use
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
-    (context.params as any).worktreeRepo = worktreeRepo;
+    // Use optimized repository method (single SQL query with JOIN)
+    const accessibleWorktrees = await worktreeRepo.findAccessibleWorktrees(userId);
+
+    // Set result directly to bypass default query
+    // This prevents the N+1 problem from the old filterWorktreesByPermission approach
+    context.result = {
+      total: accessibleWorktrees.length,
+      limit: context.params.query?.$limit ?? accessibleWorktrees.length,
+      skip: context.params.query?.$skip ?? 0,
+      data: accessibleWorktrees,
+    };
 
     return context;
   };
 }
 
 /**
- * Filter worktrees by permission in find() results
+ * Helper to compare two session fields for sorting
+ *
+ * Handles string, number, and date comparisons with type safety.
+ */
+function compareSessionFields(a: Session, b: Session, field: keyof Session, order: 1 | -1): number {
+  const aVal = a[field];
+  const bVal = b[field];
+
+  // Handle null/undefined
+  if (aVal == null && bVal == null) return 0;
+  if (aVal == null) return 1;
+  if (bVal == null) return -1;
+
+  // Type-safe comparison
+  if (aVal < bVal) return order === -1 ? 1 : -1;
+  if (aVal > bVal) return order === -1 ? -1 : 1;
+  return 0;
+}
+
+/**
+ * Scope session query to only return sessions from authorized worktrees (OPTIMIZED SQL VERSION)
+ *
+ * Uses an optimized SQL query with JOINs to filter sessions by worktree access
+ * in a single database query instead of N+1 queries.
+ *
+ * This is a BEFORE hook that replaces the default find() query.
+ *
+ * @param sessionRepo - SessionRepository instance
+ * @returns Feathers hook
+ */
+export function scopeSessionQuery(sessionRepo: SessionRepository) {
+  return async (context: HookContext) => {
+    // Skip for internal calls
+    if (!context.params.provider) {
+      return context;
+    }
+
+    // Only apply to find() method
+    if (context.method !== 'find') {
+      return context;
+    }
+
+    const userId = context.params.user?.user_id as UUID | undefined;
+    if (!userId) {
+      // Not authenticated - return empty results
+      context.result = {
+        total: 0,
+        limit: 0,
+        skip: 0,
+        data: [],
+      };
+      return context;
+    }
+
+    // Use optimized repository method (single SQL query with JOINs)
+    const accessibleSessions = await sessionRepo.findAccessibleSessions(userId);
+
+    // Apply sorting if specified in query
+    let sortedSessions = accessibleSessions;
+    const sort = context.params.query?.$sort;
+    if (sort) {
+      const sortField = Object.keys(sort)[0] as keyof Session;
+      const sortOrder = sort[sortField] as 1 | -1;
+      sortedSessions = [...accessibleSessions].sort((a, b) =>
+        compareSessionFields(a, b, sortField, sortOrder)
+      );
+    }
+
+    // Apply pagination if specified
+    const limit = context.params.query?.$limit ?? sortedSessions.length;
+    const skip = context.params.query?.$skip ?? 0;
+    const paginatedSessions = sortedSessions.slice(skip, skip + limit);
+
+    // Set result directly to bypass default query
+    context.result = {
+      total: sortedSessions.length,
+      limit,
+      skip,
+      data: paginatedSessions,
+    };
+
+    return context;
+  };
+}
+
+/**
+ * Filter worktrees by permission in find() results (DEPRECATED - use scopeWorktreeQuery instead)
  *
  * This is a post-query hook that filters out worktrees the user cannot access.
  * Should run AFTER the database query.
  *
+ * WARNING: This has an N+1 query problem. Use scopeWorktreeQuery instead.
+ *
  * @param worktreeRepo - WorktreeRepository instance
  * @returns Feathers hook
+ * @deprecated Use scopeWorktreeQuery for optimized SQL-based filtering
  */
 export function filterWorktreesByPermission(worktreeRepo: WorktreeRepository) {
   return async (context: HookContext) => {
@@ -254,8 +352,7 @@ export function filterWorktreesByPermission(worktreeRepo: WorktreeRepository) {
       return context;
     }
 
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
-    const userId = (context.params as any).user?.user_id;
+    const userId = context.params.user?.user_id as UUID | undefined;
     if (!userId) {
       // Not authenticated - return empty results
       context.result = {
@@ -382,17 +479,13 @@ export function loadSessionWorktree(
     }
 
     // Check ownership
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
-    const userId = (context.params as any).user?.user_id;
+    const userId = context.params.user?.user_id as UUID | undefined;
     const isOwner = userId ? await worktreeRepo.isOwner(worktree.worktree_id, userId) : false;
 
-    // Cache on context
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
-    (context.params as any).session = session;
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
-    (context.params as any).worktree = worktree;
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
-    (context.params as any).isWorktreeOwner = isOwner;
+    // Cache on context for downstream hooks (type-safe via RBACParams)
+    context.params.session = session;
+    context.params.worktree = worktree;
+    context.params.isWorktreeOwner = isOwner;
 
     return context;
   };
@@ -478,9 +571,8 @@ export function resolveSessionContext() {
       );
     }
 
-    // Cache on context
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
-    (context.params as any).sessionId = sessionId;
+    // Cache on context for downstream hooks (type-safe via RBACParams)
+    context.params.sessionId = sessionId;
 
     return context;
   };
@@ -506,8 +598,7 @@ export function loadSession(
       return context;
     }
 
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
-    const sessionId = (context.params as any).sessionId;
+    const sessionId = context.params.sessionId;
 
     if (!sessionId) {
       throw new Error('resolveSessionContext hook must run before loadSession');
@@ -520,9 +611,8 @@ export function loadSession(
       throw new Forbidden(`Session not found: ${sessionId}`);
     }
 
-    // Cache on context
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
-    (context.params as any).session = session;
+    // Cache on context for downstream hooks (type-safe via RBACParams)
+    context.params.session = session;
 
     return context;
   };
@@ -545,8 +635,7 @@ export function loadWorktreeFromSession(worktreeRepo: WorktreeRepository) {
       return context;
     }
 
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
-    const session = (context.params as any).session;
+    const session = context.params.session;
 
     if (!session) {
       throw new Error('loadSession hook must run before loadWorktreeFromSession');
@@ -560,15 +649,12 @@ export function loadWorktreeFromSession(worktreeRepo: WorktreeRepository) {
     }
 
     // Check ownership
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
-    const userId = (context.params as any).user?.user_id;
+    const userId = context.params.user?.user_id as UUID | undefined;
     const isOwner = userId ? await worktreeRepo.isOwner(worktree.worktree_id, userId) : false;
 
-    // Cache on context
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
-    (context.params as any).worktree = worktree;
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
-    (context.params as any).isWorktreeOwner = isOwner;
+    // Cache on context for downstream hooks (type-safe via RBACParams)
+    context.params.worktree = worktree;
+    context.params.isWorktreeOwner = isOwner;
 
     return context;
   };
@@ -647,10 +733,9 @@ export function setSessionUnixUsername(
       return context;
     }
 
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
+    // biome-ignore lint/suspicious/noExplicitAny: Feathers context data is dynamic
     const data = context.data as any;
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
-    const userId = (context.params as any).user?.user_id;
+    const userId = context.params.user?.user_id;
 
     console.log('[setSessionUnixUsername] Hook called for session creation', {
       userId,
@@ -713,8 +798,7 @@ export function validateSessionUnixUsername(
       return context;
     }
 
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
-    const session = (context.params as any).session;
+    const session = context.params.session;
 
     if (!session) {
       throw new Error('loadSession hook must run before validateSessionUnixUsername');

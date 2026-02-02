@@ -7,7 +7,14 @@
 
 import { type ApiKeyName, resolveApiKey } from '@agor/core/config';
 import { getGitState } from '@agor/core/git';
-import type { MessageID, PermissionMode, SessionID, Task, TaskID } from '@agor/core/types';
+import type {
+  MessageID,
+  PermissionMode,
+  SessionID,
+  StreamingEventType,
+  Task,
+  TaskID,
+} from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
 import { normalizeRawSdkResponse } from '../../sdk-handlers/normalizer-factory.js';
@@ -92,18 +99,11 @@ export function createStreamingCallbacks(
   // This ensures thinking events have session_id even if they fire before onStreamStart
   const currentSessionId: SessionID = sessionId;
 
+  // Track sequence numbers per message for ordering guarantees
+  const sequenceCounters = new Map<string, number>();
+
   // Helper to broadcast streaming events via custom route
-  const broadcastEvent = async (
-    event:
-      | 'streaming:start'
-      | 'streaming:chunk'
-      | 'streaming:end'
-      | 'streaming:error'
-      | 'thinking:start'
-      | 'thinking:chunk'
-      | 'thinking:end',
-    data: Record<string, unknown>
-  ) => {
+  const broadcastEvent = async (event: StreamingEventType, data: Record<string, unknown>) => {
     await client.service('/messages/streaming').create({
       event,
       data,
@@ -112,6 +112,9 @@ export function createStreamingCallbacks(
 
   return {
     onStreamStart: async (message_id, data) => {
+      // Initialize sequence counter for this message
+      sequenceCounters.set(message_id, 0);
+
       await broadcastEvent('streaming:start', {
         message_id,
         session_id: currentSessionId,
@@ -120,22 +123,31 @@ export function createStreamingCallbacks(
         timestamp: data.timestamp,
       });
     },
-    onStreamChunk: async (message_id, chunk) => {
-      console.log(
-        `[${toolName}] Streaming chunk: ${message_id.substring(0, 8)}, length: ${chunk.length}`
-      );
+    onStreamChunk: async (message_id, chunk, _sequenceOverride?: number) => {
+      // Get and increment sequence number for this message
+      const currentSeq = sequenceCounters.get(message_id) || 0;
+      const sequence = _sequenceOverride !== undefined ? _sequenceOverride : currentSeq;
+      sequenceCounters.set(message_id, sequence + 1);
+
       await broadcastEvent('streaming:chunk', {
         message_id,
         session_id: currentSessionId,
         chunk,
+        sequence, // Add sequence number for ordering
       });
     },
     onStreamEnd: async (message_id) => {
-      console.log(`[${toolName}] Stream ended: ${message_id}`);
+      // Get final sequence number for this message
+      const finalSequence = sequenceCounters.get(message_id) || 0;
+
       await broadcastEvent('streaming:end', {
         message_id,
         session_id: currentSessionId,
+        sequence: finalSequence, // Include final sequence for validation
       });
+
+      // Clean up sequence counter
+      sequenceCounters.delete(message_id);
     },
     onStreamError: async (message_id, error) => {
       console.error(`[${toolName}] Stream error for ${message_id}:`, error);

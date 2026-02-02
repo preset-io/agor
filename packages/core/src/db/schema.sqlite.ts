@@ -478,6 +478,9 @@ export const worktrees = sqliteTable(
         // Custom context for templates (accessible as {{custom.*}})
         custom_context?: Record<string, unknown>;
 
+        // Unix integration
+        unix_gid?: number; // GID of worktree's unix_group (best effort capture)
+
         // Schedule configuration (full config in JSON blob)
         schedule?: {
           timezone: string; // IANA timezone (default: 'UTC')

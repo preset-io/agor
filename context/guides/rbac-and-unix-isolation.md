@@ -92,25 +92,29 @@ Agor supports three modes of operation, each with different trade-offs:
 ### Mode 1: Open Access (Default)
 
 **Configuration:**
+
 ```yaml
 # ~/.agor/config.yaml
 execution:
-  worktree_rbac: false  # Default
+  worktree_rbac: false # Default
 ```
 
 **Characteristics:**
+
 - Single shared Unix user for all operations
 - No permission checks on worktrees, sessions, or tasks
 - All authenticated Agor users can access everything
 - Simplest setup, great for trusted teams or personal use
 
 **Use cases:**
+
 - Personal Agor instances
 - Small, fully-trusted teams
 - Prototyping and learning Agor
 - Teams already using shared accounts
 
 **Limitations:**
+
 - No privacy between users
 - Cannot restrict access to sensitive worktrees
 - Agent execution runs as single user (usually `agor` daemon user)
@@ -118,14 +122,16 @@ execution:
 ### Mode 2: Soft Privacy (RBAC Only)
 
 **Configuration:**
+
 ```yaml
 # ~/.agor/config.yaml
 execution:
   worktree_rbac: true
-  unix_user_mode: simple  # Or omit - simple is default when rbac enabled
+  unix_user_mode: simple # Or omit - simple is default when rbac enabled
 ```
 
 **Characteristics:**
+
 - App-layer permission checks on all operations
 - Each worktree has owners and permission levels
 - API enforces `view` / `prompt` / `all` permissions
@@ -133,18 +139,21 @@ execution:
 - No filesystem-level isolation or OS-level enforcement
 
 **Use cases:**
+
 - Stepping stone toward full Unix integration
 - Teams wanting organization without OS complexity
 - Environments where OS integration isn't possible (shared hosting, etc.)
 - Testing RBAC policies before enabling Unix isolation
 
 **Limitations:**
+
 - Users can bypass restrictions via direct filesystem access
 - Agent execution still runs as single user
 - No `~/ ` per-user setup or dotfile isolation
 - Defense in depth only at app layer, not OS layer
 
 **Implementation notes:**
+
 - Worktree owners service is registered and functional
 - UI shows Owners & Permissions section
 - API returns 403 Forbidden when permission checks fail
@@ -153,14 +162,16 @@ execution:
 ### Mode 3: Hard Security (RBAC + Unix)
 
 **Configuration:**
+
 ```yaml
 # ~/.agor/config.yaml
 execution:
   worktree_rbac: true
-  unix_user_mode: insulated  # or opportunistic / strict
+  unix_user_mode: insulated # or strict
 ```
 
 **Characteristics:**
+
 - Full app-layer and OS-layer security
 - Each user gets dedicated Unix account
 - Worktree filesystem permissions enforced by OS
@@ -169,18 +180,21 @@ execution:
 - Defense in depth: app + OS layers
 
 **Use cases:**
+
 - Multi-tenant production environments
 - Teams with sensitive or confidential code
 - Compliance requirements (audit trails, least privilege)
 - Environments allowing SSH or web terminal access
 
 **Benefits over Mode 2:**
+
 - Cannot bypass via filesystem (OS enforces permissions)
 - Audit trail: process ownership shows who ran what
 - User isolation: dotfiles, env vars, API keys stay private
 - Familiar Unix model: users understand `ls -la` permissions
 
 **Requirements:**
+
 - Root access or sudo privileges for Agor daemon
 - Ability to create Unix users and groups
 - Filesystem that supports standard Unix permissions
@@ -201,12 +215,14 @@ Before enabling RBAC + Unix integration, ensure:
    - Setting filesystem permissions (`chown`, `chmod`)
 
 2. **Sudoers configuration** - Install the Agor sudoers file:
+
    ```bash
    # Download and install
    curl -O https://raw.githubusercontent.com/preset-io/agor/main/docker/sudoers/agor-daemon.sudoers
    sudo visudo -c -f ./agor-daemon.sudoers  # Validate first!
    sudo install -m 0440 ./agor-daemon.sudoers /etc/sudoers.d/agor
    ```
+
    See [docker/sudoers/agor-daemon.sudoers](../../docker/sudoers/agor-daemon.sudoers) for the full, well-documented configuration.
 
 3. **User management strategy** - Decide:
@@ -233,7 +249,6 @@ execution:
   # Unix user mode (choose one):
   # - simple: No OS integration, all runs as daemon user (Mode 2)
   # - insulated: Create worktree groups, enforce filesystem permissions (recommended)
-  # - opportunistic: insulated + run agents as user's Unix account if possible
   # - strict: Require agents run as user's Unix account, fail if not possible
   unix_user_mode: insulated
 
@@ -241,8 +256,8 @@ execution:
   # executor_unix_user: agor-runner
 
   # Optional: Session token settings (for CLI/API authentication)
-  session_token_expiration_ms: 86400000  # 24 hours
-  session_token_max_uses: -1  # Unlimited (default: 1 = single-use)
+  session_token_expiration_ms: 86400000 # 24 hours
+  session_token_max_uses: -1 # Unlimited (default: 1 = single-use)
 ```
 
 ### Unix User Modes Explained
@@ -267,18 +282,9 @@ execution:
 - Agents still run as daemon user (or `executor_unix_user`)
 - **Great for**: Teams wanting filesystem isolation without complex process impersonation
 
-#### `opportunistic` (Process Impersonation)
-
-- All benefits of `insulated` mode
-- **Attempts to run agents as user's Unix account** when possible:
-  - Uses `sudo -u <username>` to impersonate user
-  - Falls back to daemon user if impersonation fails
-  - Logs warning when fallback occurs
-- **Great for**: Teams wanting audit trails and user isolation, with graceful degradation
-
 #### `strict` (Enforced Process Impersonation)
 
-- All benefits of `opportunistic` mode
+- All benefits of `insulated` mode
 - **Requires agents run as user's Unix account**:
   - Fails task execution if impersonation not possible
   - Returns error to user explaining issue
@@ -300,6 +306,7 @@ agor config get execution
 ```
 
 Expected output:
+
 ```
 execution.worktree_rbac: true
 execution.unix_user_mode: insulated
@@ -317,6 +324,7 @@ agor daemon start
 ```
 
 **Verify RBAC is enabled** in daemon logs:
+
 ```
 [RBAC] Worktree RBAC Enabled
 [Unix Integration] Enabled (mode: insulated)
@@ -338,17 +346,20 @@ sudo install -m 0440 ./agor-daemon.sudoers /etc/sudoers.d/agor
 ```
 
 The sudoers file enables:
+
 - **User impersonation** - Run agents as the user who created the session
 - **User/group management** - Create Unix users/groups for RBAC
 - **Filesystem operations** - Set permissions on worktree directories
 - **No TTY mode** - Essential for daemon operation
 
 **Key security properties:**
+
 - Only `agor_users` group members can be impersonated (prevents root escalation)
 - All operations logged to `/var/log/auth.log`
 - Well-documented with troubleshooting tips
 
 **Test sudo access:**
+
 ```bash
 sudo -l -U agor
 # Should show permitted commands without password prompt
@@ -363,10 +374,10 @@ Agor can automatically create Unix users when users first authenticate:
 ```yaml
 # ~/.agor/config.yaml
 execution:
-  auto_create_unix_users: true  # Feature not yet implemented
+  auto_create_unix_users: true # Feature not yet implemented
 ```
 
-*(Note: This feature is planned but not yet implemented. Use Option B for now.)*
+_(Note: This feature is planned but not yet implemented. Use Option B for now.)_
 
 **Option B: Manual**
 
@@ -387,6 +398,7 @@ agor unix-integration ensure-user <username>
 ```
 
 **Bulk creation script:**
+
 ```bash
 #!/bin/bash
 # create-agor-unix-users.sh
@@ -418,6 +430,7 @@ agor worktree owners list <worktree-id>
 ```
 
 **Add another user:**
+
 ```bash
 # Add user with 'all' permission
 agor worktree owners add <worktree-id> <user-id> --permission all
@@ -428,6 +441,7 @@ getent group agor-wt-<worktree-id>
 ```
 
 **Test access as other user:**
+
 ```bash
 # SSH as other user
 ssh other-user@agor-server
@@ -444,6 +458,7 @@ touch test-file.txt  # Should succeed
 #### 6. Test Permission Levels
 
 **View permission (read-only):**
+
 ```bash
 # Add user with view permission
 agor worktree owners add <worktree-id> <user-id> --permission view
@@ -455,6 +470,7 @@ touch test.txt
 ```
 
 **Prompt permission (API only):**
+
 ```bash
 # Add user with prompt permission
 agor worktree owners add <worktree-id> <user-id> --permission prompt
@@ -471,6 +487,7 @@ agor session prompt <session-id> "What files exist?"
 #### 7. Monitor and Debug
 
 **Check daemon logs:**
+
 ```bash
 # If systemd
 journalctl -u agor-daemon -f
@@ -540,10 +557,11 @@ By default, Agor creates symlinks at `~/agor/worktrees/<worktree-name>`. To cust
 ```yaml
 # ~/.agor/config.yaml
 execution:
-  worktree_symlink_base: ~/projects  # Custom location
+  worktree_symlink_base: ~/projects # Custom location
 ```
 
 **Result:**
+
 ```
 /home/alice/projects/
 ├── feature-auth/      -> /var/agor/worktrees/abc123/
@@ -556,11 +574,13 @@ execution:
 To allow users direct SSH access:
 
 1. **Install SSH server** (if not already):
+
    ```bash
    sudo apt install openssh-server
    ```
 
 2. **Configure SSH keys** - Users add their public keys:
+
    ```bash
    # As user
    mkdir -p ~/.ssh
@@ -570,6 +590,7 @@ To allow users direct SSH access:
    ```
 
 3. **Set proper shell** - Ensure users have valid shell:
+
    ```bash
    # Check
    getent passwd alice | cut -d: -f7
@@ -579,6 +600,7 @@ To allow users direct SSH access:
    ```
 
 4. **Test connection:**
+
    ```bash
    ssh alice@agor-server
    # Should land in /home/alice/
@@ -596,6 +618,7 @@ Agor UI includes a web-based terminal (planned feature). When enabled:
 - Full shell access with proper RBAC enforcement
 
 **Configuration:**
+
 ```yaml
 # ~/.agor/config.yaml
 ui:
@@ -605,9 +628,10 @@ ui:
 
 ### Agent Execution with Process Impersonation
 
-When using `opportunistic` or `strict` modes, agents run as the user who created the session:
+When using `strict` mode, agents run as the user who created the session:
 
 **Example:**
+
 ```bash
 # User alice creates session
 agor session create --worktree abc123
@@ -626,17 +650,19 @@ agor session create --worktree abc123
 ```
 
 **Benefits:**
+
 - Audit trail: `ps aux` shows who ran what
 - User isolation: agents cannot access other users' files
 - Natural permissions: agents inherit user's access rights
 
 **Implementation:**
+
 ```typescript
 // In executor service
 const executor = await this.createExecutor({
   worktreeId: session.worktree_id,
   sessionId: session.session_id,
-  userId: session.user_id,  // Run as this user
+  userId: session.user_id, // Run as this user
   unixUserMode: config.execution.unix_user_mode,
 });
 ```
@@ -646,6 +672,7 @@ const executor = await this.createExecutor({
 To prevent resource exhaustion:
 
 **Disk quotas** (per user):
+
 ```bash
 # Enable quotas on filesystem
 sudo apt install quota
@@ -658,6 +685,7 @@ sudo setquota -u alice 10G 12G 0 0 /home
 ```
 
 **Process limits** (via systemd):
+
 ```ini
 # /etc/systemd/system/user@.service.d/limits.conf
 [Service]
@@ -668,12 +696,13 @@ MemoryMax=4G         # Max 4GB RAM
 ```
 
 **Agor-level limits** (planned feature):
+
 ```yaml
 # ~/.agor/config.yaml
 execution:
   max_concurrent_sessions_per_user: 5
   max_worktrees_per_user: 20
-  session_timeout_minutes: 480  # 8 hours
+  session_timeout_minutes: 480 # 8 hours
 ```
 
 ---
@@ -685,6 +714,7 @@ execution:
 **Symptom**: User sees "Permission denied" when accessing worktree files
 
 **Checklist:**
+
 1. ✅ RBAC enabled: `agor config get execution.worktree_rbac` → should be `true`
 2. ✅ User has permission: `agor worktree owners list <worktree-id>` → should show user
 3. ✅ Unix group membership: `groups` → should show `agor-wt-<worktree-id>`
@@ -692,6 +722,7 @@ execution:
 5. ✅ Symlink exists: `ls -la ~/agor/worktrees/` → should show worktree
 
 **Fix:**
+
 ```bash
 # Re-sync permissions (as admin)
 agor unix-integration sync-worktree-permissions <worktree-id>
@@ -704,6 +735,7 @@ agor unix-integration sync-worktree-permissions <worktree-id>
 **Cause**: Unix group not created when worktree was created
 
 **Fix:**
+
 ```bash
 # Manually create group
 sudo agor unix-integration ensure-group agor-wt-abc123
@@ -725,6 +757,7 @@ sudo chmod -R 770 /var/agor/worktrees/abc123
 **Cause**: Sudoers not configured for passwordless sudo, or missing `!requiretty`
 
 **Fix:**
+
 ```bash
 # Re-install the sudoers file
 sudo install -m 0440 /path/to/agor-daemon.sudoers /etc/sudoers.d/agor
@@ -734,6 +767,7 @@ sudo grep -E '(NOPASSWD|requiretty)' /etc/sudoers.d/agor
 ```
 
 **Verify:**
+
 ```bash
 # Check what the daemon user can do
 sudo -l -U agor
@@ -752,6 +786,7 @@ sudo -u agor sudo -n id
 **Cause**: Worktree created before RBAC was enabled, or owner deleted
 
 **Fix:**
+
 ```bash
 # Assign owner
 agor worktree owners add <worktree-id> <new-owner-user-id> --permission all
@@ -766,22 +801,21 @@ agor worktree delete <worktree-id>
 
 ### Permission Levels
 
-| Level | Filesystem | Read Sessions | Prompt Sessions | Write Sessions | Create Sessions |
-|-------|------------|---------------|-----------------|----------------|-----------------|
-| `view` | Read-only symlink | ✅ | ❌ | ❌ | ❌ |
-| `prompt` | No access | ✅ | ✅ | ❌ | ❌ |
-| `all` | Read-write symlink | ✅ | ✅ | ✅ | ✅ |
+| Level    | Filesystem         | Read Sessions | Prompt Sessions | Write Sessions | Create Sessions |
+| -------- | ------------------ | ------------- | --------------- | -------------- | --------------- |
+| `view`   | Read-only symlink  | ✅            | ❌              | ❌             | ❌              |
+| `prompt` | No access          | ✅            | ✅              | ❌             | ❌              |
+| `all`    | Read-write symlink | ✅            | ✅              | ✅             | ✅              |
 
 **Inheritance**: `view` < `prompt` < `all` (higher level includes lower permissions)
 
 ### Unix User Modes Comparison
 
-| Mode | Unix Groups | Filesystem Perms | Process Impersonation | Fallback | Use Case |
-|------|-------------|------------------|----------------------|----------|----------|
-| `simple` | ❌ | ❌ | ❌ | - | Testing, RBAC-only |
-| `insulated` | ✅ | ✅ | ❌ | - | Filesystem isolation |
-| `opportunistic` | ✅ | ✅ | ✅ | Daemon user | Audit trails (lenient) |
-| `strict` | ✅ | ✅ | ✅ | Fail task | Compliance (enforced) |
+| Mode        | Unix Groups | Filesystem Perms | Process Impersonation | Use Case                           |
+| ----------- | ----------- | ---------------- | --------------------- | ---------------------------------- |
+| `simple`    | ❌          | ❌               | ❌                    | Testing, RBAC-only                 |
+| `insulated` | ✅          | ✅               | ❌                    | Filesystem isolation (recommended) |
+| `strict`    | ✅          | ✅               | ✅ (required)         | Compliance environments            |
 
 ### CLI Commands Reference
 
