@@ -365,21 +365,21 @@ export class ClaudeTool implements ITool {
 
             if (streamingCallbacks.onThinkingStart) {
               // Note: budget is extracted from thinking block if available
-              streamingCallbacks.onThinkingStart(currentThinkingMessageId, {
+              await streamingCallbacks.onThinkingStart(currentThinkingMessageId, {
                 budget: undefined, // TODO: Extract from SDK if available
               });
             }
           }
 
           // Stream thinking chunk with dedicated message ID
-          streamingCallbacks.onThinkingChunk(currentThinkingMessageId, event.thinkingChunk);
+          await streamingCallbacks.onThinkingChunk(currentThinkingMessageId, event.thinkingChunk);
         }
       }
 
       // Handle thinking complete
       if (event.type === 'thinking_complete') {
         if (streamingCallbacks?.onThinkingEnd && currentThinkingMessageId) {
-          streamingCallbacks.onThinkingEnd(currentThinkingMessageId);
+          await streamingCallbacks.onThinkingEnd(currentThinkingMessageId);
           // Keep ID around for potential merging with text message later
           // Don't reset to null - we may need it for the complete message
         }
@@ -402,7 +402,7 @@ export class ClaudeTool implements ITool {
 
             // Start streaming event for this system message
             if (streamingCallbacks) {
-              streamingCallbacks.onStreamStart(completeMessageId, {
+              await streamingCallbacks.onStreamStart(completeMessageId, {
                 session_id: sessionId,
                 task_id: taskId,
                 role: MessageRole.ASSISTANT,
@@ -432,7 +432,7 @@ export class ClaudeTool implements ITool {
             // End streaming for this system message
             // This ensures UI removes the spinner immediately
             if (streamingCallbacks) {
-              streamingCallbacks.onStreamEnd(completeMessageId);
+              await streamingCallbacks.onStreamEnd(completeMessageId);
             }
           });
         }
@@ -466,7 +466,7 @@ export class ClaudeTool implements ITool {
           console.debug(`⏱️ [SDK] TTFB (text): ${ttfb}ms`);
 
           if (streamingCallbacks) {
-            streamingCallbacks.onStreamStart(currentTextMessageId, {
+            await streamingCallbacks.onStreamStart(currentTextMessageId, {
               session_id: sessionId,
               task_id: taskId,
               role: MessageRole.ASSISTANT,
@@ -477,7 +477,7 @@ export class ClaudeTool implements ITool {
 
         // Emit chunk immediately (no artificial delays - true streaming!)
         if (streamingCallbacks) {
-          streamingCallbacks.onStreamChunk(currentTextMessageId, event.textChunk);
+          await streamingCallbacks.onStreamChunk(currentTextMessageId, event.textChunk);
         }
       }
       // Handle complete message (save to database)
@@ -582,7 +582,7 @@ export class ClaudeTool implements ITool {
             // End streaming for system messages (e.g., compaction complete)
             // This ensures UI spinners stop when system events finish
             if (streamingCallbacks) {
-              streamingCallbacks.onStreamEnd(systemMessageId);
+              await streamingCallbacks.onStreamEnd(systemMessageId);
             }
           });
           // Don't add to assistantMessageIds - these are system messages
