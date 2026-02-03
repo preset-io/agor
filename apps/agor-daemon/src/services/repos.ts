@@ -164,6 +164,11 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       userId || 'anonymous'
     );
 
+    // Check if Unix group isolation should be initialized
+    const rbacEnabled = isWorktreeRbacEnabled();
+    const { getDaemonUser } = await import('@agor/core/config');
+    const daemonUser = getDaemonUser();
+
     // Fire and forget - spawn executor and return immediately
     // Executor handles EVERYTHING: git clone, .agor.yml parsing, DB record, Unix group
     spawnExecutorFireAndForget(
@@ -176,7 +181,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
           url: data.url,
           slug,
           createDbRecord: true,
-          initUnixGroup: true, // Executor handles Unix group initialization
+          initUnixGroup: rbacEnabled, // Only initialize Unix groups when RBAC is enabled
+          daemonUser, // Daemon user needs access to .git for operations
         },
       },
       {

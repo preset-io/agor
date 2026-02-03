@@ -382,7 +382,35 @@ export async function handleUnixSyncWorktree(
               await runCommand(
                 UnixGroupCommands.addUserToGroup(payload.params.daemonUser, repo.unix_group)
               );
+              console.log(
+                `[unix.sync-worktree] Added daemon user to repo group ${repo.unix_group}`
+              );
             }
+          }
+
+          // Add all worktree owners to repo group (for .git/ access)
+          // This ensures owners can run git commands which need .git/ access
+          try {
+            const ownersResult = await client.service(`worktrees/${worktreeId}/owners`).find({});
+            const owners = Array.isArray(ownersResult) ? ownersResult : ownersResult.data || [];
+
+            for (const owner of owners as Array<{ unix_username?: string }>) {
+              if (owner.unix_username) {
+                const inRepoGroup = await checkCommand(
+                  UnixGroupCommands.isUserInGroup(owner.unix_username, repo.unix_group)
+                );
+                if (!inRepoGroup) {
+                  await runCommand(
+                    UnixGroupCommands.addUserToGroup(owner.unix_username, repo.unix_group)
+                  );
+                  console.log(
+                    `[unix.sync-worktree] Added owner ${owner.unix_username} to repo group ${repo.unix_group}`
+                  );
+                }
+              }
+            }
+          } catch (_error) {
+            console.log(`[unix.sync-worktree] Could not fetch owners for repo group sync`);
           }
 
           // Fix .git/worktrees/<name>/ permissions
@@ -629,14 +657,15 @@ export async function initializeRepoGroup(
     console.log(`[unix] Created group ${groupName}`);
   }
 
-  // Set permissions on .git directory
-  const gitPath = `${repoPath}/.git`;
+  // Set permissions on entire repo directory (including .git)
+  // This ensures worktrees inherit the correct group from parent directory
   const permCommands = UnixGroupCommands.setDirectoryGroup(
-    gitPath,
+    repoPath,
     groupName,
     REPO_GIT_PERMISSION_MODE
   );
   await runCommands(permCommands);
+  console.log(`[unix] Set repo directory permissions with group ${groupName}`);
 
   // Add daemon user to group if provided
   if (daemonUser) {
