@@ -757,7 +757,7 @@ export function setupMCPRoutes(app: Application): void {
             {
               name: 'agor_users_update',
               description:
-                'Update any user account (admin operation). Only updates fields that are provided. Can update email, name, role, password, unix_username, must_change_password, emoji, and avatar.',
+                'Update any user account (admin operation). Only updates fields that are provided. Can update email, name, role, password, unix_username, must_change_password, emoji, avatar, and preferences.',
               inputSchema: {
                 type: 'object',
                 properties: {
@@ -797,6 +797,10 @@ export function setupMCPRoutes(app: Application): void {
                   avatar: {
                     type: 'string',
                     description: 'Avatar URL (optional)',
+                  },
+                  preferences: {
+                    type: 'object',
+                    description: 'User preferences (optional, JSON object)',
                   },
                 },
                 required: ['userId'],
@@ -2233,13 +2237,13 @@ export function setupMCPRoutes(app: Application): void {
           };
         } else if (name === 'agor_users_update') {
           // Update any user (admin operation)
-          if (!args?.userId) {
+          if (!args?.userId || typeof args.userId !== 'string') {
             return res.status(400).json({
               jsonrpc: '2.0',
               id: mcpRequest.id,
               error: {
                 code: -32602,
-                message: 'Invalid params: userId is required',
+                message: 'Invalid params: userId is required and must be a string',
               },
             });
           }
@@ -2255,6 +2259,7 @@ export function setupMCPRoutes(app: Application): void {
             updateData.must_change_password = args.must_change_password;
           if (args?.emoji !== undefined) updateData.emoji = args.emoji;
           if (args?.avatar !== undefined) updateData.avatar = args.avatar;
+          if (args?.preferences !== undefined) updateData.preferences = args.preferences;
 
           if (Object.keys(updateData).length === 0) {
             return res.status(400).json({
@@ -2263,7 +2268,7 @@ export function setupMCPRoutes(app: Application): void {
               error: {
                 code: -32602,
                 message:
-                  'Invalid params: at least one field must be provided to update (email, name, password, role, unix_username, must_change_password, emoji, avatar)',
+                  'Invalid params: at least one field must be provided to update (email, name, password, role, unix_username, must_change_password, emoji, avatar, preferences)',
               },
             });
           }

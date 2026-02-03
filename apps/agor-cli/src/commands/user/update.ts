@@ -44,7 +44,7 @@ export default class UserUpdate extends BaseCommand {
       description: 'New Unix username for shell access',
     }),
     'force-password-change': Flags.boolean({
-      description: 'Force user to change password on next login',
+      description: 'Force user to change password on next login (omit to leave unchanged)',
       allowNo: true, // Allows --no-force-password-change to clear the flag
     }),
   };
