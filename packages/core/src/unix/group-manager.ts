@@ -227,8 +227,11 @@ export const UnixGroupCommands = {
       `sudo -n setfacl -R -m g:${groupName}:rwX "${path}"`,
       // ACL: set "others" access based on permissions mode
       `sudo -n setfacl -R -m ${othersAcl} "${path}"`,
+      // ACL: set mask to allow group permissions (critical for effective permissions)
+      `sudo -n setfacl -R -m m::rwX "${path}"`,
       // DEFAULT ACLs for new files/dirs (inherit these permissions)
-      `sudo -n setfacl -R -d -m u::rwX,g:${groupName}:rwX,${othersAcl} "${path}"`,
+      // IMPORTANT: Include m::rwX to ensure mask allows group access on new files
+      `sudo -n setfacl -R -d -m u::rwX,g:${groupName}:rwX,${othersAcl},m::rwX "${path}"`,
     ];
   },
 } as const;
