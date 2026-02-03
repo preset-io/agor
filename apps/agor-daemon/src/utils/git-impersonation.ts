@@ -1,61 +1,47 @@
 /**
  * Git Impersonation Utilities
  *
- * Shared helper for resolving Unix user impersonation for git operations.
- * Used by both repos and worktrees services to ensure consistent behavior.
+ * Git operations (clone, worktree add/remove/clean) always run as the daemon user
+ * to avoid permission issues with shared directories under /home/agorpg/.agor/.
+ *
+ * We still use sudo -u to force a fresh group membership read via initgroups(),
+ * which ensures the executor process has current worktree groups (agor_wt_*).
+ *
+ * The daemon process has stale group memberships from startup, so without sudo -u,
+ * git operations can't access worktree-owned files.
  */
 
 import type { Database } from '@agor/core/db';
 import type { UserID, Worktree } from '@agor/core/types';
-import {
-  resolveUnixUserForImpersonation,
-  type UnixUserMode,
-  validateResolvedUnixUser,
-} from '@agor/core/unix';
+import { validateResolvedUnixUser } from '@agor/core/unix';
 
 /**
- * Resolve Unix user for git operations based on impersonation mode
+ * Resolve Unix user for git operations
  *
- * Uses the same logic as prompt executor:
- * - simple mode: no impersonation (daemon user)
- * - insulated mode: executor_unix_user from config
- * - strict mode: user's unix_username
+ * Git operations always run as the daemon user (agorpg) because:
+ * 1. Parent directories (/home/agorpg/.agor/worktrees/) are owned by agorpg
+ * 2. Running as another user causes permission errors when creating directories
+ * 3. We still use sudo -u to get fresh group memberships via initgroups()
  *
- * @param db - Database instance for user lookup
- * @param userId - User ID to resolve impersonation for
- * @returns Unix username to impersonate, or undefined for no impersonation
+ * @param db - Database instance (unused, kept for API compatibility)
+ * @param userId - User ID (unused, kept for API compatibility)
+ * @returns Daemon username to force fresh group lookup via sudo -u
  */
 export async function resolveGitImpersonationForUser(
   db: Database,
   userId: UserID
 ): Promise<string | undefined> {
-  const { loadConfig } = await import('@agor/core/config');
-  const { UsersRepository } = await import('@agor/core/db');
+  const { getDaemonUser } = await import('@agor/core/config');
 
-  const config = await loadConfig();
-  const unixUserMode = (config.execution?.unix_user_mode ?? 'simple') as UnixUserMode;
-  const configExecutorUser = config.execution?.executor_unix_user;
+  // Always use daemon user for git operations
+  const daemonUser = getDaemonUser();
 
-  // For git operations, use the requesting user's unix_username
-  const usersRepo = new UsersRepository(db);
-  const user = await usersRepo.findById(userId);
-  const userUnixUsername = user?.unix_username;
-
-  // Use centralized impersonation resolution logic
-  const impersonationResult = resolveUnixUserForImpersonation({
-    mode: unixUserMode,
-    userUnixUsername,
-    executorUnixUser: configExecutorUser,
-  });
-
-  const asUser = impersonationResult.unixUser ?? undefined;
-
-  // Validate Unix user exists for modes that require it
-  if (asUser) {
-    validateResolvedUnixUser(unixUserMode, asUser);
+  // Validate user exists
+  if (daemonUser) {
+    validateResolvedUnixUser('simple', daemonUser);
   }
 
-  return asUser;
+  return daemonUser;
 }
 
 /**
