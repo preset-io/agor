@@ -55,7 +55,7 @@ async function callMCPTool(name: string, args: Record<string, unknown> = {}) {
 }
 
 describeIntegration('MCP Tools - Session Tools', () => {
-  it('tools/list returns all 23 tools', async () => {
+  it('tools/list returns all 24 tools', async () => {
     const resp = await fetch(`${DAEMON_URL}/mcp?sessionToken=${sessionToken}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -67,7 +67,7 @@ describeIntegration('MCP Tools - Session Tools', () => {
     });
 
     const data = (await resp.json()) as { result: { tools: Array<{ name: string }> } };
-    expect(data.result.tools).toHaveLength(23);
+    expect(data.result.tools).toHaveLength(24);
 
     const toolNames = data.result.tools.map((t) => t.name);
     expect(toolNames).toContain('agor_sessions_list');
@@ -86,6 +86,7 @@ describeIntegration('MCP Tools - Session Tools', () => {
     expect(toolNames).toContain('agor_worktrees_update');
     expect(toolNames).toContain('agor_boards_get');
     expect(toolNames).toContain('agor_boards_list');
+    expect(toolNames).toContain('agor_boards_update');
     expect(toolNames).toContain('agor_tasks_list');
     expect(toolNames).toContain('agor_tasks_get');
     expect(toolNames).toContain('agor_users_list');
@@ -345,6 +346,63 @@ describeIntegration('MCP Tools - Board Tools', () => {
 
     expect(result.board_id).toBe(boardId);
     expect(result).toHaveProperty('name');
+  });
+
+  it('agor_boards_update updates board metadata and creates zones', async () => {
+    const boards = await callMCPTool('agor_boards_list', { limit: 1 });
+
+    if (boards.data.length === 0) {
+      console.log('No boards found, skipping test');
+      return;
+    }
+
+    const board = boards.data[0];
+    const boardId = board.board_id;
+
+    // Test updating metadata
+    const metadataUpdate = await callMCPTool('agor_boards_update', {
+      boardId,
+      description: 'Updated via MCP test',
+      icon: '🧪',
+    });
+
+    expect(metadataUpdate.board.board_id).toBe(boardId);
+    expect(metadataUpdate.board.description).toBe('Updated via MCP test');
+    expect(metadataUpdate.board.icon).toBe('🧪');
+
+    // Test creating/updating zones
+    const testZoneId = 'test-zone-' + Date.now();
+    const zonesUpdate = await callMCPTool('agor_boards_update', {
+      boardId,
+      upsertObjects: {
+        [testZoneId]: {
+          type: 'zone',
+          x: 100,
+          y: 100,
+          width: 400,
+          height: 300,
+          label: 'Test Zone',
+          borderColor: '#3b82f6',
+          backgroundColor: '#eff6ff',
+        },
+      },
+    });
+
+    expect(zonesUpdate.board.objects).toHaveProperty(testZoneId);
+    expect(zonesUpdate.board.objects[testZoneId].label).toBe('Test Zone');
+
+    // Clean up - remove test zone
+    await callMCPTool('agor_boards_update', {
+      boardId,
+      removeObjects: [testZoneId],
+    });
+
+    // Restore original metadata
+    await callMCPTool('agor_boards_update', {
+      boardId,
+      description: board.description ?? '',
+      icon: board.icon ?? '',
+    });
   });
 });
 

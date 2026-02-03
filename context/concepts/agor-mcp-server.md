@@ -14,7 +14,7 @@ The built-in toolset mirrors Agor's primitives:
 - `agor_sessions_list/get/get_current/create/prompt/update/spawn`
 - `agor_repos_list/get/create_remote/create_local`
 - `agor_worktrees_list/get/create/update`
-- `agor_boards_list/get`
+- `agor_boards_list/get/update`
 - `agor_environment_start/stop/health/logs/open_app/nuke`
 - `agor_tasks_list/get`
 - `agor_users_list/get/get_current/update_current/create`
@@ -34,6 +34,7 @@ The built-in toolset mirrors Agor's primitives:
 4. Call tools like:
    - `agor_repos_create_remote` to clone new repositories
    - `agor_worktrees_create` to create worktrees
+   - `agor_boards_update` to create zones and organize boards
    - `agor_sessions_prompt` to continue work
    - `agor_environment_start` to manage environments
 
