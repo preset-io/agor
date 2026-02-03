@@ -1,7 +1,7 @@
 /**
  * MCP Tools Integration Tests
  *
- * These tests verify all 19 MCP tools work end-to-end.
+ * These tests verify all 24 MCP tools work end-to-end.
  * Requires daemon to be running on localhost:3030.
  *
  * Run with: INTEGRATION=true pnpm test
@@ -259,6 +259,43 @@ describeIntegration('MCP Tools - Repository Tools', () => {
       expect(error).toBeDefined();
     }
   });
+
+  it('agor_repos_create_remote rejects invalid git URL', async () => {
+    try {
+      await callMCPTool('agor_repos_create_remote', {
+        url: 'not-a-valid-url',
+        slug: 'test/invalid',
+      });
+      expect(false).toBe(true); // Should not reach here
+    } catch (error: any) {
+      expect(error).toBeDefined();
+      expect(error.message).toContain('must be a valid git URL');
+    }
+  });
+
+  it('agor_repos_create_remote rejects invalid slug format', async () => {
+    try {
+      await callMCPTool('agor_repos_create_remote', {
+        url: 'https://github.com/test/repo.git',
+        slug: 'invalid slug with spaces',
+      });
+      expect(false).toBe(true); // Should not reach here
+    } catch (error: any) {
+      expect(error).toBeDefined();
+      expect(error.message).toContain('org/name format');
+    }
+  });
+
+  it('agor_repos_create_remote derives slug from URL when omitted', async () => {
+    const result = await callMCPTool('agor_repos_create_remote', {
+      url: 'https://github.com/anthropics/anthropic-sdk-typescript.git',
+    });
+
+    expect(result).toHaveProperty('status');
+    expect(result.status).toBe('pending');
+    expect(result).toHaveProperty('slug');
+    expect(result.slug).toContain('anthropics/anthropic-sdk-typescript');
+  });
 });
 
 describeIntegration('MCP Tools - Worktree Tools', () => {
@@ -391,11 +428,14 @@ describeIntegration('MCP Tools - Board Tools', () => {
     expect(zonesUpdate.board.objects).toHaveProperty(testZoneId);
     expect(zonesUpdate.board.objects[testZoneId].label).toBe('Test Zone');
 
-    // Clean up - remove test zone
-    await callMCPTool('agor_boards_update', {
+    // Clean up - remove test zone and verify removal
+    const removalResult = await callMCPTool('agor_boards_update', {
       boardId,
       removeObjects: [testZoneId],
     });
+
+    // Verify the zone was removed
+    expect(removalResult.board.objects[testZoneId]).toBeUndefined();
 
     // Restore original metadata
     await callMCPTool('agor_boards_update', {

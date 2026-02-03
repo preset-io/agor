@@ -5,6 +5,7 @@
  * Uses session tokens for authentication.
  */
 
+import { extractSlugFromUrl, isValidGitUrl, isValidSlug } from '@agor/core/config';
 import type { Application } from '@agor/core/feathers';
 import type { AgenticToolName } from '@agor/core/types';
 import { normalizeOptionalHttpUrl } from '@agor/core/utils/url';
@@ -452,7 +453,7 @@ export function setupMCPRoutes(app: Application): void {
                   slug: {
                     type: 'string',
                     description:
-                      'URL-friendly slug for the repository (e.g., "myorg/myapp"). If not provided, will be derived from the remote URL.',
+                      'URL-friendly slug for the repository in org/name format (e.g., "myorg/myapp"). Required.',
                   },
                   name: {
                     type: 'string',
@@ -460,7 +461,7 @@ export function setupMCPRoutes(app: Application): void {
                       'Human-readable name for the repository. If not provided, defaults to the slug.',
                   },
                 },
-                required: ['url', 'slug'],
+                required: ['url'],
               },
             },
             {
@@ -739,7 +740,7 @@ export function setupMCPRoutes(app: Application): void {
             {
               name: 'agor_boards_update',
               description:
-                'Update board metadata and manage zones/objects. Can update name, icon, background, and create/update zones for organizing worktrees.',
+                'Update board metadata and manage zones/objects. Can update name, icon, background, and create/update zones for organizing worktrees. Zone objects have: type="zone", x, y, width, height, label, borderColor, backgroundColor, borderStyle (optional), trigger (optional: "always_new" auto-creates sessions, "show_picker" shows agent selection). Text objects have: type="text", x, y, text, fontSize, color. Markdown objects have: type="markdown", x, y, width, height, content.',
               inputSchema: {
                 type: 'object',
                 properties: {
@@ -780,7 +781,12 @@ export function setupMCPRoutes(app: Application): void {
                     type: 'object',
                     additionalProperties: true,
                     description:
-                      'Board objects to upsert (zones, text, markdown). Keys are object IDs, values are object data.',
+                      'Board objects to upsert (zones, text, markdown). Keys are object IDs, values are object data. ' +
+                      'Zone objects: { type: "zone", x: number, y: number, width: number, height: number, label: string, ' +
+                      'borderColor: string (hex), backgroundColor: string (hex), borderStyle?: "solid"|"dashed", ' +
+                      'trigger?: { behavior: "always_new"|"show_picker", agent?: "claude-code"|"codex"|"gemini" } }. ' +
+                      'Text objects: { type: "text", x: number, y: number, text: string }. ' +
+                      'Markdown objects: { type: "markdown", x: number, y: number, content: string }.',
                   },
                   removeObjects: {
                     type: 'array',
@@ -1598,7 +1604,7 @@ export function setupMCPRoutes(app: Application): void {
           if (args?.slug) query.slug = args.slug;
           if (args?.limit) query.$limit = args.limit;
 
-          const repos = await app.service('repos').find({ query });
+          const repos = await app.service('repos').find({ query, ...baseServiceParams });
           mcpResponse = {
             content: [
               {
@@ -1619,7 +1625,7 @@ export function setupMCPRoutes(app: Application): void {
             });
           }
 
-          const repo = await app.service('repos').get(args.repoId);
+          const repo = await app.service('repos').get(args.repoId, baseServiceParams);
           mcpResponse = {
             content: [
               {
@@ -1641,14 +1647,43 @@ export function setupMCPRoutes(app: Application): void {
             });
           }
 
-          const slug = coerceString(args?.slug);
-          if (!slug) {
+          // Validate git URL format
+          if (!isValidGitUrl(url)) {
             return res.status(400).json({
               jsonrpc: '2.0',
               id: mcpRequest.id,
               error: {
                 code: -32602,
-                message: 'Invalid params: slug is required',
+                message: 'Invalid params: url must be a valid git URL (https:// or git@)',
+              },
+            });
+          }
+
+          // Derive slug from URL if not provided
+          let slug = coerceString(args?.slug);
+          if (!slug) {
+            try {
+              slug = extractSlugFromUrl(url);
+            } catch (_error) {
+              return res.status(400).json({
+                jsonrpc: '2.0',
+                id: mcpRequest.id,
+                error: {
+                  code: -32602,
+                  message: `Could not derive slug from URL. Please provide a slug explicitly.`,
+                },
+              });
+            }
+          }
+
+          // Validate slug format
+          if (!isValidSlug(slug)) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message: 'Invalid params: slug must be in org/name format',
               },
             });
           }
