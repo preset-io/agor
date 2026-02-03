@@ -28,6 +28,7 @@ Agor ships with an **internal Model Context Protocol (MCP) server**. The same da
 | Domain                 | What agents can do                                                                                      |
 | ---------------------- | ------------------------------------------------------------------------------------------------------- |
 | **Sessions**           | Introspect the current session, list siblings, spawn child sessions with prompts, archive/complete work |
+| **Repositories**       | List repositories, clone remote repos, register local repos, manage repo metadata                       |
 | **Worktrees & Boards** | List or fetch worktrees, create new ones, assign them to boards, update metadata, move cards spatially  |
 | **Tasks & Reports**    | Fetch task history, create follow-up tasks, log progress, generate reports                              |
 | **Users & Teams**      | Create users, update profiles or avatars, assign roles, invite collaborators                            |
@@ -57,7 +58,8 @@ This self-awareness is what lets agents behave like team members instead of deta
 
 ## Automation Examples
 
-- **Mass subsession fan-out:** “Read `context/js-to-ts-refactor`, split the file list, create a subsession per chunk, and report back when done.”
+- **Repository bootstrap:** "Clone this GitHub repo, create a worktree for the main branch, and start the dev environment automatically."
+- **Mass subsession fan-out:** "Read `context/js-to-ts-refactor`, split the file list, create a subsession per chunk, and report back when done."
 - **Bulk account provisioning:** Paste a CSV of emails; the agent calls MCP to create users and invite them automatically.
 - **Issue triage pipeline:** Source GitHub issues by label, triage them, and create worktrees linked to each issue, dropping them onto the active board as cards.
 - **Environment orchestration:** Start/stop worktree environments via MCP before delegating work to collaborators or other agents.

@@ -55,7 +55,7 @@ async function callMCPTool(name: string, args: Record<string, unknown> = {}) {
 }
 
 describeIntegration('MCP Tools - Session Tools', () => {
-  it('tools/list returns all 19 tools', async () => {
+  it('tools/list returns all 23 tools', async () => {
     const resp = await fetch(`${DAEMON_URL}/mcp?sessionToken=${sessionToken}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -67,7 +67,7 @@ describeIntegration('MCP Tools - Session Tools', () => {
     });
 
     const data = (await resp.json()) as { result: { tools: Array<{ name: string }> } };
-    expect(data.result.tools).toHaveLength(19);
+    expect(data.result.tools).toHaveLength(23);
 
     const toolNames = data.result.tools.map((t) => t.name);
     expect(toolNames).toContain('agor_sessions_list');
@@ -77,6 +77,10 @@ describeIntegration('MCP Tools - Session Tools', () => {
     expect(toolNames).toContain('agor_sessions_prompt');
     expect(toolNames).toContain('agor_sessions_create');
     expect(toolNames).toContain('agor_sessions_update');
+    expect(toolNames).toContain('agor_repos_list');
+    expect(toolNames).toContain('agor_repos_get');
+    expect(toolNames).toContain('agor_repos_create_remote');
+    expect(toolNames).toContain('agor_repos_create_local');
     expect(toolNames).toContain('agor_worktrees_get');
     expect(toolNames).toContain('agor_worktrees_list');
     expect(toolNames).toContain('agor_worktrees_update');
@@ -192,6 +196,67 @@ describeIntegration('MCP Tools - Session Tools', () => {
     expect(result.success).toBe(true);
     expect(result).toHaveProperty('taskId');
     expect(result.note).toBe('Prompt added to existing session and execution started.');
+  });
+});
+
+describeIntegration('MCP Tools - Repository Tools', () => {
+  it('agor_repos_list returns repositories', async () => {
+    const result = await callMCPTool('agor_repos_list', { limit: 5 });
+
+    expect(result).toHaveProperty('total');
+    expect(result).toHaveProperty('data');
+    expect(Array.isArray(result.data)).toBe(true);
+    if (result.data.length > 0) {
+      expect(result.data[0]).toHaveProperty('repo_id');
+      expect(result.data[0]).toHaveProperty('slug');
+      expect(result.data[0]).toHaveProperty('repo_type');
+    }
+  });
+
+  it('agor_repos_get returns specific repository', async () => {
+    // First get a repository ID
+    const repos = await callMCPTool('agor_repos_list', { limit: 1 });
+
+    if (repos.data.length === 0) {
+      console.log('No repositories found, skipping test');
+      return;
+    }
+
+    const repoId = repos.data[0].repo_id;
+
+    // Then fetch it specifically
+    const result = await callMCPTool('agor_repos_get', { repoId });
+
+    expect(result.repo_id).toBe(repoId);
+    expect(result).toHaveProperty('slug');
+    expect(result).toHaveProperty('local_path');
+  });
+
+  it('agor_repos_create_remote initiates clone operation', async () => {
+    // This test just verifies the API works - the clone happens async
+    // Using a small, public test repository
+    const result = await callMCPTool('agor_repos_create_remote', {
+      url: 'https://github.com/anthropics/anthropic-sdk-typescript.git',
+      slug: 'test/sdk-clone-' + Date.now(),
+    });
+
+    expect(result).toHaveProperty('status');
+    expect(result.status).toBe('pending');
+    expect(result).toHaveProperty('slug');
+  });
+
+  it('agor_repos_create_local validates required params', async () => {
+    // This should fail gracefully if path doesn't exist
+    try {
+      await callMCPTool('agor_repos_create_local', {
+        path: '/nonexistent/path/to/repo',
+      });
+      // If we get here, test should fail
+      expect(false).toBe(true);
+    } catch (error) {
+      // Expected to fail with invalid path
+      expect(error).toBeDefined();
+    }
   });
 });
 

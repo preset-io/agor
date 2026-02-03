@@ -405,6 +405,85 @@ export function setupMCPRoutes(app: Application): void {
               },
             },
 
+            // Repository tools
+            {
+              name: 'agor_repos_list',
+              description: 'List all repositories accessible to the current user',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  slug: {
+                    type: 'string',
+                    description: 'Filter by repository slug',
+                  },
+                  limit: {
+                    type: 'number',
+                    description: 'Maximum number of results (default: 50)',
+                  },
+                },
+              },
+            },
+            {
+              name: 'agor_repos_get',
+              description: 'Get detailed information about a specific repository',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  repoId: {
+                    type: 'string',
+                    description: 'Repository ID (UUIDv7 or short ID)',
+                  },
+                },
+                required: ['repoId'],
+              },
+            },
+            {
+              name: 'agor_repos_create_remote',
+              description:
+                'Clone a remote repository into Agor. Returns immediately with pending status - repository will be created asynchronously.',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  url: {
+                    type: 'string',
+                    description:
+                      'Git remote URL (https://github.com/user/repo.git or git@github.com:user/repo.git)',
+                  },
+                  slug: {
+                    type: 'string',
+                    description:
+                      'URL-friendly slug for the repository (e.g., "myorg/myapp"). If not provided, will be derived from the remote URL.',
+                  },
+                  name: {
+                    type: 'string',
+                    description:
+                      'Human-readable name for the repository. If not provided, defaults to the slug.',
+                  },
+                },
+                required: ['url', 'slug'],
+              },
+            },
+            {
+              name: 'agor_repos_create_local',
+              description: 'Register an existing local git repository with Agor',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  path: {
+                    type: 'string',
+                    description:
+                      'Absolute path to the local git repository. Supports ~ for home directory.',
+                  },
+                  slug: {
+                    type: 'string',
+                    description:
+                      'URL-friendly slug for the repository (e.g., "local/myapp"). If not provided, will be auto-derived from the repository name.',
+                  },
+                },
+                required: ['path'],
+              },
+            },
+
             // Worktree tools
             {
               name: 'agor_worktrees_get',
@@ -1454,6 +1533,107 @@ export function setupMCPRoutes(app: Application): void {
                   null,
                   2
                 ),
+              },
+            ],
+          };
+
+          // Repository tools
+        } else if (name === 'agor_repos_list') {
+          const query: Record<string, unknown> = {};
+          if (args?.slug) query.slug = args.slug;
+          if (args?.limit) query.$limit = args.limit;
+
+          const repos = await app.service('repos').find({ query });
+          mcpResponse = {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(repos, null, 2),
+              },
+            ],
+          };
+        } else if (name === 'agor_repos_get') {
+          if (!args?.repoId) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message: 'Invalid params: repoId is required',
+              },
+            });
+          }
+
+          const repo = await app.service('repos').get(args.repoId);
+          mcpResponse = {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(repo, null, 2),
+              },
+            ],
+          };
+        } else if (name === 'agor_repos_create_remote') {
+          const url = coerceString(args?.url);
+          if (!url) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message: 'Invalid params: url is required',
+              },
+            });
+          }
+
+          const slug = coerceString(args?.slug);
+          if (!slug) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message: 'Invalid params: slug is required',
+              },
+            });
+          }
+
+          const name = coerceString(args?.name);
+
+          const reposService = app.service('repos') as unknown as ReposServiceImpl;
+          const result = await reposService.cloneRepository({ url, slug, name }, baseServiceParams);
+
+          mcpResponse = {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(result, null, 2),
+              },
+            ],
+          };
+        } else if (name === 'agor_repos_create_local') {
+          const path = coerceString(args?.path);
+          if (!path) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message: 'Invalid params: path is required',
+              },
+            });
+          }
+
+          const slug = coerceString(args?.slug);
+
+          const reposService = app.service('repos') as unknown as ReposServiceImpl;
+          const repo = await reposService.addLocalRepository({ path, slug }, baseServiceParams);
+
+          mcpResponse = {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(repo, null, 2),
               },
             ],
           };

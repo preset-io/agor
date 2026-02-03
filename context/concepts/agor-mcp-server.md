@@ -12,10 +12,12 @@ Agor exposes itself as a **Model Context Protocol server** so agents can introsp
 The built-in toolset mirrors Agor's primitives:
 
 - `agor_sessions_list/get/get_current/create/prompt/update/spawn`
-- `agor_worktrees_list/get/update_environment/start/stop/logs`
-- `agor_boards_list`, `agor_board_objects_list`
-- `agor_environment_logs`, `agor_environment_health`
-- MCP management helpers (`agor_mcp_servers_list`, `agor_session_mcp_servers_set`)
+- `agor_repos_list/get/create_remote/create_local`
+- `agor_worktrees_list/get/create/update`
+- `agor_boards_list/get`
+- `agor_environment_start/stop/health/logs/open_app/nuke`
+- `agor_tasks_list/get`
+- `agor_users_list/get/get_current/update_current/create`
 
 ## Key Behaviors
 
@@ -29,7 +31,11 @@ The built-in toolset mirrors Agor's primitives:
 1. Start the daemon (`pnpm dev` in `apps/agor-daemon`).
 2. In the UI, open Session Settings → MCP Tokens → "Generate MCP Token".
 3. Configure your agent (Claude Desktop, Cursor MCP, etc.) to hit `http://localhost:3030/mcp` with that token in `sessionToken` metadata.
-4. Call tools like `agor_sessions_prompt` to continue work or `agor_worktrees_start_environment` to manage environments.
+4. Call tools like:
+   - `agor_repos_create_remote` to clone new repositories
+   - `agor_worktrees_create` to create worktrees
+   - `agor_sessions_prompt` to continue work
+   - `agor_environment_start` to manage environments
 
 ## Implementation References
 
