@@ -1,9 +1,19 @@
 # Unix-Level User Integration
 
-**Status:** 🔬 Exploration
-**Recommended Approach:** Sudo-based impersonation with progressive enhancement
+> **⚠️ ARCHIVED:** This exploration doc has been superseded by the production implementation.
+>
+> **See instead:**
+> - **User Guide:** `apps/agor-docs/pages/guide/multiplayer-unix-isolation.mdx`
+> - **Implementation Guide:** `context/guides/rbac-and-unix-isolation.md`
+> - **Config Reference:** `CLAUDE.md` (Feature Flags section)
+>
+> This document remains for historical context on the design exploration phase.
+
+**Status:** 🔬 Exploration (ARCHIVED - See above)
+**Recommended Approach:** Sudo-based impersonation with progressive enhancement ✅ IMPLEMENTED
 **Complexity:** Medium
 **Last Updated:** 2025-01-01
+**Archived:** 2025-02-03
 
 ---
 

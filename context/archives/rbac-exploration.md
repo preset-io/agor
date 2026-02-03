@@ -1,10 +1,20 @@
 # Worktree-Centric RBAC
 
-**Status:** 🔬 Exploration
-**Scope:** Application-level authorization (FeathersJS services + socket events)
-**Last Updated:** 2025-01-23
+> **⚠️ ARCHIVED:** This exploration doc has been superseded by the production implementation.
+>
+> **See instead:**
+> - **User Guide:** `apps/agor-docs/pages/guide/multiplayer-unix-isolation.mdx`
+> - **Implementation Guide:** `context/guides/rbac-and-unix-isolation.md`
+> - **Feature Flags:** `CLAUDE.md` (Feature Flags section)
+>
+> This document remains for historical context on the RBAC design exploration.
 
-> This document focuses on Agor's app-layer RBAC for worktrees and the sessions that belong to them. For the unified OS-level + app-level design (Unix users, groups, modes), see `@context/explorations/unix-user-modes.md`.
+**Status:** 🔬 Exploration (ARCHIVED - See above)
+**Scope:** Application-level authorization (FeathersJS services + socket events) ✅ IMPLEMENTED
+**Last Updated:** 2025-01-23
+**Archived:** 2025-02-03
+
+> This document focused on Agor's app-layer RBAC for worktrees and the sessions that belong to them. The concepts here have been implemented in production. For the unified OS-level + app-level design, see `context/guides/rbac-and-unix-isolation.md`.
 
 ---
 

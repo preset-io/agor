@@ -1,48 +1,81 @@
 ---
-title: Full Multiplayer Mode
-description: Running Agor with full RBAC and Unix isolation for shared development environments
+title: Multiplayer Mode with Unix Isolation
+description: Running Agor with RBAC and Unix-level isolation for secure shared development environments
 ---
 
-# Full Multiplayer Mode
+# Multiplayer Mode with Unix Isolation
 
-This guide covers running Agor in full multiplayer mode with RBAC (Role-Based Access Control) and Unix-level isolation for production shared environments.
+This guide covers running Agor with full RBAC (Role-Based Access Control) and Unix-level isolation, enabling secure multi-user collaboration on shared development infrastructure.
 
 ---
 
 ## Overview
 
-Multiplayer Agor enables true collaboration on shared development environments:
+Agor's multiplayer mode brings back the power of shared development servers with modern security:
 
-- **Shared development environments** - Multiple users working on the same codebase with proper isolation
-- **True Unix isolation** - Worktree-level permissions enforced at the filesystem level
+- **Shared development environments** - Multiple users collaborate on the same codebase with proper isolation
+- **OS-level security** - Worktree permissions enforced at the Unix filesystem level
+- **Process impersonation** - Agent sessions run as the actual user who created them
 - **Real-time collaboration** - See what teammates are working on, share terminals, pair program
+
+Think of it as **"once upon a time, teams shared servers"** — but with proper RBAC, credential isolation, and modern workflows.
 
 ---
 
-## Security Considerations
+## Security Model
 
-Running Agor in full multiplayer mode with Unix isolation grants the Agor daemon significant system privileges.
+Agor implements **defense in depth** with multiple security layers:
 
-### What the Daemon Can Do
+### Multi-Layer Protection
 
-- Create and manage Unix users and groups
+1. **App Layer** - Agor API validates permissions before any operation
+2. **Sudoers Layer** - Commands restricted to specific Agor-managed paths
+3. **OS Layer** - Unix permissions prevent unauthorized filesystem access
+4. **Audit Layer** - All privileged operations logged to `/var/log/auth.log`
+
+### What the Daemon Can Do (With Proper Sudoers Configuration)
+
+- Create and manage Unix users in the `agor_users` group
+- Create Unix groups for worktree isolation (`agor_wt_*`)
 - Impersonate managed users to run agent sessions
-- Modify filesystem permissions on worktree directories
-- Execute privileged commands via sudo
+- Modify filesystem permissions on Agor-managed directories only
+- Execute scoped privileged commands via sudo
 
-### Exposure Considerations
+### Scoped Privileges
 
-- **API Keys** - Users configure their own API keys (Anthropic, OpenAI, etc.) through the UI. These are stored in the Agor database and used by the daemon when running sessions on their behalf.
-- **Worktree Access** - Users with worktree access can see files, terminal output, and session history for that worktree.
-- **Daemon Compromise** - If the daemon is compromised, an attacker could potentially access all managed worktrees and user API keys.
+All filesystem operations are **strictly scoped** to Agor-managed paths:
+- `/home/*/agor/*` - User worktree symlinks and config
+- `/home/*/.agor/*` - Agor data directories
+- `/var/agor/*` - Optional shared storage directory
+
+**System paths are NOT accessible** - the daemon cannot modify `/etc`, `/usr`, `/root`, or other system directories.
+
+### Security Properties
+
+- ✅ **Scoped impersonation** - Only `agor_users` group members can be impersonated (prevents root escalation)
+- ✅ **Credential isolation** - Each user's API keys, SSH keys, and dotfiles are isolated
+- ✅ **Filesystem enforcement** - Unix permissions prevent cross-user access
+- ✅ **Audit trail** - All sudo operations logged with timestamp and command
+- ✅ **Defense in depth** - Multiple layers: app validation → sudoers → OS permissions
+
+### Threat Model
+
+| Threat                       | Impact                          | Mitigation                                    |
+| ---------------------------- | ------------------------------- | --------------------------------------------- |
+| **Malicious user prompts**   | ⚠️ Can damage own files         | ✓ Permission system, audit logs               |
+| **Daemon compromise**        | ⚠️ Can access daemon user files | ✓ Daemon unprivileged, limited blast radius   |
+| **User escalation**          | ❌ Cannot access other users    | ✓ Unix permissions, scoped sudoers            |
+| **Credential theft**         | ❌ Cannot read other user keys  | ✓ File permissions (600 on private keys)      |
+| **Sudoers misconfiguration** | ⚠️ Risk if overly permissive    | ✓ Scoped rules, agor_users group restriction  |
 
 ### Recommendations
 
-1. **VPN/Private Network** - Run on a trusted network, not exposed to the public internet
-2. **Trusted Users Only** - Only grant access to users you trust with shared infrastructure
-3. **API Key Rotation** - Regularly rotate API keys, especially if users leave the team
-4. **Minimal Permissions** - Use the RBAC system to grant minimal necessary permissions per worktree
-5. **Audit Logs** - Enable comprehensive logging for security auditing
+1. **Private Network** - Run on VPN or trusted network, not public internet
+2. **Trusted Users** - Only grant access to users you trust with shared infrastructure
+3. **API Key Rotation** - Regularly rotate API keys, especially when users leave
+4. **Monitor Audit Logs** - Check `/var/log/auth.log` for suspicious sudo activity
+5. **Resource Limits** - Use ulimits, cgroups, or quotas to prevent resource exhaustion
+6. **Regular Audits** - Review worktree ownership quarterly with `agor worktree owners audit`
 
 ---
 
@@ -79,79 +112,136 @@ storage:
 
 ### 3. Sudoers Configuration
 
-The daemon needs sudo access for Unix user/group management. We provide a reference sudoers file with comprehensive documentation:
+The daemon requires sudo access for Unix user/group management. Agor provides a comprehensive, production-ready sudoers file with extensive documentation and security scoping.
 
-**Download the sudoers template:**
+**Installation:**
 
 ```bash
-# Download the reference sudoers file
+# Download the sudoers file
 curl -O https://raw.githubusercontent.com/preset-io/agor/main/docker/sudoers/agor-daemon.sudoers
 
-# IMPORTANT: Validate syntax before installing
+# CRITICAL: Always validate syntax before installing
 sudo visudo -c -f ./agor-daemon.sudoers
 
-# Install to sudoers.d (use your daemon username if not 'agor')
+# Install with correct permissions
 sudo install -m 0440 ./agor-daemon.sudoers /etc/sudoers.d/agor
 
-# Verify the configuration
+# Verify configuration
 sudo -l -U agor
 ```
 
-**Or view the file directly:** [agor-daemon.sudoers on GitHub](https://github.com/preset-io/agor/blob/main/docker/sudoers/agor-daemon.sudoers)
+**View the complete file:** [`docker/sudoers/agor-daemon.sudoers`](https://github.com/preset-io/agor/blob/main/docker/sudoers/agor-daemon.sudoers)
 
 <details>
-<summary>**Quick reference: What the sudoers file enables**</summary>
+<summary>**What the sudoers file enables**</summary>
 
+**User Impersonation (Core Feature):**
 ```bash
-# Core feature: User impersonation (run agents as the user who created the session)
-# Only agor_users group members can be impersonated (prevents root escalation)
+# Run agent sessions as the user who created them
+# SECURITY: Only agor_users group members can be impersonated
 agor ALL=(%agor_users) NOPASSWD: ALL
+```
 
-# User management (create Unix users for Agor users)
+**User Management:**
+```bash
+# Create/manage Unix users for Agor users
 agor ALL=(ALL) NOPASSWD: /usr/sbin/useradd *
 agor ALL=(ALL) NOPASSWD: /usr/sbin/userdel *
 agor ALL=(ALL) NOPASSWD: /usr/sbin/usermod *
+agor ALL=(ALL) NOPASSWD: /usr/sbin/chpasswd
+```
 
-# Group management (create agor_wt_* groups for worktree isolation)
+**Group Management (Worktree Isolation):**
+```bash
+# Create Unix groups per worktree (agor_wt_<id>)
 agor ALL=(ALL) NOPASSWD: /usr/sbin/groupadd *
 agor ALL=(ALL) NOPASSWD: /usr/sbin/groupdel *
 agor ALL=(ALL) NOPASSWD: /usr/sbin/gpasswd *
+```
 
-# Filesystem operations (scoped to Agor paths only)
+**Filesystem Operations (SCOPED TO AGOR PATHS ONLY):**
+```bash
+# User home directories - worktree symlinks and config
 agor ALL=(ALL) NOPASSWD: /usr/bin/chown * /home/*/agor/*
+agor ALL=(ALL) NOPASSWD: /usr/bin/chown * /home/*/.agor/*
 agor ALL=(ALL) NOPASSWD: /usr/bin/chmod * /home/*/agor/*
-# ... and more (see full file for complete scoped rules)
+agor ALL=(ALL) NOPASSWD: /usr/bin/mkdir -p /home/*/agor/*
+agor ALL=(ALL) NOPASSWD: /usr/bin/ln -sfn * /home/*/agor/worktrees/*
 
-# Query commands (read-only, safe)
+# Optional shared storage
+agor ALL=(ALL) NOPASSWD: /usr/bin/chown * /var/agor/*
+agor ALL=(ALL) NOPASSWD: /usr/bin/chmod * /var/agor/*
+```
+
+**Query Commands (Read-Only, Safe):**
+```bash
 agor ALL=(ALL) NOPASSWD: /usr/bin/id *
 agor ALL=(ALL) NOPASSWD: /usr/bin/getent *
-agor ALL=(ALL) NOPASSWD: /usr/bin/test *
+agor ALL=(ALL) NOPASSWD: /usr/bin/readlink *
 ```
 
 </details>
 
-**Security properties of this configuration:**
+**Key Security Properties:**
 
-1. **Scoped impersonation** - Only `agor_users` group members can be impersonated, preventing escalation to system users (root, postgres, etc.)
-2. **No TTY required** - `Defaults:agor !requiretty` allows daemon operation without a terminal
-3. **Audit trail** - All sudo operations logged to `/var/log/auth.log`
-4. **Defense in depth** - App layer validates before sudo, OS layer enforces after
+1. **Scoped Impersonation** - Only `agor_users` group members can be impersonated
+   - Prevents escalation to system users (root, postgres, www-data, etc.)
+   - All Agor-managed users automatically added to `agor_users`
+
+2. **Path Scoping** - Filesystem operations restricted to Agor-managed paths:
+   - `/home/*/agor/*` - User worktree symlinks
+   - `/home/*/.agor/*` - User Agor data
+   - `/var/agor/*` - Shared storage (optional)
+   - **Cannot access**: `/etc`, `/usr`, `/root`, system directories
+
+3. **No TTY Required** - `Defaults:agor !requiretty` enables daemon operation
+   - Code MUST use `sudo -n` to fail fast if TTY somehow required
+   - Without `-n` flag, missing TTY causes process freeze
+
+4. **Audit Trail** - All sudo operations logged to `/var/log/auth.log`
+   - Monitor with: `sudo grep agor /var/log/auth.log | tail -20`
+   - Consider forwarding to SIEM for compliance environments
 
 **Customization:**
 
-- Replace `agor` with your daemon username if different (e.g., `agorpg` for PostgreSQL deployments)
-- The file is well-commented; read through it before deploying
+- Replace `agor` with your daemon username throughout (e.g., `agorpg`)
+- The file includes extensive comments and troubleshooting tips
+- Read the full file before deploying to production
 
-### 4. Enable RBAC
+### 4. Enable RBAC and Unix Isolation
 
-Enable the worktree RBAC feature flag:
+Configure Agor's execution mode via config:
 
 ```yaml
 # ~/.agor/config.yaml
 execution:
+  # Enable RBAC system (default: false)
   worktree_rbac: true
-  unix_user_mode: full # Options: simple, full
+
+  # Unix user mode (default: simple)
+  # Options:
+  #   - simple: No isolation, all runs as daemon user
+  #   - insulated: Worktree groups + single executor user
+  #   - strict: Full per-user isolation, enforced impersonation
+  unix_user_mode: insulated  # or strict
+
+  # Optional: Specific Unix user for executor (insulated mode)
+  executor_unix_user: agor_executor
 ```
+
+**Mode Comparison:**
+
+| Mode        | Unix Groups | FS Permissions | Process Impersonation | Use Case                      |
+| ----------- | ----------- | -------------- | --------------------- | ----------------------------- |
+| `simple`    | ❌          | ❌             | ❌                    | Single user, dev/testing      |
+| `insulated` | ✅          | ✅             | Optional              | Shared dev, FS isolation      |
+| `strict`    | ✅          | ✅             | ✅ Required           | Production, compliance        |
+
+**When to use each mode:**
+
+- **`simple`** - Default, single user or fully trusted team, no setup required
+- **`insulated`** - Recommended for shared development, isolates daemon from executors
+- **`strict`** - Production environments, compliance requirements, full audit trail
 
 ### 5. Observability Setup
 
@@ -173,29 +263,91 @@ metrics:
 
 ## How It Works
 
+### Three-Layer Architecture
+
+Agor combines app-level RBAC with OS-level enforcement:
+
+1. **App Layer** - API validates permissions before operations
+2. **Unix Groups** - Worktree isolation via filesystem permissions
+3. **Process Impersonation** - Agents run as the session creator's Unix user
+
 ### User Management
 
-When RBAC is enabled:
+When RBAC is enabled (`worktree_rbac: true`):
 
-1. Each Agor user can have an associated Unix username
-2. Users are added to the `agor_users` group for daemon impersonation
-3. Agent sessions run as the user's Unix account, not as the daemon
+1. Each Agor user gets a Unix account (auto-created or pre-provisioned)
+2. Format: `agor_<short-id>` (e.g., `agor_03b62447`) or custom username
+3. All managed users added to `agor_users` group
+4. Users can be impersonated by daemon for session execution
+5. Each user gets home directory with:
+   - `~/agor/worktrees/` - Symlinks to authorized worktrees
+   - `~/.ssh/` - User's SSH keys (isolated)
+   - `~/.config/gh/` - GitHub CLI credentials (isolated)
+   - `~/.claude/` - Claude SDK session state
 
 ### Worktree Isolation
 
-Each worktree gets:
+Each worktree gets OS-level protection:
 
-1. A dedicated Unix group (`agor_wt_<short-id>`)
-2. Filesystem permissions based on RBAC settings
-3. Owners with specific permission levels (view/prompt/all)
+1. **Unix Group** - Dedicated group `agor_wt_<short-id>`
+2. **Filesystem Permissions** - Directory owned by group with proper mode
+3. **Group Membership** - Worktree owners added to group
+4. **Home Symlinks** - Owners get `~/agor/worktrees/<name>` → worktree path
+
+**Example:**
+
+```bash
+# Worktree created
+$ ls -la /var/agor/worktrees/wt-abc123/
+drwxrwx--- alice agor_wt_abc123 my-project/
+
+# Alice's home
+$ ls -la ~/agor/worktrees/
+lrwxrwxrwx alice alice my-project-abc123 -> /var/agor/worktrees/wt-abc123/my-project
+
+# Bob added as owner
+$ getent group agor_wt_abc123
+agor_wt_abc123:x:1050:alice,bob
+```
 
 ### Permission Levels
 
-| Level  | Can View | Can Prompt | Can Modify Settings |
-| ------ | -------- | ---------- | ------------------- |
-| view   | Yes      | No         | No                  |
-| prompt | Yes      | Yes        | No                  |
-| all    | Yes      | Yes        | Yes                 |
+Agor defines three permission levels per worktree:
+
+| Level    | Filesystem Access | View Sessions | Prompt Sessions | Modify Worktree |
+| -------- | ----------------- | ------------- | --------------- | --------------- |
+| `view`   | Read-only         | ✅            | ❌              | ❌              |
+| `prompt` | No direct access  | ✅            | ✅              | ❌              |
+| `all`    | Read-write        | ✅            | ✅              | ✅              |
+
+**Permission Grant Levels:**
+
+- **Worktree Owners** - Explicitly granted via `worktree_owners` table
+- **Non-Owners** - Default level set by `others_can` field on worktree
+
+### Session Execution Context
+
+**Critical insight:** Sessions are bound to their creator forever (immutable).
+
+```typescript
+// Session record
+{
+  session_id: "abc123",
+  created_by: alice_user_id,  // IMMUTABLE
+  worktree_id: "wt-xyz789"
+}
+
+// When Bob prompts Alice's session:
+// - Task creator: Bob (for attribution)
+// - Execution user: Alice (session.created_by)
+// - Working directory: Alice's worktree
+// - Credentials used: Alice's ~/.ssh, ~/.config/gh
+```
+
+**Why immutable?**
+- Claude SDK stores state in creator's `~/.claude/`
+- Session continuity requires consistent user context
+- Credentials belong to session creator
 
 ---
 

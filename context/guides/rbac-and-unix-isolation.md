@@ -2,6 +2,25 @@
 
 **Agor's worktree-centric RBAC system with OS-level integration**
 
+> **Status:** ✅ Implemented and Production-Ready
+> **Version:** v0.5+
+> **Quick Start:** See `apps/agor-docs/pages/guide/multiplayer-unix-isolation.mdx`
+
+---
+
+## Quick Reference
+
+**Three modes, progressively secure:**
+
+1. **Simple (Default)** - `worktree_rbac: false` - Open access, no setup
+2. **Insulated** - `worktree_rbac: true` + `unix_user_mode: insulated` - Worktree groups, single executor
+3. **Strict** - `worktree_rbac: true` + `unix_user_mode: strict` - Full per-user isolation
+
+**Key files:**
+- Config: `~/.agor/config.yaml` → `execution.worktree_rbac` and `execution.unix_user_mode`
+- Sudoers: `docker/sudoers/agor-daemon.sudoers` (production-ready reference)
+- Implementation: `packages/core/src/unix/` and `apps/agor-daemon/src/services/`
+
 ---
 
 ## Once Upon a Time, Team Shared Servers

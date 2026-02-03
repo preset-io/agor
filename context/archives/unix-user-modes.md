@@ -1,14 +1,26 @@
 # Unix User Modes & Isolation
 
-**Status:** 🔬 Exploration
+> **⚠️ ARCHIVED:** This exploration doc has been superseded by the production implementation.
+>
+> **See instead:**
+> - **User Guide:** `apps/agor-docs/pages/guide/multiplayer-unix-isolation.mdx`
+> - **Implementation Guide:** `context/guides/rbac-and-unix-isolation.md`
+> - **Sudoers Reference:** `docker/sudoers/agor-daemon.sudoers`
+>
+> This document remains for historical context on the design decisions.
+
+**Status:** 🔬 Exploration (ARCHIVED - See above)
 **Related:** rbac.md, unix-user-integration.md, executor-implementation-plan.md
 **Last Updated:** 2025-01-23
+**Archived:** 2025-02-03
 
 ---
 
 ## Overview
 
-Agor's Unix isolation strategy combines **OS-level security** (Unix users, groups, filesystem permissions) with **app-level authorization** (RBAC, session ownership). This document unifies the design across four progressive modes and establishes the interaction between sessions, worktrees, and Unix primitives.
+**NOTE:** The concepts here were implemented with slight modifications. The production system uses three modes (simple, insulated, strict) instead of the four described below.
+
+Agor's Unix isolation strategy combines **OS-level security** (Unix users, groups, filesystem permissions) with **app-level authorization** (RBAC, session ownership). This document describes the design exploration across progressive modes and establishes the interaction between sessions, worktrees, and Unix primitives.
 
 ---
 
