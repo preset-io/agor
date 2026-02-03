@@ -1191,8 +1191,12 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       setTransport(server.transport);
     }
 
-    // Set form fields
-    form.setFieldsValue({
+    // Reset form first to clear any stale registered fields from previous edits
+    // This prevents Ant Design from validating hidden fields (e.g. JWT fields when auth is OAuth)
+    form.resetFields();
+
+    // Set form fields - only include auth fields relevant to the current auth type
+    const formValues: Record<string, unknown> = {
       name: server.name,
       display_name: server.display_name,
       description: server.description,
@@ -1204,17 +1208,26 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       enabled: server.enabled,
       env: server.env ? JSON.stringify(server.env, null, 2) : undefined,
       auth_type: serverAuthType,
-      auth_token: server.auth?.token,
-      jwt_api_url: server.auth?.api_url,
-      jwt_api_token: server.auth?.api_token,
-      jwt_api_secret: server.auth?.api_secret,
-      oauth_token_url: server.auth?.oauth_token_url,
-      oauth_client_id: server.auth?.oauth_client_id,
-      oauth_client_secret: server.auth?.oauth_client_secret,
-      oauth_scope: server.auth?.oauth_scope,
-      oauth_grant_type: server.auth?.oauth_grant_type || 'client_credentials',
       tool_permissions: server.tool_permissions || {},
-    });
+    };
+
+    // Only set auth fields for the active auth type to avoid
+    // Ant Design registering and validating hidden fields
+    if (serverAuthType === 'bearer') {
+      formValues.auth_token = server.auth?.token;
+    } else if (serverAuthType === 'jwt') {
+      formValues.jwt_api_url = server.auth?.api_url;
+      formValues.jwt_api_token = server.auth?.api_token;
+      formValues.jwt_api_secret = server.auth?.api_secret;
+    } else if (serverAuthType === 'oauth') {
+      formValues.oauth_token_url = server.auth?.oauth_token_url;
+      formValues.oauth_client_id = server.auth?.oauth_client_id;
+      formValues.oauth_client_secret = server.auth?.oauth_client_secret;
+      formValues.oauth_scope = server.auth?.oauth_scope;
+      formValues.oauth_grant_type = server.auth?.oauth_grant_type || 'client_credentials';
+    }
+
+    form.setFieldsValue(formValues);
 
     setEditModalOpen(true);
     console.log('[MCP] Edit modal opened for server:', server.name, {
