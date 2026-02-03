@@ -418,6 +418,7 @@ export async function handleGitWorktreeAdd(
     console.log(`[git.worktree.add] Worktree created at ${worktreePath}`);
 
     // Initialize Unix group for worktree isolation (if requested)
+    // Note: initUnixGroup is explicitly set by daemon based on isWorktreeRbacEnabled()
     let unixGroup: string | undefined;
     if (payload.params.initUnixGroup && worktreeId) {
       try {
@@ -446,12 +447,12 @@ export async function handleGitWorktreeAdd(
           error instanceof Error ? error.message : String(error)
         );
       }
-    } else {
-      // RBAC is disabled, but we still need to ensure .git/worktrees/<name>/ is accessible
-      // Set basic world-readable permissions so git operations work
+    } else if (!payload.params.initUnixGroup) {
+      // RBAC is explicitly disabled - set basic permissions for .git/worktrees/<name>/
+      // This ensures git operations work even without Unix group isolation
       try {
         console.log(
-          `[git.worktree.add] Setting basic permissions for .git/worktrees/${worktreeName}`
+          `[git.worktree.add] RBAC disabled, setting basic permissions for .git/worktrees/${worktreeName}`
         );
         await fixWorktreeGitDirPermissionsBasic(repoPath, worktreeName);
       } catch (error) {
@@ -461,6 +462,7 @@ export async function handleGitWorktreeAdd(
         );
       }
     }
+    // else: initUnixGroup is true but worktreeId is missing - skip both paths (this shouldn't happen)
 
     // Render environment command templates (after Unix group creation if applicable)
     // Templates should be rendered regardless of RBAC status, but GID will only be available

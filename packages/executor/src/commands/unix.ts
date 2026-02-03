@@ -744,9 +744,10 @@ export async function fixWorktreeGitDirPermissionsBasic(
 
   console.log(`[unix] Setting basic permissions for .git/worktrees/${worktreeName}`);
 
-  // Set basic world-readable permissions (755 = rwxr-xr-x)
-  // This allows all users to read and traverse the directory for git operations
-  const permCommands = [`chmod -R 755 "${worktreeGitDir}"`];
+  // Set basic world-readable permissions without making files executable
+  // u+rwX,g+rX,o+rX: Capital X only adds execute bit to directories, not files
+  // This allows all users to read and traverse directories, but keeps metadata files non-executable
+  const permCommands = [`chmod -R u+rwX,g+rX,o+rX "${worktreeGitDir}"`];
 
   await runCommands(permCommands);
 }
