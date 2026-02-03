@@ -60,7 +60,7 @@ RUN curl -fsSL "$(curl -s https://api.github.com/repos/cli/cli/releases/latest |
 # NOTE: Update these versions when upgrading Agor SDKs (see packages/core/package.json)
 RUN npm install -g \
   pnpm@9.15.1 \
-  @anthropic-ai/claude-code@2.0.55 \
+  @anthropic-ai/claude-code@2.1.29 \
   @google/gemini-cli@0.18.4 \
   @openai/codex@0.69.0 \
   opencode-ai@latest
