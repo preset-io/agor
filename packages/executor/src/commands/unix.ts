@@ -533,9 +533,13 @@ export async function handleUnixSyncUser(
     // Configure git safe.directory for worktrees (if requested by daemon)
     // This prevents "dubious ownership" errors when user runs git commands
     // in worktrees owned by the daemon user (only needed when unix impersonation is enabled)
+    //
+    // NOTE: Git does NOT support wildcard patterns like /path/*/* in safe.directory.
+    // The only wildcard supported is a literal '*' which trusts ALL directories (security risk).
+    // Instead, we use '*' to trust all directories globally for this user.
     if (payload.params.configureGitSafeDirectory) {
       try {
-        const worktreesPattern = '/var/lib/agor/home/agorpg/.agor/worktrees/*/*';
+        const trustAllPattern = '*';
 
         // Check if safe.directory is already configured (idempotent)
         let existingEntries: string[] = [];
@@ -547,14 +551,17 @@ export async function handleUnixSyncUser(
           // Config doesn't exist yet, that's fine
         }
 
-        if (!existingEntries.includes(worktreesPattern)) {
-          // Add wildcard safe.directory for all worktrees
+        if (!existingEntries.includes(trustAllPattern)) {
+          // Add '*' to trust all directories for this user
+          // This is acceptable because each user is isolated and only accesses their assigned worktrees
           await runCommand(
-            `sudo -u ${unixUsername} git config --global --add safe.directory '${worktreesPattern}'`
+            `sudo -u ${unixUsername} git config --global --add safe.directory '${trustAllPattern}'`
           );
-          console.log(`[unix.sync-user] Configured git safe.directory for ${unixUsername}`);
+          console.log(`[unix.sync-user] Configured git safe.directory='*' for ${unixUsername}`);
         } else {
-          console.log(`[unix.sync-user] git safe.directory already configured for ${unixUsername}`);
+          console.log(
+            `[unix.sync-user] git safe.directory='*' already configured for ${unixUsername}`
+          );
         }
       } catch (error) {
         // Non-fatal - log warning and continue

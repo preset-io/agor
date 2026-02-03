@@ -1300,6 +1300,9 @@ export function setupMCPRoutes(app: Application): void {
 
           console.log(`✨ MCP creating new session in worktree ${args.worktreeId.substring(0, 8)}`);
 
+          // Fetch user data to get unix_username
+          const user = await app.service('users').get(context.userId, baseServiceParams);
+
           // Get worktree to extract repo context
           const worktree = await app.service('worktrees').get(args.worktreeId, baseServiceParams);
 
@@ -1322,6 +1325,8 @@ export function setupMCPRoutes(app: Application): void {
             status: 'idle',
             title: args.title,
             description: args.description,
+            created_by: context.userId,
+            unix_username: user.unix_username,
             permission_config: {
               mode: permissionMode,
               allowedTools: [],
