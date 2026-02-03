@@ -36,6 +36,7 @@ import { createExecutorClient } from '../services/feathers-client.js';
 import type { CommandOptions } from './index.js';
 import {
   fixWorktreeGitDirPermissions,
+  fixWorktreeGitDirPermissionsBasic,
   initializeRepoGroup,
   initializeWorktreeGroup,
 } from './unix.js';
@@ -442,6 +443,20 @@ export async function handleGitWorktreeAdd(
         // Log but don't fail the entire operation
         console.error(
           `[git.worktree.add] Failed to initialize Unix group:`,
+          error instanceof Error ? error.message : String(error)
+        );
+      }
+    } else {
+      // RBAC is disabled, but we still need to ensure .git/worktrees/<name>/ is accessible
+      // Set basic world-readable permissions so git operations work
+      try {
+        console.log(
+          `[git.worktree.add] Setting basic permissions for .git/worktrees/${worktreeName}`
+        );
+        await fixWorktreeGitDirPermissionsBasic(repoPath, worktreeName);
+      } catch (error) {
+        console.error(
+          `[git.worktree.add] Failed to set basic .git/worktrees permissions:`,
           error instanceof Error ? error.message : String(error)
         );
       }

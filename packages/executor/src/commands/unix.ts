@@ -729,3 +729,24 @@ export async function fixWorktreeGitDirPermissions(
   );
   await runCommands(permCommands);
 }
+
+/**
+ * Fix permissions on worktree's .git/worktrees/<name>/ directory without RBAC
+ *
+ * This ensures basic accessibility for git operations when RBAC is disabled.
+ * Sets world-readable permissions (755) so users can access the git metadata.
+ */
+export async function fixWorktreeGitDirPermissionsBasic(
+  repoPath: string,
+  worktreeName: string
+): Promise<void> {
+  const worktreeGitDir = `${repoPath}/.git/worktrees/${worktreeName}`;
+
+  console.log(`[unix] Setting basic permissions for .git/worktrees/${worktreeName}`);
+
+  // Set basic world-readable permissions (755 = rwxr-xr-x)
+  // This allows all users to read and traverse the directory for git operations
+  const permCommands = [`chmod -R 755 "${worktreeGitDir}"`];
+
+  await runCommands(permCommands);
+}
