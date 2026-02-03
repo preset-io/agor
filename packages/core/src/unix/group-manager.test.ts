@@ -154,20 +154,24 @@ describe('group-manager', () => {
   describe('UnixGroupCommands', () => {
     describe('createGroup', () => {
       it('generates groupadd command', () => {
-        expect(UnixGroupCommands.createGroup('agor_wt_01234567')).toBe('groupadd agor_wt_01234567');
+        expect(UnixGroupCommands.createGroup('agor_wt_01234567')).toBe(
+          'sudo -n groupadd agor_wt_01234567'
+        );
       });
     });
 
     describe('deleteGroup', () => {
       it('generates groupdel command', () => {
-        expect(UnixGroupCommands.deleteGroup('agor_wt_01234567')).toBe('groupdel agor_wt_01234567');
+        expect(UnixGroupCommands.deleteGroup('agor_wt_01234567')).toBe(
+          'sudo -n groupdel agor_wt_01234567'
+        );
       });
     });
 
     describe('addUserToGroup', () => {
       it('generates usermod -aG command', () => {
         expect(UnixGroupCommands.addUserToGroup('alice', 'developers')).toBe(
-          'usermod -aG developers alice'
+          'sudo -n usermod -aG developers alice'
         );
       });
     });
@@ -175,7 +179,7 @@ describe('group-manager', () => {
     describe('removeUserFromGroup', () => {
       it('generates gpasswd -d command', () => {
         expect(UnixGroupCommands.removeUserFromGroup('alice', 'developers')).toBe(
-          'gpasswd -d alice developers'
+          'sudo -n gpasswd -d alice developers'
         );
       });
     });
@@ -208,36 +212,39 @@ describe('group-manager', () => {
       it('returns ACL-based commands for others read (2775)', () => {
         const cmds = UnixGroupCommands.setDirectoryGroup('/data/project', 'developers', '2775');
         expect(cmds).toEqual([
-          'chgrp -R developers "/data/project"',
-          'find "/data/project" -type d -exec chmod g+s {} +',
-          'setfacl -R -m u::rwX "/data/project"',
-          'setfacl -R -m g:developers:rwX "/data/project"',
-          'setfacl -R -m o::rX "/data/project"',
-          'setfacl -R -d -m u::rwX,g:developers:rwX,o::rX "/data/project"',
+          'sudo -n chgrp -R developers "/data/project"',
+          'find "/data/project" -type d -exec sudo -n chmod g+s {} +',
+          'sudo -n setfacl -R -m u::rwX "/data/project"',
+          'sudo -n setfacl -R -m g:developers:rwX "/data/project"',
+          'sudo -n setfacl -R -m o::rX "/data/project"',
+          'sudo -n setfacl -R -m m::rwX "/data/project"',
+          'sudo -n setfacl -R -d -m u::rwX,g:developers:rwX,o::rX,m::rwX "/data/project"',
         ]);
       });
 
       it('returns ACL-based commands for no others access (2770)', () => {
         const cmds = UnixGroupCommands.setDirectoryGroup('/data/secret', 'admins', '2770');
         expect(cmds).toEqual([
-          'chgrp -R admins "/data/secret"',
-          'find "/data/secret" -type d -exec chmod g+s {} +',
-          'setfacl -R -m u::rwX "/data/secret"',
-          'setfacl -R -m g:admins:rwX "/data/secret"',
-          'setfacl -R -m o::--- "/data/secret"',
-          'setfacl -R -d -m u::rwX,g:admins:rwX,o::--- "/data/secret"',
+          'sudo -n chgrp -R admins "/data/secret"',
+          'find "/data/secret" -type d -exec sudo -n chmod g+s {} +',
+          'sudo -n setfacl -R -m u::rwX "/data/secret"',
+          'sudo -n setfacl -R -m g:admins:rwX "/data/secret"',
+          'sudo -n setfacl -R -m o::--- "/data/secret"',
+          'sudo -n setfacl -R -m m::rwX "/data/secret"',
+          'sudo -n setfacl -R -d -m u::rwX,g:admins:rwX,o::---,m::rwX "/data/secret"',
         ]);
       });
 
       it('returns ACL-based commands for full others access (2777)', () => {
         const cmds = UnixGroupCommands.setDirectoryGroup('/data/public', 'everyone', '2777');
         expect(cmds).toEqual([
-          'chgrp -R everyone "/data/public"',
-          'find "/data/public" -type d -exec chmod g+s {} +',
-          'setfacl -R -m u::rwX "/data/public"',
-          'setfacl -R -m g:everyone:rwX "/data/public"',
-          'setfacl -R -m o::rwX "/data/public"',
-          'setfacl -R -d -m u::rwX,g:everyone:rwX,o::rwX "/data/public"',
+          'sudo -n chgrp -R everyone "/data/public"',
+          'find "/data/public" -type d -exec sudo -n chmod g+s {} +',
+          'sudo -n setfacl -R -m u::rwX "/data/public"',
+          'sudo -n setfacl -R -m g:everyone:rwX "/data/public"',
+          'sudo -n setfacl -R -m o::rwX "/data/public"',
+          'sudo -n setfacl -R -m m::rwX "/data/public"',
+          'sudo -n setfacl -R -d -m u::rwX,g:everyone:rwX,o::rwX,m::rwX "/data/public"',
         ]);
       });
     });

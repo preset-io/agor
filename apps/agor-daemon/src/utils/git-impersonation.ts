@@ -47,11 +47,11 @@ export async function resolveGitImpersonationForUser(
 /**
  * Resolve Unix user for git operations on a worktree
  *
- * Uses the worktree creator's unix_username for impersonation.
+ * Git operations always run as the daemon user (see resolveGitImpersonationForUser).
  *
- * @param db - Database instance for user lookup
- * @param worktree - Worktree to resolve user for
- * @returns Unix username to impersonate, or undefined for no impersonation
+ * @param db - Database instance (unused, kept for API compatibility)
+ * @param worktree - Worktree (unused, kept for API compatibility)
+ * @returns Daemon username to force fresh group lookup via sudo -u
  */
 export async function resolveGitImpersonationForWorktree(
   db: Database,
