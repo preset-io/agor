@@ -1,9 +1,10 @@
 export default {
-  openclaw: 'Agor vs. OpenClaw (ClawdBot)',
-  announcement: 'Agor Announcement',
-  'agor-platform': 'Agor Platform',
-  'making-of-agor': 'Making of Agor',
+  'agor-openclaw': 'Agor-OpenClaw Framework',
   'agor-cloud': 'Agor Cloud Private Beta',
-  'context-engineering': 'Context Engineering',
+  openclaw: 'Agor vs. OpenClaw (ClawdBot)',
+  'agor-platform': 'Agor Platform',
   'orchestration-layers': 'The Orchestration Layers',
+  'context-engineering': 'Context Engineering',
+  'making-of-agor': 'Making of Agor',
+  announcement: 'Agor Announcement',
 };
