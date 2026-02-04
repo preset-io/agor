@@ -129,6 +129,7 @@ export class SessionTokenStrategy extends AuthenticationBaseStrategy {
       user: {
         user_id: sessionInfo.user_id,
         email: '',
+        role: 'member', // Default role for session token auth
       },
       // Include session_id for downstream services
       session_id: sessionInfo.session_id,
@@ -170,6 +171,7 @@ export class SessionTokenStrategy extends AuthenticationBaseStrategy {
       user: {
         user_id: sessionInfo.user_id,
         email: '',
+        role: 'member', // Default role for session token auth
       },
       session_id: sessionInfo.session_id,
     };

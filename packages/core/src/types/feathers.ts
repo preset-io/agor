@@ -47,8 +47,8 @@ export interface AuthenticatedUser {
   user_id: string;
   /** User email address */
   email: string;
-  /** User role (for authorization) */
-  role?: string;
+  /** User role (for authorization) - always defined, defaults to 'member' */
+  role: string;
 }
 
 /**

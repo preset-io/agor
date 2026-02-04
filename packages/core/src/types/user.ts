@@ -136,9 +136,10 @@ export interface User extends BaseUserFields {
 /**
  * Create user input (password required, not stored in User type)
  */
-export interface CreateUserInput extends Partial<BaseUserFields> {
+export interface CreateUserInput extends Partial<Omit<BaseUserFields, 'role'>> {
   email: string;
   password: string;
+  role?: UserRole; // Optional, defaults to 'member' if not provided
   unix_username?: string;
   /** Force user to change password on first login (admin-only) */
   must_change_password?: boolean;

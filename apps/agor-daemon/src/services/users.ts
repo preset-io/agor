@@ -379,7 +379,7 @@ export class UsersService {
       email: row.email,
       name: row.name ?? undefined,
       emoji: row.emoji ?? undefined,
-      role: row.role as 'owner' | 'admin' | 'member' | 'viewer',
+      role: (row.role ?? 'member') as 'owner' | 'admin' | 'member' | 'viewer',
       unix_username: row.unix_username ?? undefined,
       avatar: data.avatar,
       preferences: data.preferences,
@@ -448,7 +448,7 @@ class UsersServiceWithAuth extends UsersService {
       password: row.password, // Include for authentication
       name: row.name ?? undefined,
       emoji: row.emoji ?? undefined,
-      role: row.role as 'owner' | 'admin' | 'member' | 'viewer',
+      role: (row.role ?? 'member') as 'owner' | 'admin' | 'member' | 'viewer',
       avatar: data.avatar,
       preferences: data.preferences,
       onboarding_completed: !!row.onboarding_completed,
