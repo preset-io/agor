@@ -467,9 +467,7 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
 
     try {
       // Get worktree IDs that are on boards
-      const worktreeIds = worktrees
-        .filter((wt) => wt.board_id)
-        .map((wt) => wt.worktree_id);
+      const worktreeIds = worktrees.filter((wt) => wt.board_id).map((wt) => wt.worktree_id);
 
       // If no worktrees are on boards, return as-is
       if (worktreeIds.length === 0) {
@@ -494,10 +492,7 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
         .all();
 
       // Build a map of worktree_id -> zone info for O(1) lookup
-      const zoneInfoByWorktree = new Map<
-        string,
-        { zone_id: string; zone_label?: string }
-      >();
+      const zoneInfoByWorktree = new Map<string, { zone_id: string; zone_label?: string }>();
 
       for (const row of rows) {
         if (!row.zone_id) {

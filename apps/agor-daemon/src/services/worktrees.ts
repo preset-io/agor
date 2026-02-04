@@ -531,7 +531,11 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
    * Phase 0: Sets board_id on worktree
    * Phase 1: Will also create board_object entry for positioning
    */
-  async addToBoard(id: WorktreeID, boardId: UUID, params?: WorktreeParams): Promise<WorktreeWithZone> {
+  async addToBoard(
+    id: WorktreeID,
+    boardId: UUID,
+    params?: WorktreeParams
+  ): Promise<WorktreeWithZone> {
     // Set worktree.board_id (patch already enriches with zone info)
     const worktree = await this.patch(
       id,
