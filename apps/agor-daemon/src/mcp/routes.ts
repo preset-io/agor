@@ -1137,6 +1137,7 @@ export function setupMCPRoutes(app: Application): void {
           }
 
           // Include last message in MCP session get calls
+          console.log(`🔍 [MCP sessions_get] Fetching session ${args.sessionId} with include_last_message=true`);
           const session = await app.service('sessions').get(args.sessionId, {
             query: {
               include_last_message: true,
@@ -1144,6 +1145,7 @@ export function setupMCPRoutes(app: Application): void {
             },
             ...baseServiceParams,
           });
+          console.log(`🔍 [MCP sessions_get] Result has last_message: ${!!(session as any).last_message}, length: ${(session as any).last_message?.length ?? 'N/A'}`);
           mcpResponse = {
             content: [
               {
@@ -1829,6 +1831,7 @@ export function setupMCPRoutes(app: Application): void {
           }
 
           // Include session activity in MCP worktree get calls
+          console.log(`🔍 [MCP worktrees_get] Fetching worktree ${args.worktreeId} with include_sessions=true`);
           const worktree = await app.service('worktrees').get(args.worktreeId, {
             query: {
               include_sessions: true,
@@ -1836,6 +1839,7 @@ export function setupMCPRoutes(app: Application): void {
             },
             ...baseServiceParams,
           });
+          console.log(`🔍 [MCP worktrees_get] Result has sessions array: ${Array.isArray((worktree as any).sessions)}, length: ${(worktree as any).sessions?.length ?? 'N/A'}`);
           mcpResponse = {
             content: [
               {

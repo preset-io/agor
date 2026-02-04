@@ -237,15 +237,20 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
    * Session activity enrichment is opt-in via include_sessions query parameter
    */
   async get(id: WorktreeID, params?: WorktreeParams): Promise<WorktreeWithZoneAndSessions> {
+    console.log(`🔍 [WorktreesService.get] id=${id}, include_sessions=${params?.query?.include_sessions}, type=${typeof params?.query?.include_sessions}`);
     const worktree = await super.get(id, params);
     const withZone = await this.worktreeRepo.enrichWithZoneInfo(worktree as Worktree);
 
     // Only enrich with session activity if explicitly requested
     if (params?.query?.include_sessions === true || params?.query?.include_sessions === 'true') {
+      console.log(`🔍 [WorktreesService.get] Enriching with session activity`);
       const truncationLength = parseTruncationLength(params?.query?.last_message_truncation_length);
-      return this.worktreeRepo.enrichWithSessionActivity(withZone, truncationLength);
+      const result = await this.worktreeRepo.enrichWithSessionActivity(withZone, truncationLength);
+      console.log(`🔍 [WorktreesService.get] Enriched result has ${(result as any).sessions?.length ?? 0} sessions`);
+      return result;
     }
 
+    console.log(`🔍 [WorktreesService.get] Skipping session activity enrichment`);
     return withZone as WorktreeWithZoneAndSessions;
   }
 

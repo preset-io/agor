@@ -492,6 +492,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
    * Last message enrichment is opt-in via include_last_message query parameter
    */
   async get(id: string, params?: SessionParams): Promise<SessionWithLastMessage> {
+    console.log(`🔍 [SessionsService.get] id=${id}, include_last_message=${params?.query?.include_last_message}, type=${typeof params?.query?.include_last_message}`);
     const session = await super.get(id, params);
 
     // Only enrich with last message if explicitly requested
@@ -499,10 +500,14 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
       params?.query?.include_last_message === true ||
       params?.query?.include_last_message === 'true'
     ) {
+      console.log(`🔍 [SessionsService.get] Enriching with last message`);
       const truncationLength = parseTruncationLength(params?.query?.last_message_truncation_length);
-      return this.sessionRepo.enrichWithLastMessage(session as Session, truncationLength);
+      const result = await this.sessionRepo.enrichWithLastMessage(session as Session, truncationLength);
+      console.log(`🔍 [SessionsService.get] Enriched result has last_message: ${!!(result as any).last_message}`);
+      return result;
     }
 
+    console.log(`🔍 [SessionsService.get] Skipping last message enrichment`);
     return session as SessionWithLastMessage;
   }
 
