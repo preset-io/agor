@@ -2234,26 +2234,55 @@ export function setupMCPRoutes(app: Application): void {
             const centerY = zone.y + zone.height / 2;
 
             // Find or create board object for this worktree
-            const boardObjectsRepo = app.get('boardObjectsRepository');
-            let boardObject = await boardObjectsRepo.findByWorktreeId(
-              worktreeId as import('@agor/core/types').WorktreeID
-            );
+            const boardObjectsService = app.service('board-objects') as unknown as {
+              findByWorktreeId: (
+                worktreeId: import('@agor/core/types').WorktreeID,
+                params?: unknown
+              ) => Promise<import('@agor/core/types').BoardEntityObject | null>;
+              create: (
+                data: unknown,
+                params?: unknown
+              ) => Promise<import('@agor/core/types').BoardEntityObject>;
+              updatePosition: (
+                objectId: string,
+                position: { x: number; y: number },
+                params?: unknown
+              ) => Promise<import('@agor/core/types').BoardEntityObject>;
+              updateZone: (
+                objectId: string,
+                zoneId: string | undefined | null,
+                params?: unknown
+              ) => Promise<import('@agor/core/types').BoardEntityObject>;
+            };
+            let boardObject: import('@agor/core/types').BoardEntityObject | null =
+              await boardObjectsService.findByWorktreeId(
+                worktreeId as import('@agor/core/types').WorktreeID,
+                baseServiceParams
+              );
 
             if (!boardObject) {
               // Create new board object
-              boardObject = await boardObjectsRepo.create({
-                board_id: worktree.board_id as import('@agor/core/types').BoardID,
-                worktree_id: worktreeId as import('@agor/core/types').WorktreeID,
-                position: { x: centerX, y: centerY },
-                zone_id: zoneId,
-              });
+              boardObject = await boardObjectsService.create(
+                {
+                  board_id: worktree.board_id as import('@agor/core/types').BoardID,
+                  worktree_id: worktreeId as import('@agor/core/types').WorktreeID,
+                  position: { x: centerX, y: centerY },
+                  zone_id: zoneId,
+                },
+                baseServiceParams
+              );
             } else {
               // Update existing board object with zone and center position
-              await boardObjectsRepo.updatePosition(boardObject.object_id, {
-                x: centerX,
-                y: centerY,
-              });
-              boardObject = await boardObjectsRepo.updateZone(boardObject.object_id, zoneId);
+              await boardObjectsService.updatePosition(
+                boardObject.object_id,
+                { x: centerX, y: centerY },
+                baseServiceParams
+              );
+              boardObject = await boardObjectsService.updateZone(
+                boardObject.object_id,
+                zoneId,
+                baseServiceParams
+              );
             }
 
             console.log(`✅ Worktree pinned to zone at position (${centerX}, ${centerY})`);
