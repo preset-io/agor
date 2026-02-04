@@ -482,10 +482,11 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
       // This is correct - no board_object means no zone assignment.
       const { boardObjects: boardObjectsTable } = await import('../schema');
       const { boards: boardsTable } = await import('../schema');
+      const { jsonExtract } = await import('../database-wrapper');
 
       const rows = await select(this.db, {
         worktree_id: boardObjectsTable.worktree_id,
-        zone_id: sql<string | null>`json_extract(${boardObjectsTable.data}, '$.zone_id')`,
+        zone_id: jsonExtract(this.db, boardObjectsTable.data, 'zone_id'),
         board_data: boardsTable.data,
       })
         .from(boardObjectsTable)
