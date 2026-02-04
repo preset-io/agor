@@ -713,17 +713,21 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
       }
 
       // Enrich worktrees with session activity
-      return worktrees.map((wt) => {
+      const result = worktrees.map((wt) => {
         const sessions = sessionsByWorktree.get(wt.worktree_id) || [];
+        console.log(`🔍 [WorktreeRepo] Mapping worktree ${wt.worktree_id} -> ${sessions.length} sessions`);
         return {
           ...wt,
           sessions,
         };
       });
+      console.log(`🔍 [WorktreeRepo] Returning ${result.length} worktrees with total ${result.reduce((sum, wt) => sum + (wt.sessions?.length || 0), 0)} sessions`);
+      return result;
     } catch (error) {
-      console.warn(
-        'Failed to enrich worktrees with session activity:',
-        error instanceof Error ? error.message : String(error)
+      console.error(
+        '❌ Failed to enrich worktrees with session activity:',
+        error instanceof Error ? error.message : String(error),
+        error instanceof Error ? error.stack : ''
       );
       // Return worktrees without session activity on error
       return worktrees.map((wt) => ({ ...wt, sessions: [] }));
