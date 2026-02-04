@@ -549,7 +549,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
 
       for (const sessionId of sessionIds) {
         const query = select(this.db, {
-          content_preview: messagesTable.content_preview,
+          data: messagesTable.data,
         })
           .from(messagesTable)
           .where(
@@ -566,12 +566,26 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         const lastMessage = await (query as any).orderBy(desc(messagesTable.index)).limit(1).one();
 
         if (lastMessage) {
-          let content = (lastMessage.content_preview as string) || '';
-          // Apply truncation if needed (content_preview is already ~200 chars, but respect param)
-          if (content.length > truncationLength) {
-            content = content.substring(0, truncationLength) + '...truncated';
+          // Extract text content from message data and truncate to requested length
+          const messageData = lastMessage.data as {
+            content?: Array<{ type: string; text?: string }>;
+          };
+          let fullText = '';
+
+          // Extract text from content blocks (messages can have multiple content blocks)
+          if (messageData?.content && Array.isArray(messageData.content)) {
+            fullText = messageData.content
+              .filter((block) => block.type === 'text' && block.text)
+              .map((block) => block.text)
+              .join('\n');
           }
-          lastMessageBySession.set(sessionId, content);
+
+          // Truncate to requested length
+          if (fullText.length > truncationLength) {
+            fullText = fullText.substring(0, truncationLength) + '...';
+          }
+
+          lastMessageBySession.set(sessionId, fullText);
         }
       }
 
