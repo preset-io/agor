@@ -1136,7 +1136,14 @@ export function setupMCPRoutes(app: Application): void {
             });
           }
 
-          const session = await app.service('sessions').get(args.sessionId);
+          // Include last message in MCP session get calls
+          const session = await app.service('sessions').get(args.sessionId, {
+            query: {
+              include_last_message: true,
+              last_message_truncation_length: 500,
+            },
+            ...baseServiceParams,
+          });
           mcpResponse = {
             content: [
               {
@@ -1146,8 +1153,14 @@ export function setupMCPRoutes(app: Application): void {
             ],
           };
         } else if (name === 'agor_sessions_get_current') {
-          // Get current session using token context
-          const session = await app.service('sessions').get(context.sessionId);
+          // Get current session using token context with last message
+          const session = await app.service('sessions').get(context.sessionId, {
+            query: {
+              include_last_message: true,
+              last_message_truncation_length: 500,
+            },
+            ...baseServiceParams,
+          });
           mcpResponse = {
             content: [
               {
@@ -1815,7 +1828,14 @@ export function setupMCPRoutes(app: Application): void {
             });
           }
 
-          const worktree = await app.service('worktrees').get(args.worktreeId);
+          // Include session activity in MCP worktree get calls
+          const worktree = await app.service('worktrees').get(args.worktreeId, {
+            query: {
+              include_sessions: true,
+              last_message_truncation_length: 500,
+            },
+            ...baseServiceParams,
+          });
           mcpResponse = {
             content: [
               {

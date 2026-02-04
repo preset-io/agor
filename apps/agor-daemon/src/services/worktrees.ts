@@ -36,8 +36,34 @@ export type WorktreeParams = QueryParams<{
   name?: string;
   ref?: string;
   deleteFromFilesystem?: boolean;
-  last_message_truncation_length?: number; // Default: 500 chars
+  include_sessions?: boolean | 'true' | 'false'; // Opt-in session activity enrichment
+  last_message_truncation_length?: number; // Default: 500 chars, min: 50, max: 10000
 }>;
+
+/**
+ * Parse and validate last_message_truncation_length parameter
+ * Feathers delivers query params as strings, so we need to parse and validate
+ */
+function parseTruncationLength(value: unknown): number {
+  // Default value
+  const DEFAULT = 500;
+  const MIN = 50;
+  const MAX = 10000;
+
+  if (value === undefined || value === null) {
+    return DEFAULT;
+  }
+
+  // Parse to number
+  const parsed = typeof value === 'number' ? value : Number(value);
+
+  // Validate: must be finite, positive, and within bounds
+  if (!Number.isFinite(parsed) || parsed < MIN || parsed > MAX) {
+    return DEFAULT;
+  }
+
+  return Math.floor(parsed); // Ensure integer
+}
 
 /**
  * Process tracking for environment management
@@ -149,11 +175,18 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     const updatedWorktree = (await super.patch(id, data, params)) as Worktree;
 
     // Handle board_objects changes if board_id changed
-    const truncationLength = params?.query?.last_message_truncation_length ?? 500;
-
     if (!boardIdProvided) {
       const withZone = await this.worktreeRepo.enrichWithZoneInfo(updatedWorktree);
-      return this.worktreeRepo.enrichWithSessionActivity(withZone, truncationLength);
+
+      // Only enrich with session activity if explicitly requested
+      if (params?.query?.include_sessions === true || params?.query?.include_sessions === 'true') {
+        const truncationLength = parseTruncationLength(
+          params?.query?.last_message_truncation_length
+        );
+        return this.worktreeRepo.enrichWithSessionActivity(withZone, truncationLength);
+      }
+
+      return withZone as WorktreeWithZoneAndSessions;
     }
 
     if (oldBoardId !== newBoardId) {
@@ -188,17 +221,32 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     }
 
     const withZone = await this.worktreeRepo.enrichWithZoneInfo(updatedWorktree);
-    return this.worktreeRepo.enrichWithSessionActivity(withZone, truncationLength);
+
+    // Only enrich with session activity if explicitly requested
+    if (params?.query?.include_sessions === true || params?.query?.include_sessions === 'true') {
+      const truncationLength = parseTruncationLength(params?.query?.last_message_truncation_length);
+      return this.worktreeRepo.enrichWithSessionActivity(withZone, truncationLength);
+    }
+
+    return withZone as WorktreeWithZoneAndSessions;
   }
 
   /**
-   * Override get to enrich with zone and session information
+   * Override get to enrich with zone information
+   *
+   * Session activity enrichment is opt-in via include_sessions query parameter
    */
   async get(id: WorktreeID, params?: WorktreeParams): Promise<WorktreeWithZoneAndSessions> {
     const worktree = await super.get(id, params);
     const withZone = await this.worktreeRepo.enrichWithZoneInfo(worktree as Worktree);
-    const truncationLength = params?.query?.last_message_truncation_length ?? 500;
-    return this.worktreeRepo.enrichWithSessionActivity(withZone, truncationLength);
+
+    // Only enrich with session activity if explicitly requested
+    if (params?.query?.include_sessions === true || params?.query?.include_sessions === 'true') {
+      const truncationLength = parseTruncationLength(params?.query?.last_message_truncation_length);
+      return this.worktreeRepo.enrichWithSessionActivity(withZone, truncationLength);
+    }
+
+    return withZone as WorktreeWithZoneAndSessions;
   }
 
   /**

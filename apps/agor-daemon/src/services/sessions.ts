@@ -19,8 +19,34 @@ export type SessionParams = QueryParams<{
   status?: Session['status'];
   agentic_tool?: Session['agentic_tool'];
   board_id?: string;
-  last_message_truncation_length?: number; // Default: 500 chars
+  include_last_message?: boolean | 'true' | 'false'; // Opt-in last message enrichment
+  last_message_truncation_length?: number; // Default: 500 chars, min: 50, max: 10000
 }>;
+
+/**
+ * Parse and validate last_message_truncation_length parameter
+ * Feathers delivers query params as strings, so we need to parse and validate
+ */
+function parseTruncationLength(value: unknown): number {
+  // Default value
+  const DEFAULT = 500;
+  const MIN = 50;
+  const MAX = 10000;
+
+  if (value === undefined || value === null) {
+    return DEFAULT;
+  }
+
+  // Parse to number
+  const parsed = typeof value === 'number' ? value : Number(value);
+
+  // Validate: must be finite, positive, and within bounds
+  if (!Number.isFinite(parsed) || parsed < MIN || parsed > MAX) {
+    return DEFAULT;
+  }
+
+  return Math.floor(parsed); // Ensure integer
+}
 
 /**
  * Extended sessions service with custom methods
@@ -461,12 +487,23 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
   }
 
   /**
-   * Override get to enrich with last message
+   * Override get to optionally enrich with last message
+   *
+   * Last message enrichment is opt-in via include_last_message query parameter
    */
   async get(id: string, params?: SessionParams): Promise<SessionWithLastMessage> {
     const session = await super.get(id, params);
-    const truncationLength = params?.query?.last_message_truncation_length ?? 500;
-    return this.sessionRepo.enrichWithLastMessage(session as Session, truncationLength);
+
+    // Only enrich with last message if explicitly requested
+    if (
+      params?.query?.include_last_message === true ||
+      params?.query?.include_last_message === 'true'
+    ) {
+      const truncationLength = parseTruncationLength(params?.query?.last_message_truncation_length);
+      return this.sessionRepo.enrichWithLastMessage(session as Session, truncationLength);
+    }
+
+    return session as SessionWithLastMessage;
   }
 
   /**
