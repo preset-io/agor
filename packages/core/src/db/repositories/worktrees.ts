@@ -5,7 +5,18 @@
  */
 
 import type { AgenticToolName, SessionStatus, UUID, Worktree, WorktreeID } from '@agor/core/types';
-import { and, eq, getTableColumns, inArray, isNotNull, isNull, like, or, sql } from 'drizzle-orm';
+import {
+  and,
+  desc,
+  eq,
+  getTableColumns,
+  inArray,
+  isNotNull,
+  isNull,
+  like,
+  or,
+  sql,
+} from 'drizzle-orm';
 import { formatShortId, generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
@@ -603,7 +614,6 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
       // Query to get recent sessions for these worktrees with last message
       // We use a subquery to get the latest message for each session
       // We also extract message_count from the data column to avoid COUNT(*) queries
-      console.log(`🔍 [WorktreeRepo.enrichWithSessionActivity] Fetching sessions for worktrees: ${worktreeIds.join(', ')}`);
       const sessionRows = await select(this.db, {
         worktree_id: sessionsTable.worktree_id,
         session_id: sessionsTable.session_id,
@@ -620,52 +630,38 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
 
       // Get message counts and last messages for all sessions in one query
       const sessionIds = sessionRows.map((s: { session_id: unknown }) => s.session_id as string);
-      console.log(`🔍 [WorktreeRepo.enrichWithSessionActivity] Found ${sessionRows.length} sessions: ${sessionIds.slice(0, 3).join(', ')}${sessionIds.length > 3 ? '...' : ''}`);
 
       if (sessionIds.length === 0) {
         // No sessions found, return worktrees as-is with empty sessions array
-        console.log(`🔍 [WorktreeRepo.enrichWithSessionActivity] No sessions found, returning empty arrays`);
         return worktrees.map((wt) => ({ ...wt, sessions: [] }));
       }
 
-      // Get last assistant message for each session using SQL subquery
-      // We use content_preview (first 200 chars) which is already optimized for display
-      // and query for the max index per session to get only the latest message
-      // Exclude queued messages (status='queued') - only include normal messages (status IS NULL)
-      const lastMessagesSubquery = select(this.db, {
-        session_id: messagesTable.session_id,
-        max_index: sql<number>`MAX(${messagesTable.index})`,
-      })
-        .from(messagesTable)
-        .where(
-          and(
-            inArray(messagesTable.session_id, sessionIds),
-            eq(messagesTable.role, 'assistant'),
-            isNull(messagesTable.status) // Exclude queued messages
-          )
-        )
-        .groupBy(messagesTable.session_id)
-        .as('latest_messages');
-
-      // Join to get the actual message content for the latest messages
-      const lastMessages = await select(this.db, {
-        session_id: messagesTable.session_id,
-        content_preview: messagesTable.content_preview,
-      })
-        .from(messagesTable)
-        .innerJoin(
-          lastMessagesSubquery,
-          and(
-            eq(messagesTable.session_id, lastMessagesSubquery.session_id),
-            eq(messagesTable.index, lastMessagesSubquery.max_index)
-          )
-        )
-        .all();
-
-      // Build map of session_id -> last message
+      // Get last assistant message for each session using N+1 queries
+      // This is acceptable since we typically have 1-5 sessions per worktree
+      // Much better than fetching all messages which could be huge for long-running sessions
       const lastMessageBySession = new Map<string, string>();
-      for (const msg of lastMessages) {
-        lastMessageBySession.set(msg.session_id as string, (msg.content_preview as string) || '');
+
+      for (const sessionId of sessionIds) {
+        const query = select(this.db, {
+          content_preview: messagesTable.content_preview,
+        })
+          .from(messagesTable)
+          .where(
+            and(
+              eq(messagesTable.session_id, sessionId),
+              eq(messagesTable.role, 'assistant'),
+              isNull(messagesTable.status) // Exclude queued messages
+            )
+          );
+
+        // Chain orderBy and limit, then execute with one()
+        // The spread operator in the wrapper passes through these methods
+        // biome-ignore lint/suspicious/noExplicitAny: Wrapper spreads query builder methods
+        const lastMessage = await (query as any).orderBy(desc(messagesTable.index)).limit(1).one();
+
+        if (lastMessage) {
+          lastMessageBySession.set(sessionId, (lastMessage.content_preview as string) || '');
+        }
       }
 
       // Note: We extract message_count from sessions.data column instead of running COUNT(*)
@@ -715,19 +711,16 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
       // Enrich worktrees with session activity
       const result = worktrees.map((wt) => {
         const sessions = sessionsByWorktree.get(wt.worktree_id) || [];
-        console.log(`🔍 [WorktreeRepo] Mapping worktree ${wt.worktree_id} -> ${sessions.length} sessions`);
         return {
           ...wt,
           sessions,
         };
       });
-      console.log(`🔍 [WorktreeRepo] Returning ${result.length} worktrees with total ${result.reduce((sum, wt) => sum + (wt.sessions?.length || 0), 0)} sessions`);
       return result;
     } catch (error) {
       console.error(
-        '❌ Failed to enrich worktrees with session activity:',
-        error instanceof Error ? error.message : String(error),
-        error instanceof Error ? error.stack : ''
+        'Failed to enrich worktrees with session activity:',
+        error instanceof Error ? error.message : String(error)
       );
       // Return worktrees without session activity on error
       return worktrees.map((wt) => ({ ...wt, sessions: [] }));

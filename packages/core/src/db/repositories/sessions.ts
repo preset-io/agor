@@ -6,7 +6,18 @@
 
 import type { Session, UUID } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
-import { and, eq, getTableColumns, inArray, isNotNull, isNull, like, or, sql } from 'drizzle-orm';
+import {
+  and,
+  desc,
+  eq,
+  getTableColumns,
+  inArray,
+  isNotNull,
+  isNull,
+  like,
+  or,
+  sql,
+} from 'drizzle-orm';
 import { formatShortId, generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
@@ -531,50 +542,37 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       // Import messages table dynamically
       const { messages: messagesTable } = await import('../schema');
 
-      // Get last assistant message for each session using SQL subquery
-      // We use content_preview (first 200 chars) for efficiency
-      // Exclude queued messages (status='queued') - only include normal messages (status IS NULL)
-      const lastMessagesSubquery = select(this.db, {
-        session_id: messagesTable.session_id,
-        max_index: sql<number>`MAX(${messagesTable.index})`,
-      })
-        .from(messagesTable)
-        .where(
-          and(
-            inArray(messagesTable.session_id, sessionIds),
-            eq(messagesTable.role, 'assistant'),
-            isNull(messagesTable.status) // Exclude queued messages
-          )
-        )
-        .groupBy(messagesTable.session_id)
-        .as('latest_messages');
-
-      // Join to get the actual message content for the latest messages
-      const lastMessages = await select(this.db, {
-        session_id: messagesTable.session_id,
-        content_preview: messagesTable.content_preview,
-      })
-        .from(messagesTable)
-        .innerJoin(
-          lastMessagesSubquery,
-          and(
-            eq(messagesTable.session_id, lastMessagesSubquery.session_id),
-            eq(messagesTable.index, lastMessagesSubquery.max_index)
-          )
-        )
-        .all();
-
-      // Build map and apply truncation
+      // Get last assistant message for each session using N+1 queries
+      // This is acceptable since we're enriching a small number of sessions at a time
+      // Much better than fetching all messages which could be huge for long-running sessions
       const lastMessageBySession = new Map<string, string>();
-      for (const msg of lastMessages) {
-        let content = (msg.content_preview as string) || '';
 
-        // Apply truncation if needed (content_preview is already ~200 chars, but respect param)
-        if (content.length > truncationLength) {
-          content = content.substring(0, truncationLength) + '...truncated';
+      for (const sessionId of sessionIds) {
+        const query = select(this.db, {
+          content_preview: messagesTable.content_preview,
+        })
+          .from(messagesTable)
+          .where(
+            and(
+              eq(messagesTable.session_id, sessionId),
+              eq(messagesTable.role, 'assistant'),
+              isNull(messagesTable.status) // Exclude queued messages
+            )
+          );
+
+        // Chain orderBy and limit, then execute with one()
+        // The spread operator in the wrapper passes through these methods
+        // biome-ignore lint/suspicious/noExplicitAny: Wrapper spreads query builder methods
+        const lastMessage = await (query as any).orderBy(desc(messagesTable.index)).limit(1).one();
+
+        if (lastMessage) {
+          let content = (lastMessage.content_preview as string) || '';
+          // Apply truncation if needed (content_preview is already ~200 chars, but respect param)
+          if (content.length > truncationLength) {
+            content = content.substring(0, truncationLength) + '...truncated';
+          }
+          lastMessageBySession.set(sessionId, content);
         }
-
-        lastMessageBySession.set(msg.session_id as string, content);
       }
 
       // Enrich sessions with last message
