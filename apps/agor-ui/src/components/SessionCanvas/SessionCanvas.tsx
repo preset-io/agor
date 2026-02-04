@@ -532,8 +532,8 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         // Note: zone_id in database already has 'zone-' prefix (e.g., 'zone-1234')
         const zoneId = boardObject?.zone_id; // Zone ID with 'zone-' prefix (for React Flow parentId)
 
-        const dbZoneId = zoneId?.replace('zone-', ''); // Strip prefix for zoneLabels lookup
-        const zoneName = dbZoneId ? zoneLabels[dbZoneId] || 'Unknown Zone' : undefined;
+        // Look up zone name using full zone ID (zoneLabels uses full IDs as keys)
+        const zoneName = zoneId ? zoneLabels[zoneId] || 'Unknown Zone' : undefined;
         const zoneObj = zoneId && board?.objects?.[zoneId] ? board.objects[zoneId] : undefined;
         const zoneColor =
           zoneObj && zoneObj.type === 'zone'
@@ -583,7 +583,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             onNukeEnvironment,
             onUnpin: handleUnpinWorktree,
             compact: false,
-            isPinned: !!dbZoneId,
+            isPinned: !!zoneId,
             zoneName,
             zoneColor,
             client,

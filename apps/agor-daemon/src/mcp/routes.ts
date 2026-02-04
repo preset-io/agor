@@ -2229,9 +2229,17 @@ export function setupMCPRoutes(app: Application): void {
               });
             }
 
-            // Calculate zone center position
-            const centerX = zone.x + zone.width / 2;
-            const centerY = zone.y + zone.height / 2;
+            // Calculate position RELATIVE to zone (not absolute canvas coordinates)
+            // The UI expects relative positions and adds zone.x/zone.y when rendering
+            // (see apps/agor-ui/src/components/SessionCanvas/SessionCanvas.tsx:480-481)
+            const WORKTREE_CARD_WIDTH = 500;
+            const WORKTREE_CARD_HEIGHT = 200;
+
+            // Center the card within the zone by placing it at:
+            // - Horizontally: (zone.width - cardWidth) / 2
+            // - Vertically: (zone.height - cardHeight) / 2
+            const relativeX = (zone.width - WORKTREE_CARD_WIDTH) / 2;
+            const relativeY = (zone.height - WORKTREE_CARD_HEIGHT) / 2;
 
             // Find or create board object for this worktree
             const boardObjectsService = app.service('board-objects') as unknown as {
@@ -2243,14 +2251,9 @@ export function setupMCPRoutes(app: Application): void {
                 data: unknown,
                 params?: unknown
               ) => Promise<import('@agor/core/types').BoardEntityObject>;
-              updatePosition: (
+              patch: (
                 objectId: string,
-                position: { x: number; y: number },
-                params?: unknown
-              ) => Promise<import('@agor/core/types').BoardEntityObject>;
-              updateZone: (
-                objectId: string,
-                zoneId: string | undefined | null,
+                data: Partial<import('@agor/core/types').BoardEntityObject>,
                 params?: unknown
               ) => Promise<import('@agor/core/types').BoardEntityObject>;
             };
@@ -2266,26 +2269,27 @@ export function setupMCPRoutes(app: Application): void {
                 {
                   board_id: worktree.board_id as import('@agor/core/types').BoardID,
                   worktree_id: worktreeId as import('@agor/core/types').WorktreeID,
-                  position: { x: centerX, y: centerY },
+                  position: { x: relativeX, y: relativeY },
                   zone_id: zoneId,
                 },
                 baseServiceParams
               );
             } else {
               // Update existing board object with zone and center position
-              await boardObjectsService.updatePosition(
+              // Use patch() to update both position and zone_id atomically with single WebSocket event
+              boardObject = await boardObjectsService.patch(
                 boardObject.object_id,
-                { x: centerX, y: centerY },
-                baseServiceParams
-              );
-              boardObject = await boardObjectsService.updateZone(
-                boardObject.object_id,
-                zoneId,
+                {
+                  position: { x: relativeX, y: relativeY },
+                  zone_id: zoneId,
+                },
                 baseServiceParams
               );
             }
 
-            console.log(`✅ Worktree pinned to zone at position (${centerX}, ${centerY})`);
+            console.log(
+              `✅ Worktree pinned to zone at relative position (${relativeX}, ${relativeY})`
+            );
 
             // Trigger zone prompt template if requested
             let promptResult: { taskId?: string; note: string } | undefined;
@@ -2354,7 +2358,7 @@ export function setupMCPRoutes(app: Application): void {
                       success: true,
                       worktree_id: worktree.worktree_id,
                       zone_id: zoneId,
-                      position: { x: centerX, y: centerY },
+                      position: { x: relativeX, y: relativeY },
                       board_object_id: boardObject.object_id,
                       ...(promptResult ? { trigger: promptResult } : {}),
                     },

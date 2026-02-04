@@ -13,7 +13,7 @@ import {
   SubnodeOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import { Badge, Button, Card, Collapse, Space, Spin, Tree, Typography, theme } from 'antd';
+import { Badge, Button, Card, Collapse, Space, Spin, Tooltip, Tree, Typography, theme } from 'antd';
 import { AggregationColor } from 'antd/es/color-picker/color';
 import React, { useEffect, useMemo, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
@@ -516,19 +516,24 @@ const WorktreeCardComponent = ({
 
         <Space size={4}>
           {!inPopover && isPinned && (
-            <Button
-              type="text"
-              size="small"
-              icon={<PushpinFilled style={{ color: visiblePinColor }} />}
-              onClick={(e) => {
-                e.stopPropagation();
-                onUnpin?.(worktree.worktree_id);
-              }}
-              className="nodrag"
+            <Tooltip
               title={
-                zoneName ? `Pinned to ${zoneName} (click to unpin)` : 'Pinned (click to unpin)'
+                zoneName
+                  ? `Pinned to [${zoneName}] zone (click to unpin)`
+                  : 'Pinned (click to unpin)'
               }
-            />
+            >
+              <Button
+                type="text"
+                size="small"
+                icon={<PushpinFilled style={{ color: visiblePinColor }} />}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onUnpin?.(worktree.worktree_id);
+                }}
+                className="nodrag"
+              />
+            </Tooltip>
           )}
           {!inPopover && (
             <Button
