@@ -470,32 +470,12 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
   }
 
   /**
-   * Override find to support custom filtering
+   * Override find - no custom logic, just use default find
    *
    * Note: Last message is NOT included in list operations - only on single GET
    */
   async find(params?: SessionParams): Promise<Paginated<Session> | Session[]> {
-    // If filtering by status, use repository method (more efficient)
-    if (params?.query?.status) {
-      const sessions = await this.sessionRepo.findByStatus(params.query.status);
-
-      // Apply pagination if enabled
-      if (this.paginate) {
-        const limit = params.query.$limit ?? this.paginate.default ?? 50;
-        const skip = params.query.$skip ?? 0;
-
-        return {
-          total: sessions.length,
-          limit,
-          skip,
-          data: sessions.slice(skip, skip + limit),
-        };
-      }
-
-      return sessions;
-    }
-
-    // Otherwise use default find (no enrichment for lists)
+    // Use default find to ensure all hooks and scoping are applied
     return super.find(params);
   }
 }

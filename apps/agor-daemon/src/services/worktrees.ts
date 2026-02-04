@@ -202,32 +202,12 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
   }
 
   /**
-   * Override find to support repo_id filter and enrich with zone information only
+   * Override find to enrich with zone information only
    *
    * Note: Session activity is NOT included in list operations - only on single GET
    */
   async find(params?: WorktreeParams) {
-    const { repo_id } = params?.query || {};
-
-    // If repo_id filter is provided, use repository method
-    if (repo_id) {
-      const worktrees = await this.worktreeRepo.findAll({ repo_id });
-      const enriched = await this.worktreeRepo.enrichManyWithZoneInfo(worktrees);
-
-      // Return with pagination if enabled
-      if (this.paginate) {
-        return {
-          total: enriched.length,
-          limit: params?.query?.$limit || this.paginate.default || 50,
-          skip: params?.query?.$skip || 0,
-          data: enriched,
-        };
-      }
-
-      return enriched;
-    }
-
-    // Otherwise, use default find and enrich with zone info only
+    // Use default find to ensure all hooks and scoping are applied (including repo_id filter)
     const result = await super.find(params);
 
     // Handle both paginated and non-paginated results

@@ -6,7 +6,7 @@
 
 import type { Session, UUID } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
-import { and, eq, getTableColumns, inArray, isNotNull, like, or, sql } from 'drizzle-orm';
+import { and, eq, getTableColumns, inArray, isNotNull, isNull, like, or, sql } from 'drizzle-orm';
 import { formatShortId, generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
@@ -533,13 +533,18 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
 
       // Get last assistant message for each session using SQL subquery
       // We use content_preview (first 200 chars) for efficiency
+      // Exclude queued messages (status='queued') - only include normal messages (status IS NULL)
       const lastMessagesSubquery = select(this.db, {
         session_id: messagesTable.session_id,
         max_index: sql<number>`MAX(${messagesTable.index})`,
       })
         .from(messagesTable)
         .where(
-          and(inArray(messagesTable.session_id, sessionIds), eq(messagesTable.role, 'assistant'))
+          and(
+            inArray(messagesTable.session_id, sessionIds),
+            eq(messagesTable.role, 'assistant'),
+            isNull(messagesTable.status) // Exclude queued messages
+          )
         )
         .groupBy(messagesTable.session_id)
         .as('latest_messages');
