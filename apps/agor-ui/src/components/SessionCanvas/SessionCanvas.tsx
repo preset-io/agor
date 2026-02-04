@@ -455,7 +455,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       });
       console.log('✅ [SessionCanvas] zoneLabels calculated:', labels);
       return labels;
-    }, [board?.objects]);
+    }, [board]);
 
     // Handler to unpin a worktree from its zone
     const handleUnpinWorktree = useCallback(

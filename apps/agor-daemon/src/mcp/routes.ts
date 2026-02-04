@@ -7,7 +7,7 @@
 
 import { extractSlugFromUrl, isValidGitUrl, isValidSlug } from '@agor/core/config';
 import type { Application } from '@agor/core/feathers';
-import type { AgenticToolName } from '@agor/core/types';
+import type { AgenticToolName, Board } from '@agor/core/types';
 import { normalizeOptionalHttpUrl } from '@agor/core/utils/url';
 import type { Request, Response } from 'express';
 import type { ReposServiceImpl, SessionsServiceImpl } from '../declarations.js';
@@ -2754,9 +2754,13 @@ export function setupMCPRoutes(app: Application): void {
 
           // Handle object removals
           if (args.removeObjects && Array.isArray(args.removeObjects)) {
-            let finalBoard;
+            let finalBoard: Board | undefined;
             for (const objectId of args.removeObjects) {
-              finalBoard = await boardsService.removeBoardObject(args.boardId, objectId, baseServiceParams);
+              finalBoard = await boardsService.removeBoardObject(
+                args.boardId,
+                objectId,
+                baseServiceParams
+              );
             }
             console.log(`✅ Removed ${args.removeObjects.length} board object(s)`);
 
