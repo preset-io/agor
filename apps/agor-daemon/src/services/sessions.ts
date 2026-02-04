@@ -6,7 +6,7 @@
  */
 
 import { PAGINATION } from '@agor/core/config';
-import { type Database, SessionRepository } from '@agor/core/db';
+import { type Database, SessionRepository, type SessionWithLastMessage } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { Paginated, QueryParams, Session, TaskID } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
@@ -19,6 +19,7 @@ export type SessionParams = QueryParams<{
   status?: Session['status'];
   agentic_tool?: Session['agentic_tool'];
   board_id?: string;
+  last_message_truncation_length?: number; // Default: 500 chars
 }>;
 
 /**
@@ -438,10 +439,10 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
 
     // Single delete with cascade
     // Get the session before deleting
-    const session = await this.get(id, params);
+    const session = await this.get(String(id), params);
 
     // Find all children (forks and subsessions)
-    const children = await this.sessionRepo.findChildren(id as string);
+    const children = await this.sessionRepo.findChildren(String(id));
 
     // Recursively delete all children first
     if (children.length > 0) {
@@ -460,12 +461,26 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
   }
 
   /**
-   * Override find to support custom filtering
+   * Override get to enrich with last message
    */
-  async find(params?: SessionParams): Promise<Paginated<Session> | Session[]> {
+  async get(id: string, params?: SessionParams): Promise<SessionWithLastMessage> {
+    const session = await super.get(id, params);
+    const truncationLength = params?.query?.last_message_truncation_length ?? 500;
+    return this.sessionRepo.enrichWithLastMessage(session as Session, truncationLength);
+  }
+
+  /**
+   * Override find to support custom filtering and enrich with last message
+   */
+  async find(
+    params?: SessionParams
+  ): Promise<Paginated<SessionWithLastMessage> | SessionWithLastMessage[]> {
+    const truncationLength = params?.query?.last_message_truncation_length ?? 500;
+
     // If filtering by status, use repository method (more efficient)
     if (params?.query?.status) {
       const sessions = await this.sessionRepo.findByStatus(params.query.status);
+      const enriched = await this.sessionRepo.enrichManyWithLastMessage(sessions, truncationLength);
 
       // Apply pagination if enabled
       if (this.paginate) {
@@ -473,18 +488,32 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
         const skip = params.query.$skip ?? 0;
 
         return {
-          total: sessions.length,
+          total: enriched.length,
           limit,
           skip,
-          data: sessions.slice(skip, skip + limit),
+          data: enriched.slice(skip, skip + limit),
         };
       }
 
-      return sessions;
+      return enriched;
     }
 
-    // Otherwise use default find
-    return super.find(params);
+    // Otherwise use default find and enrich
+    const result = await super.find(params);
+
+    // Handle both paginated and non-paginated results
+    if (Array.isArray(result)) {
+      return this.sessionRepo.enrichManyWithLastMessage(result as Session[], truncationLength);
+    } else {
+      const enriched = await this.sessionRepo.enrichManyWithLastMessage(
+        result.data as Session[],
+        truncationLength
+      );
+      return {
+        ...result,
+        data: enriched,
+      };
+    }
   }
 }
 

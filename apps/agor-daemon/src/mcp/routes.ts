@@ -1514,7 +1514,7 @@ export function setupMCPRoutes(app: Application): void {
           }
 
           // Build model config (if user has defaults for this tool and a model is specified)
-          let modelConfig: Record<string, unknown> | undefined = undefined;
+          let modelConfig: Record<string, unknown> | undefined;
           if (userToolDefaults?.modelConfig?.model) {
             modelConfig = {
               mode: userToolDefaults.modelConfig.mode || 'alias',

@@ -10,7 +10,7 @@ import { mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { ENVIRONMENT, PAGINATION } from '@agor/core/config';
-import { type Database, WorktreeRepository, type WorktreeWithZone } from '@agor/core/db';
+import { type Database, WorktreeRepository, type WorktreeWithZoneAndSessions } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
@@ -36,6 +36,7 @@ export type WorktreeParams = QueryParams<{
   name?: string;
   ref?: string;
   deleteFromFilesystem?: boolean;
+  last_message_truncation_length?: number; // Default: 500 chars
 }>;
 
 /**
@@ -102,7 +103,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     id: WorktreeID,
     data: Partial<Worktree>,
     params?: WorktreeParams
-  ): Promise<WorktreeWithZone> {
+  ): Promise<WorktreeWithZoneAndSessions> {
     // Get current worktree to check if board_id is changing
     const currentWorktree = await super.get(id, params);
     const oldBoardId = currentWorktree.board_id;
@@ -148,8 +149,11 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     const updatedWorktree = (await super.patch(id, data, params)) as Worktree;
 
     // Handle board_objects changes if board_id changed
+    const truncationLength = params?.query?.last_message_truncation_length ?? 500;
+
     if (!boardIdProvided) {
-      return this.worktreeRepo.enrichWithZoneInfo(updatedWorktree);
+      const withZone = await this.worktreeRepo.enrichWithZoneInfo(updatedWorktree);
+      return this.worktreeRepo.enrichWithSessionActivity(withZone, truncationLength);
     }
 
     if (oldBoardId !== newBoardId) {
@@ -183,27 +187,35 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       }
     }
 
-    return this.worktreeRepo.enrichWithZoneInfo(updatedWorktree);
+    const withZone = await this.worktreeRepo.enrichWithZoneInfo(updatedWorktree);
+    return this.worktreeRepo.enrichWithSessionActivity(withZone, truncationLength);
   }
 
   /**
-   * Override get to enrich with zone information
+   * Override get to enrich with zone and session information
    */
-  async get(id: WorktreeID, params?: WorktreeParams): Promise<WorktreeWithZone> {
+  async get(id: WorktreeID, params?: WorktreeParams): Promise<WorktreeWithZoneAndSessions> {
     const worktree = await super.get(id, params);
-    return this.worktreeRepo.enrichWithZoneInfo(worktree as Worktree);
+    const withZone = await this.worktreeRepo.enrichWithZoneInfo(worktree as Worktree);
+    const truncationLength = params?.query?.last_message_truncation_length ?? 500;
+    return this.worktreeRepo.enrichWithSessionActivity(withZone, truncationLength);
   }
 
   /**
-   * Override find to support repo_id filter and enrich with zone information
+   * Override find to support repo_id filter and enrich with zone and session information
    */
   async find(params?: WorktreeParams) {
     const { repo_id } = params?.query || {};
+    const truncationLength = params?.query?.last_message_truncation_length ?? 500;
 
     // If repo_id filter is provided, use repository method
     if (repo_id) {
       const worktrees = await this.worktreeRepo.findAll({ repo_id });
-      const enriched = await this.worktreeRepo.enrichManyWithZoneInfo(worktrees);
+      const withZone = await this.worktreeRepo.enrichManyWithZoneInfo(worktrees);
+      const enriched = await this.worktreeRepo.enrichManyWithSessionActivity(
+        withZone,
+        truncationLength
+      );
 
       // Return with pagination if enabled
       if (this.paginate) {
@@ -223,9 +235,14 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
 
     // Handle both paginated and non-paginated results
     if (Array.isArray(result)) {
-      return this.worktreeRepo.enrichManyWithZoneInfo(result as Worktree[]);
+      const withZone = await this.worktreeRepo.enrichManyWithZoneInfo(result as Worktree[]);
+      return this.worktreeRepo.enrichManyWithSessionActivity(withZone, truncationLength);
     } else {
-      const enriched = await this.worktreeRepo.enrichManyWithZoneInfo(result.data as Worktree[]);
+      const withZone = await this.worktreeRepo.enrichManyWithZoneInfo(result.data as Worktree[]);
+      const enriched = await this.worktreeRepo.enrichManyWithSessionActivity(
+        withZone,
+        truncationLength
+      );
       return {
         ...result,
         data: enriched,
@@ -313,7 +330,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       filesystemAction: 'preserved' | 'cleaned' | 'deleted';
     },
     params?: WorktreeParams
-  ): Promise<WorktreeWithZone | { deleted: true; worktree_id: WorktreeID }> {
+  ): Promise<WorktreeWithZoneAndSessions | { deleted: true; worktree_id: WorktreeID }> {
     const { metadataAction, filesystemAction } = options;
     const worktree = await this.get(id, params);
     const currentUserId = 'anonymous' as UUID; // TODO: Get from auth context
@@ -462,7 +479,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     id: WorktreeID,
     options?: { boardId?: BoardID },
     params?: WorktreeParams
-  ): Promise<WorktreeWithZone> {
+  ): Promise<WorktreeWithZoneAndSessions> {
     const worktree = await this.get(id, params);
 
     if (!worktree.archived) {
@@ -535,7 +552,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     id: WorktreeID,
     boardId: UUID,
     params?: WorktreeParams
-  ): Promise<WorktreeWithZone> {
+  ): Promise<WorktreeWithZoneAndSessions> {
     // Set worktree.board_id (patch already enriches with zone info)
     const worktree = await this.patch(
       id,
@@ -563,7 +580,10 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
    * Phase 0: Clears board_id on worktree
    * Phase 1: Will also remove board_object entry
    */
-  async removeFromBoard(id: WorktreeID, params?: WorktreeParams): Promise<WorktreeWithZone> {
+  async removeFromBoard(
+    id: WorktreeID,
+    params?: WorktreeParams
+  ): Promise<WorktreeWithZoneAndSessions> {
     // Clear worktree.board_id (patch already enriches with zone info, but it will be empty now)
     const worktree = await this.patch(
       id,
@@ -592,7 +612,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     id: WorktreeID,
     environmentUpdate: Partial<Worktree['environment_instance']>,
     params?: WorktreeParams
-  ): Promise<WorktreeWithZone> {
+  ): Promise<WorktreeWithZoneAndSessions> {
     const existing = await this.get(id, params);
 
     const updatedEnvironment = {
@@ -637,7 +657,10 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
   /**
    * Custom method: Start environment
    */
-  async startEnvironment(id: WorktreeID, params?: WorktreeParams): Promise<WorktreeWithZone> {
+  async startEnvironment(
+    id: WorktreeID,
+    params?: WorktreeParams
+  ): Promise<WorktreeWithZoneAndSessions> {
     const worktree = await this.get(id, params);
 
     // Validate static start command exists
@@ -738,7 +761,10 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
   /**
    * Custom method: Stop environment
    */
-  async stopEnvironment(id: WorktreeID, params?: WorktreeParams): Promise<WorktreeWithZone> {
+  async stopEnvironment(
+    id: WorktreeID,
+    params?: WorktreeParams
+  ): Promise<WorktreeWithZoneAndSessions> {
     const worktree = await this.get(id, params);
 
     // Set status to 'stopping'
@@ -831,7 +857,10 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
   /**
    * Custom method: Restart environment
    */
-  async restartEnvironment(id: WorktreeID, params?: WorktreeParams): Promise<WorktreeWithZone> {
+  async restartEnvironment(
+    id: WorktreeID,
+    params?: WorktreeParams
+  ): Promise<WorktreeWithZoneAndSessions> {
     const worktree = await this.get(id, params);
 
     // Stop if running
@@ -849,7 +878,10 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
   /**
    * Custom method: Nuke environment (destructive operation)
    */
-  async nukeEnvironment(id: WorktreeID, params?: WorktreeParams): Promise<WorktreeWithZone> {
+  async nukeEnvironment(
+    id: WorktreeID,
+    params?: WorktreeParams
+  ): Promise<WorktreeWithZoneAndSessions> {
     const worktree = await this.get(id, params);
 
     // Require nuke_command to be configured
@@ -934,7 +966,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
   /**
    * Custom method: Check health
    */
-  async checkHealth(id: WorktreeID, params?: WorktreeParams): Promise<WorktreeWithZone> {
+  async checkHealth(id: WorktreeID, params?: WorktreeParams): Promise<WorktreeWithZoneAndSessions> {
     const worktree = await this.get(id, params);
     const _repo = (await this.app.service('repos').get(worktree.repo_id, params)) as Repo;
 

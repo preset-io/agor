@@ -26,6 +26,13 @@ import {
 import { deepMerge } from './merge-utils';
 
 /**
+ * Session with enriched last message
+ */
+export interface SessionWithLastMessage extends Session {
+  last_message?: string;
+}
+
+/**
  * Session repository implementation
  */
 export class SessionRepository implements BaseRepository<Session, Partial<Session>> {
@@ -483,5 +490,108 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       .all();
 
     return rows.map((row: SessionRow) => this.rowToSession(row));
+  }
+
+  /**
+   * Enrich a single session with last assistant message
+   *
+   * @param session - Session to enrich
+   * @param truncationLength - Maximum length for last_message (default: 500)
+   * @returns Session with last_message added
+   */
+  async enrichWithLastMessage(
+    session: Session,
+    truncationLength = 500
+  ): Promise<SessionWithLastMessage> {
+    const enriched = await this.enrichManyWithLastMessage([session], truncationLength);
+    return enriched[0] || session;
+  }
+
+  /**
+   * Enrich multiple sessions with last assistant message (batch operation)
+   *
+   * Fetches the most recent assistant message for each session.
+   *
+   * @param sessions - Array of sessions to enrich
+   * @param truncationLength - Maximum length for last_message (default: 500)
+   * @returns Array of sessions with last_message added
+   */
+  async enrichManyWithLastMessage(
+    sessions: Session[],
+    truncationLength = 500
+  ): Promise<SessionWithLastMessage[]> {
+    // Quick path: if no sessions, return empty array
+    if (sessions.length === 0) {
+      return [];
+    }
+
+    try {
+      const sessionIds = sessions.map((s) => s.session_id);
+
+      // Import messages table and JSON extract function dynamically
+      const { messages: messagesTable } = await import('../schema');
+      const { jsonExtract } = await import('../database-wrapper');
+
+      // Get all assistant messages for these sessions
+      const allMessages = await select(this.db, {
+        session_id: messagesTable.session_id,
+        content: jsonExtract(this.db, messagesTable.data, 'content'),
+        index: messagesTable.index,
+      })
+        .from(messagesTable)
+        .where(
+          and(
+            inArray(messagesTable.session_id, sessionIds),
+            eq(messagesTable.role, 'assistant') // Only get assistant messages
+          )
+        )
+        .all();
+
+      // Group messages by session and find the most recent one (highest index)
+      const messagesBySession = new Map<string, Array<{ content: string; index: number }>>();
+      for (const msg of allMessages) {
+        const sessionId = msg.session_id as string;
+        if (!messagesBySession.has(sessionId)) {
+          messagesBySession.set(sessionId, []);
+        }
+        messagesBySession.get(sessionId)!.push({
+          content: msg.content as string,
+          index: msg.index as number,
+        });
+      }
+
+      // Find the last message for each session
+      const lastMessageBySession = new Map<string, string>();
+      for (const [sessionId, messages] of messagesBySession.entries()) {
+        if (messages.length > 0) {
+          // Sort by index descending and take the first one
+          messages.sort((a, b) => b.index - a.index);
+          let lastMessage = messages[0].content;
+
+          // Truncate if needed
+          if (lastMessage.length > truncationLength) {
+            lastMessage = lastMessage.substring(0, truncationLength) + '...truncated';
+          }
+
+          lastMessageBySession.set(sessionId, lastMessage);
+        }
+      }
+
+      // Enrich sessions with last message
+      return sessions.map((session) => {
+        const lastMessage = lastMessageBySession.get(session.session_id) || '';
+        return {
+          ...session,
+          last_message: lastMessage,
+        };
+      });
+    } catch (error) {
+      console.warn(
+        'Failed to enrich sessions with last message:',
+        error instanceof Error ? error.message : String(error)
+      );
+      // Return sessions without last message on error
+      return sessions.map((session) => ({ ...session, last_message: '' }));
+    }
   }
 }

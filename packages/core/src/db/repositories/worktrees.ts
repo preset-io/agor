@@ -14,11 +14,31 @@ import { AmbiguousIdError, type BaseRepository, EntityNotFoundError } from './ba
 import { deepMerge } from './merge-utils';
 
 /**
+ * Session activity summary for a worktree
+ */
+export interface WorktreeSessionActivity {
+  session_id: string;
+  status: 'idle' | 'running' | 'completed' | 'failed';
+  agentic_tool: 'claude-code' | 'codex' | 'gemini';
+  last_updated: string;
+  last_message: string;
+  message_count: number;
+  unix_username: string;
+}
+
+/**
  * Worktree with enriched zone information
  */
 export interface WorktreeWithZone extends Worktree {
   zone_id?: string;
   zone_label?: string;
+}
+
+/**
+ * Worktree with enriched zone and session information
+ */
+export interface WorktreeWithZoneAndSessions extends WorktreeWithZone {
+  sessions?: WorktreeSessionActivity[];
 }
 
 /**
@@ -537,6 +557,180 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
       );
       // Return worktrees without zone info on error
       return worktrees;
+    }
+  }
+
+  /**
+   * Enrich a single worktree with session activity information
+   *
+   * @param worktree - Worktree to enrich
+   * @param truncationLength - Maximum length for last_message (default: 500)
+   * @returns Worktree with sessions array added
+   */
+  async enrichWithSessionActivity(
+    worktree: WorktreeWithZone,
+    truncationLength = 500
+  ): Promise<WorktreeWithZoneAndSessions> {
+    const enriched = await this.enrichManyWithSessionActivity([worktree], truncationLength);
+    return enriched[0] || worktree;
+  }
+
+  /**
+   * Enrich multiple worktrees with session activity information (batch operation)
+   *
+   * Uses efficient LEFT JOINs to fetch sessions, tasks, and messages in bulk.
+   * Returns recent session activity (most recent first) with last message truncated.
+   *
+   * @param worktrees - Array of worktrees to enrich
+   * @param truncationLength - Maximum length for last_message (default: 500)
+   * @returns Array of worktrees with sessions array added
+   */
+  async enrichManyWithSessionActivity(
+    worktrees: WorktreeWithZone[],
+    truncationLength = 500
+  ): Promise<WorktreeWithZoneAndSessions[]> {
+    // Quick path: if no worktrees, return empty array
+    if (worktrees.length === 0) {
+      return [];
+    }
+
+    try {
+      const worktreeIds = worktrees.map((wt) => wt.worktree_id);
+
+      // Import schema tables and JSON extract function dynamically
+      const { sessions: sessionsTable, messages: messagesTable } = await import('../schema');
+      const { jsonExtract } = await import('../database-wrapper');
+
+      // Query to get recent sessions for these worktrees with last message
+      // We use a subquery to get the latest message for each session
+      const sessionRows = await select(this.db, {
+        worktree_id: sessionsTable.worktree_id,
+        session_id: sessionsTable.session_id,
+        status: sessionsTable.status,
+        agentic_tool: sessionsTable.agentic_tool,
+        updated_at: sessionsTable.updated_at,
+        unix_username: sessionsTable.unix_username,
+      })
+        .from(sessionsTable)
+        .where(inArray(sessionsTable.worktree_id, worktreeIds))
+        .orderBy(sessionsTable.updated_at)
+        .all();
+
+      // Get message counts and last messages for all sessions in one query
+      const sessionIds = sessionRows.map((s: { session_id: unknown }) => s.session_id as string);
+
+      if (sessionIds.length === 0) {
+        // No sessions found, return worktrees as-is with empty sessions array
+        return worktrees.map((wt) => ({ ...wt, sessions: [] }));
+      }
+
+      // Get last assistant message for each session
+      // We fetch all assistant messages and then keep only the last one per session
+      const allMessages = await select(this.db, {
+        session_id: messagesTable.session_id,
+        content: jsonExtract(this.db, messagesTable.data, 'content'),
+        index: messagesTable.index,
+      })
+        .from(messagesTable)
+        .where(
+          and(
+            inArray(messagesTable.session_id, sessionIds),
+            eq(messagesTable.role, 'assistant') // Only get assistant messages
+          )
+        )
+        .all();
+
+      // Group messages by session and find the most recent one (highest index)
+      const messagesBySession = new Map<string, Array<{ content: string; index: number }>>();
+      for (const msg of allMessages) {
+        const sessionId = msg.session_id as string;
+        if (!messagesBySession.has(sessionId)) {
+          messagesBySession.set(sessionId, []);
+        }
+        messagesBySession.get(sessionId)!.push({
+          content: msg.content as string,
+          index: msg.index as number,
+        });
+      }
+
+      // Find the last message for each session
+      const lastMessageBySession = new Map<string, string>();
+      for (const [sessionId, messages] of messagesBySession.entries()) {
+        if (messages.length > 0) {
+          // Sort by index descending and take the first one
+          messages.sort((a, b) => b.index - a.index);
+          lastMessageBySession.set(sessionId, messages[0].content);
+        }
+      }
+
+      // Get message counts per session
+      const messageCounts = await select(this.db, {
+        session_id: messagesTable.session_id,
+        count: sql<number>`COUNT(*)`,
+      })
+        .from(messagesTable)
+        .where(inArray(messagesTable.session_id, sessionIds))
+        .groupBy(messagesTable.session_id)
+        .all();
+
+      const messageCountBySession = new Map<string, number>();
+      for (const mc of messageCounts) {
+        messageCountBySession.set(mc.session_id as string, mc.count);
+      }
+
+      // Build sessions map grouped by worktree_id
+      const sessionsByWorktree = new Map<string, WorktreeSessionActivity[]>();
+
+      for (const row of sessionRows) {
+        const worktreeId = row.worktree_id as string;
+        const sessionId = row.session_id as string;
+
+        // Get last message and truncate if needed
+        let lastMessage = lastMessageBySession.get(sessionId) || '';
+        if (lastMessage.length > truncationLength) {
+          lastMessage = lastMessage.substring(0, truncationLength) + '...truncated';
+        }
+
+        const sessionActivity: WorktreeSessionActivity = {
+          session_id: sessionId,
+          status: row.status as WorktreeSessionActivity['status'],
+          agentic_tool: row.agentic_tool as WorktreeSessionActivity['agentic_tool'],
+          last_updated: row.updated_at
+            ? new Date(row.updated_at).toISOString()
+            : new Date().toISOString(),
+          last_message: lastMessage,
+          message_count: messageCountBySession.get(sessionId) || 0,
+          unix_username: (row.unix_username as string) || 'unknown',
+        };
+
+        if (!sessionsByWorktree.has(worktreeId)) {
+          sessionsByWorktree.set(worktreeId, []);
+        }
+        sessionsByWorktree.get(worktreeId)!.push(sessionActivity);
+      }
+
+      // Sort sessions by last_updated DESC within each worktree
+      for (const sessions of sessionsByWorktree.values()) {
+        sessions.sort((a, b) => {
+          return new Date(b.last_updated).getTime() - new Date(a.last_updated).getTime();
+        });
+      }
+
+      // Enrich worktrees with session activity
+      return worktrees.map((wt) => {
+        const sessions = sessionsByWorktree.get(wt.worktree_id) || [];
+        return {
+          ...wt,
+          sessions,
+        };
+      });
+    } catch (error) {
+      console.warn(
+        'Failed to enrich worktrees with session activity:',
+        error instanceof Error ? error.message : String(error)
+      );
+      // Return worktrees without session activity on error
+      return worktrees.map((wt) => ({ ...wt, sessions: [] }));
     }
   }
 }
