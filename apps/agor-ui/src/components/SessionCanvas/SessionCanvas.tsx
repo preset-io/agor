@@ -442,6 +442,10 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
     // Extract zone labels - memoized to only change when labels actually change
     const zoneLabels = useMemo(() => {
+      console.log('🔄 [SessionCanvas] Recalculating zoneLabels', {
+        hasBoard: !!board,
+        objectsCount: Object.keys(board?.objects || {}).length,
+      });
       if (!board?.objects) return {};
       const labels: Record<string, string> = {};
       Object.entries(board.objects).forEach(([id, obj]) => {
@@ -449,6 +453,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           labels[id] = obj.label;
         }
       });
+      console.log('✅ [SessionCanvas] zoneLabels calculated:', labels);
       return labels;
     }, [board?.objects]);
 

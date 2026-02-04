@@ -2741,20 +2741,29 @@ export function setupMCPRoutes(app: Application): void {
             !Array.isArray(args.upsertObjects)
           ) {
             // Note: declarations.ts says unknown[] but the actual implementation expects Record<string, BoardObject>
-            await boardsService.batchUpsertBoardObjects(
+            const updatedBoard = await boardsService.batchUpsertBoardObjects(
               args.boardId,
               args.upsertObjects as unknown as unknown[],
               baseServiceParams
             );
             console.log(`✅ Upserted ${Object.keys(args.upsertObjects).length} board object(s)`);
+
+            // Emit WebSocket event for real-time updates
+            app.service('boards').emit('patched', updatedBoard);
           }
 
           // Handle object removals
           if (args.removeObjects && Array.isArray(args.removeObjects)) {
+            let finalBoard;
             for (const objectId of args.removeObjects) {
-              await boardsService.removeBoardObject(args.boardId, objectId, baseServiceParams);
+              finalBoard = await boardsService.removeBoardObject(args.boardId, objectId, baseServiceParams);
             }
             console.log(`✅ Removed ${args.removeObjects.length} board object(s)`);
+
+            // Emit WebSocket event for real-time updates (use final board state after all removals)
+            if (finalBoard) {
+              app.service('boards').emit('patched', finalBoard);
+            }
           }
 
           // Get updated board

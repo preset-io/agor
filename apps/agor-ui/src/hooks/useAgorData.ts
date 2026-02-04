@@ -379,9 +379,18 @@ export function useAgorData(
       });
     };
     const handleBoardPatched = (board: Board) => {
+      console.log('🔄 [useAgorData] Board patched:', {
+        board_id: board.board_id.substring(0, 8),
+        objectsCount: Object.keys(board.objects || {}).length,
+        objects: board.objects,
+      });
       setBoardById((prev) => {
         const existing = prev.get(board.board_id);
-        if (existing === board) return prev; // Same reference, no change
+        if (existing === board) {
+          console.log('⚠️ [useAgorData] Board reference unchanged, skipping update');
+          return prev; // Same reference, no change
+        }
+        console.log('✅ [useAgorData] Updating boardById Map with new board');
         const next = new Map(prev);
         next.set(board.board_id, board);
         return next;

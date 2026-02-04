@@ -2998,6 +2998,12 @@ async function main() {
               objectData
             );
             context.result = result;
+            console.log('🔄 [boards patch hook] Emitting patched event for upsertObject', {
+              board_id: result.board_id.substring(0, 8),
+              objectId,
+              objectsCount: Object.keys(result.objects || {}).length,
+              objects: result.objects,
+            });
             // Manually emit 'patched' event for WebSocket broadcasting (ONCE)
             app.service('boards').emit('patched', result);
             // Skip normal patch flow to prevent double emit
