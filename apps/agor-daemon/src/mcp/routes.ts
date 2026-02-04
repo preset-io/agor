@@ -1137,15 +1137,19 @@ export function setupMCPRoutes(app: Application): void {
           }
 
           // Include last message in MCP session get calls
-          console.log(`🔍 [MCP sessions_get] Fetching session ${args.sessionId} with include_last_message=true`);
+          console.log(
+            `🔍 [MCP sessions_get] Fetching session ${args.sessionId} with include_last_message=true`
+          );
           const session = await app.service('sessions').get(args.sessionId, {
+            ...baseServiceParams,
             query: {
               include_last_message: true,
               last_message_truncation_length: 500,
             },
-            ...baseServiceParams,
           });
-          console.log(`🔍 [MCP sessions_get] Result has last_message: ${!!(session as any).last_message}, length: ${(session as any).last_message?.length ?? 'N/A'}`);
+          console.log(
+            `🔍 [MCP sessions_get] Result has last_message: ${!!(session as any).last_message}, length: ${(session as any).last_message?.length ?? 'N/A'}`
+          );
           mcpResponse = {
             content: [
               {
@@ -1157,11 +1161,11 @@ export function setupMCPRoutes(app: Application): void {
         } else if (name === 'agor_sessions_get_current') {
           // Get current session using token context with last message
           const session = await app.service('sessions').get(context.sessionId, {
+            ...baseServiceParams,
             query: {
               include_last_message: true,
               last_message_truncation_length: 500,
             },
-            ...baseServiceParams,
           });
           mcpResponse = {
             content: [
@@ -1831,15 +1835,19 @@ export function setupMCPRoutes(app: Application): void {
           }
 
           // Include session activity in MCP worktree get calls
-          console.log(`🔍 [MCP worktrees_get] Fetching worktree ${args.worktreeId} with include_sessions=true`);
+          console.log(
+            `🔍 [MCP worktrees_get] Fetching worktree ${args.worktreeId} with include_sessions=true`
+          );
           const worktree = await app.service('worktrees').get(args.worktreeId, {
+            ...baseServiceParams,
             query: {
               include_sessions: true,
               last_message_truncation_length: 500,
             },
-            ...baseServiceParams,
           });
-          console.log(`🔍 [MCP worktrees_get] Result has sessions array: ${Array.isArray((worktree as any).sessions)}, length: ${(worktree as any).sessions?.length ?? 'N/A'}`);
+          console.log(
+            `🔍 [MCP worktrees_get] Result has sessions array: ${Array.isArray((worktree as any).sessions)}, length: ${(worktree as any).sessions?.length ?? 'N/A'}`
+          );
           mcpResponse = {
             content: [
               {
