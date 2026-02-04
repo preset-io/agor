@@ -1,22 +1,24 @@
 ---
 title: 'Agor-OpenClaw: OpenClaw Patterns Running 100% Inside Agor'
-description: 'We recreated the OpenClaw agent framework to run entirely within Agor—persistent agents with full visibility, introspection, and multi-agent coordination on a spatial canvas. The results are crazy amazing.'
+description: 'I recreated the OpenClaw agent framework to run entirely within Agor—persistent agents with full visibility, introspection, and multi-agent coordination on a spatial canvas. The results are crazy amazing.'
 date: 2026-02-04
 ---
 
 # Agor-OpenClaw: OpenClaw Patterns Running 100% Inside Agor
 
-**tl;dr:** We took [OpenClaw's](https://openclaw.ai/) brilliant agent loop architecture (SOUL.md, MEMORY.md, persistent identity) and retrofitted it to run 100% inside [Agor](https://agor.live). Everything is visible on a spatial canvas. Multi-agent coordination through session trees. State tracked in git. The first bootstrap went beautifully. This is super promising.
+**tl;dr:** I took [OpenClaw's](https://openclaw.ai/) brilliant agent loop architecture (SOUL.md, MEMORY.md, persistent identity) and retrofitted it to run 100% inside [Agor](https://agor.live). Everything is visible on a spatial canvas. Multi-agent coordination through session trees. State tracked in git. The first bootstrap went beautifully. This is super promising.
 
 ---
 
 ## What Happened
 
-Yesterday we published [Agor Cloud](/blog/agor-cloud), announcing our fully managed service. Today we're announcing something equally exciting but completely different: **agor-openclaw**, an adaptation of the OpenClaw agent framework that runs entirely within Agor.
+Like everyone out there, I've been super inspired and anxious while watching the rise of ClawdBot → MoltBook → OpenClaw recently. Crazy stuff and it's been hard to keep up with all the developments. But I've been [thinking deeply](/blog/openclaw) about the implications—what it means for where AI's going next, agent orchestration, and how any of that might relate to the work I've been doing on [Agor](https://agor.live).
 
-[OpenClaw](https://openclaw.ai/) has shown us what persistent AI agents should look like—continuous identity, layered memory, self-improvement through file modifications, task tracking. It's a complete framework for agent continuity.
+So I decided to experiment: **agor-openclaw**, an adaptation of the OpenClaw agent framework that runs entirely within Agor.
 
-But OpenClaw runs as a standalone process. What if we could take those patterns and run them **inside Agor**, gaining:
+[OpenClaw](https://openclaw.ai/) has shown what persistent AI agents should look like—continuous identity, layered memory, self-improvement through file modifications, task tracking. It's a complete framework for agent continuity.
+
+But OpenClaw runs as a standalone process. What if I could take those patterns and run them **inside Agor**, gaining:
 
 - **Full visibility** - everything on a spatial canvas
 - **Introspection** - inspect any session at any time
@@ -31,7 +33,7 @@ But OpenClaw runs as a standalone process. What if we could take those patterns 
 
 ## The Bootstrap Story
 
-Here's what we did:
+Here's what I did:
 
 1. **Copied OpenClaw's template files** - SOUL.md, MEMORY.md, IDENTITY.md, AGENTS.md, BOOTSTRAP.md, USER.md
 2. **Retrofitted AGENTS.md for Agor** - replaced standalone agent execution with Agor MCP orchestration, oriented toward software development workflows
@@ -235,7 +237,7 @@ All worktrees and sessions are introspectable **in real-time**.
 
 Need to course-correct? Just prompt the session:
 
-> "Hey, I noticed you're stuck on the type errors. Try using `as any` for now and we'll fix it properly later."
+> "Hey, I noticed you're stuck on the type errors. Try using `as any` for now and I'll fix it properly later."
 
 The agent adjusts immediately. You're not waiting for a CI run to finish—you're conversing with a live agent.
 
@@ -244,6 +246,18 @@ The main agent does this automatically during heartbeats. If a session looks stu
 > "You haven't updated in 45 minutes. Are you blocked? Need help?"
 
 **Goal is full autonomy, but visibility is invaluable.**
+
+### 7. Built-in Guardrails & Safety
+
+Agor provides guarantees that standalone OpenClaw doesn't:
+
+**Sandboxing & Permissions** - Agents run through [Claude Agent SDK](https://docs.anthropic.com/en/docs/agents), [Codex SDK](https://codex.io), [Gemini SDK](https://ai.google.dev), or [OpenCode](https://github.com/opencodeblock/opencode) (beta). These frameworks provide sandboxing and permission systems. Agor uses sensible defaults, meaning agents will ask for permissions or get blocked when attempting risky operations. You control how rogue agents can go.
+
+**Structured Repository Management** - All coding jobs go through Agor's framework, making it easy to track where repos and worktrees are stored. You can archive worktrees, see filesystem status, and maintain clean repository hygiene without hunting through directories.
+
+**[Managed Environments](https://agor.live/docs/guide/environments)** - When a repo includes an `.agor.yml` file, you can fire up dev environments instantly. Click play on a worktree widget and a full dev environment appears—perfect for QA, review, or testing agent changes in isolation.
+
+These aren't just nice-to-haves—they're essential when agents start creating worktrees, spawning sessions, and modifying code autonomously.
 
 ---
 
@@ -456,16 +470,19 @@ That's intelligence.
 | **State backup** | ❌ Local files | ✅ Git-tracked, version-controlled |
 | **Workflow automation** | ❌ Skills only | ✅ Zones, triggers, templates |
 | **Team collaboration** | ❌ Single-user | ✅ Multi-user with RBAC |
+| **Sandboxing & permissions** | ⚠️ Manual configuration | ✅ SDK-level sandboxing (Claude/Codex/Gemini) |
+| **Repository management** | ❌ Manual tracking | ✅ Structured worktree lifecycle |
+| **Dev environments** | ❌ Manual setup | ✅ One-click via `.agor.yml` |
 
 Both frameworks share the core insight: **agents need infrastructure for continuity.**
 
-Agor-OpenClaw adds visibility, multi-agent coordination, and git-native state tracking.
+Agor-OpenClaw adds visibility, multi-agent coordination, git-native state tracking, and built-in safety guardrails.
 
 ---
 
 ## What's Next
 
-This is day one. We're already seeing crazy promising results:
+This is day one. I'm already seeing crazy promising results:
 
 ### Framework Evolution
 
@@ -482,7 +499,7 @@ The agent is actively improving the framework. It's:
 
 ### Long-Term Goals
 
-We want agor-openclaw agents to:
+I want agor-openclaw agents to:
 
 1. **Manage complex projects** - create worktrees, spawn agents, track PRs, coordinate reviews
 2. **Learn continuously** - update `MEMORY.md` as patterns emerge
@@ -493,14 +510,14 @@ All while being **fully visible** on an Agor board.
 
 ### Community Iteration
 
-We're open-sourcing this experiment. The framework is MIT licensed. If you want to:
+I'm open-sourcing this experiment. The framework is MIT licensed. If you want to:
 
 - Try running your own persistent agent in Agor
 - Contribute new skills or patterns
 - Share learnings from your own agents
 - Suggest improvements
 
-**Join us:** [github.com/mistercrunch/agor-openclaw](https://github.com/mistercrunch/agor-openclaw)
+**Join me:** [github.com/mistercrunch/agor-openclaw](https://github.com/mistercrunch/agor-openclaw)
 
 ---
 
@@ -528,7 +545,7 @@ BOOTSTRAP.md will guide you through the rest.
 
 This wouldn't exist without [OpenClaw](https://openclaw.ai/).
 
-The agent loop architecture—SOUL.md, MEMORY.md, persistent identity, self-improvement—that's OpenClaw's innovation. We just adapted it to run inside Agor.
+The agent loop architecture—SOUL.md, MEMORY.md, persistent identity, self-improvement—that's OpenClaw's innovation. I just adapted it to run inside Agor.
 
 If you're looking for a working personal AI agent right now, **use OpenClaw**. It's a complete framework, battle-tested, with a rich skills ecosystem.
 
@@ -536,7 +553,7 @@ Agor-OpenClaw is an experiment in bringing those patterns to team-based software
 
 Both frameworks share the same belief: **AI agents should actually do things, with memory, identity, and the ability to evolve.**
 
-OpenClaw proved it for personal automation. We're exploring what it means for developer workflows.
+OpenClaw proved it for personal automation. I'm exploring what it means for developer workflows.
 
 ---
 
@@ -546,13 +563,13 @@ The agent loop architecture is the unlock.
 
 Not API integrations. Not tool use. **Infrastructure for continuity and self-improvement.**
 
-OpenClaw figured this out. We're learning from it and adapting it for Agor's multi-agent, spatial canvas paradigm.
+OpenClaw figured this out. I'm learning from it and adapting it for Agor's multi-agent, spatial canvas paradigm.
 
 Day one results are crazy promising. The agent bootstrapped itself, spawned parallel work, created and merged 4 PRs, maintained accurate memory, and even course-corrected on a task it had previously archived.
 
 All fully visible on a board. All introspectable in real-time. All tracked in git.
 
-**This is what we think AI agents should look like.**
+**This is what I think AI agents should look like.**
 
 ---
 
@@ -567,4 +584,4 @@ Questions or want to share your experience?
 
 ---
 
-_If you're running agor-openclaw or building your own agent loops in Agor, we'd love to hear about it. Open a discussion or drop us a note—your feedback shapes where this goes next._
+_If you're running agor-openclaw or building your own agent loops in Agor, I'd love to hear about it. Open a discussion or drop me a note—your feedback shapes where this goes next._
