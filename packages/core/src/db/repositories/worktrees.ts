@@ -480,8 +480,7 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
       // NOTE: This only fetches worktrees that have board_objects entries.
       // Worktrees on a board without board_objects (not positioned yet) won't appear here.
       // This is correct - no board_object means no zone assignment.
-      const { boardObjects: boardObjectsTable } = await import('../schema');
-      const { boards: boardsTable } = await import('../schema');
+      const { boardObjects: boardObjectsTable, boards: boardsTable } = await import('../schema');
       const { jsonExtract } = await import('../database-wrapper');
 
       const rows = await select(this.db, {
