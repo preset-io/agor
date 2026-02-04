@@ -1108,6 +1108,7 @@ async function main() {
           probeResponse = await fetch(data.mcp_url, {
             method: 'GET',
             headers: { Accept: 'application/json' },
+            signal: AbortSignal.timeout(15_000),
           });
         } catch (fetchError) {
           return {
@@ -1152,17 +1153,21 @@ async function main() {
           // If start_browser_flow is true, perform the full OAuth flow with browser
           if (data.start_browser_flow) {
             console.log('[OAuth Test] Starting browser-based OAuth 2.1 flow...');
+            console.log('[OAuth Test] WWW-Authenticate:', wwwAuthenticate);
+            console.log('[OAuth Test] Metadata URL:', metadataUrl);
 
             const { performMCPOAuthFlow } = await import(
               '@agor/core/tools/mcp/oauth-mcp-transport'
             );
 
             try {
+              console.log('[OAuth Test] Calling performMCPOAuthFlow...');
               const token = await performMCPOAuthFlow(
                 wwwAuthenticate!,
                 data.client_id, // Optional client_id
-                (url) => console.log('[OAuth Test] Browser opening:', url)
+                (url) => console.log('[OAuth Test] Browser should open:', url)
               );
+              console.log('[OAuth Test] OAuth flow completed, token obtained');
 
               // Test the token against the MCP server
               // Cache the token at daemon level for discover endpoint to use
@@ -1180,6 +1185,7 @@ async function main() {
                   Authorization: `Bearer ${token}`,
                   Accept: 'application/json',
                 },
+                signal: AbortSignal.timeout(15_000),
               });
 
               return {
@@ -1191,6 +1197,7 @@ async function main() {
                 mcpStatusText: testResponse.statusText,
               };
             } catch (flowError) {
+              console.error('[OAuth Test] Browser flow error:', flowError);
               return {
                 success: false,
                 error: `OAuth 2.1 browser flow failed: ${flowError instanceof Error ? flowError.message : String(flowError)}`,

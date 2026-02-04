@@ -83,7 +83,7 @@ function parseWWWAuthenticate(header: string): string | null {
  * Fetch Protected Resource Metadata (RFC 9728)
  */
 async function fetchResourceMetadata(metadataUrl: string): Promise<OAuthMetadata> {
-  const response = await fetch(metadataUrl);
+  const response = await fetch(metadataUrl, { signal: AbortSignal.timeout(15_000) });
   if (!response.ok) {
     throw new Error(
       `Failed to fetch OAuth resource metadata from ${metadataUrl} (${response.status}). ` +
@@ -136,6 +136,7 @@ async function registerDynamicClient(
       Accept: 'application/json',
     },
     body: JSON.stringify(registrationRequest),
+    signal: AbortSignal.timeout(15_000),
   });
 
   if (!response.ok) {
@@ -172,12 +173,12 @@ async function fetchAuthorizationServerMetadata(
 ): Promise<AuthorizationServerMetadata> {
   // Try OIDC discovery first
   let metadataUrl = `${authServerUrl}/.well-known/openid-configuration`;
-  let response = await fetch(metadataUrl);
+  let response = await fetch(metadataUrl, { signal: AbortSignal.timeout(15_000) });
 
   // Fall back to OAuth 2.0 discovery
   if (!response.ok) {
     metadataUrl = `${authServerUrl}/.well-known/oauth-authorization-server`;
-    response = await fetch(metadataUrl);
+    response = await fetch(metadataUrl, { signal: AbortSignal.timeout(15_000) });
   }
 
   if (!response.ok) {
@@ -187,6 +188,9 @@ async function fetchAuthorizationServerMetadata(
   return (await response.json()) as AuthorizationServerMetadata;
 }
 
+// Timeout for waiting for the OAuth callback (2 minutes)
+const OAUTH_CALLBACK_TIMEOUT_MS = 120_000;
+
 /**
  * Start local HTTP server to receive OAuth callback
  */
@@ -194,7 +198,7 @@ function startCallbackServer(port: number = 0): Promise<{
   server: http.Server;
   port: number;
   url: string;
-  waitForCallback: () => Promise<{ code: string; state: string }>;
+  waitForCallback: (timeoutMs?: number) => Promise<{ code: string; state: string }>;
 }> {
   return new Promise((resolve, reject) => {
     let callbackResolve: (value: { code: string; state: string }) => void;
@@ -247,7 +251,21 @@ function startCallbackServer(port: number = 0): Promise<{
         server,
         port: actualPort,
         url: `http://127.0.0.1:${actualPort}/oauth/callback`,
-        waitForCallback: () => callbackPromise,
+        waitForCallback: (timeoutMs: number = OAUTH_CALLBACK_TIMEOUT_MS) => {
+          // Race the callback promise against a timeout
+          const timeoutPromise = new Promise<never>((_resolve, reject) => {
+            setTimeout(() => {
+              reject(
+                new Error(
+                  `OAuth callback timed out after ${Math.round(timeoutMs / 1000)}s. ` +
+                    'The browser may not have opened, or the authentication was not completed in time. ' +
+                    'Please try again.'
+                )
+              );
+            }, timeoutMs);
+          });
+          return Promise.race([callbackPromise, timeoutPromise]);
+        },
       });
     });
 
@@ -304,6 +322,7 @@ async function exchangeCodeForToken(
       'Content-Type': 'application/x-www-form-urlencoded',
     },
     body: new URLSearchParams(body).toString(),
+    signal: AbortSignal.timeout(15_000),
   });
 
   if (!response.ok) {
