@@ -14,6 +14,14 @@ import { AmbiguousIdError, type BaseRepository, EntityNotFoundError } from './ba
 import { deepMerge } from './merge-utils';
 
 /**
+ * Worktree with enriched zone information
+ */
+export interface WorktreeWithZone extends Worktree {
+  zone_id?: string;
+  zone_label?: string;
+}
+
+/**
  * Worktree repository implementation
  */
 export class WorktreeRepository implements BaseRepository<Worktree, Partial<Worktree>> {
@@ -421,5 +429,119 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
       .all();
 
     return rows.map((row: WorktreeRow) => this.rowToWorktree(row));
+  }
+
+  /**
+   * Enrich a single worktree with zone information
+   *
+   * Uses the batch enrichment method for consistency and efficiency.
+   * Just wraps the worktree in an array and unwraps the result.
+   *
+   * @param worktree - Worktree to enrich
+   * @returns Worktree with zone_id and zone_label added (if in a zone)
+   */
+  async enrichWithZoneInfo(worktree: Worktree): Promise<WorktreeWithZone> {
+    // Use batch enrichment for single worktree (same efficient query)
+    const enriched = await this.enrichManyWithZoneInfo([worktree]);
+    return enriched[0] || worktree;
+  }
+
+  /**
+   * Enrich multiple worktrees with zone information (batch operation)
+   *
+   * Uses a single efficient query with LEFT JOINs to fetch board_objects + boards.
+   * No N+1 queries - all data fetched in one round trip to the database.
+   *
+   * IMPORTANT: This only enriches worktrees that have board_objects entries.
+   * Worktrees on a board but not yet positioned (no board_object) will not have zone info.
+   * This is correct behavior - if there's no board_object, the worktree isn't in a zone.
+   *
+   * @param worktrees - Array of worktrees to enrich
+   * @returns Array of worktrees with zone info added (where applicable)
+   */
+  async enrichManyWithZoneInfo(worktrees: Worktree[]): Promise<WorktreeWithZone[]> {
+    // Quick path: if no worktrees, return empty array
+    if (worktrees.length === 0) {
+      return [];
+    }
+
+    try {
+      // Get worktree IDs that are on boards
+      const worktreeIds = worktrees
+        .filter((wt) => wt.board_id)
+        .map((wt) => wt.worktree_id);
+
+      // If no worktrees are on boards, return as-is
+      if (worktreeIds.length === 0) {
+        return worktrees;
+      }
+
+      // Single query with LEFT JOINs to get board_objects and boards
+      // NOTE: This only fetches worktrees that have board_objects entries.
+      // Worktrees on a board without board_objects (not positioned yet) won't appear here.
+      // This is correct - no board_object means no zone assignment.
+      const { boardObjects: boardObjectsTable } = await import('../schema');
+      const { boards: boardsTable } = await import('../schema');
+
+      const rows = await select(this.db, {
+        worktree_id: boardObjectsTable.worktree_id,
+        zone_id: sql<string | null>`json_extract(${boardObjectsTable.data}, '$.zone_id')`,
+        board_data: boardsTable.data,
+      })
+        .from(boardObjectsTable)
+        .leftJoin(boardsTable, eq(boardObjectsTable.board_id, boardsTable.board_id))
+        .where(inArray(boardObjectsTable.worktree_id, worktreeIds))
+        .all();
+
+      // Build a map of worktree_id -> zone info for O(1) lookup
+      const zoneInfoByWorktree = new Map<
+        string,
+        { zone_id: string; zone_label?: string }
+      >();
+
+      for (const row of rows) {
+        if (!row.zone_id) {
+          // Worktree has board_object but no zone_id - on board but not in a zone
+          // Don't add to map, worktree will be returned as-is
+          continue;
+        }
+
+        // Extract zone definition from board.data.objects
+        const boardData = row.board_data as {
+          objects?: Record<string, { type: string; label?: string }>;
+        } | null;
+
+        const zone = boardData?.objects?.[row.zone_id];
+        const zoneLabel = zone?.type === 'zone' ? zone.label : undefined;
+
+        zoneInfoByWorktree.set(row.worktree_id as string, {
+          zone_id: row.zone_id,
+          zone_label: zoneLabel,
+        });
+      }
+
+      // Enrich worktrees with zone info using O(1) map lookup
+      // Worktrees not in the map are returned unchanged (no zone info)
+      return worktrees.map((wt) => {
+        const zoneInfo = zoneInfoByWorktree.get(wt.worktree_id);
+        if (!zoneInfo) {
+          // Worktree not in a zone (or not on a board, or no board_object yet)
+          return wt;
+        }
+
+        return {
+          ...wt,
+          zone_id: zoneInfo.zone_id,
+          zone_label: zoneInfo.zone_label,
+        };
+      });
+    } catch (error) {
+      console.warn(
+        'Failed to batch enrich worktrees with zone info:',
+        error instanceof Error ? error.message : String(error)
+      );
+      // Return worktrees without zone info on error
+      return worktrees;
+    }
   }
 }
