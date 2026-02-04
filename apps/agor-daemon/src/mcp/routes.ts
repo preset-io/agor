@@ -1101,8 +1101,20 @@ export function setupMCPRoutes(app: Application): void {
         const { name, arguments: args } = mcpRequest.params || {};
         console.log(`🔧 MCP tool call: ${name}`);
         console.log(`   Arguments:`, JSON.stringify(args || {}).substring(0, 200));
+
+        // Fetch the authenticated user to get their role for permission checks
+        const authenticatedUser = context.userId
+          ? await app.service('users').get(context.userId)
+          : undefined;
+
         const baseServiceParams = {
-          user: context.userId ? { user_id: context.userId } : undefined,
+          user: authenticatedUser
+            ? {
+                user_id: authenticatedUser.user_id,
+                email: authenticatedUser.email,
+                role: authenticatedUser.role,
+              }
+            : undefined,
           authenticated: true,
         };
 
