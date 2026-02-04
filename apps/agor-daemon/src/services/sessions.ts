@@ -470,17 +470,14 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
   }
 
   /**
-   * Override find to support custom filtering and enrich with last message
+   * Override find to support custom filtering
+   *
+   * Note: Last message is NOT included in list operations - only on single GET
    */
-  async find(
-    params?: SessionParams
-  ): Promise<Paginated<SessionWithLastMessage> | SessionWithLastMessage[]> {
-    const truncationLength = params?.query?.last_message_truncation_length ?? 500;
-
+  async find(params?: SessionParams): Promise<Paginated<Session> | Session[]> {
     // If filtering by status, use repository method (more efficient)
     if (params?.query?.status) {
       const sessions = await this.sessionRepo.findByStatus(params.query.status);
-      const enriched = await this.sessionRepo.enrichManyWithLastMessage(sessions, truncationLength);
 
       // Apply pagination if enabled
       if (this.paginate) {
@@ -488,32 +485,18 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
         const skip = params.query.$skip ?? 0;
 
         return {
-          total: enriched.length,
+          total: sessions.length,
           limit,
           skip,
-          data: enriched.slice(skip, skip + limit),
+          data: sessions.slice(skip, skip + limit),
         };
       }
 
-      return enriched;
+      return sessions;
     }
 
-    // Otherwise use default find and enrich
-    const result = await super.find(params);
-
-    // Handle both paginated and non-paginated results
-    if (Array.isArray(result)) {
-      return this.sessionRepo.enrichManyWithLastMessage(result as Session[], truncationLength);
-    } else {
-      const enriched = await this.sessionRepo.enrichManyWithLastMessage(
-        result.data as Session[],
-        truncationLength
-      );
-      return {
-        ...result,
-        data: enriched,
-      };
-    }
+    // Otherwise use default find (no enrichment for lists)
+    return super.find(params);
   }
 }
 

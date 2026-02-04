@@ -202,20 +202,17 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
   }
 
   /**
-   * Override find to support repo_id filter and enrich with zone and session information
+   * Override find to support repo_id filter and enrich with zone information only
+   *
+   * Note: Session activity is NOT included in list operations - only on single GET
    */
   async find(params?: WorktreeParams) {
     const { repo_id } = params?.query || {};
-    const truncationLength = params?.query?.last_message_truncation_length ?? 500;
 
     // If repo_id filter is provided, use repository method
     if (repo_id) {
       const worktrees = await this.worktreeRepo.findAll({ repo_id });
-      const withZone = await this.worktreeRepo.enrichManyWithZoneInfo(worktrees);
-      const enriched = await this.worktreeRepo.enrichManyWithSessionActivity(
-        withZone,
-        truncationLength
-      );
+      const enriched = await this.worktreeRepo.enrichManyWithZoneInfo(worktrees);
 
       // Return with pagination if enabled
       if (this.paginate) {
@@ -230,19 +227,14 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       return enriched;
     }
 
-    // Otherwise, use default find and enrich
+    // Otherwise, use default find and enrich with zone info only
     const result = await super.find(params);
 
     // Handle both paginated and non-paginated results
     if (Array.isArray(result)) {
-      const withZone = await this.worktreeRepo.enrichManyWithZoneInfo(result as Worktree[]);
-      return this.worktreeRepo.enrichManyWithSessionActivity(withZone, truncationLength);
+      return this.worktreeRepo.enrichManyWithZoneInfo(result as Worktree[]);
     } else {
-      const withZone = await this.worktreeRepo.enrichManyWithZoneInfo(result.data as Worktree[]);
-      const enriched = await this.worktreeRepo.enrichManyWithSessionActivity(
-        withZone,
-        truncationLength
-      );
+      const enriched = await this.worktreeRepo.enrichManyWithZoneInfo(result.data as Worktree[]);
       return {
         ...result,
         data: enriched,

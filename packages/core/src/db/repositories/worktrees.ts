@@ -4,7 +4,7 @@
  * Type-safe CRUD operations for worktrees with short ID support.
  */
 
-import type { UUID, Worktree, WorktreeID } from '@agor/core/types';
+import type { AgenticToolName, SessionStatus, UUID, Worktree, WorktreeID } from '@agor/core/types';
 import { and, eq, getTableColumns, inArray, isNotNull, like, or, sql } from 'drizzle-orm';
 import { formatShortId, generateId } from '../../lib/ids';
 import type { Database } from '../client';
@@ -18,8 +18,8 @@ import { deepMerge } from './merge-utils';
  */
 export interface WorktreeSessionActivity {
   session_id: string;
-  status: 'idle' | 'running' | 'completed' | 'failed';
-  agentic_tool: 'claude-code' | 'codex' | 'gemini';
+  status: SessionStatus;
+  agentic_tool: AgenticToolName;
   last_updated: string;
   last_message: string;
   message_count: number;
@@ -597,9 +597,8 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
     try {
       const worktreeIds = worktrees.map((wt) => wt.worktree_id);
 
-      // Import schema tables and JSON extract function dynamically
+      // Import schema tables dynamically
       const { sessions: sessionsTable, messages: messagesTable } = await import('../schema');
-      const { jsonExtract } = await import('../database-wrapper');
 
       // Query to get recent sessions for these worktrees with last message
       // We use a subquery to get the latest message for each session
@@ -624,43 +623,39 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
         return worktrees.map((wt) => ({ ...wt, sessions: [] }));
       }
 
-      // Get last assistant message for each session
-      // We fetch all assistant messages and then keep only the last one per session
-      const allMessages = await select(this.db, {
+      // Get last assistant message for each session using SQL subquery
+      // We use content_preview (first 200 chars) which is already optimized for display
+      // and query for the max index per session to get only the latest message
+      const lastMessagesSubquery = select(this.db, {
         session_id: messagesTable.session_id,
-        content: jsonExtract(this.db, messagesTable.data, 'content'),
-        index: messagesTable.index,
+        max_index: sql<number>`MAX(${messagesTable.index})`,
       })
         .from(messagesTable)
         .where(
+          and(inArray(messagesTable.session_id, sessionIds), eq(messagesTable.role, 'assistant'))
+        )
+        .groupBy(messagesTable.session_id)
+        .as('latest_messages');
+
+      // Join to get the actual message content for the latest messages
+      const lastMessages = await select(this.db, {
+        session_id: messagesTable.session_id,
+        content_preview: messagesTable.content_preview,
+      })
+        .from(messagesTable)
+        .innerJoin(
+          lastMessagesSubquery,
           and(
-            inArray(messagesTable.session_id, sessionIds),
-            eq(messagesTable.role, 'assistant') // Only get assistant messages
+            eq(messagesTable.session_id, lastMessagesSubquery.session_id),
+            eq(messagesTable.index, lastMessagesSubquery.max_index)
           )
         )
         .all();
 
-      // Group messages by session and find the most recent one (highest index)
-      const messagesBySession = new Map<string, Array<{ content: string; index: number }>>();
-      for (const msg of allMessages) {
-        const sessionId = msg.session_id as string;
-        if (!messagesBySession.has(sessionId)) {
-          messagesBySession.set(sessionId, []);
-        }
-        messagesBySession.get(sessionId)!.push({
-          content: msg.content as string,
-          index: msg.index as number,
-        });
-      }
-
-      // Find the last message for each session
+      // Build map of session_id -> last message
       const lastMessageBySession = new Map<string, string>();
-      for (const [sessionId, messages] of messagesBySession.entries()) {
-        if (messages.length > 0) {
-          // Sort by index descending and take the first one
-          messages.sort((a, b) => b.index - a.index);
-          lastMessageBySession.set(sessionId, messages[0].content);
-        }
+      for (const msg of lastMessages) {
+        lastMessageBySession.set(msg.session_id as string, (msg.content_preview as string) || '');
       }
 
       // Get message counts per session
