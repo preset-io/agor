@@ -521,7 +521,7 @@ export function setupMCPRoutes(app: Application): void {
             {
               name: 'agor_worktrees_create',
               description:
-                'Create a worktree (and optional branch) for a repository, with optional board/issue/PR links',
+                'Create a worktree (and optional branch) for a repository, with required board placement',
               inputSchema: {
                 type: 'object',
                 properties: {
@@ -533,6 +533,11 @@ export function setupMCPRoutes(app: Application): void {
                     type: 'string',
                     description:
                       'Slug name for the worktree directory (lowercase letters, numbers, hyphens)',
+                  },
+                  boardId: {
+                    type: 'string',
+                    description:
+                      'Board ID to place the worktree on (positions to default coordinates). Required to ensure worktrees are visible in the UI.',
                   },
                   ref: {
                     type: 'string',
@@ -559,11 +564,6 @@ export function setupMCPRoutes(app: Application): void {
                     description:
                       'Pull latest from remote before creating the branch (defaults to true for new branches).',
                   },
-                  boardId: {
-                    type: 'string',
-                    description:
-                      "Board ID to immediately place the worktree on (positions to default coordinates). If not specified, defaults to the current session's board.",
-                  },
                   issueUrl: {
                     type: 'string',
                     description: 'Issue URL to associate with the worktree.',
@@ -573,7 +573,7 @@ export function setupMCPRoutes(app: Application): void {
                     description: 'Pull request URL to associate with the worktree.',
                   },
                 },
-                required: ['repoId', 'worktreeName'],
+                required: ['repoId', 'worktreeName', 'boardId'],
               },
             },
             {
@@ -1931,11 +1931,17 @@ export function setupMCPRoutes(app: Application): void {
             }
           }
 
-          // Default to current session's board if not specified
-          let boardId = coerceString(args?.boardId);
+          // boardId is now required
+          const boardId = coerceString(args?.boardId);
           if (!boardId) {
-            const currentSession = await app.service('sessions').get(context.sessionId);
-            boardId = currentSession.board_id ?? undefined;
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message: 'Invalid params: boardId is required',
+              },
+            });
           }
 
           let issueUrl: string | undefined;
