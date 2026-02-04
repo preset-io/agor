@@ -603,6 +603,7 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
       // Query to get recent sessions for these worktrees with last message
       // We use a subquery to get the latest message for each session
       // We also extract message_count from the data column to avoid COUNT(*) queries
+      console.log(`🔍 [WorktreeRepo.enrichWithSessionActivity] Fetching sessions for worktrees: ${worktreeIds.join(', ')}`);
       const sessionRows = await select(this.db, {
         worktree_id: sessionsTable.worktree_id,
         session_id: sessionsTable.session_id,
@@ -619,9 +620,11 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
 
       // Get message counts and last messages for all sessions in one query
       const sessionIds = sessionRows.map((s: { session_id: unknown }) => s.session_id as string);
+      console.log(`🔍 [WorktreeRepo.enrichWithSessionActivity] Found ${sessionRows.length} sessions: ${sessionIds.slice(0, 3).join(', ')}${sessionIds.length > 3 ? '...' : ''}`);
 
       if (sessionIds.length === 0) {
         // No sessions found, return worktrees as-is with empty sessions array
+        console.log(`🔍 [WorktreeRepo.enrichWithSessionActivity] No sessions found, returning empty arrays`);
         return worktrees.map((wt) => ({ ...wt, sessions: [] }));
       }
 
