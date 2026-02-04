@@ -8,9 +8,15 @@
 import { extractSlugFromUrl, isValidGitUrl, isValidSlug } from '@agor/core/config';
 import type { Application } from '@agor/core/feathers';
 import type { AgenticToolName, Board } from '@agor/core/types';
+import { NotFoundError } from '@agor/core/utils/errors';
 import { normalizeOptionalHttpUrl } from '@agor/core/utils/url';
 import type { Request, Response } from 'express';
-import type { ReposServiceImpl, SessionsServiceImpl } from '../declarations.js';
+import type {
+  AuthenticatedParams,
+  AuthenticatedUser,
+  ReposServiceImpl,
+  SessionsServiceImpl,
+} from '../declarations.js';
 import { validateSessionToken } from './tokens.js';
 
 const WORKTREE_NAME_PATTERN = /^[a-z0-9-]+$/;
@@ -1103,11 +1109,27 @@ export function setupMCPRoutes(app: Application): void {
         console.log(`   Arguments:`, JSON.stringify(args || {}).substring(0, 200));
 
         // Fetch the authenticated user to get their role for permission checks
-        const authenticatedUser = context.userId
-          ? await app.service('users').get(context.userId)
-          : undefined;
+        let authenticatedUser: AuthenticatedUser | undefined;
+        try {
+          authenticatedUser = context.userId
+            ? await app.service('users').get(context.userId)
+            : undefined;
+        } catch (error) {
+          // If user doesn't exist (e.g., deleted after token was issued), treat as unauthorized
+          if (error instanceof NotFoundError) {
+            return res.status(401).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32001,
+                message: 'Invalid or expired session token',
+              },
+            });
+          }
+          throw error;
+        }
 
-        const baseServiceParams = {
+        const baseServiceParams: Pick<AuthenticatedParams, 'user' | 'authenticated'> = {
           user: authenticatedUser
             ? {
                 user_id: authenticatedUser.user_id,
