@@ -1140,12 +1140,11 @@ export function setupMCPRoutes(app: Application): void {
           console.log(
             `🔍 [MCP sessions_get] Fetching session ${args.sessionId} with include_last_message=true`
           );
+          // Pass enrichment flags at params root level to bypass Feathers query filtering
           const session = await app.service('sessions').get(args.sessionId, {
             ...baseServiceParams,
-            query: {
-              include_last_message: true,
-              last_message_truncation_length: 500,
-            },
+            _include_last_message: true,
+            _last_message_truncation_length: 500,
           });
           console.log(
             `🔍 [MCP sessions_get] Result has last_message: ${!!(session as any).last_message}, length: ${(session as any).last_message?.length ?? 'N/A'}`
@@ -1160,12 +1159,11 @@ export function setupMCPRoutes(app: Application): void {
           };
         } else if (name === 'agor_sessions_get_current') {
           // Get current session using token context with last message
+          // Pass enrichment flags at params root level to bypass Feathers query filtering
           const session = await app.service('sessions').get(context.sessionId, {
             ...baseServiceParams,
-            query: {
-              include_last_message: true,
-              last_message_truncation_length: 500,
-            },
+            _include_last_message: true,
+            _last_message_truncation_length: 500,
           });
           mcpResponse = {
             content: [
@@ -1838,12 +1836,11 @@ export function setupMCPRoutes(app: Application): void {
           console.log(
             `🔍 [MCP worktrees_get] Fetching worktree ${args.worktreeId} with include_sessions=true`
           );
+          // Pass enrichment flags at params root level to bypass Feathers query filtering
           const worktree = await app.service('worktrees').get(args.worktreeId, {
             ...baseServiceParams,
-            query: {
-              include_sessions: true,
-              last_message_truncation_length: 500,
-            },
+            _include_sessions: true,
+            _last_message_truncation_length: 500,
           });
           console.log(
             `🔍 [MCP worktrees_get] Result has sessions array: ${Array.isArray((worktree as any).sessions)}, length: ${(worktree as any).sessions?.length ?? 'N/A'}`

@@ -237,16 +237,27 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
    * Session activity enrichment is opt-in via include_sessions query parameter
    */
   async get(id: WorktreeID, params?: WorktreeParams): Promise<WorktreeWithZoneAndSessions> {
-    console.log(`🔍 [WorktreesService.get] id=${id}, include_sessions=${params?.query?.include_sessions}, type=${typeof params?.query?.include_sessions}`);
+    // Check both query params and root-level params (root-level bypasses Feathers query filtering)
+    const includeSessionsQuery = params?.query?.include_sessions;
+    const includeSessionsRoot = (params as any)?._include_sessions;
+    const includeSessions = includeSessionsRoot ?? includeSessionsQuery;
+
+    console.log(
+      `🔍 [WorktreesService.get] id=${id}, include_sessions=${includeSessions}, type=${typeof includeSessions}, from_root=${!!includeSessionsRoot}`
+    );
     const worktree = await super.get(id, params);
     const withZone = await this.worktreeRepo.enrichWithZoneInfo(worktree as Worktree);
 
     // Only enrich with session activity if explicitly requested
-    if (params?.query?.include_sessions === true || params?.query?.include_sessions === 'true') {
+    if (includeSessions === true || includeSessions === 'true') {
       console.log(`🔍 [WorktreesService.get] Enriching with session activity`);
-      const truncationLength = parseTruncationLength(params?.query?.last_message_truncation_length);
+      const truncationLengthQuery = params?.query?.last_message_truncation_length;
+      const truncationLengthRoot = (params as any)?._last_message_truncation_length;
+      const truncationLength = parseTruncationLength(truncationLengthRoot ?? truncationLengthQuery);
       const result = await this.worktreeRepo.enrichWithSessionActivity(withZone, truncationLength);
-      console.log(`🔍 [WorktreesService.get] Enriched result has ${(result as any).sessions?.length ?? 0} sessions`);
+      console.log(
+        `🔍 [WorktreesService.get] Enriched result has ${(result as any).sessions?.length ?? 0} sessions`
+      );
       return result;
     }
 
