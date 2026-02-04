@@ -537,6 +537,35 @@ export function setupMCPRoutes(app: Application): void {
                 },
               },
             },
+            {
+              name: 'agor_worktrees_set_zone',
+              description:
+                "Pin a worktree to a zone on a board and optionally trigger the zone's prompt template. Calculates zone center position automatically and creates board association.",
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  worktreeId: {
+                    type: 'string',
+                    description: 'Worktree ID to pin to the zone (UUIDv7 or short ID)',
+                  },
+                  zoneId: {
+                    type: 'string',
+                    description: 'Zone ID to pin the worktree to (e.g., "zone-1770152859108")',
+                  },
+                  targetSessionId: {
+                    type: 'string',
+                    description:
+                      'Session ID to send the zone trigger prompt to (required if triggerTemplate is true)',
+                  },
+                  triggerTemplate: {
+                    type: 'boolean',
+                    description:
+                      "Whether to execute the zone's prompt template after pinning (default: false)",
+                  },
+                },
+                required: ['worktreeId', 'zoneId'],
+              },
+            },
 
             // Environment tools
             {
@@ -1818,6 +1847,195 @@ export function setupMCPRoutes(app: Application): void {
               },
             ],
           };
+        } else if (name === 'agor_worktrees_set_zone') {
+          // Pin worktree to zone and optionally trigger zone prompt
+          const worktreeId = coerceString(args?.worktreeId);
+          const zoneId = coerceString(args?.zoneId);
+          const targetSessionId = coerceString(args?.targetSessionId);
+          const triggerTemplate = args?.triggerTemplate === true;
+
+          if (!worktreeId) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message: 'Invalid params: worktreeId is required',
+              },
+            });
+          }
+
+          if (!zoneId) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message: 'Invalid params: zoneId is required',
+              },
+            });
+          }
+
+          if (triggerTemplate && !targetSessionId) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message: 'Invalid params: targetSessionId is required when triggerTemplate is true',
+              },
+            });
+          }
+
+          console.log(`📍 MCP pinning worktree ${worktreeId.substring(0, 8)} to zone ${zoneId}`);
+
+          try {
+            // Get worktree to find its board
+            const worktree = await app.service('worktrees').get(worktreeId, baseServiceParams);
+
+            if (!worktree.board_id) {
+              return res.status(400).json({
+                jsonrpc: '2.0',
+                id: mcpRequest.id,
+                error: {
+                  code: -32602,
+                  message: 'Worktree must be on a board before it can be pinned to a zone',
+                },
+              });
+            }
+
+            // Get board to find zone definition
+            const board = await app.service('boards').get(worktree.board_id, baseServiceParams);
+
+            const zone = board.objects?.[zoneId];
+            if (!zone || zone.type !== 'zone') {
+              return res.status(404).json({
+                jsonrpc: '2.0',
+                id: mcpRequest.id,
+                error: {
+                  code: -32602,
+                  message: `Zone ${zoneId} not found on board ${worktree.board_id}`,
+                },
+              });
+            }
+
+            // Calculate zone center position
+            const centerX = zone.x + zone.width / 2;
+            const centerY = zone.y + zone.height / 2;
+
+            // Find or create board object for this worktree
+            const boardObjectsRepo = app.get('boardObjectsRepository');
+            let boardObject = await boardObjectsRepo.findByWorktreeId(
+              worktreeId as import('@agor/core/types').WorktreeID
+            );
+
+            if (!boardObject) {
+              // Create new board object
+              boardObject = await boardObjectsRepo.create({
+                board_id: worktree.board_id as import('@agor/core/types').BoardID,
+                worktree_id: worktreeId as import('@agor/core/types').WorktreeID,
+                position: { x: centerX, y: centerY },
+                zone_id: zoneId,
+              });
+            } else {
+              // Update existing board object with zone and center position
+              await boardObjectsRepo.updatePosition(boardObject.object_id, {
+                x: centerX,
+                y: centerY,
+              });
+              boardObject = await boardObjectsRepo.updateZone(boardObject.object_id, zoneId);
+            }
+
+            console.log(`✅ Worktree pinned to zone at position (${centerX}, ${centerY})`);
+
+            // Trigger zone prompt template if requested
+            let promptResult: { taskId?: string; note: string } | undefined;
+            if (triggerTemplate && zone.trigger?.template && targetSessionId) {
+              console.log(
+                `🎯 Triggering zone prompt template for session ${targetSessionId.substring(0, 8)}`
+              );
+
+              // Build template context
+              const { renderTemplate } = await import('@agor/core/templates/handlebars-helpers');
+              const templateContext = {
+                worktree: {
+                  name: worktree.name,
+                  ref: worktree.ref,
+                  issue_url: worktree.issue_url,
+                  pull_request_url: worktree.pull_request_url,
+                  notes: worktree.notes,
+                  custom_context: worktree.custom_context,
+                },
+                board: {
+                  name: board.name,
+                  custom_context: board.custom_context,
+                },
+                zone: {
+                  label: zone.label,
+                  status: zone.status,
+                },
+              };
+
+              const renderedPrompt = renderTemplate(zone.trigger.template, templateContext);
+
+              if (renderedPrompt) {
+                // Send prompt to target session
+                const promptResponse = await app.service('/sessions/:id/prompt').create(
+                  {
+                    prompt: renderedPrompt,
+                    stream: true,
+                  },
+                  {
+                    ...baseServiceParams,
+                    route: { id: targetSessionId },
+                  }
+                );
+
+                promptResult = {
+                  taskId: promptResponse.taskId,
+                  note: 'Zone trigger prompt sent to target session',
+                };
+                console.log(
+                  `✅ Zone trigger executed: task ${promptResponse.taskId.substring(0, 8)}`
+                );
+              } else {
+                promptResult = {
+                  note: 'Zone trigger template rendered to empty string (check template syntax)',
+                };
+                console.warn('⚠️  Zone trigger template rendered to empty string');
+              }
+            }
+
+            mcpResponse = {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify(
+                    {
+                      success: true,
+                      worktree_id: worktree.worktree_id,
+                      zone_id: zoneId,
+                      position: { x: centerX, y: centerY },
+                      board_object_id: boardObject.object_id,
+                      ...(promptResult ? { trigger: promptResult } : {}),
+                    },
+                    null,
+                    2
+                  ),
+                },
+              ],
+            };
+          } catch (error) {
+            console.error('❌ Failed to set worktree zone:', error);
+            return res.status(500).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32603,
+                message: `Failed to set worktree zone: ${error instanceof Error ? error.message : String(error)}`,
+              },
+            });
+          }
 
           // Environment tools
         } else if (name === 'agor_environment_start') {
