@@ -53,6 +53,11 @@ export const AGOR_ZELLIJ_CONFIG = `// Agor Zellij Config
 // Hide startup banners for cleaner embedded terminal UX
 show_startup_tips false
 show_release_notes false
+
+// Clipboard configuration for web terminal (xterm.js)
+// Disable Zellij clipboard handling to allow native browser copy/paste
+mouse_mode false
+copy_on_select false
 `;
 
 /**

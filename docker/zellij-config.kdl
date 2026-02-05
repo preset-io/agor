@@ -8,12 +8,9 @@ pane_frames false
 // When enabled, mouse mode interferes with text selection and copy/paste in the browser
 mouse_mode false
 
-// Copy to clipboard on selection
-copy_on_select true
-
-// Clipboard management
-copy_command "pbcopy"  // macOS - will be ignored on Linux
-copy_clipboard "primary"
+// Disable Zellij's clipboard handling - let the browser handle copy/paste natively
+// This allows users to use standard browser shortcuts (Ctrl+C, Ctrl+V) without interference
+copy_on_select false
 
 // Scrollback buffer (10,000 lines)
 scroll_buffer_size 10000

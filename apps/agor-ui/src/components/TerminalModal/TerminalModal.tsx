@@ -1,5 +1,6 @@
 import type { AgorClient } from '@agor/core/api';
 import type { User, UserID } from '@agor/core/types';
+import { ClipboardAddon } from '@xterm/addon-clipboard';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Terminal } from '@xterm/xterm';
 import { App, Modal } from 'antd';
@@ -186,6 +187,11 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
 
       terminal.open(terminalDivRef.current!);
       terminalRef.current = terminal;
+
+      // Load Clipboard addon for OSC 52 support
+      // This enables Zellij to copy to the browser clipboard via OSC 52 escape sequences
+      const clipboardAddon = new ClipboardAddon();
+      terminal.loadAddon(clipboardAddon);
 
       // Load Web Links addon for clickable URLs
       const webLinksAddon = new WebLinksAddon((_event, uri) => {
