@@ -76,7 +76,7 @@ export class FilesService {
         // Handle "dubious ownership" error on Linux by adding to safe.directory
         if (error instanceof Error && error.message.includes('dubious ownership')) {
           console.log(`Adding ${worktree.path} to git safe.directory`);
-          await git.addConfig('safe.directory', worktree.path, false, 'global');
+          await git.addConfig('safe.directory', worktree.path, true, 'global');
           // Retry the ls-files command
           result = await git.raw(['ls-files', '-z']);
         } else {

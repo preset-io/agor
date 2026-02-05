@@ -429,7 +429,7 @@ export async function createWorktree(
   // but accessed by other users (e.g., in multi-user Linux environments)
   try {
     const worktreeGit = createGit(worktreePath, env);
-    await worktreeGit.addConfig('safe.directory', worktreePath, false, 'global');
+    await worktreeGit.addConfig('safe.directory', worktreePath, true, 'global');
     console.log(`✅ Added ${worktreePath} to git safe.directory`);
   } catch (error) {
     // Non-fatal - log warning and continue
