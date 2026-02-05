@@ -651,7 +651,8 @@ export async function initializeRepoGroup(
   repoId: string,
   repoPath: string,
   client: AgorClient,
-  daemonUser?: string
+  daemonUser?: string,
+  creatorUnixUsername?: string
 ): Promise<string> {
   const groupName = generateRepoGroupName(repoId as RepoID);
 
@@ -683,6 +684,19 @@ export async function initializeRepoGroup(
     }
   }
 
+  // Add creator to repo group if provided
+  if (creatorUnixUsername) {
+    const inGroup = await checkCommand(
+      UnixGroupCommands.isUserInGroup(creatorUnixUsername, groupName)
+    );
+    if (!inGroup) {
+      await runCommand(UnixGroupCommands.addUserToGroup(creatorUnixUsername, groupName));
+      console.log(`[unix] Added creator ${creatorUnixUsername} to repo group ${groupName}`);
+    } else {
+      console.log(`[unix] Creator ${creatorUnixUsername} already in repo group ${groupName}`);
+    }
+  }
+
   // Update repo record with group name via Feathers
   await client.service('repos').patch(repoId, { unix_group: groupName });
   console.log(`[unix] Updated repo ${repoId.substring(0, 8)} with unix_group=${groupName}`);
@@ -699,7 +713,8 @@ export async function initializeWorktreeGroup(
   othersAccess: 'none' | 'read' | 'write',
   client: AgorClient,
   daemonUser?: string,
-  creatorUnixUsername?: string
+  creatorUnixUsername?: string,
+  repoUnixGroup?: string
 ): Promise<string> {
   const groupName = generateWorktreeGroupName(worktreeId as WorktreeID);
 
@@ -719,23 +734,37 @@ export async function initializeWorktreeGroup(
   const permCommands = UnixGroupCommands.setDirectoryGroup(worktreePath, groupName, permissionMode);
   await runCommands(permCommands);
 
-  // Add daemon user to group if provided
+  // Add daemon user to worktree group if provided
   if (daemonUser) {
     const inGroup = await checkCommand(UnixGroupCommands.isUserInGroup(daemonUser, groupName));
     if (!inGroup) {
       await runCommand(UnixGroupCommands.addUserToGroup(daemonUser, groupName));
-      console.log(`[unix] Added daemon user ${daemonUser} to group ${groupName}`);
+      console.log(`[unix] Added daemon user ${daemonUser} to worktree group ${groupName}`);
     }
   }
 
-  // Add creator to group if provided (worktree owner gets access)
+  // Add creator to worktree group if provided (worktree owner gets access)
   if (creatorUnixUsername) {
     const inGroup = await checkCommand(
       UnixGroupCommands.isUserInGroup(creatorUnixUsername, groupName)
     );
     if (!inGroup) {
       await runCommand(UnixGroupCommands.addUserToGroup(creatorUnixUsername, groupName));
-      console.log(`[unix] Added creator ${creatorUnixUsername} to group ${groupName}`);
+      console.log(`[unix] Added creator ${creatorUnixUsername} to worktree group ${groupName}`);
+    }
+  }
+
+  // Also add creator to repo group if provided (for .git/ access)
+  // This ensures the creator can run git commands that need .git/ access
+  if (creatorUnixUsername && repoUnixGroup) {
+    const inRepoGroup = await checkCommand(
+      UnixGroupCommands.isUserInGroup(creatorUnixUsername, repoUnixGroup)
+    );
+    if (!inRepoGroup) {
+      await runCommand(UnixGroupCommands.addUserToGroup(creatorUnixUsername, repoUnixGroup));
+      console.log(`[unix] Added creator ${creatorUnixUsername} to repo group ${repoUnixGroup}`);
+    } else {
+      console.log(`[unix] Creator ${creatorUnixUsername} already in repo group ${repoUnixGroup}`);
     }
   }
 

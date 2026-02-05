@@ -169,6 +169,21 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     const { getDaemonUser } = await import('@agor/core/config');
     const daemonUser = getDaemonUser();
 
+    // Fetch creator's Unix username for repo group assignment
+    let creatorUnixUsername: string | undefined;
+    if (userId) {
+      try {
+        const usersService = this.app.service('users');
+        const creator = await usersService.get(userId);
+        creatorUnixUsername = creator.unix_username || undefined;
+        if (creatorUnixUsername) {
+          console.log(`✓ Creator Unix username for repo: ${creatorUnixUsername}`);
+        }
+      } catch (_error) {
+        console.warn(`⚠️  Could not fetch Unix username for user ${userId.substring(0, 8)}`);
+      }
+    }
+
     // Fire and forget - spawn executor and return immediately
     // Executor handles EVERYTHING: git clone, .agor.yml parsing, DB record, Unix group
     spawnExecutorFireAndForget(
@@ -183,6 +198,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
           createDbRecord: true,
           initUnixGroup: rbacEnabled, // Only initialize Unix groups when RBAC is enabled
           daemonUser, // Daemon user needs access to .git for operations
+          creatorUnixUsername, // Creator will be added to repo group
         },
       },
       {

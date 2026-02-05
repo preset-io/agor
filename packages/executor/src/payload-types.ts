@@ -187,6 +187,9 @@ export const GitClonePayloadSchema = BasePayloadSchema.extend({
 
     /** Daemon Unix user to add to the repo group (for daemon access) */
     daemonUser: z.string().optional(),
+
+    /** Creator's Unix username to add to the repo group (for owner access) */
+    creatorUnixUsername: z.string().optional(),
   }),
 });
 

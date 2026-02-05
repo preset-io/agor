@@ -206,7 +206,8 @@ export async function handleGitClone(
             repoId,
             cloneResult.path,
             client,
-            payload.params.daemonUser
+            payload.params.daemonUser,
+            payload.params.creatorUnixUsername
           );
           console.log(`[git.clone] Unix group initialized: ${unixGroup}`);
         } catch (error) {
@@ -432,7 +433,8 @@ export async function handleGitWorktreeAdd(
           othersAccess,
           client,
           payload.params.daemonUser,
-          payload.params.creatorUnixUsername
+          payload.params.creatorUnixUsername,
+          payload.params.repoUnixGroup
         );
         console.log(`[git.worktree.add] Unix group initialized: ${unixGroup}`);
 
