@@ -2557,18 +2557,27 @@ async function main() {
       // After user create/patch: optionally ensure Unix user exists and sync password
       create: [
         async (context: HookContext) => {
-          // Skip Unix sync if RBAC is disabled
-          if (!worktreeRbacEnabled || !jwtSecret) {
+          // Need JWT secret for service tokens (required by executor)
+          if (!jwtSecret) {
             return context;
           }
 
           const user = context.result as User;
           if (!user.unix_username) {
-            return context; // No unix_username set, skip Unix user creation
+            return context; // No unix_username set, skip Unix operations
           }
 
           // Get plaintext password from request data (for password sync)
           const data = context.data as { password?: string };
+
+          // Determine if we should sync:
+          // - Full unix user creation/sync when RBAC is enabled
+          // - Password-only sync when sync_unix_passwords is true (independent of RBAC)
+          const shouldSync = worktreeRbacEnabled || (config.execution?.sync_unix_passwords ?? true);
+
+          if (!shouldSync) {
+            return context;
+          }
 
           // Fire-and-forget sync to executor
           console.log(`[Unix Integration] Syncing Unix user for: ${user.unix_username}`);
@@ -2592,8 +2601,8 @@ async function main() {
       ],
       patch: [
         async (context: HookContext) => {
-          // Skip Unix sync if RBAC is disabled
-          if (!worktreeRbacEnabled || !jwtSecret) {
+          // Need JWT secret for service tokens (required by executor)
+          if (!jwtSecret) {
             return context;
           }
 
@@ -2602,6 +2611,20 @@ async function main() {
 
           // Only sync if unix_username or password changed
           if (!data?.unix_username && !data?.password) {
+            return context;
+          }
+
+          // Skip if user doesn't have unix_username (would fail in executor anyway)
+          if (!user.unix_username) {
+            return context;
+          }
+
+          // Determine if we should sync:
+          // - Full unix user creation/sync when RBAC is enabled
+          // - Password-only sync when sync_unix_passwords is true (independent of RBAC)
+          const shouldSync = worktreeRbacEnabled || (config.execution?.sync_unix_passwords ?? true);
+
+          if (!shouldSync) {
             return context;
           }
 
