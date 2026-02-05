@@ -2570,10 +2570,9 @@ async function main() {
           // Get plaintext password from request data (for password sync)
           const data = context.data as { password?: string };
 
-          // Determine if we should sync:
-          // - Full unix user creation/sync when RBAC is enabled
-          // - Password-only sync when sync_unix_passwords is true (independent of RBAC)
-          const shouldSync = worktreeRbacEnabled || (config.execution?.sync_unix_passwords ?? true);
+          // Respect sync_unix_passwords config (defaults to true)
+          // When false, skip all Unix sync operations (user creation, groups, password)
+          const shouldSync = config.execution?.sync_unix_passwords ?? true;
 
           if (!shouldSync) {
             return context;
@@ -2619,10 +2618,9 @@ async function main() {
             return context;
           }
 
-          // Determine if we should sync:
-          // - Full unix user creation/sync when RBAC is enabled
-          // - Password-only sync when sync_unix_passwords is true (independent of RBAC)
-          const shouldSync = worktreeRbacEnabled || (config.execution?.sync_unix_passwords ?? true);
+          // Respect sync_unix_passwords config (defaults to true)
+          // When false, skip all Unix sync operations (user creation, groups, password)
+          const shouldSync = config.execution?.sync_unix_passwords ?? true;
 
           if (!shouldSync) {
             return context;
