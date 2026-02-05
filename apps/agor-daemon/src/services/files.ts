@@ -68,7 +68,21 @@ export class FilesService {
 
       // Run git ls-files
       const git = simpleGit(worktree.path);
-      const result = await git.raw(['ls-files', '-z']);
+      let result: string;
+
+      try {
+        result = await git.raw(['ls-files', '-z']);
+      } catch (error) {
+        // Handle "dubious ownership" error on Linux by adding to safe.directory
+        if (error instanceof Error && error.message.includes('dubious ownership')) {
+          console.log(`Adding ${worktree.path} to git safe.directory`);
+          await git.addConfig('safe.directory', worktree.path, false, 'global');
+          // Retry the ls-files command
+          result = await git.raw(['ls-files', '-z']);
+        } else {
+          throw error;
+        }
+      }
 
       // Parse null-separated file list
       const allFiles = result.split('\0').filter((f) => f.length > 0);

@@ -423,6 +423,21 @@ export async function createWorktree(
   }
 
   await git.raw(['worktree', 'add', ...args]);
+
+  // Add worktree to safe.directory to prevent "dubious ownership" errors
+  // This is needed when worktrees are owned by a different user (e.g., daemon user)
+  // but accessed by other users (e.g., in multi-user Linux environments)
+  try {
+    const worktreeGit = createGit(worktreePath, env);
+    await worktreeGit.addConfig('safe.directory', worktreePath, false, 'global');
+    console.log(`✅ Added ${worktreePath} to git safe.directory`);
+  } catch (error) {
+    // Non-fatal - log warning and continue
+    console.warn(
+      `⚠️  Failed to add ${worktreePath} to safe.directory:`,
+      error instanceof Error ? error.message : String(error)
+    );
+  }
 }
 
 /**
