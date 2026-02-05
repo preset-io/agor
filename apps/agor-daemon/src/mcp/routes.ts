@@ -2295,11 +2295,18 @@ export function setupMCPRoutes(app: Application): void {
             const WORKTREE_CARD_WIDTH = 500;
             const WORKTREE_CARD_HEIGHT = 200;
 
-            // Center the card within the zone by placing it at:
-            // - Horizontally: (zone.width - cardWidth) / 2
-            // - Vertically: (zone.height - cardHeight) / 2
-            const relativeX = (zone.width - WORKTREE_CARD_WIDTH) / 2;
-            const relativeY = (zone.height - WORKTREE_CARD_HEIGHT) / 2;
+            // Add jitter to prevent worktree cards from stacking exactly on top of each other
+            // Use padding to keep cards away from zone edges
+            const PADDING = 80; // pixels from zone edges
+
+            // Calculate valid placement area (zone dimensions minus card size and padding)
+            const maxX = zone.width - WORKTREE_CARD_WIDTH - PADDING;
+            const maxY = zone.height - WORKTREE_CARD_HEIGHT - PADDING;
+
+            // Generate random position within valid area
+            // Math.random() returns [0, 1), so we get positions from PADDING to max
+            const relativeX = PADDING + Math.random() * (maxX - PADDING);
+            const relativeY = PADDING + Math.random() * (maxY - PADDING);
 
             // Find or create board object for this worktree
             const boardObjectsService = app.service('board-objects') as unknown as {
