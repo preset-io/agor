@@ -4873,53 +4873,137 @@ async function main() {
   );
 
   // POST /worktrees/:id/archive-or-delete - Archive or delete worktree
-  registerAuthenticatedRoute(
-    app,
-    '/worktrees/:id/archive-or-delete',
-    {
-      async create(data: unknown, params: RouteParams) {
-        const id = params.route?.id;
-        if (!id) throw new Error('Worktree ID required');
-        const options = data as {
-          metadataAction: 'archive' | 'delete';
-          filesystemAction: 'preserved' | 'cleaned' | 'deleted';
-        };
-        return worktreesService.archiveOrDelete(
-          id as import('@agor/core/types').WorktreeID,
-          options,
-          params
-        );
-      },
-      // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
-    } as any,
-    {
-      create: { role: 'admin', action: 'archive or delete worktrees' },
+  app.use('/worktrees/:id/archive-or-delete', {
+    async create(data: unknown, params: RouteParams) {
+      const id = params.route?.id;
+      if (!id) throw new Error('Worktree ID required');
+      const options = data as {
+        metadataAction: 'archive' | 'delete';
+        filesystemAction: 'preserved' | 'cleaned' | 'deleted';
+      };
+      return worktreesService.archiveOrDelete(
+        id as import('@agor/core/types').WorktreeID,
+        options,
+        params
+      );
     },
-    requireAuth
-  );
+  });
+
+  // Add RBAC hooks for archive-or-delete route
+  app.service('/worktrees/:id/archive-or-delete').hooks({
+    before: {
+      create: [
+        requireAuth,
+        requireMinimumRole('member', 'archive or delete worktrees'),
+        // Load worktree from route param and check ownership (always run, even if RBAC disabled)
+        async (context: HookContext) => {
+          const id = context.params.route?.id;
+          if (!id) throw new Error('Worktree ID required');
+
+          const worktree = await worktreeRepository.findById(id);
+          if (!worktree) {
+            throw new Forbidden(`Worktree not found: ${id}`);
+          }
+
+          // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type
+          const userId = (context.params as any).user?.user_id;
+          const isOwner = userId
+            ? await worktreeRepository.isOwner(worktree.worktree_id, userId)
+            : false;
+
+          // Cache for downstream hooks
+          // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type
+          (context.params as any).worktree = worktree;
+          // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type
+          (context.params as any).isWorktreeOwner = isOwner;
+
+          return context;
+        },
+        // Always enforce ownership check (even when RBAC disabled)
+        worktreeRbacEnabled
+          ? ensureWorktreePermission('all', 'archive or delete worktrees')
+          : (context: HookContext) => {
+              // When RBAC disabled, still require worktree ownership OR admin role
+              // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type
+              const isOwner = (context.params as any).isWorktreeOwner;
+              // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type
+              const userRole = (context.params as any).user?.role;
+
+              if (!isOwner && userRole !== 'admin' && userRole !== 'owner') {
+                throw new Forbidden(
+                  'You must be the worktree owner or a global admin to archive/delete worktrees'
+                );
+              }
+              return context;
+            },
+      ],
+    },
+  });
 
   // POST /worktrees/:id/unarchive - Unarchive worktree
-  registerAuthenticatedRoute(
-    app,
-    '/worktrees/:id/unarchive',
-    {
-      async create(data: unknown, params: RouteParams) {
-        const id = params.route?.id;
-        if (!id) throw new Error('Worktree ID required');
-        const options = data as { boardId?: import('@agor/core/types').BoardID };
-        return worktreesService.unarchive(
-          id as import('@agor/core/types').WorktreeID,
-          options,
-          params
-        );
-      },
-      // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
-    } as any,
-    {
-      create: { role: 'admin', action: 'unarchive worktrees' },
+  app.use('/worktrees/:id/unarchive', {
+    async create(data: unknown, params: RouteParams) {
+      const id = params.route?.id;
+      if (!id) throw new Error('Worktree ID required');
+      const options = data as { boardId?: import('@agor/core/types').BoardID };
+      return worktreesService.unarchive(
+        id as import('@agor/core/types').WorktreeID,
+        options,
+        params
+      );
     },
-    requireAuth
-  );
+  });
+
+  // Add RBAC hooks for unarchive route
+  app.service('/worktrees/:id/unarchive').hooks({
+    before: {
+      create: [
+        requireAuth,
+        requireMinimumRole('member', 'unarchive worktrees'),
+        // Load worktree from route param and check ownership (always run, even if RBAC disabled)
+        async (context: HookContext) => {
+          const id = context.params.route?.id;
+          if (!id) throw new Error('Worktree ID required');
+
+          const worktree = await worktreeRepository.findById(id);
+          if (!worktree) {
+            throw new Forbidden(`Worktree not found: ${id}`);
+          }
+
+          // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type
+          const userId = (context.params as any).user?.user_id;
+          const isOwner = userId
+            ? await worktreeRepository.isOwner(worktree.worktree_id, userId)
+            : false;
+
+          // Cache for downstream hooks
+          // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type
+          (context.params as any).worktree = worktree;
+          // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type
+          (context.params as any).isWorktreeOwner = isOwner;
+
+          return context;
+        },
+        // Always enforce ownership check (even when RBAC disabled)
+        worktreeRbacEnabled
+          ? ensureWorktreePermission('all', 'unarchive worktrees')
+          : (context: HookContext) => {
+              // When RBAC disabled, still require worktree ownership OR admin role
+              // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type
+              const isOwner = (context.params as any).isWorktreeOwner;
+              // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type
+              const userRole = (context.params as any).user?.role;
+
+              if (!isOwner && userRole !== 'admin' && userRole !== 'owner') {
+                throw new Forbidden(
+                  'You must be the worktree owner or a global admin to unarchive worktrees'
+                );
+              }
+              return context;
+            },
+      ],
+    },
+  });
 
   // GET /worktrees/logs?worktree_id=xxx - Get environment logs
   registerAuthenticatedRoute(
