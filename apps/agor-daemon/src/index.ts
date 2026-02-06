@@ -650,8 +650,8 @@ async function main() {
 
   // Wire up custom session methods for Feathers/WebSocket executor architecture
   sessionsService.setExecuteHandler(async (sessionId, data, params) => {
-    // Import spawn, execSync and path utilities
-    const { spawn, execSync } = await import('node:child_process');
+    // Import spawn and path utilities
+    const { spawn } = await import('node:child_process');
     const path = await import('node:path');
     const { fileURLToPath } = await import('node:url');
 
@@ -774,7 +774,12 @@ async function main() {
       | import('@agor/core/types').UserID
       | undefined;
     // When impersonating, strip HOME/USER/LOGNAME/SHELL so sudo -u can set them
-    const executorEnv = await createUserProcessEnvironment(userId, db, undefined, !!executorUnixUser);
+    const executorEnv = await createUserProcessEnvironment(
+      userId,
+      db,
+      undefined,
+      !!executorUnixUser
+    );
 
     // Add DAEMON_URL to environment so executor can connect back
     executorEnv.DAEMON_URL = daemonUrl;
