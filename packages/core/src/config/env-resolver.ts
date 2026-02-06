@@ -30,12 +30,6 @@ export const AGOR_INTERNAL_ENV_VARS = new Set([
   'CODESPACES', // GitHub Codespaces detection
   'RAILWAY_ENVIRONMENT', // Railway deployment detection
   'RENDER', // Render deployment detection
-
-  // User-specific variables (let sudo -u set these for impersonated user)
-  'HOME', // User home directory - sudo -u sets this to /home/<username>
-  'USER', // Username - sudo -u sets this to the impersonated user
-  'LOGNAME', // Login name - sudo -u sets this to the impersonated user
-  'SHELL', // User shell - sudo -u sets this to the user's configured shell
 ]);
 
 /**
@@ -115,19 +109,26 @@ export const AGOR_USER_ENV_KEYS_VAR = 'AGOR_USER_ENV_KEYS';
  * This function:
  * 1. Starts with system environment (process.env)
  * 2. Filters out Agor-internal variables (NODE_ENV, AGOR_*, etc.)
- * 3. Resolves and merges user-specific encrypted environment variables
- * 4. Optionally merges additional environment variables
- * 5. Sets AGOR_USER_ENV_KEYS with comma-separated list of user-defined var keys
+ * 3. Optionally filters out user-identity vars (HOME/USER/LOGNAME/SHELL) for impersonation
+ * 4. Resolves and merges user-specific encrypted environment variables
+ * 5. Optionally merges additional environment variables
+ * 6. Sets AGOR_USER_ENV_KEYS with comma-separated list of user-defined var keys
  *
  * @param userId - User ID to resolve environment for (optional)
  * @param db - Database instance (required if userId provided)
  * @param additionalEnv - Additional env vars to merge (optional, highest priority)
+ * @param forImpersonation - If true, strips HOME/USER/LOGNAME/SHELL so sudo -u can set them (default: false)
  * @returns Clean environment object ready for child process spawning
  *
  * @example
  * // For worktree environment startup (with user)
  * const env = await createUserProcessEnvironment(worktree.created_by, db);
  * spawn(command, { cwd, shell: true, env });
+ *
+ * @example
+ * // For user impersonation (strips HOME/USER/LOGNAME/SHELL)
+ * const env = await createUserProcessEnvironment(worktree.created_by, db, undefined, true);
+ * buildSpawnArgs(command, [], { asUser: 'alice', env });
  *
  * @example
  * // For worktree environment with custom NODE_ENV
@@ -143,7 +144,8 @@ export const AGOR_USER_ENV_KEYS_VAR = 'AGOR_USER_ENV_KEYS';
 export async function createUserProcessEnvironment(
   userId?: UserID,
   db?: Database,
-  additionalEnv?: Record<string, string>
+  additionalEnv?: Record<string, string>,
+  forImpersonation = false
 ): Promise<Record<string, string>> {
   // Start with system environment
   const env: Record<string, string> = { ...process.env } as Record<string, string>;
@@ -151,6 +153,15 @@ export async function createUserProcessEnvironment(
   // Filter out Agor-internal variables
   for (const internalVar of AGOR_INTERNAL_ENV_VARS) {
     delete env[internalVar];
+  }
+
+  // For impersonation, also strip user-identity vars so sudo -u can set them
+  // These are in AGOR_INTERNAL_ENV_VARS but we only want to filter them conditionally
+  const USER_IDENTITY_VARS = ['HOME', 'USER', 'LOGNAME', 'SHELL'];
+  if (forImpersonation) {
+    for (const identityVar of USER_IDENTITY_VARS) {
+      delete env[identityVar];
+    }
   }
 
   // Track user-defined env var keys (for MCP template scoping)

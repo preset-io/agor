@@ -773,22 +773,11 @@ async function main() {
     const userId = (params as AuthenticatedParams).user?.user_id as
       | import('@agor/core/types').UserID
       | undefined;
-    const executorEnv = await createUserProcessEnvironment(userId, db);
+    // When impersonating, strip HOME/USER/LOGNAME/SHELL so sudo -u can set them
+    const executorEnv = await createUserProcessEnvironment(userId, db, undefined, !!executorUnixUser);
 
     // Add DAEMON_URL to environment so executor can connect back
     executorEnv.DAEMON_URL = daemonUrl;
-
-    // When impersonating, override HOME to use impersonated user's home directory
-    if (executorUnixUser) {
-      // Get impersonated user's home directory from /etc/passwd
-      const userHomeDir = execSync(`getent passwd "${executorUnixUser}" | cut -d: -f6`, {
-        encoding: 'utf8',
-      }).trim();
-
-      // Override HOME with impersonated user's home directory
-      // Keep everything else from createUserProcessEnvironment (user env vars, API keys, etc.)
-      executorEnv.HOME = userHomeDir || executorEnv.HOME;
-    }
 
     // =========================================================================
     // PHASE 4: JSON-OVER-STDIN WITH IMPERSONATION AT SPAWN

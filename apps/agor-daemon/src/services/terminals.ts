@@ -356,7 +356,8 @@ export class TerminalsService {
     const envFile = writeEnvFile(userId, userEnv, finalUnixUser);
 
     // Get executor process environment (includes system vars)
-    const executorEnv = await createUserProcessEnvironment(userId, this.db);
+    // When impersonating, strip HOME/USER/LOGNAME/SHELL so sudo -u can set them
+    const executorEnv = await createUserProcessEnvironment(userId, this.db, undefined, !!finalUnixUser);
 
     // Spawn executor with zellij.attach command
     spawnExecutorFireAndForget(

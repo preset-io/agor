@@ -60,10 +60,7 @@ export async function spawnEnvironmentCommand(
   const config = await loadConfig();
   const unixUserMode = config.execution?.unix_user_mode ?? 'simple';
 
-  // Create clean environment for user process
-  const env = await createUserProcessEnvironment(worktree.created_by, db);
-
-  // Resolve impersonation user
+  // Resolve impersonation user first to determine if we need impersonation-safe env
   let asUser: string | undefined;
 
   if (unixUserMode !== 'simple') {
@@ -90,6 +87,10 @@ export async function spawnEnvironmentCommand(
   } else {
     console.log(`${logPrefix} Running as daemon user (mode: ${unixUserMode})`);
   }
+
+  // Create clean environment for user process
+  // If impersonating, strip HOME/USER/LOGNAME/SHELL so sudo -u can set them properly
+  const env = await createUserProcessEnvironment(worktree.created_by, db, undefined, !!asUser);
 
   // Build spawn args with impersonation
   const { cmd, args } = buildSpawnArgs(command, [], {
