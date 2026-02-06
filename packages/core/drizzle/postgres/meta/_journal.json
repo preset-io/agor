@@ -78,6 +78,13 @@
       "when": 1770054869625,
       "tag": "0010_backfill_worktree_others_can",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1770276000000,
+      "tag": "0011_fix_schedule_timestamp_overflow",
+      "breakpoints": true
     }
   ]
 }
