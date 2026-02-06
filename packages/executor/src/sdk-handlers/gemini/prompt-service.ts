@@ -397,71 +397,87 @@ export class GeminiPromptService {
         console.debug(`[Gemini Loop] Found ${pendingToolCalls.length} pending tool calls`);
 
         // CRITICAL: The Gemini SDK does NOT auto-execute tools in streaming mode!
-        // We need to manually execute the tools using SDK's executeToolCall() and send results back.
+        // We need to manually execute the tools using SDK's Scheduler and send results back.
 
-        // Get config for executeToolCall
+        // Get config for Scheduler
         const config = (client as unknown as GeminiClientWithConfig).config;
 
-        // Execute all pending tool calls using SDK's executeToolCall function
+        // Create Scheduler instance (SDK 0.27.2+ uses event-driven scheduler)
+        // The Scheduler needs a MessageBus and PolicyEngine for approval workflows
+        const policyEngine = new Gemini.PolicyEngine({
+          approvalMode: mapPermissionMode(permissionMode), // Convert our permission mode to Gemini's ApprovalMode
+          nonInteractive: false,
+        });
+        const messageBus = new Gemini.MessageBus(policyEngine);
+        const scheduler = new Gemini.Scheduler({
+          config,
+          messageBus,
+          getPreferredEditor: () => undefined,
+          schedulerId: `scheduler-${promptId}`,
+        });
+
+        // Convert pending tool calls to ToolCallRequestInfo format and execute via Scheduler
+        const toolCallRequests: Gemini.ToolCallRequestInfo[] = pendingToolCalls.map((toolCall) => ({
+          callId: toolCall.callId,
+          name: toolCall.name,
+          args: toolCall.args,
+          isClientInitiated: false,
+          prompt_id: promptId,
+        }));
+
+        console.debug(
+          `[Gemini Loop] Executing ${toolCallRequests.length} tool calls via Scheduler...`
+        );
+
+        // Execute all tool calls via Scheduler (handles validation, confirmation, execution)
+        const completedCalls = await scheduler.schedule(toolCallRequests, abortController.signal);
+        console.debug(`[Gemini Loop] Scheduler completed ${completedCalls.length} tool calls`);
+
+        // Convert completed calls to function response parts for Gemini
         const functionResponseParts: Part[] = [];
 
-        for (const toolCall of pendingToolCalls) {
+        for (const completedCall of completedCalls) {
           try {
             console.debug(
-              `[Gemini Loop] Executing tool: ${toolCall.name} with args:`,
-              JSON.stringify(toolCall.args).slice(0, 100)
+              `[Gemini Loop] Processing completed tool: ${completedCall.request.name}`,
+              completedCall.status
             );
 
-            // Use SDK's executeToolCall function instead of manually calling tool.execute()
-            const response = await Gemini.executeToolCall(
-              config,
-              {
-                callId: toolCall.callId,
-                name: toolCall.name,
-                args: toolCall.args,
-                isClientInitiated: false,
-                prompt_id: promptId,
-              },
-              abortController.signal
-            );
-            console.debug(`[Gemini Loop] Tool ${toolCall.name} executed successfully:`, response);
-
-            // In SDK 0.15.1, the response structure changed
-            // ToolCallResponseInfo has { callId, output } instead of { status, result }
-            // Create function response part from the tool call output
-            const responseOutput =
-              typeof response === 'object' && response && 'output' in response
-                ? response.output
-                : response;
-
-            // Sanitize response to remove circular references (common with file system tools)
-            // JSON.parse(JSON.stringify()) handles circular refs by throwing, so catch and stringify safely
-            let sanitizedOutput = responseOutput;
-            try {
-              sanitizedOutput = JSON.parse(JSON.stringify(responseOutput));
-            } catch (_circularError) {
-              // If circular reference detected, use safe stringify that handles circular refs
+            // Extract response parts from the completed call
+            // The response.responseParts contains the Gemini-formatted Parts array
+            // We need to append these parts directly, as they're already in the correct format
+            if (
+              completedCall.response.responseParts &&
+              completedCall.response.responseParts.length > 0
+            ) {
+              functionResponseParts.push(...completedCall.response.responseParts);
+            } else {
+              // Fallback: If no response parts, create a generic error response
               console.warn(
-                `[Gemini Loop] Tool ${toolCall.name} response has circular reference, using safe stringify`
+                `[Gemini Loop] Tool ${completedCall.request.name} returned no response parts, status: ${completedCall.status}`
               );
-              // Parse the safe stringified version to ensure it's a proper JSON object
-              sanitizedOutput = JSON.parse(safeStringify(responseOutput));
+              functionResponseParts.push({
+                functionResponse: {
+                  name: completedCall.request.name,
+                  response: {
+                    error:
+                      completedCall.status === 'error'
+                        ? completedCall.response.error?.message || 'Tool execution failed'
+                        : 'Tool execution returned no response',
+                  },
+                },
+              } as Part);
             }
-
-            functionResponseParts.push({
-              functionResponse: {
-                name: toolCall.name,
-                response: sanitizedOutput,
-              },
-            } as Part);
           } catch (error) {
-            console.error(`[Gemini Loop] Error executing tool ${toolCall.name}:`, error);
+            console.error(
+              `[Gemini Loop] Error processing completed tool ${completedCall.request.name}:`,
+              error
+            );
             // On error, create a function response part with the error
-            // Use safe serialization for error objects as they may have circular refs
             const errorMessage = error instanceof Error ? error.message : String(error);
             functionResponseParts.push({
               functionResponse: {
-                name: toolCall.name,
+                name: completedCall.request.name,
                 response: { error: errorMessage },
               },
             } as Part);

@@ -32,6 +32,7 @@ RUN curl -fsSL "$(curl -s https://api.github.com/repos/cli/cli/releases/latest |
 
 # Install pnpm (for developers who want to build from source)
 # and agor-live from npm for quick start
+# NOTE: Using @latest for devcontainer to always get newest versions
 RUN npm install -g pnpm@latest agor-live@latest @anthropic-ai/claude-code@latest @google/gemini-cli@latest @openai/codex@latest @opencode-ai/cli@latest
 
 WORKDIR /workspaces

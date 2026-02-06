@@ -33,6 +33,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
     rm -rf /var/lib/apt/lists/*
 
 # Install foundation packages one at a time (more robust against npm hiccups)
+# NOTE: Using @latest for playground to always get newest versions
 RUN npm install -g @anthropic-ai/claude-code@latest && \
     npm install -g @google/gemini-cli@latest && \
     npm install -g @openai/codex@latest && \

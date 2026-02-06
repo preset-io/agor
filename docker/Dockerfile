@@ -60,10 +60,10 @@ RUN curl -fsSL "$(curl -s https://api.github.com/repos/cli/cli/releases/latest |
 # NOTE: Update these versions when upgrading Agor SDKs (see packages/core/package.json)
 RUN npm install -g \
   pnpm@9.15.1 \
-  @anthropic-ai/claude-code@2.1.29 \
-  @google/gemini-cli@0.18.4 \
-  @openai/codex@0.69.0 \
-  opencode-ai@latest
+  @anthropic-ai/claude-code@2.1.33 \
+  @google/gemini-cli@0.27.2 \
+  @openai/codex@0.98.0 \
+  opencode-ai@1.1.53
 
 # Arguments for matching host user UID/GID (default to 1000)
 ARG UID=1000
