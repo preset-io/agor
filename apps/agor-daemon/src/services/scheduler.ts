@@ -315,7 +315,7 @@ export class SchedulerService {
 
     try {
       // 4. Look up creator's unix_username for session execution context
-      const { unixUsername } = await this.resolveCreatorUnixUsername(worktree);
+      const { creator, unixUsername } = await this.resolveCreatorUnixUsername(worktree);
 
       // 5. Create session with schedule metadata
       const session: Partial<Session> = {
@@ -359,6 +359,10 @@ export class SchedulerService {
       console.log(`      ✅ Spawned scheduled session for ${worktree.name} (run #${runIndex})`);
 
       // 6. Trigger prompt execution (creates task and starts agent)
+      // IMPORTANT: Must pass provider: undefined to bypass auth (internal call)
+      // AND pass user: creator so the executor's session token is generated for the correct user.
+      // Without the user, the token defaults to 'anonymous' which doesn't exist in the database,
+      // causing the executor to fail with "User not found: anonymous" error.
       const promptService = this.app.service('/sessions/:id/prompt');
       await promptService.create(
         {
@@ -368,7 +372,9 @@ export class SchedulerService {
         },
         {
           route: { id: createdSession.session_id },
-        }
+          provider: undefined, // Bypass auth for internal scheduler call
+          user: creator, // Pass creator user for session token generation
+        } as import('@agor/core/types').AuthenticatedParams & { route: { id: string } }
       );
 
       // TODO: Attach MCP servers if specified in schedule.mcp_server_ids
