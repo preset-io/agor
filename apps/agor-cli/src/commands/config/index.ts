@@ -61,19 +61,9 @@ export default class ConfigIndex extends Command {
       this.log(`  dialect:       ${chalk.gray(dialect)}`);
 
       if (dialect === 'postgresql' && databaseUrl) {
-        // Parse and mask the PostgreSQL URL
-        try {
-          const url = new URL(databaseUrl);
-          const host = url.hostname;
-          const port = url.port || '5432';
-          const database = url.pathname.slice(1); // Remove leading slash
-          const username = url.username;
-          // Mask password if present
-          const maskedUrl = `postgresql://${username}:***@${host}:${port}/${database}`;
-          this.log(`  connection:    ${chalk.gray(maskedUrl)}`);
-        } catch {
-          this.log(`  connection:    ${chalk.gray('***')}`);
-        }
+        // Mask password in PostgreSQL URL (same pattern as daemon)
+        const maskedUrl = databaseUrl.replace(/:([^:@]+)@/, ':****@');
+        this.log(`  connection:    ${chalk.gray(maskedUrl)}`);
       } else if (dialect === 'sqlite') {
         this.log(`  database file: ${chalk.gray(sqlitePath)}`);
       }
