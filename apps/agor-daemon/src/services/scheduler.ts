@@ -120,6 +120,10 @@ export class SchedulerService {
       // 1. Fetch enabled schedules
       const enabledWorktrees = await this.getEnabledSchedules();
 
+      if (this.config.debug) {
+        console.log(`🔄 Scheduler tick: Found ${enabledWorktrees.length} enabled schedules`);
+      }
+
       // 2. Process each schedule
       for (const worktree of enabledWorktrees) {
         try {
@@ -192,6 +196,13 @@ export class SchedulerService {
     }
 
     if (!isDue) {
+      if (this.config.debug) {
+        const nextRunAt = getNextRunTime(worktree.schedule_cron, new Date(now));
+        const timeUntilNext = nextRunAt - now;
+        console.log(
+          `   ⏱️  ${worktree.name}: Not due yet (next run in ${Math.round(timeUntilNext / 1000)}s)`
+        );
+      }
       return;
     }
 
