@@ -1669,10 +1669,24 @@ async function main() {
                   '@agor/core/tools/mcp/oauth-mcp-transport'
                 );
 
+                // Custom browser opener: emit WebSocket event to client
+                const browserOpener = async (authUrl: string) => {
+                  const socketId = (params as { connection?: { id?: string } })?.connection?.id;
+                  if (socketId && app.io) {
+                    console.log(
+                      '[MCP Discovery] Emitting oauth:open_browser event to socket:',
+                      socketId
+                    );
+                    app.io.to(socketId).emit('oauth:open_browser', { authUrl });
+                  } else {
+                    console.log('[MCP Discovery] No socket connection, auth URL:', authUrl);
+                  }
+                };
+
                 const token = await performMCPOAuthFlow(
                   wwwAuthenticate,
                   undefined, // Let it use DCR
-                  (url) => console.log('[MCP Discovery] Browser opening:', url)
+                  browserOpener
                 );
 
                 // Cache the token in memory
