@@ -1098,16 +1098,19 @@ async function main() {
   // - OAuth 2.1 with auto-discovery (RFC 9728) - browser-based Authorization Code flow with PKCE
   // - OAuth 2.0 Client Credentials flow - machine-to-machine with client_id/secret
   app.use('/mcp-servers/test-oauth', {
-    async create(data: {
-      mcp_url: string;
-      mcp_server_id?: string; // Optional: if provided, token will be saved to DB
-      token_url?: string;
-      client_id?: string;
-      client_secret?: string;
-      scope?: string;
-      grant_type?: string;
-      start_browser_flow?: boolean; // If true, initiate browser-based OAuth flow
-    }) {
+    async create(
+      data: {
+        mcp_url: string;
+        mcp_server_id?: string; // Optional: if provided, token will be saved to DB
+        token_url?: string;
+        client_id?: string;
+        client_secret?: string;
+        scope?: string;
+        grant_type?: string;
+        start_browser_flow?: boolean; // If true, initiate browser-based OAuth flow
+      },
+      params?: { connection?: { id?: string } }
+    ) {
       // Create repo for DB token storage
       const mcpServerRepo = new MCPServerRepository(db);
       try {
@@ -1174,10 +1177,27 @@ async function main() {
 
             try {
               console.log('[OAuth Test] Calling performMCPOAuthFlow...');
+
+              // Custom browser opener: emit WebSocket event to client instead of opening locally
+              const browserOpener = async (authUrl: string) => {
+                const socketId = params?.connection?.id;
+                if (socketId && app.io) {
+                  console.log(
+                    '[OAuth Test] Emitting oauth:open_browser event to socket:',
+                    socketId
+                  );
+                  app.io.to(socketId).emit('oauth:open_browser', { authUrl });
+                } else {
+                  console.log('[OAuth Test] No socket connection, auth URL:', authUrl);
+                  // For REST clients, we can't open browser automatically
+                  // The URL will be logged, but flow may timeout
+                }
+              };
+
               const token = await performMCPOAuthFlow(
                 wwwAuthenticate!,
                 data.client_id, // Optional client_id
-                (url) => console.log('[OAuth Test] Browser should open:', url)
+                browserOpener // Custom opener emits event to client
               );
               console.log('[OAuth Test] OAuth flow completed, token obtained');
 

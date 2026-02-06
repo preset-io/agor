@@ -347,7 +347,15 @@ async function exchangeCodeForToken(
 export async function performMCPOAuthFlow(
   wwwAuthenticateHeader: string,
   clientId?: string,
-  onBrowserOpen?: (url: string) => void
+  /**
+   * Custom browser opener function. If provided, this is called instead of the default
+   * system browser opener. This allows the caller to handle browser opening in a different
+   * way (e.g., via WebSocket to open on client side when daemon runs remotely).
+   *
+   * The function should open the provided URL in a browser. It can be async.
+   * Throwing an error will abort the OAuth flow.
+   */
+  browserOpener?: (url: string) => void | Promise<void>
 ): Promise<string> {
   console.log('[MCP OAuth] Starting OAuth 2.1 Authorization Code flow with PKCE');
 
@@ -460,11 +468,13 @@ export async function performMCPOAuthFlow(
     console.log('[MCP OAuth] Opening browser for user authentication...');
     console.log('[MCP OAuth] Authorization URL:', authUrl.toString());
 
-    // Step 7: Open browser
-    if (onBrowserOpen) {
-      onBrowserOpen(authUrl.toString());
+    // Step 7: Open browser (use custom opener if provided, otherwise default)
+    if (browserOpener) {
+      console.log('[MCP OAuth] Using custom browser opener');
+      await browserOpener(authUrl.toString());
+    } else {
+      await openBrowser(authUrl.toString());
     }
-    await openBrowser(authUrl.toString());
 
     // Step 8: Wait for callback
     console.log('[MCP OAuth] Waiting for user to complete authentication...');

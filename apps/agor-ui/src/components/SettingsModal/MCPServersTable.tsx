@@ -212,8 +212,17 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
     }
 
     setStartingOAuthFlow(true);
+
+    // Set up listener for oauth:open_browser event from daemon
+    // The daemon emits this when it needs us to open the browser
+    const handleOpenBrowser = ({ authUrl }: { authUrl: string }) => {
+      console.log('[OAuth] Received open_browser event, opening:', authUrl);
+      window.open(authUrl, '_blank', 'noopener,noreferrer');
+    };
+    client.io.on('oauth:open_browser', handleOpenBrowser);
+
     try {
-      showInfo('Opening browser for OAuth authentication...');
+      showInfo('Starting OAuth authentication flow...');
 
       const data = (await client.service('mcp-servers/test-oauth').create({
         ...requestData,
@@ -236,6 +245,8 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
     } catch (error) {
       showError(`OAuth flow error: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
+      // Clean up listener
+      client.io.off('oauth:open_browser', handleOpenBrowser);
       setStartingOAuthFlow(false);
     }
   };
