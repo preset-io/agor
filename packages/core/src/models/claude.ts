@@ -30,6 +30,12 @@ export const AVAILABLE_CLAUDE_MODEL_ALIASES: ClaudeModel[] = [
     description: 'Best for coding',
   },
   {
+    id: 'claude-opus-4-6',
+    displayName: 'Claude Opus 4.6',
+    family: 'claude-4',
+    description: 'Latest most capable model',
+  },
+  {
     id: 'claude-opus-4-5',
     displayName: 'Claude Opus 4.5',
     family: 'claude-4',
