@@ -52,6 +52,32 @@ export default class ConfigIndex extends Command {
         }
       }
 
+      // Database Settings
+      const databaseUrl = process.env.DATABASE_URL || config.database?.postgresql?.url;
+      const dialect = config.database?.dialect || (databaseUrl ? 'postgresql' : 'sqlite');
+      const sqlitePath = config.database?.sqlite?.path || process.env.DB_PATH || '~/.agor/agor.db';
+
+      this.log(chalk.bold('\nDatabase Settings:'));
+      this.log(`  dialect:       ${chalk.gray(dialect)}`);
+
+      if (dialect === 'postgresql' && databaseUrl) {
+        // Parse and mask the PostgreSQL URL
+        try {
+          const url = new URL(databaseUrl);
+          const host = url.hostname;
+          const port = url.port || '5432';
+          const database = url.pathname.slice(1); // Remove leading slash
+          const username = url.username;
+          // Mask password if present
+          const maskedUrl = `postgresql://${username}:***@${host}:${port}/${database}`;
+          this.log(`  connection:    ${chalk.gray(maskedUrl)}`);
+        } catch {
+          this.log(`  connection:    ${chalk.gray('***')}`);
+        }
+      } else if (dialect === 'sqlite') {
+        this.log(`  database file: ${chalk.gray(sqlitePath)}`);
+      }
+
       // Daemon Settings (merge with defaults to show effective values)
       const daemonConfig = { ...defaults.daemon, ...config.daemon };
 
@@ -98,6 +124,9 @@ export default class ConfigIndex extends Command {
       this.log('    credentials.ANTHROPIC_API_KEY');
       this.log('    credentials.OPENAI_API_KEY');
       this.log('    credentials.GEMINI_API_KEY');
+      this.log('');
+      this.log(chalk.cyan('  Database:'));
+      this.log('    database.dialect, database.postgresql.url, database.sqlite.path');
       this.log('');
       this.log(chalk.cyan('  Daemon:'));
       this.log('    daemon.port, daemon.host');
