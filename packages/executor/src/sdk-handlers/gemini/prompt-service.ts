@@ -39,47 +39,6 @@ import { mapPermissionMode } from './permission-mapper.js';
 import { extractGeminiTokenUsage } from './usage.js';
 
 /**
- * Safely stringify an object, handling circular references and edge cases
- * Uses a WeakSet to track seen objects and replaces circular refs with a descriptive string
- *
- * @example
- * // Circular reference handling
- * const obj = { a: 1 };
- * obj.self = obj;
- * safeStringify(obj); // '{"a":1,"self":"[Circular Reference]"}'
- *
- * @example
- * // BigInt serialization
- * safeStringify({ count: 123n }); // '{"count":"123"}'
- *
- * @param obj - Any value to stringify (typically an object)
- * @returns JSON string with circular references replaced by "[Circular Reference]"
- */
-function safeStringify(obj: unknown): string {
-  const seen = new WeakSet();
-
-  return JSON.stringify(obj, (key, value) => {
-    // Handle BigInt serialization (would throw TypeError otherwise)
-    if (typeof value === 'bigint') {
-      return value.toString();
-    }
-
-    // Handle non-object values normally
-    if (typeof value !== 'object' || value === null) {
-      return value;
-    }
-
-    // Detect circular references
-    if (seen.has(value)) {
-      return '[Circular Reference]';
-    }
-
-    seen.add(value);
-    return value;
-  });
-}
-
-/**
  * GeminiClient with internal config property exposed
  * The SDK doesn't expose this in types, but we need it for executeToolCall()
  * Note: config is private in GeminiClient, so we use unknown cast
@@ -446,13 +405,15 @@ export class GeminiPromptService {
             // Extract response parts from the completed call
             // The response.responseParts contains the Gemini-formatted Parts array
             // We need to append these parts directly, as they're already in the correct format
+            // Use optional chaining to safely handle cases where response is undefined
             if (
-              completedCall.response.responseParts &&
+              completedCall.response?.responseParts &&
               completedCall.response.responseParts.length > 0
             ) {
               functionResponseParts.push(...completedCall.response.responseParts);
             } else {
               // Fallback: If no response parts, create a generic error response
+              // Include callId to ensure Gemini correlates the response to the request
               console.warn(
                 `[Gemini Loop] Tool ${completedCall.request.name} returned no response parts, status: ${completedCall.status}`
               );
@@ -462,7 +423,7 @@ export class GeminiPromptService {
                   response: {
                     error:
                       completedCall.status === 'error'
-                        ? completedCall.response.error?.message || 'Tool execution failed'
+                        ? completedCall.response?.error?.message || 'Tool execution failed'
                         : 'Tool execution returned no response',
                   },
                 },

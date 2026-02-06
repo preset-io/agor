@@ -24,15 +24,22 @@ export const GEMINI_DEFAULT_PERMISSION_MODE = getDefaultPermissionMode(
  * - 'autoEdit': Auto-approve file edits only (ApprovalMode.AUTO_EDIT)
  * - 'yolo': Auto-approve all operations (ApprovalMode.YOLO)
  *
- * For unknown/legacy modes, falls back to the centralized default from core.
+ * Generic/legacy modes (cross-agent compatibility):
+ * - 'ask': Prompt for each tool use → DEFAULT
+ * - 'auto': Auto-approve edits → AUTO_EDIT
+ * - 'on-failure': Auto-approve on failure → AUTO_EDIT (closest match)
+ * - 'allow-all': Auto-approve all → YOLO
  *
- * @param permissionMode - Native Gemini permission mode
+ * For unknown modes, falls back to the centralized default from core.
+ *
+ * @param permissionMode - Native Gemini permission mode or generic mode
  * @returns Gemini SDK ApprovalMode
  */
 export function mapPermissionMode(
   permissionMode: GeminiPermissionMode | string | undefined
 ): (typeof Gemini.ApprovalMode)[keyof typeof Gemini.ApprovalMode] {
   switch (permissionMode) {
+    // Gemini native modes
     case 'default':
       return Gemini.ApprovalMode.DEFAULT;
 
@@ -44,8 +51,22 @@ export function mapPermissionMode(
     case 'yolo':
       return Gemini.ApprovalMode.YOLO;
 
+    // Generic/legacy modes (cross-agent compatibility)
+    case 'ask':
+      return Gemini.ApprovalMode.DEFAULT;
+
+    case 'auto':
+      return Gemini.ApprovalMode.AUTO_EDIT;
+
+    case 'on-failure':
+      // Map to AUTO_EDIT as closest match (prompts on dangerous operations)
+      return Gemini.ApprovalMode.AUTO_EDIT;
+
+    case 'allow-all':
+      return Gemini.ApprovalMode.YOLO;
+
     default:
-      // Fallback to centralized default for unknown/legacy modes
+      // Fallback to centralized default for unknown modes
       // This ensures consistency with UI and other parts of the app
       return mapPermissionMode(GEMINI_DEFAULT_PERMISSION_MODE);
   }
