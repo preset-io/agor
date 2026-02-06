@@ -79,7 +79,7 @@ export const sessions = pgTable(
       }),
 
     // Scheduler tracking (materialized for deduplication and retention cleanup)
-    scheduled_run_at: integer('scheduled_run_at'), // Unix timestamp (ms) - authoritative run ID
+    scheduled_run_at: bigint('scheduled_run_at', { mode: 'number' }), // Unix timestamp (ms) - authoritative run ID - bigint to support dates beyond 2038
     scheduled_from_worktree: t.bool('scheduled_from_worktree').notNull().default(false),
 
     // UI state (materialized for efficient highlighting queries)

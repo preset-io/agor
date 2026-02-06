@@ -85,6 +85,13 @@
       "when": 1770276000000,
       "tag": "0011_fix_schedule_timestamp_overflow",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1738806000000,
+      "tag": "0012_fix_session_timestamp_overflow",
+      "breakpoints": true
     }
   ]
 }
