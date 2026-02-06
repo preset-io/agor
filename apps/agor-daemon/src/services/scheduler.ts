@@ -24,9 +24,10 @@
  */
 
 import type { Database } from '@agor/core/db';
-import { SessionRepository, WorktreeRepository } from '@agor/core/db';
-import type { PermissionMode, Session, Worktree } from '@agor/core/types';
+import { SessionRepository, UsersRepository, WorktreeRepository } from '@agor/core/db';
+import type { PermissionMode, Session, User, Worktree } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
+import type { UnixUserMode } from '@agor/core/unix';
 import { getNextRunTime, getPrevRunTime } from '@agor/core/utils/cron';
 import Handlebars from 'handlebars';
 import type { Application } from '../declarations';
@@ -38,6 +39,8 @@ export interface SchedulerConfig {
   gracePeriod?: number;
   /** Enable debug logging (default: false) */
   debug?: boolean;
+  /** Unix user mode for validation (default: 'simple') */
+  unixUserMode?: UnixUserMode;
 }
 
 export class SchedulerService {
@@ -47,6 +50,7 @@ export class SchedulerService {
   private isRunning = false;
   private worktreeRepo: WorktreeRepository;
   private sessionRepo: SessionRepository;
+  private userRepo: UsersRepository;
 
   constructor(db: Database, app: Application, config: SchedulerConfig = {}) {
     this.app = app;
@@ -54,9 +58,11 @@ export class SchedulerService {
       tickInterval: config.tickInterval ?? 30000, // 30 seconds
       gracePeriod: config.gracePeriod ?? 120000, // 2 minutes
       debug: config.debug ?? false,
+      unixUserMode: config.unixUserMode ?? 'simple',
     };
     this.worktreeRepo = new WorktreeRepository(db);
     this.sessionRepo = new SessionRepository(db);
+    this.userRepo = new UsersRepository(db);
   }
 
   /**
@@ -213,13 +219,64 @@ export class SchedulerService {
   }
 
   /**
+   * Resolve creator's unix_username for scheduled session execution
+   *
+   * Validates that the creator exists and has appropriate unix_username based on mode:
+   * - simple: unix_username optional (no impersonation)
+   * - insulated: unix_username optional (uses executor user)
+   * - strict: unix_username required (throws if missing)
+   *
+   * @returns Object with creator and resolved unixUsername (may be null in non-strict modes)
+   * @throws Error if creator not found or unix_username missing in strict mode
+   */
+  private async resolveCreatorUnixUsername(
+    worktree: Worktree
+  ): Promise<{ creator: User; unixUsername: string | null }> {
+    const creator = await this.userRepo.findById(worktree.created_by);
+
+    if (!creator) {
+      console.error(`      ❌ Cannot spawn scheduled session: Worktree creator not found`, {
+        worktree_id: worktree.worktree_id,
+        worktree_name: worktree.name,
+        created_by: worktree.created_by,
+        unix_user_mode: this.config.unixUserMode,
+      });
+      throw new Error(
+        `Worktree creator ${worktree.created_by} not found. Cannot spawn scheduled session.`
+      );
+    }
+
+    const unixUsername = creator.unix_username || null;
+
+    // Only require unix_username in strict mode
+    if (!unixUsername && this.config.unixUserMode === 'strict') {
+      console.error(
+        `      ❌ Cannot spawn scheduled session: Creator has no unix_username (strict mode)`,
+        {
+          worktree_id: worktree.worktree_id,
+          worktree_name: worktree.name,
+          created_by: worktree.created_by,
+          creator_email: creator.email,
+          unix_user_mode: this.config.unixUserMode,
+        }
+      );
+      throw new Error(
+        `Worktree creator ${creator.email} has no unix_username set. Cannot spawn scheduled session in strict Unix user mode.`
+      );
+    }
+
+    return { creator, unixUsername };
+  }
+
+  /**
    * Spawn a scheduled session for a worktree
    *
    * 1. Check deduplication (no existing session with same scheduled_run_at)
    * 2. Render prompt template with Handlebars
-   * 3. Create session with schedule metadata
-   * 4. Update worktree schedule metadata (last_triggered_at, next_run_at)
-   * 5. Enforce retention policy
+   * 3. Look up creator's unix_username for execution context
+   * 4. Create session with schedule metadata
+   * 5. Update worktree schedule metadata (last_triggered_at, next_run_at)
+   * 6. Enforce retention policy
    *
    * @param worktree - The worktree to spawn a session for
    * @param scheduledRunAt - The scheduled run timestamp (may be recomputed from cron)
@@ -256,48 +313,52 @@ export class SchedulerService {
     const scheduledSessions = worktreeSessions.filter((s) => s.scheduled_from_worktree === true);
     const runIndex = scheduledSessions.length + 1;
 
-    // 4. Create session with schedule metadata
-    const session: Partial<Session> = {
-      worktree_id: worktree.worktree_id,
-      agentic_tool: schedule.agentic_tool,
-      status: SessionStatus.IDLE,
-      created_by: worktree.created_by,
-      scheduled_run_at: scheduledRunAt,
-      scheduled_from_worktree: true,
-      title: `[Scheduled run - ${new Date(scheduledRunAt).toISOString()}]`,
-      contextFiles: schedule.context_files ?? [],
-      permission_config: schedule.permission_mode
-        ? { mode: schedule.permission_mode as PermissionMode }
-        : undefined,
-      model_config:
-        schedule.model_config?.mode === 'custom' && schedule.model_config.model
-          ? {
-              mode: 'exact',
-              model: schedule.model_config.model,
-              updated_at: new Date(now).toISOString(),
-            }
+    try {
+      // 4. Look up creator's unix_username for session execution context
+      const { unixUsername } = await this.resolveCreatorUnixUsername(worktree);
+
+      // 5. Create session with schedule metadata
+      const session: Partial<Session> = {
+        worktree_id: worktree.worktree_id,
+        agentic_tool: schedule.agentic_tool,
+        status: SessionStatus.IDLE,
+        created_by: worktree.created_by,
+        unix_username: unixUsername, // Set unix_username for strict mode execution
+        scheduled_run_at: scheduledRunAt,
+        scheduled_from_worktree: true,
+        title: `[Scheduled run - ${new Date(scheduledRunAt).toISOString()}]`,
+        contextFiles: schedule.context_files ?? [],
+        permission_config: schedule.permission_mode
+          ? { mode: schedule.permission_mode as PermissionMode }
           : undefined,
-      custom_context: {
-        scheduled_run: {
-          rendered_prompt: renderedPrompt,
-          run_index: runIndex,
-          schedule_config_snapshot: {
-            cron: worktree.schedule_cron,
-            timezone: schedule.timezone,
-            retention: schedule.retention,
+        model_config:
+          schedule.model_config?.mode === 'custom' && schedule.model_config.model
+            ? {
+                mode: 'exact',
+                model: schedule.model_config.model,
+                updated_at: new Date(now).toISOString(),
+              }
+            : undefined,
+        custom_context: {
+          scheduled_run: {
+            rendered_prompt: renderedPrompt,
+            run_index: runIndex,
+            schedule_config_snapshot: {
+              cron: worktree.schedule_cron,
+              timezone: schedule.timezone,
+              retention: schedule.retention,
+            },
           },
         },
-      },
-    };
+      };
 
-    try {
       // Use service for session creation (triggers WebSocket events)
       // But still need to bypass auth - use the service with no params
       const sessionsService = this.app.service('sessions');
       const createdSession = await sessionsService.create(session);
       console.log(`      ✅ Spawned scheduled session for ${worktree.name} (run #${runIndex})`);
 
-      // 5. Trigger prompt execution (creates task and starts agent)
+      // 6. Trigger prompt execution (creates task and starts agent)
       const promptService = this.app.service('/sessions/:id/prompt');
       await promptService.create(
         {
@@ -312,10 +373,10 @@ export class SchedulerService {
 
       // TODO: Attach MCP servers if specified in schedule.mcp_server_ids
 
-      // 6. Update schedule metadata
+      // 7. Update schedule metadata
       await this.updateScheduleMetadata(worktree, scheduledRunAt, now);
 
-      // 7. Enforce retention policy
+      // 8. Enforce retention policy
       await this.enforceRetentionPolicy(worktree);
     } catch (error) {
       console.error(`      ❌ Failed to spawn session for ${worktree.name}:`, error);

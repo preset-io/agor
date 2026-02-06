@@ -5531,6 +5531,7 @@ async function main() {
     tickInterval: 30000, // 30 seconds
     gracePeriod: 120000, // 2 minutes
     debug: process.env.NODE_ENV !== 'production',
+    unixUserMode: config.execution?.unix_user_mode ?? 'simple',
   });
   schedulerService.start();
   console.log(`🔄 Scheduler started (tick interval: 30s)`);
