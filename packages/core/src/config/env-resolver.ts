@@ -30,6 +30,12 @@ export const AGOR_INTERNAL_ENV_VARS = new Set([
   'CODESPACES', // GitHub Codespaces detection
   'RAILWAY_ENVIRONMENT', // Railway deployment detection
   'RENDER', // Render deployment detection
+
+  // User-specific variables (let sudo -u set these for impersonated user)
+  'HOME', // User home directory - sudo -u sets this to /home/<username>
+  'USER', // Username - sudo -u sets this to the impersonated user
+  'LOGNAME', // Login name - sudo -u sets this to the impersonated user
+  'SHELL', // User shell - sudo -u sets this to the user's configured shell
 ]);
 
 /**
