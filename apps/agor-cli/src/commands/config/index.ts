@@ -3,6 +3,7 @@
  */
 
 import { getConfigPath, getDefaultConfig, loadConfig } from '@agor/core/config';
+import { getDatabaseUrl } from '@agor/core/db';
 import { Command } from '@oclif/core';
 import chalk from 'chalk';
 
@@ -53,20 +54,26 @@ export default class ConfigIndex extends Command {
       }
 
       // Database Settings
-      const databaseUrl = process.env.DATABASE_URL || config.database?.postgresql?.url;
-      const dialect = config.database?.dialect || (databaseUrl ? 'postgresql' : 'sqlite');
-      const sqlitePath = config.database?.sqlite?.path || process.env.DB_PATH || '~/.agor/agor.db';
+      // Use the same centralized database URL resolution as the daemon
+      const databaseUrl = getDatabaseUrl();
+      const dialect = process.env.AGOR_DB_DIALECT === 'postgresql' ? 'postgresql' : 'sqlite';
 
       this.log(chalk.bold('\nDatabase Settings:'));
       this.log(`  dialect:       ${chalk.gray(dialect)}`);
 
-      if (dialect === 'postgresql' && databaseUrl) {
+      if (dialect === 'postgresql') {
         // Mask password in PostgreSQL URL (same pattern as daemon)
         const maskedUrl = databaseUrl.replace(/:([^:@]+)@/, ':****@');
         this.log(`  connection:    ${chalk.gray(maskedUrl)}`);
-      } else if (dialect === 'sqlite') {
-        this.log(`  database file: ${chalk.gray(sqlitePath)}`);
+      } else {
+        this.log(`  database file: ${chalk.gray(databaseUrl)}`);
       }
+
+      this.log(
+        chalk.dim(
+          '  (Configure via AGOR_DB_DIALECT, DATABASE_URL, or AGOR_DB_PATH environment variables)'
+        )
+      );
 
       // Daemon Settings (merge with defaults to show effective values)
       const daemonConfig = { ...defaults.daemon, ...config.daemon };
@@ -114,9 +121,6 @@ export default class ConfigIndex extends Command {
       this.log('    credentials.ANTHROPIC_API_KEY');
       this.log('    credentials.OPENAI_API_KEY');
       this.log('    credentials.GEMINI_API_KEY');
-      this.log('');
-      this.log(chalk.cyan('  Database:'));
-      this.log('    database.dialect, database.postgresql.url, database.sqlite.path');
       this.log('');
       this.log(chalk.cyan('  Daemon:'));
       this.log('    daemon.port, daemon.host');
