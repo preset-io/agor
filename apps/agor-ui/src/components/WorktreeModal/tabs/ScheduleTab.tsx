@@ -121,7 +121,7 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
         schedule_cron: cronExpression,
         schedule: scheduleConfig,
       });
-      message.success('Schedule configuration saved');
+      // Note: onUpdate already shows a success toast, so we don't show another one here
     } catch (error) {
       message.error('Failed to save schedule configuration');
       console.error('Error saving schedule:', error);
