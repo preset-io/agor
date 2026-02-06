@@ -161,9 +161,23 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
 
     // If schedule_enabled is being set to true, ensure schedule config exists
     if (data.schedule_enabled === true && !currentWorktree.schedule && !data.schedule) {
+      console.error('❌ Schedule validation failed:', {
+        schedule_enabled: data.schedule_enabled,
+        currentWorktree_has_schedule: !!currentWorktree.schedule,
+        data_has_schedule: !!data.schedule,
+        currentWorktree_schedule: currentWorktree.schedule,
+        data_schedule: data.schedule,
+      });
       throw new Error(
         'Cannot enable schedule without schedule configuration. Please provide schedule config in data.schedule.'
       );
+    }
+
+    if (data.schedule_enabled === true) {
+      console.log('✅ Schedule validation passed:', {
+        has_current_schedule: !!currentWorktree.schedule,
+        has_data_schedule: !!data.schedule,
+      });
     }
 
     // If schedule_enabled is being set to false, clear next_run_at
@@ -172,6 +186,11 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     }
 
     // Call parent patch
+    console.log('🔄 Calling parent patch with data:', {
+      schedule_enabled: data.schedule_enabled,
+      schedule_cron: data.schedule_cron,
+      has_schedule: !!data.schedule,
+    });
     const updatedWorktree = (await super.patch(id, data, params)) as Worktree;
 
     // Handle board_objects changes if board_id changed

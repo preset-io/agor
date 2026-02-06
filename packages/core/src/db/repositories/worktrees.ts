@@ -259,15 +259,37 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
 
       const insertData = this.worktreeToInsert(merged);
 
+      console.log('🔄 Repository update - merged data:', {
+        schedule_enabled: merged.schedule_enabled,
+        schedule_cron: merged.schedule_cron,
+        has_schedule: !!merged.schedule,
+      });
+
+      console.log('🔄 Repository update - insertData:', {
+        schedule_enabled: insertData.schedule_enabled,
+        schedule_cron: insertData.schedule_cron,
+        data_has_schedule: !!(insertData.data as any).schedule,
+        data_keys: Object.keys(insertData.data as any),
+      });
+
       // STEP 4: Write merged worktree (within same transaction)
       // biome-ignore lint/suspicious/noExplicitAny: Transaction context requires type assertion for database wrapper functions
-      const row = await update(tx as any, worktrees)
-        .set(insertData)
-        .where(eq(worktrees.worktree_id, current.worktree_id))
-        .returning()
-        .one();
+      try {
+        const row = await update(tx as any, worktrees)
+          .set(insertData)
+          .where(eq(worktrees.worktree_id, current.worktree_id))
+          .returning()
+          .one();
 
-      return this.rowToWorktree(row);
+        console.log('✅ Repository update successful');
+        return this.rowToWorktree(row);
+      } catch (error) {
+        console.error('❌ Repository update failed:', error);
+        console.error('   insertData schedule_enabled:', insertData.schedule_enabled, typeof insertData.schedule_enabled);
+        console.error('   insertData schedule_cron:', insertData.schedule_cron);
+        console.error('   insertData.data type:', typeof insertData.data);
+        throw error;
+      }
     });
   }
 
