@@ -15,6 +15,7 @@ import type {
 } from '@agor/core/types';
 import { sql } from 'drizzle-orm';
 import {
+  bigint,
   boolean,
   index,
   integer,
@@ -415,8 +416,8 @@ export const worktrees = pgTable(
     // Scheduler config (materialized for efficient queries)
     schedule_enabled: t.bool('schedule_enabled').notNull().default(false),
     schedule_cron: text('schedule_cron'), // Cron expression (e.g., "0 9 * * 1-5")
-    schedule_last_triggered_at: integer('schedule_last_triggered_at'), // Unix timestamp (ms)
-    schedule_next_run_at: integer('schedule_next_run_at'), // Unix timestamp (ms)
+    schedule_last_triggered_at: bigint('schedule_last_triggered_at', { mode: 'number' }), // Unix timestamp (ms) - bigint to support dates beyond 2038
+    schedule_next_run_at: bigint('schedule_next_run_at', { mode: 'number' }), // Unix timestamp (ms) - bigint to support dates beyond 2038
 
     // UI state (materialized for efficient highlighting queries)
     needs_attention: t.bool('needs_attention').notNull().default(true), // Default true for new worktrees
