@@ -20,10 +20,21 @@ export interface ModelSelectorProps {
 
 // Codex model options
 const CODEX_MODEL_OPTIONS = [
-  // GPT-5.2 models (latest, recommended)
+  // GPT-5.3 models (newest, recommended)
+  {
+    id: 'gpt-5.3-codex',
+    label: 'GPT-5.3 Codex (Recommended)',
+    description: 'Most capable agentic coding model - stronger reasoning, 25% faster',
+  },
+  // GPT-5.2 models
+  {
+    id: 'gpt-5.2-codex',
+    label: 'GPT-5.2 Codex',
+    description: 'Advanced coding model optimized for agentic tasks - 400k context',
+  },
   {
     id: 'gpt-5.2',
-    label: 'GPT-5.2 (Recommended)',
+    label: 'GPT-5.2',
     description: 'Best for complex tasks - 400k context, thinking mode',
   },
   {
@@ -144,7 +155,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       if (newMode === 'alias') {
         defaultModel = modelList[0].id;
       } else if (effectiveTool === 'codex') {
-        defaultModel = 'gpt-5.2';
+        defaultModel = 'gpt-5.3-codex';
       } else if (effectiveTool === 'gemini') {
         defaultModel = 'gemini-2.5-flash';
       } else {
@@ -210,7 +221,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                 onChange={(e) => handleModelChange(e.target.value)}
                 placeholder={
                   effectiveTool === 'codex'
-                    ? 'e.g., gpt-5.2'
+                    ? 'e.g., gpt-5.3-codex'
                     : effectiveTool === 'gemini'
                       ? 'e.g., gemini-2.5-pro'
                       : 'e.g., claude-opus-4-20250514' // claude-code (opencode handled earlier)
