@@ -4,22 +4,21 @@
  * OpenAI Codex model identifiers and defaults
  */
 
-/** Default Codex model (GPT-5-Codex optimized for software engineering) */
-export const DEFAULT_CODEX_MODEL = 'gpt-5-codex';
+/** Default Codex model */
+export const DEFAULT_CODEX_MODEL = 'gpt-5.3-codex';
 
 /** Codex Mini model (GPT-5-Codex-Mini for cost-effective usage) */
 export const CODEX_MINI_MODEL = 'gpt-5-codex-mini';
-
-/** All known Codex model IDs */
-export type CodexModel = keyof typeof CODEX_MODEL_METADATA;
 
 /**
  * Model metadata for UI display (single source of truth).
  *
  * Order matters — the UI dropdown renders models in this order,
  * and the first entry is used as the default for alias mode.
+ *
+ * Uses `as const satisfies` to preserve literal key types for CodexModel.
  */
-export const CODEX_MODEL_METADATA: Record<string, { name: string; description: string }> = {
+const _CODEX_MODEL_METADATA = {
   // GPT-5.3 models (newest)
   'gpt-5.3-codex': {
     name: 'GPT-5.3 Codex (Recommended)',
@@ -55,6 +54,10 @@ export const CODEX_MODEL_METADATA: Record<string, { name: string; description: s
     name: 'GPT-5.1 Codex Mini',
     description: 'Cost-effective variant with 4x more usage',
   },
+  'gpt-5.1': {
+    name: 'GPT-5.1',
+    description: 'General purpose GPT-5.1 model',
+  },
   // GPT-5 models (legacy)
   'gpt-5-codex': {
     name: 'GPT-5 Codex',
@@ -63,6 +66,10 @@ export const CODEX_MODEL_METADATA: Record<string, { name: string; description: s
   'gpt-5-codex-mini': {
     name: 'GPT-5 Codex Mini',
     description: 'Legacy faster, lighter model',
+  },
+  'gpt-5': {
+    name: 'GPT-5',
+    description: 'Legacy general purpose model',
   },
   // GPT-4o models
   'gpt-4o': {
@@ -73,7 +80,12 @@ export const CODEX_MODEL_METADATA: Record<string, { name: string; description: s
     name: 'GPT-4o Mini',
     description: 'Smaller, faster model',
   },
-};
+} as const satisfies Record<string, { name: string; description: string }>;
+
+export const CODEX_MODEL_METADATA = _CODEX_MODEL_METADATA;
+
+/** All known Codex model IDs (literal union) */
+export type CodexModel = keyof typeof _CODEX_MODEL_METADATA;
 
 /** Model aliases for Codex (derived from metadata) */
 export const CODEX_MODELS = Object.fromEntries(
