@@ -88,7 +88,7 @@ export default class Init extends Command {
       const { createDatabase, select, sessions, tasks, messages, repos } = await import(
         '@agor/core/db'
       );
-      const db = createDatabase({ url: `file:${dbPath}` });
+      const db = createDatabase({ url: `file:${dbPath}`, dialect: 'sqlite' });
 
       // Count rows by selecting all and measuring length
       const sessionRows = await select(db).from(sessions).all();
@@ -345,7 +345,7 @@ export default class Init extends Command {
     // Initialize database
     this.log('');
     this.log('💾 Setting up database...');
-    const db = createDatabase({ url: `file:${dbPath}` });
+    const db = createDatabase({ url: `file:${dbPath}`, dialect: 'sqlite' });
 
     await runMigrations(db);
     this.log(`${chalk.green('   ✓')} Created ${dbPath}`);
@@ -367,7 +367,7 @@ export default class Init extends Command {
 
       // Create default admin user with credentials displayed to user
       try {
-        const db = createDatabase({ url: `file:${dbPath}` });
+        const db = createDatabase({ url: `file:${dbPath}`, dialect: 'sqlite' });
         const defaultEmail = 'admin@agor.live';
         const defaultPassword = 'admin';
 
@@ -527,7 +527,7 @@ export default class Init extends Command {
     ]);
 
     // Create admin user directly in database (no daemon required)
-    const db = createDatabase({ url: `file:${dbPath}` });
+    const db = createDatabase({ url: `file:${dbPath}`, dialect: 'sqlite' });
 
     const _user = await createUser(db, {
       email,
