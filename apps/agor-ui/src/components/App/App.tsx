@@ -312,9 +312,16 @@ export const App: React.FC<AppProps> = ({
   });
 
   // Wrapper to update board ID (updates both state and URL via hook)
-  const setCurrentBoardId = useCallback((boardId: string) => {
-    setCurrentBoardIdInternal(boardId);
-  }, []);
+  // Also closes conversation panel when switching to a different board
+  const setCurrentBoardId = useCallback(
+    (boardId: string) => {
+      if (boardId !== currentBoardId) {
+        setSelectedSessionId(null);
+      }
+      setCurrentBoardIdInternal(boardId);
+    },
+    [currentBoardId]
+  );
 
   // If the stored board no longer exists (e.g., deleted), fallback to first board
   useEffect(() => {
