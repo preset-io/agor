@@ -209,6 +209,7 @@ export const repoQuerySchema = createQuerySchema(
   Type.Object({
     repo_id: Type.Optional(CommonSchemas.uuid),
     slug: Type.Optional(Type.String({ maxLength: 255 })),
+    cleanup: Type.Optional(CommonSchemas.boolean), // For delete: true = delete filesystem too
     created_at: Type.Optional(CommonSchemas.timestamp),
   })
 );

@@ -344,9 +344,9 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     }
 
     // Get existing worktrees to compute unique_id BEFORE creating the record
+    // Use internal call (no provider) to get all worktrees regardless of RBAC
     const worktreesService = this.app.service('worktrees');
     const worktreesResult = await worktreesService.find({
-      ...params,
       query: { $limit: 1000 },
       paginate: false,
     });
@@ -540,9 +540,11 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     const cleanup = params?.query?.cleanup === true;
 
     // Get ALL worktrees for this repo (needed for both filesystem and database cleanup)
+    // CRITICAL: Use internal call (no provider) to avoid RBAC hooks that bypass repo_id filter.
+    // Spreading external params with provider causes scopeWorktreeQuery to return ALL accessible
+    // worktrees instead of filtering by repo_id, leading to cross-repo deletion.
     const worktreesService = this.app.service('worktrees');
     const worktreesResult = await worktreesService.find({
-      ...params,
       query: { repo_id: repo.repo_id },
       paginate: false,
     });
@@ -550,6 +552,19 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     const worktrees = (
       Array.isArray(worktreesResult) ? worktreesResult : worktreesResult.data
     ) as Worktree[];
+
+    // Safety check: verify all worktrees belong to this repo (defense in depth)
+    const foreignWorktrees = worktrees.filter((wt) => wt.repo_id !== repo.repo_id);
+    if (foreignWorktrees.length > 0) {
+      throw new Error(
+        `SAFETY CHECK FAILED: Found ${foreignWorktrees.length} worktree(s) not belonging to repo ${repo.repo_id}. ` +
+          `Aborting deletion to prevent cross-repo data loss. This is a bug — please report it.`
+      );
+    }
+
+    console.log(
+      `🗑️  Repo deletion: Found ${worktrees.length} worktree(s) for repo ${repo.slug} (${repo.repo_id})`
+    );
 
     // If cleanup is requested and this is a remote repo, delete filesystem directories FIRST
     if (cleanup && repo.repo_type === 'remote') {
@@ -615,9 +630,12 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // 2. Service hooks run properly (lifecycle, validation, etc.)
     // 3. Session cascades trigger (sessions → tasks → messages)
     // 4. Foreign key cascades may not be reliable (pragmas are async fire-and-forget)
+    // NOTE: Don't spread external params — use internal call to bypass auth/RBAC hooks.
+    // The repo deletion itself is already authorized; individual worktree permission checks
+    // would incorrectly block cleanup of worktrees the user doesn't directly own.
     for (const worktree of worktrees) {
       try {
-        await worktreesService.remove(worktree.worktree_id, params);
+        await worktreesService.remove(worktree.worktree_id);
         console.log(`🗑️  Deleted worktree from database: ${worktree.name}`);
       } catch (error) {
         console.warn(
