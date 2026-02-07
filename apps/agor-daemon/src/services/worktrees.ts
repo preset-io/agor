@@ -485,7 +485,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
             archived: true,
             archived_reason: 'worktree_archived',
           },
-          params
+          { provider: undefined } // Bypass RBAC - this is an internal cascade operation
         );
       }
 
@@ -553,7 +553,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
           archived: false,
           archived_reason: undefined,
         },
-        params
+        { provider: undefined } // Bypass RBAC - this is an internal cascade operation
       );
     }
 

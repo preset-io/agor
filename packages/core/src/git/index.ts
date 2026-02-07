@@ -499,10 +499,18 @@ export async function removeWorktree(repoPath: string, worktreeName: string): Pr
  * - Tracked files
  * - Git state (commits, branches)
  *
+ * In multi-user worktrees, files may be owned by different users (e.g., build artifacts
+ * created by different user sessions). This function attempts to fix ownership before
+ * cleaning to ensure all files can be removed.
+ *
  * @param worktreePath - Absolute path to the worktree directory
+ * @param fixOwnership - Whether to attempt ownership fix via sudo (default: true)
  * @returns Disk space freed in bytes (approximate based on removed file count)
  */
-export async function cleanWorktree(worktreePath: string): Promise<{ filesRemoved: number }> {
+export async function cleanWorktree(
+  worktreePath: string,
+  fixOwnership: boolean = true
+): Promise<{ filesRemoved: number }> {
   const git = createGit(worktreePath);
 
   // Run git clean -fdx (force, directories, ignored files)
@@ -513,8 +521,73 @@ export async function cleanWorktree(worktreePath: string): Promise<{ filesRemove
   // CleanSummary has a files array with removed files
   const filesRemoved = Array.isArray(dryRunResult.files) ? dryRunResult.files.length : 0;
 
-  // Actually clean
-  await git.clean('fdx');
+  // In multi-user worktrees, fix ownership before cleaning
+  if (fixOwnership) {
+    try {
+      const { execSync } = await import('node:child_process');
+      const { existsSync } = await import('node:fs');
+      const os = await import('node:os');
+
+      // Verify worktree path exists
+      if (!existsSync(worktreePath)) {
+        throw new Error(`Worktree path does not exist: ${worktreePath}`);
+      }
+
+      // Get current user (who will own the files after chown)
+      // When running in executor via sudo -u, this returns the impersonated user (e.g., agorpg)
+      const currentUser = os.userInfo().username;
+
+      // Attempt to chown the worktree to current user
+      // This allows git clean to remove files owned by other users
+      //
+      // IMPORTANT: This requires sudoers configuration:
+      // agor ALL=(ALL) NOPASSWD: /usr/bin/chown * /home/*/.agor/*
+      //
+      // The executor is already running as the daemon user (via sudo -u agorpg),
+      // so this is effectively: sudo -n chown -R agorpg: /path/to/worktree
+      try {
+        const escapedPath = worktreePath.replace(/'/g, "'\\''");
+        execSync(`sudo -n chown -R ${currentUser}: '${escapedPath}'`, {
+          stdio: 'pipe',
+          encoding: 'utf-8',
+        });
+        console.log(`[git.clean] Fixed ownership to ${currentUser} before clean`);
+      } catch (_chownError) {
+        // Chown failed - log but continue with git clean
+        // Git clean will still remove what it can
+        // This is expected in environments without sudo configuration
+        console.warn(
+          '[git.clean] Could not fix ownership (sudo not configured), continuing anyway'
+        );
+      }
+    } catch (error) {
+      // Ownership fix failed - log but continue
+      console.warn('[git.clean] Error fixing ownership, continuing with clean:', error);
+    }
+  }
+
+  // Run git clean
+  // After ownership fix, this should be able to remove all files
+  try {
+    await git.clean('fdx');
+  } catch (error) {
+    // Check if this is just warnings (permission denied on some files)
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const isWarningsOnly =
+      errorMessage.includes('warning:') && errorMessage.includes('failed to remove');
+
+    if (!isWarningsOnly) {
+      // Real error - rethrow
+      throw error;
+    }
+
+    // Warnings only - log but don't fail
+    // Some files couldn't be removed (multi-user env without sudo)
+    console.warn(
+      '[git.clean] Completed with warnings (some files could not be removed):',
+      errorMessage
+    );
+  }
 
   return { filesRemoved };
 }
