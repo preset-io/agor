@@ -431,8 +431,13 @@ export const TaskBlock = React.memo<TaskBlockProps>(
           <Flex wrap gap={token.sizeUnit}>
             <TimerPill
               status={task.status}
-              startedAt={task.message_range?.start_timestamp || task.created_at}
-              endedAt={task.message_range?.end_timestamp || task.completed_at}
+              startedAt={task.started_at || task.message_range?.start_timestamp || task.created_at}
+              endedAt={
+                task.completed_at ||
+                (task.message_range?.end_timestamp !== task.message_range?.start_timestamp
+                  ? task.message_range?.end_timestamp
+                  : undefined)
+              }
               durationMs={task.duration_ms}
               tooltip="Task runtime"
             />

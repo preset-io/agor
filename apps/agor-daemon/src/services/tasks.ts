@@ -433,12 +433,26 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     data: { report?: Task['report'] },
     params?: TaskParams
   ): Promise<Task> {
+    const completedAt = new Date().toISOString();
+
+    // Fetch current task to calculate duration
+    const currentTask = await this.get(id, params);
+    const startTime = currentTask?.started_at || currentTask?.created_at;
+    const durationMs = startTime
+      ? Math.max(0, new Date(completedAt).getTime() - new Date(startTime).getTime())
+      : undefined;
+
     const completedTask = (await this.patch(
       id,
       {
         status: TaskStatus.COMPLETED,
-        completed_at: new Date().toISOString(),
+        completed_at: completedAt,
         report: data.report,
+        duration_ms: durationMs,
+        message_range: {
+          ...currentTask?.message_range,
+          end_timestamp: completedAt,
+        },
       },
       params
     )) as Task;
@@ -469,11 +483,25 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
    * Custom method: Fail a task
    */
   async fail(id: string, _data: { error?: string }, params?: TaskParams): Promise<Task> {
+    const completedAt = new Date().toISOString();
+
+    // Fetch current task to calculate duration
+    const currentTask = await this.get(id, params);
+    const startTime = currentTask?.started_at || currentTask?.created_at;
+    const durationMs = startTime
+      ? Math.max(0, new Date(completedAt).getTime() - new Date(startTime).getTime())
+      : undefined;
+
     return this.patch(
       id,
       {
         status: TaskStatus.FAILED,
-        completed_at: new Date().toISOString(),
+        completed_at: completedAt,
+        duration_ms: durationMs,
+        message_range: {
+          ...currentTask?.message_range,
+          end_timestamp: completedAt,
+        },
         // Don't set report for failed tasks - error info should be in task description
       },
       params
