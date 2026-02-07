@@ -1,4 +1,9 @@
-import { AVAILABLE_CLAUDE_MODEL_ALIASES, GEMINI_MODELS, type GeminiModel } from '@agor/core/models';
+import {
+  AVAILABLE_CLAUDE_MODEL_ALIASES,
+  CODEX_MODEL_METADATA,
+  GEMINI_MODELS,
+  type GeminiModel,
+} from '@agor/core/models';
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { Input, Radio, Select, Space, Tooltip } from 'antd';
 import { useState } from 'react';
@@ -18,66 +23,12 @@ export interface ModelSelectorProps {
   agentic_tool?: 'claude-code' | 'codex' | 'gemini' | 'opencode';
 }
 
-// Codex model options
-const CODEX_MODEL_OPTIONS = [
-  // GPT-5.3 models (newest, recommended)
-  {
-    id: 'gpt-5.3-codex',
-    label: 'GPT-5.3 Codex (Recommended)',
-    description: 'Most capable agentic coding model - stronger reasoning, 25% faster',
-  },
-  // GPT-5.2 models
-  {
-    id: 'gpt-5.2-codex',
-    label: 'GPT-5.2 Codex',
-    description: 'Advanced coding model optimized for agentic tasks - 400k context',
-  },
-  {
-    id: 'gpt-5.2',
-    label: 'GPT-5.2',
-    description: 'Best for complex tasks - 400k context, thinking mode',
-  },
-  {
-    id: 'gpt-5.2-pro',
-    label: 'GPT-5.2 Pro',
-    description: 'Highest accuracy, xhigh reasoning for difficult problems',
-  },
-  {
-    id: 'gpt-5.2-instant',
-    label: 'GPT-5.2 Instant',
-    description: 'Faster model for writing and information seeking',
-  },
-  // GPT-5.1 models
-  {
-    id: 'gpt-5.1-codex-max',
-    label: 'GPT-5.1 Codex Max',
-    description: 'Optimized for long-horizon agentic coding',
-  },
-  {
-    id: 'gpt-5.1-codex',
-    label: 'GPT-5.1 Codex',
-    description: 'Optimized for agentic coding tasks',
-  },
-  {
-    id: 'gpt-5.1-codex-mini',
-    label: 'GPT-5.1 Codex Mini',
-    description: 'Cost-effective variant with 4x more usage',
-  },
-  // GPT-5 models (legacy)
-  {
-    id: 'gpt-5-codex',
-    label: 'GPT-5 Codex',
-    description: 'Legacy model for software engineering',
-  },
-  {
-    id: 'gpt-5-codex-mini',
-    label: 'GPT-5 Codex Mini',
-    description: 'Legacy faster, lighter model',
-  },
-  // GPT-4o models
-  { id: 'gpt-4o', label: 'GPT-4o', description: 'General purpose model' },
-  { id: 'gpt-4o-mini', label: 'GPT-4o Mini', description: 'Smaller, faster model' },
-];
+// Codex model options (derived from @agor/core metadata)
+const CODEX_MODEL_OPTIONS = Object.entries(CODEX_MODEL_METADATA).map(([modelId, meta]) => ({
+  id: modelId,
+  label: meta.name,
+  description: meta.description,
+}));
 
 // Gemini model options (convert from GEMINI_MODELS metadata)
 const GEMINI_MODEL_OPTIONS = Object.entries(GEMINI_MODELS).map(([modelId, meta]) => ({
