@@ -202,14 +202,21 @@ export function createDatabase(config: DbConfig): Database {
  */
 function createPostgresDatabase(config: DbConfig): PostgresJsDatabase<typeof postgresSchema> {
   try {
-    const sql = postgres(config.url, {
+    // Build options without ssl key by default — postgres.js treats an explicitly-present
+    // `ssl: undefined` differently from an absent key. When the key is absent, postgres.js
+    // reads sslmode from the connection URL (e.g. ?sslmode=require). When present (even as
+    // undefined), it overrides URL-based SSL detection.
+    const options: postgres.Options<Record<string, postgres.PostgresType>> = {
       max: config.pool?.max || 10,
       idle_timeout: config.pool?.idleTimeout || 30,
-      ssl: config.ssl,
       // Disable prepared statements - they can cause issues with DDL statements like CREATE SCHEMA
       // and with Drizzle's migration system
       prepare: false,
-    });
+    };
+    if (config.ssl !== undefined) {
+      options.ssl = config.ssl;
+    }
+    const sql = postgres(config.url, options);
 
     return drizzlePostgres(sql, { schema: postgresSchema });
   } catch (error) {
