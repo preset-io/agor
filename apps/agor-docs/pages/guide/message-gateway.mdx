@@ -5,6 +5,24 @@ description: Route messages from Slack, Discord, and other platforms directly in
 
 # Message Gateway (Beta)
 
+<div style={{ marginTop: '16px', marginBottom: '24px', padding: '16px 20px', border: '1px solid #d4940a', borderRadius: '8px', backgroundColor: 'rgba(212, 148, 10, 0.08)' }}>
+
+**Security Warning — Read Before Enabling**
+
+The Message Gateway gives anyone who can message your bot the ability to create Agor sessions and interact with autonomous coding agents. This effectively grants **full access to the target worktree, the host machine (to the extent the agent can access it), and any connected services (MCP servers, APIs, credentials).**
+
+This is a **beta feature**. Use at your own risk and with caution:
+
+- **Assume full access.** Anyone who can DM your Slack bot can prompt the agent to read, write, and execute code on the worktree. Treat this as giving them SSH access to that environment.
+- **Sandbox everything you can.** Run the daemon in a container, use restricted permission modes (`supervised` or `manual`), limit MCP server exposure, and avoid mounting sensitive host directories.
+- **Restrict bot access.** In Slack, limit who can DM the bot. Consider creating a private Slack workspace or restricting the bot to specific users via Slack's app distribution settings.
+- **Use dedicated worktrees.** Don't point channels at worktrees containing production code or credentials. Create isolated worktrees specifically for gateway use.
+- **Audit regularly.** Monitor sessions created by the gateway. All activity is logged in Agor's session transcripts.
+- **Rotate credentials.** Periodically rotate your Slack bot tokens and channel keys through the Settings UI.
+- **Don't run as root.** The daemon and agents should never run as root. Use Agor's [Unix isolation modes](/guide/multiplayer-unix-isolation) for additional sandboxing.
+
+</div>
+
 The Message Gateway connects external messaging platforms to Agor's agent sessions. DM your Slack bot, and Agor spins up a fresh coding session on the right worktree with the right agent — then streams responses back into the same thread. Follow-up messages continue the conversation in the same session.
 
 > Currently Slack-only. Discord, WhatsApp, and Telegram connectors are planned.

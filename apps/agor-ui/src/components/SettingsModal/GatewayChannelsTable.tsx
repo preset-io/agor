@@ -576,6 +576,28 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         </Button>
       </div>
 
+      <Alert
+        type="warning"
+        showIcon
+        style={{ marginBottom: 16 }}
+        message="Beta Feature — Security Notice"
+        description={
+          <>
+            The Message Gateway is a <strong>beta feature</strong>. Connecting external messaging
+            platforms grants anyone who can message your bot potential access to Agor sessions and
+            the underlying worktree environment.{' '}
+            <Typography.Link
+              href="https://docs.agor.live/guide/message-gateway"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Read the full security guidance
+            </Typography.Link>{' '}
+            before enabling channels in production.
+          </>
+        }
+      />
+
       {channels.length === 0 ? (
         <div
           style={{
