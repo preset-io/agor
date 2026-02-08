@@ -470,9 +470,9 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       );
 
       // Archive all sessions in this worktree
+      // Use internal call (no provider) to bypass RBAC hooks that would ignore worktree_id filter
       const sessionsService = this.app.service('sessions');
       const sessionsResult = await sessionsService.find({
-        ...params,
         query: { worktree_id: id, $limit: 1000 },
         paginate: false,
       });
@@ -533,9 +533,9 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     );
 
     // Unarchive all sessions that were archived due to worktree archival
+    // Use internal call (no provider) to bypass RBAC hooks that would ignore worktree_id filter
     const sessionsService = this.app.service('sessions');
     const sessionsResult = await sessionsService.find({
-      ...params,
       query: {
         worktree_id: id,
         archived: true,
