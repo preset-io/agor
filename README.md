@@ -301,6 +301,14 @@ Highlights:
 
 ---
 
+## Community
+
+- **[Discord](https://discord.gg/HZKWXfgc)** - Join our Discord community for support and discussion
+- **[GitHub Discussions](https://github.com/preset-io/agor/discussions)** - Ask questions, share ideas
+- **[GitHub Issues](https://github.com/preset-io/agor/issues)** - Report bugs, request features
+
+---
+
 ## About
 
 **Heavily prompted by [@mistercrunch](https://github.com/mistercrunch)** ([Preset](https://preset.io), [Apache Superset](https://github.com/apache/superset), [Apache Airflow](https://github.com/apache/airflow)), built by an army of Claudes.

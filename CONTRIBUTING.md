@@ -224,6 +224,7 @@ Closes #123
 
 **Stuck? Confused? Need guidance?**
 
+- **[Discord](https://discord.gg/HZKWXfgc)** - Join our Discord community for support and discussion
 - **[GitHub Discussions](https://github.com/preset-io/agor/discussions)** - Ask questions, share ideas, get help
 - **[GitHub Issues](https://github.com/preset-io/agor/issues)** - Report bugs, request features
 - **Read the docs** - [CLAUDE.md](CLAUDE.md) and [context/](context/) have extensive documentation

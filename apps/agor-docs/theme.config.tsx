@@ -33,6 +33,9 @@ const config: DocsThemeConfig = {
   project: {
     link: 'https://github.com/preset-io/agor',
   },
+  chat: {
+    link: 'https://discord.gg/HZKWXfgc',
+  },
   docsRepositoryBase: 'https://github.com/preset-io/agor/tree/main/apps/agor-docs',
 
   navigation: {

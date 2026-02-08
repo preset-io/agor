@@ -46,6 +46,14 @@ export function Hero({
             >
               View on GitHub →
             </Link>
+            <Link
+              href="https://discord.gg/HZKWXfgc"
+              target="_blank"
+              rel="noopener noreferrer"
+              className={styles.secondaryButton}
+            >
+              Join Discord →
+            </Link>
           </div>
 
           {/* GIF Grid */}
