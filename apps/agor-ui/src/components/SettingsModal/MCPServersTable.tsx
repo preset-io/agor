@@ -941,6 +941,8 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
         form.resetFields();
         setCreateModalOpen(false);
         setTransport('stdio');
+        setAuthType('none');
+        setTestResult(null);
       })
       .catch((error) => {
         // Validation failed - form will show errors automatically
