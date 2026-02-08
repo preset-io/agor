@@ -360,8 +360,8 @@ importers:
   packages/agor-live:
     dependencies:
       '@anthropic-ai/claude-agent-sdk':
-        specifier: ^0.2.29
-        version: 0.2.29(zod@3.25.76)
+        specifier: ^0.2.33
+        version: 0.2.34(zod@3.25.76)
       '@feathersjs/authentication':
         specifier: ^5.0.37
         version: 5.0.37(typescript@5.9.3)
@@ -396,8 +396,8 @@ importers:
         specifier: ^5.0.37
         version: 5.0.37(typescript@5.9.3)
       '@google/gemini-cli-core':
-        specifier: ^0.21.3
-        version: 0.21.3(@opentelemetry/core@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/resources@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-metrics@2.0.1(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.0.1(@opentelemetry/api@1.9.0))(hono@4.11.3)
+        specifier: ^0.27.2
+        version: 0.27.2(@grpc/grpc-js@1.14.0)(@opentelemetry/core@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/resources@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-metrics@2.0.1(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.0.1(@opentelemetry/api@1.9.0))(express@5.2.1)(hono@4.11.3)
       '@google/genai':
         specifier: ^1.34.0
         version: 1.34.0(@modelcontextprotocol/sdk@1.25.2(hono@4.11.3)(zod@3.25.76))
@@ -420,11 +420,11 @@ importers:
         specifier: ^6.2.18
         version: 6.2.35
       '@openai/codex-sdk':
-        specifier: ^0.71.0
-        version: 0.71.0
+        specifier: ^0.98.0
+        version: 0.98.0
       '@opencode-ai/sdk':
-        specifier: ^1.0.122
-        version: 1.0.125
+        specifier: ^1.1.53
+        version: 1.1.53
       bcryptjs:
         specifier: ^2.4.3
         version: 2.4.3
@@ -508,7 +508,7 @@ importers:
     dependencies:
       '@anthropic-ai/claude-agent-sdk':
         specifier: ^0.2.33
-        version: 0.2.34(zod@3.25.76)
+        version: 0.2.34(zod@4.1.12)
       '@feathersjs/authentication':
         specifier: ^5.0.37
         version: 5.0.37(typescript@5.9.3)
@@ -547,7 +547,7 @@ importers:
         version: 0.27.2(@grpc/grpc-js@1.14.0)(@opentelemetry/core@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/resources@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-metrics@2.0.1(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.0.1(@opentelemetry/api@1.9.0))(express@5.2.1)(hono@4.11.3)
       '@google/genai':
         specifier: ^1.34.0
-        version: 1.34.0(@modelcontextprotocol/sdk@1.25.2(hono@4.11.3)(zod@3.25.76))
+        version: 1.34.0(@modelcontextprotocol/sdk@1.25.2(hono@4.11.3)(zod@4.1.12))
       '@iarna/toml':
         specifier: ^2.2.5
         version: 2.2.5
@@ -1738,10 +1738,6 @@ packages:
     resolution: {integrity: sha512-nXYxwnllYlpIXMtESJNAoyCpykUbviBdRixpfn0eVC3aIeY7Z7GN3IYzOiz0sdVXjdTLsU0MePSfuaUjkpEE2A==}
     engines: {node: '>=20'}
 
-  '@google/gemini-cli-core@0.21.3':
-    resolution: {integrity: sha512-XvVduP8tsI1r4KTr4x4CzWnFUvW7lf2Cmhp0Qnx9KDH5GAya4jHNbOnE9gOQ0CY18jjtp3kGX6D1ntVJDkp12g==}
-    engines: {node: '>=20'}
-
   '@google/gemini-cli-core@0.27.2':
     resolution: {integrity: sha512-vgxxwtWj97p8HJUIb+awk/2ERGUp16sX5a8QV/i4lj98acXQrAvxawhYiA2w2ybKGay9Zn0bwIGQEST1iSMVUw==}
     engines: {node: '>=20'}
@@ -2404,10 +2400,6 @@ packages:
 
   '@openai/codex-sdk@0.63.0':
     resolution: {integrity: sha512-5ZJpytgGG0xxfloJUvPWxsVMVeROXG1t1q03aejTgWLubTcgGFRx9zNBdZE/OvJ7NGtUBbhQkfkzaFp1kIA2Cg==}
-    engines: {node: '>=18'}
-
-  '@openai/codex-sdk@0.71.0':
-    resolution: {integrity: sha512-4PkZL1+1WAKfNOeYYMPXSGCrnTLbJEHh3vu2/cmiJLv1/YFmc2YVCj9TWt+qR2++q+GsBIrIhzb5xdWQZZecPQ==}
     engines: {node: '>=18'}
 
   '@openai/codex-sdk@0.98.0':
@@ -8876,19 +8868,6 @@ snapshots:
       '@img/sharp-linuxmusl-x64': 0.33.5
       '@img/sharp-win32-x64': 0.33.5
 
-  '@anthropic-ai/claude-agent-sdk@0.2.29(zod@3.25.76)':
-    dependencies:
-      zod: 3.25.76
-    optionalDependencies:
-      '@img/sharp-darwin-arm64': 0.33.5
-      '@img/sharp-darwin-x64': 0.33.5
-      '@img/sharp-linux-arm': 0.33.5
-      '@img/sharp-linux-arm64': 0.33.5
-      '@img/sharp-linux-x64': 0.33.5
-      '@img/sharp-linuxmusl-arm64': 0.33.5
-      '@img/sharp-linuxmusl-x64': 0.33.5
-      '@img/sharp-win32-x64': 0.33.5
-
   '@anthropic-ai/claude-agent-sdk@0.2.29(zod@4.1.12)':
     dependencies:
       zod: 4.1.12
@@ -8905,6 +8884,19 @@ snapshots:
   '@anthropic-ai/claude-agent-sdk@0.2.34(zod@3.25.76)':
     dependencies:
       zod: 3.25.76
+    optionalDependencies:
+      '@img/sharp-darwin-arm64': 0.33.5
+      '@img/sharp-darwin-x64': 0.33.5
+      '@img/sharp-linux-arm': 0.33.5
+      '@img/sharp-linux-arm64': 0.33.5
+      '@img/sharp-linux-x64': 0.33.5
+      '@img/sharp-linuxmusl-arm64': 0.33.5
+      '@img/sharp-linuxmusl-x64': 0.33.5
+      '@img/sharp-win32-x64': 0.33.5
+
+  '@anthropic-ai/claude-agent-sdk@0.2.34(zod@4.1.12)':
+    dependencies:
+      zod: 4.1.12
     optionalDependencies:
       '@img/sharp-darwin-arm64': 0.33.5
       '@img/sharp-darwin-x64': 0.33.5
@@ -10237,78 +10229,6 @@ snapshots:
       - tree-sitter
       - utf-8-validate
 
-  '@google/gemini-cli-core@0.21.3(@opentelemetry/core@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/resources@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-metrics@2.0.1(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.0.1(@opentelemetry/api@1.9.0))(hono@4.11.3)':
-    dependencies:
-      '@google-cloud/logging': 11.2.1
-      '@google-cloud/opentelemetry-cloud-monitoring-exporter': 0.21.0(@opentelemetry/api@1.9.0)(@opentelemetry/core@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/resources@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-metrics@2.0.1(@opentelemetry/api@1.9.0))
-      '@google-cloud/opentelemetry-cloud-trace-exporter': 3.0.0(@opentelemetry/api@1.9.0)(@opentelemetry/core@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/resources@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.0.1(@opentelemetry/api@1.9.0))
-      '@google/genai': 1.34.0(@modelcontextprotocol/sdk@1.25.2(hono@4.11.3)(zod@3.25.76))
-      '@iarna/toml': 2.2.5
-      '@joshua.litt/get-ripgrep': 0.0.3
-      '@modelcontextprotocol/sdk': 1.25.2(hono@4.11.3)(zod@3.25.76)
-      '@opentelemetry/api': 1.9.0
-      '@opentelemetry/exporter-logs-otlp-grpc': 0.203.0(@opentelemetry/api@1.9.0)
-      '@opentelemetry/exporter-logs-otlp-http': 0.203.0(@opentelemetry/api@1.9.0)
-      '@opentelemetry/exporter-metrics-otlp-grpc': 0.203.0(@opentelemetry/api@1.9.0)
-      '@opentelemetry/exporter-metrics-otlp-http': 0.203.0(@opentelemetry/api@1.9.0)
-      '@opentelemetry/exporter-trace-otlp-grpc': 0.203.0(@opentelemetry/api@1.9.0)
-      '@opentelemetry/exporter-trace-otlp-http': 0.203.0(@opentelemetry/api@1.9.0)
-      '@opentelemetry/instrumentation-http': 0.203.0(@opentelemetry/api@1.9.0)
-      '@opentelemetry/resource-detector-gcp': 0.40.3(@opentelemetry/api@1.9.0)
-      '@opentelemetry/sdk-node': 0.203.0(@opentelemetry/api@1.9.0)
-      '@types/glob': 8.1.0
-      '@types/html-to-text': 9.0.4
-      '@xterm/headless': 5.5.0
-      ajv: 8.17.1
-      ajv-formats: 3.0.1(ajv@8.17.1)
-      chardet: 2.1.1
-      diff: 7.0.0
-      dotenv: 17.2.3
-      fast-levenshtein: 2.0.6
-      fast-uri: 3.1.0
-      fdir: 6.5.0(picomatch@4.0.3)
-      fzf: 0.5.2
-      glob: 11.1.0
-      google-auth-library: 9.15.1
-      html-to-text: 9.0.5
-      https-proxy-agent: 7.0.6
-      ignore: 7.0.5
-      marked: 15.0.12
-      mime: 4.0.7
-      mnemonist: 0.40.3
-      open: 10.2.0
-      picomatch: 4.0.3
-      read-package-up: 11.0.0
-      shell-quote: 1.8.3
-      simple-git: 3.30.0
-      strip-ansi: 7.1.2
-      tree-sitter-bash: 0.25.0
-      undici: 7.16.0
-      web-tree-sitter: 0.25.10
-      ws: 8.18.3
-      zod: 3.25.76
-    optionalDependencies:
-      '@lydell/node-pty': 1.1.0
-      '@lydell/node-pty-darwin-arm64': 1.1.0
-      '@lydell/node-pty-darwin-x64': 1.1.0
-      '@lydell/node-pty-linux-x64': 1.1.0
-      '@lydell/node-pty-win32-arm64': 1.1.0
-      '@lydell/node-pty-win32-x64': 1.1.0
-      node-pty: 1.0.0
-    transitivePeerDependencies:
-      - '@cfworker/json-schema'
-      - '@opentelemetry/core'
-      - '@opentelemetry/resources'
-      - '@opentelemetry/sdk-metrics'
-      - '@opentelemetry/sdk-trace-base'
-      - '@types/emscripten'
-      - bufferutil
-      - encoding
-      - hono
-      - supports-color
-      - tree-sitter
-      - utf-8-validate
-
   '@google/gemini-cli-core@0.27.2(@grpc/grpc-js@1.14.0)(@opentelemetry/core@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/resources@2.2.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-metrics@2.0.1(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.0.1(@opentelemetry/api@1.9.0))(express@5.2.1)(hono@4.11.3)':
     dependencies:
       '@a2a-js/sdk': 0.3.10(@grpc/grpc-js@1.14.0)(express@5.2.1)
@@ -10392,6 +10312,17 @@ snapshots:
       ws: 8.18.3
     optionalDependencies:
       '@modelcontextprotocol/sdk': 1.25.2(hono@4.11.3)(zod@3.25.76)
+    transitivePeerDependencies:
+      - bufferutil
+      - supports-color
+      - utf-8-validate
+
+  '@google/genai@1.34.0(@modelcontextprotocol/sdk@1.25.2(hono@4.11.3)(zod@4.1.12))':
+    dependencies:
+      google-auth-library: 10.5.0
+      ws: 8.18.3
+    optionalDependencies:
+      '@modelcontextprotocol/sdk': 1.25.2(hono@4.11.3)(zod@4.1.12)
     transitivePeerDependencies:
       - bufferutil
       - supports-color
@@ -11241,8 +11172,6 @@ snapshots:
       - supports-color
 
   '@openai/codex-sdk@0.63.0': {}
-
-  '@openai/codex-sdk@0.71.0': {}
 
   '@openai/codex-sdk@0.98.0': {}
 
@@ -17120,7 +17049,7 @@ snapshots:
 
   parse-json@8.3.0:
     dependencies:
-      '@babel/code-frame': 7.27.1
+      '@babel/code-frame': 7.28.6
       index-to-position: 1.2.0
       type-fest: 4.41.0
 

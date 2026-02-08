@@ -166,7 +166,6 @@ interface MCPServerFormFieldsProps {
   client: import('@agor/core/api').AgorClient | null;
   serverId?: string;
   onTestConnection?: () => Promise<void>;
-  onSaveFirst?: () => Promise<string | null>; // Save server first, returns new server ID or null on failure
   testing?: boolean;
   testResult?: {
     success: boolean;
@@ -189,7 +188,6 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
   client,
   serverId,
   onTestConnection,
-  onSaveFirst,
   testing = false,
   testResult,
 }) => {
@@ -205,21 +203,6 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
       return;
     }
 
-    // Track the effective server ID (may be set after saving)
-    let effectiveServerId = serverId;
-
-    // If no serverId and we have onSaveFirst callback, save the server first
-    if (!effectiveServerId && onSaveFirst) {
-      showInfo('Saving MCP server before testing...');
-      const newServerId = await onSaveFirst();
-      if (!newServerId) {
-        showError('Failed to save MCP server');
-        return;
-      }
-      effectiveServerId = newServerId;
-      // Server is now saved, continue with the test
-    }
-
     const values = form.getFieldsValue();
     const requestData = extractOAuthConfigForTesting(values);
     if (!requestData) {
@@ -233,7 +216,7 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
 
       const data = (await client.service('mcp-servers/test-oauth').create({
         ...requestData,
-        mcp_server_id: effectiveServerId, // Pass server ID so token is saved to DB
+        ...(serverId ? { mcp_server_id: serverId } : {}), // Only pass server ID if already saved
         start_browser_flow: true,
       })) as {
         success: boolean;
@@ -260,17 +243,6 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
     if (!client) {
       showError('Client not available');
       return;
-    }
-
-    // If no serverId and we have onSaveFirst callback, save the server first
-    if (!serverId && onSaveFirst) {
-      showInfo('Saving MCP server before testing...');
-      const newServerId = await onSaveFirst();
-      if (!newServerId) {
-        showError('Failed to save MCP server');
-        return;
-      }
-      // Server is now saved, continue with the test
     }
 
     const values = form.getFieldsValue();
@@ -880,7 +852,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   onUpdate,
   onDelete,
 }) => {
-  const { showSuccess, showError, showInfo } = useThemedMessage();
+  const { showSuccess, showError } = useThemedMessage();
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [viewModalOpen, setViewModalOpen] = useState(false);
@@ -978,84 +950,8 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       });
   };
 
-  // Save the MCP server from form values, returns new server ID or null on failure
-  const saveServerFromForm = async (): Promise<string | null> => {
-    if (!client) {
-      showError('Client not available');
-      return null;
-    }
-
-    try {
-      const values = await form.validateFields();
-
-      const data: CreateMCPServerInput = {
-        name: values.name,
-        display_name: values.display_name,
-        description: values.description,
-        transport: values.transport,
-        scope: values.scope || 'global',
-        enabled: values.enabled ?? true,
-        source: 'user',
-      };
-
-      // Add transport-specific fields
-      if (values.transport === 'stdio') {
-        data.command = values.command;
-        data.args = values.args?.split(',').map((arg: string) => arg.trim()) || [];
-      } else {
-        data.url = values.url;
-      }
-
-      // Add auth config if present
-      if (values.auth_type && values.auth_type !== 'none') {
-        data.auth = {
-          type: values.auth_type,
-        };
-        if (values.auth_type === 'bearer') {
-          data.auth.token = values.auth_token;
-        } else if (values.auth_type === 'jwt') {
-          data.auth.api_url = values.jwt_api_url;
-          data.auth.api_token = values.jwt_api_token;
-          data.auth.api_secret = values.jwt_api_secret;
-        } else if (values.auth_type === 'oauth') {
-          const oauthConfig = extractOAuthConfig(values);
-          Object.assign(data.auth, oauthConfig);
-        }
-      }
-
-      // Add env vars if present
-      if (values.env) {
-        try {
-          data.env = JSON.parse(values.env);
-        } catch {
-          // Invalid JSON, skip
-        }
-      }
-
-      // Create the server via API
-      const newServer = (await client.service('mcp-servers').create(data)) as MCPServer;
-      showSuccess(`MCP server "${data.name}" saved`);
-
-      // Update local state to switch to edit mode
-      setEditingServer(newServer);
-      setCreateModalOpen(false);
-      setEditModalOpen(true);
-
-      // Also notify parent callback
-      onCreate?.(data);
-
-      return newServer.mcp_server_id;
-    } catch (error) {
-      console.error('Save failed:', error);
-      const errorMessage = error instanceof Error ? error.message : 'Failed to save server';
-      showError(errorMessage);
-      return null;
-    }
-  };
-
-  // Test connection using current form values (not saved config)
+  // Test connection using current form values (inline config, no save required)
   // If serverId is provided, capabilities will be persisted after successful test
-  // If no serverId, saves the server first then tests
   const handleTestConnection = async (serverId?: string) => {
     if (!client) {
       showError('Client not available');
@@ -1073,17 +969,6 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     if (values.transport === 'stdio') {
       showError('Connection test is not available for stdio transport');
       return;
-    }
-
-    // If no serverId, save the server first
-    let effectiveServerId = serverId;
-    if (!effectiveServerId) {
-      showInfo('Saving MCP server before testing...');
-      effectiveServerId = (await saveServerFromForm()) || undefined;
-      if (!effectiveServerId) {
-        // Save failed, error already shown
-        return;
-      }
     }
 
     setTesting(true);
@@ -1121,7 +1006,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
         }
       }
 
-      // Send form values for testing (optionally with serverId to persist results)
+      // Send form values for testing using inline config
       const requestData: {
         mcp_server_id?: string;
         url: string;
@@ -1133,9 +1018,9 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
         auth,
       };
 
-      // Include server ID to persist discovered capabilities
-      if (effectiveServerId) {
-        requestData.mcp_server_id = effectiveServerId;
+      // Include server ID to persist discovered capabilities (only for saved servers)
+      if (serverId) {
+        requestData.mcp_server_id = serverId;
       }
 
       const data = (await client.service('mcp-servers/discover').create(requestData)) as {
@@ -1187,9 +1072,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     setAuthType(serverAuthType);
 
     // Set transport state for conditional rendering
-    if (server.transport) {
-      setTransport(server.transport);
-    }
+    setTransport(server.transport || (server.url ? 'http' : 'stdio'));
 
     // Reset form first to clear any stale registered fields from previous edits
     // This prevents Ant Design from validating hidden fields (e.g. JWT fields when auth is OAuth)
@@ -1298,6 +1181,8 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       form.resetFields();
       setEditModalOpen(false);
       setEditingServer(null);
+      setTransport('stdio');
+      setAuthType('none');
       setTestResult(null);
     } catch (error) {
       // Validation or update failed
@@ -1504,7 +1389,6 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
             form={form}
             client={client}
             onTestConnection={() => handleTestConnection()}
-            onSaveFirst={saveServerFromForm}
             testing={testing}
             testResult={testResult}
           />
@@ -1520,6 +1404,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
           form.resetFields();
           setEditModalOpen(false);
           setEditingServer(null);
+          setTransport('stdio');
           setAuthType('none');
           setTestResult(null);
         }}
@@ -1529,7 +1414,8 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
         <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
           <MCPServerFormFields
             mode="edit"
-            transport={editingServer?.transport}
+            transport={transport}
+            onTransportChange={setTransport}
             authType={authType}
             onAuthTypeChange={setAuthType}
             form={form}
