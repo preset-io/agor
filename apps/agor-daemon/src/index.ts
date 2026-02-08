@@ -1440,44 +1440,10 @@ async function main() {
 
         const mcpServerRepo = new MCPServerRepository(db);
 
-        // SSRF Protection: Validate URLs to prevent internal network access
+        // Validate URL format and protocol
         const validateUrl = (url: string): { valid: boolean; error?: string } => {
           try {
             const parsed = new URL(url);
-            const hostname = parsed.hostname.toLowerCase();
-
-            // Block localhost and loopback
-            if (
-              hostname === 'localhost' ||
-              hostname === '127.0.0.1' ||
-              hostname === '::1' ||
-              hostname === '0.0.0.0'
-            ) {
-              return { valid: false, error: 'Connection to localhost is not allowed' };
-            }
-
-            // Block private IP ranges (10.x.x.x, 172.16-31.x.x, 192.168.x.x)
-            const ipv4Match = hostname.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
-            if (ipv4Match) {
-              const [, a, b] = ipv4Match.map(Number);
-              if (
-                a === 10 ||
-                (a === 172 && b >= 16 && b <= 31) ||
-                (a === 192 && b === 168) ||
-                a === 169 // link-local
-              ) {
-                return { valid: false, error: 'Connection to private IP addresses is not allowed' };
-              }
-            }
-
-            // Block common internal hostnames
-            if (
-              hostname.endsWith('.local') ||
-              hostname.endsWith('.internal') ||
-              hostname.endsWith('.lan')
-            ) {
-              return { valid: false, error: 'Connection to internal hostnames is not allowed' };
-            }
 
             // Only allow http/https
             if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
