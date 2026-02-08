@@ -5,7 +5,9 @@ import type {
   GatewayAgenticConfig,
   GatewayChannel,
   MCPServer,
+  PermissionMode,
   User,
+  UUID,
   Worktree,
 } from '@agor/core/types';
 import {
@@ -339,7 +341,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     // Build agentic config from form values
     const agenticConfig: GatewayAgenticConfig = {
       agent: (agent || 'claude-code') as AgenticToolName,
-      ...(values.permissionMode ? { permissionMode: values.permissionMode as string } : {}),
+      ...(values.permissionMode ? { permissionMode: values.permissionMode as PermissionMode } : {}),
       ...(values.modelConfig
         ? { modelConfig: values.modelConfig as GatewayAgenticConfig['modelConfig'] }
         : {}),
@@ -361,8 +363,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     return {
       name: values.name as string,
       channel_type: values.channel_type as ChannelType,
-      target_worktree_id: values.target_worktree_id as string,
-      agor_user_id: values.agor_user_id as string,
+      target_worktree_id: values.target_worktree_id as UUID,
+      agor_user_id: values.agor_user_id as UUID,
       config,
       agentic_config: agenticConfig,
       enabled: (values.enabled as boolean) ?? true,
@@ -379,7 +381,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         return;
       }
 
-      const created = await client.service('gateway-channels').create(data);
+      const created = (await client.service('gateway-channels').create(data)) as GatewayChannel;
       showSuccess('Gateway channel created!');
       setCreatedChannelType(values.channel_type);
       setCreatedChannelKey(created.channel_key);
