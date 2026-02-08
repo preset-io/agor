@@ -9,8 +9,8 @@
 import { type Database, GatewayChannelRepository, ThreadSessionMapRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import { getConnector, hasConnector } from '@agor/core/gateway';
-import type { ChannelType, Session } from '@agor/core/types';
-import { SessionStatus } from '@agor/core/types';
+import type { AgenticToolName, ChannelType, Session, User } from '@agor/core/types';
+import { getDefaultPermissionMode, SessionStatus } from '@agor/core/types';
 
 /**
  * Inbound message data (platform → session)
@@ -80,7 +80,13 @@ export class GatewayService {
       throw new Error('Channel is disabled');
     }
 
-    // 2. Look up existing thread mapping
+    // 2. Fetch channel owner user (needed for auth context + agentic defaults)
+    const usersService = this.app.service('users') as {
+      get: (id: string) => Promise<User>;
+    };
+    const user = await usersService.get(channel.agor_user_id);
+
+    // 3. Look up existing thread mapping
     const existingMapping = await this.threadMapRepo.findByChannelAndThread(
       channel.id,
       data.thread_id
@@ -89,6 +95,16 @@ export class GatewayService {
     let sessionId: string;
     let created = false;
 
+    // Resolve agentic config: channel config > user defaults > system defaults
+    const channelConfig = channel.agentic_config;
+    const agenticTool: AgenticToolName = (channelConfig?.agent as AgenticToolName) ?? 'claude-code';
+    const userDefaults = user.default_agentic_config?.[agenticTool];
+    const permissionMode =
+      channelConfig?.permissionMode ??
+      userDefaults?.permissionMode ??
+      getDefaultPermissionMode(agenticTool);
+    const modelConfig = channelConfig?.modelConfig ?? userDefaults?.modelConfig;
+
     if (existingMapping) {
       // Existing thread → existing session
       sessionId = existingMapping.session_id;
@@ -96,7 +112,7 @@ export class GatewayService {
       // Touch timestamps
       await this.threadMapRepo.updateLastMessage(existingMapping.id);
     } else {
-      // New thread → create session and mapping
+      // New thread → create session via FeathersJS service
       const sessionsService = this.app.service('sessions') as {
         create: (data: Partial<Session>) => Promise<Session>;
       };
@@ -107,7 +123,15 @@ export class GatewayService {
         worktree_id: channel.target_worktree_id,
         created_by: channel.agor_user_id,
         status: SessionStatus.IDLE,
-        agentic_tool: 'claude-code',
+        agentic_tool: agenticTool,
+        permission_config: { mode: permissionMode },
+        model_config: modelConfig
+          ? {
+              mode: modelConfig.mode ?? 'alias',
+              model: modelConfig.model ?? '',
+              updated_at: new Date().toISOString(),
+            }
+          : undefined,
         tasks: [],
         message_count: 0,
       });
@@ -129,19 +153,27 @@ export class GatewayService {
     // Touch channel last_message_at
     await this.channelRepo.updateLastMessage(channel.id);
 
-    // Create a task for the session (executor will pick it up)
+    // 4. Send prompt via /sessions/:id/prompt — triggers full flow:
+    //    task creation, user message, git state, executor spawn
     try {
-      const tasksService = this.app.service('tasks') as {
-        create: (data: Record<string, unknown>) => Promise<Record<string, unknown>>;
+      const promptService = this.app.service('/sessions/:id/prompt') as {
+        create: (
+          data: { prompt: string; permissionMode?: string },
+          params: Record<string, unknown>
+        ) => Promise<Record<string, unknown>>;
       };
 
-      await tasksService.create({
-        session_id: sessionId,
-        prompt: data.text,
-        status: 'queued',
-      });
+      // Internal call: pass user, omit provider to bypass auth hooks
+      await promptService.create(
+        { prompt: data.text, permissionMode },
+        { route: { id: sessionId }, user }
+      );
+
+      console.log(
+        `[gateway] Prompt sent to session ${sessionId.substring(0, 8)} via /sessions/:id/prompt`
+      );
     } catch (error) {
-      console.warn('[gateway] Failed to create task for session:', error);
+      console.error('[gateway] Failed to send prompt to session:', error);
     }
 
     return {

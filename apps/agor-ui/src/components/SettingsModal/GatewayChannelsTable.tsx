@@ -1,8 +1,17 @@
 import type { AgorClient } from '@agor/core/api';
-import type { ChannelType, GatewayChannel, User, Worktree } from '@agor/core/types';
+import type {
+  AgenticToolName,
+  ChannelType,
+  GatewayAgenticConfig,
+  GatewayChannel,
+  MCPServer,
+  User,
+  Worktree,
+} from '@agor/core/types';
 import {
   CopyOutlined,
   DeleteOutlined,
+  DownOutlined,
   EditOutlined,
   MessageOutlined,
   PlusOutlined,
@@ -12,6 +21,7 @@ import {
   Alert,
   Badge,
   Button,
+  Collapse,
   Form,
   type FormInstance,
   Input,
@@ -26,15 +36,20 @@ import {
   Typography,
   theme,
 } from 'antd';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
+import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
+import { AgentSelectionGrid } from '../AgentSelectionGrid';
+import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
 
 interface GatewayChannelsTableProps {
   client: AgorClient | null;
   gatewayChannelById: Map<string, GatewayChannel>;
   worktreeById: Map<string, Worktree>;
   userById: Map<string, User>;
+  mcpServerById: Map<string, MCPServer>;
+  currentUser?: User | null;
   onCreate?: (data: Partial<GatewayChannel>) => void;
   onUpdate?: (channelId: string, updates: Partial<GatewayChannel>) => void;
   onDelete?: (channelId: string) => void;
@@ -79,6 +94,9 @@ const ChannelFormFields: React.FC<{
   onChannelTypeChange: (type: ChannelType) => void;
   worktreeById: Map<string, Worktree>;
   userById: Map<string, User>;
+  mcpServerById: Map<string, MCPServer>;
+  selectedAgent: string;
+  onAgentChange: (agent: string) => void;
   editingChannel?: GatewayChannel | null;
   onCopyKey?: (key: string) => void;
 }> = ({
@@ -87,6 +105,9 @@ const ChannelFormFields: React.FC<{
   onChannelTypeChange,
   worktreeById,
   userById,
+  mcpServerById,
+  selectedAgent,
+  onAgentChange,
   editingChannel,
   onCopyKey,
 }) => {
@@ -227,6 +248,39 @@ const ChannelFormFields: React.FC<{
           style={{ marginBottom: 16 }}
         />
       )}
+
+      <Collapse
+        ghost
+        defaultActiveKey={[]}
+        expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
+        items={[
+          {
+            key: 'agentic-tool-config',
+            label: <Typography.Text strong>Agentic Tool Configuration</Typography.Text>,
+            children: (
+              <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  Configure which agent and settings to use for sessions created from this channel.
+                </Typography.Text>
+                <AgentSelectionGrid
+                  agents={AVAILABLE_AGENTS}
+                  selectedAgentId={selectedAgent}
+                  onSelect={onAgentChange}
+                  columns={2}
+                  showHelperText={false}
+                  showComparisonLink={false}
+                />
+                <AgenticToolConfigForm
+                  agenticTool={selectedAgent as AgenticToolName}
+                  mcpServerById={mcpServerById}
+                  showHelpText={false}
+                />
+              </Space>
+            ),
+          },
+        ]}
+        style={{ marginTop: 8 }}
+      />
     </>
   );
 };
@@ -236,6 +290,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   gatewayChannelById,
   worktreeById,
   userById,
+  mcpServerById,
+  currentUser,
   onCreate,
   onUpdate,
   onDelete,
@@ -246,14 +302,32 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editingChannel, setEditingChannel] = useState<GatewayChannel | null>(null);
   const [channelType, setChannelType] = useState<ChannelType>('slack');
+  const [selectedAgent, setSelectedAgent] = useState<string>('claude-code');
   const [createdChannelKey, setCreatedChannelKey] = useState<string | null>(null);
   const [createdChannelType, setCreatedChannelType] = useState<ChannelType | null>(null);
   const [createForm] = Form.useForm();
   const [editForm] = Form.useForm();
 
+  // Pre-populate agentic config form with user defaults when agent changes
+  useEffect(() => {
+    const agentDefaults = currentUser?.default_agentic_config?.[selectedAgent as AgenticToolName];
+    if (agentDefaults) {
+      const activeForm = editModalOpen ? editForm : createForm;
+      activeForm.setFieldsValue({
+        permissionMode: agentDefaults.permissionMode,
+        modelConfig: agentDefaults.modelConfig,
+        mcpServerIds: agentDefaults.mcpServerIds,
+        codexSandboxMode: agentDefaults.codexSandboxMode,
+        codexApprovalPolicy: agentDefaults.codexApprovalPolicy,
+        codexNetworkAccess: agentDefaults.codexNetworkAccess,
+      });
+    }
+  }, [selectedAgent, currentUser, createForm, editForm, editModalOpen]);
+
   const extractFormData = (
     values: Record<string, unknown>,
-    existingConfig?: Record<string, unknown>
+    existingConfig?: Record<string, unknown>,
+    agent?: string
   ): Partial<GatewayChannel> => {
     const config: Record<string, unknown> = { ...(existingConfig || {}) };
     if (values.channel_type === 'slack') {
@@ -261,12 +335,36 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       if (values.app_token) config.app_token = values.app_token;
       if (values.connection_mode) config.connection_mode = values.connection_mode;
     }
+
+    // Build agentic config from form values
+    const agenticConfig: GatewayAgenticConfig = {
+      agent: (agent || 'claude-code') as AgenticToolName,
+      ...(values.permissionMode ? { permissionMode: values.permissionMode as string } : {}),
+      ...(values.modelConfig
+        ? { modelConfig: values.modelConfig as GatewayAgenticConfig['modelConfig'] }
+        : {}),
+      ...(values.mcpServerIds ? { mcpServerIds: values.mcpServerIds as string[] } : {}),
+      ...(values.codexSandboxMode
+        ? { codexSandboxMode: values.codexSandboxMode as GatewayAgenticConfig['codexSandboxMode'] }
+        : {}),
+      ...(values.codexApprovalPolicy
+        ? {
+            codexApprovalPolicy:
+              values.codexApprovalPolicy as GatewayAgenticConfig['codexApprovalPolicy'],
+          }
+        : {}),
+      ...(values.codexNetworkAccess !== undefined
+        ? { codexNetworkAccess: values.codexNetworkAccess as boolean }
+        : {}),
+    };
+
     return {
       name: values.name as string,
       channel_type: values.channel_type as ChannelType,
       target_worktree_id: values.target_worktree_id as string,
       agor_user_id: values.agor_user_id as string,
       config,
+      agentic_config: agenticConfig,
       enabled: (values.enabled as boolean) ?? true,
     };
   };
@@ -274,7 +372,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   const handleCreate = async () => {
     try {
       const values = await createForm.validateFields();
-      const data = extractFormData(values);
+      const data = extractFormData(values, undefined, selectedAgent);
 
       if (!client) {
         showError('Not connected to server');
@@ -301,6 +399,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   const handleEdit = (channel: GatewayChannel) => {
     setEditingChannel(channel);
     setChannelType(channel.channel_type);
+    const agent = channel.agentic_config?.agent || 'claude-code';
+    setSelectedAgent(agent);
     editForm.resetFields();
     editForm.setFieldsValue({
       name: channel.name,
@@ -309,6 +409,13 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       agor_user_id: channel.agor_user_id,
       enabled: channel.enabled,
       connection_mode: (channel.config as Record<string, unknown>)?.connection_mode || 'socket',
+      // Agentic config fields
+      permissionMode: channel.agentic_config?.permissionMode,
+      modelConfig: channel.agentic_config?.modelConfig,
+      mcpServerIds: channel.agentic_config?.mcpServerIds,
+      codexSandboxMode: channel.agentic_config?.codexSandboxMode,
+      codexApprovalPolicy: channel.agentic_config?.codexApprovalPolicy,
+      codexNetworkAccess: channel.agentic_config?.codexNetworkAccess,
     });
     setEditModalOpen(true);
   };
@@ -318,7 +425,11 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     editForm
       .validateFields()
       .then((values) => {
-        const updates = extractFormData(values, editingChannel.config as Record<string, unknown>);
+        const updates = extractFormData(
+          values,
+          editingChannel.config as Record<string, unknown>,
+          selectedAgent
+        );
         onUpdate?.(editingChannel.id, updates);
         editForm.resetFields();
         setEditModalOpen(false);
@@ -499,6 +610,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
           createForm.resetFields();
           setCreateModalOpen(false);
           setChannelType('slack');
+          setSelectedAgent('claude-code');
         }}
         okText="Create"
         width={600}
@@ -511,6 +623,9 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             onChannelTypeChange={setChannelType}
             worktreeById={worktreeById}
             userById={userById}
+            mcpServerById={mcpServerById}
+            selectedAgent={selectedAgent}
+            onAgentChange={setSelectedAgent}
           />
         </Form>
       </Modal>
@@ -525,6 +640,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
           setEditModalOpen(false);
           setEditingChannel(null);
           setChannelType('slack');
+          setSelectedAgent('claude-code');
         }}
         okText="Save"
         width={600}
@@ -537,6 +653,9 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             onChannelTypeChange={setChannelType}
             worktreeById={worktreeById}
             userById={userById}
+            mcpServerById={mcpServerById}
+            selectedAgent={selectedAgent}
+            onAgentChange={setSelectedAgent}
             editingChannel={editingChannel}
             onCopyKey={handleCopyKey}
           />

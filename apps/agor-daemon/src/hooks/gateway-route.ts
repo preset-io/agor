@@ -6,13 +6,31 @@
  * Fire-and-forget — never blocks message creation.
  */
 
-import type { HookContext, Message } from '@agor/core/types';
+import type { ContentBlock, HookContext, Message } from '@agor/core/types';
 import type { GatewayService } from '../services/gateway';
 
 /**
+ * Extract readable text from message content.
+ * Handles string content, ContentBlock[] arrays, and other shapes gracefully.
+ */
+function extractText(content: Message['content']): string {
+  if (typeof content === 'string') {
+    return content;
+  }
+  if (Array.isArray(content)) {
+    return (content as ContentBlock[])
+      .filter((b) => b.type === 'text')
+      .map((b) => (b as Record<string, unknown>).text as string)
+      .filter(Boolean)
+      .join('\n');
+  }
+  return '';
+}
+
+/**
  * After hook that routes assistant messages through the gateway.
- * Only fires for assistant messages. Errors are caught and logged,
- * never propagated to avoid slowing down message creation.
+ * Only fires for assistant messages with text content. Errors are caught
+ * and logged, never propagated to avoid slowing down message creation.
  */
 export const gatewayRouteHook = async (context: HookContext) => {
   const message = context.result as Message;
@@ -22,12 +40,14 @@ export const gatewayRouteHook = async (context: HookContext) => {
     return context;
   }
 
+  const messageText = extractText(message.content);
+  if (!messageText) {
+    return context; // No text to route (tool-only messages, etc.)
+  }
+
   // Fire-and-forget: route message through gateway
   try {
     const gatewayService = context.app.service('gateway') as unknown as GatewayService;
-
-    const messageText =
-      typeof message.content === 'string' ? message.content : JSON.stringify(message.content);
 
     // Don't await — fire and forget
     gatewayService

@@ -942,6 +942,9 @@ export const gatewayChannels = sqliteTable(
 
     // JSON blob for platform credentials (encrypted at rest)
     config: t.json<Record<string, unknown>>('config').notNull(),
+
+    // JSON blob for agentic tool configuration (agent, model, permission mode, etc.)
+    agentic_config: t.json<Record<string, unknown> | null>('agentic_config'),
   },
   (table) => ({
     channelKeyIdx: index('idx_gateway_channel_key').on(table.channel_key),

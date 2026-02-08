@@ -1,0 +1,1 @@
+ALTER TABLE "gateway_channels" ADD COLUMN "agentic_config" jsonb;

@@ -5,7 +5,10 @@
  * messaging platforms (Slack, Discord, etc.) and Agor sessions.
  */
 
+import type { AgenticToolName, CodexApprovalPolicy, CodexSandboxMode } from './agentic-tool';
 import type { SessionID, UserID, UUID, WorktreeID } from './id';
+import type { PermissionMode } from './session';
+import type { DefaultModelConfig } from './user';
 
 // ============================================================================
 // ID Types
@@ -28,6 +31,27 @@ export type ChannelType = 'slack' | 'discord' | 'whatsapp' | 'telegram';
 export type ThreadStatus = 'active' | 'archived' | 'paused';
 
 // ============================================================================
+// Agentic Tool Configuration
+// ============================================================================
+
+/**
+ * Agentic tool configuration for gateway channels.
+ *
+ * Reuses existing types from agentic-tool.ts and user.ts to stay DRY.
+ * When a channel has agentic_config, sessions created via that channel
+ * use these settings. Falls back to user defaults when not set.
+ */
+export interface GatewayAgenticConfig {
+  agent: AgenticToolName;
+  modelConfig?: DefaultModelConfig;
+  permissionMode?: PermissionMode;
+  mcpServerIds?: string[];
+  codexSandboxMode?: CodexSandboxMode;
+  codexApprovalPolicy?: CodexApprovalPolicy;
+  codexNetworkAccess?: boolean;
+}
+
+// ============================================================================
 // Core Interfaces
 // ============================================================================
 
@@ -47,6 +71,7 @@ export interface GatewayChannel {
   agor_user_id: UserID;
   channel_key: string; // UUID — the auth secret for inbound webhooks
   config: Record<string, unknown>; // Platform credentials (encrypted at rest)
+  agentic_config: GatewayAgenticConfig | null; // Session creation settings
   enabled: boolean;
   created_at: string; // ISO 8601
   updated_at: string; // ISO 8601

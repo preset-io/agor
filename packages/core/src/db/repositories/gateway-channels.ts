@@ -5,7 +5,13 @@
  * Handles encryption/decryption of sensitive platform credentials in the config blob.
  */
 
-import type { ChannelType, GatewayChannel, GatewayChannelID, UUID } from '@agor/core/types';
+import type {
+  ChannelType,
+  GatewayAgenticConfig,
+  GatewayChannel,
+  GatewayChannelID,
+  UUID,
+} from '@agor/core/types';
 import { eq, like } from 'drizzle-orm';
 import { formatShortId, generateId } from '../../lib/ids';
 import type { Database } from '../client';
@@ -75,6 +81,7 @@ export class GatewayChannelRepository
       agor_user_id: row.agor_user_id as UUID,
       channel_key: row.channel_key,
       config: decryptConfig(config),
+      agentic_config: (row.agentic_config as unknown as GatewayAgenticConfig) ?? null,
       enabled: Boolean(row.enabled),
       created_at: new Date(row.created_at).toISOString(),
       updated_at: new Date(row.updated_at).toISOString(),
@@ -102,6 +109,7 @@ export class GatewayChannelRepository
       enabled: data.enabled ?? true,
       last_message_at: data.last_message_at ? new Date(data.last_message_at) : null,
       config: data.config ? encryptConfig(data.config) : {},
+      agentic_config: (data.agentic_config as unknown as Record<string, unknown>) ?? null,
     };
   }
 
@@ -228,6 +236,7 @@ export class GatewayChannelRepository
           agor_user_id: insertData.agor_user_id,
           enabled: insertData.enabled,
           config: insertData.config,
+          agentic_config: insertData.agentic_config,
           updated_at: new Date(),
         })
         .where(eq(gatewayChannels.id, fullId))
