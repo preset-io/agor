@@ -13,6 +13,7 @@ import {
   Badge,
   Button,
   Form,
+  type FormInstance,
   Input,
   Modal,
   Popconfirm,
@@ -70,149 +71,122 @@ function getChannelTypeColor(type: ChannelType): string {
   }
 }
 
-export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
-  client,
-  gatewayChannelById,
+/** Shared form fields for create and edit modals */
+const ChannelFormFields: React.FC<{
+  form: FormInstance;
+  mode: 'create' | 'edit';
+  channelType: ChannelType;
+  onChannelTypeChange: (type: ChannelType) => void;
+  worktreeById: Map<string, Worktree>;
+  userById: Map<string, User>;
+  editingChannel?: GatewayChannel | null;
+  onCopyKey?: (key: string) => void;
+}> = ({
+  mode,
+  channelType,
+  onChannelTypeChange,
   worktreeById,
   userById,
-  onCreate,
-  onUpdate,
-  onDelete,
+  editingChannel,
+  onCopyKey,
 }) => {
-  const { showSuccess, showError } = useThemedMessage();
-  const { token } = theme.useToken();
-  const [createModalOpen, setCreateModalOpen] = useState(false);
-  const [editModalOpen, setEditModalOpen] = useState(false);
-  const [editingChannel, setEditingChannel] = useState<GatewayChannel | null>(null);
-  const [channelType, setChannelType] = useState<ChannelType>('slack');
-  const [createdChannelKey, setCreatedChannelKey] = useState<string | null>(null);
-  const [createdChannelType, setCreatedChannelType] = useState<ChannelType | null>(null);
-  const [form] = Form.useForm();
+  return (
+    <>
+      {mode === 'edit' && editingChannel && (
+        <Form.Item label="Channel Key">
+          <Input.Search
+            value={editingChannel.channel_key}
+            readOnly
+            enterButton={<CopyOutlined />}
+            onSearch={() => onCopyKey?.(editingChannel.channel_key)}
+          />
+          <Typography.Text
+            type="secondary"
+            style={{ fontSize: 12, marginTop: 4, display: 'block' }}
+          >
+            Use this key to authenticate inbound messages from the platform.
+          </Typography.Text>
+        </Form.Item>
+      )}
 
-  const worktreeOptions = Array.from(worktreeById.values()).map((wt) => ({
-    value: wt.worktree_id,
-    label: wt.name || wt.ref || wt.worktree_id,
-  }));
+      <Form.Item
+        label="Channel Type"
+        name="channel_type"
+        initialValue={mode === 'create' ? 'slack' : undefined}
+        rules={[{ required: true }]}
+      >
+        <Select onChange={(value: ChannelType) => onChannelTypeChange(value)}>
+          {CHANNEL_TYPE_OPTIONS.map((opt) => (
+            <Select.Option key={opt.value} value={opt.value}>
+              <Space>
+                {opt.icon}
+                {opt.label}
+              </Space>
+            </Select.Option>
+          ))}
+        </Select>
+      </Form.Item>
 
-  const userOptions = Array.from(userById.values()).map((u) => ({
-    value: u.user_id,
-    label: u.name || u.email || u.user_id,
-  }));
+      <Form.Item
+        label="Name"
+        name="name"
+        rules={[{ required: true, message: 'Please enter a channel name' }]}
+      >
+        <Input placeholder="e.g., Team Slack, Personal Discord" />
+      </Form.Item>
 
-  const handleCreate = () => {
-    form
-      .validateFields()
-      .then((values) => {
-        const config: Record<string, unknown> = {};
-        if (values.channel_type === 'slack') {
-          if (values.bot_token) config.bot_token = values.bot_token;
-          if (values.app_token) config.app_token = values.app_token;
-          if (values.connection_mode) config.connection_mode = values.connection_mode;
+      <Form.Item
+        label="Target Worktree"
+        name="target_worktree_id"
+        rules={[{ required: true, message: 'Please select a target worktree' }]}
+        tooltip={
+          mode === 'create'
+            ? 'New sessions from this channel will be created in this worktree'
+            : undefined
         }
+      >
+        <Select placeholder="Select a worktree" showSearch optionFilterProp="children">
+          {Array.from(worktreeById.values()).map((wt) => (
+            <Select.Option key={wt.worktree_id} value={wt.worktree_id}>
+              {wt.name || wt.ref || wt.worktree_id}
+            </Select.Option>
+          ))}
+        </Select>
+      </Form.Item>
 
-        const data: Partial<GatewayChannel> = {
-          name: values.name,
-          channel_type: values.channel_type,
-          target_worktree_id: values.target_worktree_id,
-          agor_user_id: values.agor_user_id,
-          config,
-          enabled: values.enabled ?? true,
-        };
-
-        onCreate?.(data);
-
-        // Show success state with channel key
-        // In a real implementation the parent would return the created channel
-        // with its generated key. For now we show a placeholder.
-        setCreatedChannelType(values.channel_type);
-        setCreatedChannelKey('pending');
-
-        form.resetFields();
-        setCreateModalOpen(false);
-        setChannelType('slack');
-      })
-      .catch((error) => {
-        console.error('Form validation failed:', error);
-        if (error.errorFields?.length > 0) {
-          showError(error.errorFields[0].errors[0] || 'Please fill in required fields');
+      <Form.Item
+        label="Post messages as"
+        name="agor_user_id"
+        rules={[{ required: true, message: 'Please select a user' }]}
+        tooltip={
+          mode === 'create'
+            ? 'Messages from this channel will be attributed to this Agor user'
+            : undefined
         }
-      });
-  };
+      >
+        <Select placeholder="Select a user" showSearch optionFilterProp="children">
+          {Array.from(userById.values()).map((u) => (
+            <Select.Option key={u.user_id} value={u.user_id}>
+              {u.name || u.email || u.user_id}
+            </Select.Option>
+          ))}
+        </Select>
+      </Form.Item>
 
-  const handleEdit = (channel: GatewayChannel) => {
-    setEditingChannel(channel);
-    setChannelType(channel.channel_type);
-    form.resetFields();
-    form.setFieldsValue({
-      name: channel.name,
-      channel_type: channel.channel_type,
-      target_worktree_id: channel.target_worktree_id,
-      agor_user_id: channel.agor_user_id,
-      enabled: channel.enabled,
-      connection_mode: (channel.config as Record<string, unknown>)?.connection_mode || 'socket',
-      // Don't pre-populate tokens — they're encrypted
-    });
-    setEditModalOpen(true);
-  };
+      <Form.Item
+        label="Enabled"
+        name="enabled"
+        valuePropName="checked"
+        initialValue={mode === 'create' ? true : undefined}
+      >
+        <Switch />
+      </Form.Item>
 
-  const handleUpdate = () => {
-    if (!editingChannel) return;
+      <Typography.Text strong style={{ display: 'block', marginBottom: 12, marginTop: 8 }}>
+        Platform Configuration
+      </Typography.Text>
 
-    form
-      .validateFields()
-      .then((values) => {
-        const config: Record<string, unknown> = { ...(editingChannel.config || {}) };
-        if (values.channel_type === 'slack') {
-          // Only update tokens if user entered new values
-          if (values.bot_token) config.bot_token = values.bot_token;
-          if (values.app_token) config.app_token = values.app_token;
-          if (values.connection_mode) config.connection_mode = values.connection_mode;
-        }
-
-        const updates: Partial<GatewayChannel> = {
-          name: values.name,
-          channel_type: values.channel_type,
-          target_worktree_id: values.target_worktree_id,
-          agor_user_id: values.agor_user_id,
-          config,
-          enabled: values.enabled,
-        };
-
-        onUpdate?.(editingChannel.id, updates);
-        showSuccess('Gateway channel updated');
-        form.resetFields();
-        setEditModalOpen(false);
-        setEditingChannel(null);
-        setChannelType('slack');
-      })
-      .catch((error) => {
-        console.error('Form validation failed:', error);
-        if (error.errorFields?.length > 0) {
-          showError(error.errorFields[0].errors[0] || 'Please fill in required fields');
-        }
-      });
-  };
-
-  const handleToggleEnabled = (channel: GatewayChannel) => {
-    onUpdate?.(channel.id, { enabled: !channel.enabled });
-  };
-
-  const handleDelete = (channelId: string) => {
-    onDelete?.(channelId);
-  };
-
-  const handleCopyKey = async (key: string) => {
-    try {
-      await navigator.clipboard.writeText(key);
-      showSuccess('Channel key copied to clipboard');
-    } catch {
-      showError('Failed to copy to clipboard');
-    }
-  };
-
-  const renderPlatformConfig = (type: ChannelType, mode: 'create' | 'edit') => {
-    if (type === 'slack') {
-      return (
+      {channelType === 'slack' ? (
         <>
           <Form.Item
             label="Bot Token"
@@ -244,18 +218,136 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             </Select>
           </Form.Item>
         </>
-      );
-    }
+      ) : (
+        <Alert
+          message={`${channelType.charAt(0).toUpperCase() + channelType.slice(1)} support coming soon`}
+          description="This platform integration is not yet available. Slack is currently the only supported platform."
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+        />
+      )}
+    </>
+  );
+};
 
-    return (
-      <Alert
-        message={`${type.charAt(0).toUpperCase() + type.slice(1)} support coming soon`}
-        description="This platform integration is not yet available. Slack is currently the only supported platform."
-        type="info"
-        showIcon
-        style={{ marginBottom: 16 }}
-      />
-    );
+export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
+  client,
+  gatewayChannelById,
+  worktreeById,
+  userById,
+  onCreate,
+  onUpdate,
+  onDelete,
+}) => {
+  const { showSuccess, showError } = useThemedMessage();
+  const { token } = theme.useToken();
+  const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [editModalOpen, setEditModalOpen] = useState(false);
+  const [editingChannel, setEditingChannel] = useState<GatewayChannel | null>(null);
+  const [channelType, setChannelType] = useState<ChannelType>('slack');
+  const [createdChannelKey, setCreatedChannelKey] = useState<string | null>(null);
+  const [createdChannelType, setCreatedChannelType] = useState<ChannelType | null>(null);
+  const [createForm] = Form.useForm();
+  const [editForm] = Form.useForm();
+
+  const extractFormData = (
+    values: Record<string, unknown>,
+    existingConfig?: Record<string, unknown>
+  ): Partial<GatewayChannel> => {
+    const config: Record<string, unknown> = { ...(existingConfig || {}) };
+    if (values.channel_type === 'slack') {
+      if (values.bot_token) config.bot_token = values.bot_token;
+      if (values.app_token) config.app_token = values.app_token;
+      if (values.connection_mode) config.connection_mode = values.connection_mode;
+    }
+    return {
+      name: values.name as string,
+      channel_type: values.channel_type as ChannelType,
+      target_worktree_id: values.target_worktree_id as string,
+      agor_user_id: values.agor_user_id as string,
+      config,
+      enabled: (values.enabled as boolean) ?? true,
+    };
+  };
+
+  const handleCreate = async () => {
+    try {
+      const values = await createForm.validateFields();
+      const data = extractFormData(values);
+
+      if (!client) {
+        showError('Not connected to server');
+        return;
+      }
+
+      const created = await client.service('gateway-channels').create(data);
+      showSuccess('Gateway channel created!');
+      setCreatedChannelType(values.channel_type);
+      setCreatedChannelKey(created.channel_key);
+      createForm.resetFields();
+      setCreateModalOpen(false);
+      setChannelType('slack');
+    } catch (error: unknown) {
+      const err = error as { errorFields?: { errors: string[] }[]; message?: string };
+      if (err.errorFields?.length) {
+        showError(err.errorFields[0].errors[0] || 'Please fill in required fields');
+      } else {
+        showError(`Failed to create channel: ${err.message || String(error)}`);
+      }
+    }
+  };
+
+  const handleEdit = (channel: GatewayChannel) => {
+    setEditingChannel(channel);
+    setChannelType(channel.channel_type);
+    editForm.resetFields();
+    editForm.setFieldsValue({
+      name: channel.name,
+      channel_type: channel.channel_type,
+      target_worktree_id: channel.target_worktree_id,
+      agor_user_id: channel.agor_user_id,
+      enabled: channel.enabled,
+      connection_mode: (channel.config as Record<string, unknown>)?.connection_mode || 'socket',
+    });
+    setEditModalOpen(true);
+  };
+
+  const handleUpdate = () => {
+    if (!editingChannel) return;
+    editForm
+      .validateFields()
+      .then((values) => {
+        const updates = extractFormData(values, editingChannel.config as Record<string, unknown>);
+        onUpdate?.(editingChannel.id, updates);
+        editForm.resetFields();
+        setEditModalOpen(false);
+        setEditingChannel(null);
+        setChannelType('slack');
+      })
+      .catch((error) => {
+        console.error('Form validation failed:', error);
+        if (error.errorFields?.length > 0) {
+          showError(error.errorFields[0].errors[0] || 'Please fill in required fields');
+        }
+      });
+  };
+
+  const handleToggleEnabled = (channel: GatewayChannel) => {
+    onUpdate?.(channel.id, { enabled: !channel.enabled });
+  };
+
+  const handleDelete = (channelId: string) => {
+    onDelete?.(channelId);
+  };
+
+  const handleCopyKey = async (key: string) => {
+    try {
+      await navigator.clipboard.writeText(key);
+      showSuccess('Channel key copied to clipboard');
+    } catch {
+      showError('Failed to copy to clipboard');
+    }
   };
 
   const columns = [
@@ -404,77 +496,22 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         open={createModalOpen}
         onOk={handleCreate}
         onCancel={() => {
-          form.resetFields();
+          createForm.resetFields();
           setCreateModalOpen(false);
           setChannelType('slack');
         }}
         okText="Create"
         width={600}
       >
-        <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
-          <Form.Item
-            label="Channel Type"
-            name="channel_type"
-            initialValue="slack"
-            rules={[{ required: true }]}
-          >
-            <Select onChange={(value: ChannelType) => setChannelType(value)}>
-              {CHANNEL_TYPE_OPTIONS.map((opt) => (
-                <Select.Option key={opt.value} value={opt.value}>
-                  <Space>
-                    {opt.icon}
-                    {opt.label}
-                  </Space>
-                </Select.Option>
-              ))}
-            </Select>
-          </Form.Item>
-
-          <Form.Item
-            label="Name"
-            name="name"
-            rules={[{ required: true, message: 'Please enter a channel name' }]}
-          >
-            <Input placeholder="e.g., Team Slack, Personal Discord" />
-          </Form.Item>
-
-          <Form.Item
-            label="Target Worktree"
-            name="target_worktree_id"
-            rules={[{ required: true, message: 'Please select a target worktree' }]}
-            tooltip="New sessions from this channel will be created in this worktree"
-          >
-            <Select
-              placeholder="Select a worktree"
-              showSearch
-              optionFilterProp="label"
-              options={worktreeOptions}
-            />
-          </Form.Item>
-
-          <Form.Item
-            label="Post messages as"
-            name="agor_user_id"
-            rules={[{ required: true, message: 'Please select a user' }]}
-            tooltip="Messages from this channel will be attributed to this Agor user"
-          >
-            <Select
-              placeholder="Select a user"
-              showSearch
-              optionFilterProp="label"
-              options={userOptions}
-            />
-          </Form.Item>
-
-          <Form.Item label="Enabled" name="enabled" valuePropName="checked" initialValue={true}>
-            <Switch />
-          </Form.Item>
-
-          <Typography.Text strong style={{ display: 'block', marginBottom: 12, marginTop: 8 }}>
-            Platform Configuration
-          </Typography.Text>
-
-          {renderPlatformConfig(channelType, 'create')}
+        <Form form={createForm} layout="vertical" style={{ marginTop: 16 }}>
+          <ChannelFormFields
+            form={createForm}
+            mode="create"
+            channelType={channelType}
+            onChannelTypeChange={setChannelType}
+            worktreeById={worktreeById}
+            userById={userById}
+          />
         </Form>
       </Modal>
 
@@ -484,7 +521,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         open={editModalOpen}
         onOk={handleUpdate}
         onCancel={() => {
-          form.resetFields();
+          editForm.resetFields();
           setEditModalOpen(false);
           setEditingChannel(null);
           setChannelType('slack');
@@ -492,80 +529,17 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         okText="Save"
         width={600}
       >
-        <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
-          {editingChannel && (
-            <Form.Item label="Channel Key">
-              <Input.Search
-                value={editingChannel.channel_key}
-                readOnly
-                enterButton={<CopyOutlined />}
-                onSearch={() => handleCopyKey(editingChannel.channel_key)}
-              />
-              <Typography.Text
-                type="secondary"
-                style={{ fontSize: 12, marginTop: 4, display: 'block' }}
-              >
-                Use this key to authenticate inbound messages from the platform.
-              </Typography.Text>
-            </Form.Item>
-          )}
-
-          <Form.Item label="Channel Type" name="channel_type" rules={[{ required: true }]}>
-            <Select onChange={(value: ChannelType) => setChannelType(value)}>
-              {CHANNEL_TYPE_OPTIONS.map((opt) => (
-                <Select.Option key={opt.value} value={opt.value}>
-                  <Space>
-                    {opt.icon}
-                    {opt.label}
-                  </Space>
-                </Select.Option>
-              ))}
-            </Select>
-          </Form.Item>
-
-          <Form.Item
-            label="Name"
-            name="name"
-            rules={[{ required: true, message: 'Please enter a channel name' }]}
-          >
-            <Input placeholder="e.g., Team Slack, Personal Discord" />
-          </Form.Item>
-
-          <Form.Item
-            label="Target Worktree"
-            name="target_worktree_id"
-            rules={[{ required: true, message: 'Please select a target worktree' }]}
-          >
-            <Select
-              placeholder="Select a worktree"
-              showSearch
-              optionFilterProp="label"
-              options={worktreeOptions}
-            />
-          </Form.Item>
-
-          <Form.Item
-            label="Post messages as"
-            name="agor_user_id"
-            rules={[{ required: true, message: 'Please select a user' }]}
-          >
-            <Select
-              placeholder="Select a user"
-              showSearch
-              optionFilterProp="label"
-              options={userOptions}
-            />
-          </Form.Item>
-
-          <Form.Item label="Enabled" name="enabled" valuePropName="checked">
-            <Switch />
-          </Form.Item>
-
-          <Typography.Text strong style={{ display: 'block', marginBottom: 12, marginTop: 8 }}>
-            Platform Configuration
-          </Typography.Text>
-
-          {renderPlatformConfig(channelType, 'edit')}
+        <Form form={editForm} layout="vertical" style={{ marginTop: 16 }}>
+          <ChannelFormFields
+            form={editForm}
+            mode="edit"
+            channelType={channelType}
+            onChannelTypeChange={setChannelType}
+            worktreeById={worktreeById}
+            userById={userById}
+            editingChannel={editingChannel}
+            onCopyKey={handleCopyKey}
+          />
         </Form>
       </Modal>
 

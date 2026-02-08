@@ -11,6 +11,7 @@ import type {
   Board,
   BoardComment,
   BoardEntityObject,
+  GatewayChannel,
   MCPServer,
   Repo,
   Session,
@@ -29,6 +30,7 @@ interface UseAgorDataResult {
   worktreeById: Map<string, Worktree>; // Primary storage - efficient lookups, stable references
   userById: Map<string, User>; // O(1) lookups by user_id - efficient, stable references
   mcpServerById: Map<string, MCPServer>; // O(1) lookups by mcp_server_id - efficient, stable references
+  gatewayChannelById: Map<string, GatewayChannel>; // O(1) lookups by id - efficient, stable references
   sessionMcpServerIds: Map<string, string[]>; // O(1) lookups by session_id - efficient, stable references
   loading: boolean;
   error: string | null;
@@ -58,6 +60,9 @@ export function useAgorData(
   const [worktreeById, setWorktreeById] = useState<Map<string, Worktree>>(new Map());
   const [userById, setUserById] = useState<Map<string, User>>(new Map());
   const [mcpServerById, setMcpServerById] = useState<Map<string, MCPServer>>(new Map());
+  const [gatewayChannelById, setGatewayChannelById] = useState<Map<string, GatewayChannel>>(
+    new Map()
+  );
   const [sessionMcpServerIds, setSessionMcpServerIds] = useState<Map<string, string[]>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -88,6 +93,7 @@ export function useAgorData(
         usersResult,
         mcpServersResult,
         sessionMcpResult,
+        gatewayChannelsResult,
       ] = await Promise.all([
         client
           .service('sessions')
@@ -100,6 +106,7 @@ export function useAgorData(
         client.service('users').find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
         client.service('mcp-servers').find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
         client.service('session-mcp-servers').find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+        client.service('gateway-channels').find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
       ]);
 
       // Handle paginated vs array results
@@ -118,6 +125,9 @@ export function useAgorData(
       const sessionMcpList = Array.isArray(sessionMcpResult)
         ? sessionMcpResult
         : sessionMcpResult.data;
+      const gatewayChannelsList = Array.isArray(gatewayChannelsResult)
+        ? gatewayChannelsResult
+        : gatewayChannelsResult.data;
 
       // Build session Maps for efficient lookups
       const sessionsById = new Map<string, Session>();
@@ -192,6 +202,13 @@ export function useAgorData(
         mcpServersMap.set(mcpServer.mcp_server_id, mcpServer);
       }
       setMcpServerById(mcpServersMap);
+
+      // Build gateway channel Map for efficient lookups
+      const gatewayChannelsMap = new Map<string, GatewayChannel>();
+      for (const channel of gatewayChannelsList) {
+        gatewayChannelsMap.set(channel.id, channel);
+      }
+      setGatewayChannelById(gatewayChannelsMap);
 
       // Group session-MCP relationships by session_id
       const sessionMcpMap = new Map<string, string[]>();
@@ -581,6 +598,39 @@ export function useAgorData(
     mcpServersService.on('updated', handleMCPServerPatched);
     mcpServersService.on('removed', handleMCPServerRemoved);
 
+    // Subscribe to gateway channel events
+    const gatewayChannelsService = client.service('gateway-channels');
+    const handleGatewayChannelCreated = (channel: GatewayChannel) => {
+      setGatewayChannelById((prev) => {
+        if (prev.has(channel.id)) return prev;
+        const next = new Map(prev);
+        next.set(channel.id, channel);
+        return next;
+      });
+    };
+    const handleGatewayChannelPatched = (channel: GatewayChannel) => {
+      setGatewayChannelById((prev) => {
+        const existing = prev.get(channel.id);
+        if (existing === channel) return prev;
+        const next = new Map(prev);
+        next.set(channel.id, channel);
+        return next;
+      });
+    };
+    const handleGatewayChannelRemoved = (channel: GatewayChannel) => {
+      setGatewayChannelById((prev) => {
+        if (!prev.has(channel.id)) return prev;
+        const next = new Map(prev);
+        next.delete(channel.id);
+        return next;
+      });
+    };
+
+    gatewayChannelsService.on('created', handleGatewayChannelCreated);
+    gatewayChannelsService.on('patched', handleGatewayChannelPatched);
+    gatewayChannelsService.on('updated', handleGatewayChannelPatched);
+    gatewayChannelsService.on('removed', handleGatewayChannelRemoved);
+
     // Subscribe to session-MCP server relationship events
     const sessionMcpService = client.service('session-mcp-servers');
     const handleSessionMcpCreated = (relationship: {
@@ -699,6 +749,11 @@ export function useAgorData(
       commentsService.removeListener('patched', handleCommentPatched);
       commentsService.removeListener('updated', handleCommentPatched);
       commentsService.removeListener('removed', handleCommentRemoved);
+
+      gatewayChannelsService.removeListener('created', handleGatewayChannelCreated);
+      gatewayChannelsService.removeListener('patched', handleGatewayChannelPatched);
+      gatewayChannelsService.removeListener('updated', handleGatewayChannelPatched);
+      gatewayChannelsService.removeListener('removed', handleGatewayChannelRemoved);
     };
   }, [client, enabled, fetchData, hasInitiallyFetched]);
 
@@ -712,6 +767,7 @@ export function useAgorData(
     worktreeById,
     userById,
     mcpServerById,
+    gatewayChannelById,
     sessionMcpServerIds,
     loading,
     error,

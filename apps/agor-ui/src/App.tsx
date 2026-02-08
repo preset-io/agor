@@ -3,6 +3,7 @@ import type {
   Board,
   CreateMCPServerInput,
   CreateUserInput,
+  GatewayChannel,
   PermissionMode,
   Repo,
   Session,
@@ -133,6 +134,7 @@ function AppContent() {
     worktreeById,
     userById,
     mcpServerById,
+    gatewayChannelById,
     sessionMcpServerIds,
     loading,
     error: dataError,
@@ -839,6 +841,46 @@ function AppContent() {
     }
   };
 
+  // Handle gateway channel CRUD
+  const handleCreateGatewayChannel = async (data: Partial<GatewayChannel>) => {
+    if (!client) return;
+    try {
+      await client.service('gateway-channels').create(data);
+      showSuccess('Gateway channel created!');
+    } catch (error) {
+      showError(
+        `Failed to create gateway channel: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  };
+
+  const handleUpdateGatewayChannel = async (
+    channelId: string,
+    updates: Partial<GatewayChannel>
+  ) => {
+    if (!client) return;
+    try {
+      await client.service('gateway-channels').patch(channelId, updates);
+      showSuccess('Gateway channel updated!');
+    } catch (error) {
+      showError(
+        `Failed to update gateway channel: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  };
+
+  const handleDeleteGatewayChannel = async (channelId: string) => {
+    if (!client) return;
+    try {
+      await client.service('gateway-channels').remove(channelId);
+      showSuccess('Gateway channel deleted!');
+    } catch (error) {
+      showError(
+        `Failed to delete gateway channel: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  };
+
   // Handle update session-MCP server relationships
   const handleUpdateSessionMcpServers = async (sessionId: string, mcpServerIds: string[]) => {
     if (!client) return;
@@ -1064,6 +1106,10 @@ function AppContent() {
                 onCreateMCPServer={handleCreateMCPServer as any}
                 onUpdateMCPServer={handleUpdateMCPServer}
                 onDeleteMCPServer={handleDeleteMCPServer}
+                gatewayChannelById={gatewayChannelById}
+                onCreateGatewayChannel={handleCreateGatewayChannel}
+                onUpdateGatewayChannel={handleUpdateGatewayChannel}
+                onDeleteGatewayChannel={handleDeleteGatewayChannel}
                 onUpdateSessionMcpServers={handleUpdateSessionMcpServers}
                 onSendComment={handleSendComment}
                 onReplyComment={handleReplyComment}
@@ -1135,6 +1181,10 @@ function AppContent() {
                 onCreateMCPServer={handleCreateMCPServer as any}
                 onUpdateMCPServer={handleUpdateMCPServer}
                 onDeleteMCPServer={handleDeleteMCPServer}
+                gatewayChannelById={gatewayChannelById}
+                onCreateGatewayChannel={handleCreateGatewayChannel}
+                onUpdateGatewayChannel={handleUpdateGatewayChannel}
+                onDeleteGatewayChannel={handleDeleteGatewayChannel}
                 onUpdateSessionMcpServers={handleUpdateSessionMcpServers}
                 onSendComment={handleSendComment}
                 onReplyComment={handleReplyComment}
@@ -1206,6 +1256,10 @@ function AppContent() {
                 onCreateMCPServer={handleCreateMCPServer as any}
                 onUpdateMCPServer={handleUpdateMCPServer}
                 onDeleteMCPServer={handleDeleteMCPServer}
+                gatewayChannelById={gatewayChannelById}
+                onCreateGatewayChannel={handleCreateGatewayChannel}
+                onUpdateGatewayChannel={handleUpdateGatewayChannel}
+                onDeleteGatewayChannel={handleDeleteGatewayChannel}
                 onUpdateSessionMcpServers={handleUpdateSessionMcpServers}
                 onSendComment={handleSendComment}
                 onReplyComment={handleReplyComment}

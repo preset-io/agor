@@ -5,6 +5,7 @@ import type {
   BoardEntityObject,
   BoardID,
   CreateUserInput,
+  GatewayChannel,
   MCPServer,
   PermissionMode,
   Repo,
@@ -121,6 +122,10 @@ export interface AppProps {
   onCreateMCPServer?: (data: Partial<MCPServer>) => void;
   onUpdateMCPServer?: (mcpServerId: string, updates: Partial<MCPServer>) => void;
   onDeleteMCPServer?: (mcpServerId: string) => void;
+  gatewayChannelById: Map<string, GatewayChannel>;
+  onCreateGatewayChannel?: (data: Partial<GatewayChannel>) => void;
+  onUpdateGatewayChannel?: (channelId: string, updates: Partial<GatewayChannel>) => void;
+  onDeleteGatewayChannel?: (channelId: string) => void;
   onUpdateSessionMcpServers?: (sessionId: string, mcpServerIds: string[]) => void;
   onSendComment?: (boardId: string, content: string) => void;
   onReplyComment?: (parentId: string, content: string) => void;
@@ -184,6 +189,10 @@ export const App: React.FC<AppProps> = ({
   onCreateMCPServer,
   onUpdateMCPServer,
   onDeleteMCPServer,
+  gatewayChannelById,
+  onCreateGatewayChannel,
+  onUpdateGatewayChannel,
+  onDeleteGatewayChannel,
   onUpdateSessionMcpServers,
   onSendComment,
   onReplyComment,
@@ -916,6 +925,10 @@ export const App: React.FC<AppProps> = ({
             onCreateMCPServer={onCreateMCPServer}
             onUpdateMCPServer={onUpdateMCPServer}
             onDeleteMCPServer={onDeleteMCPServer}
+            gatewayChannelById={gatewayChannelById}
+            onCreateGatewayChannel={onCreateGatewayChannel}
+            onUpdateGatewayChannel={onUpdateGatewayChannel}
+            onDeleteGatewayChannel={onDeleteGatewayChannel}
           />
           {sessionSettingsSession && (
             <SessionSettingsModal

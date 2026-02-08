@@ -10,6 +10,7 @@ export type SettingsSection =
   | 'worktrees'
   | 'mcp'
   | 'agentic-tools'
+  | 'gateway'
   | 'users'
   | 'about';
 
@@ -66,6 +67,7 @@ export function useSettingsRoute() {
       'worktrees',
       'mcp',
       'agentic-tools',
+      'gateway',
       'users',
       'about',
     ];
