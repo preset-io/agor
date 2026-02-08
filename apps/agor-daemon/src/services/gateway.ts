@@ -61,10 +61,27 @@ export class GatewayService {
   /** Active Socket Mode listeners keyed by channel ID */
   private activeListeners = new Map<string, GatewayConnector>();
 
+  /**
+   * In-memory flag: true when at least one gateway channel exists.
+   * Allows routeMessage() to skip the DB lookup entirely when the
+   * gateway feature is not in use (the common case for most instances).
+   * Updated on startup and whenever channels are created/deleted.
+   */
+  private hasActiveChannels = false;
+
   constructor(db: Database, app: Application) {
     this.channelRepo = new GatewayChannelRepository(db);
     this.threadMapRepo = new ThreadSessionMapRepository(db);
     this.app = app;
+  }
+
+  /**
+   * Refresh the in-memory hasActiveChannels flag.
+   * Called at startup and should be called when channels are created/deleted.
+   */
+  async refreshChannelState(): Promise<void> {
+    const channels = await this.channelRepo.findAll();
+    this.hasActiveChannels = channels.some((ch) => ch.enabled);
   }
 
   /**
@@ -229,6 +246,11 @@ export class GatewayService {
    * returns a cheap no-op. Uses platform connectors to send messages.
    */
   async routeMessage(data: RouteMessageData): Promise<RouteMessageResult> {
+    // Fast path: skip DB lookup entirely when no channels are configured
+    if (!this.hasActiveChannels) {
+      return { routed: false };
+    }
+
     // Look up session in thread_session_map
     const mapping = await this.threadMapRepo.findBySession(data.session_id);
 

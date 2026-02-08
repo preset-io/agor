@@ -2407,6 +2407,16 @@ async function main() {
     },
   });
 
+  // Refresh the gateway's in-memory channel state when channels are mutated.
+  // This allows routeMessage() to skip DB lookups entirely when no channels exist.
+  const refreshGatewayChannelState = async (context: HookContext) => {
+    const gw = context.app.service('gateway') as unknown as GatewayService;
+    gw.refreshChannelState().catch((err: unknown) =>
+      console.warn('[gateway] Failed to refresh channel state:', err)
+    );
+    return context;
+  };
+
   app.service('gateway-channels').hooks({
     before: {
       all: [requireAuth],
@@ -2437,6 +2447,9 @@ async function main() {
           return context;
         },
       ],
+      create: [refreshGatewayChannelState],
+      patch: [refreshGatewayChannelState],
+      remove: [refreshGatewayChannelState],
     },
   });
 
@@ -5556,11 +5569,16 @@ async function main() {
   schedulerService.start();
   console.log(`🔄 Scheduler started (tick interval: 30s)`);
 
-  // Start gateway Socket Mode listeners for enabled channels
+  // Initialize gateway: refresh channel state cache, then start Socket Mode listeners
   const gatewayService = app.service('gateway') as unknown as GatewayService;
-  gatewayService.startListeners().catch((error: unknown) => {
-    console.error('[gateway] Failed to start listeners:', error);
-  });
+  gatewayService
+    .refreshChannelState()
+    .then(() => {
+      return gatewayService.startListeners();
+    })
+    .catch((error: unknown) => {
+      console.error('[gateway] Failed to start listeners:', error);
+    });
 
   // Graceful shutdown handler
   const shutdown = async (signal: string) => {
