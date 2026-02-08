@@ -127,17 +127,32 @@ export class SlackConnector implements GatewayConnector {
       appToken: this.config.app_token,
     });
 
-    this.socketMode.on('message', async ({ event, ack }) => {
+    // Debug: log all incoming Slack events
+    this.socketMode.on('slack_event', async ({ type, body, ack }) => {
+      console.log(`[slack] Received event type="${type}" subtype="${body?.event?.type}"`);
+
+      // Only handle events_api message events
+      if (type !== 'events_api' || body?.event?.type !== 'message') {
+        await ack();
+        return;
+      }
+
       await ack();
+      const event = body.event;
 
       // Skip bot messages to avoid loops
       if (event.bot_id || event.subtype === 'bot_message') {
+        console.log('[slack] Skipping bot message');
         return;
       }
 
       const threadId = event.thread_ts
         ? `${event.channel}-${event.thread_ts}`
         : `${event.channel}-${event.ts}`;
+
+      console.log(
+        `[slack] Inbound message: thread=${threadId} user=${event.user} text="${event.text?.substring(0, 50)}"`
+      );
 
       callback({
         threadId,

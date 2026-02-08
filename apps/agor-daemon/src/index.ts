@@ -319,7 +319,7 @@ import { createConfigService } from './services/config';
 import { createContextService } from './services/context';
 import { createFileService } from './services/file';
 import { createFilesService } from './services/files';
-import { createGatewayService } from './services/gateway';
+import { createGatewayService, type GatewayService } from './services/gateway';
 import { createGatewayChannelsService } from './services/gateway-channels';
 import { createHealthMonitor } from './services/health-monitor';
 import { createLeaderboardService } from './services/leaderboard';
@@ -5532,6 +5532,12 @@ async function main() {
   schedulerService.start();
   console.log(`🔄 Scheduler started (tick interval: 30s)`);
 
+  // Start gateway Socket Mode listeners for enabled channels
+  const gatewayService = app.service('gateway') as unknown as GatewayService;
+  gatewayService.startListeners().catch((error: unknown) => {
+    console.error('[gateway] Failed to start listeners:', error);
+  });
+
   // Graceful shutdown handler
   const shutdown = async (signal: string) => {
     console.log(`\n⏳ Received ${signal}, shutting down gracefully...`);
@@ -5543,6 +5549,10 @@ async function main() {
       // Clean up terminal sessions
       console.log('🖥️  Cleaning up terminal sessions...');
       terminalsService.cleanup();
+
+      // Stop gateway listeners
+      console.log('🌐 Stopping gateway listeners...');
+      await gatewayService.stopListeners();
 
       // Stop scheduler
       console.log('🔄 Stopping scheduler...');

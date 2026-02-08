@@ -8,8 +8,9 @@
 
 import { type Database, GatewayChannelRepository, ThreadSessionMapRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
+import type { GatewayConnector, InboundMessage } from '@agor/core/gateway';
 import { getConnector, hasConnector } from '@agor/core/gateway';
-import type { AgenticToolName, ChannelType, Session, User } from '@agor/core/types';
+import type { AgenticToolName, ChannelType, GatewayChannel, Session, User } from '@agor/core/types';
 import { getDefaultPermissionMode, SessionStatus } from '@agor/core/types';
 
 /**
@@ -57,10 +58,29 @@ export class GatewayService {
   private threadMapRepo: ThreadSessionMapRepository;
   private app: Application;
 
+  /** Active Socket Mode listeners keyed by channel ID */
+  private activeListeners = new Map<string, GatewayConnector>();
+
   constructor(db: Database, app: Application) {
     this.channelRepo = new GatewayChannelRepository(db);
     this.threadMapRepo = new ThreadSessionMapRepository(db);
     this.app = app;
+  }
+
+  /**
+   * Send a debug/system message to the platform thread (fire-and-forget).
+   * Useful for giving the user visibility into what's happening.
+   */
+  private sendDebugMessage(channel: GatewayChannel, threadId: string, text: string): void {
+    if (!hasConnector(channel.channel_type as ChannelType)) return;
+    try {
+      const connector = getConnector(channel.channel_type as ChannelType, channel.config);
+      connector
+        .sendMessage({ threadId, text: `_[system] ${text}_` })
+        .catch((err) => console.warn('[gateway] Debug message failed:', err));
+    } catch {
+      // Ignore — debug messages are best-effort
+    }
   }
 
   /**
@@ -111,11 +131,23 @@ export class GatewayService {
 
       // Touch timestamps
       await this.threadMapRepo.updateLastMessage(existingMapping.id);
+
+      this.sendDebugMessage(
+        channel,
+        data.thread_id,
+        `Received follow-up, routing to session ${sessionId.substring(0, 8)}...`
+      );
     } else {
       // New thread → create session via FeathersJS service
       const sessionsService = this.app.service('sessions') as {
         create: (data: Partial<Session>) => Promise<Session>;
       };
+
+      this.sendDebugMessage(
+        channel,
+        data.thread_id,
+        `Creating new ${agenticTool} session (${permissionMode} mode)...`
+      );
 
       const session = await sessionsService.create({
         title: data.text.substring(0, 100),
@@ -148,6 +180,12 @@ export class GatewayService {
         status: 'active',
         metadata: data.metadata ?? null,
       });
+
+      this.sendDebugMessage(
+        channel,
+        data.thread_id,
+        `Session ${sessionId.substring(0, 8)} created, sending prompt to agent...`
+      );
     }
 
     // Touch channel last_message_at
@@ -174,6 +212,7 @@ export class GatewayService {
       );
     } catch (error) {
       console.error('[gateway] Failed to send prompt to session:', error);
+      this.sendDebugMessage(channel, data.thread_id, `Error sending prompt: ${error}`);
     }
 
     return {
@@ -238,6 +277,82 @@ export class GatewayService {
       routed: true,
       channelType: channel.channel_type,
     };
+  }
+
+  /**
+   * Start Socket Mode listeners for all enabled channels that support it.
+   * Called once at daemon startup. Inbound messages are routed through
+   * the gateway's create() method (same path as webhook POST).
+   */
+  async startListeners(): Promise<void> {
+    const channels = await this.channelRepo.findAll();
+    const eligible = channels.filter(
+      (ch) => ch.enabled && hasConnector(ch.channel_type as ChannelType) && ch.config.app_token
+    );
+
+    if (eligible.length === 0) {
+      console.log('[gateway] No channels with Socket Mode configured');
+      return;
+    }
+
+    for (const channel of eligible) {
+      await this.startChannelListener(channel);
+    }
+  }
+
+  /**
+   * Start a Socket Mode listener for a single channel
+   */
+  private async startChannelListener(channel: GatewayChannel): Promise<void> {
+    if (this.activeListeners.has(channel.id)) {
+      return; // Already listening
+    }
+
+    try {
+      const connector = getConnector(channel.channel_type as ChannelType, channel.config);
+
+      if (!connector.startListening) {
+        return; // Connector doesn't support listening
+      }
+
+      const callback = (msg: InboundMessage) => {
+        this.create({
+          channel_key: channel.channel_key,
+          thread_id: msg.threadId,
+          text: msg.text,
+          user_name: msg.userId,
+          metadata: msg.metadata,
+        }).catch((error) => {
+          console.error(
+            `[gateway] Failed to process inbound message for channel ${channel.name}:`,
+            error
+          );
+        });
+      };
+
+      await connector.startListening(callback);
+      this.activeListeners.set(channel.id, connector);
+      console.log(`[gateway] Socket Mode listener started for channel "${channel.name}"`);
+    } catch (error) {
+      console.error(`[gateway] Failed to start listener for channel "${channel.name}":`, error);
+    }
+  }
+
+  /**
+   * Stop all active listeners (called on shutdown)
+   */
+  async stopListeners(): Promise<void> {
+    for (const [channelId, connector] of this.activeListeners) {
+      try {
+        if (connector.stopListening) {
+          await connector.stopListening();
+        }
+        console.log(`[gateway] Listener stopped for channel ${channelId.substring(0, 8)}`);
+      } catch (error) {
+        console.error(`[gateway] Error stopping listener for ${channelId}:`, error);
+      }
+    }
+    this.activeListeners.clear();
   }
 }
 
