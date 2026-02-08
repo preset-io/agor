@@ -8,7 +8,8 @@
 
 import { type Database, GatewayChannelRepository, ThreadSessionMapRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { Session } from '@agor/core/types';
+import { getConnector, hasConnector } from '@agor/core/gateway';
+import type { ChannelType, Session } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
 
 /**
@@ -154,7 +155,7 @@ export class GatewayService {
    * Outbound routing: session → platform
    *
    * Looks up session in thread_session_map. If no mapping exists,
-   * returns a cheap no-op. Connector integration comes in Phase 4.
+   * returns a cheap no-op. Uses platform connectors to send messages.
    */
   async routeMessage(data: RouteMessageData): Promise<RouteMessageResult> {
     // Look up session in thread_session_map
@@ -165,10 +166,15 @@ export class GatewayService {
       return { routed: false };
     }
 
-    // Get channel info for logging
     const channel = await this.channelRepo.findById(mapping.channel_id);
 
     if (!channel || !channel.enabled) {
+      return { routed: false };
+    }
+
+    // Check if we have a connector for this channel type
+    if (!hasConnector(channel.channel_type as ChannelType)) {
+      console.warn(`[gateway] No connector for channel type: ${channel.channel_type}`);
       return { routed: false };
     }
 
@@ -176,10 +182,25 @@ export class GatewayService {
     await this.threadMapRepo.updateLastMessage(mapping.id);
     await this.channelRepo.updateLastMessage(channel.id);
 
-    // TODO: Phase 4 — send message to platform via connector
-    console.log(
-      `[gateway] Would route message to ${channel.channel_type} thread ${mapping.thread_id}`
-    );
+    // Send via platform connector
+    try {
+      const connector = getConnector(channel.channel_type as ChannelType, channel.config);
+
+      const text = connector.formatMessage ? connector.formatMessage(data.message) : data.message;
+
+      await connector.sendMessage({
+        threadId: mapping.thread_id,
+        text,
+        metadata: data.metadata,
+      });
+
+      console.log(
+        `[gateway] Routed message to ${channel.channel_type} thread ${mapping.thread_id}`
+      );
+    } catch (error) {
+      console.error(`[gateway] Failed to route message to ${channel.channel_type}:`, error);
+      return { routed: false, channelType: channel.channel_type };
+    }
 
     return {
       routed: true,

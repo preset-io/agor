@@ -33,6 +33,7 @@ export default defineConfig({
     'tools/mcp/oauth-mcp-transport': 'src/tools/mcp/oauth-mcp-transport.ts', // MCP OAuth 2.1 protocol transport
     'unix/index': 'src/unix/index.ts', // Unix group management utilities for worktree isolation
     'mcp/index': 'src/mcp/index.ts', // MCP template resolution utilities
+    'gateway/index': 'src/gateway/index.ts', // Gateway platform connectors (Slack, etc.)
   },
   format: ['cjs', 'esm'],
   dts: true,
@@ -46,6 +47,8 @@ export default defineConfig({
     '@google/gemini-cli-core',
     '@google/genai',
     '@opencode-ai/sdk',
+    '@slack/web-api',
+    '@slack/socket-mode',
     'node:fs',
     'node:fs/promises',
     'node:path',

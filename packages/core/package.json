@@ -164,6 +164,11 @@
       "types": "./dist/mcp/index.d.ts",
       "import": "./dist/mcp/index.js",
       "require": "./dist/mcp/index.cjs"
+    },
+    "./gateway": {
+      "types": "./dist/gateway/index.d.ts",
+      "import": "./dist/gateway/index.js",
+      "require": "./dist/gateway/index.cjs"
     }
   },
   "scripts": {
@@ -202,6 +207,8 @@
     "@libsql/client": "^0.15.15",
     "@openai/codex-sdk": "^0.98.0",
     "@opencode-ai/sdk": "^1.1.53",
+    "@slack/socket-mode": "^2.0.5",
+    "@slack/web-api": "^7.13.0",
     "bcryptjs": "^2.4.3",
     "cron-parser": "^5.4.0",
     "cronstrue": "^3.9.0",
