@@ -2414,6 +2414,30 @@ async function main() {
       patch: [requireMinimumRole('member', 'update gateway channels')],
       remove: [requireMinimumRole('member', 'delete gateway channels')],
     },
+    after: {
+      all: [
+        // Redact sensitive config fields in API responses
+        async (context: HookContext) => {
+          const redact = (channel: Record<string, unknown>) => {
+            if (channel?.config && typeof channel.config === 'object') {
+              const config = { ...(channel.config as Record<string, unknown>) };
+              for (const field of ['bot_token', 'app_token', 'signing_secret']) {
+                if (config[field]) {
+                  config[field] = '••••••••';
+                }
+              }
+              channel.config = config;
+            }
+          };
+          if (Array.isArray(context.result?.data)) {
+            for (const item of context.result.data) redact(item);
+          } else if (context.result) {
+            redact(context.result as Record<string, unknown>);
+          }
+          return context;
+        },
+      ],
+    },
   });
 
   app.service('thread-session-map').hooks({

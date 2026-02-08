@@ -24,6 +24,7 @@ import {
   primaryKey,
   text,
   timestamp,
+  uniqueIndex,
   varchar,
 } from 'drizzle-orm/pg-core';
 
@@ -993,7 +994,7 @@ export const threadSessionMap = pgTable(
     metadata: t.json<Record<string, unknown>>('metadata'),
   },
   (table) => ({
-    uniqueChannelThread: index('uniq_thread_map_channel_thread').on(
+    uniqueChannelThread: uniqueIndex('uniq_thread_map_channel_thread').on(
       table.channel_id,
       table.thread_id
     ),

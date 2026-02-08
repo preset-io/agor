@@ -14,7 +14,14 @@ import type {
   Task,
 } from '@agor/core/types';
 import { sql } from 'drizzle-orm';
-import { index, integer, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import {
+  index,
+  integer,
+  primaryKey,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from 'drizzle-orm/sqlite-core';
 
 // SQLite-specific type helpers (inline to avoid factory pattern type issues)
 const t = {
@@ -989,7 +996,7 @@ export const threadSessionMap = sqliteTable(
     metadata: t.json<Record<string, unknown>>('metadata'),
   },
   (table) => ({
-    uniqueChannelThread: index('uniq_thread_map_channel_thread').on(
+    uniqueChannelThread: uniqueIndex('uniq_thread_map_channel_thread').on(
       table.channel_id,
       table.thread_id
     ),

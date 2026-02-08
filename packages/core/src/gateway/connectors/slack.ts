@@ -140,9 +140,21 @@ export class SlackConnector implements GatewayConnector {
       await ack();
       const event = body.event;
 
+      // Only handle DMs (im) — skip public/private channel messages
+      if (event.channel_type && event.channel_type !== 'im') {
+        console.log(`[slack] Skipping non-DM message (channel_type=${event.channel_type})`);
+        return;
+      }
+
       // Skip bot messages to avoid loops
       if (event.bot_id || event.subtype === 'bot_message') {
         console.log('[slack] Skipping bot message');
+        return;
+      }
+
+      // Skip message edits, deletes, and other subtypes — only handle new messages
+      if (event.subtype) {
+        console.log(`[slack] Skipping message subtype="${event.subtype}"`);
         return;
       }
 
