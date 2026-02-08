@@ -188,13 +188,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
 
     const handleWorktreeUpdate = (data: unknown) => {
       const updatedWorktree = data as Worktree;
-      console.log(
-        '🔄 WebSocket worktree update:',
-        updatedWorktree.worktree_id.substring(0, 8),
-        updatedWorktree.environment_instance
-      );
       if (updatedWorktree.worktree_id === worktree.worktree_id) {
-        console.log('✅ Updating UI state for worktree:', worktree.name);
         setEnvStatus(updatedWorktree.environment_instance?.status || 'stopped');
         setLastHealthCheck(updatedWorktree.environment_instance?.last_health_check);
         setProcessInfo(updatedWorktree.environment_instance?.process);
@@ -203,7 +197,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
 
     client.service('worktrees').on('patched', handleWorktreeUpdate);
     return () => client.service('worktrees').removeListener('patched', handleWorktreeUpdate);
-  }, [client, worktree.worktree_id, worktree.name]);
+  }, [client, worktree.worktree_id]);
 
   // Environment control handlers
   const handleStart = async () => {

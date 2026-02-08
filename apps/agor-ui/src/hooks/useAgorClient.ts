@@ -89,8 +89,6 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
                 return;
               } catch (_accessTokenErr) {
                 // Access token expired or invalid - try refresh token
-                console.log('Access token failed on reconnect, attempting refresh...');
-
                 // Check if we have a refresh token in localStorage
                 const refreshToken = getStoredRefreshToken();
                 if (refreshToken) {
@@ -142,12 +140,10 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
 
       client.io.on('disconnect', (reason) => {
         if (mounted) {
-          console.log('🔌 Disconnected from daemon:', reason);
           setConnected(false);
 
           // Auto-reconnect if disconnect was due to server restart (not intentional client disconnect)
           if (reason === 'io server disconnect' || reason === 'transport close') {
-            console.log('🔄 Daemon restarted, attempting to reconnect...');
             // Socket.io will auto-reconnect, we just need to re-authenticate when it does
           }
         }
@@ -163,7 +159,6 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
             setConnected(false);
           } else {
             // During reconnection, keep connecting=true so UI shows reconnecting indicator
-            console.log('🔄 Reconnection attempt failed, will retry...');
             setConnecting(true);
             setConnected(false);
             // Don't set error - socket.io will keep trying
@@ -269,11 +264,8 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
     const client = clientRef.current;
     if (!client?.io) return;
 
-    console.log('🔄 Manual reconnection requested');
-
     // If already connected, disconnect first
     if (client.io.connected) {
-      console.log('🔌 Disconnecting before retry...');
       client.io.disconnect();
     }
 

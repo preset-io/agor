@@ -55,8 +55,6 @@ export function useTaskEvents(
         return;
       }
 
-      console.debug(`🔧 Tool start: ${data.tool_name} (${data.tool_use_id.substring(0, 8)})`);
-
       setToolsExecuting((prev) => {
         // Avoid duplicates
         if (prev.some((t) => t.toolUseId === data.tool_use_id)) {
@@ -80,8 +78,6 @@ export function useTaskEvents(
       if (data.task_id !== taskId) {
         return;
       }
-
-      console.debug(`✅ Tool complete: ${data.tool_use_id.substring(0, 8)}`);
 
       setToolsExecuting((prev) => {
         // Mark as complete

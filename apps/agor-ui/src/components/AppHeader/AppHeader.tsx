@@ -207,7 +207,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
               {instanceLabel}
             </Tag>
           ))}
-        <Divider type="vertical" style={{ height: 32, margin: '0 8px' }} />
+        <Divider orientation="vertical" style={{ height: 32, margin: '0 8px' }} />
         {currentBoardId && boards.length > 0 && (
           <div style={{ minWidth: 200 }}>
             <BoardSwitcher
@@ -264,7 +264,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
                 marginRight: 8,
               }}
             />
-            <Divider type="vertical" style={{ height: 32, margin: '0 8px' }} />
+            <Divider orientation="vertical" style={{ height: 32, margin: '0 8px' }} />
           </>
         )}
         {eventStreamEnabled && (

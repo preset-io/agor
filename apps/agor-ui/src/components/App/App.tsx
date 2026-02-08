@@ -366,7 +366,6 @@ export const App: React.FC<AppProps> = ({
   };
 
   const handleCreateSession = async (config: NewSessionConfig) => {
-    console.log('Creating session with config:', config, 'for board:', currentBoardId);
     const sessionId = await onCreateSession?.(config, currentBoardId);
     setNewSessionWorktreeId(null);
 
@@ -425,10 +424,6 @@ export const App: React.FC<AppProps> = ({
       if (!client) return;
 
       try {
-        console.log(
-          `📋 Permission decision: ${allow ? 'ALLOW' : 'DENY'} (${scope}) for task ${taskId}`
-        );
-
         // Call the permission decision endpoint
         await client.service(`sessions/${sessionId}/permission-decision`).create({
           requestId,
@@ -439,8 +434,6 @@ export const App: React.FC<AppProps> = ({
           scope,
           decidedBy: user?.user_id || 'anonymous',
         });
-
-        console.log(`✅ Permission decision sent successfully`);
       } catch (error) {
         console.error('❌ Failed to send permission decision:', error);
       }

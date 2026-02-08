@@ -38,7 +38,7 @@ const ApiKeyTabContent: React.FC<{
   return (
     <div style={{ paddingTop: token.paddingMD }}>
       <Alert
-        message={
+        title={
           <span>
             This is the <strong>global API key</strong> for all users. Per-user keys can be set in
             the Users tab.{' '}
@@ -58,7 +58,7 @@ const ApiKeyTabContent: React.FC<{
 
       {keysError && (
         <Alert
-          message={keysError}
+          title={keysError}
           type="error"
           icon={<WarningOutlined />}
           showIcon
@@ -401,7 +401,7 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
               <div style={{ paddingTop: token.paddingMD }}>
                 {/* OpenCode Info */}
                 <Alert
-                  message="OpenCode.ai Integration"
+                  title="OpenCode.ai Integration"
                   description={
                     <div>
                       <p style={{ marginBottom: token.marginXS }}>
@@ -471,7 +471,7 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
                       {/* Connection Status */}
                       {opencodeConnected !== null && (
                         <Alert
-                          message={
+                          title={
                             opencodeConnected ? (
                               <Space>
                                 <CheckCircleOutlined style={{ color: token.colorSuccess }} />
@@ -493,7 +493,7 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
                       {/* Setup Instructions (shown if not connected) */}
                       {opencodeConnected === false && (
                         <Alert
-                          message="Server Not Running"
+                          title="Server Not Running"
                           description={
                             <div>
                               <p style={{ marginBottom: token.marginXS }}>
@@ -533,7 +533,7 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
                       {/* Success Status */}
                       {opencodeConnected === true && (
                         <Alert
-                          message="Ready to use!"
+                          title="Ready to use!"
                           description="You can now create sessions with OpenCode as the agentic tool."
                           type="success"
                           showIcon

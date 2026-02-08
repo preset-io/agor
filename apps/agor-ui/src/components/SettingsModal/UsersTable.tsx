@@ -60,9 +60,8 @@ export const UsersTable: React.FC<UsersTableProps> = ({
         form.resetFields();
         setCreateModalOpen(false);
       })
-      .catch((error) => {
+      .catch(() => {
         // Form validation failed - Ant Design will show field errors automatically
-        console.log('Form validation failed:', error);
       });
   };
 

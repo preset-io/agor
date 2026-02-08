@@ -149,7 +149,6 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
         cols: 160,
         linkHandler: {
           activate: (_event, uri) => {
-            console.debug('[Terminal] Opening link', uri);
             window.open(uri, '_blank', 'noopener,noreferrer');
           },
           hover: () => {
@@ -195,7 +194,6 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
 
       // Load Web Links addon for clickable URLs
       const webLinksAddon = new WebLinksAddon((_event, uri) => {
-        console.log('[Terminal] Link clicked:', uri);
         window.open(uri, '_blank', 'noopener,noreferrer');
       });
       terminal.loadAddon(webLinksAddon);
@@ -280,8 +278,6 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
             });
           }
         }
-
-        console.log(`[Terminal] Connected to executor terminal via channel: ${result.channel}`);
       } catch (error) {
         console.error('[Terminal] Failed to create terminal:', error);
         if (terminalRef.current) {

@@ -11,7 +11,6 @@ installClipboardPolyfill();
 // Cleanup WebSocket connections on Vite HMR
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
-    console.log('🔌 HMR: Cleaning up WebSocket connections...');
     // Close all open socket.io connections
     // biome-ignore lint/suspicious/noExplicitAny: Global window extension for HMR cleanup
     if (typeof window !== 'undefined' && (window as any).__agorClient) {
@@ -20,7 +19,6 @@ if (import.meta.hot) {
       if (client?.io) {
         client.io.removeAllListeners();
         client.io.close();
-        console.log('✅ HMR: Closed existing WebSocket connection');
       }
       // biome-ignore lint/suspicious/noExplicitAny: Global window extension for HMR cleanup
       delete (window as any).__agorClient;

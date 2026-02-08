@@ -8,9 +8,6 @@ import { ACCESS_TOKEN_KEY } from '../../utils/tokenRefresh';
 const { TextArea } = Input;
 const { Text } = Typography;
 
-// Debug logging only in development
-const DEBUG_UPLOAD = import.meta.env.DEV;
-
 export type UploadDestination = 'worktree' | 'temp' | 'global';
 
 export interface UploadedFile {
@@ -70,21 +67,9 @@ export const FileUpload: React.FC<FileUploadProps> = ({
     try {
       const formData = new FormData();
 
-      if (DEBUG_UPLOAD) {
-        console.log('[FileUpload] Preparing FormData:', {
-          fileListLength: fileList.length,
-          files: fileList.map((f) => ({
-            name: f.name,
-            hasOriginFileObj: !!f.originFileObj,
-            type: f.type,
-          })),
-        });
-      }
-
       fileList.forEach((file) => {
         if (file.originFileObj) {
           formData.append('files', file.originFileObj);
-          if (DEBUG_UPLOAD) console.log('[FileUpload] Added file to FormData:', file.name);
         } else {
           console.warn('[FileUpload] File missing originFileObj:', file.name);
         }
@@ -95,15 +80,6 @@ export const FileUpload: React.FC<FileUploadProps> = ({
       formData.append('message', agentMessage);
 
       const uploadUrl = `${daemonUrl}/sessions/${sessionId}/upload?destination=${encodeURIComponent(destination)}`;
-      if (DEBUG_UPLOAD) {
-        console.log('[FileUpload] Starting upload:', {
-          url: uploadUrl,
-          sessionId: sessionId.substring(0, 8),
-          fileCount: fileList.length,
-          destination,
-          notifyAgent,
-        });
-      }
 
       // Get JWT token from localStorage (same as Feathers client)
       const accessToken = localStorage.getItem(ACCESS_TOKEN_KEY);
@@ -111,7 +87,6 @@ export const FileUpload: React.FC<FileUploadProps> = ({
 
       if (accessToken) {
         headers.Authorization = `Bearer ${accessToken}`;
-        if (DEBUG_UPLOAD) console.log('[FileUpload] Added Authorization header with token');
       } else {
         console.warn('[FileUpload] No access token found in localStorage');
       }
@@ -123,22 +98,8 @@ export const FileUpload: React.FC<FileUploadProps> = ({
         credentials: 'include', // Include cookies for session
       });
 
-      if (DEBUG_UPLOAD) {
-        console.log('[FileUpload] Response received:', {
-          status: response.status,
-          ok: response.ok,
-        });
-      }
-
       if (!response.ok) {
         const errorText = await response.text();
-        if (DEBUG_UPLOAD) {
-          console.error('[FileUpload] Upload failed:', {
-            status: response.status,
-            statusText: response.statusText,
-            body: errorText,
-          });
-        }
         let error: { error?: string } = {};
         try {
           error = JSON.parse(errorText);
@@ -149,7 +110,6 @@ export const FileUpload: React.FC<FileUploadProps> = ({
       }
 
       const result = await response.json();
-      if (DEBUG_UPLOAD) console.log('[FileUpload] Upload successful:', result);
 
       // Show success message with final filename(s) so user knows what to reference
       if (result.files.length === 1) {

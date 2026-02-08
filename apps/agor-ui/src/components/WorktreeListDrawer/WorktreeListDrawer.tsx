@@ -81,7 +81,7 @@ export const WorktreeListDrawer: React.FC<WorktreeListDrawerProps> = ({
     <Drawer
       title={null}
       placement="left"
-      width={400}
+      size={400}
       open={open}
       onClose={onClose}
       styles={{
@@ -138,7 +138,7 @@ export const WorktreeListDrawer: React.FC<WorktreeListDrawerProps> = ({
                   </Space>
                 }
                 description={
-                  <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                  <Space orientation="vertical" size={2} style={{ width: '100%' }}>
                     <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                       {session.agentic_tool} • {session.tasks.length}{' '}
                       {session.tasks.length === 1 ? 'task' : 'tasks'}

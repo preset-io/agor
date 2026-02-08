@@ -51,8 +51,6 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
         throw new Error('Worktree ID is required');
       }
 
-      console.log(`Creating session with worktree_id: ${config.worktree_id}`);
-
       // Create session with worktree_id
       const agenticTool = config.agent as AgenticToolName;
       const permissionMode: PermissionMode =

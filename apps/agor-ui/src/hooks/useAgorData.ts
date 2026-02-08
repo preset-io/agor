@@ -183,12 +183,6 @@ export function useAgorData(
       // Build MCP server Map for efficient lookups
       const mcpServersMap = new Map<string, MCPServer>();
       for (const mcpServer of mcpServersList) {
-        console.log('[useAgorData] Loading MCP server:', {
-          name: mcpServer.name,
-          mcp_server_id: mcpServer.mcp_server_id.substring(0, 8),
-          tools: mcpServer.tools,
-          toolCount: mcpServer.tools?.length || 0,
-        });
         mcpServersMap.set(mcpServer.mcp_server_id, mcpServer);
       }
       setMcpServerById(mcpServersMap);
@@ -245,12 +239,6 @@ export function useAgorData(
       });
     };
     const handleSessionPatched = (session: Session) => {
-      console.log(`🔄 [useAgorData] Session patched:`, {
-        session_id: session.session_id.substring(0, 8),
-        status: session.status,
-        ready_for_prompt: session.ready_for_prompt,
-      });
-
       // Track old worktree_id for migration detection
       let oldWorktreeId: string | null = null;
 
@@ -295,44 +283,22 @@ export function useAgorData(
           const newSessions = prev.get(newWorktreeId) || [];
           next.set(newWorktreeId, [...newSessions, session]);
 
-          console.log(
-            `🔄 [useAgorData] sessionsByWorktree updated (MIGRATED) for worktree ${newWorktreeId.substring(0, 8)}`
-          );
           return next;
         }
 
         // Session not found in this worktree and didn't migrate (shouldn't happen, but be safe)
         if (index === -1) {
-          console.log(
-            `⚠️ [useAgorData] Session ${session.session_id.substring(0, 8)} not found in worktree ${newWorktreeId.substring(0, 8)}, skipping sessionsByWorktree update`
-          );
           return prev;
         }
 
         // Check if session actually changed (reference equality is sufficient for socket updates)
         if (worktreeSessions[index] === session) {
-          console.log(
-            `🔄 [useAgorData] Session ${session.session_id.substring(0, 8)} reference unchanged, skipping sessionsByWorktree update`
-          );
           return prev;
         }
 
         // Create new array with updated session (in-place update)
         const updatedSessions = [...worktreeSessions];
         updatedSessions[index] = session;
-
-        const oldArrayRef = worktreeSessions;
-        const newArrayRef = updatedSessions;
-        console.log(
-          `🔄 [useAgorData] sessionsByWorktree updated for worktree ${newWorktreeId.substring(0, 8)}`,
-          {
-            arrayRefChanged: oldArrayRef !== newArrayRef,
-            oldLength: oldArrayRef.length,
-            newLength: newArrayRef.length,
-            sessionIndex: index,
-            sessionStatus: session.status,
-          }
-        );
 
         // Only create new Map with updated worktree entry
         const next = new Map(prev);
@@ -379,18 +345,11 @@ export function useAgorData(
       });
     };
     const handleBoardPatched = (board: Board) => {
-      console.log('🔄 [useAgorData] Board patched:', {
-        board_id: board.board_id.substring(0, 8),
-        objectsCount: Object.keys(board.objects || {}).length,
-        objects: board.objects,
-      });
       setBoardById((prev) => {
         const existing = prev.get(board.board_id);
         if (existing === board) {
-          console.log('⚠️ [useAgorData] Board reference unchanged, skipping update');
           return prev; // Same reference, no change
         }
-        console.log('✅ [useAgorData] Updating boardById Map with new board');
         const next = new Map(prev);
         next.set(board.board_id, board);
         return next;
@@ -553,12 +512,6 @@ export function useAgorData(
       });
     };
     const handleMCPServerPatched = (server: MCPServer) => {
-      console.log('[useAgorData] MCP server patched:', {
-        name: server.name,
-        mcp_server_id: server.mcp_server_id.substring(0, 8),
-        tools: server.tools,
-        toolCount: server.tools?.length || 0,
-      });
       setMcpServerById((prev) => {
         const existing = prev.get(server.mcp_server_id);
         if (existing === server) return prev; // Same reference, no change

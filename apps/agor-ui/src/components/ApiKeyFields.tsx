@@ -80,7 +80,7 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
 
     return (
       <div key={field} style={{ marginBottom: token.marginLG }}>
-        <Space direction="vertical" size="small" style={{ width: '100%' }}>
+        <Space orientation="vertical" size="small" style={{ width: '100%' }}>
           <Space>
             <Text strong>{label}</Text>
             {description && <Text type="secondary">{description}</Text>}
@@ -138,7 +138,7 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
   };
 
   return (
-    <Space direction="vertical" size="large" style={{ width: '100%' }}>
+    <Space orientation="vertical" size="large" style={{ width: '100%' }}>
       {KEY_CONFIGS.filter((config) => config.field in keyStatus).map((config) =>
         renderKeyField(config)
       )}

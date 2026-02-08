@@ -55,9 +55,6 @@ export const AboutTab: React.FC<AboutTabProps> = ({
   const [healthInfo, setHealthInfo] = useState<HealthInfo | null>(null);
 
   useEffect(() => {
-    console.log('[AboutTab] isAdmin:', isAdmin);
-    console.log('[AboutTab] connected:', connected);
-
     // Determine which detection method was used
     if ((window as WindowWithAgorConfig).AGOR_DAEMON_URL) {
       setDetectionMethod('Runtime injection (window.AGOR_DAEMON_URL)');
@@ -75,15 +72,13 @@ export const AboutTab: React.FC<AboutTabProps> = ({
         .service('health')
         .find()
         .then((data) => {
-          console.log('[AboutTab] Health info:', data);
           // Health endpoint returns a single object, not paginated
           const healthData = data as HealthInfo;
-          console.log('[AboutTab] Database info:', healthData.database);
           setHealthInfo(healthData);
         })
         .catch((err) => console.error('Failed to fetch health info:', err));
     }
-  }, [client, isAdmin, connected]);
+  }, [client]);
 
   return (
     <div style={{ position: 'relative', minHeight: 500, padding: '24px 0' }}>

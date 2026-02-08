@@ -298,9 +298,6 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           debugInfo?: unknown;
         };
 
-        // Log full response for debugging
-        console.log('[OAuth Test Response]', data);
-
         if (data.success) {
           if (data.requiresBrowserFlow) {
             // OAuth 2.1 detected but needs browser authentication
@@ -322,21 +319,11 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
             }
             showSuccess(message);
           }
-
-          if (data.debugInfo) {
-            console.log('[OAuth Debug]', data.debugInfo);
-          }
         } else {
           // Show detailed error with hints
           let errorMsg = data.error || 'OAuth authentication failed';
           if (data.hint) {
             errorMsg += `\n\nHint: ${data.hint}`;
-          }
-          if (data.wwwAuthenticate) {
-            console.log('[OAuth] WWW-Authenticate header:', data.wwwAuthenticate);
-          }
-          if (data.responseHeaders) {
-            console.log('[OAuth] Response headers:', data.responseHeaders);
           }
           showError(errorMsg);
         }
@@ -880,9 +867,6 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     if (editingServer && mcpServerById.has(editingServer.mcp_server_id)) {
       const updatedServer = mcpServerById.get(editingServer.mcp_server_id);
       if (updatedServer && updatedServer !== editingServer) {
-        console.log('[MCP] Server updated via WebSocket, refreshing edit modal', {
-          serverId: String(editingServer.mcp_server_id).substring(0, 8),
-        });
         setEditingServer(updatedServer);
       }
     }
@@ -1079,11 +1063,6 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   };
 
   const handleEdit = async (server: MCPServer) => {
-    console.log('[MCP] handleEdit called with server:', {
-      name: server.name,
-      mcp_server_id: String(server.mcp_server_id).substring(0, 8),
-    });
-
     setEditingServer(server);
     setTestResult(null); // Reset test result when opening edit modal
     const serverAuthType = (server.auth?.type as 'none' | 'bearer' | 'jwt' | 'oauth') || 'none';
@@ -1131,9 +1110,6 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     form.setFieldsValue(formValues);
 
     setEditModalOpen(true);
-    console.log('[MCP] Edit modal opened for server:', server.name, {
-      transport: server.transport,
-    });
   };
 
   const handleUpdate = async () => {

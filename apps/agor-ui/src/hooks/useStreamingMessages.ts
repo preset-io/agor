@@ -98,8 +98,6 @@ export function useStreamingMessages(
         return;
       }
 
-      console.debug(`📡 Streaming start: ${data.message_id.substring(0, 8)}`);
-
       setStreamingMessages((prev) => {
         const newMap = new Map(prev);
         newMap.set(data.message_id, {
@@ -143,8 +141,6 @@ export function useStreamingMessages(
       if (sessionId && data.session_id !== sessionId) {
         return;
       }
-
-      console.debug(`📡 Streaming end: ${data.message_id.substring(0, 8)}`);
 
       // Mark as ended but DON'T remove yet - wait for DB 'created' event
       // This prevents jitter where streaming message disappears before DB message appears
@@ -201,10 +197,6 @@ export function useStreamingMessages(
         return;
       }
 
-      console.debug(
-        `📡 Message created in DB: ${message.message_id.substring(0, 8)} - removing from streaming buffer`
-      );
-
       // Remove from streaming map now that it's in the DB
       setStreamingMessages((prev) => {
         const newMap = new Map(prev);
@@ -219,8 +211,6 @@ export function useStreamingMessages(
       if (sessionId && data.session_id !== sessionId) {
         return;
       }
-
-      console.debug(`🧠 Thinking start: ${data.message_id.substring(0, 8)}`);
 
       setStreamingMessages((prev) => {
         const newMap = new Map(prev);
@@ -268,8 +258,6 @@ export function useStreamingMessages(
       if (sessionId && data.session_id !== sessionId) {
         return;
       }
-
-      console.debug(`🧠 Thinking end: ${data.message_id.substring(0, 8)}`);
 
       setStreamingMessages((prev) => {
         const message = prev.get(data.message_id);
