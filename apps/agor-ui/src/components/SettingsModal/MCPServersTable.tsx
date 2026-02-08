@@ -172,6 +172,7 @@ interface MCPServerFormFieldsProps {
     toolCount: number;
     resourceCount: number;
     promptCount: number;
+    error?: string;
     tools?: Array<{ name: string; description: string }>;
     resources?: Array<{ name: string; uri: string; mimeType?: string }>;
     prompts?: Array<{ name: string; description: string }>;
@@ -822,6 +823,7 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                     <Alert
                       type="error"
                       message="Connection failed"
+                      description={testResult.error}
                       showIcon
                       style={{ marginTop: 8 }}
                     />
@@ -867,6 +869,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     toolCount: number;
     resourceCount: number;
     promptCount: number;
+    error?: string;
     tools?: Array<{ name: string; description: string }>;
     resources?: Array<{ name: string; uri: string; mimeType?: string }>;
     prompts?: Array<{ name: string; description: string }>;
@@ -1047,13 +1050,26 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
           `Connection successful: ${result.toolCount} tools, ${result.resourceCount} resources, ${result.promptCount} prompts`
         );
       } else {
-        setTestResult({ success: false, toolCount: 0, resourceCount: 0, promptCount: 0 });
-        showError(data.error || 'Connection test failed');
+        const errorMsg = data.error || 'Connection test failed';
+        setTestResult({
+          success: false,
+          toolCount: 0,
+          resourceCount: 0,
+          promptCount: 0,
+          error: errorMsg,
+        });
+        showError(errorMsg);
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       console.error('Connection test failed:', error);
-      setTestResult({ success: false, toolCount: 0, resourceCount: 0, promptCount: 0 });
+      setTestResult({
+        success: false,
+        toolCount: 0,
+        resourceCount: 0,
+        promptCount: 0,
+        error: errorMessage,
+      });
       showError(`Connection test failed: ${errorMessage}`);
     } finally {
       setTesting(false);
