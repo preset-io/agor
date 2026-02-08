@@ -7,6 +7,7 @@ export * from './board-comment';
 export * from './context';
 export * from './feathers';
 export * from './file';
+export * from './gateway';
 export * from './id';
 export * from './mcp';
 export * from './message';

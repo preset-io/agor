@@ -32,6 +32,8 @@ export const mcpServers = schema.mcpServers;
 export const boardObjects = schema.boardObjects;
 export const sessionMcpServers = schema.sessionMcpServers;
 export const boardComments = schema.boardComments;
+export const gatewayChannels = schema.gatewayChannels;
+export const threadSessionMap = schema.threadSessionMap;
 
 // Re-export all types
 export type * from './schema.sqlite';

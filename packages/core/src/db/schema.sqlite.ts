@@ -910,6 +910,92 @@ export const boardComments = sqliteTable(
 );
 
 /**
+ * Gateway Channels table - Registered messaging platform integrations
+ *
+ * Users create channels to connect messaging platforms (Slack, Discord, etc.)
+ * to Agor. Each channel targets a specific worktree and routes messages
+ * to/from sessions within that worktree.
+ */
+export const gatewayChannels = sqliteTable(
+  'gateway_channels',
+  {
+    // Primary identity
+    id: text('id', { length: 36 }).primaryKey(),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+
+    // User attribution
+    created_by: text('created_by', { length: 36 }).notNull().default('anonymous'),
+
+    // Materialized for queries
+    name: text('name').notNull(),
+    channel_type: text('channel_type', {
+      enum: ['slack', 'discord', 'whatsapp', 'telegram'],
+    }).notNull(),
+    target_worktree_id: text('target_worktree_id', { length: 36 })
+      .notNull()
+      .references(() => worktrees.worktree_id, { onDelete: 'cascade' }),
+    agor_user_id: text('agor_user_id', { length: 36 }).notNull(),
+    channel_key: text('channel_key').notNull().unique(),
+    enabled: t.bool('enabled').notNull().default(true),
+    last_message_at: t.timestamp('last_message_at'),
+
+    // JSON blob for platform credentials (encrypted at rest)
+    config: t.json<Record<string, unknown>>('config').notNull(),
+  },
+  (table) => ({
+    channelKeyIdx: index('idx_gateway_channel_key').on(table.channel_key),
+    enabledTypeIdx: index('idx_gateway_enabled_type').on(table.enabled, table.channel_type),
+  })
+);
+
+/**
+ * Thread-Session Map table - Links platform threads to Agor sessions
+ *
+ * Each thread in a messaging platform maps 1:1 to an Agor session.
+ * The gateway service manages these mappings for routing.
+ */
+export const threadSessionMap = sqliteTable(
+  'thread_session_map',
+  {
+    // Primary identity
+    id: text('id', { length: 36 }).primaryKey(),
+    created_at: t.timestamp('created_at').notNull(),
+    last_message_at: t.timestamp('last_message_at').notNull(),
+
+    // Foreign keys
+    channel_id: text('channel_id', { length: 36 })
+      .notNull()
+      .references(() => gatewayChannels.id, { onDelete: 'cascade' }),
+    thread_id: text('thread_id').notNull(),
+    session_id: text('session_id', { length: 36 })
+      .notNull()
+      .references(() => sessions.session_id),
+    worktree_id: text('worktree_id', { length: 36 })
+      .notNull()
+      .references(() => worktrees.worktree_id),
+
+    // Materialized for queries
+    status: text('status', {
+      enum: ['active', 'archived', 'paused'],
+    })
+      .notNull()
+      .default('active'),
+
+    // JSON blob for extra metadata
+    metadata: t.json<Record<string, unknown>>('metadata'),
+  },
+  (table) => ({
+    uniqueChannelThread: index('uniq_thread_map_channel_thread').on(
+      table.channel_id,
+      table.thread_id
+    ),
+    sessionIdx: index('idx_thread_map_session_id').on(table.session_id),
+    channelStatusIdx: index('idx_thread_map_channel_status').on(table.channel_id, table.status),
+  })
+);
+
+/**
  * Type exports for use with Drizzle ORM
  */
 export type SessionRow = typeof sessions.$inferSelect;
@@ -934,3 +1020,7 @@ export type BoardObjectRow = typeof boardObjects.$inferSelect;
 export type BoardObjectInsert = typeof boardObjects.$inferInsert;
 export type BoardCommentRow = typeof boardComments.$inferSelect;
 export type BoardCommentInsert = typeof boardComments.$inferInsert;
+export type GatewayChannelRow = typeof gatewayChannels.$inferSelect;
+export type GatewayChannelInsert = typeof gatewayChannels.$inferInsert;
+export type ThreadSessionMapRow = typeof threadSessionMap.$inferSelect;
+export type ThreadSessionMapInsert = typeof threadSessionMap.$inferInsert;
