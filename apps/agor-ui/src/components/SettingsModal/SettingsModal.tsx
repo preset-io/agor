@@ -4,6 +4,7 @@ import type {
   BoardEntityObject,
   CreateMCPServerInput,
   CreateUserInput,
+  GatewayChannel,
   MCPServer,
   Repo,
   Session,
@@ -19,6 +20,7 @@ import {
   CloseOutlined,
   FolderOutlined,
   InfoCircleOutlined,
+  MessageOutlined,
   RobotOutlined,
   TeamOutlined,
 } from '@ant-design/icons';
@@ -30,6 +32,7 @@ import type { WorktreeUpdate } from '../WorktreeModal/tabs/GeneralTab';
 import { AboutTab } from './AboutTab';
 import { AgenticToolsSection } from './AgenticToolsSection';
 import { BoardsTable } from './BoardsTable';
+import { GatewayChannelsTable } from './GatewayChannelsTable';
 import { MCPServersTable } from './MCPServersTable';
 import { ReposTable } from './ReposTable';
 import { UsersTable } from './UsersTable';
@@ -88,6 +91,10 @@ export interface SettingsModalProps {
   onCreateMCPServer?: (data: CreateMCPServerInput) => void;
   onUpdateMCPServer?: (serverId: string, updates: UpdateMCPServerInput) => void;
   onDeleteMCPServer?: (serverId: string) => void;
+  gatewayChannelById?: Map<string, GatewayChannel>;
+  onCreateGatewayChannel?: (data: Partial<GatewayChannel>) => void;
+  onUpdateGatewayChannel?: (channelId: string, updates: Partial<GatewayChannel>) => void;
+  onDeleteGatewayChannel?: (channelId: string) => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -123,6 +130,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onCreateMCPServer,
   onUpdateMCPServer,
   onDeleteMCPServer,
+  gatewayChannelById = new Map(),
+  onCreateGatewayChannel,
+  onUpdateGatewayChannel,
+  onDeleteGatewayChannel,
 }) => {
   const [selectedWorktree, setSelectedWorktree] = useState<Worktree | null>(null);
   const [selectedRepo, setSelectedRepo] = useState<Repo | null>(null);
@@ -197,6 +208,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           key: 'agentic-tools',
           label: 'Agentic Tools',
           icon: <RobotOutlined />,
+        },
+        {
+          key: 'gateway',
+          label: 'Gateway Channels',
+          icon: <MessageOutlined />,
         },
       ],
     },
@@ -278,6 +294,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         );
       case 'agentic-tools':
         return <AgenticToolsSection client={client} />;
+      case 'gateway':
+        return (
+          <GatewayChannelsTable
+            client={client}
+            gatewayChannelById={gatewayChannelById}
+            worktreeById={worktreeById}
+            userById={userById}
+            onCreate={onCreateGatewayChannel}
+            onUpdate={onUpdateGatewayChannel}
+            onDelete={onDeleteGatewayChannel}
+          />
+        );
       case 'users':
         return (
           <UsersTable

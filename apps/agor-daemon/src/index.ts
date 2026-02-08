@@ -311,6 +311,7 @@ import type {
   SessionsServiceImpl,
   TasksServiceImpl,
 } from './declarations';
+import { gatewayRouteHook } from './hooks/gateway-route';
 import { createBoardCommentsService } from './services/board-comments';
 import { createBoardObjectsService } from './services/board-objects';
 import { createBoardsService } from './services/boards';
@@ -318,6 +319,8 @@ import { createConfigService } from './services/config';
 import { createContextService } from './services/context';
 import { createFileService } from './services/file';
 import { createFilesService } from './services/files';
+import { createGatewayService } from './services/gateway';
+import { createGatewayChannelsService } from './services/gateway-channels';
 import { createHealthMonitor } from './services/health-monitor';
 import { createLeaderboardService } from './services/leaderboard';
 import { createMCPServersService } from './services/mcp-servers';
@@ -328,6 +331,7 @@ import { createSessionMCPServersService } from './services/session-mcp-servers';
 import { createSessionsService } from './services/sessions';
 import { createTasksService } from './services/tasks';
 import { TerminalsService } from './services/terminals';
+import { createThreadSessionMapService } from './services/thread-session-map';
 import { createUsersService } from './services/users';
 import { setupWorktreeOwnersService } from './services/worktree-owners.js';
 import { createWorktreesService } from './services/worktrees';
@@ -1919,6 +1923,13 @@ async function main() {
     },
   });
 
+  // Register gateway services
+  app.use('/gateway-channels', createGatewayChannelsService(db));
+  app.use('/thread-session-map', createThreadSessionMapService(db));
+  app.use('/gateway', createGatewayService(db, app), {
+    methods: ['create', 'routeMessage'],
+  });
+
   // Register config service for API key management
   const configService = createConfigService(db);
   // Store app reference for service method access
@@ -2050,6 +2061,7 @@ async function main() {
       ],
     },
     after: {
+      create: [gatewayRouteHook],
       patch: [
         async (context: HookContext<Board>) => {
           // Detect permission resolution and notify executor via IPC
@@ -2394,6 +2406,24 @@ async function main() {
       find: [requireMinimumRole('member', 'list session MCP servers')],
     },
   });
+
+  app.service('gateway-channels').hooks({
+    before: {
+      all: [requireAuth],
+      create: [requireMinimumRole('member', 'create gateway channels')],
+      patch: [requireMinimumRole('member', 'update gateway channels')],
+      remove: [requireMinimumRole('member', 'delete gateway channels')],
+    },
+  });
+
+  app.service('thread-session-map').hooks({
+    before: {
+      all: [requireAuth],
+    },
+  });
+
+  // Gateway service create (postMessage) authenticates via channel_key, not user auth
+  // No hooks needed — auth is handled internally by the service
 
   app.service('config').hooks({
     before: {
