@@ -1,0 +1,153 @@
+---
+title: Message Gateway
+description: Route messages from Slack, Discord, and other platforms directly into Agor sessions — turning any chat thread into a portal to an autonomous coding agent.
+---
+
+# Message Gateway (Beta)
+
+The Message Gateway connects external messaging platforms to Agor's agent sessions. DM your Slack bot, and Agor spins up a fresh coding session on the right worktree with the right agent — then streams responses back into the same thread. Follow-up messages continue the conversation in the same session.
+
+> Currently Slack-only. Discord, WhatsApp, and Telegram connectors are planned.
+
+## What is a Channel?
+
+A **Channel** is a portal into a worktree. It defines:
+
+- **A home worktree** — the persistent worktree where every session spawned by this channel will operate. Think of it as a command center, like an `agor-openclaw` worktree that supervises a project.
+- **An agentic tool configuration** — which coding agent to use (Claude Code, Codex, Gemini, OpenCode), which model, permission mode, and which MCP servers to attach.
+- **Platform credentials** — bot token, app token, and other secrets needed to send and receive messages (encrypted at rest).
+
+You can create multiple channels for the same or different worktrees. For example:
+
+- **"Optimus Prime"** — Claude Code (Opus 4.6) on your main `agor-openclaw` worktree, with Slack + GitHub MCP servers
+- **"Scout"** — Claude Code (Sonnet 4.5) on a lighter review worktree, trust mode, no MCP servers
+- **"Codex Runner"** — Codex on a `superset-frontend` worktree for quick JS tasks
+
+Each channel gets a unique **channel key** (a UUID) that authenticates inbound messages. The Slack integration uses Socket Mode, so no public webhook URLs are needed.
+
+## How It Works
+
+When a message arrives from a platform (e.g., a Slack DM), the gateway processes it through a simple pipeline:
+
+1. **Authenticate.** The gateway looks up the channel by its key and verifies it's enabled.
+2. **Map thread to session.** If this is a new thread, create a fresh Agor session on the channel's target worktree with the channel's agentic tool configuration. If this thread has been seen before, route to the existing session.
+3. **Send prompt.** The message text is sent to the session via Agor's standard prompt flow — task creation, executor spawn, the full pipeline.
+4. **Agent runs.** The coding agent (Claude Code, Codex, etc.) processes the prompt with full access to the worktree, MCP servers, and any configured tools.
+5. **Route response back.** When the agent produces a response, Agor's outbound routing hook intercepts it and posts it back into the same platform thread. Markdown is converted to platform-native formatting (e.g., Slack mrkdwn).
+6. **Repeat.** Follow-up messages in the same thread continue the same session — the agent has full conversation history.
+
+```
+Slack DM                    Agor Daemon                    Agent
+────────                    ───────────                    ─────
+  │                              │                           │
+  │  "Fix the login bug"         │                           │
+  ├─────────────────────────────>│                           │
+  │                              │  Create session           │
+  │                              │  + thread mapping          │
+  │                              │                           │
+  │                              │  Send prompt              │
+  │                              ├──────────────────────────>│
+  │                              │                           │
+  │                              │        Agent response     │
+  │                              │<──────────────────────────┤
+  │   "I've fixed the login..."  │                           │
+  │<─────────────────────────────┤                           │
+  │                              │                           │
+  │  "Can you also add tests?"   │                           │
+  ├─────────────────────────────>│                           │
+  │                              │  Route to same session    │
+  │                              ├──────────────────────────>│
+  │                              │                           │
+```
+
+The outbound routing is a lightweight after-hook on message creation. For sessions without a gateway mapping (the vast majority), it's a single database lookup that returns immediately — effectively a no-op.
+
+## Setting Up Slack Integration
+
+### 1. Create a Slack App
+
+1. Go to [api.slack.com/apps](https://api.slack.com/apps) and create a new app.
+2. Under **OAuth & Permissions**, add the `chat:write` bot scope.
+3. Under **App Home**, enable the **Messages Tab** and check "Allow users to send Slash commands and messages from the messages tab."
+4. Under **Event Subscriptions**, subscribe to the `message.im` bot event.
+5. Under **Socket Mode**, enable Socket Mode and generate an **App-Level Token** (`xapp-...`).
+6. Install the app to your workspace and note the **Bot User OAuth Token** (`xoxb-...`).
+
+### 2. Create a Channel in Agor
+
+1. Open **Settings** (gear icon) and navigate to the **Gateway** tab.
+2. Click **Add Channel**.
+3. Fill in:
+   - **Name** — Give it a memorable name (e.g., "Optimus Prime").
+   - **Channel Type** — Select `slack`.
+   - **Target Worktree** — Pick the worktree where sessions will run.
+   - **Bot Token** — Paste the `xoxb-...` token.
+   - **App Token** — Paste the `xapp-...` token (required for receiving DMs via Socket Mode).
+4. Optionally expand **Agentic Tool Configuration** to customize the agent, model, permission mode, and MCP servers for sessions created by this channel.
+5. Save. The daemon will immediately start a Socket Mode listener for this channel.
+
+### 3. DM Your Bot
+
+Open Slack, find your bot under Apps, and send it a message. You should see system debug messages confirming session creation, followed by the agent's response — all in the same DM thread.
+
+## Agentic Tool Configuration
+
+Each channel can define its own agent configuration, overriding the user's defaults:
+
+| Setting | Description | Default |
+|---------|-------------|---------|
+| **Agent** | Which coding tool to use (Claude Code, Codex, Gemini, OpenCode) | Claude Code |
+| **Model** | Model alias or specific model ID | User's default |
+| **Permission Mode** | How the agent handles tool approvals (trust, auto, supervised, manual) | Agent's default |
+| **MCP Servers** | Which MCP servers the agent can access | None |
+
+The gateway resolves configuration with a fallback chain: **channel config** > **user defaults** > **system defaults**. This means you only need to configure what you want to override.
+
+## Architecture
+
+The gateway is built as a set of loosely coupled components:
+
+- **Gateway Service** (`/gateway`) — Orchestrates inbound routing (platform to session) and outbound routing (session to platform). Custom FeathersJS service.
+- **Gateway Channels** (`/gateway-channels`) — CRUD for channel configurations with encrypted credential storage.
+- **Thread-Session Map** (`/thread-session-map`) — Persists the mapping between platform thread IDs and Agor session IDs.
+- **Connector Layer** — Platform-agnostic `GatewayConnector` interface with a registry pattern. Adding a new platform means implementing `sendMessage()` and optionally `startListening()`.
+- **Outbound Hook** — FeathersJS `after.create` hook on the messages service. Fire-and-forget; never blocks message creation.
+
+### Adding a New Platform
+
+The connector interface is intentionally minimal:
+
+```typescript
+interface GatewayConnector {
+  readonly channelType: ChannelType;
+  sendMessage(req: { threadId: string; text: string }): Promise<string>;
+  startListening?(callback: (msg: InboundMessage) => void): Promise<void>;
+  stopListening?(): Promise<void>;
+  formatMessage?(markdown: string): string;
+}
+```
+
+Implement this interface, register it in the connector registry, and the gateway service handles the rest — authentication, thread mapping, session lifecycle, and outbound routing all work automatically.
+
+## Best Practices
+
+- **Use trust or auto mode for unattended agents.** If you want the agent to operate without human approval on each tool call, set the permission mode accordingly.
+- **Attach relevant MCP servers.** A Slack-connected agent that also has GitHub MCP can create PRs, check CI status, and post updates — all from a DM.
+- **One worktree per concern.** Create separate channels for different projects or responsibilities rather than funneling everything through one worktree.
+- **Name channels descriptively.** When you have multiple channels, names like "Frontend Review Bot (Sonnet)" are much more useful than "Channel 1."
+- **Keep credentials rotated.** Bot tokens and app tokens are encrypted at rest, but rotate them periodically through the channel edit UI.
+
+## Troubleshooting
+
+- **"Sending messages to this app has been turned off."** Enable the Messages Tab in your Slack app's App Home settings, and subscribe to the `message.im` bot event.
+- **Bot doesn't respond to DMs.** Check that Socket Mode is enabled, the `app_token` is set in the channel config, and the daemon logs show `[gateway] Socket Mode listener started for channel "..."`.
+- **Agent session created but no response.** Verify that the coding agent (Claude Code, etc.) is authenticated inside the daemon's environment. Check daemon logs for executor errors.
+- **Response appears in logs but not in Slack.** The `bot_token` may lack the `chat:write` scope, or the bot may not have permission to DM the user. Check Slack app permissions.
+- **Infinite message loop.** The connector filters out bot messages (`bot_id` or `subtype: bot_message`). If you see loops, check that your Slack app's bot user is properly configured.
+
+## Related Reading
+
+- [Worktree Scheduler](./scheduler) — Automate recurring work on worktrees (complements gateway for event-driven vs. time-driven automation).
+- [Agor MCP Server](./internal-mcp) — Give gateway-spawned agents full self-awareness and orchestration capabilities.
+- [Agent SDK Comparison](./sdk-comparison) — Choose the right coding agent for your channel's use case.
+- [Spawned Subsessions](./spawned-subsessions) — Gateway-created sessions can themselves spawn child sessions for parallel work.

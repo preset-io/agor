@@ -7,6 +7,7 @@ export default {
     title: 'Features',
   },
   'internal-mcp': 'Agor MCP Server',
+  'message-gateway': 'Message Gateway (Beta)',
   scheduler: 'Scheduler',
   'environment-configuration': 'Environments',
   'advanced-features': 'Advanced Features',
