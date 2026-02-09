@@ -978,7 +978,7 @@ export const threadSessionMap = pgTable(
     thread_id: text('thread_id').notNull(),
     session_id: varchar('session_id', { length: 36 })
       .notNull()
-      .references(() => sessions.session_id),
+      .references(() => sessions.session_id, { onDelete: 'cascade' }),
     worktree_id: varchar('worktree_id', { length: 36 })
       .notNull()
       .references(() => worktrees.worktree_id),

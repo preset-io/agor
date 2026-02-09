@@ -169,6 +169,13 @@
       "when": 1770584533766,
       "tag": "0025_sticky_karnak",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "6",
+      "when": 1770600000000,
+      "tag": "0026_fix_thread_session_map_fk_cascade",
+      "breakpoints": true
     }
   ]
 }
