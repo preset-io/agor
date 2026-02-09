@@ -24,6 +24,7 @@ import {
   Badge,
   Button,
   Collapse,
+  Divider,
   Form,
   type FormInstance,
   Input,
@@ -102,6 +103,7 @@ const ChannelFormFields: React.FC<{
   editingChannel?: GatewayChannel | null;
   onCopyKey?: (key: string) => void;
 }> = ({
+  form,
   mode,
   channelType,
   onChannelTypeChange,
@@ -113,6 +115,12 @@ const ChannelFormFields: React.FC<{
   editingChannel,
   onCopyKey,
 }) => {
+  // Watch message source settings for showing warnings/scope requirements
+  const enableChannels = Form.useWatch('enable_channels', form) ?? false;
+  const enableGroups = Form.useWatch('enable_groups', form) ?? false;
+  const enableMpim = Form.useWatch('enable_mpim', form) ?? false;
+  const requireMention = Form.useWatch('require_mention', form) ?? true;
+
   return (
     <>
       {mode === 'edit' && editingChannel && (
@@ -229,17 +237,189 @@ const ChannelFormFields: React.FC<{
             <Input.Password placeholder={mode === 'edit' ? '••••••••' : 'xapp-...'} />
           </Form.Item>
 
+          <Alert
+            type="info"
+            showIcon
+            message="Socket Mode Required"
+            description="Agor's Slack integration uses Socket Mode for real-time message delivery. Enable Socket Mode in your Slack app settings and generate an app-level token with connections:write scope."
+            style={{ marginBottom: 16, fontSize: 12 }}
+          />
+
+          <Divider orientation="left" style={{ marginTop: 24, marginBottom: 16 }}>
+            Message Sources
+          </Divider>
+
+          <Alert
+            type="info"
+            showIcon
+            message="Choose where the bot should listen for messages"
+            description="Direct messages are always enabled. Enable additional sources carefully — anyone who can message the bot can interact with your agent. See security documentation."
+            style={{ marginBottom: 16 }}
+          />
+
           <Form.Item
-            label="Connection Mode"
-            name="connection_mode"
-            initialValue="socket"
-            tooltip="How the gateway connects to Slack"
+            label="Enable Public Channels"
+            name="enable_channels"
+            valuePropName="checked"
+            initialValue={false}
+            tooltip="Bot will respond to messages in public channels it's added to"
           >
-            <Select>
-              <Select.Option value="socket">Socket Mode</Select.Option>
-              <Select.Option value="webhook">Webhook</Select.Option>
-            </Select>
+            <Switch />
           </Form.Item>
+
+          <Form.Item
+            label="Enable Private Channels"
+            name="enable_groups"
+            valuePropName="checked"
+            initialValue={false}
+            tooltip="Bot will respond to messages in private channels it's added to"
+          >
+            <Switch />
+          </Form.Item>
+
+          <Form.Item
+            label="Enable Group DMs"
+            name="enable_mpim"
+            valuePropName="checked"
+            initialValue={false}
+            tooltip="Bot will respond to messages in multi-person direct messages"
+          >
+            <Switch />
+          </Form.Item>
+
+          <Form.Item
+            label="Require Bot Mention"
+            name="require_mention"
+            valuePropName="checked"
+            initialValue={true}
+            tooltip="When enabled, bot only responds when explicitly @mentioned (recommended for channels)"
+          >
+            <Switch />
+          </Form.Item>
+
+          {(enableChannels || enableGroups || enableMpim) && !requireMention && (
+            <Alert
+              type="warning"
+              showIcon
+              message="Bot will respond to ALL messages"
+              description="With 'Require Bot Mention' disabled, the bot will respond to every message in enabled channels/groups. This can be noisy and expensive. Consider enabling mention requirement."
+              style={{ marginBottom: 16 }}
+            />
+          )}
+
+          {(enableChannels || enableGroups || enableMpim) && (
+            <Alert
+              type="info"
+              showIcon
+              message="Required Slack OAuth Scopes"
+              description={
+                <ul style={{ margin: '8px 0 0 0', paddingLeft: 20, fontSize: 12 }}>
+                  <li>
+                    <code>chat:write</code> (always required)
+                  </li>
+                  {enableChannels && (
+                    <>
+                      <li>
+                        <code>channels:history</code> - Read public channel messages
+                      </li>
+                      <li>
+                        <code>app_mentions:read</code> - Receive mention events
+                      </li>
+                    </>
+                  )}
+                  {enableGroups && (
+                    <li>
+                      <code>groups:history</code> - Read private channel messages
+                    </li>
+                  )}
+                  {enableMpim && (
+                    <li>
+                      <code>mpim:history</code> - Read group DM messages
+                    </li>
+                  )}
+                </ul>
+              }
+              style={{ marginBottom: 16 }}
+            />
+          )}
+
+          {(enableChannels || enableGroups || enableMpim) && (
+            <Alert
+              type="info"
+              showIcon
+              message="Required Slack Event Subscriptions"
+              description={
+                <ul style={{ margin: '8px 0 0 0', paddingLeft: 20, fontSize: 12 }}>
+                  <li>
+                    <code>message.im</code> (always required)
+                  </li>
+                  {enableChannels && (
+                    <>
+                      <li>
+                        <code>message.channels</code> - Public channel messages
+                      </li>
+                      <li>
+                        <code>app_mention</code> - Bot mention events (recommended)
+                      </li>
+                    </>
+                  )}
+                  {enableGroups && (
+                    <li>
+                      <code>message.groups</code> - Private channel messages
+                    </li>
+                  )}
+                  {enableMpim && (
+                    <li>
+                      <code>message.mpim</code> - Group DM messages
+                    </li>
+                  )}
+                </ul>
+              }
+              style={{ marginBottom: 16 }}
+            />
+          )}
+
+          <Collapse
+            ghost
+            items={[
+              {
+                key: 'channel-whitelist',
+                label: (
+                  <Typography.Text strong style={{ fontSize: 13 }}>
+                    Advanced: Channel Whitelist
+                  </Typography.Text>
+                ),
+                children: (
+                  <>
+                    <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 12 }}>
+                      Optionally restrict the bot to specific Slack channels by ID. Leave empty to allow all
+                      channels where the bot is added. Find channel IDs in Slack: right-click channel → View
+                      channel details → scroll to bottom.
+                    </Typography.Text>
+                    <Form.Item
+                      name="allowed_channel_ids"
+                      tooltip="Slack channel IDs (e.g., C01ABC123XY). Press Enter to add each ID."
+                    >
+                      <Select
+                        mode="tags"
+                        placeholder="Add channel IDs... (e.g., C01ABC123XY)"
+                        style={{ width: '100%' }}
+                        tokenSeparators={[',', ' ']}
+                      />
+                    </Form.Item>
+                    <Alert
+                      type="info"
+                      showIcon
+                      message="Whitelist applies to all message sources"
+                      description="If set, the bot will ONLY respond in the specified channels, regardless of which message sources are enabled above."
+                      style={{ fontSize: 12 }}
+                    />
+                  </>
+                ),
+              },
+            ]}
+            style={{ marginBottom: 16 }}
+          />
         </>
       ) : (
         <Alert
@@ -336,6 +516,27 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       if (values.bot_token) config.bot_token = values.bot_token;
       if (values.app_token) config.app_token = values.app_token;
       if (values.connection_mode) config.connection_mode = values.connection_mode;
+
+      // Message source configuration
+      config.enable_channels = values.enable_channels ?? false;
+      config.enable_groups = values.enable_groups ?? false;
+      config.enable_mpim = values.enable_mpim ?? false;
+      config.require_mention = values.require_mention ?? true;
+
+      // Channel whitelist
+      // Note: In edit mode, if the form field is mounted and user clears all tags,
+      // it will be an empty array. If undefined, it means the field wasn't touched
+      // (e.g., in create mode or if form control wasn't rendered), so we preserve
+      // the existing config value to avoid accidentally clearing a whitelist.
+      if (values.allowed_channel_ids && Array.isArray(values.allowed_channel_ids)) {
+        config.allowed_channel_ids = values.allowed_channel_ids;
+      } else if (values.allowed_channel_ids === undefined) {
+        // Preserve existing value if not provided (field not touched)
+        config.allowed_channel_ids = existingConfig?.allowed_channel_ids || [];
+      } else {
+        // Empty array or other falsy value - clear the whitelist
+        config.allowed_channel_ids = [];
+      }
     }
 
     // Build agentic config from form values
@@ -404,13 +605,22 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     const agent = channel.agentic_config?.agent || 'claude-code';
     setSelectedAgent(agent);
     editForm.resetFields();
+
+    const config = channel.config as Record<string, unknown>;
+
     editForm.setFieldsValue({
       name: channel.name,
       channel_type: channel.channel_type,
       target_worktree_id: channel.target_worktree_id,
       agor_user_id: channel.agor_user_id,
       enabled: channel.enabled,
-      connection_mode: (channel.config as Record<string, unknown>)?.connection_mode || 'socket',
+      connection_mode: config?.connection_mode || 'socket',
+      // Message source configuration
+      enable_channels: config?.enable_channels ?? false,
+      enable_groups: config?.enable_groups ?? false,
+      enable_mpim: config?.enable_mpim ?? false,
+      require_mention: config?.require_mention ?? true,
+      allowed_channel_ids: (config?.allowed_channel_ids as string[]) ?? [],
       // Agentic config fields
       permissionMode: channel.agentic_config?.permissionMode,
       modelConfig: channel.agentic_config?.modelConfig,
@@ -743,7 +953,12 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
                     <li>Install the Slack app to your workspace</li>
                     <li>Enable Socket Mode in your Slack app settings</li>
                     <li>
-                      Subscribe to events: message.channels, message.groups, message.im, app_mention
+                      Add required OAuth scopes: <code>chat:write</code> (and others based on enabled message
+                      sources)
+                    </li>
+                    <li>
+                      Subscribe to bot events: <code>message.im</code> (and others based on enabled message
+                      sources)
                     </li>
                     <li>The gateway will automatically connect when the channel is enabled</li>
                   </ol>

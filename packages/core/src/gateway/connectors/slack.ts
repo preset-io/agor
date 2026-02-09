@@ -5,7 +5,16 @@
  * inbound messages via Socket Mode.
  *
  * Config shape (stored encrypted in gateway_channels.config):
- *   { bot_token: string, app_token?: string, default_channel?: string }
+ *   {
+ *     bot_token: string,
+ *     app_token?: string,
+ *     default_channel?: string,
+ *     enable_channels?: boolean,      // Listen in public channels
+ *     enable_groups?: boolean,        // Listen in private channels
+ *     enable_mpim?: boolean,          // Listen in group DMs
+ *     require_mention?: boolean,      // Require @mention in channels
+ *     allowed_channel_ids?: string[]  // Channel ID whitelist
+ *   }
  *
  * Thread ID format: "{channel_id}-{thread_ts}"
  *   e.g. "C07ABC123-1707340800.123456"
@@ -21,6 +30,13 @@ interface SlackConfig {
   bot_token: string;
   app_token?: string;
   default_channel?: string;
+
+  // Message source configuration
+  enable_channels?: boolean;
+  enable_groups?: boolean;
+  enable_mpim?: boolean;
+  require_mention?: boolean;
+  allowed_channel_ids?: string[];
 }
 
 /**
@@ -76,6 +92,7 @@ export class SlackConnector implements GatewayConnector {
   private web: WebClient;
   private socketMode: SocketModeClient | null = null;
   private config: SlackConfig;
+  private botUserId: string | null = null;
 
   constructor(config: Record<string, unknown>) {
     this.config = config as unknown as SlackConfig;
@@ -115,8 +132,13 @@ export class SlackConnector implements GatewayConnector {
   /**
    * Start listening for inbound messages via Socket Mode
    *
-   * Requires app_token in config. Filters for messages that
-   * mention the bot or are direct messages.
+   * Requires app_token in config. Filters messages based on config:
+   * - Direct messages (always enabled)
+   * - Public channels (if enable_channels = true)
+   * - Private channels (if enable_groups = true)
+   * - Group DMs (if enable_mpim = true)
+   * - Mention requirement (if require_mention = true)
+   * - Channel whitelist (if allowed_channel_ids is set)
    */
   async startListening(callback: (msg: InboundMessage) => void): Promise<void> {
     if (!this.config.app_token) {
@@ -127,7 +149,50 @@ export class SlackConnector implements GatewayConnector {
       appToken: this.config.app_token,
     });
 
-    // Debug: log all incoming Slack events
+    // Fetch bot user ID for mention detection
+    let botMentionPattern: RegExp | null = null;
+    let botMentionReplacePattern: RegExp | null = null;
+    try {
+      const authTest = await this.web.auth.test();
+      this.botUserId = authTest.user_id as string;
+      // Precompile regex patterns for performance
+      botMentionPattern = new RegExp(`<@${this.botUserId}>`);
+      botMentionReplacePattern = new RegExp(`<@${this.botUserId}>\\s*`, 'g');
+      console.log(`[slack] Bot user ID: ${this.botUserId}`);
+    } catch (error) {
+      console.warn('[slack] Failed to fetch bot user ID:', error);
+      console.warn('[slack] Mention detection will be disabled');
+    }
+
+    // Read config options (with defaults matching UI)
+    const enableChannels = this.config.enable_channels ?? false;
+    const enableGroups = this.config.enable_groups ?? false;
+    const enableMpim = this.config.enable_mpim ?? false;
+    const requireMention = this.config.require_mention ?? true;
+
+    // Normalize allowed_channel_ids to string[] (handle malformed config)
+    let allowedChannelIds: string[] | undefined;
+    if (this.config.allowed_channel_ids) {
+      if (Array.isArray(this.config.allowed_channel_ids)) {
+        allowedChannelIds = this.config.allowed_channel_ids.filter((id): id is string => typeof id === 'string');
+      } else if (typeof this.config.allowed_channel_ids === 'string') {
+        // Handle case where config was persisted as string instead of array
+        allowedChannelIds = [this.config.allowed_channel_ids];
+      } else {
+        console.warn('[slack] Invalid allowed_channel_ids config (not array or string). Ignoring whitelist.');
+        allowedChannelIds = undefined;
+      }
+    }
+
+    console.log('[slack] Message source config:', {
+      enableChannels,
+      enableGroups,
+      enableMpim,
+      requireMention,
+      allowedChannelIds: allowedChannelIds?.length || 0,
+    });
+
+    // Handle incoming Slack events
     this.socketMode.on('slack_event', async ({ type, body, ack }) => {
       console.log(`[slack] Received event type="${type}" subtype="${body?.event?.type}"`);
 
@@ -139,12 +204,6 @@ export class SlackConnector implements GatewayConnector {
 
       await ack();
       const event = body.event;
-
-      // Only handle DMs (im) — skip public/private channel messages
-      if (event.channel_type && event.channel_type !== 'im') {
-        console.log(`[slack] Skipping non-DM message (channel_type=${event.channel_type})`);
-        return;
-      }
 
       // Skip bot messages to avoid loops
       if (event.bot_id || event.subtype === 'bot_message') {
@@ -158,17 +217,85 @@ export class SlackConnector implements GatewayConnector {
         return;
       }
 
+      const channelType = event.channel_type;
+
+      // Handle missing channel_type (some Slack events may omit it)
+      if (!channelType) {
+        console.warn(
+          `[slack] Message event missing channel_type for channel ${event.channel}. Treating as DM (safest default).`
+        );
+        // Treat as DM - safest default since DMs are always allowed
+        // If this causes issues, we could instead infer from channel ID prefix
+      }
+
+      // Channel type filtering based on config
+      if (!channelType || channelType === 'im') {
+        // Direct messages are always allowed
+        console.log('[slack] Processing DM (always allowed)');
+      } else if (channelType === 'channel') {
+        if (!enableChannels) {
+          console.log('[slack] Skipping public channel message (not enabled in config)');
+          return;
+        }
+        console.log('[slack] Processing public channel message (enabled in config)');
+      } else if (channelType === 'group') {
+        if (!enableGroups) {
+          console.log('[slack] Skipping private channel message (not enabled in config)');
+          return;
+        }
+        console.log('[slack] Processing private channel message (enabled in config)');
+      } else if (channelType === 'mpim') {
+        if (!enableMpim) {
+          console.log('[slack] Skipping group DM (not enabled in config)');
+          return;
+        }
+        console.log('[slack] Processing group DM (enabled in config)');
+      } else {
+        console.log(`[slack] Skipping unknown channel_type="${channelType}"`);
+        return;
+      }
+
+      // Channel whitelist check (applies to all channel types)
+      if (allowedChannelIds && allowedChannelIds.length > 0) {
+        if (!allowedChannelIds.includes(event.channel)) {
+          console.log(
+            `[slack] Skipping message from non-whitelisted channel ${event.channel} (whitelist: ${allowedChannelIds.join(', ')})`
+          );
+          return;
+        }
+        console.log(`[slack] Channel ${event.channel} is whitelisted`);
+      }
+
+      // Mention requirement for non-DM channels
+      let messageText = event.text ?? '';
+      if (channelType !== 'im' && requireMention) {
+        if (!botMentionPattern || !botMentionReplacePattern) {
+          // SECURITY: Fail closed - if we can't verify mentions, reject non-DM messages
+          console.warn(
+            '[slack] Cannot enforce mention requirement (bot user ID not available). Rejecting non-DM message for safety.'
+          );
+          return;
+        }
+        if (!botMentionPattern.test(messageText)) {
+          console.log('[slack] Skipping channel message without bot mention');
+          return;
+        }
+        // Strip bot mention from text before processing
+        messageText = messageText.replace(botMentionReplacePattern, '').trim();
+        console.log('[slack] Bot was mentioned, stripped mention from text');
+      }
+
       const threadId = event.thread_ts
         ? `${event.channel}-${event.thread_ts}`
         : `${event.channel}-${event.ts}`;
 
       console.log(
-        `[slack] Inbound message: thread=${threadId} user=${event.user} text="${event.text?.substring(0, 50)}"`
+        `[slack] Inbound message: thread=${threadId} channel_type=${channelType} user=${event.user} text="${messageText.substring(0, 50)}${messageText.length > 50 ? '...' : ''}"`
       );
 
       callback({
         threadId,
-        text: event.text ?? '',
+        text: messageText,
         userId: event.user ?? 'unknown',
         timestamp: event.ts ?? new Date().toISOString(),
         metadata: {
