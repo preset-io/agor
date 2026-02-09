@@ -465,6 +465,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             branch: data.ref,
             sourceBranch: data.sourceBranch,
             createBranch: data.createBranch,
+            refType: data.refType,
             // Unix group isolation (only when RBAC is enabled)
             initUnixGroup: rbacEnabled,
             othersAccess: worktree.others_fs_access || 'read', // Default to read access

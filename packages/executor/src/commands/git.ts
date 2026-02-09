@@ -399,10 +399,11 @@ export async function handleGitWorktreeAdd(
     const branch = payload.params.branch || worktreeName;
     const createBranch = payload.params.createBranch ?? false;
     const sourceBranch = payload.params.sourceBranch;
+    const refType = payload.params.refType;
 
     console.log(`[git.worktree.add] Creating worktree at ${worktreePath}...`);
     console.log(
-      `[git.worktree.add] Repo: ${repoPath}, Branch: ${branch}, CreateBranch: ${createBranch}`
+      `[git.worktree.add] Repo: ${repoPath}, Branch: ${branch}, CreateBranch: ${createBranch}, RefType: ${refType || 'branch'}`
     );
 
     // Create the git worktree on filesystem
@@ -413,7 +414,8 @@ export async function handleGitWorktreeAdd(
       createBranch,
       true, // pullLatest
       sourceBranch,
-      env
+      env,
+      refType
     );
 
     console.log(`[git.worktree.add] Worktree created at ${worktreePath}`);

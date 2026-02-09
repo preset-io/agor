@@ -239,6 +239,9 @@ export const GitWorktreeAddPayloadSchema = BasePayloadSchema.extend({
     /** Create new branch */
     createBranch: z.boolean().optional(),
 
+    /** Type of ref (branch or tag) */
+    refType: z.enum(['branch', 'tag']).optional(),
+
     /** Initialize Unix group for worktree isolation (default: false, requires RBAC enabled) */
     initUnixGroup: z.boolean().optional().default(false),
 
