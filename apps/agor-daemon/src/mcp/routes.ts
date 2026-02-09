@@ -1291,12 +1291,7 @@ export function setupMCPRoutes(app: Application): void {
             // Mode: subsession - spawn child session (reuse existing spawn logic)
             console.log(`🌱 MCP spawning subsession from ${args.sessionId.substring(0, 8)}`);
 
-            const spawnData: {
-              prompt: string;
-              title?: string;
-              agentic_tool?: AgenticToolName;
-              task_id?: string;
-            } = {
+            const spawnData: Partial<import('@agor/core/types').SpawnConfig> = {
               prompt: args.prompt,
             };
 
@@ -1305,7 +1300,7 @@ export function setupMCPRoutes(app: Application): void {
             }
 
             if (args.agenticTool) {
-              spawnData.agentic_tool = args.agenticTool as AgenticToolName;
+              spawnData.agent = args.agenticTool as AgenticToolName;
             }
 
             if (args.taskId) {
