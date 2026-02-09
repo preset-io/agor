@@ -3,8 +3,8 @@
  */
 
 import type { AgenticToolName, BoardObject, ZoneTriggerBehavior } from '@agor/core/types';
-import { Alert, Input, Modal, Select, Typography, theme } from 'antd';
-import { useEffect, useId, useRef, useState } from 'react';
+import { Alert, Form, Input, Modal, Select } from 'antd';
+import { useEffect, useRef, useState } from 'react';
 import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../../AgentSelectionGrid';
 
 interface ZoneConfigModalProps {
@@ -16,6 +16,12 @@ interface ZoneConfigModalProps {
   zoneData: BoardObject;
 }
 
+interface ZoneFormValues {
+  name: string;
+  triggerBehavior: ZoneTriggerBehavior;
+  triggerTemplate: string;
+}
+
 export const ZoneConfigModal = ({
   open,
   onCancel,
@@ -24,61 +30,66 @@ export const ZoneConfigModal = ({
   onUpdate,
   zoneData,
 }: ZoneConfigModalProps) => {
-  const { token } = theme.useToken();
-  const [name, setName] = useState(zoneName);
-  const [triggerBehavior, setTriggerBehavior] = useState<ZoneTriggerBehavior>('show_picker');
-  const [triggerTemplate, setTriggerTemplate] = useState('');
+  const [form] = Form.useForm<ZoneFormValues>();
   const [triggerAgent, setTriggerAgent] = useState<AgenticToolName>('claude-code');
-  const nameId = useId();
-  const triggerBehaviorId = useId();
-  const triggerTemplateId = useId();
   const isInitializingRef = useRef(false);
+
+  const triggerBehavior = Form.useWatch('triggerBehavior', form);
+  const triggerTemplate = Form.useWatch('triggerTemplate', form);
 
   // Reset form when modal opens (prevent WebSocket updates from erasing user input)
   useEffect(() => {
     if (open && !isInitializingRef.current) {
       isInitializingRef.current = true;
-      setName(zoneName);
-      // Load existing trigger data if available
       if (zoneData.type === 'zone' && zoneData.trigger) {
-        setTriggerBehavior(zoneData.trigger.behavior);
-        setTriggerTemplate(zoneData.trigger.template);
+        form.setFieldsValue({
+          name: zoneName,
+          triggerBehavior: zoneData.trigger.behavior,
+          triggerTemplate: zoneData.trigger.template,
+        });
         setTriggerAgent(zoneData.trigger.agent || 'claude-code');
       } else {
-        setTriggerBehavior('show_picker');
-        setTriggerTemplate('');
+        form.setFieldsValue({
+          name: zoneName,
+          triggerBehavior: 'show_picker',
+          triggerTemplate: '',
+        });
         setTriggerAgent('claude-code');
       }
     } else if (!open) {
-      // Reset flag when modal closes
       isInitializingRef.current = false;
     }
-  }, [open, zoneName, zoneData]);
+  }, [open, zoneName, zoneData, form]);
 
-  const handleSave = () => {
-    if (zoneData.type === 'zone') {
-      const hasChanges =
-        name !== zoneName ||
-        triggerTemplate.trim() !== (zoneData.trigger?.template || '') ||
-        triggerBehavior !== (zoneData.trigger?.behavior || 'show_picker') ||
-        triggerAgent !== (zoneData.trigger?.agent || 'claude-code');
+  const handleSave = async () => {
+    try {
+      const values = await form.validateFields();
 
-      if (hasChanges) {
-        onUpdate(objectId, {
-          ...zoneData,
-          label: name,
-          // Only save trigger if template is provided
-          trigger: triggerTemplate.trim()
-            ? {
-                behavior: triggerBehavior,
-                template: triggerTemplate.trim(),
-                agent: triggerAgent,
-              }
-            : undefined, // Remove trigger if template is empty
-        });
+      if (zoneData.type === 'zone') {
+        const hasChanges =
+          values.name !== zoneName ||
+          values.triggerTemplate.trim() !== (zoneData.trigger?.template || '') ||
+          values.triggerBehavior !== (zoneData.trigger?.behavior || 'show_picker') ||
+          triggerAgent !== (zoneData.trigger?.agent || 'claude-code');
+
+        if (hasChanges) {
+          onUpdate(objectId, {
+            ...zoneData,
+            label: values.name,
+            trigger: values.triggerTemplate.trim()
+              ? {
+                  behavior: values.triggerBehavior,
+                  template: values.triggerTemplate.trim(),
+                  agent: triggerAgent,
+                }
+              : undefined,
+          });
+        }
       }
+      onCancel();
+    } catch {
+      // Validation failed — form will show inline errors
     }
-    onCancel();
   };
 
   return (
@@ -88,96 +99,61 @@ export const ZoneConfigModal = ({
       onCancel={onCancel}
       onOk={handleSave}
       okText="Save"
+      okButtonProps={{ disabled: !triggerTemplate?.trim() }}
       cancelText="Cancel"
       width={600}
     >
-      {/* Zone Name */}
-      <div style={{ marginBottom: 24 }}>
-        <label
-          htmlFor={nameId}
-          style={{
-            display: 'block',
-            marginBottom: 8,
-            fontWeight: 500,
-            color: token.colorText,
-          }}
-        >
-          Zone Name
-        </label>
-        <Input
-          id={nameId}
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="Enter zone name..."
-          size="large"
-        />
-      </div>
+      <Form form={form} layout="vertical">
+        <Form.Item name="name" label="Zone Name">
+          <Input placeholder="Enter zone name..." size="large" />
+        </Form.Item>
 
-      <div style={{ marginBottom: 16 }}>
-        <label
-          htmlFor={triggerBehaviorId}
-          style={{
-            display: 'block',
-            marginBottom: 8,
-            fontWeight: 500,
-            color: token.colorText,
-          }}
-        >
-          Trigger Behavior
-        </label>
-        <Select
-          id={triggerBehaviorId}
-          value={triggerBehavior}
-          onChange={setTriggerBehavior}
-          style={{ width: '100%' }}
-          options={[
-            {
-              value: 'show_picker',
-              label: 'Show Picker - Choose session and action when dropped',
-            },
-            { value: 'always_new', label: 'Always New - Auto-create new root session' },
-          ]}
-        />
-      </div>
-
-      {triggerBehavior === 'always_new' && (
-        <div style={{ marginBottom: 16 }}>
-          <Typography.Text strong style={{ display: 'block', marginBottom: 8 }}>
-            Agent
-          </Typography.Text>
-          <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
-            New sessions will use the dropping user's default configuration for this agent.
-          </Typography.Text>
-          <AgentSelectionGrid
-            agents={AVAILABLE_AGENTS}
-            selectedAgentId={triggerAgent}
-            onSelect={(id) => setTriggerAgent(id as AgenticToolName)}
-            columns={2}
-            showHelperText={false}
-            showComparisonLink={false}
+        <Form.Item name="triggerBehavior" label="Trigger Behavior">
+          <Select
+            style={{ width: '100%' }}
+            options={[
+              {
+                value: 'show_picker',
+                label: 'Show Picker - Choose session and action when dropped',
+              },
+              { value: 'always_new', label: 'Always New - Auto-create new root session' },
+            ]}
           />
-        </div>
-      )}
+        </Form.Item>
 
-      <div>
-        <label
-          htmlFor={triggerTemplateId}
-          style={{
-            display: 'block',
-            marginBottom: 8,
-            fontWeight: 500,
-            color: token.colorText,
-          }}
+        {triggerBehavior === 'always_new' && (
+          <Form.Item
+            label="Agent"
+            help="New sessions will use the dropping user's default configuration for this agent."
+          >
+            <AgentSelectionGrid
+              agents={AVAILABLE_AGENTS}
+              selectedAgentId={triggerAgent}
+              onSelect={(id) => setTriggerAgent(id as AgenticToolName)}
+              columns={2}
+              showHelperText={false}
+              showComparisonLink={false}
+            />
+          </Form.Item>
+        )}
+
+        <Form.Item
+          name="triggerTemplate"
+          label="Trigger Template"
+          rules={[
+            {
+              required: true,
+              whitespace: true,
+              message: 'Please enter a prompt template for the zone trigger',
+            },
+          ]}
         >
-          Trigger Template
-        </label>
-        <Input.TextArea
-          id={triggerTemplateId}
-          value={triggerTemplate}
-          onChange={(e) => setTriggerTemplate(e.target.value)}
-          placeholder="Enter the prompt template that will be triggered when a worktree is dropped here..."
-          rows={6}
-        />
+          <Input.TextArea
+            placeholder="Enter the prompt template that will be triggered when a worktree is dropped here..."
+            rows={6}
+          />
+        </Form.Item>
+
         <Alert
           message="Handlebars Template Support"
           description={
@@ -223,9 +199,9 @@ export const ZoneConfigModal = ({
           }
           type="info"
           showIcon
-          style={{ marginTop: 12 }}
+          style={{ marginTop: 0 }}
         />
-      </div>
+      </Form>
     </Modal>
   );
 };
