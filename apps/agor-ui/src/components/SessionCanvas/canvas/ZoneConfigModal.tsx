@@ -2,9 +2,10 @@
  * Modal for configuring zone settings (name, triggers, etc.)
  */
 
-import type { BoardObject, ZoneTriggerBehavior } from '@agor/core/types';
-import { Alert, Input, Modal, Select, theme } from 'antd';
+import type { AgenticToolName, BoardObject, ZoneTriggerBehavior } from '@agor/core/types';
+import { Alert, Input, Modal, Select, Typography, theme } from 'antd';
 import { useEffect, useId, useRef, useState } from 'react';
+import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../../AgentSelectionGrid';
 
 interface ZoneConfigModalProps {
   open: boolean;
@@ -27,6 +28,7 @@ export const ZoneConfigModal = ({
   const [name, setName] = useState(zoneName);
   const [triggerBehavior, setTriggerBehavior] = useState<ZoneTriggerBehavior>('show_picker');
   const [triggerTemplate, setTriggerTemplate] = useState('');
+  const [triggerAgent, setTriggerAgent] = useState<AgenticToolName>('claude-code');
   const nameId = useId();
   const triggerBehaviorId = useId();
   const triggerTemplateId = useId();
@@ -41,9 +43,11 @@ export const ZoneConfigModal = ({
       if (zoneData.type === 'zone' && zoneData.trigger) {
         setTriggerBehavior(zoneData.trigger.behavior);
         setTriggerTemplate(zoneData.trigger.template);
+        setTriggerAgent(zoneData.trigger.agent || 'claude-code');
       } else {
         setTriggerBehavior('show_picker');
         setTriggerTemplate('');
+        setTriggerAgent('claude-code');
       }
     } else if (!open) {
       // Reset flag when modal closes
@@ -56,7 +60,8 @@ export const ZoneConfigModal = ({
       const hasChanges =
         name !== zoneName ||
         triggerTemplate.trim() !== (zoneData.trigger?.template || '') ||
-        triggerBehavior !== (zoneData.trigger?.behavior || 'show_picker');
+        triggerBehavior !== (zoneData.trigger?.behavior || 'show_picker') ||
+        triggerAgent !== (zoneData.trigger?.agent || 'claude-code');
 
       if (hasChanges) {
         onUpdate(objectId, {
@@ -67,6 +72,7 @@ export const ZoneConfigModal = ({
             ? {
                 behavior: triggerBehavior,
                 template: triggerTemplate.trim(),
+                agent: triggerAgent,
               }
             : undefined, // Remove trigger if template is empty
         });
@@ -133,6 +139,25 @@ export const ZoneConfigModal = ({
           ]}
         />
       </div>
+
+      {triggerBehavior === 'always_new' && (
+        <div style={{ marginBottom: 16 }}>
+          <Typography.Text strong style={{ display: 'block', marginBottom: 8 }}>
+            Agent
+          </Typography.Text>
+          <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+            New sessions will use the dropping user's default configuration for this agent.
+          </Typography.Text>
+          <AgentSelectionGrid
+            agents={AVAILABLE_AGENTS}
+            selectedAgentId={triggerAgent}
+            onSelect={(id) => setTriggerAgent(id as AgenticToolName)}
+            columns={2}
+            showHelperText={false}
+            showComparisonLink={false}
+          />
+        </div>
+      )}
 
       <div>
         <label

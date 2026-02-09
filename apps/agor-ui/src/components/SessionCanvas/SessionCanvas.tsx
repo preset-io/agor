@@ -1337,7 +1337,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                             worktree_id: nodeId as WorktreeID,
                             description: `Session from zone "${zoneData.label}"`,
                             status: 'idle',
-                            agentic_tool: 'claude-code',
+                            agentic_tool: (trigger.agent || 'claude-code') as AgenticToolName,
                           });
 
                           // Send prompt to new session

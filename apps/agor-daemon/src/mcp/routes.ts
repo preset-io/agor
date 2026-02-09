@@ -626,7 +626,7 @@ export function setupMCPRoutes(app: Application): void {
             {
               name: 'agor_worktrees_set_zone',
               description:
-                "Pin a worktree to a zone on a board and optionally trigger the zone's prompt template. Calculates zone center position automatically and creates board association.",
+                "Pin a worktree to a zone on a board and optionally trigger the zone's prompt template. Calculates zone center position automatically and creates board association. If the zone has an 'always_new' trigger, a new session is automatically created and the prompt template is executed (matching UI drag-drop behavior). For 'show_picker' zones, use triggerTemplate + targetSessionId to send to an existing session.",
               inputSchema: {
                 type: 'object',
                 properties: {
@@ -646,7 +646,7 @@ export function setupMCPRoutes(app: Application): void {
                   triggerTemplate: {
                     type: 'boolean',
                     description:
-                      "Whether to execute the zone's prompt template after pinning (default: false)",
+                      "Whether to execute the zone's prompt template after pinning (default: false). When true, sends the rendered template to targetSessionId. For zones with always_new triggers, this is handled automatically without needing to set this flag.",
                   },
                 },
                 required: ['worktreeId', 'zoneId'],
@@ -2246,17 +2246,6 @@ export function setupMCPRoutes(app: Application): void {
             });
           }
 
-          if (triggerTemplate && !targetSessionId) {
-            return res.status(400).json({
-              jsonrpc: '2.0',
-              id: mcpRequest.id,
-              error: {
-                code: -32602,
-                message: 'Invalid params: targetSessionId is required when triggerTemplate is true',
-              },
-            });
-          }
-
           console.log(`📍 MCP pinning worktree ${worktreeId.substring(0, 8)} to zone ${zoneId}`);
 
           try {
@@ -2372,14 +2361,25 @@ export function setupMCPRoutes(app: Application): void {
               `✅ Worktree pinned to zone at relative position (${relativeX}, ${relativeY})`
             );
 
-            // Trigger zone prompt template if requested
-            let promptResult: { taskId?: string; note: string } | undefined;
-            if (triggerTemplate && zone.trigger?.template && targetSessionId) {
+            // Determine whether to fire zone trigger
+            // Priority:
+            // 1. Explicit triggerTemplate=true + targetSessionId → send to existing session
+            // 2. Zone has always_new trigger → auto-create session and execute
+            // 3. triggerTemplate=true but missing targetSessionId or template → return error note
+            // 4. Zone has show_picker trigger → return trigger info (agent picks action)
+            // 5. No trigger → just pin
+            let promptResult: { taskId?: string; sessionId?: string; note: string } | undefined;
+
+            const hasZoneTrigger =
+              zone.trigger?.template && zone.trigger.template.trim().length > 0;
+            const isAlwaysNew = hasZoneTrigger && zone.trigger!.behavior === 'always_new';
+
+            if (triggerTemplate && targetSessionId && hasZoneTrigger) {
+              // Case 1: Explicit trigger to an existing session (original behavior)
               console.log(
                 `🎯 Triggering zone prompt template for session ${targetSessionId.substring(0, 8)}`
               );
 
-              // Build template context
               const { renderTemplate } = await import('@agor/core/templates/handlebars-helpers');
               const templateContext = {
                 worktree: {
@@ -2400,10 +2400,9 @@ export function setupMCPRoutes(app: Application): void {
                 },
               };
 
-              const renderedPrompt = renderTemplate(zone.trigger.template, templateContext);
+              const renderedPrompt = renderTemplate(zone.trigger!.template, templateContext);
 
               if (renderedPrompt) {
-                // Send prompt to target session
                 const promptResponse = await app.service('/sessions/:id/prompt').create(
                   {
                     prompt: renderedPrompt,
@@ -2417,6 +2416,7 @@ export function setupMCPRoutes(app: Application): void {
 
                 promptResult = {
                   taskId: promptResponse.taskId,
+                  sessionId: targetSessionId,
                   note: 'Zone trigger prompt sent to target session',
                 };
                 console.log(
@@ -2428,6 +2428,179 @@ export function setupMCPRoutes(app: Application): void {
                 };
                 console.warn('⚠️  Zone trigger template rendered to empty string');
               }
+            } else if (isAlwaysNew) {
+              // Case 2: always_new — auto-create session and execute trigger
+              // Fires both when no flags are set AND when triggerTemplate=true without targetSessionId
+              console.log(
+                `🎯 Zone has always_new trigger, auto-creating session for worktree ${worktreeId.substring(0, 8)}`
+              );
+
+              const { renderTemplate } = await import('@agor/core/templates/handlebars-helpers');
+              const templateContext = {
+                worktree: {
+                  name: worktree.name,
+                  ref: worktree.ref,
+                  issue_url: worktree.issue_url,
+                  pull_request_url: worktree.pull_request_url,
+                  notes: worktree.notes,
+                  custom_context: worktree.custom_context,
+                },
+                board: {
+                  name: board.name,
+                  custom_context: board.custom_context,
+                },
+                zone: {
+                  label: zone.label,
+                  status: zone.status,
+                },
+              };
+
+              const renderedPrompt = renderTemplate(zone.trigger!.template, templateContext);
+
+              if (renderedPrompt) {
+                // Determine agent from trigger config, validate against known values
+                const validAgents: AgenticToolName[] = [
+                  'claude-code',
+                  'codex',
+                  'gemini',
+                  'opencode',
+                ];
+                const rawAgent = zone.trigger!.agent;
+                const agenticTool: AgenticToolName =
+                  rawAgent && validAgents.includes(rawAgent) ? rawAgent : 'claude-code';
+
+                // Fetch user data for session creation context
+                const user = await app.service('users').get(context.userId, baseServiceParams);
+
+                // Get current git state
+                const { getGitState, getCurrentBranch } = await import('@agor/core/git');
+                const currentSha = await getGitState(worktree.path);
+                const currentRef = await getCurrentBranch(worktree.path);
+
+                // Resolve permission mode from user defaults
+                const { getDefaultPermissionMode } = await import('@agor/core/types');
+                const { mapPermissionMode } = await import(
+                  '@agor/core/utils/permission-mode-mapper'
+                );
+                const userToolDefaults = user?.default_agentic_config?.[agenticTool];
+                const requestedMode =
+                  userToolDefaults?.permissionMode || getDefaultPermissionMode(agenticTool);
+                const permissionMode = mapPermissionMode(requestedMode, agenticTool);
+
+                // Build permission config
+                const permissionConfig: Record<string, unknown> = {
+                  mode: permissionMode,
+                  allowedTools: [],
+                };
+                if (
+                  agenticTool === 'codex' &&
+                  userToolDefaults?.codexSandboxMode &&
+                  userToolDefaults?.codexApprovalPolicy
+                ) {
+                  permissionConfig.codex = {
+                    sandboxMode: userToolDefaults.codexSandboxMode,
+                    approvalPolicy: userToolDefaults.codexApprovalPolicy,
+                    networkAccess: userToolDefaults.codexNetworkAccess,
+                  };
+                }
+
+                // Build model config from user defaults
+                let modelConfig: Record<string, unknown> | undefined;
+                if (userToolDefaults?.modelConfig?.model) {
+                  modelConfig = {
+                    mode: userToolDefaults.modelConfig.mode || 'alias',
+                    model: userToolDefaults.modelConfig.model,
+                    updated_at: new Date().toISOString(),
+                    thinkingMode: userToolDefaults.modelConfig.thinkingMode,
+                    manualThinkingTokens: userToolDefaults.modelConfig.manualThinkingTokens,
+                  };
+                }
+
+                // Resolve MCP server IDs from user defaults
+                const mcpServerIds = userToolDefaults?.mcpServerIds || [];
+
+                // Create new session
+                const sessionData: Record<string, unknown> = {
+                  worktree_id: worktreeId,
+                  agentic_tool: agenticTool,
+                  status: 'idle',
+                  description: `Session from zone "${zone.label}"`,
+                  created_by: context.userId,
+                  unix_username: user.unix_username,
+                  permission_config: permissionConfig,
+                  ...(modelConfig && { model_config: modelConfig }),
+                  git_state: {
+                    ref: currentRef,
+                    base_sha: currentSha,
+                    current_sha: currentSha,
+                  },
+                  genealogy: { children: [] },
+                  tasks: [],
+                  message_count: 0,
+                };
+
+                const newSession = await app
+                  .service('sessions')
+                  .create(sessionData, baseServiceParams);
+                console.log(
+                  `✅ Auto-created session ${newSession.session_id.substring(0, 8)} (${agenticTool})`
+                );
+
+                // Attach MCP servers from user defaults
+                if (mcpServerIds.length > 0) {
+                  for (const mcpServerId of mcpServerIds) {
+                    await app.service('session-mcp-servers').create(
+                      {
+                        session_id: newSession.session_id,
+                        mcp_server_id: mcpServerId,
+                      },
+                      baseServiceParams
+                    );
+                  }
+                  console.log(`✅ Attached ${mcpServerIds.length} MCP servers`);
+                }
+
+                // Send rendered prompt to new session
+                const promptResponse = await app.service('/sessions/:id/prompt').create(
+                  {
+                    prompt: renderedPrompt,
+                    stream: true,
+                  },
+                  {
+                    ...baseServiceParams,
+                    route: { id: newSession.session_id },
+                  }
+                );
+
+                promptResult = {
+                  taskId: promptResponse.taskId,
+                  sessionId: newSession.session_id,
+                  note: `always_new trigger: created session ${newSession.session_id.substring(0, 8)} (${agenticTool}) and sent prompt`,
+                };
+                console.log(
+                  `✅ Zone trigger executed: task ${promptResponse.taskId.substring(0, 8)}`
+                );
+              } else {
+                promptResult = {
+                  note: 'Zone trigger template rendered to empty string (check template syntax)',
+                };
+                console.warn('⚠️  Zone trigger template rendered to empty string');
+              }
+            } else if (triggerTemplate && !hasZoneTrigger) {
+              // Case 3: triggerTemplate requested but zone has no template configured
+              promptResult = {
+                note: `Zone "${zone.label}" has no trigger template configured. Add a trigger template to the zone via agor_boards_update first.`,
+              };
+            } else if (triggerTemplate && !targetSessionId) {
+              // Case 3b: triggerTemplate requested but no targetSessionId on a non-always_new zone
+              promptResult = {
+                note: `Zone "${zone.label}" has a show_picker trigger. Provide a targetSessionId to send the prompt to, or use agor_sessions_create to make a new session first.`,
+              };
+            } else if (hasZoneTrigger && zone.trigger!.behavior === 'show_picker') {
+              // Case 4: show_picker without explicit trigger — return trigger info for agent to decide
+              promptResult = {
+                note: `Zone "${zone.label}" has a show_picker trigger. Use triggerTemplate=true with a targetSessionId to execute, or use agor_sessions_create to make a new session first.`,
+              };
             }
 
             mcpResponse = {
