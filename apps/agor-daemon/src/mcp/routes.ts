@@ -227,7 +227,7 @@ export function setupMCPRoutes(app: Application): void {
                     type: 'string',
                     enum: ['claude-code', 'codex', 'gemini'],
                     description:
-                      'Override parent agent (for fork/subsession only, defaults to parent agent)',
+                      'Agent for subsession (subsession mode only, defaults to parent agent). Fork mode always uses parent agent.',
                   },
                   title: {
                     type: 'string',
@@ -1112,16 +1112,13 @@ export function setupMCPRoutes(app: Application): void {
             });
           }
 
+          // Build spawn config - only include fields we allow via MCP
+          // Explicitly omit permissionMode, modelConfig, codex*, and mcpServerIds
+          // These are managed via user defaults or inherited from parent
           const spawnData: Partial<import('@agor/core/types').SpawnConfig> = {
             prompt: args.prompt,
             title: args.title,
             agent: args.agenticTool as AgenticToolName | undefined,
-            permissionMode: args.permissionMode,
-            modelConfig: args.modelConfig,
-            codexSandboxMode: args.codexSandboxMode,
-            codexApprovalPolicy: args.codexApprovalPolicy,
-            codexNetworkAccess: args.codexNetworkAccess,
-            mcpServerIds: args.mcpServerIds,
             enableCallback: args.enableCallback,
             includeLastMessage: args.includeLastMessage,
             includeOriginalPrompt: args.includeOriginalPrompt,
@@ -1243,19 +1240,9 @@ export function setupMCPRoutes(app: Application): void {
               app.service('sessions') as unknown as SessionsServiceImpl
             ).fork(args.sessionId, forkData, baseServiceParams);
 
-            // Override agentic tool if specified
-            if (args.agenticTool) {
-              await app
-                .service('sessions')
-                .patch(
-                  forkedSession.session_id,
-                  { agentic_tool: args.agenticTool as AgenticToolName },
-                  baseServiceParams
-                );
-            }
-
-            // Permission mode is inherited from fork() method (parent session or user defaults)
-            // No explicit override allowed via MCP to avoid complexity
+            // Note: We no longer allow changing agenticTool in fork mode via MCP.
+            // Fork inherits the same agent as parent. If you need a different agent,
+            // use 'subsession' mode instead, which properly handles config for different tools.
 
             // Set custom title if provided
             if (args.title) {
@@ -1425,12 +1412,13 @@ export function setupMCPRoutes(app: Application): void {
             };
           }
 
-          // Build model config from user defaults (if any model config exists)
+          // Build model config from user defaults (only if a model is specified)
+          // Other fields like thinkingMode require a model context to be meaningful
           let modelConfig: Record<string, unknown> | undefined;
-          if (userToolDefaults?.modelConfig) {
+          if (userToolDefaults?.modelConfig?.model) {
             modelConfig = {
               mode: userToolDefaults.modelConfig.mode || 'alias',
-              model: userToolDefaults.modelConfig.model || '',
+              model: userToolDefaults.modelConfig.model,
               updated_at: new Date().toISOString(),
               thinkingMode: userToolDefaults.modelConfig.thinkingMode,
               manualThinkingTokens: userToolDefaults.modelConfig.manualThinkingTokens,
@@ -1465,7 +1453,7 @@ export function setupMCPRoutes(app: Application): void {
           const session = await app.service('sessions').create(sessionData, baseServiceParams);
           console.log(`✅ Session created: ${session.session_id.substring(0, 8)}`);
 
-          // Attach MCP servers (from explicit param or user defaults)
+          // Attach MCP servers from user defaults
           if (mcpServerIds && mcpServerIds.length > 0) {
             for (const mcpServerId of mcpServerIds) {
               await app.service('session-mcp-servers').create(
@@ -2355,12 +2343,13 @@ export function setupMCPRoutes(app: Application): void {
                   };
                 }
 
-                // Build model config from user defaults (if any model config exists)
+                // Build model config from user defaults (only if a model is specified)
+                // Other fields like thinkingMode require a model context to be meaningful
                 let modelConfig: Record<string, unknown> | undefined;
-                if (userToolDefaults?.modelConfig) {
+                if (userToolDefaults?.modelConfig?.model) {
                   modelConfig = {
                     mode: userToolDefaults.modelConfig.mode || 'alias',
-                    model: userToolDefaults.modelConfig.model || '',
+                    model: userToolDefaults.modelConfig.model,
                     updated_at: new Date().toISOString(),
                     thinkingMode: userToolDefaults.modelConfig.thinkingMode,
                     manualThinkingTokens: userToolDefaults.modelConfig.manualThinkingTokens,
