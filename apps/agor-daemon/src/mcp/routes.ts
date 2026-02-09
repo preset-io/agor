@@ -503,7 +503,7 @@ export function setupMCPRoutes(app: Application): void {
                   notes: {
                     type: ['string', 'null'],
                     description:
-                      'Freeform notes about the worktree. Pass null or empty string to clear.',
+                      'Freeform notes about the worktree (markdown supported). Pass null or empty string to clear.',
                   },
                   boardId: {
                     type: ['string', 'null'],

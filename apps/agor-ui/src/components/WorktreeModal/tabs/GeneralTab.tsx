@@ -243,7 +243,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
               <TextArea
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
-                placeholder="Freeform notes about this worktree..."
+                placeholder="Freeform notes about this worktree... (Markdown supported)"
                 rows={4}
                 disabled={!canEdit}
               />

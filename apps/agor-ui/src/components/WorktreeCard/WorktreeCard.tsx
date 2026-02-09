@@ -22,6 +22,7 @@ import { ensureColorVisible, isDarkTheme } from '../../utils/theme';
 import { ArchiveDeleteWorktreeModal } from '../ArchiveDeleteWorktreeModal';
 import { EnvironmentPill } from '../EnvironmentPill';
 import { type ForkSpawnAction, ForkSpawnModal } from '../ForkSpawnModal';
+import { MarkdownRenderer } from '../MarkdownRenderer';
 import { CreatedByTag } from '../metadata';
 import { IssuePill, PullRequestPill } from '../Pill';
 import { TaskStatusIcon } from '../TaskStatusIcon';
@@ -617,9 +618,10 @@ const WorktreeCardComponent = ({
       {/* Notes */}
       {worktree.notes && (
         <div className="nodrag" style={{ marginBottom: 8 }}>
-          <Typography.Text type="secondary" style={{ fontSize: 12, fontStyle: 'italic' }}>
-            {worktree.notes}
-          </Typography.Text>
+          <MarkdownRenderer
+            content={worktree.notes}
+            style={{ fontSize: 12, color: token.colorTextSecondary }}
+          />
         </div>
       )}
 
