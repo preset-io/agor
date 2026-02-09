@@ -1,0 +1,36 @@
+version: 2
+updates:
+  # Apps
+  - package-ecosystem: "npm"
+    directory: "/apps/agor-cli"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "npm"
+    directory: "/apps/agor-daemon"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "npm"
+    directory: "/apps/agor-docs"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "npm"
+    directory: "/apps/agor-ui"
+    schedule:
+      interval: "weekly"
+
+  # Packages (excluding agor-live meta-package)
+  - package-ecosystem: "npm"
+    directory: "/packages/core"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "npm"
+    directory: "/packages/executor"
+    schedule:
+      interval: "weekly"
+
+  # Note: packages/agor-live is intentionally excluded as it's a meta-package
+  # whose dependencies are derived from other packages in the monorepo
