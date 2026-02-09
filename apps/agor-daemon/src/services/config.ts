@@ -86,6 +86,7 @@ export class ConfigService {
     apiKey: string | null;
     source: 'user' | 'config' | 'env' | 'native';
     useNativeAuth: boolean;
+    decryptionFailed?: boolean;
   }> {
     const { taskId, keyName } = data;
 
@@ -114,6 +115,7 @@ export class ConfigService {
       apiKey: result.apiKey ?? null,
       source: result.source === 'none' ? 'native' : result.source,
       useNativeAuth: result.useNativeAuth,
+      ...(result.decryptionFailed && { decryptionFailed: true }),
     };
   }
 

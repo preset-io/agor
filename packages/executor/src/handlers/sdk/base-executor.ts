@@ -289,6 +289,15 @@ export async function executeToolTask(params: {
   // Resolve API key with proper precedence (user → config → env → native auth)
   const resolution = await resolveApiKeyForTask(apiKeyEnvVar as ApiKeyName, client, taskId);
 
+  // Fail fast if stored key can't be decrypted (e.g. master secret changed)
+  if (resolution.decryptionFailed) {
+    throw new Error(
+      `API key "${apiKeyEnvVar}" could not be decrypted. ` +
+        `The stored key may have been encrypted with a different master secret. ` +
+        `Please re-enter your API key in Settings > API Keys.`
+    );
+  }
+
   // Log resolution result
   if (resolution.apiKey) {
     console.log(`[${toolName}] Using API key from ${resolution.source} level for ${apiKeyEnvVar}`);

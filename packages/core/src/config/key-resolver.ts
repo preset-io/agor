@@ -24,6 +24,8 @@ export interface KeyResolutionResult {
   source: 'user' | 'config' | 'env' | 'none';
   /** Whether SDK should fall back to native auth (OAuth, CLI login, etc.) */
   useNativeAuth: boolean;
+  /** True when a user-level key exists but couldn't be decrypted (master secret mismatch) */
+  decryptionFailed?: boolean;
 }
 
 /**
@@ -48,37 +50,31 @@ export async function resolveApiKey(
   // 1. Check per-user key (highest precedence)
   if (context.userId && context.db) {
     console.log(`   → Checking user-level configuration...`);
-    try {
-      const row = await select(context.db)
-        .from(users)
-        .where(eq(users.user_id, context.userId))
-        .one();
+    const row = await select(context.db).from(users).where(eq(users.user_id, context.userId)).one();
 
-      if (row) {
-        const data = row.data as { api_keys?: Record<string, string> };
-        const encryptedKey = data.api_keys?.[keyName];
+    if (row) {
+      const data = row.data as { api_keys?: Record<string, string> };
+      const encryptedKey = data.api_keys?.[keyName];
 
-        if (encryptedKey) {
+      if (encryptedKey) {
+        try {
           const decryptedKey = decryptApiKey(encryptedKey);
           if (decryptedKey && decryptedKey.length > 0) {
             console.log(
               `   ✓ Found user-level API key for ${keyName} (user: ${context.userId.substring(0, 8)})`
             );
             return { apiKey: decryptedKey, source: 'user', useNativeAuth: false };
-          } else {
-            console.log(
-              `   ✗ User-level API key for ${keyName} is empty (user: ${context.userId.substring(0, 8)})`
-            );
           }
-        } else {
-          console.log(`   ✗ No user-level API key for ${keyName}`);
+        } catch {
+          // Key exists but can't be decrypted (master secret changed) — stop here, don't fall through
+          return {
+            apiKey: undefined,
+            source: 'user',
+            useNativeAuth: false,
+            decryptionFailed: true,
+          };
         }
-      } else {
-        console.log(`   ✗ User record not found`);
       }
-    } catch (err) {
-      console.error(`   ✗ Failed to check user-level key:`, err);
-      // Fall through to global/env fallback
     }
   } else if (!context.userId) {
     console.log(`   → Skipping user-level check (no user ID provided)`);
