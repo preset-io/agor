@@ -621,6 +621,8 @@ const WorktreeCardComponent = ({
           <MarkdownRenderer
             content={worktree.notes}
             style={{ fontSize: 12, color: token.colorTextSecondary }}
+            compact={true}
+            showControls={false}
           />
         </div>
       )}

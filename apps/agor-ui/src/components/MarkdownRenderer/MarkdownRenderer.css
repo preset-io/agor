@@ -1,0 +1,75 @@
+/**
+ * Compact markdown styling for constrained contexts (cards, small containers)
+ * Reduces heading sizes, margins, and ensures content doesn't blow up layout
+ */
+
+.markdown-compact h1 {
+  font-size: 1.2em;
+  margin-top: 0.5em;
+  margin-bottom: 0.3em;
+}
+
+.markdown-compact h2 {
+  font-size: 1.1em;
+  margin-top: 0.4em;
+  margin-bottom: 0.3em;
+}
+
+.markdown-compact h3 {
+  font-size: 1em;
+  margin-top: 0.4em;
+  margin-bottom: 0.3em;
+}
+
+.markdown-compact h4,
+.markdown-compact h5,
+.markdown-compact h6 {
+  font-size: 0.95em;
+  margin-top: 0.3em;
+  margin-bottom: 0.2em;
+}
+
+.markdown-compact p {
+  margin-top: 0.3em;
+  margin-bottom: 0.3em;
+}
+
+.markdown-compact ul,
+.markdown-compact ol {
+  margin-top: 0.3em;
+  margin-bottom: 0.3em;
+  padding-left: 1.5em;
+}
+
+.markdown-compact li {
+  margin-top: 0.1em;
+  margin-bottom: 0.1em;
+}
+
+.markdown-compact pre {
+  margin-top: 0.3em;
+  margin-bottom: 0.3em;
+  font-size: 0.9em;
+}
+
+.markdown-compact code {
+  font-size: 0.9em;
+}
+
+.markdown-compact blockquote {
+  margin-top: 0.3em;
+  margin-bottom: 0.3em;
+  padding-left: 0.5em;
+}
+
+.markdown-compact table {
+  font-size: 0.9em;
+  margin-top: 0.3em;
+  margin-bottom: 0.3em;
+}
+
+/* Ensure mermaid diagrams don't get too large */
+.markdown-compact .mermaid {
+  max-width: 100%;
+  max-height: 150px;
+}
