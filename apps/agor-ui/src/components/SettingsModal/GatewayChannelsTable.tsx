@@ -245,8 +245,8 @@ const ChannelFormFields: React.FC<{
             style={{ marginBottom: 16, fontSize: 12 }}
           />
 
-          <Divider orientation="left" style={{ marginTop: 24, marginBottom: 16 }}>
-            Message Sources
+          <Divider style={{ marginTop: 24, marginBottom: 16 }}>
+            <Typography.Text strong>Message Sources</Typography.Text>
           </Divider>
 
           <Alert
@@ -391,10 +391,13 @@ const ChannelFormFields: React.FC<{
                 ),
                 children: (
                   <>
-                    <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 12 }}>
-                      Optionally restrict the bot to specific Slack channels by ID. Leave empty to allow all
-                      channels where the bot is added. Find channel IDs in Slack: right-click channel → View
-                      channel details → scroll to bottom.
+                    <Typography.Text
+                      type="secondary"
+                      style={{ fontSize: 12, display: 'block', marginBottom: 12 }}
+                    >
+                      Optionally restrict the bot to specific Slack channels by ID. Leave empty to
+                      allow all channels where the bot is added. Find channel IDs in Slack:
+                      right-click channel → View channel details → scroll to bottom.
                     </Typography.Text>
                     <Form.Item
                       name="allowed_channel_ids"
@@ -953,12 +956,12 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
                     <li>Install the Slack app to your workspace</li>
                     <li>Enable Socket Mode in your Slack app settings</li>
                     <li>
-                      Add required OAuth scopes: <code>chat:write</code> (and others based on enabled message
-                      sources)
+                      Add required OAuth scopes: <code>chat:write</code> (and others based on
+                      enabled message sources)
                     </li>
                     <li>
-                      Subscribe to bot events: <code>message.im</code> (and others based on enabled message
-                      sources)
+                      Subscribe to bot events: <code>message.im</code> (and others based on enabled
+                      message sources)
                     </li>
                     <li>The gateway will automatically connect when the channel is enabled</li>
                   </ol>

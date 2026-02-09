@@ -174,12 +174,16 @@ export class SlackConnector implements GatewayConnector {
     let allowedChannelIds: string[] | undefined;
     if (this.config.allowed_channel_ids) {
       if (Array.isArray(this.config.allowed_channel_ids)) {
-        allowedChannelIds = this.config.allowed_channel_ids.filter((id): id is string => typeof id === 'string');
+        allowedChannelIds = this.config.allowed_channel_ids.filter(
+          (id): id is string => typeof id === 'string'
+        );
       } else if (typeof this.config.allowed_channel_ids === 'string') {
         // Handle case where config was persisted as string instead of array
         allowedChannelIds = [this.config.allowed_channel_ids];
       } else {
-        console.warn('[slack] Invalid allowed_channel_ids config (not array or string). Ignoring whitelist.');
+        console.warn(
+          '[slack] Invalid allowed_channel_ids config (not array or string). Ignoring whitelist.'
+        );
         allowedChannelIds = undefined;
       }
     }
