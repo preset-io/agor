@@ -1944,13 +1944,6 @@ async function main() {
     },
   });
 
-  // Register custom method for base URL resolution (used by executors)
-  app.use('/config/resolve-base-url', {
-    async create(data: { taskId: TaskID; baseUrlKey: string }) {
-      return await configService.resolveBaseUrl(data);
-    },
-  });
-
   // Register context service (read-only filesystem browser for worktree context/ files)
   // Scans context/ directory in worktree for all .md files recursively
   // Requires worktree_id query parameter
