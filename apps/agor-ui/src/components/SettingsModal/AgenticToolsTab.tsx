@@ -1,9 +1,11 @@
 import type { AgorClient } from '@agor/core/api';
 import type { AgorConfig } from '@agor/core/config';
 import { InfoCircleOutlined, WarningOutlined } from '@ant-design/icons';
-import { Alert, Spin, theme } from 'antd';
+import { Alert, Button, Divider, Input, Space, Spin, Typography, theme } from 'antd';
 import { useEffect, useState } from 'react';
 import { ApiKeyFields, type ApiKeyStatus } from '../ApiKeyFields';
+
+const { Text, Link } = Typography;
 
 export interface AgenticToolsTabProps {
   client: AgorClient | null;
@@ -19,6 +21,8 @@ export const AgenticToolsTab: React.FC<AgenticToolsTabProps> = ({ client }) => {
     OPENAI_API_KEY: false,
     GEMINI_API_KEY: false,
   });
+  const [baseUrl, setBaseUrl] = useState<string>('');
+  const [baseUrlInput, setBaseUrlInput] = useState<string>('');
 
   // Load current config on mount
   useEffect(() => {
@@ -40,6 +44,10 @@ export const AgenticToolsTab: React.FC<AgenticToolsTabProps> = ({ client }) => {
           OPENAI_API_KEY: !!config?.OPENAI_API_KEY,
           GEMINI_API_KEY: !!config?.GEMINI_API_KEY,
         });
+
+        // Load base URL if set
+        setBaseUrl(config?.ANTHROPIC_BASE_URL || '');
+        setBaseUrlInput(config?.ANTHROPIC_BASE_URL || '');
       } catch (err) {
         console.error('Failed to load config:', err);
         setError(err instanceof Error ? err.message : 'Failed to load configuration');
@@ -96,6 +104,56 @@ export const AgenticToolsTab: React.FC<AgenticToolsTabProps> = ({ client }) => {
       throw err;
     } finally {
       setSaving((prev) => ({ ...prev, [field]: false }));
+    }
+  };
+
+  // Base URL save handler
+  const handleSaveBaseUrl = async () => {
+    if (!client) return;
+
+    try {
+      setSaving((prev) => ({ ...prev, ANTHROPIC_BASE_URL: true }));
+      setError(null);
+
+      const value = baseUrlInput.trim();
+      await client.service('config').patch(null, {
+        credentials: {
+          ANTHROPIC_BASE_URL: value || null,
+        },
+      });
+
+      setBaseUrl(value);
+    } catch (err) {
+      console.error('Failed to save base URL:', err);
+      setError(err instanceof Error ? err.message : 'Failed to save base URL');
+      throw err;
+    } finally {
+      setSaving((prev) => ({ ...prev, ANTHROPIC_BASE_URL: false }));
+    }
+  };
+
+  // Base URL clear handler
+  const handleClearBaseUrl = async () => {
+    if (!client) return;
+
+    try {
+      setSaving((prev) => ({ ...prev, ANTHROPIC_BASE_URL: true }));
+      setError(null);
+
+      await client.service('config').patch(null, {
+        credentials: {
+          ANTHROPIC_BASE_URL: null,
+        },
+      });
+
+      setBaseUrl('');
+      setBaseUrlInput('');
+    } catch (err) {
+      console.error('Failed to clear base URL:', err);
+      setError(err instanceof Error ? err.message : 'Failed to clear base URL');
+      throw err;
+    } finally {
+      setSaving((prev) => ({ ...prev, ANTHROPIC_BASE_URL: false }));
     }
   };
 
@@ -160,6 +218,48 @@ export const AgenticToolsTab: React.FC<AgenticToolsTabProps> = ({ client }) => {
         onClear={handleClear}
         saving={saving}
       />
+
+      <Divider />
+
+      <div style={{ marginTop: token.marginLG }}>
+        <Text strong style={{ display: 'block', marginBottom: token.marginXS }}>
+          Anthropic API Base URL (Optional)
+        </Text>
+        <Text type="secondary" style={{ display: 'block', marginBottom: token.marginMD }}>
+          Customize the Anthropic API endpoint for proxies, Claude Enterprise deployments, or
+          third-party compatible APIs (e.g., OpenRouter, AWS Bedrock).
+        </Text>
+
+        <Space.Compact style={{ width: '100%', marginBottom: token.marginXS }}>
+          <Input
+            placeholder="https://api.anthropic.com (default)"
+            value={baseUrlInput}
+            onChange={(e) => setBaseUrlInput(e.target.value)}
+            onPressEnter={handleSaveBaseUrl}
+            style={{ flex: 1 }}
+          />
+          <Button
+            type="primary"
+            onClick={handleSaveBaseUrl}
+            loading={saving.ANTHROPIC_BASE_URL}
+            disabled={baseUrlInput === baseUrl}
+          >
+            Save
+          </Button>
+          {baseUrl && (
+            <Button danger onClick={handleClearBaseUrl} loading={saving.ANTHROPIC_BASE_URL}>
+              Clear
+            </Button>
+          )}
+        </Space.Compact>
+
+        <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+          Leave empty to use the default Anthropic API endpoint. Learn more:{' '}
+          <Link href="https://github.com/anthropics/claude-code/issues/216" target="_blank">
+            Custom API endpoints
+          </Link>
+        </Text>
+      </div>
     </div>
   );
 };

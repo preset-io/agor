@@ -5,7 +5,13 @@
  * Wraps @agor/core/config functions for UI access.
  */
 
-import { type AgorConfig, loadConfig, resolveApiKey, saveConfig } from '@agor/core/config';
+import {
+  type AgorConfig,
+  loadConfig,
+  resolveApiKey,
+  resolveBaseUrl,
+  saveConfig,
+} from '@agor/core/config';
 import type { Database } from '@agor/core/db';
 import type { Params, TaskID, UserID } from '@agor/core/types';
 
@@ -28,6 +34,7 @@ function maskCredentials(config: AgorConfig): AgorConfig {
     ...config,
     credentials: {
       ANTHROPIC_API_KEY: maskApiKey(config.credentials.ANTHROPIC_API_KEY),
+      ANTHROPIC_BASE_URL: config.credentials.ANTHROPIC_BASE_URL, // Base URLs are not sensitive
       OPENAI_API_KEY: maskApiKey(config.credentials.OPENAI_API_KEY),
       GEMINI_API_KEY: maskApiKey(config.credentials.GEMINI_API_KEY),
     },
@@ -114,6 +121,46 @@ export class ConfigService {
       apiKey: result.apiKey ?? null,
       source: result.source === 'none' ? 'native' : result.source,
       useNativeAuth: result.useNativeAuth,
+    };
+  }
+
+  /**
+   * Custom method: Resolve base URL for a task
+   *
+   * This allows executors to request base URL resolution without direct database access.
+   * The service handles the precedence: user-level > config > env > SDK default.
+   *
+   * Called via: client.service('config').resolveBaseUrl({ taskId, baseUrlKey })
+   */
+  async resolveBaseUrl(data: { taskId: TaskID; baseUrlKey: string }): Promise<{
+    baseUrl: string | null;
+    source: 'user' | 'config' | 'env' | 'default';
+  }> {
+    const { taskId, baseUrlKey } = data;
+
+    // Fetch task to get creator user ID
+    let userId: UserID | undefined;
+    try {
+      // biome-ignore lint/suspicious/noExplicitAny: App reference stored dynamically for cross-service calls
+      const tasksService = (this as any).app?.service('tasks');
+      if (tasksService) {
+        const task = await tasksService.get(taskId, { provider: undefined });
+        userId = task?.created_by;
+      }
+    } catch (err) {
+      console.warn(`[Config.resolveBaseUrl] Failed to fetch task ${taskId}:`, err);
+    }
+
+    // Use core resolveBaseUrl with database access
+    const result = await resolveBaseUrl(baseUrlKey, {
+      userId,
+      db: this.db,
+    });
+
+    // Map to service response type
+    return {
+      baseUrl: result ?? null,
+      source: result ? (result === process.env[baseUrlKey] ? 'env' : 'config') : 'default',
     };
   }
 

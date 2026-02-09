@@ -67,7 +67,7 @@ export async function resolveUserEnvironment(
         }
       }
 
-      // Decrypt and merge user API keys (e.g., OPENAI_API_KEY, ANTHROPIC_API_KEY)
+      // Decrypt and merge user API keys and base URLs (e.g., OPENAI_API_KEY, ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL)
       // Only override if the decrypted value is non-empty
       const encryptedApiKeys = data.api_keys;
       if (encryptedApiKeys) {

@@ -345,6 +345,13 @@ export async function setupQuery(
     queryOptions.apiKey = deps.apiKey;
   }
 
+  // Log if custom base URL is configured
+  // Claude Agent SDK automatically picks up ANTHROPIC_BASE_URL from process.env
+  // See: https://github.com/anthropics/claude-code/issues/216
+  if (process.env.ANTHROPIC_BASE_URL) {
+    console.log(`🌐 Using custom Anthropic API base URL: ${process.env.ANTHROPIC_BASE_URL}`);
+  }
+
   // Resolve user environment variables
   // In executor mode, environment is inherited from the executor process
   const userEnv = resolveUserEnvironment();

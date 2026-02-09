@@ -274,6 +274,7 @@ export interface AgorPathSettings {
  */
 export enum CredentialKey {
   ANTHROPIC_API_KEY = 'ANTHROPIC_API_KEY',
+  ANTHROPIC_BASE_URL = 'ANTHROPIC_BASE_URL',
   OPENAI_API_KEY = 'OPENAI_API_KEY',
   GEMINI_API_KEY = 'GEMINI_API_KEY',
 }
@@ -284,6 +285,10 @@ export enum CredentialKey {
 export interface AgorCredentials {
   /** Anthropic API key for Claude Code */
   ANTHROPIC_API_KEY?: string;
+
+  /** Custom Anthropic API base URL (default: https://api.anthropic.com)
+   * Useful for proxies, Claude Enterprise deployments, or third-party compatible APIs */
+  ANTHROPIC_BASE_URL?: string;
 
   /** OpenAI API key for Codex */
   OPENAI_API_KEY?: string;

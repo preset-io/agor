@@ -347,7 +347,7 @@ export function loadConfigSync(): AgorConfig {
  * @returns API key or undefined
  */
 export function getCredential(
-  key: 'ANTHROPIC_API_KEY' | 'OPENAI_API_KEY' | 'GEMINI_API_KEY'
+  key: 'ANTHROPIC_API_KEY' | 'ANTHROPIC_BASE_URL' | 'OPENAI_API_KEY' | 'GEMINI_API_KEY'
 ): string | undefined {
   try {
     const config = loadConfigSync();
