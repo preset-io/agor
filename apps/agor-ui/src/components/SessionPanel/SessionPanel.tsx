@@ -353,12 +353,18 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   };
 
   const handleStop = async () => {
-    if (!session || !client || isStopping) return;
+    if (!session || !client) return;
 
     try {
       await client.service(`sessions/${session.session_id}/stop`).create({});
+
+      // If this is a retry (session already stopping), show feedback
+      if (isStopping) {
+        message.info('Retrying stop request...');
+      }
     } catch (error) {
       console.error('Failed to stop execution:', error);
+      message.error('Failed to stop execution. You can try again.');
     }
   };
 
@@ -643,14 +649,18 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             <Space.Compact>
               <Tooltip
                 title={
-                  isStopping ? 'Stopping...' : isRunning ? 'Stop Execution' : 'No active execution'
+                  isStopping
+                    ? 'Stopping... (Click again to retry if stuck)'
+                    : isRunning
+                      ? 'Stop Execution'
+                      : 'No active execution'
                 }
               >
                 <Button
                   danger
                   icon={<StopOutlined />}
                   onClick={handleStop}
-                  disabled={!isRunning || isStopping}
+                  disabled={!isRunning}
                   loading={isStopping}
                 />
               </Tooltip>

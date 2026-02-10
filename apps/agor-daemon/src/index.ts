@@ -4155,20 +4155,30 @@ async function main() {
         // Get session to check status
         const session = await sessionsService.get(id, params);
 
-        // Check if session is actually running or awaiting permission
+        // Allow stop requests for RUNNING, AWAITING_PERMISSION, or STOPPING sessions
+        // STOPPING state is allowed to support retries when sessions get stuck
         if (
           session.status !== SessionStatus.RUNNING &&
-          session.status !== SessionStatus.AWAITING_PERMISSION
+          session.status !== SessionStatus.AWAITING_PERMISSION &&
+          session.status !== SessionStatus.STOPPING
         ) {
           return {
             success: false,
-            reason: `Session is not running (status: ${session.status})`,
+            reason: `Session cannot be stopped (status: ${session.status})`,
           };
         }
 
-        // Find the currently running task(s)
-        // Note: Using two separate queries to avoid $in operator which fails schema validation
-        let runningTasksArray: Task[] = [];
+        // If already in STOPPING state, this is a retry attempt
+        const isRetry = session.status === SessionStatus.STOPPING;
+        if (isRetry) {
+          console.log(`🔁 [Daemon] Retry stop request for session ${id.substring(0, 8)}`);
+        }
+
+        // Find the task to stop
+        // For retries, also check STOPPING tasks; otherwise check RUNNING and AWAITING_PERMISSION
+        // Note: Using separate queries to avoid $in operator which fails schema validation
+        let targetTasksArray: Task[] = [];
+
         // Query for RUNNING tasks
         const runningResult = await tasksService.find({
           query: {
@@ -4195,38 +4205,57 @@ async function main() {
           ? awaitingFindResult.data
           : awaitingFindResult;
 
-        runningTasksArray = [...runningTasks, ...awaitingTasks];
+        targetTasksArray = [...runningTasks, ...awaitingTasks];
 
-        if (runningTasksArray.length === 0) {
+        // If this is a retry, also check for STOPPING tasks
+        if (isRetry) {
+          const stoppingResult = await tasksService.find({
+            query: {
+              session_id: id,
+              status: TaskStatus.STOPPING,
+              $limit: 10,
+            },
+          });
+          const stoppingFindResult = stoppingResult as Task[] | Paginated<Task>;
+          const stoppingTasks = isPaginated(stoppingFindResult)
+            ? stoppingFindResult.data
+            : stoppingFindResult;
+          targetTasksArray = [...targetTasksArray, ...stoppingTasks];
+        }
+
+        if (targetTasksArray.length === 0) {
           return {
             success: false,
-            reason: 'No running tasks found',
+            reason: isRetry ? 'No active or stopping tasks found' : 'No running tasks found',
           };
         }
 
-        const latestTask = runningTasksArray[runningTasksArray.length - 1];
+        const latestTask = targetTasksArray[targetTasksArray.length - 1];
 
         // PHASE 1: Atomically update task AND session to STOPPING
-        try {
-          // Update task status to STOPPING
-          await tasksService.patch(latestTask.task_id, {
-            status: TaskStatus.STOPPING,
-          });
+        // Skip this phase for retries since status is already STOPPING
+        if (!isRetry) {
+          try {
+            // Update task status to STOPPING
+            await tasksService.patch(latestTask.task_id, {
+              status: TaskStatus.STOPPING,
+            });
 
-          // Update session status to STOPPING
-          await app.service('sessions').patch(
-            id,
-            {
-              status: SessionStatus.STOPPING,
-              ready_for_prompt: false, // Prevent new prompts during stop
-            },
-            params
-          );
-        } catch (error) {
-          return {
-            success: false,
-            reason: `Failed to update status: ${error instanceof Error ? error.message : 'Unknown error'}`,
-          };
+            // Update session status to STOPPING
+            await app.service('sessions').patch(
+              id,
+              {
+                status: SessionStatus.STOPPING,
+                ready_for_prompt: false, // Prevent new prompts during stop
+              },
+              params
+            );
+          } catch (error) {
+            return {
+              success: false,
+              reason: `Failed to update status: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            };
+          }
         }
 
         // PHASE 2: Use bulletproof stop handler with ACK protocol
