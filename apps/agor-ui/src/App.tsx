@@ -106,6 +106,7 @@ function AppContent() {
     accessToken,
     login,
     logout,
+    reAuthenticate,
   } = useAuth();
 
   // Call ALL hooks unconditionally BEFORE any conditional returns
@@ -554,6 +555,9 @@ function AppContent() {
     // This will auto-clear must_change_password flag on the backend
     await client.service('users').patch(userId, { password: newPassword } as Partial<User>);
     showSuccess('Password changed successfully!');
+    // Re-authenticate to refresh user state with must_change_password: false
+    // This will dismiss the modal and allow the user to continue
+    await reAuthenticate();
   };
 
   // Handle board CRUD
