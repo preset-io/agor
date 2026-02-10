@@ -15,11 +15,13 @@ These files are kept for historical reference and to understand the evolution of
 
 **Why archived:**
 These exploration docs have been successfully implemented and their content consolidated into:
+
 - `context/guides/rbac-and-unix-isolation.md` - Complete implementation guide
 - `apps/agor-docs/pages/guide/multiplayer-unix-isolation.mdx` - User-facing setup guide
 - `docker/sudoers/agor-daemon.sudoers` - Production sudoers configuration
 
 The implemented system follows the design from these explorations closely, with these key refinements:
+
 - Three clear modes: simple, insulated, strict
 - Production-ready sudoers file with extensive documentation
 - Path scoping for all filesystem operations
@@ -30,6 +32,7 @@ The implemented system follows the design from these explorations closely, with 
 ## When to Archive
 
 Documentation should be moved to archives when:
+
 1. The exploration has been fully implemented
 2. The content has been consolidated into canonical docs
 3. The file is no longer maintained or updated

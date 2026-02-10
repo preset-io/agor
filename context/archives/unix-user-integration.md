@@ -3,6 +3,7 @@
 > **⚠️ ARCHIVED:** This exploration doc has been superseded by the production implementation.
 >
 > **See instead:**
+>
 > - **User Guide:** `apps/agor-docs/pages/guide/multiplayer-unix-isolation.mdx`
 > - **Implementation Guide:** `context/guides/rbac-and-unix-isolation.md`
 > - **Config Reference:** `CLAUDE.md` (Feature Flags section)

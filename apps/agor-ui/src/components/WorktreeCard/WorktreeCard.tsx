@@ -8,6 +8,7 @@ import {
   DragOutlined,
   EditOutlined,
   ForkOutlined,
+  MessageOutlined,
   PlusOutlined,
   PushpinFilled,
   SubnodeOutlined,
@@ -15,7 +16,7 @@ import {
 import type { MenuProps } from 'antd';
 import { Badge, Button, Card, Collapse, Space, Spin, Tooltip, Tree, Typography, theme } from 'antd';
 import { AggregationColor } from 'antd/es/color-picker/color';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
 import { ensureColorVisible, isDarkTheme } from '../../utils/theme';
@@ -24,7 +25,7 @@ import { EnvironmentPill } from '../EnvironmentPill';
 import { type ForkSpawnAction, ForkSpawnModal } from '../ForkSpawnModal';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { CreatedByTag } from '../metadata';
-import { IssuePill, PullRequestPill } from '../Pill';
+import { ChannelPill, IssuePill, PullRequestPill } from '../Pill';
 import { TaskStatusIcon } from '../TaskStatusIcon';
 import { ToolIcon } from '../ToolIcon';
 import { buildSessionTree, type SessionTreeNode } from './buildSessionTree';
@@ -143,10 +144,15 @@ const WorktreeCardComponent = ({
     }
   };
 
-  // Separate manual sessions from scheduled runs
+  // Helper to check if a session is from gateway (has denormalized gateway metadata)
+  const isGatewaySession = useCallback((session: Session): boolean => {
+    return !!(session.custom_context as Record<string, unknown> | undefined)?.gateway_source;
+  }, []);
+
+  // Separate sessions by type: manual, scheduled, and gateway
   const manualSessions = useMemo(
-    () => sessions.filter((s) => !s.scheduled_from_worktree),
-    [sessions]
+    () => sessions.filter((s) => !s.scheduled_from_worktree && !isGatewaySession(s)),
+    [sessions, isGatewaySession]
   );
   const scheduledSessions = useMemo(
     () =>
@@ -154,6 +160,10 @@ const WorktreeCardComponent = ({
         .filter((s) => s.scheduled_from_worktree)
         .sort((a, b) => (b.scheduled_run_at || 0) - (a.scheduled_run_at || 0)), // Most recent first
     [sessions]
+  );
+  const gatewaySessions = useMemo(
+    () => sessions.filter((s) => isGatewaySession(s)),
+    [sessions, isGatewaySession]
   );
 
   // Build genealogy tree structure (only for manual sessions)
@@ -417,6 +427,99 @@ const WorktreeCardComponent = ({
           </div>
         </div>
       ))}
+    </div>
+  );
+
+  // Gateway sessions header
+  const gatewaySessionsHeader = (
+    <div
+      style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        width: '100%',
+      }}
+    >
+      <Space size={4} align="center">
+        <MessageOutlined style={{ color: token.colorSuccess }} />
+        <Typography.Text strong>Gateway Sessions</Typography.Text>
+        <Badge
+          count={gatewaySessions.length}
+          showZero
+          style={{ backgroundColor: token.colorSuccessBgHover }}
+        />
+      </Space>
+    </div>
+  );
+
+  // Gateway sessions content (flat list with channel info)
+  const gatewaySessionsContent = (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      {gatewaySessions.map((session) => {
+        // Extract denormalized gateway metadata (stamped at session creation)
+        const gatewaySource = (session.custom_context as Record<string, unknown> | undefined)
+          ?.gateway_source as
+          | {
+              channel_id: string;
+              channel_name: string;
+              channel_type: string;
+              thread_id: string;
+            }
+          | undefined;
+
+        return (
+          <div
+            key={session.session_id}
+            style={{
+              border: `1px solid rgba(255, 255, 255, 0.1)`,
+              borderRadius: 4,
+              padding: 8,
+              background: 'rgba(0, 0, 0, 0.2)',
+              display: 'flex',
+              alignItems: 'center',
+              cursor: 'pointer',
+            }}
+            onClick={() => onSessionClick?.(session.session_id)}
+          >
+            <Space size={4} align="center" style={{ flex: 1, minWidth: 0 }}>
+              <ToolIcon tool={session.agentic_tool} size={20} />
+              <div
+                style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}
+              >
+                <Typography.Text
+                  style={{
+                    fontSize: 12,
+                    ...getSessionTitleStyles(2),
+                  }}
+                >
+                  {getSessionDisplayTitle(session, { includeAgentFallback: true })}
+                </Typography.Text>
+                {gatewaySource && (
+                  <div style={{ alignSelf: 'flex-start' }}>
+                    <ChannelPill
+                      channelType={gatewaySource.channel_type}
+                      channelName={gatewaySource.channel_name}
+                    />
+                  </div>
+                )}
+              </div>
+            </Space>
+
+            {/* Status indicator */}
+            <div
+              style={{
+                marginLeft: 8,
+                width: 24,
+                display: 'flex',
+                justifyContent: 'center',
+                alignItems: 'center',
+              }}
+            >
+              <TaskStatusIcon status={session.status} size={16} />
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 
@@ -686,7 +789,7 @@ const WorktreeCardComponent = ({
             {/* Scheduled Runs */}
             {scheduledSessions.length > 0 && (
               <Collapse
-                defaultActiveKey={defaultExpanded ? ['scheduled-runs'] : []}
+                defaultActiveKey={[]}
                 items={[
                   {
                     key: 'scheduled-runs',
@@ -696,6 +799,24 @@ const WorktreeCardComponent = ({
                 ]}
                 ghost
                 style={{ marginTop: manualSessions.length > 0 ? 0 : 8 }}
+              />
+            )}
+
+            {/* Gateway Sessions */}
+            {gatewaySessions.length > 0 && (
+              <Collapse
+                defaultActiveKey={[]}
+                items={[
+                  {
+                    key: 'gateway-sessions',
+                    label: gatewaySessionsHeader,
+                    children: gatewaySessionsContent,
+                  },
+                ]}
+                ghost
+                style={{
+                  marginTop: manualSessions.length > 0 || scheduledSessions.length > 0 ? 0 : 8,
+                }}
               />
             )}
           </>

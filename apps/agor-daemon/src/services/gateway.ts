@@ -82,6 +82,10 @@ export class GatewayService {
   async refreshChannelState(): Promise<void> {
     const channels = await this.channelRepo.findAll();
     this.hasActiveChannels = channels.some((ch) => ch.enabled);
+    console.log(
+      `[gateway] refreshChannelState: found ${channels.length} channels, ${channels.filter((ch) => ch.enabled).length} enabled`
+    );
+    console.log(`[gateway] hasActiveChannels set to: ${this.hasActiveChannels}`);
   }
 
   /**
@@ -188,6 +192,16 @@ export class GatewayService {
           : undefined,
         tasks: [],
         message_count: 0,
+        // Denormalized gateway metadata (immutable snapshot at creation time)
+        // Avoids N+1 lookups when rendering board cards
+        custom_context: {
+          gateway_source: {
+            channel_id: channel.id,
+            channel_name: channel.name,
+            channel_type: channel.channel_type,
+            thread_id: data.thread_id,
+          },
+        },
       });
 
       sessionId = session.session_id;
@@ -251,8 +265,11 @@ export class GatewayService {
    * returns a cheap no-op. Uses platform connectors to send messages.
    */
   async routeMessage(data: RouteMessageData): Promise<RouteMessageResult> {
+    console.log(`[gateway] routeMessage called for session ${data.session_id.substring(0, 8)}`);
+
     // Fast path: skip DB lookup entirely when no channels are configured
     if (!this.hasActiveChannels) {
+      console.log('[gateway] No active channels, skipping route');
       return { routed: false };
     }
 
@@ -261,8 +278,13 @@ export class GatewayService {
 
     if (!mapping) {
       // No mapping → cheap no-op (session is not gateway-connected)
+      console.log(`[gateway] No mapping found for session ${data.session_id.substring(0, 8)}`);
       return { routed: false };
     }
+
+    console.log(
+      `[gateway] Found mapping: channel=${mapping.channel_id.substring(0, 8)}, thread=${mapping.thread_id}`
+    );
 
     const channel = await this.channelRepo.findById(mapping.channel_id);
 
@@ -324,6 +346,56 @@ export class GatewayService {
 
     for (const channel of eligible) {
       await this.startChannelListener(channel);
+    }
+  }
+
+  /**
+   * Start or stop a Socket Mode listener for a single channel based on its enabled state
+   * (public wrapper for hook usage)
+   */
+  async startListenerForChannel(channelId: string): Promise<void> {
+    const channel = await this.channelRepo.findById(channelId);
+    if (!channel) {
+      console.warn(`[gateway] Cannot manage listener: channel ${channelId} not found`);
+      return;
+    }
+
+    // If channel is disabled, stop the listener
+    if (!channel.enabled) {
+      await this.stopChannelListener(channelId);
+      console.log(`[gateway] Stopped listener for disabled channel ${channel.name}`);
+      return;
+    }
+
+    // Otherwise, try to start it
+    if (!hasConnector(channel.channel_type as ChannelType)) {
+      console.warn(`[gateway] No connector for channel type: ${channel.channel_type}`);
+      return;
+    }
+    if (!channel.config.app_token) {
+      console.log(`[gateway] Skipping listener for channel ${channel.name} (no app_token)`);
+      return;
+    }
+    await this.startChannelListener(channel);
+  }
+
+  /**
+   * Stop a Socket Mode listener for a single channel
+   */
+  async stopChannelListener(channelId: string): Promise<void> {
+    const connector = this.activeListeners.get(channelId);
+    if (!connector) {
+      return; // Not listening
+    }
+
+    try {
+      if (connector.stopListening) {
+        await connector.stopListening();
+      }
+      this.activeListeners.delete(channelId);
+      console.log(`[gateway] Listener stopped for channel ${channelId.substring(0, 8)}`);
+    } catch (error) {
+      console.error(`[gateway] Error stopping listener for ${channelId}:`, error);
     }
   }
 

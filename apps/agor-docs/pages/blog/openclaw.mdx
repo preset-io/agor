@@ -6,13 +6,13 @@ date: 2026-02-03
 
 # Agor vs. OpenClaw (ClawdBot): Thoughts on Agent Orchestration
 
-*What the fastest-growing open-source project teaches us about agentic AI*
+_What the fastest-growing open-source project teaches us about agentic AI_
 
 ---
 
 OpenClaw (née ClawdBot, briefly MoltBot - trademark lawyers move fast) just became the fastest-growing open-source project in GitHub history. 90,000+ stars in weeks. Cloudflare stock up 20%. Mac Minis selling out globally.
 
-The market screaming that it wants AI that actually *does things*.
+The market screaming that it wants AI that actually _does things_.
 
 For a decade, big tech promised us AI assistants and delivered glorified timers. Siri in its walled garden. Alexa controlling lights. Google Assistant knowing everything and doing nothing with it. OpenClaw exposed how timid those efforts were and proved the demand for real agency was always there, waiting.
 
@@ -38,7 +38,7 @@ On first run, OpenClaw asks for a name. It maintains a `SOUL.md` file defining i
 - Auto-flush before context compaction to preserve important information
 - Task tracking through `taskr` for persistent todo management
 
-This isn't just infrastructure. **It's an architecture for artificial continuity.** The agent remembers what it learned yesterday. It tracks what it's working on. It can modify its own instructions and improve its workflows. It has *persistence* across sessions.
+This isn't just infrastructure. **It's an architecture for artificial continuity.** The agent remembers what it learned yesterday. It tracks what it's working on. It can modify its own instructions and improve its workflows. It has _persistence_ across sessions.
 
 That restaurant reservation story everyone shares? The real insight isn't that it made a phone call. It's that the agent recognized the initial approach failed, searched for alternative solutions, found voice AI software, taught itself to use it, and executed a completely different plan—autonomously, with no human in the loop.
 
@@ -51,6 +51,7 @@ Agor came from a different problem space: software engineers managing dozens of 
 It's built on top of agentic coding SDKs ([Claude Code](https://docs.anthropic.com/en/docs/agents/claude-code), [Codex](https://github.com/anthropics/anthropic-quickstarts/tree/main/computer-use-demo), [Gemini](https://ai.google.dev/gemini-api/docs/code-execution), [OpenCode](https://docs.all-hands.dev/opencode/introduction)) and is fundamentally **worktree-centric**: every agent operates in a Git worktree, an isolated filesystem with its own branch, environment, and permissions.
 
 Agor gives you:
+
 - Git-native isolation (every agent in its own worktree)
 - Spatial canvas to visualize parallel work
 - Scheduler for recurring prompts
@@ -68,17 +69,17 @@ You get the primitives: git, scheduling, policies, MCP. But if you want an agent
 
 The OpenClaw moment is teaching the entire industry several things at once:
 
-**1. Agent loops + orchestration are the unlock.** The real innovation isn't connecting to APIs—it's building infrastructure for persistent identity, memory, and self-improvement. OpenClaw's SOUL.md + memory system + task tracking is a complete framework for artificial continuity. That's what makes agents feel *intelligent* rather than just responsive.
+**1. Agent loops + orchestration are the unlock.** The real innovation isn't connecting to APIs—it's building infrastructure for persistent identity, memory, and self-improvement. OpenClaw's SOUL.md + memory system + task tracking is a complete framework for artificial continuity. That's what makes agents feel _intelligent_ rather than just responsive.
 
-**2. The demand is real and massive.** People don't want assistants that suggest. They want assistants that *do*. The pent-up frustration with neutered AI helpers just got quantified: 90,000 stars in weeks.
+**2. The demand is real and massive.** People don't want assistants that suggest. They want assistants that _do_. The pent-up frustration with neutered AI helpers just got quantified: 90,000 stars in weeks.
 
 **3. Local-first resonates.** Your conversation history on your machine. Your credentials under your control. Privacy-first architecture isn't just a nice-to-have; it's a core value prop that people will move markets for.
 
 **4. Extensibility is everything.** OpenClaw's "skills" ecosystem (50+ bundled, infinite customization) shows that agents need hands and feet. Browser automation, file system access, shell commands, calendar integration. The more an agent can touch, the more useful it becomes.
 
-**5. Security is genuinely hard.** The vulnerabilities researchers found aren't indictments of OpenClaw—they're the inherent challenges of giving AI agents real agency. Broad permissions create attack surface. Prompt injection remains unsolved. These are agentic AI problems we're *all* grappling with.
+**5. Security is genuinely hard.** The vulnerabilities researchers found aren't indictments of OpenClaw—they're the inherent challenges of giving AI agents real agency. Broad permissions create attack surface. Prompt injection remains unsolved. These are agentic AI problems we're _all_ grappling with.
 
-OpenClaw isn't just showing us what's possible. It's showing us what's *necessary* to make agents actually useful.
+OpenClaw isn't just showing us what's possible. It's showing us what's _necessary_ to make agents actually useful.
 
 ---
 
@@ -86,21 +87,21 @@ OpenClaw isn't just showing us what's possible. It's showing us what's *necessar
 
 OpenClaw and Agor are solving related but distinct problems:
 
-| | OpenClaw (ClawdBot) | Agor |
-|---|---|---|
-| **Primary use case** | Personal digital life automation | Developer workflows & team coordination |
-| **Agent model** | One long-lived agent with persistent identity | Many short-lived agents in parallel |
-| **Core innovation** | **Agent loop: memory + identity + self-improvement** | Spatial orchestration + git-native isolation |
-| **Interface** | Chat (WhatsApp, Telegram, SMS, etc.) | Spatial canvas + mobile |
-| **Extensibility** | Skills marketplace (50+ bundled) | MCP servers + SDK policies |
-| **Out-of-box experience** | Complete agent framework ready to use | Primitives you compose yourself |
-| **Collaboration** | Single-player | Multiplayer with real-time presence |
-| **Best for** | Individuals who want a working agent now | Teams who need structured multi-agent orchestration |
-| **Deployment** | Mac Mini, local machine | Self-hosted, multi-user, containerized |
+|                           | OpenClaw (ClawdBot)                                  | Agor                                                |
+| ------------------------- | ---------------------------------------------------- | --------------------------------------------------- |
+| **Primary use case**      | Personal digital life automation                     | Developer workflows & team coordination             |
+| **Agent model**           | One long-lived agent with persistent identity        | Many short-lived agents in parallel                 |
+| **Core innovation**       | **Agent loop: memory + identity + self-improvement** | Spatial orchestration + git-native isolation        |
+| **Interface**             | Chat (WhatsApp, Telegram, SMS, etc.)                 | Spatial canvas + mobile                             |
+| **Extensibility**         | Skills marketplace (50+ bundled)                     | MCP servers + SDK policies                          |
+| **Out-of-box experience** | Complete agent framework ready to use                | Primitives you compose yourself                     |
+| **Collaboration**         | Single-player                                        | Multiplayer with real-time presence                 |
+| **Best for**              | Individuals who want a working agent now             | Teams who need structured multi-agent orchestration |
+| **Deployment**            | Mac Mini, local machine                              | Self-hosted, multi-user, containerized              |
 
 What's inspiring to me is the convergence:
 
-- Both believe in agents that *do things*, not just suggest
+- Both believe in agents that _do things_, not just suggest
 - Both are local-first / self-hosted
 - Both embrace extensibility (skills vs MCP—increasingly overlapping)
 - Both support scheduling and proactive behavior
@@ -121,7 +122,7 @@ That `SOUL.md` file? That's not a gimmick. It's addressing a real problem: how d
 
 The memory system with daily logs and vector search? That's solving context limitations at the architectural level. The agent isn't just dumping history—it's actively curating what matters.
 
-The self-improvement loop where the agent modifies its own instructions and commits changes? That's treating the agent's capabilities as *code* that can evolve.
+The self-improvement loop where the agent modifies its own instructions and commits changes? That's treating the agent's capabilities as _code_ that can evolve.
 
 **This is brilliant.** And it's making me expand my horizons arond what Agor could provide.
 
@@ -191,7 +192,7 @@ OpenClaw's explosion taught me something I should have understood sooner: **peop
 
 Not "agents" as in chatbots that answer questions. Agents as in entities with persistent identity, memory, filesystem acces, and the ability to take action autonomously over time.
 
-The agent loop architecture—SOUL.md for identity, layered memory systems, self-improvement capabilities—that's what makes OpenClaw *feel* like an agent rather than just an LLM wrapper.
+The agent loop architecture—SOUL.md for identity, layered memory systems, self-improvement capabilities—that's what makes OpenClaw _feel_ like an agent rather than just an LLM wrapper.
 
 Agor was built for a different problem (team coordination, parallel work, git-native isolation), but the lesson translates: **infrastructure for continuity is foundational.**
 
@@ -205,7 +206,7 @@ What I know: OpenClaw proved the demand. Now the question is how to build agent 
 
 ## Which One Should You Use?
 
-Honestly? If you're looking for a working personal AI agent, connecting to all your tools, *right now*, **use OpenClaw.**
+Honestly? If you're looking for a working personal AI agent, connecting to all your tools, _right now_, **use OpenClaw.**
 
 It's a complete framework. The agent loop architecture is there, the memory system works, the skills ecosystem is rich. You install it, give it a name, and you have an agent that can manage your digital life with persistent identity and self-improvement.
 
@@ -224,7 +225,7 @@ Could you build OpenClaw-style agent loops in Agor? Yes, technically. Should you
 
 OpenClaw's agent loop architecture is inspiring me to think about how Agor could provide similar infrastructure for continuity—but in a way that makes sense for team-based development workflows. Not one long-lived personal agent, but many coordinated agents with structured memory and identity.
 
-That's still exploratory. OpenClaw has it figured out *now*.
+That's still exploratory. OpenClaw has it figured out _now_.
 
 ---
 
@@ -234,11 +235,11 @@ OpenClaw's explosive growth isn't just validation for one project. It's a signal
 
 **People want creative agent that can think and act on their own.** Not suggestions. Not summaries. Action with continuity.
 
-The agent loop architecture—persistent identity, memory systems, self-improvement—is what makes that possible. It's the difference between a tool you use and an agent that works *for* you.
+The agent loop architecture—persistent identity, memory systems, self-improvement—is what makes that possible. It's the difference between a tool you use and an agent that works _for_ you.
 
 OpenClaw figured this out for personal automation. The framework is elegant, the execution is solid, and the demand proves it's solving a real problem.
 
-The security challenges OpenClaw faces aren't unique to OpenClaw. They're the frontier problems *everyone* building agentic systems has to solve. Prompt injection, credential management, attack surface, trust boundaries—these are hard problems precisely because we're giving AI real agency.
+The security challenges OpenClaw faces aren't unique to OpenClaw. They're the frontier problems _everyone_ building agentic systems has to solve. Prompt injection, credential management, attack surface, trust boundaries—these are hard problems precisely because we're giving AI real agency.
 
 The researchers finding vulnerabilities are doing important work. The community patching quickly shows maturity. The conversation about security trade-offs is one we all need to have, not just OpenClaw users.
 

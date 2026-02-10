@@ -676,7 +676,7 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
 
           // Truncate to requested length
           if (fullText.length > truncationLength) {
-            fullText = fullText.substring(0, truncationLength) + '...';
+            fullText = `${fullText.substring(0, truncationLength)}...`;
           }
 
           lastMessageBySession.set(sessionId, fullText);
@@ -695,7 +695,7 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
         // Get last message and truncate if needed
         let lastMessage = lastMessageBySession.get(sessionId) || '';
         if (lastMessage.length > truncationLength) {
-          lastMessage = lastMessage.substring(0, truncationLength) + '...truncated';
+          lastMessage = `${lastMessage.substring(0, truncationLength)}...truncated`;
         }
 
         // Extract message_count from data column (materialized field)

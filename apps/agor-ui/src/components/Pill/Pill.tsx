@@ -16,6 +16,7 @@ import {
   MessageOutlined,
   PercentageOutlined,
   RobotOutlined,
+  SlackOutlined,
   ThunderboltOutlined,
   ToolOutlined,
 } from '@ant-design/icons';
@@ -976,5 +977,31 @@ export const ScheduledRunPill: React.FC<ScheduledRunPillProps> = ({ scheduledRun
     <Pill icon={<ClockCircleOutlined />} color={PILL_COLORS.processing} tooltip={tooltip}>
       {displayTime}
     </Pill>
+  );
+};
+
+interface ChannelPillProps extends BasePillProps {
+  channelType: string; // e.g., "slack", "discord"
+  channelName: string;
+}
+
+export const ChannelPill: React.FC<ChannelPillProps> = ({ channelType, channelName, style }) => {
+  // Map channel type to icon
+  const getIcon = () => {
+    const type = (channelType || '').toLowerCase();
+    switch (type) {
+      case 'slack':
+        return <SlackOutlined />;
+      case 'discord':
+        return <MessageOutlined />; // TODO: Add DiscordOutlined when available
+      default:
+        return <MessageOutlined />;
+    }
+  };
+
+  return (
+    <Tag icon={getIcon()} color={PILL_COLORS.success} style={style}>
+      {channelName}
+    </Tag>
   );
 };

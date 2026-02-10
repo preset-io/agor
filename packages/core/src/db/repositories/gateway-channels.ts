@@ -50,8 +50,15 @@ function decryptConfig(config: Record<string, unknown>): Record<string, unknown>
     if (typeof decrypted[field] === 'string' && decrypted[field]) {
       try {
         decrypted[field] = decryptApiKey(decrypted[field] as string);
-      } catch {
+      } catch (error) {
         // If decryption fails (e.g., key changed), leave as-is
+        console.error(
+          `[gateway-channels] Failed to decrypt ${field}:`,
+          error instanceof Error ? error.message : String(error)
+        );
+        console.error(
+          '[gateway-channels] Channel credentials may be corrupted or master secret changed'
+        );
       }
     }
   }
@@ -225,7 +232,21 @@ export class GatewayChannelRepository
         throw new EntityNotFoundError('GatewayChannel', id);
       }
 
+      // Merge updates, but preserve existing encrypted credentials if update has empty values
       const merged = { ...current, ...updates };
+
+      // Preserve existing credentials if updates contain empty strings
+      if (updates.config) {
+        const mergedConfig = { ...current.config, ...updates.config };
+        for (const field of SENSITIVE_CONFIG_FIELDS) {
+          // If update has empty/falsy value, keep current value
+          if (!updates.config[field] && current.config[field]) {
+            mergedConfig[field] = current.config[field];
+          }
+        }
+        merged.config = mergedConfig;
+      }
+
       const insertData = this.channelToInsert(merged);
 
       await update(this.db, gatewayChannels)

@@ -582,7 +582,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
 
           // Truncate to requested length
           if (fullText.length > truncationLength) {
-            fullText = fullText.substring(0, truncationLength) + '...';
+            fullText = `${fullText.substring(0, truncationLength)}...`;
           }
 
           lastMessageBySession.set(sessionId, fullText);

@@ -705,119 +705,117 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
 
           {/* Test Connection - only for HTTP/SSE transport */}
           {transport !== 'stdio' && (
-            <>
-              <div style={{ borderTop: '1px solid #303030', marginTop: 16, paddingTop: 16 }}>
-                <Space direction="vertical" style={{ width: '100%' }}>
-                  <Button
-                    type="default"
-                    icon={<ApiOutlined />}
-                    onClick={onTestConnection}
-                    loading={testing}
-                  >
-                    {testing ? 'Testing...' : 'Test Connection'}
-                  </Button>
+            <div style={{ borderTop: '1px solid #303030', marginTop: 16, paddingTop: 16 }}>
+              <Space direction="vertical" style={{ width: '100%' }}>
+                <Button
+                  type="default"
+                  icon={<ApiOutlined />}
+                  onClick={onTestConnection}
+                  loading={testing}
+                >
+                  {testing ? 'Testing...' : 'Test Connection'}
+                </Button>
 
-                  {testResult && testResult.success && (
-                    <div style={{ marginTop: 8 }}>
-                      <Alert
-                        type="success"
-                        message={`Connected: ${testResult.toolCount} tools, ${testResult.resourceCount} resources`}
-                        showIcon
-                        style={{ marginBottom: 8 }}
-                      />
-                      {testResult.tools && testResult.tools.length > 0 && (
-                        <div style={{ marginTop: 8 }}>
-                          <Typography.Text
-                            type="secondary"
-                            style={{ fontSize: 12, display: 'block', marginBottom: 4 }}
-                          >
-                            Tools:
-                          </Typography.Text>
-                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                            {testResult.tools.map((tool) => (
-                              <Tooltip
-                                key={tool.name}
-                                title={tool.description || 'No description'}
-                                placement="top"
-                              >
-                                <Tag color="blue" style={{ marginBottom: 4, cursor: 'help' }}>
-                                  {tool.name}
-                                </Tag>
-                              </Tooltip>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                      {testResult.resources && testResult.resources.length > 0 && (
-                        <div style={{ marginTop: 8 }}>
-                          <Typography.Text
-                            type="secondary"
-                            style={{ fontSize: 12, display: 'block', marginBottom: 4 }}
-                          >
-                            Resources:
-                          </Typography.Text>
-                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                            {testResult.resources.map((resource) => (
-                              <Tooltip
-                                key={resource.uri}
-                                title={
-                                  <div>
-                                    <div>{resource.uri}</div>
-                                    {resource.mimeType && (
-                                      <div style={{ opacity: 0.7, fontSize: 11 }}>
-                                        {resource.mimeType}
-                                      </div>
-                                    )}
-                                  </div>
-                                }
-                                placement="top"
-                              >
-                                <Tag color="cyan" style={{ marginBottom: 4, cursor: 'help' }}>
-                                  {resource.name}
-                                </Tag>
-                              </Tooltip>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                      {testResult.prompts && testResult.prompts.length > 0 && (
-                        <div style={{ marginTop: 8 }}>
-                          <Typography.Text
-                            type="secondary"
-                            style={{ fontSize: 12, display: 'block', marginBottom: 4 }}
-                          >
-                            Prompts:
-                          </Typography.Text>
-                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                            {testResult.prompts.map((prompt) => (
-                              <Tooltip
-                                key={prompt.name}
-                                title={prompt.description || 'No description'}
-                                placement="top"
-                              >
-                                <Tag color="purple" style={{ marginBottom: 4, cursor: 'help' }}>
-                                  {prompt.name}
-                                </Tag>
-                              </Tooltip>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {testResult && !testResult.success && (
+                {testResult?.success && (
+                  <div style={{ marginTop: 8 }}>
                     <Alert
-                      type="error"
-                      message="Connection failed"
-                      description={testResult.error}
+                      type="success"
+                      message={`Connected: ${testResult.toolCount} tools, ${testResult.resourceCount} resources`}
                       showIcon
-                      style={{ marginTop: 8 }}
+                      style={{ marginBottom: 8 }}
                     />
-                  )}
-                </Space>
-              </div>
-            </>
+                    {testResult.tools && testResult.tools.length > 0 && (
+                      <div style={{ marginTop: 8 }}>
+                        <Typography.Text
+                          type="secondary"
+                          style={{ fontSize: 12, display: 'block', marginBottom: 4 }}
+                        >
+                          Tools:
+                        </Typography.Text>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                          {testResult.tools.map((tool) => (
+                            <Tooltip
+                              key={tool.name}
+                              title={tool.description || 'No description'}
+                              placement="top"
+                            >
+                              <Tag color="blue" style={{ marginBottom: 4, cursor: 'help' }}>
+                                {tool.name}
+                              </Tag>
+                            </Tooltip>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {testResult.resources && testResult.resources.length > 0 && (
+                      <div style={{ marginTop: 8 }}>
+                        <Typography.Text
+                          type="secondary"
+                          style={{ fontSize: 12, display: 'block', marginBottom: 4 }}
+                        >
+                          Resources:
+                        </Typography.Text>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                          {testResult.resources.map((resource) => (
+                            <Tooltip
+                              key={resource.uri}
+                              title={
+                                <div>
+                                  <div>{resource.uri}</div>
+                                  {resource.mimeType && (
+                                    <div style={{ opacity: 0.7, fontSize: 11 }}>
+                                      {resource.mimeType}
+                                    </div>
+                                  )}
+                                </div>
+                              }
+                              placement="top"
+                            >
+                              <Tag color="cyan" style={{ marginBottom: 4, cursor: 'help' }}>
+                                {resource.name}
+                              </Tag>
+                            </Tooltip>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {testResult.prompts && testResult.prompts.length > 0 && (
+                      <div style={{ marginTop: 8 }}>
+                        <Typography.Text
+                          type="secondary"
+                          style={{ fontSize: 12, display: 'block', marginBottom: 4 }}
+                        >
+                          Prompts:
+                        </Typography.Text>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                          {testResult.prompts.map((prompt) => (
+                            <Tooltip
+                              key={prompt.name}
+                              title={prompt.description || 'No description'}
+                              placement="top"
+                            >
+                              <Tag color="purple" style={{ marginBottom: 4, cursor: 'help' }}>
+                                {prompt.name}
+                              </Tag>
+                            </Tooltip>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {testResult && !testResult.success && (
+                  <Alert
+                    type="error"
+                    message="Connection failed"
+                    description={testResult.error}
+                    showIcon
+                    style={{ marginTop: 8 }}
+                  />
+                )}
+              </Space>
+            </div>
           )}
         </>
       ),

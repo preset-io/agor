@@ -340,4 +340,23 @@ export class ThreadSessionMapRepository
       );
     }
   }
+
+  /**
+   * Find all mappings for a worktree (for UI filtering gateway sessions)
+   */
+  async findByWorktree(worktreeId: string): Promise<ThreadSessionMap[]> {
+    try {
+      const rows = await select(this.db)
+        .from(threadSessionMap)
+        .where(eq(threadSessionMap.worktree_id, worktreeId))
+        .all();
+
+      return rows.map((row: ThreadSessionMapRow) => this.rowToMapping(row));
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to find mappings by worktree: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
 }

@@ -14,6 +14,8 @@ export class ThreadSessionMapService extends DrizzleService<
   ThreadSessionMap,
   Partial<ThreadSessionMap>
 > {
+  private threadMapRepo: ThreadSessionMapRepository;
+
   constructor(db: Database) {
     const repo = new ThreadSessionMapRepository(db);
     super(repo, {
@@ -24,6 +26,15 @@ export class ThreadSessionMapService extends DrizzleService<
         max: PAGINATION.MAX_LIMIT,
       },
     });
+    this.threadMapRepo = repo;
+  }
+
+  /**
+   * Find all thread-session mappings for a worktree
+   * Used by UI to identify gateway-created sessions
+   */
+  async findByWorktree(worktreeId: string): Promise<ThreadSessionMap[]> {
+    return this.threadMapRepo.findByWorktree(worktreeId);
   }
 }
 

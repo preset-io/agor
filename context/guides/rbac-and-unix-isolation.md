@@ -17,6 +17,7 @@
 3. **Strict** - `worktree_rbac: true` + `unix_user_mode: strict` - Full per-user isolation
 
 **Key files:**
+
 - Config: `~/.agor/config.yaml` → `execution.worktree_rbac` and `execution.unix_user_mode`
 - Sudoers: `docker/sudoers/agor-daemon.sudoers` (production-ready reference)
 - Implementation: `packages/core/src/unix/` and `apps/agor-daemon/src/services/`

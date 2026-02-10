@@ -56,18 +56,18 @@ export interface GatewayChannel {
   channel_type: ChannelType;
   target_worktree_id: WorktreeID;
   agor_user_id: UserID;
-  channel_key: string;          // UUID — the auth secret for inbound webhooks
-  config: Record<string, unknown>;  // Platform credentials (encrypted at rest)
+  channel_key: string; // UUID — the auth secret for inbound webhooks
+  config: Record<string, unknown>; // Platform credentials (encrypted at rest)
   enabled: boolean;
-  created_at: string;           // ISO 8601
-  updated_at: string;           // ISO 8601
+  created_at: string; // ISO 8601
+  updated_at: string; // ISO 8601
   last_message_at: string | null;
 }
 
 export interface ThreadSessionMap {
   id: ThreadSessionMapID;
   channel_id: GatewayChannelID;
-  thread_id: string;            // Platform-specific (e.g., "C123456-1707340800.123456")
+  thread_id: string; // Platform-specific (e.g., "C123456-1707340800.123456")
   session_id: SessionID;
   worktree_id: WorktreeID;
   created_at: string;
@@ -84,6 +84,7 @@ export interface ThreadSessionMap {
 Two new tables following existing patterns (hybrid materialized + JSON):
 
 **`gateway_channels` table:**
+
 - `id` text PK (36 chars, UUIDv7)
 - `created_by` text NOT NULL DEFAULT 'anonymous'
 - `name` text NOT NULL
@@ -98,10 +99,12 @@ Two new tables following existing patterns (hybrid materialized + JSON):
 - `last_message_at` timestamp (nullable)
 
 Indexes:
+
 - `idx_gateway_channel_key` on (channel_key) — fast auth lookup
 - `idx_gateway_enabled_type` on (enabled, channel_type)
 
 **`thread_session_map` table:**
+
 - `id` text PK (36 chars, UUIDv7)
 - `channel_id` text NOT NULL FK → gateway_channels (CASCADE delete)
 - `thread_id` text NOT NULL
@@ -113,6 +116,7 @@ Indexes:
 - `metadata` json (nullable)
 
 Indexes:
+
 - `uniq_thread_map_channel_thread` on (channel_id, thread_id) — unique constraint
 - `idx_thread_map_session_id` on (session_id) — outbound routing lookup
 - `idx_thread_map_channel_status` on (channel_id, status)
@@ -120,6 +124,7 @@ Indexes:
 ### 1.3 Schema barrel export — `packages/core/src/db/schema.ts`
 
 Add re-exports:
+
 ```typescript
 export const gatewayChannels = schema.gatewayChannels;
 export const threadSessionMap = schema.threadSessionMap;
@@ -143,6 +148,7 @@ Implements `BaseRepository<GatewayChannel, Partial<GatewayChannel>>`.
 Pattern: follow `BoardRepository` exactly (rowToX, xToInsert, resolveId, CRUD).
 
 Key methods beyond CRUD:
+
 - `findByKey(channelKey: string): Promise<GatewayChannel | null>` — auth lookup
 - `findByUser(userId: string): Promise<GatewayChannel[]>` — list user's channels
 - `updateLastMessage(id: GatewayChannelID): Promise<void>` — touch timestamp
@@ -154,6 +160,7 @@ Encryption: use existing `encryptApiKey()` / `decryptApiKey()` from `packages/co
 Implements `BaseRepository<ThreadSessionMap, Partial<ThreadSessionMap>>`.
 
 Key methods beyond CRUD:
+
 - `findByChannelAndThread(channelId, threadId): Promise<ThreadSessionMap | null>` — inbound routing
 - `findBySession(sessionId): Promise<ThreadSessionMap | null>` — outbound routing
 - `findByChannel(channelId, status?): Promise<ThreadSessionMap[]>` — list threads
@@ -163,6 +170,7 @@ Key methods beyond CRUD:
 ### 2.3 Export from `packages/core/src/db/repositories/index.ts`
 
 Add:
+
 ```typescript
 export * from './gateway-channels';
 export * from './thread-session-map';
@@ -182,11 +190,9 @@ export class GatewayChannelsService extends DrizzleService<GatewayChannel> {
   //   1. Generate channel_key (UUIDv7)
   //   2. Encrypt sensitive config fields
   //   3. Set timestamps
-
   // Override get()/find() to:
   //   1. NEVER return decrypted config in list responses
   //   2. Only return decrypted config for single get() by owner
-
   // Custom method: rotateKey(id) — generate new channel_key
 }
 ```
@@ -206,6 +212,7 @@ Register at: `app.use('thread-session-map', threadSessionMapService)`
 Two main methods:
 
 **`postMessage(data)` — Inbound (platform → session)**
+
 1. Authenticate via `channel_key` lookup
 2. Check channel enabled
 3. Look up thread in `thread_session_map`
@@ -215,6 +222,7 @@ Two main methods:
 7. Return `{ success, sessionId, created }`
 
 **`routeMessage(data)` — Outbound (session → platform)**
+
 1. Look up session in `thread_session_map` by `session_id`
 2. If no mapping → return `{ routed: false }` (cheap no-op)
 3. Get channel config, get connector
@@ -229,6 +237,7 @@ Register at: `app.use('gateway', gatewayService)`
 **File:** `apps/agor-daemon/src/hooks/gateway-route.ts`
 
 FeathersJS `after` hook on the messages service `create` method:
+
 - Check if `message.role === 'assistant'`
 - Call `app.service('gateway').routeMessage(...)` (fire-and-forget, catch errors)
 - Non-blocking — don't slow down message creation
@@ -249,7 +258,7 @@ export interface GatewayConnector {
     threadId: string;
     text: string;
     metadata?: Record<string, unknown>;
-  }): Promise<string>;  // Returns platform message ID
+  }): Promise<string>; // Returns platform message ID
 
   // Optional: active listening (Socket Mode, etc.)
   startListening?(callback: (msg: InboundMessage) => void): Promise<void>;
@@ -282,9 +291,10 @@ Dependencies to add: `@slack/web-api`, `@slack/socket-mode`
 ### 4.3 Connector registry — `packages/core/src/gateway/connector-registry.ts`
 
 Simple factory that returns connector instances by channel type:
+
 ```typescript
 const connectors = new Map<string, (config) => GatewayConnector>();
-connectors.set('slack', (config) => new SlackConnector(config));
+connectors.set('slack', config => new SlackConnector(config));
 // Future: discord, whatsapp, telegram
 ```
 
@@ -297,10 +307,12 @@ connectors.set('slack', (config) => new SlackConnector(config));
 Follow `MCPServersTable.tsx` pattern (closest analog — also has encrypted config, CRUD, multiple types).
 
 **Channel list view:**
+
 - Table with columns: Status (green/red dot), Name, Type, Target Worktree, Active Threads, Last Message
 - Actions: Edit, Enable/Disable, Delete
 
 **Create/Edit modal:**
+
 - Channel Type selector (Slack, Discord, etc.)
 - Name input
 - Target Worktree dropdown
@@ -311,6 +323,7 @@ Follow `MCPServersTable.tsx` pattern (closest analog — also has encrypted conf
   - etc.
 
 **Post-create success view:**
+
 - Show generated channel_key
 - Show setup instructions based on channel type
 - "Keep this key secret" warning
@@ -318,6 +331,7 @@ Follow `MCPServersTable.tsx` pattern (closest analog — also has encrypted conf
 ### 5.2 Register in SettingsModal.tsx
 
 Add to `menuItems` under "Integrations" group:
+
 ```typescript
 {
   key: 'gateway',
@@ -333,6 +347,7 @@ Add callback props: `onCreateGatewayChannel`, `onUpdateGatewayChannel`, `onDelet
 ### 5.3 State management — `apps/agor-ui/src/hooks/useAgorData.ts`
 
 Add:
+
 - `gatewayChannelById` Map
 - WebSocket listeners for `gateway-channels` service events
 - Feathers service calls for CRUD
@@ -344,6 +359,7 @@ Add:
 ### `apps/agor-daemon/src/index.ts`
 
 Add imports and registration:
+
 ```typescript
 import { GatewayChannelsRepository, ThreadSessionMapRepository } from '@agor/core/db';
 
@@ -357,10 +373,12 @@ app.use('thread-session-map', new ThreadSessionMapService(db));
 app.use('gateway', new GatewayService(db, app));
 
 // Add query validator hooks
-app.service('gateway-channels').hooks({ before: { find: [validateQuery(gatewayChannelQueryValidator)] }});
+app
+  .service('gateway-channels')
+  .hooks({ before: { find: [validateQuery(gatewayChannelQueryValidator)] } });
 
 // Add gateway routing hook to messages service
-app.service('messages').hooks({ after: { create: [gatewayRouteHook] }});
+app.service('messages').hooks({ after: { create: [gatewayRouteHook] } });
 ```
 
 ---
@@ -382,20 +400,21 @@ Start with the data layer and work up:
 
 ## What We're NOT Doing (Spec Divergences)
 
-| Spec says | We're doing instead | Why |
-|-----------|---------------------|-----|
-| Store gateway metadata in `session.data` | No gateway info in sessions | Sessions should be unaware; gateway owns the mapping |
-| Separate encryption key (`GATEWAY_ENCRYPTION_KEY`) | Reuse `AGOR_MASTER_SECRET` via `encryptApiKey()`/`decryptApiKey()` | Existing pattern, no new config needed |
-| Separate gateway process | Part of agor-daemon | Follows daemon extension pattern |
-| Custom rate limiting middleware | Defer to Phase 2 | Get core routing working first |
-| CLI commands (`agor gateway ...`) | Defer to Phase 2 | UI-first, CLI later |
-| Multiple platform connectors at once | Slack only first | Prove the pattern, then extend |
+| Spec says                                          | We're doing instead                                                | Why                                                  |
+| -------------------------------------------------- | ------------------------------------------------------------------ | ---------------------------------------------------- |
+| Store gateway metadata in `session.data`           | No gateway info in sessions                                        | Sessions should be unaware; gateway owns the mapping |
+| Separate encryption key (`GATEWAY_ENCRYPTION_KEY`) | Reuse `AGOR_MASTER_SECRET` via `encryptApiKey()`/`decryptApiKey()` | Existing pattern, no new config needed               |
+| Separate gateway process                           | Part of agor-daemon                                                | Follows daemon extension pattern                     |
+| Custom rate limiting middleware                    | Defer to Phase 2                                                   | Get core routing working first                       |
+| CLI commands (`agor gateway ...`)                  | Defer to Phase 2                                                   | UI-first, CLI later                                  |
+| Multiple platform connectors at once               | Slack only first                                                   | Prove the pattern, then extend                       |
 
 ---
 
 ## Config Requirements
 
 The gateway service requires:
+
 - **Auth enabled** — channels reference `agor_user_id` and `created_by`
 - **`AGOR_MASTER_SECRET`** — for encrypting platform credentials in `config` column
 - **Slack App** — Bot Token + App Token for Socket Mode (user provides during channel creation)

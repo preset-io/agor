@@ -265,8 +265,8 @@ Agor supports progressive security modes controlled by two config flags:
 ```yaml
 # ~/.agor/config.yaml
 execution:
-  worktree_rbac: false      # Enable RBAC (default: false)
-  unix_user_mode: simple    # Unix isolation mode (default: simple)
+  worktree_rbac: false # Enable RBAC (default: false)
+  unix_user_mode: simple # Unix isolation mode (default: simple)
 ```
 
 ---
@@ -280,6 +280,7 @@ execution:
 ```
 
 **Behavior:**
+
 - ✅ All authenticated users can access all worktrees
 - ✅ No permission enforcement
 - ✅ All operations run as daemon user
@@ -298,6 +299,7 @@ execution:
 ```
 
 **Behavior:**
+
 - ✅ App-layer permission checks (view/prompt/all)
 - ✅ Worktree owners service active
 - ✅ UI shows permission management
@@ -317,6 +319,7 @@ execution:
 ```
 
 **Behavior:**
+
 - ✅ Full app-layer RBAC
 - ✅ Unix groups per worktree (`agor_wt_*`)
 - ✅ Filesystem permissions enforced
@@ -338,6 +341,7 @@ execution:
 ```
 
 **Behavior:**
+
 - ✅ All insulated mode features
 - ✅ Each user MUST have `unix_username`
 - ✅ Sessions run as session creator's Unix user
@@ -355,20 +359,20 @@ execution:
 ```yaml
 execution:
   # RBAC toggle
-  worktree_rbac: boolean                    # default: false
+  worktree_rbac: boolean # default: false
 
   # Unix mode: simple | insulated | strict
-  unix_user_mode: string                    # default: simple
+  unix_user_mode: string # default: simple
 
   # Executor user (insulated mode)
-  executor_unix_user: string                # optional
+  executor_unix_user: string # optional
 
   # Session tokens
-  session_token_expiration_ms: number       # default: 86400000 (24h)
-  session_token_max_uses: number            # default: 1, -1 = unlimited
+  session_token_expiration_ms: number # default: 86400000 (24h)
+  session_token_max_uses: number # default: 1, -1 = unlimited
 
   # Password sync (strict mode)
-  sync_unix_passwords: boolean              # default: true
+  sync_unix_passwords: boolean # default: true
 ```
 
 ---
@@ -376,24 +380,29 @@ execution:
 ### Implementation Notes
 
 **Database Schema:**
+
 - `worktree_owners` table and `others_can` column exist regardless of mode
 - Schema migrations run on all instances
 - Safe to toggle flags at runtime
 
 **Service Registration:**
+
 - Worktree owners API (`/worktrees/:id/owners`) registered only when `worktree_rbac: true`
 - Returns 404 when RBAC disabled
 
 **Unix Integration:**
+
 - Groups created only in `insulated` or `strict` modes
 - Toggling off does NOT clean up existing groups
 - Filesystem permissions persist after disabling
 
 **UI Behavior:**
+
 - Owners & Permissions section shown only when `worktree_rbac: true`
 - Gracefully degrades when disabled
 
 **Sudoers Setup:**
+
 - Required for `insulated` and `strict` modes
 - Reference file: `docker/sudoers/agor-daemon.sudoers`
 - Comprehensive documentation and security scoping included
@@ -403,11 +412,13 @@ execution:
 ### Related Documentation
 
 **Setup & Security:**
+
 - `apps/agor-docs/pages/guide/multiplayer-unix-isolation.mdx` - Complete setup guide
 - `context/guides/rbac-and-unix-isolation.md` - Architecture and design philosophy
 - `docker/sudoers/agor-daemon.sudoers` - Production-ready sudoers configuration
 
 **Implementation:**
+
 - `packages/core/src/config/types.ts` - Configuration types
 - `packages/core/src/unix/user-manager.ts` - Unix user utilities
 - `apps/agor-daemon/src/index.ts` - Mode detection and service registration

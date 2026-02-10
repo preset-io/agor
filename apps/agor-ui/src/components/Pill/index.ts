@@ -1,6 +1,7 @@
 export { EventStreamPill } from './EventStreamPill';
 export {
   BranchPill,
+  ChannelPill,
   ConceptPill,
   ContextWindowPill,
   DirtyStatePill,

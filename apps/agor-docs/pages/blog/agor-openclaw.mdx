@@ -30,7 +30,7 @@ But OpenClaw runs as a standalone process. What if I could take those patterns a
 **That's exactly what agor-openclaw is.**
 
 ![Agor OpenClaw board showing the agent's first bootstrap conversation with zones for workflow management](/images/blog/agor-openclaw-board.png)
-*The Agor board during bootstrap - zones for workflow automation (left), agent's first conversation establishing identity (right)*
+_The Agor board during bootstrap - zones for workflow automation (left), agent's first conversation establishing identity (right)_
 
 ---
 
@@ -156,7 +156,7 @@ The main agent creates and manages:
 - **Session spawning** for parallel work
 - **Zone triggers** for workflow automation
 
-When a worktree enters the "Codex review" zone, a trigger fires automatically with a template prompt like: *"Review the PR in this worktree. Check for bugs, suggest improvements. Report findings and move to 'Human review' if changes needed."*
+When a worktree enters the "Codex review" zone, a trigger fires automatically with a template prompt like: _"Review the PR in this worktree. Check for bugs, suggest improvements. Report findings and move to 'Human review' if changes needed."_
 
 The agent uses these primitives to build sophisticated workflows without writing code.
 
@@ -298,18 +298,21 @@ Then it **compared** what Agor knows vs. what's in `memory/agor-state/*.json`.
 The agent read `memory/agor-state/sessions.json` and cross-referenced with Agor MCP:
 
 **Task #1: MCP Repo Creation**
+
 - Status in memory: "running"
 - Status in Agor: "idle" (completed)
 - PR attached: #536
 - ✅ COMPLETED
 
 **Task #2: Session Defaults Fix**
+
 - Status in memory: "running"
 - Status in Agor: "idle" (completed)
 - PR attached: #535
 - ✅ COMPLETED
 
 **Task #3: Git Worktree Debug**
+
 - Status in memory: "running"
 - Status in Agor: "idle" (completed)
 - PR attached: #537
@@ -322,6 +325,7 @@ All three tasks had completed successfully and created PRs. The heartbeat detect
 The agent updated:
 
 **`memory/agor-state/sessions.json`**
+
 ```json
 {
   "sessions": [
@@ -337,6 +341,7 @@ The agent updated:
 ```
 
 **`memory/agor-state/worktrees.json`**
+
 ```json
 {
   "active_worktrees": [
@@ -352,10 +357,12 @@ The agent updated:
 ```
 
 **`memory/2026-02-03.md`** (daily log)
+
 ```markdown
 ## Heartbeat Check (20:55 PST)
 
 **Task #1: MCP Repo Creation - COMPLETED ✅**
+
 - Session: 5a242ffa
 - PR: https://github.com/preset-io/agor/pull/536
 - Outcome: Successfully created PR with MCP tools for repository creation
@@ -370,6 +377,7 @@ Finally, the agent composed a summary and sent it to the parent session (via cal
 > **HEARTBEAT - 2026-02-03 20:55 PST**
 >
 > All 3 delegated tasks completed successfully:
+>
 > - MCP Repo Creation → PR #536 ✅
 > - Session Defaults Fix → PR #535 ✅
 > - Git Worktree Permissions → PR #537 ✅
@@ -399,6 +407,7 @@ Let's talk about what actually happened.
 ### Bootstrap Complete in One Session
 
 The agent:
+
 - Established identity
 - Learned about the user
 - Set up the board
@@ -461,21 +470,21 @@ That's intelligence.
 
 ## Comparing to Standalone OpenClaw
 
-| Feature | OpenClaw | Agor-OpenClaw |
-|---------|----------|---------------|
-| **Agent identity** | ✅ SOUL.md | ✅ SOUL.md |
-| **Persistent memory** | ✅ MEMORY.md + daily logs | ✅ MEMORY.md + daily logs |
-| **Self-improvement** | ✅ Modifies own files | ✅ Modifies own files + commits to git |
-| **Task tracking** | ✅ taskr integration | ✅ Agor worktrees + sessions |
-| **Visibility** | ❌ Chat interface only | ✅ Spatial canvas, real-time |
-| **Multi-agent** | ❌ Single agent | ✅ Spawn subsessions, session trees |
-| **Introspection** | ❌ Limited | ✅ Full session inspection |
-| **State backup** | ❌ Local files | ✅ Git-tracked, version-controlled |
-| **Workflow automation** | ❌ Skills only | ✅ Zones, triggers, templates |
-| **Team collaboration** | ❌ Single-user | ✅ Multi-user with RBAC |
-| **Sandboxing & permissions** | ⚠️ Manual configuration | ✅ SDK-level sandboxing (Claude/Codex/Gemini) |
-| **Repository management** | ❌ Manual tracking | ✅ Structured worktree lifecycle |
-| **Dev environments** | ❌ Manual setup | ✅ One-click via `.agor.yml` |
+| Feature                      | OpenClaw                  | Agor-OpenClaw                                 |
+| ---------------------------- | ------------------------- | --------------------------------------------- |
+| **Agent identity**           | ✅ SOUL.md                | ✅ SOUL.md                                    |
+| **Persistent memory**        | ✅ MEMORY.md + daily logs | ✅ MEMORY.md + daily logs                     |
+| **Self-improvement**         | ✅ Modifies own files     | ✅ Modifies own files + commits to git        |
+| **Task tracking**            | ✅ taskr integration      | ✅ Agor worktrees + sessions                  |
+| **Visibility**               | ❌ Chat interface only    | ✅ Spatial canvas, real-time                  |
+| **Multi-agent**              | ❌ Single agent           | ✅ Spawn subsessions, session trees           |
+| **Introspection**            | ❌ Limited                | ✅ Full session inspection                    |
+| **State backup**             | ❌ Local files            | ✅ Git-tracked, version-controlled            |
+| **Workflow automation**      | ❌ Skills only            | ✅ Zones, triggers, templates                 |
+| **Team collaboration**       | ❌ Single-user            | ✅ Multi-user with RBAC                       |
+| **Sandboxing & permissions** | ⚠️ Manual configuration   | ✅ SDK-level sandboxing (Claude/Codex/Gemini) |
+| **Repository management**    | ❌ Manual tracking        | ✅ Structured worktree lifecycle              |
+| **Dev environments**         | ❌ Manual setup           | ✅ One-click via `.agor.yml`                  |
 
 Both frameworks share the core insight: **agents need infrastructure for continuity.**
 

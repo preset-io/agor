@@ -112,12 +112,12 @@ Open Slack, find your bot under Apps, and send it a message. You should see syst
 
 Each channel can define its own agent configuration, overriding the user's defaults:
 
-| Setting | Description | Default |
-|---------|-------------|---------|
-| **Agent** | Which coding tool to use (Claude Code, Codex, Gemini, OpenCode) | Claude Code |
-| **Model** | Model alias or specific model ID | User's default |
+| Setting             | Description                                                            | Default         |
+| ------------------- | ---------------------------------------------------------------------- | --------------- |
+| **Agent**           | Which coding tool to use (Claude Code, Codex, Gemini, OpenCode)        | Claude Code     |
+| **Model**           | Model alias or specific model ID                                       | User's default  |
 | **Permission Mode** | How the agent handles tool approvals (trust, auto, supervised, manual) | Agent's default |
-| **MCP Servers** | Which MCP servers the agent can access | None |
+| **MCP Servers**     | Which MCP servers the agent can access                                 | None            |
 
 The gateway resolves configuration with a fallback chain: **channel config** > **user defaults** > **system defaults**. This means you only need to configure what you want to override.
 

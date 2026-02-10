@@ -278,7 +278,7 @@ describeIntegration('MCP Tools - Repository Tools', () => {
     // Using a small, public test repository
     const result = await callMCPTool('agor_repos_create_remote', {
       url: 'https://github.com/anthropics/anthropic-sdk-typescript.git',
-      slug: 'test/sdk-clone-' + Date.now(),
+      slug: `test/sdk-clone-${Date.now()}`,
     });
 
     expect(result).toHaveProperty('status');
@@ -448,7 +448,7 @@ describeIntegration('MCP Tools - Board Tools', () => {
     expect(metadataUpdate.board.icon).toBe('🧪');
 
     // Test creating/updating zones
-    const testZoneId = 'test-zone-' + Date.now();
+    const testZoneId = `test-zone-${Date.now()}`;
     const zonesUpdate = await callMCPTool('agor_boards_update', {
       boardId,
       upsertObjects: {
