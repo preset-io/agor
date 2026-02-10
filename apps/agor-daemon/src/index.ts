@@ -4207,8 +4207,8 @@ async function main() {
 
         targetTasksArray = [...runningTasks, ...awaitingTasks];
 
-        // If this is a retry, also check for STOPPING tasks
-        if (isRetry) {
+        // If this is a retry, also check for STOPPING tasks, but only as fallback
+        if (isRetry && targetTasksArray.length === 0) {
           const stoppingResult = await tasksService.find({
             query: {
               session_id: id,
@@ -4220,7 +4220,7 @@ async function main() {
           const stoppingTasks = isPaginated(stoppingFindResult)
             ? stoppingFindResult.data
             : stoppingFindResult;
-          targetTasksArray = [...targetTasksArray, ...stoppingTasks];
+          targetTasksArray = stoppingTasks;
         }
 
         if (targetTasksArray.length === 0) {
@@ -4230,10 +4230,18 @@ async function main() {
           };
         }
 
-        const latestTask = targetTasksArray[targetTasksArray.length - 1];
+        // Sort tasks by most recent activity (started_at or created_at) to ensure deterministic selection
+        targetTasksArray.sort((a, b) => {
+          const timeA = new Date(a.started_at || a.created_at).getTime();
+          const timeB = new Date(b.started_at || b.created_at).getTime();
+          return timeB - timeA; // Most recent first
+        });
+
+        const latestTask = targetTasksArray[0];
 
         // PHASE 1: Atomically update task AND session to STOPPING
-        // Skip this phase for retries since status is already STOPPING
+        // Skip task/session transition for retries, but re-assert ready_for_prompt
+        let didTransitionToStopping = false;
         if (!isRetry) {
           try {
             // Update task status to STOPPING
@@ -4250,11 +4258,25 @@ async function main() {
               },
               params
             );
+            didTransitionToStopping = true;
           } catch (error) {
             return {
               success: false,
               reason: `Failed to update status: ${error instanceof Error ? error.message : 'Unknown error'}`,
             };
+          }
+        } else {
+          // For retries, re-assert ready_for_prompt to ensure consistency
+          try {
+            await app.service('sessions').patch(
+              id,
+              {
+                ready_for_prompt: false,
+              },
+              params
+            );
+          } catch (error) {
+            console.warn(`⚠️  [Daemon] Failed to re-assert ready_for_prompt on retry:`, error);
           }
         }
 
@@ -4269,7 +4291,8 @@ async function main() {
         );
 
         // PHASE 3: Handle failed stop (revert to RUNNING)
-        if (!result.success) {
+        // Only revert if WE transitioned to STOPPING (not on retries of already-STOPPING sessions)
+        if (!result.success && didTransitionToStopping) {
           try {
             await tasksService.patch(latestTask.task_id, {
               status: TaskStatus.RUNNING,

@@ -136,6 +136,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const [spawnModalOpen, setSpawnModalOpen] = React.useState(false);
   const [uploadModalOpen, setUploadModalOpen] = React.useState(false);
   const [droppedFiles, setDroppedFiles] = React.useState<File[]>([]);
+  const [stopRequestInFlight, setStopRequestInFlight] = React.useState(false);
 
   const currentUser = currentUserId ? userById.get(currentUserId) || null : null;
   const { tasks } = useTasks(client, session?.session_id || null, currentUser, open);
@@ -353,18 +354,21 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   };
 
   const handleStop = async () => {
-    if (!session || !client) return;
+    if (!session || !client || stopRequestInFlight) return;
 
+    // Show feedback immediately if this is a retry
+    if (isStopping) {
+      message.info('Retrying stop request...');
+    }
+
+    setStopRequestInFlight(true);
     try {
       await client.service(`sessions/${session.session_id}/stop`).create({});
-
-      // If this is a retry (session already stopping), show feedback
-      if (isStopping) {
-        message.info('Retrying stop request...');
-      }
     } catch (error) {
       console.error('Failed to stop execution:', error);
       message.error('Failed to stop execution. You can try again.');
+    } finally {
+      setStopRequestInFlight(false);
     }
   };
 
@@ -649,19 +653,21 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             <Space.Compact>
               <Tooltip
                 title={
-                  isStopping
-                    ? 'Stopping... (Click again to retry if stuck)'
-                    : isRunning
-                      ? 'Stop Execution'
-                      : 'No active execution'
+                  stopRequestInFlight
+                    ? 'Sending stop request...'
+                    : isStopping
+                      ? 'Stopping... (Click again to retry if stuck)'
+                      : isRunning
+                        ? 'Stop Execution'
+                        : 'No active execution'
                 }
               >
                 <Button
                   danger
                   icon={<StopOutlined />}
                   onClick={handleStop}
-                  disabled={!isRunning}
-                  loading={isStopping}
+                  disabled={!isRunning || stopRequestInFlight}
+                  loading={isStopping && !stopRequestInFlight}
                 />
               </Tooltip>
               <Tooltip title="Advanced Spawn Options">
