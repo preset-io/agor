@@ -258,13 +258,25 @@ export class SlackConnector implements GatewayConnector {
       const isThreadReply = !!event.thread_ts;
       const isChannelMessage = event.channel_type === 'channel' || event.channel_type === 'group';
 
-      // CRITICAL: Prevent duplicates in channels/groups
-      // When bot ID lookup fails, botMentionPattern is null and we can't detect mentions
-      // Skip ALL message events in channels when this happens (use app_mention only)
-      // This applies regardless of require_mention setting
-      if (eventType === 'message' && isChannelMessage && !botMentionPattern) {
-        console.warn('[slack] Bot ID unavailable - skipping message event (will use app_mention)');
-        return;
+      // CRITICAL: Prevent duplicates in channels/groups when bot ID unavailable
+      // Strategy depends on require_mention setting:
+      // - If require_mention=true: prefer app_mention (Slack guarantees mention), skip message
+      // - If require_mention=false: prefer message (app_mention won't fire for non-mentions), skip app_mention
+      if (isChannelMessage && !botMentionPattern) {
+        if (eventType === 'message' && requireMention) {
+          // Can't detect mentions - let app_mention handle (which Slack guarantees is a mention)
+          console.warn(
+            '[slack] Bot ID unavailable, require_mention=true - skipping message event (will use app_mention)'
+          );
+          return;
+        }
+        if (eventType === 'app_mention' && !requireMention) {
+          // Avoid duplicates - prefer message events when mentions not required
+          console.warn(
+            '[slack] Bot ID unavailable, require_mention=false - skipping app_mention (will use message)'
+          );
+          return;
+        }
       }
 
       if (eventType === 'message' && isChannelMessage && botMentionPattern) {
@@ -318,31 +330,40 @@ export class SlackConnector implements GatewayConnector {
 
       if (requireMention) {
         if (!botMentionPattern || !botMentionReplacePattern) {
-          // SECURITY: Fail closed - if we can't verify mentions, reject messages
-          console.warn(
-            '[slack] Cannot enforce mention requirement (bot user ID not available). Rejecting message for safety.'
-          );
-          return;
-        }
-
-        const hasMention = botMentionPattern.test(messageText);
-
-        if (!hasMention) {
-          // Check if this is a thread reply that's allowed without mention
-          if (isThreadReply && allowThreadRepliesWithoutMention) {
-            // Thread reply without mention - allow for conversation flow
-            // NOTE: This means a reply in ANY thread (even without a mapping) will be processed
-            // The gateway service will create a new session if no mapping exists
-            // Set allow_thread_replies_without_mention: false for stricter security
+          // app_mention events are inherently mentions (Slack guarantees this)
+          // Allow them even without bot ID pattern
+          if (eventType === 'app_mention') {
+            // Mention is implied by event type - allow without pattern validation
+            // We can't strip the mention without the pattern, but that's acceptable
+            // (messageText stays as-is since we don't have botMentionReplacePattern)
           } else {
-            // Reject: top-level message or thread reply not allowed without mention
+            // SECURITY: Fail closed - if we can't verify mentions on message events, reject
+            console.warn(
+              '[slack] Cannot enforce mention requirement (bot user ID not available). Rejecting message event.'
+            );
             return;
           }
-        }
+        } else {
+          // Bot ID available - perform normal mention validation
+          const hasMention = botMentionPattern.test(messageText);
 
-        // Strip mention if present
-        if (hasMention) {
-          messageText = messageText.replace(botMentionReplacePattern, '').trim();
+          if (!hasMention) {
+            // Check if this is a thread reply that's allowed without mention
+            if (isThreadReply && allowThreadRepliesWithoutMention) {
+              // Thread reply without mention - allow for conversation flow
+              // NOTE: This means a reply in ANY thread (even without a mapping) will be processed
+              // The gateway service will create a new session if no mapping exists
+              // Set allow_thread_replies_without_mention: false for stricter security
+            } else {
+              // Reject: top-level message or thread reply not allowed without mention
+              return;
+            }
+          }
+
+          // Strip mention if present
+          if (hasMention) {
+            messageText = messageText.replace(botMentionReplacePattern, '').trim();
+          }
         }
       }
 

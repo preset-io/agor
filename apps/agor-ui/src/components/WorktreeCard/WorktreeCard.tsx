@@ -180,12 +180,22 @@ const WorktreeCardComponent = ({
     []
   );
 
+  // Check if session has gateway_source (presence check, not validation)
+  const hasGatewaySource = useCallback((session: Session): boolean => {
+    const context = session.custom_context as Record<string, unknown> | undefined;
+    return !!(
+      context &&
+      typeof context.gateway_source === 'object' &&
+      context.gateway_source !== null
+    );
+  }, []);
+
   // Helper to check if a session is from gateway (has denormalized gateway metadata)
   const isGatewaySession = useCallback(
     (session: Session): boolean => {
-      return !!getGatewaySource(session);
+      return hasGatewaySource(session);
     },
-    [getGatewaySource]
+    [hasGatewaySource]
   );
 
   // Separate sessions by type: manual, scheduled, and gateway
