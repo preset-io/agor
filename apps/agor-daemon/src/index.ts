@@ -311,6 +311,7 @@ import type {
   SessionsServiceImpl,
   TasksServiceImpl,
 } from './declarations';
+import { addBoardUrl, addSessionUrl } from './hooks/add-resource-urls';
 import { gatewayRouteHook } from './hooks/gateway-route';
 import { createBoardCommentsService } from './services/board-comments';
 import { createBoardObjectsService } from './services/board-objects';
@@ -2852,6 +2853,7 @@ async function main() {
     },
     after: {
       get: [
+        addSessionUrl(), // Add external URL to session
         async (context) => {
           // Regenerate MCP token for fetched session (deterministic, no DB storage)
           if (config.daemon?.mcpEnabled === false) {
@@ -2884,6 +2886,7 @@ async function main() {
           return context;
         },
       ],
+      find: [addSessionUrl()], // Add external URLs to all sessions in list
       create: [
         async (context) => {
           // Skip MCP setup if MCP server is disabled
@@ -3145,6 +3148,8 @@ async function main() {
       clone: [requireMinimumRole('member', 'clone boards')],
     },
     after: {
+      get: [addBoardUrl()], // Add external URL to board
+      find: [addBoardUrl()], // Add external URLs to all boards in list
       // Emit created events for custom methods that create boards
       // Custom methods don't automatically trigger app.publish(), so we emit manually
       clone: [

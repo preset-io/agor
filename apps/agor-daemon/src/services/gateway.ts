@@ -6,19 +6,11 @@
  * since it orchestrates across multiple repositories and services.
  */
 
-import { getBaseUrl } from '@agor/core/config';
 import { type Database, GatewayChannelRepository, ThreadSessionMapRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { GatewayConnector, InboundMessage } from '@agor/core/gateway';
 import { getConnector, hasConnector } from '@agor/core/gateway';
-import type {
-  AgenticToolName,
-  ChannelType,
-  GatewayChannel,
-  Session,
-  User,
-  Worktree,
-} from '@agor/core/types';
+import type { AgenticToolName, ChannelType, GatewayChannel, Session, User } from '@agor/core/types';
 import { getDefaultPermissionMode, SessionStatus } from '@agor/core/types';
 
 /**
@@ -224,22 +216,17 @@ export class GatewayService {
         metadata: data.metadata ?? null,
       });
 
-      // Generate session URL for external access
+      // Get session URL from created session (URL is added by after hook)
+      // Fetch the session to get the URL property
       let sessionUrl: string | null = null;
       try {
-        // Fetch worktree to get board_id (pass user for auth context)
-        const worktreesService = this.app.service('worktrees') as {
-          get: (id: string, params?: { user: User }) => Promise<Worktree>;
+        const sessionsService = this.app.service('sessions') as {
+          get: (id: string, params?: { user: User }) => Promise<Session & { url?: string | null }>;
         };
-        const worktree = await worktreesService.get(channel.target_worktree_id, { user });
-
-        if (worktree.board_id) {
-          const baseUrl = await getBaseUrl();
-          // Session URL format: /b/:boardId/:sessionId/
-          sessionUrl = `${baseUrl}/b/${worktree.board_id}/${sessionId}/`;
-        }
+        const sessionWithUrl = await sessionsService.get(sessionId, { user });
+        sessionUrl = sessionWithUrl.url || null;
       } catch (error) {
-        console.warn('[gateway] Failed to generate session URL:', error);
+        console.warn('[gateway] Failed to fetch session URL:', error);
       }
 
       // Send debug message with session URL

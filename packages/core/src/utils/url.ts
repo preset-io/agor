@@ -4,6 +4,48 @@
  * Provides shared helpers for validating and normalizing user-provided URLs.
  */
 
+import type { BoardID, SessionID } from '../types/id';
+
+/**
+ * Generate a session URL for external/user-facing links
+ *
+ * @param sessionId - Session ID
+ * @param boardId - Board ID (required for URL generation)
+ * @param baseUrl - Base URL from config (e.g., "https://agor.example.com")
+ * @returns Session URL or null if boardId is missing
+ *
+ * @example
+ * ```ts
+ * getSessionUrl('abc123', 'board456', 'https://agor.example.com')
+ * // => 'https://agor.example.com/b/board456/abc123/'
+ * ```
+ */
+export function getSessionUrl(
+  sessionId: SessionID,
+  boardId: BoardID | null | undefined,
+  baseUrl: string
+): string | null {
+  if (!boardId) return null;
+  return `${baseUrl}/b/${boardId}/${sessionId}/`;
+}
+
+/**
+ * Generate a board URL for external/user-facing links
+ *
+ * @param boardId - Board ID
+ * @param baseUrl - Base URL from config (e.g., "https://agor.example.com")
+ * @returns Board URL
+ *
+ * @example
+ * ```ts
+ * getBoardUrl('board456', 'https://agor.example.com')
+ * // => 'https://agor.example.com/b/board456/'
+ * ```
+ */
+export function getBoardUrl(boardId: BoardID, baseUrl: string): string {
+  return `${baseUrl}/b/${boardId}/`;
+}
+
 /**
  * Normalize an optional HTTP(S) URL string.
  *
