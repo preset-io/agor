@@ -9,11 +9,12 @@
  *     bot_token: string,
  *     app_token?: string,
  *     default_channel?: string,
- *     enable_channels?: boolean,      // Listen in public channels
- *     enable_groups?: boolean,        // Listen in private channels
- *     enable_mpim?: boolean,          // Listen in group DMs
- *     require_mention?: boolean,      // Require @mention in channels
- *     allowed_channel_ids?: string[]  // Channel ID whitelist
+ *     enable_channels?: boolean,                    // Listen in public channels
+ *     enable_groups?: boolean,                      // Listen in private channels
+ *     enable_mpim?: boolean,                        // Listen in group DMs
+ *     require_mention?: boolean,                    // Require @mention in channels
+ *     allow_thread_replies_without_mention?: boolean, // Allow thread replies without @mention (default: true)
+ *     allowed_channel_ids?: string[]                // Channel ID whitelist
  *   }
  *
  * Thread ID format: "{channel_id}-{thread_ts}"
@@ -36,6 +37,7 @@ interface SlackConfig {
   enable_groups?: boolean;
   enable_mpim?: boolean;
   require_mention?: boolean;
+  allow_thread_replies_without_mention?: boolean;
   allowed_channel_ids?: string[];
 }
 
@@ -182,6 +184,8 @@ export class SlackConnector implements GatewayConnector {
     const enableGroups = this.config.enable_groups ?? false;
     const enableMpim = this.config.enable_mpim ?? false;
     const requireMention = this.config.require_mention ?? true;
+    const allowThreadRepliesWithoutMention =
+      this.config.allow_thread_replies_without_mention ?? true;
 
     // Normalize allowed_channel_ids to string[] (handle malformed config)
     let allowedChannelIds: string[] | undefined;
@@ -257,7 +261,18 @@ export class SlackConnector implements GatewayConnector {
       if (eventType === 'message' && isChannelMessage) {
         // For all channel/group messages (including threads), check if it's a mention
         // If it's a mention, we'll handle it via app_mention event instead
-        const hasMention = botMentionPattern?.test(event.text ?? '');
+
+        // EDGE CASE: If bot ID lookup failed, botMentionPattern is null
+        // In this case, we can't detect mentions, so we must skip ALL message events
+        // in channels to avoid duplicates (prefer app_mention for safety)
+        if (!botMentionPattern) {
+          console.warn(
+            '[slack] Bot ID unavailable - skipping message event (will use app_mention)'
+          );
+          return;
+        }
+
+        const hasMention = botMentionPattern.test(event.text ?? '');
         if (hasMention) {
           return; // Will be handled by app_mention event
         }
@@ -314,15 +329,18 @@ export class SlackConnector implements GatewayConnector {
 
         const hasMention = botMentionPattern.test(messageText);
 
-        if (!hasMention && !isThreadReply) {
-          // Top-level messages MUST have mentions when require_mention is true
-          return;
+        if (!hasMention) {
+          // Check if this is a thread reply that's allowed without mention
+          if (isThreadReply && allowThreadRepliesWithoutMention) {
+            // Thread reply without mention - allow for conversation flow
+            // NOTE: This means a reply in ANY thread (even without a mapping) will be processed
+            // The gateway service will create a new session if no mapping exists
+            // Set allow_thread_replies_without_mention: false for stricter security
+          } else {
+            // Reject: top-level message or thread reply not allowed without mention
+            return;
+          }
         }
-
-        // For thread replies: we bypass mention requirement to allow conversation flow
-        // NOTE: This means a reply in ANY thread (even without a mapping) will be processed
-        // The gateway service will create a new session if no mapping exists
-        // This is a UX trade-off: better conversation flow vs stricter mention enforcement
 
         // Strip mention if present
         if (hasMention) {
@@ -335,7 +353,7 @@ export class SlackConnector implements GatewayConnector {
         : `${event.channel}-${event.ts}`;
 
       console.log(
-        `[slack] Inbound message: thread=${threadId} channel_type=${channelType} user=${event.user} text="${messageText.substring(0, 50)}${messageText.length > 50 ? '...' : ''}"`
+        `[slack] Inbound message: thread=${threadId} channel_type=${channelType} user=${event.user}`
       );
 
       callback({
