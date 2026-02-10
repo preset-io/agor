@@ -261,25 +261,60 @@ export class GatewayService {
     // Touch channel last_message_at
     await this.channelRepo.updateLastMessage(channel.id);
 
-    // 4. Send prompt via /sessions/:id/prompt — triggers full flow:
-    //    task creation, user message, git state, executor spawn
+    // 4. Check session status and route accordingly:
+    //    - If session is IDLE → send prompt directly via /sessions/:id/prompt
+    //    - If session is RUNNING/STOPPING → queue via /sessions/:id/messages/queue
+    //    This matches the UI behavior and respects the one-task-at-a-time constraint
     try {
-      const promptService = this.app.service('/sessions/:id/prompt') as {
-        create: (
-          data: { prompt: string; permissionMode?: string },
-          params: Record<string, unknown>
-        ) => Promise<Record<string, unknown>>;
+      // Re-fetch session to get current status
+      const sessionsService = this.app.service('sessions') as {
+        get: (id: string, params?: { user: User }) => Promise<Session>;
       };
+      const currentSession = await sessionsService.get(sessionId, { user });
 
-      // Internal call: pass user, omit provider to bypass auth hooks
-      await promptService.create(
-        { prompt: data.text, permissionMode },
-        { route: { id: sessionId }, user }
-      );
+      const isRunning =
+        currentSession.status === SessionStatus.RUNNING ||
+        currentSession.status === SessionStatus.STOPPING;
 
-      console.log(
-        `[gateway] Prompt sent to session ${sessionId.substring(0, 8)} via /sessions/:id/prompt`
-      );
+      if (isRunning) {
+        // Session is busy → queue the message
+        const queueService = this.app.service(`/sessions/${sessionId}/messages/queue`) as {
+          create: (
+            data: { prompt: string },
+            params: Record<string, unknown>
+          ) => Promise<{ success: boolean; message: { queue_position: number } }>;
+        };
+
+        const response = await queueService.create({ prompt: data.text }, { user });
+
+        console.log(
+          `[gateway] Message queued for session ${sessionId.substring(0, 8)} at position ${response.message.queue_position}`
+        );
+
+        this.sendDebugMessage(
+          channel,
+          data.thread_id,
+          `Session is busy, message queued at position ${response.message.queue_position}`
+        );
+      } else {
+        // Session is idle → send prompt directly
+        const promptService = this.app.service('/sessions/:id/prompt') as {
+          create: (
+            data: { prompt: string; permissionMode?: string },
+            params: Record<string, unknown>
+          ) => Promise<Record<string, unknown>>;
+        };
+
+        // Internal call: pass user, omit provider to bypass auth hooks
+        await promptService.create(
+          { prompt: data.text, permissionMode },
+          { route: { id: sessionId }, user }
+        );
+
+        console.log(
+          `[gateway] Prompt sent to session ${sessionId.substring(0, 8)} via /sessions/:id/prompt`
+        );
+      }
     } catch (error) {
       console.error('[gateway] Failed to send prompt to session:', error);
       this.sendDebugMessage(channel, data.thread_id, `Error sending prompt: ${error}`);
