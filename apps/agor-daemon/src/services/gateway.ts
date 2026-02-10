@@ -132,6 +132,22 @@ export class GatewayService {
       data.thread_id
     );
 
+    // SECURITY FIX: Reject unmapped thread replies that came through without mention.
+    // This prevents unauthorized session creation when users reply to random threads
+    // without explicitly mentioning the bot. Only threads where the bot was mentioned
+    // (creating a mapping) can continue conversations without mentions.
+    if (!existingMapping && data.metadata?.requires_mapping_verification) {
+      console.log(
+        `[gateway] REJECTED: Thread reply without mention in unmapped thread: channel=${channel.id.substring(0, 8)}, thread=${data.thread_id}`
+      );
+      this.sendDebugMessage(
+        channel,
+        data.thread_id,
+        'Please @mention me to start a new conversation in this thread.'
+      );
+      throw new Error('Thread requires explicit mention to create new session');
+    }
+
     let sessionId: string;
     let created = false;
 

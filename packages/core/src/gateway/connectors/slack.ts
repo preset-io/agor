@@ -185,7 +185,7 @@ export class SlackConnector implements GatewayConnector {
     const enableMpim = this.config.enable_mpim ?? false;
     const requireMention = this.config.require_mention ?? true;
     const allowThreadRepliesWithoutMention =
-      this.config.allow_thread_replies_without_mention ?? true;
+      this.config.allow_thread_replies_without_mention ?? false;
 
     // Normalize allowed_channel_ids to string[] (handle malformed config)
     let allowedChannelIds: string[] | undefined;
@@ -327,6 +327,7 @@ export class SlackConnector implements GatewayConnector {
 
       // Mention requirement handling
       let messageText = event.text ?? '';
+      let hasMention = false;
 
       if (requireMention) {
         if (!botMentionPattern || !botMentionReplacePattern) {
@@ -336,6 +337,7 @@ export class SlackConnector implements GatewayConnector {
             // Mention is implied by event type - allow without pattern validation
             // We can't strip the mention without the pattern, but that's acceptable
             // (messageText stays as-is since we don't have botMentionReplacePattern)
+            hasMention = true;
           } else {
             // SECURITY: Fail closed - if we can't verify mentions on message events, reject
             console.warn(
@@ -345,15 +347,16 @@ export class SlackConnector implements GatewayConnector {
           }
         } else {
           // Bot ID available - perform normal mention validation
-          const hasMention = botMentionPattern.test(messageText);
+          hasMention = botMentionPattern.test(messageText);
 
           if (!hasMention) {
             // Check if this is a thread reply that's allowed without mention
             if (isThreadReply && allowThreadRepliesWithoutMention) {
               // Thread reply without mention - allow for conversation flow
-              // NOTE: This means a reply in ANY thread (even without a mapping) will be processed
-              // The gateway service will create a new session if no mapping exists
-              // Set allow_thread_replies_without_mention: false for stricter security
+              // SECURITY: Gateway service verifies a mapping exists before creating sessions.
+              // Unmapped threads (where bot was never mentioned) will be rejected.
+              // Set allow_thread_replies_without_mention: true only if you want to allow
+              // continuing conversations in existing threads without requiring @mentions.
             } else {
               // Reject: top-level message or thread reply not allowed without mention
               return;
@@ -383,6 +386,7 @@ export class SlackConnector implements GatewayConnector {
         metadata: {
           channel: event.channel,
           channel_type: event.channel_type,
+          requires_mapping_verification: isThreadReply && !hasMention,
         },
       });
     });
