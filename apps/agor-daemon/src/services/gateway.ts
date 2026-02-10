@@ -6,11 +6,19 @@
  * since it orchestrates across multiple repositories and services.
  */
 
+import { getBaseUrl } from '@agor/core/config';
 import { type Database, GatewayChannelRepository, ThreadSessionMapRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { GatewayConnector, InboundMessage } from '@agor/core/gateway';
 import { getConnector, hasConnector } from '@agor/core/gateway';
-import type { AgenticToolName, ChannelType, GatewayChannel, Session, User } from '@agor/core/types';
+import type {
+  AgenticToolName,
+  ChannelType,
+  GatewayChannel,
+  Session,
+  User,
+  Worktree,
+} from '@agor/core/types';
 import { getDefaultPermissionMode, SessionStatus } from '@agor/core/types';
 
 /**
@@ -216,11 +224,31 @@ export class GatewayService {
         metadata: data.metadata ?? null,
       });
 
-      this.sendDebugMessage(
-        channel,
-        data.thread_id,
-        `Session ${sessionId.substring(0, 8)} created, sending prompt to agent...`
-      );
+      // Generate session URL for external access
+      let sessionUrl: string | null = null;
+      try {
+        // Fetch worktree to get board_id
+        const worktreesService = this.app.service('worktrees') as {
+          get: (id: string) => Promise<Worktree>;
+        };
+        const worktree = await worktreesService.get(channel.target_worktree_id);
+
+        if (worktree.board_id) {
+          const baseUrl = await getBaseUrl();
+          // Session URL format: /b/:boardId/:sessionId/
+          sessionUrl = `${baseUrl}/b/${worktree.board_id}/${sessionId}/`;
+        }
+      } catch (error) {
+        console.warn('[gateway] Failed to generate session URL:', error);
+      }
+
+      // Send debug message with session URL
+      const sessionIdShort = sessionId.substring(0, 8);
+      const message = sessionUrl
+        ? `Session created: ${sessionUrl}`
+        : `Session ${sessionIdShort} created, sending prompt to agent...`;
+
+      this.sendDebugMessage(channel, data.thread_id, message);
     }
 
     // Touch channel last_message_at

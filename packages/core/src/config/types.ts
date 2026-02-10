@@ -59,6 +59,25 @@ export interface AgorDaemonSettings {
    */
   public_url?: string;
 
+  /**
+   * Base URL for external/user-facing links (e.g., session URLs in Slack messages).
+   *
+   * Used to generate clickable URLs to sessions, boards, and other resources
+   * that are sent to external platforms like Slack, email, etc.
+   *
+   * Defaults to `http://localhost:{port}` in development.
+   * Should be set to your public domain in production (e.g., https://agor.example.com).
+   *
+   * Note: Should NOT include trailing slash.
+   *
+   * @example
+   * ```yaml
+   * daemon:
+   *   base_url: https://agor.sandbox.preset.zone
+   * ```
+   */
+  base_url?: string;
+
   /** Allow anonymous access (default: true for local mode) */
   allowAnonymous?: boolean;
 
