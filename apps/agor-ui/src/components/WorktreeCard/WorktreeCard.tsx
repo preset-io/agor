@@ -30,6 +30,7 @@ import { ToolIcon } from '../ToolIcon';
 import { buildSessionTree, type SessionTreeNode } from './buildSessionTree';
 
 const _WORKTREE_CARD_MAX_WIDTH = 600;
+const NOTES_MAX_LENGTH = 200; // Character limit for truncated notes
 
 // Inject CSS animation for pulsing glow effect
 if (typeof document !== 'undefined' && !document.getElementById('worktree-card-animations')) {
@@ -128,6 +129,9 @@ const WorktreeCardComponent = ({
 
   // Tree expansion state - track which nodes are expanded
   const [expandedKeys, setExpandedKeys] = useState<React.Key[]>([]);
+
+  // Notes expansion state
+  const [notesExpanded, setNotesExpanded] = useState(false);
 
   // Handle fork/spawn modal confirm
   const handleForkSpawnConfirm = async (config: string | Partial<SpawnConfig>) => {
@@ -450,6 +454,17 @@ const WorktreeCardComponent = ({
     return ensureColorVisible(zoneColor, isDarkMode, 50, 50);
   }, [zoneColor, isDarkMode]);
 
+  // Determine if notes should show "See more" button
+  const notesNeedTruncation = worktree.notes && worktree.notes.length > NOTES_MAX_LENGTH;
+  const displayedNotes = useMemo(() => {
+    if (!worktree.notes) return '';
+    if (!notesNeedTruncation || notesExpanded) return worktree.notes;
+    // Truncate at word boundary for cleaner display
+    const truncated = worktree.notes.slice(0, NOTES_MAX_LENGTH);
+    const lastSpace = truncated.lastIndexOf(' ');
+    return lastSpace > NOTES_MAX_LENGTH * 0.8 ? truncated.slice(0, lastSpace) + '...' : truncated + '...';
+  }, [worktree.notes, notesNeedTruncation, notesExpanded]);
+
   return (
     <Card
       style={{
@@ -618,12 +633,38 @@ const WorktreeCardComponent = ({
       {/* Notes */}
       {worktree.notes && (
         <div className="nodrag" style={{ marginBottom: 8 }}>
-          <MarkdownRenderer
-            content={worktree.notes}
-            style={{ fontSize: 12, color: token.colorTextSecondary }}
-            compact={true}
-            showControls={false}
-          />
+          <div
+            style={{
+              maxHeight: notesExpanded ? 'none' : '120px',
+              overflow: 'hidden',
+              transition: 'max-height 0.3s ease',
+            }}
+          >
+            <MarkdownRenderer
+              content={displayedNotes}
+              style={{ fontSize: 12, color: token.colorTextSecondary }}
+              compact={false}
+              showControls={false}
+            />
+          </div>
+          {notesNeedTruncation && (
+            <Button
+              type="link"
+              size="small"
+              onClick={(e) => {
+                e.stopPropagation();
+                setNotesExpanded(!notesExpanded);
+              }}
+              style={{
+                padding: 0,
+                height: 'auto',
+                fontSize: 12,
+                color: token.colorTextSecondary,
+              }}
+            >
+              {notesExpanded ? 'See less' : 'See more'}
+            </Button>
+          )}
         </div>
       )}
 
