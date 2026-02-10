@@ -14,7 +14,6 @@
  * - /b/550e8400/a1b2c3d4
  */
 
-import type { AgorClient } from '@agor/core/api';
 import { useCallback, useEffect, useRef } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 
@@ -36,8 +35,6 @@ export interface UseUrlStateOptions {
   onBoardChange: (boardIdOrSlug: string) => void;
   /** Callback when URL indicates a different session */
   onSessionChange: (sessionId: string | null) => void;
-  /** Feathers client for API calls */
-  client: AgorClient | null;
 }
 
 /**
@@ -58,7 +55,6 @@ export function useUrlState(options: UseUrlStateOptions) {
     sessionById,
     onBoardChange,
     onSessionChange,
-    client,
   } = options;
 
   const navigate = useNavigate();
@@ -136,10 +132,9 @@ export function useUrlState(options: UseUrlStateOptions) {
 
   /**
    * Resolve URL param to board ID
-   * Tries local cache first, then falls back to API if needed
    */
   const resolveBoardFromUrl = useCallback(
-    async (boardParam: string): Promise<string | null> => {
+    (boardParam: string): string | null => {
       // First, try to find by slug
       for (const board of boardById.values()) {
         if (board.slug === boardParam) {
@@ -156,22 +151,9 @@ export function useUrlState(options: UseUrlStateOptions) {
         }
       }
 
-      // If not found locally and we have a client, try API resolution
-      if (client) {
-        try {
-          const board = await client.service('boards').get(boardParam);
-          // Success! The board exists. Return its ID
-          return board.board_id;
-        } catch (error) {
-          // Board not found or other API error
-          console.warn(`Failed to resolve board from URL param "${boardParam}":`, error);
-          return null;
-        }
-      }
-
       return null;
     },
-    [boardById, client]
+    [boardById]
   );
 
   /**
@@ -230,9 +212,8 @@ export function useUrlState(options: UseUrlStateOptions) {
       return;
     }
 
-    // Only try to resolve if we have boards loaded (or we can try API)
-    // Allow API resolution even if boardById is empty
-    if (boardById.size === 0 && !client) {
+    // Only try to resolve if we have boards loaded
+    if (boardById.size === 0) {
       return;
     }
 
@@ -241,49 +222,43 @@ export function useUrlState(options: UseUrlStateOptions) {
       return;
     }
 
-    // Async resolution function
-    const resolveAndSync = async () => {
-      // Only sync from URL if the URL actually represents a different board/session
-      const resolvedBoardId = await resolveBoardFromUrl(urlBoardParam);
-      const resolvedSessionId = urlSessionParam ? resolveSessionFromShortId(urlSessionParam) : null;
+    // Only sync from URL if the URL actually represents a different board/session
+    const resolvedBoardId = resolveBoardFromUrl(urlBoardParam);
+    const resolvedSessionId = urlSessionParam ? resolveSessionFromShortId(urlSessionParam) : null;
 
-      // Track resolution status
-      if (resolvedBoardId) {
-        urlParamsResolvedRef.current.board = true;
+    // Track resolution status
+    if (resolvedBoardId) {
+      urlParamsResolvedRef.current.board = true;
+    }
+    if (!urlSessionParam || resolvedSessionId) {
+      urlParamsResolvedRef.current.session = true;
+    }
+
+    // Check if URL is different from current state (using refs)
+    const boardChanged = resolvedBoardId && resolvedBoardId !== currentBoardIdRef.current;
+    const sessionChanged = resolvedSessionId !== currentSessionIdRef.current;
+
+    if (boardChanged || sessionChanged) {
+      syncingRef.current = true;
+
+      if (boardChanged) {
+        onBoardChange(resolvedBoardId);
       }
-      if (!urlSessionParam || resolvedSessionId) {
-        urlParamsResolvedRef.current.session = true;
+
+      if (sessionChanged) {
+        onSessionChange(resolvedSessionId);
       }
 
-      // Check if URL is different from current state (using refs)
-      const boardChanged = resolvedBoardId && resolvedBoardId !== currentBoardIdRef.current;
-      const sessionChanged = resolvedSessionId !== currentSessionIdRef.current;
-
-      if (boardChanged || sessionChanged) {
-        syncingRef.current = true;
-
-        if (boardChanged) {
-          onBoardChange(resolvedBoardId);
-        }
-
-        if (sessionChanged) {
-          onSessionChange(resolvedSessionId);
-        }
-
-        // Reset sync flag after a tick to allow state updates
-        setTimeout(() => {
-          syncingRef.current = false;
-        }, 0);
-      }
-    };
-
-    resolveAndSync();
+      // Reset sync flag after a tick to allow state updates
+      setTimeout(() => {
+        syncingRef.current = false;
+      }, 0);
+    }
   }, [
     urlBoardParam,
     urlSessionParam,
     boardById.size,
     sessionById.size,
-    client,
     resolveBoardFromUrl,
     resolveSessionFromShortId,
     onBoardChange,

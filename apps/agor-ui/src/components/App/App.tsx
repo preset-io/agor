@@ -312,7 +312,6 @@ export const App: React.FC<AppProps> = ({
     currentSessionId: selectedSessionId,
     boardById,
     sessionById,
-    client,
     onBoardChange: (boardId) => {
       setCurrentBoardIdInternal(boardId);
     },

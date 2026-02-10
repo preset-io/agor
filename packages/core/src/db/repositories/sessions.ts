@@ -13,6 +13,7 @@ import { getSessionUrl } from '../../utils/url';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
 import {
+  boards,
   type SessionInsert,
   type SessionRow,
   sessions,
@@ -45,15 +46,21 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
    *
    * @param row - Database row
    * @param worktreeBoardId - Board ID from worktree (if JOINed)
+   * @param boardSlug - Board slug from boards table (if JOINed)
    * @param baseUrl - Base URL for generating session URLs
    */
-  private rowToSession(row: SessionRow, worktreeBoardId?: UUID | null, baseUrl?: string): Session {
+  private rowToSession(
+    row: SessionRow,
+    worktreeBoardId?: UUID | null,
+    boardSlug?: string | null,
+    baseUrl?: string
+  ): Session {
     const genealogyData = row.data.genealogy || { children: [] };
     const sessionId = row.session_id as UUID;
     const boardId = worktreeBoardId ?? null;
 
     // Compute URL if baseUrl provided, otherwise null
-    const url = baseUrl ? getSessionUrl(sessionId, boardId, baseUrl) : null;
+    const url = baseUrl ? getSessionUrl(sessionId, boardId, boardSlug, baseUrl) : null;
 
     return {
       session_id: sessionId,
@@ -194,10 +201,11 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
 
       const baseUrl = await getBaseUrl();
 
-      // LEFT JOIN with worktrees to get board_id
+      // LEFT JOIN with worktrees and boards to get board_id and slug
       const result = await select(this.db)
         .from(sessions)
         .leftJoin(worktrees, eq(sessions.worktree_id, worktrees.worktree_id))
+        .leftJoin(boards, eq(worktrees.board_id, boards.board_id))
         .where(eq(sessions.session_id, insertData.session_id))
         .one();
 
@@ -207,8 +215,9 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
 
       const sessionRow = result.sessions;
       const boardId = (result.worktrees?.board_id ?? null) as UUID | null;
+      const boardSlug = result.boards?.slug ?? null;
 
-      return this.rowToSession(sessionRow, boardId, baseUrl);
+      return this.rowToSession(sessionRow, boardId, boardSlug, baseUrl);
     } catch (error) {
       if (error instanceof RepositoryError) throw error;
       throw new RepositoryError(
@@ -229,10 +238,11 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       const fullId = await this.resolveId(id);
       const baseUrl = await getBaseUrl();
 
-      // LEFT JOIN with worktrees to get board_id in a single query
+      // LEFT JOIN with worktrees and boards to get board_id and slug in a single query
       const result = await select(this.db)
         .from(sessions)
         .leftJoin(worktrees, eq(sessions.worktree_id, worktrees.worktree_id))
+        .leftJoin(boards, eq(worktrees.board_id, boards.board_id))
         .where(eq(sessions.session_id, fullId))
         .one();
 
@@ -240,11 +250,12 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         return null;
       }
 
-      // Extract session row and board_id from JOIN result
+      // Extract session row, board_id, and slug from JOIN result
       const sessionRow = result.sessions;
       const boardId = (result.worktrees?.board_id ?? null) as UUID | null;
+      const boardSlug = result.boards?.slug ?? null;
 
-      return this.rowToSession(sessionRow, boardId, baseUrl);
+      return this.rowToSession(sessionRow, boardId, boardSlug, baseUrl);
     } catch (error) {
       if (error instanceof EntityNotFoundError) return null;
       if (error instanceof AmbiguousIdError) throw error;
@@ -267,13 +278,19 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       const results = await select(this.db)
         .from(sessions)
         .leftJoin(worktrees, eq(sessions.worktree_id, worktrees.worktree_id))
+        .leftJoin(boards, eq(worktrees.board_id, boards.board_id))
         .all();
 
       return results.map(
-        (result: { sessions: SessionRow; worktrees?: { board_id?: string } | null }) => {
+        (result: {
+          sessions: SessionRow;
+          worktrees?: { board_id?: string } | null;
+          boards?: { slug?: string | null } | null;
+        }) => {
           const sessionRow = result.sessions;
           const boardId = (result.worktrees?.board_id ?? null) as UUID | null;
-          return this.rowToSession(sessionRow, boardId, baseUrl);
+          const boardSlug = result.boards?.slug ?? null;
+          return this.rowToSession(sessionRow, boardId, boardSlug, baseUrl);
         }
       );
     } catch (error) {
@@ -296,14 +313,20 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       const results = await select(this.db)
         .from(sessions)
         .leftJoin(worktrees, eq(sessions.worktree_id, worktrees.worktree_id))
+        .leftJoin(boards, eq(worktrees.board_id, boards.board_id))
         .where(eq(sessions.status, status))
         .all();
 
       return results.map(
-        (result: { sessions: SessionRow; worktrees?: { board_id?: string } | null }) => {
+        (result: {
+          sessions: SessionRow;
+          worktrees?: { board_id?: string } | null;
+          boards?: { slug?: string | null } | null;
+        }) => {
           const sessionRow = result.sessions;
           const boardId = (result.worktrees?.board_id ?? null) as UUID | null;
-          return this.rowToSession(sessionRow, boardId, baseUrl);
+          const boardSlug = result.boards?.slug ?? null;
+          return this.rowToSession(sessionRow, boardId, boardSlug, baseUrl);
         }
       );
     } catch (error) {
@@ -328,15 +351,21 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       const results = await select(this.db)
         .from(sessions)
         .leftJoin(worktrees, eq(sessions.worktree_id, worktrees.worktree_id))
+        .leftJoin(boards, eq(worktrees.board_id, boards.board_id))
         .where(eq(sessions.board_id, boardId))
         .all();
 
       return results.map(
-        (result: { sessions: SessionRow; worktrees?: { board_id?: string } | null }) => {
+        (result: {
+          sessions: SessionRow;
+          worktrees?: { board_id?: string } | null;
+          boards?: { slug?: string | null } | null;
+        }) => {
           const sessionRow = result.sessions;
           // We know board_id from the filter, but still get it from JOIN for consistency
           const board_id = (result.worktrees?.board_id ?? null) as UUID | null;
-          return this.rowToSession(sessionRow, board_id, baseUrl);
+          const boardSlug = result.boards?.slug ?? null;
+          return this.rowToSession(sessionRow, board_id, boardSlug, baseUrl);
         }
       );
     } catch (error) {
@@ -364,6 +393,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       const results = await select(this.db)
         .from(sessions)
         .leftJoin(worktrees, eq(sessions.worktree_id, worktrees.worktree_id))
+        .leftJoin(boards, eq(worktrees.board_id, boards.board_id))
         .where(
           or(
             sql`${jsonExtract(this.db, sessions.data, 'genealogy.parent_session_id')} = ${fullId}`,
@@ -373,10 +403,15 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         .all();
 
       return results.map(
-        (result: { sessions: SessionRow; worktrees?: { board_id?: string } | null }) => {
+        (result: {
+          sessions: SessionRow;
+          worktrees?: { board_id?: string } | null;
+          boards?: { slug?: string | null } | null;
+        }) => {
           const sessionRow = result.sessions;
           const boardId = (result.worktrees?.board_id ?? null) as UUID | null;
-          return this.rowToSession(sessionRow, boardId, baseUrl);
+          const boardSlug = result.boards?.slug ?? null;
+          return this.rowToSession(sessionRow, boardId, boardSlug, baseUrl);
         }
       );
     } catch (error) {
@@ -453,11 +488,12 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       // Use transaction to make read-merge-write atomic
       // This prevents race conditions where another update happens between read and write
       const result = await this.db.transaction(async (tx) => {
-        // STEP 1: Read current session with worktree JOIN (within transaction)
+        // STEP 1: Read current session with worktree and board JOINs (within transaction)
         // biome-ignore lint/suspicious/noExplicitAny: Transaction context requires type assertion for database wrapper functions
         const currentResult = await select(tx as any)
           .from(sessions)
           .leftJoin(worktrees, eq(sessions.worktree_id, worktrees.worktree_id))
+          .leftJoin(boards, eq(worktrees.board_id, boards.board_id))
           .where(eq(sessions.session_id, fullId))
           .one();
 
@@ -467,7 +503,8 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
 
         const currentRow = currentResult.sessions;
         const boardId = (currentResult.worktrees?.board_id ?? null) as UUID | null;
-        const current = this.rowToSession(currentRow, boardId, baseUrl);
+        const boardSlug = currentResult.boards?.slug ?? null;
+        const current = this.rowToSession(currentRow, boardId, boardSlug, baseUrl);
 
         // STEP 2: Deep merge updates into current session (in memory)
         // IMPORTANT: Receiver-side merge for nested objects (permission_config, model_config, etc.)
@@ -570,10 +607,11 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
   async findAccessibleSessions(userId: UUID): Promise<Session[]> {
     const baseUrl = await getBaseUrl();
 
-    // Get both session columns AND worktree board_id
+    // Get both session columns AND worktree board_id and board slug
     const results = await select(this.db)
       .from(sessions)
       .innerJoin(worktrees, eq(sessions.worktree_id, worktrees.worktree_id))
+      .leftJoin(boards, eq(worktrees.board_id, boards.board_id))
       .leftJoin(
         worktreeOwners,
         and(
@@ -590,10 +628,15 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       .all();
 
     return results.map(
-      (result: { sessions: SessionRow; worktrees?: { board_id?: string } | null }) => {
+      (result: {
+        sessions: SessionRow;
+        worktrees?: { board_id?: string } | null;
+        boards?: { slug?: string | null } | null;
+      }) => {
         const sessionRow = result.sessions;
         const boardId = (result.worktrees?.board_id ?? null) as UUID | null;
-        return this.rowToSession(sessionRow, boardId, baseUrl);
+        const boardSlug = result.boards?.slug ?? null;
+        return this.rowToSession(sessionRow, boardId, boardSlug, baseUrl);
       }
     );
   }

@@ -44,12 +44,13 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
     };
 
     const boardId = row.board_id as UUID;
-    const url = baseUrl ? getBoardUrl(boardId, baseUrl) : '';
+    const slug = row.slug !== null ? row.slug : undefined;
+    const url = baseUrl ? getBoardUrl(boardId, slug, baseUrl) : '';
 
     return {
       board_id: boardId,
       name: row.name,
-      slug: row.slug !== null ? row.slug : undefined,
+      slug,
       created_at: new Date(row.created_at).toISOString(),
       last_updated: row.updated_at
         ? new Date(row.updated_at).toISOString()
