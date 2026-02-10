@@ -258,20 +258,18 @@ export class SlackConnector implements GatewayConnector {
       const isThreadReply = !!event.thread_ts;
       const isChannelMessage = event.channel_type === 'channel' || event.channel_type === 'group';
 
-      if (eventType === 'message' && isChannelMessage) {
+      // CRITICAL: Prevent duplicates in channels/groups
+      // When bot ID lookup fails, botMentionPattern is null and we can't detect mentions
+      // Skip ALL message events in channels when this happens (use app_mention only)
+      // This applies regardless of require_mention setting
+      if (eventType === 'message' && isChannelMessage && !botMentionPattern) {
+        console.warn('[slack] Bot ID unavailable - skipping message event (will use app_mention)');
+        return;
+      }
+
+      if (eventType === 'message' && isChannelMessage && botMentionPattern) {
         // For all channel/group messages (including threads), check if it's a mention
         // If it's a mention, we'll handle it via app_mention event instead
-
-        // EDGE CASE: If bot ID lookup failed, botMentionPattern is null
-        // In this case, we can't detect mentions, so we must skip ALL message events
-        // in channels to avoid duplicates (prefer app_mention for safety)
-        if (!botMentionPattern) {
-          console.warn(
-            '[slack] Bot ID unavailable - skipping message event (will use app_mention)'
-          );
-          return;
-        }
-
         const hasMention = botMentionPattern.test(event.text ?? '');
         if (hasMention) {
           return; // Will be handled by app_mention event

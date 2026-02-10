@@ -144,10 +144,49 @@ const WorktreeCardComponent = ({
     }
   };
 
+  // Type guard for gateway source metadata
+  const getGatewaySource = useCallback(
+    (
+      session: Session
+    ):
+      | { channel_id: string; channel_name: string; channel_type: string; thread_id: string }
+      | undefined => {
+      const context = session.custom_context as Record<string, unknown> | undefined;
+      if (!context) return undefined;
+
+      const source = context.gateway_source;
+      if (
+        typeof source === 'object' &&
+        source !== null &&
+        'channel_id' in source &&
+        'channel_name' in source &&
+        'channel_type' in source &&
+        'thread_id' in source &&
+        typeof source.channel_id === 'string' &&
+        typeof source.channel_name === 'string' &&
+        typeof source.channel_type === 'string' &&
+        typeof source.thread_id === 'string'
+      ) {
+        return source as {
+          channel_id: string;
+          channel_name: string;
+          channel_type: string;
+          thread_id: string;
+        };
+      }
+
+      return undefined;
+    },
+    []
+  );
+
   // Helper to check if a session is from gateway (has denormalized gateway metadata)
-  const isGatewaySession = useCallback((session: Session): boolean => {
-    return !!(session.custom_context as Record<string, unknown> | undefined)?.gateway_source;
-  }, []);
+  const isGatewaySession = useCallback(
+    (session: Session): boolean => {
+      return !!getGatewaySource(session);
+    },
+    [getGatewaySource]
+  );
 
   // Separate sessions by type: manual, scheduled, and gateway
   const manualSessions = useMemo(
@@ -457,15 +496,7 @@ const WorktreeCardComponent = ({
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
       {gatewaySessions.map((session) => {
         // Extract denormalized gateway metadata (stamped at session creation)
-        const gatewaySource = (session.custom_context as Record<string, unknown> | undefined)
-          ?.gateway_source as
-          | {
-              channel_id: string;
-              channel_name: string;
-              channel_type: string;
-              thread_id: string;
-            }
-          | undefined;
+        const gatewaySource = getGatewaySource(session);
 
         return (
           <div
@@ -494,14 +525,18 @@ const WorktreeCardComponent = ({
                 >
                   {getSessionDisplayTitle(session, { includeAgentFallback: true })}
                 </Typography.Text>
-                {gatewaySource && (
-                  <div style={{ alignSelf: 'flex-start' }}>
+                <div style={{ alignSelf: 'flex-start' }}>
+                  {gatewaySource ? (
                     <ChannelPill
                       channelType={gatewaySource.channel_type}
                       channelName={gatewaySource.channel_name}
                     />
-                  </div>
-                )}
+                  ) : (
+                    <Typography.Text type="secondary" style={{ fontSize: 11, fontStyle: 'italic' }}>
+                      (Gateway - metadata unavailable)
+                    </Typography.Text>
+                  )}
+                </div>
               </div>
             </Space>
 
