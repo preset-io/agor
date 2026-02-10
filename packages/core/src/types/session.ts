@@ -149,7 +149,7 @@ export interface Session {
    * Format: {baseUrl}/b/{boardId}/{sessionId}/
    * Null if the worktree is not on a board.
    */
-  url?: string | null;
+  url: string | null;
 
   // Git state
   git_state: {

@@ -183,7 +183,7 @@ export interface Board {
    * Computed property added by API hooks.
    * Format: {baseUrl}/b/{boardId}/
    */
-  url?: string;
+  url: string;
 }
 
 /**

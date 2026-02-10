@@ -6,19 +6,10 @@
 
 import type { Session, UUID } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
-import {
-  and,
-  desc,
-  eq,
-  getTableColumns,
-  inArray,
-  isNotNull,
-  isNull,
-  like,
-  or,
-  sql,
-} from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, like, or, sql } from 'drizzle-orm';
+import { getBaseUrl } from '../../config/config-manager';
 import { formatShortId, generateId } from '../../lib/ids';
+import { getSessionUrl } from '../../utils/url';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
 import {
@@ -51,12 +42,21 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
 
   /**
    * Convert database row to Session type
+   *
+   * @param row - Database row
+   * @param worktreeBoardId - Board ID from worktree (if JOINed)
+   * @param baseUrl - Base URL for generating session URLs
    */
-  private rowToSession(row: SessionRow, worktreeBoardId?: UUID | null): Session {
+  private rowToSession(row: SessionRow, worktreeBoardId?: UUID | null, baseUrl?: string): Session {
     const genealogyData = row.data.genealogy || { children: [] };
+    const sessionId = row.session_id as UUID;
+    const boardId = worktreeBoardId ?? null;
+
+    // Compute URL if baseUrl provided, otherwise null
+    const url = baseUrl ? getSessionUrl(sessionId, boardId, baseUrl) : null;
 
     return {
-      session_id: row.session_id as UUID,
+      session_id: sessionId,
       status: row.status,
       agentic_tool: row.agentic_tool,
       created_at: new Date(row.created_at).toISOString(),
@@ -66,7 +66,8 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       created_by: row.created_by,
       unix_username: row.unix_username || null,
       worktree_id: row.worktree_id as UUID,
-      worktree_board_id: worktreeBoardId ?? undefined,
+      worktree_board_id: boardId,
+      url,
       ...row.data,
       tasks: row.data.tasks.map((id) => id as UUID),
       genealogy: {
@@ -191,16 +192,23 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       const insertData = this.sessionToInsert(data);
       await insert(this.db, sessions).values(insertData).run();
 
-      const row = await select(this.db)
+      const baseUrl = await getBaseUrl();
+
+      // LEFT JOIN with worktrees to get board_id
+      const result = await select(this.db)
         .from(sessions)
+        .leftJoin(worktrees, eq(sessions.worktree_id, worktrees.worktree_id))
         .where(eq(sessions.session_id, insertData.session_id))
         .one();
 
-      if (!row) {
+      if (!result) {
         throw new RepositoryError('Failed to retrieve created session');
       }
 
-      return this.rowToSession(row);
+      const sessionRow = result.sessions;
+      const boardId = (result.worktrees?.board_id ?? null) as UUID | null;
+
+      return this.rowToSession(sessionRow, boardId, baseUrl);
     } catch (error) {
       if (error instanceof RepositoryError) throw error;
       throw new RepositoryError(
@@ -213,12 +221,13 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
   /**
    * Find session by ID (supports short ID)
    *
-   * Automatically LEFT JOINs with worktrees table to populate worktree_board_id.
+   * Automatically LEFT JOINs with worktrees table to populate worktree_board_id and url.
    * This avoids N+1 queries when URL generation is needed.
    */
   async findById(id: string): Promise<Session | null> {
     try {
       const fullId = await this.resolveId(id);
+      const baseUrl = await getBaseUrl();
 
       // LEFT JOIN with worktrees to get board_id in a single query
       const result = await select(this.db)
@@ -235,7 +244,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       const sessionRow = result.sessions;
       const boardId = (result.worktrees?.board_id ?? null) as UUID | null;
 
-      return this.rowToSession(sessionRow, boardId);
+      return this.rowToSession(sessionRow, boardId, baseUrl);
     } catch (error) {
       if (error instanceof EntityNotFoundError) return null;
       if (error instanceof AmbiguousIdError) throw error;
@@ -248,11 +257,25 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
 
   /**
    * Find all sessions
+   *
+   * LEFT JOINs with worktrees to populate board_id and url in a single query.
    */
   async findAll(): Promise<Session[]> {
     try {
-      const rows = await select(this.db).from(sessions).all();
-      return rows.map((row: SessionRow) => this.rowToSession(row));
+      const baseUrl = await getBaseUrl();
+
+      const results = await select(this.db)
+        .from(sessions)
+        .leftJoin(worktrees, eq(sessions.worktree_id, worktrees.worktree_id))
+        .all();
+
+      return results.map(
+        (result: { sessions: SessionRow; worktrees?: { board_id?: string } | null }) => {
+          const sessionRow = result.sessions;
+          const boardId = (result.worktrees?.board_id ?? null) as UUID | null;
+          return this.rowToSession(sessionRow, boardId, baseUrl);
+        }
+      );
     } catch (error) {
       throw new RepositoryError(
         `Failed to find all sessions: ${error instanceof Error ? error.message : String(error)}`,
@@ -263,12 +286,26 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
 
   /**
    * Find sessions by status
+   *
+   * LEFT JOINs with worktrees to populate board_id and url.
    */
   async findByStatus(status: Session['status']): Promise<Session[]> {
     try {
-      const rows = await select(this.db).from(sessions).where(eq(sessions.status, status)).all();
+      const baseUrl = await getBaseUrl();
 
-      return rows.map((row: SessionRow) => this.rowToSession(row));
+      const results = await select(this.db)
+        .from(sessions)
+        .leftJoin(worktrees, eq(sessions.worktree_id, worktrees.worktree_id))
+        .where(eq(sessions.status, status))
+        .all();
+
+      return results.map(
+        (result: { sessions: SessionRow; worktrees?: { board_id?: string } | null }) => {
+          const sessionRow = result.sessions;
+          const boardId = (result.worktrees?.board_id ?? null) as UUID | null;
+          return this.rowToSession(sessionRow, boardId, baseUrl);
+        }
+      );
     } catch (error) {
       throw new RepositoryError(
         `Failed to find sessions by status: ${error instanceof Error ? error.message : String(error)}`,
@@ -279,14 +316,29 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
 
   /**
    * Find sessions by board ID
+   *
+   * Uses materialized board_id column for O(1) indexed lookup.
+   * LEFT JOINs with worktrees to populate url (board_id already known from filter).
    */
   async findByBoard(boardId: string): Promise<Session[]> {
     try {
-      // OPTIMIZED: Uses materialized board_id column for O(1) indexed lookup
-      // Previously loaded ALL sessions and filtered in-memory (O(n) full table scan)
-      const rows = await select(this.db).from(sessions).where(eq(sessions.board_id, boardId)).all();
+      const baseUrl = await getBaseUrl();
 
-      return rows.map((row: SessionRow) => this.rowToSession(row));
+      // Use materialized board_id column for indexed lookup
+      const results = await select(this.db)
+        .from(sessions)
+        .leftJoin(worktrees, eq(sessions.worktree_id, worktrees.worktree_id))
+        .where(eq(sessions.board_id, boardId))
+        .all();
+
+      return results.map(
+        (result: { sessions: SessionRow; worktrees?: { board_id?: string } | null }) => {
+          const sessionRow = result.sessions;
+          // We know board_id from the filter, but still get it from JOIN for consistency
+          const board_id = (result.worktrees?.board_id ?? null) as UUID | null;
+          return this.rowToSession(sessionRow, board_id, baseUrl);
+        }
+      );
     } catch (error) {
       throw new RepositoryError(
         `Failed to find sessions by board: ${error instanceof Error ? error.message : String(error)}`,
@@ -297,17 +349,21 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
 
   /**
    * Find child sessions (forked or spawned from this session)
+   *
+   * LEFT JOINs with worktrees to populate board_id and url.
    */
   async findChildren(sessionId: string): Promise<Session[]> {
     try {
       const fullId = await this.resolveId(sessionId);
+      const baseUrl = await getBaseUrl();
 
       // Query sessions where parent_session_id or forked_from_session_id matches
       // Use database-agnostic JSON extraction helper
       const { jsonExtract } = await import('../database-wrapper');
 
-      const rows = await select(this.db)
+      const results = await select(this.db)
         .from(sessions)
+        .leftJoin(worktrees, eq(sessions.worktree_id, worktrees.worktree_id))
         .where(
           or(
             sql`${jsonExtract(this.db, sessions.data, 'genealogy.parent_session_id')} = ${fullId}`,
@@ -316,7 +372,13 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         )
         .all();
 
-      return rows.map((row: SessionRow) => this.rowToSession(row));
+      return results.map(
+        (result: { sessions: SessionRow; worktrees?: { board_id?: string } | null }) => {
+          const sessionRow = result.sessions;
+          const boardId = (result.worktrees?.board_id ?? null) as UUID | null;
+          return this.rowToSession(sessionRow, boardId, baseUrl);
+        }
+      );
     } catch (error) {
       throw new RepositoryError(
         `Failed to find child sessions: ${error instanceof Error ? error.message : String(error)}`,
@@ -381,6 +443,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
   async update(id: string, updates: Partial<Session>): Promise<Session> {
     try {
       const fullId = await this.resolveId(id);
+      const baseUrl = await getBaseUrl();
 
       const statusInfo = updates.status
         ? ` (status: ${updates.status}, ready_for_prompt: ${updates.ready_for_prompt})`
@@ -390,18 +453,21 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       // Use transaction to make read-merge-write atomic
       // This prevents race conditions where another update happens between read and write
       const result = await this.db.transaction(async (tx) => {
-        // STEP 1: Read current session (within transaction)
+        // STEP 1: Read current session with worktree JOIN (within transaction)
         // biome-ignore lint/suspicious/noExplicitAny: Transaction context requires type assertion for database wrapper functions
-        const currentRow = await select(tx as any)
+        const currentResult = await select(tx as any)
           .from(sessions)
+          .leftJoin(worktrees, eq(sessions.worktree_id, worktrees.worktree_id))
           .where(eq(sessions.session_id, fullId))
           .one();
 
-        if (!currentRow) {
+        if (!currentResult) {
           throw new EntityNotFoundError('Session', id);
         }
 
-        const current = this.rowToSession(currentRow);
+        const currentRow = currentResult.sessions;
+        const boardId = (currentResult.worktrees?.board_id ?? null) as UUID | null;
+        const current = this.rowToSession(currentRow, boardId, baseUrl);
 
         // STEP 2: Deep merge updates into current session (in memory)
         // IMPORTANT: Receiver-side merge for nested objects (permission_config, model_config, etc.)
@@ -492,15 +558,20 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
    * instead of N+1. Returns sessions where user is a worktree owner OR worktree.others_can
    * allows at least 'view' access.
    *
+   * Also populates board_id and url via the worktrees JOIN.
+   *
    * NOTE: This method should only be called when RBAC is enabled. When RBAC is disabled,
    * the scopeSessionQuery hook is not registered, so default Feathers query is used
    * (which returns all sessions without filtering).
    *
    * @param userId - User ID to check access for
-   * @returns Array of accessible sessions
+   * @returns Array of accessible sessions with urls populated
    */
   async findAccessibleSessions(userId: UUID): Promise<Session[]> {
-    const rows = await select(this.db, getTableColumns(sessions))
+    const baseUrl = await getBaseUrl();
+
+    // Get both session columns AND worktree board_id
+    const results = await select(this.db)
       .from(sessions)
       .innerJoin(worktrees, eq(sessions.worktree_id, worktrees.worktree_id))
       .leftJoin(
@@ -518,7 +589,13 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       )
       .all();
 
-    return rows.map((row: SessionRow) => this.rowToSession(row));
+    return results.map(
+      (result: { sessions: SessionRow; worktrees?: { board_id?: string } | null }) => {
+        const sessionRow = result.sessions;
+        const boardId = (result.worktrees?.board_id ?? null) as UUID | null;
+        return this.rowToSession(sessionRow, boardId, baseUrl);
+      }
+    );
   }
 
   /**
