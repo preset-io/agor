@@ -636,6 +636,7 @@ const WorktreeCardComponent = ({
       {worktree.notes && (
         <div className="nodrag" style={{ marginBottom: 8 }}>
           <div
+            className="markdown-compact"
             style={{
               maxHeight: notesExpanded ? 'none' : '120px',
               overflow: 'hidden',
@@ -644,7 +645,7 @@ const WorktreeCardComponent = ({
           >
             <MarkdownRenderer
               content={displayedNotes}
-              style={{ fontSize: 12, color: token.colorTextSecondary }}
+              style={{ fontSize: 12, color: token.colorTextSecondary, lineHeight: '1.5' }}
               compact={false}
               showControls={false}
             />
@@ -661,7 +662,7 @@ const WorktreeCardComponent = ({
                 padding: 0,
                 height: 'auto',
                 fontSize: 12,
-                color: token.colorTextSecondary,
+                color: token.colorLink,
               }}
             >
               {notesExpanded ? 'See less' : 'See more'}
