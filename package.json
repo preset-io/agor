@@ -27,6 +27,7 @@
     "typecheck": "turbo run typecheck --filter='!@agor/docs'",
     "check": "pnpm typecheck && pnpm lint && turbo run build --filter='!@agor/docs'",
     "check:fix": "pnpm lint:fix && pnpm typecheck && turbo run build --filter='!@agor/docs'",
+    "check:clean": "turbo run typecheck build --filter='!@agor/docs' --force && pnpm lint",
     "clean": "turbo run clean && rm -rf node_modules",
     "prepare": "husky",
     "cli:link": "pnpm -C apps/agor-cli link --global",
