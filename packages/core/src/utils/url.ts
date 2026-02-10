@@ -20,7 +20,7 @@ import type { BoardID, SessionID } from '../types/id';
  * @example
  * ```ts
  * getSessionUrl('abc12345-...', 'board456-...', 'https://agor.example.com')
- * // => 'https://agor.example.com/b/board456/abc12345/'
+ * // => 'https://agor.example.com/b/board456/abc12345'
  * ```
  */
 export function getSessionUrl(
@@ -29,7 +29,7 @@ export function getSessionUrl(
   baseUrl: string
 ): string | null {
   if (!boardId) return null;
-  return `${baseUrl}/b/${shortId(boardId)}/${shortId(sessionId)}/`;
+  return `${baseUrl}/b/${shortId(boardId)}/${shortId(sessionId)}`;
 }
 
 /**
@@ -44,11 +44,11 @@ export function getSessionUrl(
  * @example
  * ```ts
  * getBoardUrl('board456-...', 'https://agor.example.com')
- * // => 'https://agor.example.com/b/board456/'
+ * // => 'https://agor.example.com/b/board456'
  * ```
  */
 export function getBoardUrl(boardId: BoardID, baseUrl: string): string {
-  return `${baseUrl}/b/${shortId(boardId)}/`;
+  return `${baseUrl}/b/${shortId(boardId)}`;
 }
 
 /**
