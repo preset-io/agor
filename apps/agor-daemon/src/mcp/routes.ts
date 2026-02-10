@@ -108,7 +108,8 @@ export function setupMCPRoutes(app: Application): void {
             // Session tools
             {
               name: 'agor_sessions_list',
-              description: 'List all sessions accessible to the current user',
+              description:
+                'List all sessions accessible to the current user. Each session includes a `url` field with a clickable link to view the session in the UI.',
               inputSchema: {
                 type: 'object',
                 properties: {
@@ -135,7 +136,7 @@ export function setupMCPRoutes(app: Application): void {
             {
               name: 'agor_sessions_get',
               description:
-                'Get detailed information about a specific session, including genealogy and current state',
+                'Get detailed information about a specific session, including genealogy and current state. The response includes a `url` field with a clickable link to view the session in the UI.',
               inputSchema: {
                 type: 'object',
                 properties: {
@@ -643,7 +644,8 @@ export function setupMCPRoutes(app: Application): void {
             // Board tools
             {
               name: 'agor_boards_get',
-              description: 'Get information about a board, including zones and layout',
+              description:
+                'Get information about a board, including zones and layout. The response includes a `url` field with a clickable link to view the board in the UI.',
               inputSchema: {
                 type: 'object',
                 properties: {
@@ -657,7 +659,8 @@ export function setupMCPRoutes(app: Application): void {
             },
             {
               name: 'agor_boards_list',
-              description: 'List all boards accessible to the current user',
+              description:
+                'List all boards accessible to the current user. Each board includes a `url` field with a clickable link to view the board in the UI.',
               inputSchema: {
                 type: 'object',
                 properties: {
