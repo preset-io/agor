@@ -85,7 +85,6 @@ export class GatewayService {
     console.log(
       `[gateway] refreshChannelState: found ${channels.length} channels, ${channels.filter((ch) => ch.enabled).length} enabled`
     );
-    console.log(`[gateway] hasActiveChannels set to: ${this.hasActiveChannels}`);
   }
 
   /**
@@ -265,11 +264,8 @@ export class GatewayService {
    * returns a cheap no-op. Uses platform connectors to send messages.
    */
   async routeMessage(data: RouteMessageData): Promise<RouteMessageResult> {
-    console.log(`[gateway] routeMessage called for session ${data.session_id.substring(0, 8)}`);
-
     // Fast path: skip DB lookup entirely when no channels are configured
     if (!this.hasActiveChannels) {
-      console.log('[gateway] No active channels, skipping route');
       return { routed: false };
     }
 
@@ -278,7 +274,6 @@ export class GatewayService {
 
     if (!mapping) {
       // No mapping → cheap no-op (session is not gateway-connected)
-      console.log(`[gateway] No mapping found for session ${data.session_id.substring(0, 8)}`);
       return { routed: false };
     }
 
@@ -367,15 +362,19 @@ export class GatewayService {
       return;
     }
 
-    // Otherwise, try to start it
+    // If no connector or no app_token, stop any existing listener
     if (!hasConnector(channel.channel_type as ChannelType)) {
       console.warn(`[gateway] No connector for channel type: ${channel.channel_type}`);
+      await this.stopChannelListener(channelId);
       return;
     }
     if (!channel.config.app_token) {
       console.log(`[gateway] Skipping listener for channel ${channel.name} (no app_token)`);
+      await this.stopChannelListener(channelId);
       return;
     }
+
+    // Start or restart the listener
     await this.startChannelListener(channel);
   }
 
