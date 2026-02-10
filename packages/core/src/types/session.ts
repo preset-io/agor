@@ -133,6 +133,24 @@ export interface Session {
   /** Worktree ID - all sessions must be associated with an Agor-managed worktree */
   worktree_id: WorktreeID;
 
+  /**
+   * Board ID from the session's worktree (populated via LEFT JOIN)
+   *
+   * This is a computed property populated by the repository layer when fetching sessions.
+   * It avoids N+1 queries by joining with the worktrees table.
+   * Null if the worktree is not placed on any board.
+   */
+  worktree_board_id?: BoardID | null;
+
+  /**
+   * External/user-facing URL for viewing this session in the UI
+   *
+   * Computed property added by API hooks based on worktree_board_id.
+   * Format: {baseUrl}/b/{boardId}/{sessionId}/
+   * Null if the worktree is not on a board.
+   */
+  url?: string | null;
+
   // Git state
   git_state: {
     ref: string;
@@ -425,28 +443,3 @@ export interface SpawnConfig {
   /** Task ID to link as spawn point */
   task_id?: string;
 }
-
-/**
- * Session with worktree board_id (enriched from JOIN)
- *
- * Returned by repository methods that JOIN with worktrees table.
- * Avoids N+1 queries for URL generation and board relationships.
- */
-export type SessionWithBoardId = Session & {
-  /** Board ID from joined worktree (null if worktree not on a board) */
-  worktree_board_id: BoardID | null;
-};
-
-/**
- * Session with external URL property (API response type)
- *
- * Extends Session with a computed url property added by FeathersJS hooks.
- * This type represents session objects as returned by REST API and MCP tools.
- *
- * URL format: {baseUrl}/b/{boardId}/{sessionId}/
- * Returns null if the session's worktree is not on a board.
- */
-export type SessionWithUrl = Session & {
-  /** External/user-facing URL for viewing this session in the UI */
-  url: string | null;
-};

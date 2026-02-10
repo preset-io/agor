@@ -6,25 +6,17 @@
  */
 
 import { getBaseUrl } from '@agor/core/config';
-import { SessionRepository } from '@agor/core/db';
-import type {
-  BoardWithUrl,
-  HookContext,
-  Session,
-  SessionWithBoardId,
-  SessionWithUrl,
-} from '@agor/core/types';
+import type { Board, HookContext, Session } from '@agor/core/types';
 import { getBoardUrl, getSessionUrl } from '@agor/core/utils/url';
 
 /**
  * Add URL to session response(s)
  *
- * Adds a `url` property to session objects with a direct link to view the session.
+ * Computes the `url` property from `worktree_board_id` (already populated by repository JOIN).
  * URL format: {baseUrl}/b/{boardId}/{sessionId}/
  *
  * Returns null if the session's worktree is not on a board.
- *
- * Uses SessionRepository.enrichWithBoardIds() for efficient batch loading.
+ * No database queries - just string computation from already-joined data.
  */
 export function addSessionUrl() {
   return async (context: HookContext) => {
@@ -44,34 +36,10 @@ export function addSessionUrl() {
         : isArray
           ? context.result
           : [context.result];
-      const isSingle = !isPaginated && !isArray;
 
-      // Access the SessionRepository from the service
-      // SessionsService extends DrizzleService and has sessionRepo as a private property
-      const sessionsService = context.service as { sessionRepo: SessionRepository };
-      const sessionRepo = sessionsService.sessionRepo;
-
-      if (!sessionRepo) {
-        console.warn('[addSessionUrl] No session repository available, skipping URL enrichment');
-        return context;
-      }
-
-      // Enrich all sessions with board_ids in one efficient query
-      const enrichedSessions = await sessionRepo.enrichWithBoardIds(sessions as Session[]);
-
-      // Add URL to each session using the joined board_id
-      const sessionsWithUrl = enrichedSessions.map((session: SessionWithBoardId) => {
-        const url = getSessionUrl(session.session_id, session.worktree_board_id, baseUrl);
-        return { ...session, url } as SessionWithUrl;
-      });
-
-      // Update context result
-      if (isSingle) {
-        context.result = sessionsWithUrl[0];
-      } else if (isArray) {
-        context.result = sessionsWithUrl;
-      } else if (isPaginated) {
-        context.result.data = sessionsWithUrl;
+      // Compute URL for each session from already-joined worktree_board_id
+      for (const session of sessions as Session[]) {
+        session.url = getSessionUrl(session.session_id, session.worktree_board_id ?? null, baseUrl);
       }
     } catch (error) {
       console.error('[addSessionUrl] Failed to generate URLs:', error);
@@ -85,7 +53,7 @@ export function addSessionUrl() {
 /**
  * Add URL to board response(s)
  *
- * Adds a `url` property to board objects with a direct link to view the board.
+ * Computes the `url` property for board objects.
  * URL format: {baseUrl}/b/{boardId}/
  */
 export function addBoardUrl() {
@@ -106,19 +74,10 @@ export function addBoardUrl() {
         : isArray
           ? context.result
           : [context.result];
-      const isSingle = !isPaginated && !isArray;
 
-      // Add URL to each board
-      for (const board of boards as BoardWithUrl[]) {
-        const url = getBoardUrl(board.board_id, baseUrl);
-        board.url = url;
-      }
-
-      // Update context result
-      if (isSingle) {
-        context.result = boards[0];
-      } else if (isArray) {
-        context.result = boards;
+      // Compute URL for each board
+      for (const board of boards as Board[]) {
+        board.url = getBoardUrl(board.board_id, baseUrl);
       }
     } catch (error) {
       console.error('[addBoardUrl] Failed to generate URLs:', error);
