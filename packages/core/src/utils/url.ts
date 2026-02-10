@@ -4,20 +4,23 @@
  * Provides shared helpers for validating and normalizing user-provided URLs.
  */
 
+import { shortId } from '../lib/ids';
 import type { BoardID, SessionID } from '../types/id';
 
 /**
  * Generate a session URL for external/user-facing links
  *
- * @param sessionId - Session ID
+ * Uses short IDs (8 chars) for cleaner URLs. The router supports short ID resolution.
+ *
+ * @param sessionId - Session ID (full UUID)
  * @param boardId - Board ID (required for URL generation)
  * @param baseUrl - Base URL from config (e.g., "https://agor.example.com")
  * @returns Session URL or null if boardId is missing
  *
  * @example
  * ```ts
- * getSessionUrl('abc123', 'board456', 'https://agor.example.com')
- * // => 'https://agor.example.com/b/board456/abc123/'
+ * getSessionUrl('abc12345-...', 'board456-...', 'https://agor.example.com')
+ * // => 'https://agor.example.com/b/board456/abc12345/'
  * ```
  */
 export function getSessionUrl(
@@ -26,24 +29,26 @@ export function getSessionUrl(
   baseUrl: string
 ): string | null {
   if (!boardId) return null;
-  return `${baseUrl}/b/${boardId}/${sessionId}/`;
+  return `${baseUrl}/b/${shortId(boardId)}/${shortId(sessionId)}/`;
 }
 
 /**
  * Generate a board URL for external/user-facing links
  *
- * @param boardId - Board ID
+ * Uses short IDs (8 chars) for cleaner URLs. The router supports short ID resolution.
+ *
+ * @param boardId - Board ID (full UUID)
  * @param baseUrl - Base URL from config (e.g., "https://agor.example.com")
  * @returns Board URL
  *
  * @example
  * ```ts
- * getBoardUrl('board456', 'https://agor.example.com')
+ * getBoardUrl('board456-...', 'https://agor.example.com')
  * // => 'https://agor.example.com/b/board456/'
  * ```
  */
 export function getBoardUrl(boardId: BoardID, baseUrl: string): string {
-  return `${baseUrl}/b/${boardId}/`;
+  return `${baseUrl}/b/${shortId(boardId)}/`;
 }
 
 /**
