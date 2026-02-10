@@ -462,7 +462,9 @@ const WorktreeCardComponent = ({
     // Truncate at word boundary for cleaner display
     const truncated = worktree.notes.slice(0, NOTES_MAX_LENGTH);
     const lastSpace = truncated.lastIndexOf(' ');
-    return lastSpace > NOTES_MAX_LENGTH * 0.8 ? truncated.slice(0, lastSpace) + '...' : truncated + '...';
+    return lastSpace > NOTES_MAX_LENGTH * 0.8
+      ? truncated.slice(0, lastSpace) + '...'
+      : truncated + '...';
   }, [worktree.notes, notesNeedTruncation, notesExpanded]);
 
   return (
