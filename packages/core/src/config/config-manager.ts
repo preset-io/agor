@@ -314,6 +314,31 @@ export async function getDaemonUrl(): Promise<string> {
 }
 
 /**
+ * Validate and normalize a base URL
+ *
+ * @param url - URL to validate
+ * @returns Normalized URL without trailing slash
+ * @throws Error if URL is invalid or uses unsupported scheme
+ */
+function validateBaseUrl(url: string): string {
+  const trimmed = url.trim().replace(/\/$/, ''); // Remove trailing slash and whitespace
+
+  // Basic validation: must start with http:// or https://
+  if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
+    throw new Error(`Invalid base URL: "${url}". Must start with http:// or https://`);
+  }
+
+  // Additional validation: ensure it's a valid URL structure
+  try {
+    new URL(trimmed);
+  } catch {
+    throw new Error(`Invalid base URL format: "${url}". Must be a valid HTTP(S) URL.`);
+  }
+
+  return trimmed;
+}
+
+/**
  * Get base URL for external/user-facing links
  *
  * Used to generate clickable URLs to sessions, boards, and other resources
@@ -329,17 +354,17 @@ export async function getDaemonUrl(): Promise<string> {
 export async function getBaseUrl(): Promise<string> {
   // 1. Check for explicit AGOR_BASE_URL env var (highest priority)
   if (process.env.AGOR_BASE_URL) {
-    return process.env.AGOR_BASE_URL.replace(/\/$/, ''); // Remove trailing slash
+    return validateBaseUrl(process.env.AGOR_BASE_URL);
   }
 
   const config = await loadConfig();
 
   // 2. Check config.yaml
   if (config.daemon?.base_url) {
-    return config.daemon.base_url.replace(/\/$/, ''); // Remove trailing slash
+    return validateBaseUrl(config.daemon.base_url);
   }
 
-  // 3. Default: construct from daemon port
+  // 3. Default: construct from daemon port (no validation needed for default)
   const defaults = getDefaultConfig();
   const envPort = process.env.PORT ? Number.parseInt(process.env.PORT, 10) : undefined;
   const port = envPort || config.daemon?.port || defaults.daemon?.port || DAEMON.DEFAULT_PORT;

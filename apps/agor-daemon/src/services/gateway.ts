@@ -227,11 +227,11 @@ export class GatewayService {
       // Generate session URL for external access
       let sessionUrl: string | null = null;
       try {
-        // Fetch worktree to get board_id
+        // Fetch worktree to get board_id (pass user for auth context)
         const worktreesService = this.app.service('worktrees') as {
-          get: (id: string) => Promise<Worktree>;
+          get: (id: string, params?: { user: User }) => Promise<Worktree>;
         };
-        const worktree = await worktreesService.get(channel.target_worktree_id);
+        const worktree = await worktreesService.get(channel.target_worktree_id, { user });
 
         if (worktree.board_id) {
           const baseUrl = await getBaseUrl();
