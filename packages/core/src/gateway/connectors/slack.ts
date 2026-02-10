@@ -328,6 +328,7 @@ export class SlackConnector implements GatewayConnector {
       // Mention requirement handling
       let messageText = event.text ?? '';
       let hasMention = false;
+      let allowedViaThreadReplyException = false;
 
       if (requireMention) {
         if (!botMentionPattern || !botMentionReplacePattern) {
@@ -357,6 +358,7 @@ export class SlackConnector implements GatewayConnector {
               // Unmapped threads (where bot was never mentioned) will be rejected.
               // Set allow_thread_replies_without_mention: true only if you want to allow
               // continuing conversations in existing threads without requiring @mentions.
+              allowedViaThreadReplyException = true;
             } else {
               // Reject: top-level message or thread reply not allowed without mention
               return;
@@ -386,7 +388,7 @@ export class SlackConnector implements GatewayConnector {
         metadata: {
           channel: event.channel,
           channel_type: event.channel_type,
-          requires_mapping_verification: isThreadReply && !hasMention,
+          requires_mapping_verification: allowedViaThreadReplyException,
         },
       });
     });

@@ -143,9 +143,13 @@ export class GatewayService {
       this.sendDebugMessage(
         channel,
         data.thread_id,
-        'Please @mention me to start a new conversation in this thread.'
+        'To start a conversation in this thread, please @mention me in your message.'
       );
-      throw new Error('Thread requires explicit mention to create new session');
+      return {
+        success: false,
+        sessionId: '',
+        created: false,
+      };
     }
 
     let sessionId: string;
