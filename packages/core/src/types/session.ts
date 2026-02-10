@@ -10,7 +10,7 @@ import type {
   OpenCodePermissionMode,
 } from './agentic-tool';
 import type { ContextFilePath } from './context';
-import type { SessionID, TaskID, WorktreeID } from './id';
+import type { BoardID, SessionID, TaskID, WorktreeID } from './id';
 
 export const SessionStatus = {
   IDLE: 'idle',
@@ -425,3 +425,28 @@ export interface SpawnConfig {
   /** Task ID to link as spawn point */
   task_id?: string;
 }
+
+/**
+ * Session with worktree board_id (enriched from JOIN)
+ *
+ * Returned by repository methods that JOIN with worktrees table.
+ * Avoids N+1 queries for URL generation and board relationships.
+ */
+export type SessionWithBoardId = Session & {
+  /** Board ID from joined worktree (null if worktree not on a board) */
+  worktree_board_id: BoardID | null;
+};
+
+/**
+ * Session with external URL property (API response type)
+ *
+ * Extends Session with a computed url property added by FeathersJS hooks.
+ * This type represents session objects as returned by REST API and MCP tools.
+ *
+ * URL format: {baseUrl}/b/{boardId}/{sessionId}/
+ * Returns null if the session's worktree is not on a board.
+ */
+export type SessionWithUrl = Session & {
+  /** External/user-facing URL for viewing this session in the UI */
+  url: string | null;
+};

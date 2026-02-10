@@ -13,7 +13,7 @@ import type {
   Session,
   Task,
 } from '@agor/core/types';
-import { sql } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
 import {
   index,
   integer,
@@ -1034,3 +1034,20 @@ export type GatewayChannelRow = typeof gatewayChannels.$inferSelect;
 export type GatewayChannelInsert = typeof gatewayChannels.$inferInsert;
 export type ThreadSessionMapRow = typeof threadSessionMap.$inferSelect;
 export type ThreadSessionMapInsert = typeof threadSessionMap.$inferInsert;
+
+/**
+ * Drizzle Relations for Relational Queries
+ *
+ * These enable automatic JOINs using db.query.sessions.findFirst({ with: { worktree: true } })
+ */
+
+export const sessionsRelations = relations(sessions, ({ one }) => ({
+  worktree: one(worktrees, {
+    fields: [sessions.worktree_id],
+    references: [worktrees.worktree_id],
+  }),
+}));
+
+export const worktreesRelations = relations(worktrees, ({ many }) => ({
+  sessions: many(sessions),
+}));

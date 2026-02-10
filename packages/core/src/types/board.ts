@@ -201,3 +201,16 @@ export interface BoardExportBlob {
   // Custom context for templates
   custom_context?: Record<string, unknown>;
 }
+
+/**
+ * Board with external URL property (API response type)
+ *
+ * Extends Board with a computed url property added by FeathersJS hooks.
+ * This type represents board objects as returned by REST API and MCP tools.
+ *
+ * URL format: {baseUrl}/b/{boardId}/
+ */
+export type BoardWithUrl = Board & {
+  /** External/user-facing URL for viewing this board in the UI */
+  url: string;
+};

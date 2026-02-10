@@ -4,7 +4,7 @@
  * Type-safe CRUD operations for sessions with short ID support.
  */
 
-import type { Session, UUID } from '@agor/core/types';
+import type { Session, SessionWithBoardId, UUID } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
 import {
   and,
@@ -223,6 +223,93 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       if (error instanceof AmbiguousIdError) throw error;
       throw new RepositoryError(
         `Failed to find session: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Find session by ID with worktree board_id (supports short ID)
+   *
+   * Uses LEFT JOIN to fetch worktree.board_id in a single query,
+   * avoiding N+1 queries for URL generation.
+   *
+   * @param id Session ID (full UUID or short ID)
+   * @returns Session with worktree_board_id property, or null if not found
+   */
+  async findByIdWithBoardId(id: string): Promise<SessionWithBoardId | null> {
+    try {
+      const fullId = await this.resolveId(id);
+
+      // Build select query with LEFT JOIN to get board_id
+      const query = select(this.db)
+        .from(sessions)
+        .leftJoin(worktrees, eq(sessions.worktree_id, worktrees.worktree_id))
+        .where(eq(sessions.session_id, fullId));
+
+      const result = await query.one();
+
+      if (!result) {
+        return null;
+      }
+
+      // result has both sessions.* and worktrees.board_id
+      const sessionRow = result.sessions;
+      const boardId = (result.worktrees?.board_id ?? null) as UUID | null;
+      const session = this.rowToSession(sessionRow);
+
+      return {
+        ...session,
+        worktree_board_id: boardId,
+      };
+    } catch (error) {
+      if (error instanceof EntityNotFoundError) return null;
+      if (error instanceof AmbiguousIdError) throw error;
+      throw new RepositoryError(
+        `Failed to find session with board_id: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Enrich sessions with board_id from their worktrees
+   *
+   * Performs a single JOIN query to fetch all board_ids at once.
+   * Much more efficient than N separate worktree lookups.
+   *
+   * @param sessions Array of sessions to enrich
+   * @returns Sessions with worktree_board_id property added
+   */
+  async enrichWithBoardIds(sessions: Session[]): Promise<SessionWithBoardId[]> {
+    if (sessions.length === 0) {
+      return [];
+    }
+
+    try {
+      // Get all unique worktree IDs
+      const worktreeIds = [...new Set(sessions.map((s) => s.worktree_id))];
+
+      // Fetch all worktrees in one query
+      const worktreeRows = await select(this.db)
+        .from(worktrees)
+        .where(inArray(worktrees.worktree_id, worktreeIds))
+        .all();
+
+      // Build lookup map
+      const boardIdMap = new Map<string, UUID | null>();
+      for (const row of worktreeRows) {
+        boardIdMap.set(row.worktree_id, row.board_id as UUID | null);
+      }
+
+      // Enrich sessions with board_id
+      return sessions.map((session) => ({
+        ...session,
+        worktree_board_id: (boardIdMap.get(session.worktree_id) ?? null) as UUID | null,
+      }));
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to enrich sessions with board_ids: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }

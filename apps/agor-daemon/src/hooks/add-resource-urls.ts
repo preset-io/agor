@@ -6,7 +6,14 @@
  */
 
 import { getBaseUrl } from '@agor/core/config';
-import type { Board, HookContext, Session } from '@agor/core/types';
+import { SessionRepository } from '@agor/core/db';
+import type {
+  BoardWithUrl,
+  HookContext,
+  Session,
+  SessionWithBoardId,
+  SessionWithUrl,
+} from '@agor/core/types';
 import { getBoardUrl, getSessionUrl } from '@agor/core/utils/url';
 
 /**
@@ -16,6 +23,8 @@ import { getBoardUrl, getSessionUrl } from '@agor/core/utils/url';
  * URL format: {baseUrl}/b/{boardId}/{sessionId}/
  *
  * Returns null if the session's worktree is not on a board.
+ *
+ * Uses SessionRepository.enrichWithBoardIds() for efficient batch loading.
  */
 export function addSessionUrl() {
   return async (context: HookContext) => {
@@ -27,29 +36,42 @@ export function addSessionUrl() {
     try {
       const baseUrl = await getBaseUrl();
 
-      // Handle both single result and paginated results
-      const sessions = context.result.data || [context.result];
-      const isSingle = !context.result.data;
+      // Handle both single result, paginated results, and non-paginated arrays
+      const isArray = Array.isArray(context.result);
+      const isPaginated = !isArray && context.result.data;
+      const sessions = isPaginated
+        ? context.result.data
+        : isArray
+          ? context.result
+          : [context.result];
+      const isSingle = !isPaginated && !isArray;
 
-      // Add URL to each session
-      for (const session of sessions as Session[]) {
-        // Need to fetch worktree to get board_id
-        try {
-          const worktree = await context.app.service('worktrees').get(session.worktree_id);
-          const url = getSessionUrl(session.session_id, worktree.board_id, baseUrl);
-          (session as Session & { url: string | null }).url = url;
-        } catch (error) {
-          console.warn(
-            `[addSessionUrl] Failed to get worktree for session ${session.session_id}:`,
-            error
-          );
-          (session as Session & { url: string | null }).url = null;
-        }
+      // Access the SessionRepository from the service
+      // SessionsService extends DrizzleService and has sessionRepo as a private property
+      const sessionsService = context.service as { sessionRepo: SessionRepository };
+      const sessionRepo = sessionsService.sessionRepo;
+
+      if (!sessionRepo) {
+        console.warn('[addSessionUrl] No session repository available, skipping URL enrichment');
+        return context;
       }
+
+      // Enrich all sessions with board_ids in one efficient query
+      const enrichedSessions = await sessionRepo.enrichWithBoardIds(sessions as Session[]);
+
+      // Add URL to each session using the joined board_id
+      const sessionsWithUrl = enrichedSessions.map((session: SessionWithBoardId) => {
+        const url = getSessionUrl(session.session_id, session.worktree_board_id, baseUrl);
+        return { ...session, url } as SessionWithUrl;
+      });
 
       // Update context result
       if (isSingle) {
-        context.result = sessions[0];
+        context.result = sessionsWithUrl[0];
+      } else if (isArray) {
+        context.result = sessionsWithUrl;
+      } else if (isPaginated) {
+        context.result.data = sessionsWithUrl;
       }
     } catch (error) {
       console.error('[addSessionUrl] Failed to generate URLs:', error);
@@ -76,19 +98,27 @@ export function addBoardUrl() {
     try {
       const baseUrl = await getBaseUrl();
 
-      // Handle both single result and paginated results
-      const boards = context.result.data || [context.result];
-      const isSingle = !context.result.data;
+      // Handle both single result, paginated results, and non-paginated arrays
+      const isArray = Array.isArray(context.result);
+      const isPaginated = !isArray && context.result.data;
+      const boards = isPaginated
+        ? context.result.data
+        : isArray
+          ? context.result
+          : [context.result];
+      const isSingle = !isPaginated && !isArray;
 
       // Add URL to each board
-      for (const board of boards as Board[]) {
+      for (const board of boards as BoardWithUrl[]) {
         const url = getBoardUrl(board.board_id, baseUrl);
-        (board as Board & { url: string }).url = url;
+        board.url = url;
       }
 
       // Update context result
       if (isSingle) {
         context.result = boards[0];
+      } else if (isArray) {
+        context.result = boards;
       }
     } catch (error) {
       console.error('[addBoardUrl] Failed to generate URLs:', error);
