@@ -72,6 +72,22 @@ function parseThreadId(threadId: string): { channel: string; thread_ts: string }
 }
 
 /**
+ * Check if a bot mention pattern appears *outside* code blocks in Slack message text.
+ *
+ * Slack sends `<@U12345>` in `event.text` regardless of whether the mention is
+ * inside a code block or not. However, `app_mention` events only fire for
+ * "active" mentions (outside code blocks). This function strips code blocks
+ * first, then tests for the mention pattern — so code-block mentions return false.
+ *
+ * Handles both triple-backtick blocks and inline backtick spans.
+ */
+function hasActiveMention(text: string, mentionPattern: RegExp): boolean {
+  // Strip triple-backtick blocks first (```...```), then inline code (`...`)
+  const stripped = text.replace(/```[\s\S]*?```/g, '').replace(/`[^`]*`/g, '');
+  return mentionPattern.test(stripped);
+}
+
+/**
  * Convert markdown to Slack mrkdwn format
  *
  * Handles basic conversions:
@@ -315,11 +331,18 @@ export class SlackConnector implements GatewayConnector {
       // This happens for top-level messages AND thread replies.
       //
       // Strategy:
-      // - Use 'app_mention' for ALL mentions (top-level AND threads)
-      // - Use 'message' for DMs and non-mention messages
-      // - Skip 'message' events that have mentions (to avoid duplicates)
+      // - Use 'app_mention' for active mentions outside code blocks
+      // - Use 'message' for DMs, non-mention messages, and code-block-only mentions
+      // - Skip 'message' events that have active mentions (to avoid duplicates)
+      // - Skip 'app_mention' events where the mention is only inside code blocks
+      //   (those are not "real" mentions and should be handled as plain messages)
       const isThreadReply = !!event.thread_ts;
-      const isChannelMessage = event.channel_type === 'channel' || event.channel_type === 'group';
+      // app_mention events often lack channel_type, so also infer from channel ID prefix
+      const channelPrefix = (event.channel as string | undefined)?.charAt(0);
+      const isChannelMessage =
+        event.channel_type === 'channel' ||
+        event.channel_type === 'group' ||
+        (!event.channel_type && (channelPrefix === 'C' || channelPrefix === 'G'));
 
       // CRITICAL: Prevent duplicates in channels/groups when bot ID unavailable
       // Strategy depends on require_mention setting:
@@ -342,12 +365,20 @@ export class SlackConnector implements GatewayConnector {
         }
       }
 
-      if (eventType === 'message' && isChannelMessage && botMentionPattern) {
-        // For all channel/group messages (including threads), check if it's a mention
-        // If it's a mention, we'll handle it via app_mention event instead
-        const hasMention = botMentionPattern.test(event.text ?? '');
-        if (hasMention) {
-          return; // Will be handled by app_mention event
+      if (isChannelMessage && botMentionPattern) {
+        const mentionOutsideCodeBlock = hasActiveMention(event.text ?? '', botMentionPattern);
+
+        if (eventType === 'message' && mentionOutsideCodeBlock) {
+          // Active (non-code-block) mention detected in a message event.
+          // Skip — the parallel app_mention event will handle it.
+          return;
+        }
+
+        if (eventType === 'app_mention' && !mentionOutsideCodeBlock) {
+          // app_mention fired but the mention is only inside a code block.
+          // Skip — the parallel message event will handle it as a non-mention
+          // (correctly rejected or routed via thread reply exception).
+          return;
         }
       }
 
@@ -414,8 +445,11 @@ export class SlackConnector implements GatewayConnector {
             return;
           }
         } else {
-          // Bot ID available - perform normal mention validation
-          hasMention = botMentionPattern.test(messageText);
+          // Bot ID available - perform normal mention validation.
+          // Only count mentions outside code blocks as active mentions.
+          // Code-block mentions (e.g. `@bot`) are not "real" mentions and
+          // should not trigger a response.
+          hasMention = hasActiveMention(messageText, botMentionPattern);
 
           if (!hasMention) {
             // Check if this is a thread reply that's allowed without mention
