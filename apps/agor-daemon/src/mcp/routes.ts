@@ -3099,8 +3099,8 @@ export function setupMCPRoutes(app: Application): void {
           if (args?.sortOrder) query.sortOrder = args.sortOrder;
 
           // Add pagination
-          if (args?.limit) query.$limit = args.limit;
-          if (args?.offset) query.$skip = args.offset;
+          if (args?.limit) query.limit = args.limit;
+          if (args?.offset) query.offset = args.offset;
 
           const leaderboard = await app.service('leaderboard').find({ query });
           mcpResponse = {

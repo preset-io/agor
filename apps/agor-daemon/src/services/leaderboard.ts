@@ -16,6 +16,7 @@ import {
   sessions,
   sql,
   tasks,
+  users,
   worktrees,
 } from '@agor/core/db';
 
@@ -55,6 +56,8 @@ export interface LeaderboardQuery {
 export interface LeaderboardEntry {
   userId?: string;
   userName?: string;
+  userEmail?: string;
+  userEmoji?: string;
   worktreeId?: string;
   worktreeName?: string;
   repoId?: string;
@@ -142,31 +145,24 @@ export class LeaderboardService {
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
     // Build dynamic SELECT clause
-    // Aggregate token usage from raw_sdk_response.tokenUsage
-    // IMPORTANT: Normalize tokens based on agentic_tool since different tools report differently:
-    // - Codex: input_tokens INCLUDES cached tokens (cache_read_tokens is a subset)
-    // - Claude/Gemini: input_tokens EXCLUDES cached tokens
+    // Aggregate token usage from normalized_sdk_response.tokenUsage
+    // The executor normalizes raw SDK responses into a consistent format across all agents
     // biome-ignore lint/suspicious/noExplicitAny: Dynamic SQL fields require any
     const selectFields: Record<string, any> = {
       totalTokens: sql<number>`COALESCE(SUM(
-        CASE
-          WHEN ${jsonExtract(this.db, sessions.data, 'agentic_tool')} = 'codex' THEN
-            (CAST(${jsonExtract(this.db, tasks.data, 'raw_sdk_response.tokenUsage.input_tokens')} AS INTEGER) -
-             COALESCE(CAST(${jsonExtract(this.db, tasks.data, 'raw_sdk_response.tokenUsage.cache_read_tokens')} AS INTEGER), 0)) +
-            CAST(${jsonExtract(this.db, tasks.data, 'raw_sdk_response.tokenUsage.output_tokens')} AS INTEGER)
-          ELSE
-            CAST(${jsonExtract(this.db, tasks.data, 'raw_sdk_response.tokenUsage.input_tokens')} AS INTEGER) +
-            CAST(${jsonExtract(this.db, tasks.data, 'raw_sdk_response.tokenUsage.output_tokens')} AS INTEGER)
-        END
+        CAST(${jsonExtract(this.db, tasks.data, 'normalized_sdk_response.tokenUsage.totalTokens')} AS INTEGER)
       ), 0)`.as('total_tokens'),
       totalCost: sql<number>`COALESCE(SUM(
-        CAST(${jsonExtract(this.db, tasks.data, 'raw_sdk_response.tokenUsage.estimated_cost_usd')} AS REAL)
+        CAST(${jsonExtract(this.db, tasks.data, 'normalized_sdk_response.costUsd')} AS REAL)
       ), 0.0)`.as('total_cost'),
       taskCount: sql<number>`COUNT(DISTINCT ${tasks.task_id})`.as('task_count'),
     };
 
     if (includeUser) {
       selectFields.userId = tasks.created_by;
+      selectFields.userName = users.name;
+      selectFields.userEmail = users.email;
+      selectFields.userEmoji = users.emoji;
     }
     if (includeWorktree) {
       selectFields.worktreeId = worktrees.worktree_id;
@@ -179,7 +175,12 @@ export class LeaderboardService {
     // Build dynamic GROUP BY clause
     // biome-ignore lint/suspicious/noExplicitAny: Dynamic SQL fields require any
     const groupByFields: any[] = [];
-    if (includeUser) groupByFields.push(tasks.created_by);
+    if (includeUser) {
+      groupByFields.push(tasks.created_by);
+      groupByFields.push(users.name);
+      groupByFields.push(users.email);
+      groupByFields.push(users.emoji);
+    }
     if (includeWorktree) {
       groupByFields.push(worktrees.worktree_id);
       groupByFields.push(worktrees.name);
@@ -191,13 +192,19 @@ export class LeaderboardService {
     const orderClause = sortOrder === 'desc' ? desc(sortField) : asc(sortField);
 
     // Execute aggregation query
-    // Join: tasks -> sessions -> worktrees
+    // Join: tasks -> sessions -> worktrees, optionally LEFT JOIN users for display info
     // biome-ignore lint/suspicious/noExplicitAny: Complex multi-table join with dynamic grouping requires Drizzle type assertion
-    const results = await (this.db as any)
+    let qb = (this.db as any)
       .select(selectFields)
       .from(tasks)
       .innerJoin(sessions, eq(tasks.session_id, sessions.session_id))
-      .innerJoin(worktrees, eq(sessions.worktree_id, worktrees.worktree_id))
+      .innerJoin(worktrees, eq(sessions.worktree_id, worktrees.worktree_id));
+
+    if (includeUser) {
+      qb = qb.leftJoin(users, eq(tasks.created_by, users.user_id));
+    }
+
+    const results = await qb
       .where(whereClause)
       .groupBy(...groupByFields)
       .orderBy(orderClause)
@@ -215,20 +222,28 @@ export class LeaderboardService {
         : sql`COUNT(*)`;
 
     // biome-ignore lint/suspicious/noExplicitAny: Complex aggregation query with dynamic SELECT fields requires Drizzle type assertion
-    const countResult = await (this.db as any)
+    let countQb = (this.db as any)
       .select({
         count: sql<number>`${distinctExpr}`,
       })
       .from(tasks)
       .innerJoin(sessions, eq(tasks.session_id, sessions.session_id))
-      .innerJoin(worktrees, eq(sessions.worktree_id, worktrees.worktree_id))
-      .where(whereClause);
+      .innerJoin(worktrees, eq(sessions.worktree_id, worktrees.worktree_id));
+
+    if (includeUser) {
+      countQb = countQb.leftJoin(users, eq(tasks.created_by, users.user_id));
+    }
+
+    const countResult = await countQb.where(whereClause);
 
     const total = countResult[0]?.count || 0;
 
     // Define result row type based on selected fields
     interface ResultRow {
       userId?: string;
+      userName?: string | null;
+      userEmail?: string | null;
+      userEmoji?: string | null;
       worktreeId?: string;
       worktreeName?: string;
       repoId?: string;
@@ -241,7 +256,12 @@ export class LeaderboardService {
     const data: LeaderboardEntry[] = results.map((row: unknown) => {
       const r = row as ResultRow;
       return {
-        ...(includeUser && { userId: r.userId as string }),
+        ...(includeUser && {
+          userId: r.userId as string,
+          userName: r.userName || undefined,
+          userEmail: r.userEmail || undefined,
+          userEmoji: r.userEmoji || undefined,
+        }),
         ...(includeWorktree && {
           worktreeId: r.worktreeId as string,
           worktreeName: r.worktreeName as string,
