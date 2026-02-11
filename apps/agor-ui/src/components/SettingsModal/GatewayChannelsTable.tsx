@@ -120,6 +120,7 @@ const ChannelFormFields: React.FC<{
   const enableGroups = Form.useWatch('enable_groups', form) ?? false;
   const enableMpim = Form.useWatch('enable_mpim', form) ?? false;
   const requireMention = Form.useWatch('require_mention', form) ?? true;
+  const alignSlackUsers = Form.useWatch('align_slack_users', form) ?? false;
 
   return (
     <>
@@ -189,11 +190,7 @@ const ChannelFormFields: React.FC<{
         label="Post messages as"
         name="agor_user_id"
         rules={[{ required: true, message: 'Please select a user' }]}
-        tooltip={
-          mode === 'create'
-            ? 'Messages from this channel will be attributed to this Agor user'
-            : undefined
-        }
+        tooltip="Messages from this channel will be attributed to this Agor user. When user alignment is enabled, this acts as the fallback user when a Slack user's email can't be resolved."
       >
         <Select placeholder="Select a user" showSearch optionFilterProp="children">
           {Array.from(userById.values()).map((u) => (
@@ -296,6 +293,36 @@ const ChannelFormFields: React.FC<{
           >
             <Switch />
           </Form.Item>
+
+          <Divider style={{ marginTop: 24, marginBottom: 16 }}>
+            <Typography.Text strong>User Alignment</Typography.Text>
+          </Divider>
+
+          <Form.Item
+            label="Align Slack Users with Agor Users"
+            name="align_slack_users"
+            valuePropName="checked"
+            initialValue={false}
+            tooltip="When enabled, messages are attributed to the Agor user whose email matches the Slack user's email. Falls back to the 'Post messages as' user if the Slack user has no email. Rejects the message if the email exists but has no Agor account."
+          >
+            <Switch />
+          </Form.Item>
+
+          {alignSlackUsers && (
+            <Alert
+              type="info"
+              showIcon
+              message="Additional Slack OAuth Scope Required"
+              description={
+                <span>
+                  User alignment requires the <code>users:read.email</code> scope on your Slack app
+                  to look up user email addresses. Without this scope, alignment will silently fall
+                  back to the configured &quot;Post messages as&quot; user.
+                </span>
+              }
+              style={{ marginBottom: 16 }}
+            />
+          )}
 
           {(enableChannels || enableGroups || enableMpim) && !requireMention && (
             <Alert
@@ -525,6 +552,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       config.enable_groups = values.enable_groups ?? false;
       config.enable_mpim = values.enable_mpim ?? false;
       config.require_mention = values.require_mention ?? true;
+      config.align_slack_users = values.align_slack_users ?? false;
 
       // Channel whitelist
       // Note: In edit mode, if the form field is mounted and user clears all tags,
@@ -623,6 +651,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       enable_groups: config?.enable_groups ?? false,
       enable_mpim: config?.enable_mpim ?? false,
       require_mention: config?.require_mention ?? true,
+      align_slack_users: config?.align_slack_users ?? false,
       allowed_channel_ids: (config?.allowed_channel_ids as string[]) ?? [],
       // Agentic config fields
       permissionMode: channel.agentic_config?.permissionMode,

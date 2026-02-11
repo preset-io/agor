@@ -6,7 +6,12 @@
  * since it orchestrates across multiple repositories and services.
  */
 
-import { type Database, GatewayChannelRepository, ThreadSessionMapRepository } from '@agor/core/db';
+import {
+  type Database,
+  GatewayChannelRepository,
+  ThreadSessionMapRepository,
+  UsersRepository,
+} from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { GatewayConnector, InboundMessage } from '@agor/core/gateway';
 import { getConnector, hasConnector } from '@agor/core/gateway';
@@ -56,6 +61,7 @@ interface RouteMessageResult {
 export class GatewayService {
   private channelRepo: GatewayChannelRepository;
   private threadMapRepo: ThreadSessionMapRepository;
+  private usersRepo: UsersRepository;
   private app: Application;
 
   /** Active Socket Mode listeners keyed by channel ID */
@@ -72,6 +78,7 @@ export class GatewayService {
   constructor(db: Database, app: Application) {
     this.channelRepo = new GatewayChannelRepository(db);
     this.threadMapRepo = new ThreadSessionMapRepository(db);
+    this.usersRepo = new UsersRepository(db);
     this.app = app;
   }
 
@@ -124,9 +131,37 @@ export class GatewayService {
     const usersService = this.app.service('users') as {
       get: (id: string) => Promise<User>;
     };
-    const user = await usersService.get(channel.agor_user_id);
+    const channelOwner = await usersService.get(channel.agor_user_id);
 
-    // 3. Look up existing thread mapping
+    // 3. Resolve effective user (Slack user alignment or channel owner fallback)
+    let user = channelOwner;
+    const alignSlackUsers = (channel.config as Record<string, unknown>).align_slack_users === true;
+
+    if (alignSlackUsers && data.metadata?.slack_user_email) {
+      const email = data.metadata.slack_user_email as string;
+      const matchedUser = await this.usersRepo.findByEmail(email);
+
+      if (matchedUser) {
+        console.log(
+          `[gateway] Slack user aligned: ${email} → Agor user ${matchedUser.user_id.substring(0, 8)} (${matchedUser.name || matchedUser.email})`
+        );
+        user = await usersService.get(matchedUser.user_id);
+      } else {
+        console.log(`[gateway] Slack user alignment failed: no Agor user with email ${email}`);
+        this.sendDebugMessage(
+          channel,
+          data.thread_id,
+          `User ${email} doesn't have an Agor account. Ask an admin to create an account with this email, or disable user alignment.`
+        );
+        return {
+          success: false,
+          sessionId: '',
+          created: false,
+        };
+      }
+    }
+
+    // 4. Look up existing thread mapping
     const existingMapping = await this.threadMapRepo.findByChannelAndThread(
       channel.id,
       data.thread_id
@@ -193,7 +228,7 @@ export class GatewayService {
         title: data.text.substring(0, 100),
         description: data.text,
         worktree_id: channel.target_worktree_id,
-        created_by: channel.agor_user_id,
+        created_by: user.user_id,
         // Stamp session with creator's unix_username for executor impersonation.
         // Normally set by the setSessionUnixUsername hook, but that hook skips
         // internal calls (no provider). Gateway sessions are internal, so we
