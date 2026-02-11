@@ -10,6 +10,7 @@
 import { execSync } from 'node:child_process';
 import { generateId } from '@agor/core/db';
 import type {
+  MCPServerRepository,
   MessagesRepository,
   RepoRepository,
   SessionMCPServerRepository,
@@ -62,7 +63,8 @@ export class CodexTool implements ITool {
     apiKey?: string,
     messagesService?: MessagesService,
     tasksService?: TasksService,
-    _useNativeAuth?: boolean // Codex doesn't have OAuth fallback, but accept for interface consistency
+    _useNativeAuth?: boolean, // Codex doesn't have OAuth fallback, but accept for interface consistency
+    mcpServerRepo?: MCPServerRepository
   ) {
     this.messagesRepo = messagesRepo;
     this.sessionsRepo = sessionsRepo;
@@ -76,7 +78,8 @@ export class CodexTool implements ITool {
         sessionMCPServerRepo,
         worktreesRepo,
         reposRepo,
-        apiKey
+        apiKey,
+        mcpServerRepo
       );
     }
   }

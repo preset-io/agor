@@ -40,7 +40,8 @@ export async function executeCodexTask(params: {
         apiKey,
         repos.messagesService,
         repos.tasksService,
-        useNativeAuth // Flag for native auth (if applicable)
+        useNativeAuth, // Flag for native auth (if applicable)
+        repos.mcpServers // MCPServerRepository for global MCP server resolution
       ),
   });
 }

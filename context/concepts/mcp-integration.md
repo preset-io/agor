@@ -319,22 +319,26 @@ PATCH  /sessions/:id/mcp-servers/:mcpId # Toggle enabled
     }
     ```
 
-- ✅ **Pass MCP servers to Codex** - Config file integration
+- ✅ **Pass MCP servers to Codex** - Config file integration (STDIO + Streamable HTTP)
   - Codex requires MCP configuration in `~/.codex/config.toml`
   - Agor automatically writes selected MCP servers to config file
-  - Format:
+  - Supports both STDIO and streamable HTTP transports
+  - Built-in Agor MCP server configured as streamable HTTP:
 
     ```toml
     [mcp_servers.agor]
-    command = "npx"
-    args = ["-y", "@agor/agor-mcp"]
+    url = "http://localhost:3030/mcp?sessionToken=<token>"
 
-    [mcp_servers.agor.env]
-    AGOR_API_URL = "http://localhost:3030"
+    [mcp_servers.my_stdio_server]
+    command = "npx"
+    args = ["-y", "@modelcontextprotocol/server-filesystem"]
+
+    [mcp_servers.my_stdio_server.env]
+    ALLOWED_PATHS = "/home/user/projects"
     ```
 
-  - Status: ✅ Fully implemented
-  - Location: `packages/core/src/tools/codex/prompt-service.ts:114-200`
+  - Status: ✅ Fully implemented (STDIO + HTTP)
+  - Location: `packages/executor/src/sdk-handlers/codex/prompt-service.ts`
 
 **UI Enhancements:**
 

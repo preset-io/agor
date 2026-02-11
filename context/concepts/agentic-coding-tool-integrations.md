@@ -27,8 +27,8 @@ All three use official SDKs for programmatic control, streaming, and session man
 | **Mid-Session Permission Change** | ✅ Via hooks         | ✅ Via /approvals   | ⚠️ Needs testing   |
 | **Session Continuity**            | ✅ sdk_session_id    | ✅ Thread ID        | ✅ History array   |
 | **Model Selection**               | ✅ Via SDK           | ✅ Via SDK          | ✅ Via SDK         |
-| **MCP Support**                   | ✅ Via SDK           | ⚠️ STDIO only       | ✅ Via SDK         |
-| **Agor MCP Integration**          | ✅ Self-hosted       | ⚠️ Limited (STDIO)  | ✅ Fully wired     |
+| **MCP Support**                   | ✅ Via SDK           | ✅ Via config.toml   | ✅ Via SDK         |
+| **Agor MCP Integration**          | ✅ Self-hosted       | ✅ Fully wired       | ✅ Fully wired     |
 | **Session Import**                | ✅ JSONL transcripts | ❌ Format unknown   | ❌ Not implemented |
 | **Tool Event Details**            | ✅ Rich metadata     | ✅ Rich metadata    | ✅ 13 event types  |
 | **Interactive Permissions**       | ✅ PreToolUse hook   | ❌ Config-only      | ⚠️ Unknown         |
@@ -288,14 +288,15 @@ function mapPermissionMode(mode: PermissionMode, agent: AgenticToolName): string
 - Agor integration: Session-level MCP server selection via UI
 - Status: ✅ Fully wired and working
 
-**Codex:** ⚠️ Partial support - **STDIO transport only**
+**Codex:** ✅ Full support via config.toml - **STDIO + Streamable HTTP**
 
 - API: `~/.codex/config.toml` with `[mcp_servers.<name>]` sections
 - Agor integration: Session-level MCP server selection via UI
-- Configuration: Agor writes STDIO MCP servers to config.toml automatically
-- **Limitation**: HTTP and SSE transports are NOT supported by Codex SDK
-- Behavior: HTTP/SSE servers are filtered out with warnings, only STDIO servers configured
-- Status: ⚠️ Working for STDIO servers only (Context7, filesystem, etc. won't work as they use HTTP)
+- Configuration: Agor writes both STDIO and HTTP MCP servers to config.toml automatically
+- Features: Includes Agor MCP server for daemon self-access (streamable HTTP) + user-configured MCP servers
+- STDIO servers: `command` + `args` + `env` fields
+- HTTP servers: `url` + optional `bearer_token_env_var` / `http_headers` / `env_http_headers`
+- Status: ✅ Fully wired and working (STDIO + HTTP transports)
 
 **Gemini:** ✅ Full support via SDK
 
@@ -467,7 +468,7 @@ interface Session {
 | **Mid-Session Mode Change** | ✅ Complete | ✅ Complete      | ⚠️ Needs testing   |
 | **Session Resumption**      | ✅ Complete | ✅ Complete      | ✅ Complete        |
 | **Model Selection UI**      | ✅ Complete | ✅ Complete      | ✅ Complete        |
-| **MCP Integration**         | ✅ Complete | ⚠️ STDIO only    | ✅ Complete        |
+| **MCP Integration**         | ✅ Complete | ✅ Complete       | ✅ Complete        |
 | **Session Import**          | ✅ Complete | ❌ Deferred      | ❌ Not implemented |
 | **Tool Visualization**      | ✅ Complete | ⚠️ Basic         | ❌ Not implemented |
 | **Interactive Approvals**   | ✅ Complete | ❌ Not supported | ⚠️ Unknown         |
@@ -532,7 +533,7 @@ interface Session {
 
 1. **Tool visualization** - Enhance tool blocks to Claude Code level
 2. **Session import** - Discover and parse Codex session format
-3. **HTTP/SSE MCP support** - Investigate if Codex SDK can support non-STDIO transports (likely SDK limitation)
+3. ~~**HTTP/SSE MCP support**~~ - ✅ Done! Codex now supports streamable HTTP transport natively via `url` field in config.toml
 
 ### Cross-Tool Features
 
