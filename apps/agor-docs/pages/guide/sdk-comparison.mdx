@@ -15,9 +15,9 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 | **Stop mid-execution**      | ✅ Yes              | ⚠️ Limited                | ⚠️ Limited          | Claude has `interrupt()`, others may lose partial work                                  |
 | **Session import/export**   | ✅ Yes              | ❌ No                     | ❌ No               | Only Claude Code stores sessions as JSONL transcripts                                   |
 | **Session forkable**        | ✅ Yes (via replay) | ✅ Yes (via replay)       | ✅ Yes (via replay) | Agor emulates forking by replaying messages to new session                              |
-| **MCP integration**         | ✅ Native           | ⚠️ STDIO only (not wired) | ✅ Native           | Claude Code has first-class MCP server support                                          |
+| **MCP integration**         | ✅ Native           | ✅ Native                  | ✅ Native           | All agents support MCP with Agor's built-in self-access server                          |
 | **Permission requests**     | ✅ Rich             | ⚠️ Basic                  | ⚠️ Basic            | Claude has granular tool permissions, others use simpler modes                          |
-| **Project instructions**    | ✅ CLAUDE.md        | ⚠️ Manual                 | ⚠️ Manual           | Claude auto-loads CLAUDE.md, others need manual injection                               |
+| **Project instructions**    | ✅ CLAUDE.md        | ✅ AGENTS.md               | ⚠️ Manual           | Claude auto-loads CLAUDE.md, Codex auto-loads AGENTS.md, Gemini needs manual injection  |
 | **Tool execution**          | ✅ Rich widgets     | ⚠️ Basic                  | ⚠️ Basic            | Claude exposes detailed tool metadata for rich visualization                            |
 | **Session continuity**      | ✅ SDK-managed      | ✅ History-based          | ✅ History-based    | Claude uses `session_id`, others replay message history                                 |
 | **Token usage tracking**    | ✅ Full             | ✅ Full                   | ❌ No               | Claude & Codex now surface SDK usage metadata (input/output/cache) for pills + cost     |
@@ -129,11 +129,12 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 - Supports MCP prompts, resources, and tools
 - Agor UI for managing MCP server configs per session
 
-**Codex:** ⚠️ **STDIO only (not yet integrated)**
+**Codex:** ✅ **Native support**
 
-- SDK supports MCP via STDIO transport
-- Agor hasn't wired Codex MCP configuration yet
-- HTTP/SSE transports still unsupported by the SDK
+- MCP servers configured via per-session `config.toml` under `[mcp_servers.<name>]`
+- Supports both STDIO (`command` + `args`) and streamable HTTP (`url` + `bearer_token_env_var`) transports
+- Agor's built-in MCP server auto-configured for self-awareness (sessions, worktrees, boards, etc.)
+- Session-level MCP selection via Agor UI, same as Claude and Gemini
 
 **Gemini:** ✅ **Native support**
 
@@ -141,7 +142,7 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 - Supports advanced options (tool filtering, transport selection) shared with Claude
 - Agor provides the same session-level MCP selection UI for Gemini sessions
 
-**See [Architecture Guide: Agor as an MCP Server](/guide/architecture#agor-as-an-mcp-server) for details on using MCP with Claude Code and Gemini.**
+**See [Architecture Guide: Agor as an MCP Server](/guide/architecture#agor-as-an-mcp-server) for details on using MCP with Claude Code, Codex, and Gemini.**
 
 ---
 
@@ -180,11 +181,11 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 - No manual injection needed
 - Agor sessions inherit project instructions automatically
 
-**Codex:** ⚠️ **Manual injection**
+**Codex:** ✅ **AGENTS.md auto-loading**
 
-- No standard instruction file format
-- Agor can inject instructions via system prompt
-- Requires explicit configuration
+- Codex automatically loads `AGENTS.md` from the working directory
+- Agor generates a per-session `AGENTS.md` with project context at the worktree's `CODEX_HOME`
+- No manual injection needed
 
 **Gemini:** ⚠️ **Manual injection**
 
@@ -192,7 +193,7 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 - Agor can inject instructions via system prompt
 - Requires explicit configuration
 
-**Recommendation:** Use Claude Code for projects with rich context requirements. For Codex/Gemini, manage instructions in Agor session config.
+**Recommendation:** Use Claude Code or Codex for projects with rich context requirements. For Gemini, manage instructions in Agor session config.
 
 ---
 
@@ -569,11 +570,12 @@ When expanded:
 - Replay sessions in Agor
 - Full fidelity preservation of tool uses, timestamps, git state
 
-**MCP Integration:**
+**MCP Integration (all agents):**
 
-- First-class MCP server support
-- Session-level MCP server selection
-- Agor UI for managing MCP configs
+- First-class MCP server support across Claude Code, Codex, and Gemini
+- Session-level MCP server selection via Agor UI
+- Agor's built-in MCP server for self-awareness (sessions, worktrees, boards)
+- Supports both STDIO and HTTP transports
 
 ---
 
@@ -591,9 +593,10 @@ When expanded:
 ### Use Codex when:
 
 - You prefer OpenAI's models
-- You don't need MCP integration (STDIO support exists in SDK but isn't wired up in Agor yet)
+- You need MCP integration (full STDIO + HTTP support, including Agor self-access)
 - Basic permissions are sufficient
 - You want token/cost/context pills powered by OpenAI usage data
+- You have an `AGENTS.md` project instructions file
 
 ### Use Gemini when:
 
@@ -613,7 +616,6 @@ As agent SDKs evolve, Agor will gain new capabilities.
 Agent integration priorities:
 
 - **Token tracking for Gemini** - Extract usage data from Google APIs (Codex shipped Jan 2025)
-- **Codex MCP support** - If OpenAI adds MCP protocol
 - **Gemini project files** - If Google adds instruction file support
 - **Better stop controls** - More graceful cancellation for all agents
 - **Richer tool metadata** - If Codex/Gemini expose more tool details
