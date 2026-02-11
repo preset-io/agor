@@ -263,9 +263,15 @@ export class CodexPromptService {
       `   📊 [Codex MCP] Transport breakdown: ${stdioServers.length} STDIO, ${httpServers.length} HTTP/SSE`
     );
 
-    // Create hash to detect changes (include all servers + Agor MCP token)
-    const allServerIds = mcpServers.map((s) => s.mcp_server_id).sort();
-    const configHash = `${approvalPolicy}:${networkAccess}:${mcpToken || ''}:${JSON.stringify(allServerIds)}`;
+    // Create hash to detect changes
+    // Include server config fields (not just IDs) so URL/command/auth changes trigger a rewrite
+    const serverFingerprints = mcpServers
+      .map(
+        (s) =>
+          `${s.mcp_server_id}:${s.transport}:${s.url || ''}:${s.command || ''}:${JSON.stringify(s.args || [])}:${s.auth?.token || ''}`
+      )
+      .sort();
+    const configHash = `${approvalPolicy}:${networkAccess}:${mcpToken || ''}:${JSON.stringify(serverFingerprints)}`;
 
     // Skip if config and target directory haven't changed (avoid unnecessary file I/O)
     if (this.lastMCPServersHash === configHash && this.lastCodexHome === codexHome) {
@@ -329,7 +335,7 @@ export class CodexPromptService {
     // Configure built-in Agor MCP server (streamable HTTP)
     if (mcpToken) {
       const daemonUrl = await getDaemonUrl();
-      const agorMcpUrl = `${daemonUrl}/mcp?sessionToken=${mcpToken}`;
+      const agorMcpUrl = `${daemonUrl}/mcp?sessionToken=${encodeURIComponent(mcpToken)}`;
 
       managedServerNames.add('agor');
       mcpServersConfig.agor = {
@@ -343,7 +349,14 @@ export class CodexPromptService {
 
     // Configure STDIO MCP servers
     for (const server of stdioServers) {
-      const serverName = server.name.toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+      let serverName = server.name.toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+      // Reserve 'agor' for the built-in Agor MCP server
+      if (serverName === 'agor') {
+        serverName = 'user_agor';
+        console.warn(
+          `   ⚠️  [Codex MCP] Server "${server.name}" conflicts with built-in Agor MCP server, renamed to "${serverName}"`
+        );
+      }
       managedServerNames.add(serverName);
 
       const serverConfig: JsonMap = {};
@@ -366,7 +379,14 @@ export class CodexPromptService {
 
     // Configure HTTP/SSE MCP servers (streamable HTTP transport)
     for (const server of httpServers) {
-      const serverName = server.name.toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+      let serverName = server.name.toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+      // Reserve 'agor' for the built-in Agor MCP server
+      if (serverName === 'agor') {
+        serverName = 'user_agor';
+        console.warn(
+          `   ⚠️  [Codex MCP] Server "${server.name}" conflicts with built-in Agor MCP server, renamed to "${serverName}"`
+        );
+      }
       managedServerNames.add(serverName);
 
       const serverConfig: JsonMap = {};
@@ -378,18 +398,14 @@ export class CodexPromptService {
 
       // Handle authentication for HTTP servers
       // Codex supports bearer_token_env_var, http_headers, and env_http_headers
+      // Note: 'env' field is only valid for STDIO servers in Codex config.toml
       if (server.auth?.type === 'bearer' && server.auth.token) {
-        // If we have a resolved bearer token, inject it via an env var
-        // Create a unique env var name for this server's token
-        const envVarName = `AGOR_MCP_TOKEN_${serverName.toUpperCase()}`;
+        // Inject resolved bearer token via a session-scoped env var
+        // Include sessionId to avoid collisions between concurrent sessions
+        const envVarName = `AGOR_MCP_${sessionId.substring(0, 8)}_${serverName.toUpperCase()}`;
         process.env[envVarName] = server.auth.token;
         serverConfig.bearer_token_env_var = envVarName;
         console.log(`      auth: bearer token via ${envVarName}`);
-      }
-
-      if (server.env && Object.keys(server.env).length > 0) {
-        serverConfig.env = server.env;
-        console.log(`      env vars: ${Object.keys(server.env).length} variable(s)`);
       }
 
       mcpServersConfig[serverName] = serverConfig;
@@ -997,6 +1013,14 @@ export class CodexPromptService {
       // Directory may not exist if session never ran - that's ok
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
         console.warn(`⚠️  Failed to remove per-session CODEX_HOME:`, error);
+      }
+    }
+
+    // Clean up session-scoped MCP bearer token env vars
+    const envPrefix = `AGOR_MCP_${sessionId.substring(0, 8)}_`;
+    for (const key of Object.keys(process.env)) {
+      if (key.startsWith(envPrefix)) {
+        delete process.env[key];
       }
     }
 
