@@ -281,8 +281,9 @@ function startCallbackServer(port: number = 0): Promise<{
  */
 async function openBrowser(url: string): Promise<void> {
   try {
-    const open = (await import('open')).default;
-    await open(url);
+    // Dynamic import with type assertion to handle ESM module
+    const openModule = (await import('open')) as { default: (url: string) => Promise<unknown> };
+    await openModule.default(url);
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     throw new Error(
