@@ -99,9 +99,10 @@ export class SlackConnector implements GatewayConnector {
   private config: SlackConfig;
   private botUserId: string | null = null;
 
-  /** Cache: Slack user ID → email (or null if unavailable). Expires after 15 minutes. */
+  /** Cache: Slack user ID → email (or null if unavailable). */
   private userEmailCache = new Map<string, { email: string | null; expiresAt: number }>();
-  private static USER_CACHE_TTL_MS = 15 * 60 * 1000;
+  private static USER_CACHE_TTL_MS = 15 * 60 * 1000; // 15 min for successful lookups
+  private static USER_CACHE_ERROR_TTL_MS = 60 * 1000; // 1 min for errors (transient recovery)
 
   constructor(config: Record<string, unknown>) {
     this.config = config as unknown as SlackConfig;
@@ -119,13 +120,23 @@ export class SlackConnector implements GatewayConnector {
   /**
    * Look up a Slack user's email address by their user ID.
    *
-   * Caches results (including null) for 15 minutes to reduce API calls.
+   * Caches successful results for 15 minutes and errors for 1 minute
+   * (so transient failures recover quickly). Evicts expired entries on
+   * each call to prevent unbounded cache growth.
+   *
    * Returns null if the email is unavailable (missing users:read.email scope,
    * bot user, restricted guest, or API error).
    */
   async lookupUserEmail(slackUserId: string): Promise<string | null> {
+    const now = Date.now();
+
+    // Evict expired entries to prevent unbounded growth
+    for (const [key, entry] of this.userEmailCache) {
+      if (entry.expiresAt <= now) this.userEmailCache.delete(key);
+    }
+
     const cached = this.userEmailCache.get(slackUserId);
-    if (cached && cached.expiresAt > Date.now()) {
+    if (cached && cached.expiresAt > now) {
       return cached.email;
     }
 
@@ -135,7 +146,7 @@ export class SlackConnector implements GatewayConnector {
 
       this.userEmailCache.set(slackUserId, {
         email,
-        expiresAt: Date.now() + SlackConnector.USER_CACHE_TTL_MS,
+        expiresAt: now + SlackConnector.USER_CACHE_TTL_MS,
       });
 
       if (email) {
@@ -149,9 +160,10 @@ export class SlackConnector implements GatewayConnector {
       return email;
     } catch (error) {
       console.warn(`[slack] Failed to look up email for user ${slackUserId}:`, error);
+      // Short TTL for errors so transient failures (rate limits, network) recover quickly
       this.userEmailCache.set(slackUserId, {
         email: null,
-        expiresAt: Date.now() + SlackConnector.USER_CACHE_TTL_MS,
+        expiresAt: now + SlackConnector.USER_CACHE_ERROR_TTL_MS,
       });
       return null;
     }

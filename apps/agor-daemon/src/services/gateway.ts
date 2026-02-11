@@ -137,8 +137,12 @@ export class GatewayService {
     let user = channelOwner;
     const alignSlackUsers = (channel.config as Record<string, unknown>).align_slack_users === true;
 
-    if (alignSlackUsers && data.metadata?.slack_user_email) {
-      const email = data.metadata.slack_user_email as string;
+    if (
+      alignSlackUsers &&
+      data.metadata?.slack_user_email &&
+      typeof data.metadata.slack_user_email === 'string'
+    ) {
+      const email = data.metadata.slack_user_email.toLowerCase().trim();
       const matchedUser = await this.usersRepo.findByEmail(email);
 
       if (matchedUser) {
@@ -232,7 +236,8 @@ export class GatewayService {
         // Stamp session with creator's unix_username for executor impersonation.
         // Normally set by the setSessionUnixUsername hook, but that hook skips
         // internal calls (no provider). Gateway sessions are internal, so we
-        // must set it explicitly using the channel owner's user record.
+        // must set it explicitly. When user alignment is active, this uses the
+        // aligned user's unix_username; otherwise the channel owner's.
         unix_username: user.unix_username ?? null,
         status: SessionStatus.IDLE,
         agentic_tool: agenticTool,
