@@ -1178,9 +1178,34 @@ async function main() {
             try {
               console.log('[OAuth Test] Calling performMCPOAuthFlow...');
 
+              // Debug: Log full params structure to understand socket connection
+              console.log(
+                '[OAuth Test] Full params:',
+                JSON.stringify(
+                  params,
+                  (key, value) => {
+                    // Avoid circular refs and huge objects - just show keys at top level
+                    if (key === 'connection' && value) {
+                      return { id: value.id, hasIo: !!value.io, keys: Object.keys(value) };
+                    }
+                    return value;
+                  },
+                  2
+                )
+              );
+              console.log('[OAuth Test] app.io available:', !!app.io);
+              console.log(
+                '[OAuth Test] params?.provider:',
+                (params as AuthenticatedParams)?.provider
+              );
+
               // Custom browser opener: emit WebSocket event to client instead of opening locally
               const browserOpener = async (authUrl: string) => {
-                const socketId = params?.connection?.id;
+                // For Feathers socketio, connection may have the socket directly
+                const connection = (params as AuthenticatedParams)?.connection as
+                  | { id?: string }
+                  | undefined;
+                const socketId = connection?.id;
                 if (socketId && app.io) {
                   console.log(
                     '[OAuth Test] Emitting oauth:open_browser event to socket:',
@@ -1189,8 +1214,13 @@ async function main() {
                   app.io.to(socketId).emit('oauth:open_browser', { authUrl });
                 } else {
                   console.log('[OAuth Test] No socket connection, auth URL:', authUrl);
-                  // For REST clients, we can't open browser automatically
-                  // The URL will be logged, but flow may timeout
+                  console.log('[OAuth Test] connection object:', connection);
+                  // Fallback: broadcast to ALL connected clients
+                  // The client should only have one browser tab open doing OAuth
+                  if (app.io) {
+                    console.log('[OAuth Test] Broadcasting oauth:open_browser to all clients');
+                    app.io.emit('oauth:open_browser', { authUrl });
+                  }
                 }
               };
 
@@ -1671,7 +1701,8 @@ async function main() {
 
                 // Custom browser opener: emit WebSocket event to client
                 const browserOpener = async (authUrl: string) => {
-                  const socketId = (params as { connection?: { id?: string } })?.connection?.id;
+                  const connection = params?.connection as { id?: string } | undefined;
+                  const socketId = connection?.id;
                   if (socketId && app.io) {
                     console.log(
                       '[MCP Discovery] Emitting oauth:open_browser event to socket:',
@@ -1680,6 +1711,12 @@ async function main() {
                     app.io.to(socketId).emit('oauth:open_browser', { authUrl });
                   } else {
                     console.log('[MCP Discovery] No socket connection, auth URL:', authUrl);
+                    console.log('[MCP Discovery] connection object:', connection);
+                    // Fallback: broadcast to ALL connected clients
+                    if (app.io) {
+                      console.log('[MCP Discovery] Broadcasting oauth:open_browser to all clients');
+                      app.io.emit('oauth:open_browser', { authUrl });
+                    }
                   }
                 };
 
