@@ -631,3 +631,237 @@ export function getAuthCodeTokenCacheStats(): {
     expiredEntries,
   };
 }
+
+// ============================================================================
+// TWO-PHASE OAUTH FLOW
+// Used when the daemon runs remotely and the callback server can't receive
+// the OAuth redirect. The flow is split into:
+// 1. startMCPOAuthFlow - Returns auth URL and context for browser
+// 2. completeMCPOAuthFlow - Exchanges code for token using saved context
+// ============================================================================
+
+/**
+ * Context needed to complete OAuth flow after user authentication
+ * This is returned by startMCPOAuthFlow and consumed by completeMCPOAuthFlow
+ */
+export interface OAuthFlowContext {
+  metadataUrl: string;
+  tokenEndpoint: string;
+  redirectUri: string;
+  pkceVerifier: string;
+  clientId: string;
+  clientSecret?: string;
+  state: string;
+  authorizationUrl: string;
+}
+
+/**
+ * Start the OAuth 2.1 Authorization Code flow with PKCE
+ *
+ * This is the first phase of a two-phase OAuth flow for remote daemon scenarios.
+ * Returns the authorization URL to open in browser and context needed to complete
+ * the flow later.
+ *
+ * @param wwwAuthenticateHeader - The WWW-Authenticate header from 401 response
+ * @param clientId - OAuth client ID (optional, will use DCR if not provided)
+ * @param redirectUri - Custom redirect URI (optional, defaults to a placeholder)
+ * @returns Authorization URL and flow context
+ */
+export async function startMCPOAuthFlow(
+  wwwAuthenticateHeader: string,
+  clientId?: string,
+  redirectUri?: string
+): Promise<OAuthFlowContext> {
+  console.log('[MCP OAuth] Starting two-phase OAuth 2.1 flow');
+
+  // Step 1: Parse WWW-Authenticate header
+  const metadataUrl = parseWWWAuthenticate(wwwAuthenticateHeader);
+  if (!metadataUrl) {
+    throw new Error(
+      'Invalid WWW-Authenticate header. Expected format: Bearer resource_metadata="<url>"'
+    );
+  }
+  console.log('[MCP OAuth] Resource metadata URL:', metadataUrl);
+
+  // Step 2: Fetch Protected Resource Metadata (RFC 9728)
+  const resourceMetadata = await fetchResourceMetadata(metadataUrl);
+  console.log('[MCP OAuth] Resource metadata:', resourceMetadata);
+
+  if (
+    !resourceMetadata.authorization_servers ||
+    resourceMetadata.authorization_servers.length === 0
+  ) {
+    throw new Error('No authorization servers found in resource metadata');
+  }
+
+  // Use first authorization server
+  const authServerUrl = resourceMetadata.authorization_servers[0];
+  console.log('[MCP OAuth] Authorization server:', authServerUrl);
+
+  // Step 3: Fetch Authorization Server Metadata (RFC 8414)
+  const authServerMetadata = await fetchAuthorizationServerMetadata(authServerUrl);
+  console.log('[MCP OAuth] Authorization server metadata:', authServerMetadata);
+
+  // Step 4: Generate PKCE challenge
+  const pkce = generatePKCE();
+
+  // Step 5: Use provided redirect URI or generate a placeholder
+  // When running remotely, the actual callback server won't work,
+  // so we use a known URI pattern that the user will copy from
+  const actualRedirectUri = redirectUri || 'http://127.0.0.1:0/oauth/callback';
+
+  // Step 6: Get or register client_id
+  let actualClientId = clientId;
+  let clientSecret: string | undefined;
+
+  if (!actualClientId) {
+    // Check if server supports Dynamic Client Registration (RFC 7591)
+    if (authServerMetadata.registration_endpoint) {
+      console.log('[MCP OAuth] Server supports Dynamic Client Registration');
+      const registration = await registerDynamicClient(
+        authServerMetadata.registration_endpoint,
+        actualRedirectUri,
+        'Agor MCP Client'
+      );
+      actualClientId = registration.client_id;
+      clientSecret = registration.client_secret;
+    } else {
+      // No DCR support and no client_id provided - try MCP-style endpoint
+      const mcpRegisterEndpoint = `${authServerUrl}/register`;
+      console.log('[MCP OAuth] Trying MCP-style registration endpoint:', mcpRegisterEndpoint);
+
+      try {
+        const registration = await registerDynamicClient(
+          mcpRegisterEndpoint,
+          actualRedirectUri,
+          'Agor MCP Client'
+        );
+        actualClientId = registration.client_id;
+        clientSecret = registration.client_secret;
+      } catch (_regError) {
+        throw new Error(
+          'OAuth client_id is required but the authorization server does not support ' +
+            'Dynamic Client Registration.\n\n' +
+            'Please provide a client_id in the MCP server configuration.'
+        );
+      }
+    }
+  }
+
+  // Generate state for CSRF protection
+  const state = crypto.randomUUID();
+
+  // Step 7: Build authorization URL
+  const authUrl = new URL(authServerMetadata.authorization_endpoint);
+  authUrl.searchParams.set('response_type', 'code');
+  authUrl.searchParams.set('client_id', actualClientId);
+  authUrl.searchParams.set('redirect_uri', actualRedirectUri);
+  authUrl.searchParams.set('code_challenge', pkce.challenge);
+  authUrl.searchParams.set('code_challenge_method', 'S256');
+  authUrl.searchParams.set('state', state);
+
+  // Add scopes if available
+  if (resourceMetadata.scopes_supported && resourceMetadata.scopes_supported.length > 0) {
+    authUrl.searchParams.set('scope', resourceMetadata.scopes_supported.join(' '));
+  }
+
+  console.log('[MCP OAuth] Authorization URL:', authUrl.toString());
+
+  return {
+    metadataUrl,
+    tokenEndpoint: authServerMetadata.token_endpoint,
+    redirectUri: actualRedirectUri,
+    pkceVerifier: pkce.verifier,
+    clientId: actualClientId,
+    clientSecret,
+    state,
+    authorizationUrl: authUrl.toString(),
+  };
+}
+
+/**
+ * Complete the OAuth 2.1 flow with authorization code
+ *
+ * This is the second phase of a two-phase OAuth flow for remote daemon scenarios.
+ * Takes the authorization code (from the callback URL) and exchanges it for a token.
+ *
+ * @param context - Flow context from startMCPOAuthFlow
+ * @param code - Authorization code from OAuth callback
+ * @param state - State from OAuth callback (for CSRF verification)
+ * @returns Access token
+ */
+export async function completeMCPOAuthFlow(
+  context: OAuthFlowContext,
+  code: string,
+  state: string
+): Promise<string> {
+  console.log('[MCP OAuth] Completing OAuth flow with authorization code');
+
+  // Verify state to prevent CSRF
+  if (state !== context.state) {
+    throw new Error('State mismatch - possible CSRF attack');
+  }
+
+  // Exchange code for token
+  const tokenResponse = await exchangeCodeForToken(
+    context.tokenEndpoint,
+    code,
+    context.redirectUri,
+    context.pkceVerifier,
+    context.clientId,
+    context.clientSecret
+  );
+
+  console.log('[MCP OAuth] Access token received successfully');
+
+  // Cache token
+  const expiresInSeconds = tokenResponse.expires_in || DEFAULT_AUTHCODE_TOKEN_TTL_SECONDS;
+  const expiresAt = Date.now() + (expiresInSeconds - EXPIRY_BUFFER_SECONDS) * 1000;
+  const fetchedAt = Date.now();
+
+  authCodeTokenCache.set(context.metadataUrl, {
+    token: tokenResponse.access_token,
+    expiresAt,
+    fetchedAt,
+  });
+
+  console.log(
+    `[MCP OAuth] Token cached for ${expiresInSeconds}s (${EXPIRY_BUFFER_SECONDS}s buffer)`
+  );
+
+  return tokenResponse.access_token;
+}
+
+/**
+ * Parse OAuth callback URL to extract code and state
+ *
+ * @param callbackUrl - The full callback URL from the browser (may include error page URL)
+ * @returns Object with code and state, or throws if invalid
+ */
+export function parseOAuthCallback(callbackUrl: string): { code: string; state: string } {
+  try {
+    const url = new URL(callbackUrl);
+    const code = url.searchParams.get('code');
+    const state = url.searchParams.get('state');
+
+    if (!code) {
+      const error = url.searchParams.get('error');
+      const errorDescription = url.searchParams.get('error_description');
+      if (error) {
+        throw new Error(`OAuth error: ${error}${errorDescription ? ` - ${errorDescription}` : ''}`);
+      }
+      throw new Error('No authorization code in callback URL');
+    }
+
+    if (!state) {
+      throw new Error('No state parameter in callback URL');
+    }
+
+    return { code, state };
+  } catch (e) {
+    if (e instanceof Error && e.message.startsWith('OAuth error:')) {
+      throw e;
+    }
+    throw new Error(`Invalid callback URL: ${callbackUrl}`);
+  }
+}

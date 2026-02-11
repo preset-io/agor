@@ -1473,6 +1473,188 @@ async function main() {
     },
   });
 
+  // ============================================================================
+  // TWO-PHASE OAUTH FLOW ENDPOINTS
+  // These endpoints support OAuth when the daemon runs remotely and the
+  // callback server can't receive the OAuth redirect.
+  // ============================================================================
+
+  // Store pending OAuth flow contexts (keyed by state)
+  const pendingOAuthFlows = new Map<
+    string,
+    {
+      context: {
+        metadataUrl: string;
+        tokenEndpoint: string;
+        redirectUri: string;
+        pkceVerifier: string;
+        clientId: string;
+        clientSecret?: string;
+        state: string;
+        authorizationUrl: string;
+      };
+      mcpServerId?: string;
+      createdAt: number;
+    }
+  >();
+
+  // Clean up expired flows (older than 10 minutes)
+  setInterval(() => {
+    const now = Date.now();
+    const tenMinutes = 10 * 60 * 1000;
+    for (const [state, flow] of pendingOAuthFlows.entries()) {
+      if (now - flow.createdAt > tenMinutes) {
+        pendingOAuthFlows.delete(state);
+        console.log('[OAuth] Cleaned up expired flow:', state);
+      }
+    }
+  }, 60_000); // Check every minute
+
+  // Start OAuth flow - returns auth URL and stores context for completion
+  app.use('/mcp-servers/oauth-start', {
+    async create(
+      data: {
+        mcp_url: string;
+        mcp_server_id?: string;
+        client_id?: string;
+      },
+      params?: AuthenticatedParams
+    ) {
+      try {
+        console.log('[OAuth Start] Starting two-phase OAuth flow for:', data.mcp_url);
+
+        // Probe the MCP URL to get WWW-Authenticate header
+        const probeResponse = await fetch(data.mcp_url, {
+          method: 'GET',
+          headers: { Accept: 'application/json' },
+          signal: AbortSignal.timeout(15_000),
+        });
+
+        const wwwAuthenticate = probeResponse.headers.get('www-authenticate');
+        if (probeResponse.status !== 401 || !wwwAuthenticate?.includes('resource_metadata=')) {
+          return {
+            success: false,
+            error: 'Server does not require OAuth 2.1 authentication',
+          };
+        }
+
+        // Import the two-phase OAuth flow functions
+        const { startMCPOAuthFlow } = await import('@agor/core/tools/mcp/oauth-mcp-transport');
+
+        // Start the flow - this returns auth URL and context
+        const context = await startMCPOAuthFlow(wwwAuthenticate, data.client_id);
+
+        // Store the context for later completion
+        pendingOAuthFlows.set(context.state, {
+          context,
+          mcpServerId: data.mcp_server_id,
+          createdAt: Date.now(),
+        });
+
+        console.log('[OAuth Start] Flow started, state:', context.state);
+
+        // Emit WebSocket event to open browser on client
+        const connection = params?.connection as { id?: string } | undefined;
+        const socketId = connection?.id;
+        if (socketId && app.io) {
+          console.log('[OAuth Start] Emitting oauth:open_browser to socket:', socketId);
+          app.io.to(socketId).emit('oauth:open_browser', { authUrl: context.authorizationUrl });
+        } else if (app.io) {
+          console.log('[OAuth Start] Broadcasting oauth:open_browser to all clients');
+          app.io.emit('oauth:open_browser', { authUrl: context.authorizationUrl });
+        }
+
+        return {
+          success: true,
+          authorizationUrl: context.authorizationUrl,
+          state: context.state,
+          message:
+            'Browser opened for authentication. After signing in, copy the callback URL and paste it below.',
+        };
+      } catch (error) {
+        console.error('[OAuth Start] Error:', error);
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+  });
+
+  app.service('mcp-servers/oauth-start').hooks({
+    before: { create: [requireAuth] },
+  });
+
+  // Complete OAuth flow with authorization code
+  app.use('/mcp-servers/oauth-complete', {
+    async create(data: { callback_url: string } | { code: string; state: string }) {
+      try {
+        // Import the completion function
+        const { completeMCPOAuthFlow, parseOAuthCallback } = await import(
+          '@agor/core/tools/mcp/oauth-mcp-transport'
+        );
+
+        let code: string;
+        let state: string;
+
+        // Parse the callback URL or use provided code/state
+        if ('callback_url' in data) {
+          console.log('[OAuth Complete] Parsing callback URL:', data.callback_url);
+          const parsed = parseOAuthCallback(data.callback_url);
+          code = parsed.code;
+          state = parsed.state;
+        } else {
+          code = data.code;
+          state = data.state;
+        }
+
+        console.log('[OAuth Complete] State:', state);
+
+        // Find the pending flow
+        const pendingFlow = pendingOAuthFlows.get(state);
+        if (!pendingFlow) {
+          return {
+            success: false,
+            error: 'OAuth flow expired or not found. Please start the flow again.',
+          };
+        }
+
+        // Complete the flow
+        const token = await completeMCPOAuthFlow(pendingFlow.context, code, state);
+
+        // Remove from pending flows
+        pendingOAuthFlows.delete(state);
+
+        // Cache the token at daemon level
+        cacheOAuth21Token(pendingFlow.context.metadataUrl, token, 3600);
+
+        // Save to database if we have a server ID
+        if (pendingFlow.mcpServerId) {
+          const mcpServerRepo = new MCPServerRepository(db);
+          await saveOAuth21TokenToDB(mcpServerRepo, pendingFlow.mcpServerId, token, 3600);
+        }
+
+        console.log('[OAuth Complete] Flow completed successfully');
+
+        return {
+          success: true,
+          message: 'OAuth authentication successful!',
+          tokenObtained: true,
+        };
+      } catch (error) {
+        console.error('[OAuth Complete] Error:', error);
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+  });
+
+  app.service('mcp-servers/oauth-complete').hooks({
+    before: { create: [requireAuth] },
+  });
+
   // Discover/Test MCP server capabilities endpoint
   // Accepts either:
   // - mcp_server_id: Test saved server config and persist discovered capabilities
