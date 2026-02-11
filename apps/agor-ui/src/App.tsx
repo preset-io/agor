@@ -485,6 +485,7 @@ function AppContent() {
       await client.service(`sessions/${sessionId}/prompt`).create({
         prompt,
         permissionMode,
+        messageSource: 'agor',
       });
 
       // Clear the draft after sending

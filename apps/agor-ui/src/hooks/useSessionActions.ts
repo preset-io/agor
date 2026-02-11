@@ -114,6 +114,7 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
       if (prompt.trim()) {
         await client.service(`sessions/${forkedSession.session_id}/prompt`).create({
           prompt,
+          messageSource: 'agor',
         });
       }
 

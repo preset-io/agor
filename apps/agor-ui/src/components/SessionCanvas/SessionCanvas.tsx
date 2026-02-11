@@ -2295,6 +2295,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                     // Send rendered prompt to session
                     await client.service(`sessions/${sessionId}/prompt`).create({
                       prompt: renderedPrompt,
+                      messageSource: 'agor',
                     });
                   } catch (error) {
                     console.error('❌ Failed to execute trigger:', error);

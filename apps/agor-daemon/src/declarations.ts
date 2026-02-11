@@ -67,6 +67,7 @@ export interface SessionsServiceImpl extends Service<Session, Partial<Session>, 
         prompt: string;
         permissionMode?: import('@agor/core/types').PermissionMode;
         stream?: boolean;
+        messageSource?: import('@agor/core/types').MessageSource;
       },
       params?: FeathersParams
     ) => Promise<{
@@ -83,6 +84,7 @@ export interface SessionsServiceImpl extends Service<Session, Partial<Session>, 
       prompt: string;
       permissionMode?: import('@agor/core/types').PermissionMode;
       stream?: boolean;
+      messageSource?: import('@agor/core/types').MessageSource;
     },
     params?: FeathersParams
   ): Promise<{

@@ -3729,6 +3729,20 @@ async function main() {
         if (!id) throw new Error('Session ID required');
         if (!data.prompt) throw new Error('Prompt required');
 
+        // Validate and normalize messageSource
+        let messageSource: 'gateway' | 'agor' | undefined = data.messageSource;
+        if (
+          messageSource !== undefined &&
+          messageSource !== 'gateway' &&
+          messageSource !== 'agor'
+        ) {
+          // Invalid value - default to 'agor' for UI requests (params.provider present) or undefined for internal
+          console.warn(
+            `[Daemon] Invalid messageSource value: ${messageSource}, defaulting based on provider`
+          );
+          messageSource = params.provider ? 'agor' : undefined;
+        }
+
         // Get session to find current message count
         const session = await sessionsService.get(id, params);
 
@@ -3878,9 +3892,8 @@ async function main() {
                 prompt: data.prompt,
                 permissionMode: data.permissionMode,
                 stream: useStreaming,
-                messageSource: data.messageSource,
-                // biome-ignore lint/suspicious/noExplicitAny: TypeScript incorrectly infers SessionsService.executeTask data parameter type - messageSource is defined in the type but not recognized
-              } as any,
+                messageSource,
+              },
               params
             );
 
