@@ -13,18 +13,20 @@ import type {
 import {
   CopyOutlined,
   DeleteOutlined,
-  DownOutlined,
   EditOutlined,
+  KeyOutlined,
   MessageOutlined,
   PlusOutlined,
   SlackOutlined,
+  TeamOutlined,
+  ThunderboltOutlined,
+  ToolOutlined,
 } from '@ant-design/icons';
 import {
   Alert,
   Badge,
   Button,
   Collapse,
-  Divider,
   Form,
   type FormInstance,
   Input,
@@ -89,6 +91,25 @@ function getChannelTypeColor(type: ChannelType): string {
   }
 }
 
+/** Collapsible section header with icon */
+const SectionLabel: React.FC<{ icon: React.ReactNode; title: string; subtitle?: string }> = ({
+  icon,
+  title,
+  subtitle,
+}) => (
+  <Space size="small">
+    {icon}
+    <span>
+      <Typography.Text strong>{title}</Typography.Text>
+      {subtitle && (
+        <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
+          {subtitle}
+        </Typography.Text>
+      )}
+    </span>
+  </Space>
+);
+
 /** Shared form fields for create and edit modals */
 const ChannelFormFields: React.FC<{
   form: FormInstance;
@@ -122,25 +143,11 @@ const ChannelFormFields: React.FC<{
   const requireMention = Form.useWatch('require_mention', form) ?? true;
   const alignSlackUsers = Form.useWatch('align_slack_users', form) ?? false;
 
+  const sourcesEnabled = enableChannels || enableGroups || enableMpim;
+
   return (
     <>
-      {mode === 'edit' && editingChannel && (
-        <Form.Item label="Channel Key">
-          <Input.Search
-            value={editingChannel.channel_key}
-            readOnly
-            enterButton={<CopyOutlined />}
-            onSearch={() => onCopyKey?.(editingChannel.channel_key)}
-          />
-          <Typography.Text
-            type="secondary"
-            style={{ fontSize: 12, marginTop: 4, display: 'block' }}
-          >
-            Use this key to authenticate inbound messages from the platform.
-          </Typography.Text>
-        </Form.Item>
-      )}
-
+      {/* ── Basic Settings (always visible) ── */}
       <Form.Item
         label="Channel Type"
         name="channel_type"
@@ -190,7 +197,7 @@ const ChannelFormFields: React.FC<{
         label="Post messages as"
         name="agor_user_id"
         rules={[{ required: true, message: 'Please select a user' }]}
-        tooltip="Messages from this channel will be attributed to this Agor user. When user alignment is enabled, this acts as the fallback user when a Slack user's email can't be resolved."
+        tooltip="Messages from this channel will be attributed to this Agor user. When user alignment is enabled, this acts as the fallback user."
       >
         <Select placeholder="Select a user" showSearch optionFilterProp="children">
           {Array.from(userById.values()).map((u) => (
@@ -210,248 +217,7 @@ const ChannelFormFields: React.FC<{
         <Switch />
       </Form.Item>
 
-      <Typography.Text strong style={{ display: 'block', marginBottom: 12, marginTop: 8 }}>
-        Platform Configuration
-      </Typography.Text>
-
-      {channelType === 'slack' ? (
-        <>
-          <Form.Item
-            label="Bot Token"
-            name="bot_token"
-            rules={mode === 'create' ? [{ required: true, message: 'Bot token is required' }] : []}
-            tooltip="Slack Bot User OAuth Token (xoxb-...)"
-          >
-            <Input.Password placeholder={mode === 'edit' ? '••••••••' : 'xoxb-...'} />
-          </Form.Item>
-
-          <Form.Item
-            label="App Token"
-            name="app_token"
-            rules={mode === 'create' ? [{ required: true, message: 'App token is required' }] : []}
-            tooltip="Slack App-Level Token for Socket Mode (xapp-...)"
-          >
-            <Input.Password placeholder={mode === 'edit' ? '••••••••' : 'xapp-...'} />
-          </Form.Item>
-
-          <Alert
-            type="info"
-            showIcon
-            message="Socket Mode Required"
-            description="Agor's Slack integration uses Socket Mode for real-time message delivery. Enable Socket Mode in your Slack app settings and generate an app-level token with connections:write scope."
-            style={{ marginBottom: 16, fontSize: 12 }}
-          />
-
-          <Divider style={{ marginTop: 24, marginBottom: 16 }}>
-            <Typography.Text strong>Message Sources</Typography.Text>
-          </Divider>
-
-          <Alert
-            type="info"
-            showIcon
-            message="Choose where the bot should listen for messages"
-            description="Direct messages are always enabled. Enable additional sources carefully — anyone who can message the bot can interact with your agent. See security documentation."
-            style={{ marginBottom: 16 }}
-          />
-
-          <Form.Item
-            label="Enable Public Channels"
-            name="enable_channels"
-            valuePropName="checked"
-            initialValue={false}
-            tooltip="Bot will respond to messages in public channels it's added to"
-          >
-            <Switch />
-          </Form.Item>
-
-          <Form.Item
-            label="Enable Private Channels"
-            name="enable_groups"
-            valuePropName="checked"
-            initialValue={false}
-            tooltip="Bot will respond to messages in private channels it's added to"
-          >
-            <Switch />
-          </Form.Item>
-
-          <Form.Item
-            label="Enable Group DMs"
-            name="enable_mpim"
-            valuePropName="checked"
-            initialValue={false}
-            tooltip="Bot will respond to messages in multi-person direct messages"
-          >
-            <Switch />
-          </Form.Item>
-
-          <Form.Item
-            label="Require Bot Mention"
-            name="require_mention"
-            valuePropName="checked"
-            initialValue={true}
-            tooltip="When enabled, bot only responds when explicitly @mentioned (recommended for channels)"
-          >
-            <Switch />
-          </Form.Item>
-
-          <Divider style={{ marginTop: 24, marginBottom: 16 }}>
-            <Typography.Text strong>User Alignment</Typography.Text>
-          </Divider>
-
-          <Form.Item
-            label="Align Slack Users with Agor Users"
-            name="align_slack_users"
-            valuePropName="checked"
-            initialValue={false}
-            tooltip="When enabled, messages are attributed to the Agor user whose email matches the Slack user's email. Falls back to the 'Post messages as' user if the Slack user has no email. Rejects the message if the email exists but has no Agor account."
-          >
-            <Switch />
-          </Form.Item>
-
-          {alignSlackUsers && (
-            <Alert
-              type="info"
-              showIcon
-              message="Additional Slack OAuth Scope Required"
-              description={
-                <span>
-                  User alignment requires the <code>users:read.email</code> scope on your Slack app
-                  to look up user email addresses. Without this scope, alignment will silently fall
-                  back to the configured &quot;Post messages as&quot; user.
-                </span>
-              }
-              style={{ marginBottom: 16 }}
-            />
-          )}
-
-          {(enableChannels || enableGroups || enableMpim) && !requireMention && (
-            <Alert
-              type="warning"
-              showIcon
-              message="Bot will respond to ALL messages"
-              description="With 'Require Bot Mention' disabled, the bot will respond to every message in enabled channels/groups. This can be noisy and expensive. Consider enabling mention requirement."
-              style={{ marginBottom: 16 }}
-            />
-          )}
-
-          {(enableChannels || enableGroups || enableMpim) && (
-            <Alert
-              type="info"
-              showIcon
-              message="Required Slack OAuth Scopes"
-              description={
-                <ul style={{ margin: '8px 0 0 0', paddingLeft: 20, fontSize: 12 }}>
-                  <li>
-                    <code>chat:write</code> (always required)
-                  </li>
-                  {enableChannels && (
-                    <>
-                      <li>
-                        <code>channels:history</code> - Read public channel messages
-                      </li>
-                      <li>
-                        <code>app_mentions:read</code> - Receive mention events
-                      </li>
-                    </>
-                  )}
-                  {enableGroups && (
-                    <li>
-                      <code>groups:history</code> - Read private channel messages
-                    </li>
-                  )}
-                  {enableMpim && (
-                    <li>
-                      <code>mpim:history</code> - Read group DM messages
-                    </li>
-                  )}
-                </ul>
-              }
-              style={{ marginBottom: 16 }}
-            />
-          )}
-
-          {(enableChannels || enableGroups || enableMpim) && (
-            <Alert
-              type="info"
-              showIcon
-              message="Required Slack Event Subscriptions"
-              description={
-                <ul style={{ margin: '8px 0 0 0', paddingLeft: 20, fontSize: 12 }}>
-                  <li>
-                    <code>message.im</code> (always required)
-                  </li>
-                  {enableChannels && (
-                    <>
-                      <li>
-                        <code>message.channels</code> - Public channel messages
-                      </li>
-                      <li>
-                        <code>app_mention</code> - Bot mention events (recommended)
-                      </li>
-                    </>
-                  )}
-                  {enableGroups && (
-                    <li>
-                      <code>message.groups</code> - Private channel messages
-                    </li>
-                  )}
-                  {enableMpim && (
-                    <li>
-                      <code>message.mpim</code> - Group DM messages
-                    </li>
-                  )}
-                </ul>
-              }
-              style={{ marginBottom: 16 }}
-            />
-          )}
-
-          <Collapse
-            ghost
-            items={[
-              {
-                key: 'channel-whitelist',
-                label: (
-                  <Typography.Text strong style={{ fontSize: 13 }}>
-                    Advanced: Channel Whitelist
-                  </Typography.Text>
-                ),
-                children: (
-                  <>
-                    <Typography.Text
-                      type="secondary"
-                      style={{ fontSize: 12, display: 'block', marginBottom: 12 }}
-                    >
-                      Optionally restrict the bot to specific Slack channels by ID. Leave empty to
-                      allow all channels where the bot is added. Find channel IDs in Slack:
-                      right-click channel → View channel details → scroll to bottom.
-                    </Typography.Text>
-                    <Form.Item
-                      name="allowed_channel_ids"
-                      tooltip="Slack channel IDs (e.g., C01ABC123XY). Press Enter to add each ID."
-                    >
-                      <Select
-                        mode="tags"
-                        placeholder="Add channel IDs... (e.g., C01ABC123XY)"
-                        style={{ width: '100%' }}
-                        tokenSeparators={[',', ' ']}
-                      />
-                    </Form.Item>
-                    <Alert
-                      type="info"
-                      showIcon
-                      message="Whitelist applies to all message sources"
-                      description="If set, the bot will ONLY respond in the specified channels, regardless of which message sources are enabled above."
-                      style={{ fontSize: 12 }}
-                    />
-                  </>
-                ),
-              },
-            ]}
-            style={{ marginBottom: 16 }}
-          />
-        </>
-      ) : (
+      {channelType !== 'slack' && (
         <Alert
           message={`${channelType.charAt(0).toUpperCase() + channelType.slice(1)} support coming soon`}
           description="This platform integration is not yet available. Slack is currently the only supported platform."
@@ -461,38 +227,304 @@ const ChannelFormFields: React.FC<{
         />
       )}
 
-      <Collapse
-        ghost
-        defaultActiveKey={[]}
-        expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
-        items={[
-          {
-            key: 'agentic-tool-config',
-            label: <Typography.Text strong>Agentic Tool Configuration</Typography.Text>,
-            children: (
-              <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  Configure which agent and settings to use for sessions created from this channel.
-                </Typography.Text>
-                <AgentSelectionGrid
-                  agents={AVAILABLE_AGENTS}
-                  selectedAgentId={selectedAgent}
-                  onSelect={onAgentChange}
-                  columns={2}
-                  showHelperText={false}
-                  showComparisonLink={false}
+      {/* ── Collapsible sections (Slack only) ── */}
+      {channelType === 'slack' && (
+        <Collapse
+          ghost
+          defaultActiveKey={mode === 'create' ? ['credentials'] : []}
+          style={{ marginLeft: -16, marginRight: -16 }}
+          items={[
+            // ── Credentials ──
+            {
+              key: 'credentials',
+              label: (
+                <SectionLabel
+                  icon={<KeyOutlined />}
+                  title="Credentials"
+                  subtitle={mode === 'edit' ? 'leave blank to keep current' : undefined}
                 />
-                <AgenticToolConfigForm
-                  agenticTool={selectedAgent as AgenticToolName}
-                  mcpServerById={mcpServerById}
-                  showHelpText={false}
+              ),
+              children: (
+                <>
+                  {mode === 'edit' && editingChannel && (
+                    <Form.Item label="Channel Key">
+                      <Input.Search
+                        value={editingChannel.channel_key}
+                        readOnly
+                        enterButton={<CopyOutlined />}
+                        onSearch={() => onCopyKey?.(editingChannel.channel_key)}
+                      />
+                      <Typography.Text
+                        type="secondary"
+                        style={{ fontSize: 12, marginTop: 4, display: 'block' }}
+                      >
+                        Use this key to authenticate inbound messages from the platform.
+                      </Typography.Text>
+                    </Form.Item>
+                  )}
+
+                  <Form.Item
+                    label="Bot Token"
+                    name="bot_token"
+                    rules={
+                      mode === 'create'
+                        ? [{ required: true, message: 'Bot token is required' }]
+                        : []
+                    }
+                    tooltip="Slack Bot User OAuth Token (xoxb-...)"
+                  >
+                    <Input.Password placeholder={mode === 'edit' ? '••••••••' : 'xoxb-...'} />
+                  </Form.Item>
+
+                  <Form.Item
+                    label="App Token"
+                    name="app_token"
+                    rules={
+                      mode === 'create'
+                        ? [{ required: true, message: 'App token is required' }]
+                        : []
+                    }
+                    tooltip="Slack App-Level Token for Socket Mode (xapp-...)"
+                  >
+                    <Input.Password placeholder={mode === 'edit' ? '••••••••' : 'xapp-...'} />
+                  </Form.Item>
+
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="Socket Mode Required"
+                    description="Enable Socket Mode in your Slack app settings and generate an app-level token with connections:write scope."
+                    style={{ fontSize: 12 }}
+                  />
+                </>
+              ),
+            },
+
+            // ── Message Sources ──
+            {
+              key: 'message-sources',
+              label: (
+                <SectionLabel
+                  icon={<MessageOutlined />}
+                  title="Message Sources"
+                  subtitle="DMs always enabled"
                 />
-              </Space>
-            ),
-          },
-        ]}
-        style={{ marginTop: 8 }}
-      />
+              ),
+              children: (
+                <>
+                  <Typography.Text
+                    type="secondary"
+                    style={{ fontSize: 12, display: 'block', marginBottom: 16 }}
+                  >
+                    Choose where the bot listens for messages. Direct messages are always enabled.
+                  </Typography.Text>
+
+                  <Form.Item
+                    label="Public Channels"
+                    name="enable_channels"
+                    valuePropName="checked"
+                    initialValue={false}
+                    tooltip="Bot will respond to messages in public channels it's added to"
+                  >
+                    <Switch />
+                  </Form.Item>
+
+                  <Form.Item
+                    label="Private Channels"
+                    name="enable_groups"
+                    valuePropName="checked"
+                    initialValue={false}
+                    tooltip="Bot will respond to messages in private channels it's added to"
+                  >
+                    <Switch />
+                  </Form.Item>
+
+                  <Form.Item
+                    label="Group DMs"
+                    name="enable_mpim"
+                    valuePropName="checked"
+                    initialValue={false}
+                    tooltip="Bot will respond to messages in multi-person direct messages"
+                  >
+                    <Switch />
+                  </Form.Item>
+
+                  <Form.Item
+                    label="Require @mention"
+                    name="require_mention"
+                    valuePropName="checked"
+                    initialValue={true}
+                    tooltip="When enabled, bot only responds when explicitly @mentioned (recommended for channels)"
+                  >
+                    <Switch />
+                  </Form.Item>
+
+                  {sourcesEnabled && !requireMention && (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      message="Bot will respond to ALL messages in enabled channels. This can be noisy and expensive."
+                      style={{ marginBottom: 12 }}
+                    />
+                  )}
+
+                  {sourcesEnabled && (
+                    <Alert
+                      type="info"
+                      showIcon
+                      message="Required Slack Scopes & Events"
+                      description={
+                        <ul style={{ margin: '8px 0 0 0', paddingLeft: 20, fontSize: 12 }}>
+                          <li>
+                            <code>chat:write</code> (always required)
+                          </li>
+                          {enableChannels && (
+                            <>
+                              <li>
+                                <code>channels:history</code> + <code>app_mentions:read</code>
+                              </li>
+                              <li>
+                                Events: <code>message.channels</code>, <code>app_mention</code>
+                              </li>
+                            </>
+                          )}
+                          {enableGroups && (
+                            <li>
+                              <code>groups:history</code> + event: <code>message.groups</code>
+                            </li>
+                          )}
+                          {enableMpim && (
+                            <li>
+                              <code>mpim:history</code> + event: <code>message.mpim</code>
+                            </li>
+                          )}
+                        </ul>
+                      }
+                      style={{ fontSize: 12 }}
+                    />
+                  )}
+                </>
+              ),
+            },
+
+            // ── User Alignment ──
+            {
+              key: 'user-alignment',
+              label: (
+                <SectionLabel
+                  icon={<TeamOutlined />}
+                  title="User Alignment"
+                  subtitle={alignSlackUsers ? 'enabled' : 'disabled'}
+                />
+              ),
+              children: (
+                <>
+                  <Typography.Text
+                    type="secondary"
+                    style={{ fontSize: 12, display: 'block', marginBottom: 16 }}
+                  >
+                    When enabled, messages are attributed to the Agor user whose email matches the
+                    Slack user&apos;s email. Users without a matching Agor account are rejected.
+                  </Typography.Text>
+
+                  <Form.Item
+                    label="Align Slack Users with Agor Users"
+                    name="align_slack_users"
+                    valuePropName="checked"
+                    initialValue={false}
+                  >
+                    <Switch />
+                  </Form.Item>
+
+                  {alignSlackUsers && (
+                    <Alert
+                      type="info"
+                      showIcon
+                      message="Requires users:read.email scope"
+                      description={
+                        <span>
+                          Add <code>users:read.email</code> to your Slack app to look up user
+                          emails. Without this scope, alignment silently falls back to the
+                          configured &quot;Post messages as&quot; user.
+                        </span>
+                      }
+                      style={{ fontSize: 12 }}
+                    />
+                  )}
+                </>
+              ),
+            },
+
+            // ── Advanced ──
+            {
+              key: 'advanced',
+              label: (
+                <SectionLabel
+                  icon={<ToolOutlined />}
+                  title="Advanced"
+                  subtitle="channel whitelist"
+                />
+              ),
+              children: (
+                <>
+                  <Typography.Text
+                    type="secondary"
+                    style={{ fontSize: 12, display: 'block', marginBottom: 12 }}
+                  >
+                    Restrict the bot to specific Slack channels by ID. Leave empty to allow all
+                    channels. Find channel IDs: right-click channel &rarr; View channel details
+                    &rarr; scroll to bottom.
+                  </Typography.Text>
+                  <Form.Item
+                    name="allowed_channel_ids"
+                    tooltip="Slack channel IDs (e.g., C01ABC123XY). Press Enter to add each ID."
+                  >
+                    <Select
+                      mode="tags"
+                      placeholder="Add channel IDs... (e.g., C01ABC123XY)"
+                      style={{ width: '100%' }}
+                      tokenSeparators={[',', ' ']}
+                    />
+                  </Form.Item>
+                </>
+              ),
+            },
+
+            // ── Agentic Tool Configuration ──
+            {
+              key: 'agentic-tool-config',
+              label: (
+                <SectionLabel
+                  icon={<ThunderboltOutlined />}
+                  title="Agent Configuration"
+                  subtitle={selectedAgent}
+                />
+              ),
+              children: (
+                <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    Configure which agent and settings to use for sessions created from this
+                    channel.
+                  </Typography.Text>
+                  <AgentSelectionGrid
+                    agents={AVAILABLE_AGENTS}
+                    selectedAgentId={selectedAgent}
+                    onSelect={onAgentChange}
+                    columns={2}
+                    showHelperText={false}
+                    showComparisonLink={false}
+                  />
+                  <AgenticToolConfigForm
+                    agenticTool={selectedAgent as AgenticToolName}
+                    mcpServerById={mcpServerById}
+                    showHelpText={false}
+                  />
+                </Space>
+              ),
+            },
+          ]}
+        />
+      )}
     </>
   );
 };
@@ -541,7 +573,16 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     existingConfig?: Record<string, unknown>,
     agent?: string
   ): Partial<GatewayChannel> => {
-    const config: Record<string, unknown> = { ...(existingConfig || {}) };
+    // Strip redacted sentinel values from existingConfig so they're never sent
+    // back to the server. The API redacts tokens to '••••••••' — if we spread
+    // that into the config object, the backend would save the sentinel as the
+    // actual token (wiping the real credentials).
+    const SENSITIVE_FIELDS = ['bot_token', 'app_token', 'signing_secret'];
+    const sanitizedExisting = { ...(existingConfig || {}) };
+    for (const field of SENSITIVE_FIELDS) {
+      delete sanitizedExisting[field];
+    }
+    const config: Record<string, unknown> = { ...sanitizedExisting };
     if (values.channel_type === 'slack') {
       if (values.bot_token) config.bot_token = values.bot_token;
       if (values.app_token) config.app_token = values.app_token;

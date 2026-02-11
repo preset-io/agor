@@ -28,6 +28,9 @@ import {
 /** Sensitive config fields that should be encrypted at rest */
 const SENSITIVE_CONFIG_FIELDS = ['bot_token', 'app_token', 'signing_secret'];
 
+/** Sentinel value used by the API to redact sensitive fields in responses */
+const REDACTED_SENTINEL = '••••••••';
+
 /**
  * Encrypt sensitive fields within a config object
  */
@@ -235,12 +238,14 @@ export class GatewayChannelRepository
       // Merge updates, but preserve existing encrypted credentials if update has empty values
       const merged = { ...current, ...updates };
 
-      // Preserve existing credentials if updates contain empty strings
+      // Preserve existing credentials if updates contain empty, falsy, or redacted values.
+      // The API redacts sensitive fields to '••••••••' in responses, so if the client
+      // sends that sentinel back it means "no change" — not "set token to bullets".
       if (updates.config) {
         const mergedConfig = { ...current.config, ...updates.config };
         for (const field of SENSITIVE_CONFIG_FIELDS) {
-          // If update has empty/falsy value, keep current value
-          if (!updates.config[field] && current.config[field]) {
+          const updateValue = updates.config[field];
+          if ((!updateValue || updateValue === REDACTED_SENTINEL) && current.config[field]) {
             mergedConfig[field] = current.config[field];
           }
         }

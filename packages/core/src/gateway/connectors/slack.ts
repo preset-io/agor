@@ -244,8 +244,11 @@ export class SlackConnector implements GatewayConnector {
     const enableGroups = this.config.enable_groups ?? false;
     const enableMpim = this.config.enable_mpim ?? false;
     const requireMention = this.config.require_mention ?? true;
+    // Default to true: once a user @mentions the bot to start a thread,
+    // they can continue the conversation without re-tagging. The gateway
+    // service's mapping verification prevents abuse in unmapped threads.
     const allowThreadRepliesWithoutMention =
-      this.config.allow_thread_replies_without_mention ?? false;
+      this.config.allow_thread_replies_without_mention ?? true;
 
     // Normalize allowed_channel_ids to string[] (handle malformed config)
     let allowedChannelIds: string[] | undefined;
@@ -348,15 +351,19 @@ export class SlackConnector implements GatewayConnector {
         }
       }
 
-      const channelType = event.channel_type;
-
-      // Handle missing channel_type (some Slack events may omit it)
-      if (!channelType) {
-        console.warn(
-          `[slack] Message event missing channel_type for channel ${event.channel}. Treating as DM (safest default).`
-        );
-        // Treat as DM - safest default since DMs are always allowed
-        // If this causes issues, we could instead infer from channel ID prefix
+      // Resolve channel type. app_mention events don't include channel_type,
+      // so infer it from the channel ID prefix when missing:
+      //   C = public channel, G = private channel/group DM, D = DM
+      let channelType: string | undefined = event.channel_type;
+      if (!channelType && event.channel) {
+        const prefix = (event.channel as string).charAt(0);
+        if (prefix === 'C') {
+          channelType = 'channel';
+        } else if (prefix === 'G') {
+          channelType = 'group';
+        } else if (prefix === 'D') {
+          channelType = 'im';
+        }
       }
 
       // Channel type filtering based on config
