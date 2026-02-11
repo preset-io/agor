@@ -62,13 +62,7 @@ export interface SessionsServiceImpl extends Service<Session, Partial<Session>, 
   setExecuteHandler(
     handler: (
       sessionId: string,
-      data: {
-        taskId: string;
-        prompt: string;
-        permissionMode?: import('@agor/core/types').PermissionMode;
-        stream?: boolean;
-        messageSource?: import('@agor/core/types').MessageSource;
-      },
+      data: import('./services/sessions').ExecuteTaskData,
       params?: FeathersParams
     ) => Promise<{
       success: boolean;
@@ -79,13 +73,7 @@ export interface SessionsServiceImpl extends Service<Session, Partial<Session>, 
   ): void;
   executeTask(
     id: string,
-    data: {
-      taskId: string;
-      prompt: string;
-      permissionMode?: import('@agor/core/types').PermissionMode;
-      stream?: boolean;
-      messageSource?: import('@agor/core/types').MessageSource;
-    },
+    data: import('./services/sessions').ExecuteTaskData,
     params?: FeathersParams
   ): Promise<{
     success: boolean;
