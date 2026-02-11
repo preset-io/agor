@@ -29,6 +29,7 @@ import {
   type Message,
   type MessageID,
   MessageRole,
+  type MessageSource,
   type PermissionMode,
   type SessionID,
   type TaskID,
@@ -210,7 +211,7 @@ export class ClaudeTool implements ITool {
     permissionMode?: PermissionMode,
     streamingCallbacks?: import('../base').StreamingCallbacks,
     abortController?: AbortController,
-    messageSource?: 'gateway' | 'agor'
+    messageSource?: MessageSource
   ): Promise<{
     userMessageId: MessageID;
     assistantMessageIds: MessageID[];
@@ -654,7 +655,7 @@ export class ClaudeTool implements ITool {
     prompt: string,
     taskId?: TaskID,
     permissionMode?: PermissionMode,
-    messageSource?: 'gateway' | 'agor'
+    messageSource?: MessageSource
   ): Promise<{
     userMessageId: MessageID;
     assistantMessageIds: MessageID[];

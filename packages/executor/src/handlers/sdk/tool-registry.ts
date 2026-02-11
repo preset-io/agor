@@ -5,7 +5,7 @@
  * Makes it easier to add new tools and ensures consistency.
  */
 
-import type { PermissionMode, SessionID, TaskID } from '@agor/core/types';
+import type { MessageSource, PermissionMode, SessionID, TaskID } from '@agor/core/types';
 import type { AgorClient } from '../../services/feathers-client.js';
 
 /**
@@ -23,7 +23,7 @@ export type ToolRunner = (params: {
   prompt: string;
   permissionMode?: PermissionMode;
   abortController: AbortController;
-  messageSource?: 'gateway' | 'agor';
+  messageSource?: MessageSource;
 }) => Promise<void>;
 
 /**
@@ -98,7 +98,7 @@ export class ToolRegistry {
       prompt: string;
       permissionMode?: PermissionMode;
       abortController: AbortController;
-      messageSource?: 'gateway' | 'agor';
+      messageSource?: MessageSource;
     }
   ): Promise<void> {
     const config = ToolRegistry.get(tool);

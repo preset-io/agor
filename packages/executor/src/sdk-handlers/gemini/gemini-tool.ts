@@ -26,6 +26,7 @@ import {
   type Message,
   type MessageID,
   MessageRole,
+  type MessageSource,
   type PermissionMode,
   type SessionID,
   type TaskID,
@@ -121,7 +122,7 @@ export class GeminiTool implements ITool {
     permissionMode?: PermissionMode,
     streamingCallbacks?: StreamingCallbacks,
     abortController?: AbortController,
-    messageSource?: 'gateway' | 'agor'
+    messageSource?: MessageSource
   ): Promise<GeminiExecutionResult> {
     if (!this.promptService || !this.messagesRepo) {
       throw new Error('GeminiTool not initialized with repositories for live execution');
@@ -259,7 +260,7 @@ export class GeminiTool implements ITool {
     prompt: string,
     taskId: TaskID | undefined,
     nextIndex: number,
-    messageSource?: 'gateway' | 'agor'
+    messageSource?: MessageSource
   ): Promise<Message> {
     const userMessage: Message = {
       message_id: generateId() as MessageID,
@@ -349,7 +350,7 @@ export class GeminiTool implements ITool {
     prompt: string,
     taskId?: TaskID,
     permissionMode?: PermissionMode,
-    messageSource?: 'gateway' | 'agor'
+    messageSource?: MessageSource
   ): Promise<GeminiExecutionResult> {
     if (!this.promptService || !this.messagesRepo) {
       throw new Error('GeminiTool not initialized with repositories for live execution');

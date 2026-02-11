@@ -9,6 +9,7 @@ import { type ApiKeyName, resolveApiKey } from '@agor/core/config';
 import { getGitState } from '@agor/core/git';
 import type {
   MessageID,
+  MessageSource,
   PermissionMode,
   SessionID,
   StreamingEventType,
@@ -31,7 +32,7 @@ export interface BaseTool {
     permissionMode?: PermissionMode,
     callbacks?: StreamingCallbacks,
     abortController?: AbortController,
-    messageSource?: 'gateway' | 'agor'
+    messageSource?: MessageSource
   ): Promise<{
     userMessageId: MessageID;
     assistantMessageIds: MessageID[];

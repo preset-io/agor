@@ -4,7 +4,7 @@
  * Executes prompts using Claude Code SDK with Feathers/WebSocket architecture
  */
 
-import type { PermissionMode, SessionID, TaskID } from '@agor/core/types';
+import type { MessageSource, PermissionMode, SessionID, TaskID } from '@agor/core/types';
 import { globalPermissionManager } from '../../permissions/permission-manager.js';
 import { PermissionService } from '../../permissions/permission-service.js';
 import { ClaudeTool } from '../../sdk-handlers/claude/claude-tool.js';
@@ -22,7 +22,7 @@ export async function executeClaudeCodeTask(params: {
   prompt: string;
   permissionMode?: PermissionMode;
   abortController: AbortController;
-  messageSource?: 'gateway' | 'agor';
+  messageSource?: MessageSource;
 }): Promise<void> {
   const { client, sessionId } = params;
 

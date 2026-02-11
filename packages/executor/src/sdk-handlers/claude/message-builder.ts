@@ -6,7 +6,7 @@
  */
 
 import { generateId } from '@agor/core';
-import type { Message, MessageID, SessionID, TaskID } from '@agor/core/types';
+import type { Message, MessageID, MessageSource, SessionID, TaskID } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { MessagesService, TasksService } from './claude-tool.js';
@@ -46,7 +46,7 @@ export async function createUserMessage(
   taskId: TaskID | undefined,
   nextIndex: number,
   messagesService: MessagesService,
-  messageSource?: 'gateway' | 'agor'
+  messageSource?: MessageSource
 ): Promise<Message> {
   const userMessage: Message = {
     message_id: generateId() as MessageID,

@@ -83,6 +83,7 @@ import type {
   HookContext,
   Id,
   Message,
+  MessageSource,
   Paginated,
   Params,
   PermissionRequestContent,
@@ -661,7 +662,7 @@ async function main() {
         prompt: string;
         permissionMode?: import('@agor/core/types').PermissionMode;
         stream?: boolean;
-        messageSource?: 'gateway' | 'agor';
+        messageSource?: MessageSource;
       },
       params
     ) => {
@@ -3716,7 +3717,7 @@ async function main() {
           prompt: string;
           permissionMode?: import('@agor/core/types').PermissionMode;
           stream?: boolean;
-          messageSource?: 'gateway' | 'agor';
+          messageSource?: MessageSource;
         },
         params: RouteParams
       ) {

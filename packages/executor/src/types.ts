@@ -9,6 +9,7 @@ export type {
   Message,
   MessageCreate,
   MessageID,
+  MessageSource,
   PermissionMode,
   SessionID,
   TaskID,

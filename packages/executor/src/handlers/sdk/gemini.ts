@@ -4,7 +4,7 @@
  * Executes prompts using Google Gemini SDK with Feathers/WebSocket architecture
  */
 
-import type { PermissionMode, SessionID, TaskID } from '@agor/core/types';
+import type { MessageSource, PermissionMode, SessionID, TaskID } from '@agor/core/types';
 import { GeminiTool } from '../../sdk-handlers/gemini/index.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 
@@ -20,7 +20,7 @@ export async function executeGeminiTask(params: {
   prompt: string;
   permissionMode?: PermissionMode;
   abortController: AbortController;
-  messageSource?: 'gateway' | 'agor';
+  messageSource?: MessageSource;
 }): Promise<void> {
   // Import base executor helper
   const { executeToolTask } = await import('./base-executor.js');
