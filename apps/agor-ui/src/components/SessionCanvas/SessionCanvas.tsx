@@ -1343,6 +1343,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                           // Send prompt to new session
                           await client.service(`sessions/${newSession.session_id}/prompt`).create({
                             prompt: renderedPrompt,
+                            messageSource: 'agor',
                           });
                         } catch (error) {
                           console.error('❌ Failed to execute always_new trigger:', error);
@@ -2483,6 +2484,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                     await client.service(`sessions/${targetSessionId}/prompt`).create({
                       prompt: renderedTemplate,
                       permissionMode,
+                      messageSource: 'agor',
                     });
                     break;
                   }
@@ -2493,6 +2495,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                     await client.service(`sessions/${forkedSession.session_id}/prompt`).create({
                       prompt: renderedTemplate,
                       permissionMode,
+                      messageSource: 'agor',
                     });
                     break;
                   }
@@ -2503,6 +2506,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                     await client.service(`sessions/${spawnedSession.session_id}/prompt`).create({
                       prompt: renderedTemplate,
                       permissionMode,
+                      messageSource: 'agor',
                     });
                     break;
                   }

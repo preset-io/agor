@@ -150,6 +150,7 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
       // Send the prompt to the spawned session to actually execute it
       await client.service(`sessions/${spawnedSession.session_id}/prompt`).create({
         prompt: config.prompt,
+        messageSource: 'agor',
       });
 
       return spawnedSession;
