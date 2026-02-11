@@ -228,6 +228,18 @@ const WorktreeCardComponent = ({
     [sessions]
   );
 
+  // Check if any scheduled session is running (for collapse header spinner)
+  const hasRunningScheduledSession = useMemo(
+    () => scheduledSessions.some((s) => s.status === 'running' || s.status === 'stopping'),
+    [scheduledSessions]
+  );
+
+  // Check if any gateway session is running (for collapse header spinner)
+  const hasRunningGatewaySession = useMemo(
+    () => gatewaySessions.some((s) => s.status === 'running' || s.status === 'stopping'),
+    [gatewaySessions]
+  );
+
   // Check if worktree is still being created on filesystem
   const isCreating = worktree.filesystem_status === 'creating';
   const isFailed = worktree.filesystem_status === 'failed';
@@ -431,6 +443,7 @@ const WorktreeCardComponent = ({
           showZero
           style={{ backgroundColor: token.colorInfoBgHover }}
         />
+        {hasRunningScheduledSession && <Spin size="small" />}
       </Space>
     </div>
   );
@@ -501,6 +514,7 @@ const WorktreeCardComponent = ({
           showZero
           style={{ backgroundColor: token.colorSuccessBgHover }}
         />
+        {hasRunningGatewaySession && <Spin size="small" />}
       </Space>
     </div>
   );
