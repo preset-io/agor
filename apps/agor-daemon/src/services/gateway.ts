@@ -340,14 +340,15 @@ export class GatewayService {
         // Session is idle → send prompt directly
         const promptService = this.app.service('/sessions/:id/prompt') as {
           create: (
-            data: { prompt: string; permissionMode?: string },
+            data: { prompt: string; permissionMode?: string; messageSource?: 'gateway' | 'agor' },
             params: Record<string, unknown>
           ) => Promise<Record<string, unknown>>;
         };
 
         // Internal call: pass user, omit provider to bypass auth hooks
+        // Mark message source as 'gateway' so it won't be echoed back to Slack
         await promptService.create(
-          { prompt: data.text, permissionMode },
+          { prompt: data.text, permissionMode, messageSource: 'gateway' },
           { route: { id: sessionId }, user }
         );
 

@@ -140,6 +140,7 @@ export const PromptPayloadSchema = BasePayloadSchema.extend({
     tool: ToolTypeSchema,
     permissionMode: PermissionModeSchema.optional(),
     cwd: z.string(),
+    messageSource: z.enum(['gateway', 'agor']).optional(),
   }),
 });
 

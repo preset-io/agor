@@ -28,19 +28,58 @@ function extractText(content: Message['content']): string {
 }
 
 /**
- * After hook that routes assistant messages through the gateway.
- * Only fires for assistant messages with text content. Errors are caught
- * and logged, never propagated to avoid slowing down message creation.
+ * After hook that routes messages through the gateway.
+ * Routes:
+ * - All assistant messages
+ * - User messages that originated from Agor UI (not from gateway)
+ *
+ * Errors are caught and logged, never propagated to avoid slowing down message creation.
  */
 export const gatewayRouteHook = async (context: HookContext) => {
   const message = context.result as Message;
 
-  // Only route assistant messages
-  if (message.role !== 'assistant') {
+  // Determine if message should be routed to gateway
+  let shouldRoute = false;
+  let messageText = extractText(message.content);
+
+  if (message.role === 'assistant') {
+    // Always route assistant messages
+    shouldRoute = true;
+  } else if (message.role === 'user') {
+    // Route user messages that originated from Agor (not from gateway)
+    const source = message.metadata?.source;
+
+    if (source === 'agor') {
+      // User message from Agor UI - route to Slack with username prefix
+      shouldRoute = true;
+
+      // Fetch session and user info to prefix with username
+      try {
+        const sessionsService = context.app.service('sessions');
+        const usersService = context.app.service('users');
+
+        const session = await sessionsService.get(message.session_id);
+        const user = await usersService.get(session.created_by);
+
+        // Format as "[username]: message"
+        messageText = `[${user.name}]: ${messageText}`;
+      } catch (error) {
+        console.warn('[gateway-route] Failed to fetch user info for message prefix:', error);
+        // Continue without prefix if lookup fails
+      }
+    } else if (source === 'gateway') {
+      // User message from gateway (Slack) - don't route (prevents echo)
+      shouldRoute = false;
+    } else {
+      // Legacy message without source tracking - treat as gateway to be safe
+      shouldRoute = false;
+    }
+  }
+
+  if (!shouldRoute) {
     return context;
   }
 
-  const messageText = extractText(message.content);
   if (!messageText) {
     return context; // No text to route (tool-only messages, etc.)
   }

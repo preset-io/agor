@@ -23,6 +23,7 @@ export type ToolRunner = (params: {
   prompt: string;
   permissionMode?: PermissionMode;
   abortController: AbortController;
+  messageSource?: 'gateway' | 'agor';
 }) => Promise<void>;
 
 /**
@@ -97,6 +98,7 @@ export class ToolRegistry {
       prompt: string;
       permissionMode?: PermissionMode;
       abortController: AbortController;
+      messageSource?: 'gateway' | 'agor';
     }
   ): Promise<void> {
     const config = ToolRegistry.get(tool);

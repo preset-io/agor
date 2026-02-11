@@ -20,6 +20,7 @@ export async function executeGeminiTask(params: {
   prompt: string;
   permissionMode?: PermissionMode;
   abortController: AbortController;
+  messageSource?: 'gateway' | 'agor';
 }): Promise<void> {
   // Import base executor helper
   const { executeToolTask } = await import('./base-executor.js');

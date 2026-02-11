@@ -45,7 +45,8 @@ export async function createUserMessage(
   prompt: string,
   taskId: TaskID | undefined,
   nextIndex: number,
-  messagesService: MessagesService
+  messagesService: MessagesService,
+  messageSource?: 'gateway' | 'agor'
 ): Promise<Message> {
   const userMessage: Message = {
     message_id: generateId() as MessageID,
@@ -57,6 +58,7 @@ export async function createUserMessage(
     content_preview: prompt.substring(0, 200),
     content: prompt,
     task_id: taskId,
+    metadata: messageSource ? { source: messageSource } : undefined,
   };
 
   await messagesService.create(userMessage);

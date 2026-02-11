@@ -653,257 +653,270 @@ async function main() {
   });
 
   // Wire up custom session methods for Feathers/WebSocket executor architecture
-  sessionsService.setExecuteHandler(async (sessionId, data, params) => {
-    // Import spawn and path utilities
-    const { spawn } = await import('node:child_process');
-    const path = await import('node:path');
-    const { fileURLToPath } = await import('node:url');
-
-    // Get session and validate
-    const session = await sessionsService.get(sessionId, params);
-    if (!session) {
-      throw new Error(`Session ${sessionId} not found`);
-    }
-
-    // Generate session token for executor authentication
-    const appWithExecutor = app as unknown as {
-      sessionTokenService?: import('./services/session-token-service').SessionTokenService;
-    };
-    if (!appWithExecutor.sessionTokenService) {
-      throw new Error('Session token service not initialized');
-    }
-    const sessionToken = await appWithExecutor.sessionTokenService.generateToken(
-      sessionId,
-      (params as AuthenticatedParams).user?.user_id || 'anonymous'
-    );
-
-    // Use the task ID provided by caller (task already created by prompt endpoint)
-    const taskId = data.taskId;
-
-    // NOTE: API key resolution is now handled by the executor with proper precedence:
-    // 1. Per-user encrypted keys (from database)
-    // 2. Global config.yaml keys
-    // 3. Environment variables
-    // The executor will let SDKs handle OAuth if no key is found.
-
-    // Get worktree path
-    let cwd = process.cwd();
-    if (session.worktree_id) {
-      try {
-        const worktree = await app.service('worktrees').get(session.worktree_id, params);
-        cwd = worktree.path;
-      } catch (error) {
-        console.warn(`Could not get worktree path for ${session.worktree_id}:`, error);
-      }
-    }
-
-    // Spawn executor process with Feathers/WebSocket mode
-    const dirname =
-      typeof __dirname !== 'undefined' ? __dirname : path.dirname(fileURLToPath(import.meta.url));
-
-    // Try multiple possible paths for executor (development vs bundled)
-    const { existsSync } = await import('node:fs');
-    const possiblePaths = [
-      path.join(dirname, '../executor/cli.js'), // Bundled in agor-live
-      path.join(dirname, '../../../packages/executor/bin/agor-executor'), // Development - bin script with fallback to tsx
-      path.join(dirname, '../../../packages/executor/dist/cli.js'), // Development from apps/agor-daemon/dist (if built)
-    ];
-
-    const executorPath = possiblePaths.find((p) => existsSync(p));
-    if (!executorPath) {
-      throw new Error(
-        `Executor binary not found. Tried:\n${possiblePaths.map((p) => `  - ${p}`).join('\n')}`
-      );
-    }
-
-    console.log(`[Daemon] Using executor at: ${executorPath}`);
-
-    // =========================================================================
-    // DETERMINE UNIX USER FOR EXECUTOR BASED ON unix_user_mode
-    // Uses centralized logic from @agor/core/unix
-    // =========================================================================
-    const {
-      resolveUnixUserForImpersonation,
-      validateResolvedUnixUser,
-      UnixUserNotFoundError,
-      buildSpawnArgs,
-    } = await import('@agor/core/unix');
-
-    const unixUserMode = (config.execution?.unix_user_mode ?? 'simple') as UnixUserMode;
-    const configExecutorUser = config.execution?.executor_unix_user;
-    const sessionUnixUser = session.unix_username;
-
-    console.log('[Daemon] Determining executor Unix user:', {
-      sessionId: session.session_id.slice(0, 8),
-      unixUserMode,
-      sessionUnixUser,
-      configExecutorUser,
-    });
-
-    // Use centralized impersonation resolution logic
-    const impersonationResult = resolveUnixUserForImpersonation({
-      mode: unixUserMode,
-      userUnixUsername: sessionUnixUser,
-      executorUnixUser: configExecutorUser,
-    });
-
-    const executorUnixUser = impersonationResult.unixUser;
-    const impersonationReason = impersonationResult.reason;
-
-    console.log(`[Daemon] Executor impersonation: ${impersonationReason}`);
-
-    // Determine permission mode: explicit override > session config > 'default'
-    // This ensures session settings (like bypassPermissions) are preserved unless explicitly overridden
-    // Note: 'default' is not part of the executor's Zod schema, so we convert it to undefined
-    const effectivePermissionMode =
-      data.permissionMode || session.permission_config?.mode || undefined;
-    const permissionModeForPayload =
-      effectivePermissionMode === 'default' ? undefined : effectivePermissionMode;
-
-    // Validate Unix user exists for modes that require it
-    try {
-      validateResolvedUnixUser(unixUserMode, executorUnixUser);
-    } catch (err) {
-      if (err instanceof UnixUserNotFoundError) {
-        throw new Error(
-          `${(err as InstanceType<typeof UnixUserNotFoundError>).message}. Ensure the Unix user is created before attempting to execute sessions.`
-        );
-      }
-      throw err;
-    }
-
-    // Resolve user environment variables (includes user's encrypted env vars like GITHUB_TOKEN)
-    // Use the authenticated user (whoever is executing the command), not session creator
-    const userId = (params as AuthenticatedParams).user?.user_id as
-      | import('@agor/core/types').UserID
-      | undefined;
-    // When impersonating, strip HOME/USER/LOGNAME/SHELL so sudo -u can set them
-    const executorEnv = await createUserProcessEnvironment(
-      userId,
-      db,
-      undefined,
-      !!executorUnixUser
-    );
-
-    // Add DAEMON_URL to environment so executor can connect back
-    executorEnv.DAEMON_URL = daemonUrl;
-
-    // =========================================================================
-    // PHASE 4: JSON-OVER-STDIN WITH IMPERSONATION AT SPAWN
-    //
-    // Impersonation happens at spawn time using buildSpawnArgs():
-    // - When asUser is set, spawns via `sudo -u $asUser bash -c 'node executor --stdin'`
-    // - Executor runs directly as target user with fresh group memberships
-    // - No "node calling node" indirection
-    //
-    // Benefits:
-    // - Single spawn, not node-within-node
-    // - Fresh group memberships (sudo -u calls initgroups())
-    // - k8s compatible (can use pod security context instead)
-    // - Security: Uses sudo -u (not sudo su) to avoid whitelisting /usr/bin/su
-    // =========================================================================
-
-    // Build JSON payload for executor (Phase 2 --stdin mode)
-    // Note: asUser is NOT in payload - impersonation happens at spawn time
-    const executorPayload = {
-      command: 'prompt' as const,
-      sessionToken,
-      daemonUrl,
-      env: executorEnv,
-      params: {
-        sessionId,
-        taskId,
-        prompt: data.prompt,
-        tool: session.agentic_tool as 'claude-code' | 'gemini' | 'codex' | 'opencode',
-        permissionMode: permissionModeForPayload as 'ask' | 'auto' | 'allow-all' | undefined,
-        cwd,
+  sessionsService.setExecuteHandler(
+    async (
+      sessionId: string,
+      data: {
+        taskId: string;
+        prompt: string;
+        permissionMode?: import('@agor/core/types').PermissionMode;
+        stream?: boolean;
+        messageSource?: 'gateway' | 'agor';
       },
-    };
+      params
+    ) => {
+      // Import spawn and path utilities
+      const { spawn } = await import('node:child_process');
+      const path = await import('node:path');
+      const { fileURLToPath } = await import('node:url');
 
-    // Build spawn command - handles impersonation via sudo -u when executorUnixUser is set
-    const { cmd, args } = buildSpawnArgs('node', [executorPath, '--stdin'], {
-      asUser: executorUnixUser || undefined,
-      env: executorUnixUser ? executorEnv : undefined, // Only inject env when impersonating
-    });
+      // Get session and validate
+      const session = await sessionsService.get(sessionId, params);
+      if (!session) {
+        throw new Error(`Session ${sessionId} not found`);
+      }
 
-    if (executorUnixUser) {
-      console.log(`[Daemon] Spawning executor as user: ${executorUnixUser}`);
-    } else {
-      console.log(`[Daemon] Spawning executor as current user (no impersonation)`);
-    }
+      // Generate session token for executor authentication
+      const appWithExecutor = app as unknown as {
+        sessionTokenService?: import('./services/session-token-service').SessionTokenService;
+      };
+      if (!appWithExecutor.sessionTokenService) {
+        throw new Error('Session token service not initialized');
+      }
+      const sessionToken = await appWithExecutor.sessionTokenService.generateToken(
+        sessionId,
+        (params as AuthenticatedParams).user?.user_id || 'anonymous'
+      );
 
-    // Spawn executor with --stdin mode, pipe JSON payload via stdin
-    const executorProcess = spawn(cmd, args, {
-      cwd,
-      env: executorUnixUser ? undefined : executorEnv, // When impersonating, env is in the command
-      stdio: ['pipe', 'pipe', 'pipe'], // Enable stdin for JSON payload
-    });
+      // Use the task ID provided by caller (task already created by prompt endpoint)
+      const taskId = data.taskId;
 
-    // Write JSON payload to stdin
-    executorProcess.stdin?.write(JSON.stringify(executorPayload));
-    executorProcess.stdin?.end();
+      // NOTE: API key resolution is now handled by the executor with proper precedence:
+      // 1. Per-user encrypted keys (from database)
+      // 2. Global config.yaml keys
+      // 3. Environment variables
+      // The executor will let SDKs handle OAuth if no key is found.
 
-    // Log executor output
-    executorProcess.stdout?.on('data', (data) => {
-      console.log(`[Executor ${sessionId.slice(0, 8)}] ${data.toString().trim()}`);
-    });
-
-    executorProcess.stderr?.on('data', (data) => {
-      console.error(`[Executor ${sessionId.slice(0, 8)}] ${data.toString().trim()}`);
-    });
-
-    executorProcess.on('exit', async (code) => {
-      console.log(`[Executor ${sessionId.slice(0, 8)}] Exited with code ${code}`);
-
-      // Safety net: Update session status back to IDLE when executor completes
-      // The primary session status update happens in TasksService.patch() when task status changes
-      // This is a fallback in case the task status update didn't trigger session status change
-      if (code === 0) {
+      // Get worktree path
+      let cwd = process.cwd();
+      if (session.worktree_id) {
         try {
-          // CRITICAL: Check if THIS task is still the current/latest task before updating
-          // If a new task has started while this executor was exiting, we must NOT
-          // set the session to IDLE - that would break the running task.
-          const currentSession = await app.service('sessions').get(sessionId, params);
-          const latestTaskId = currentSession.tasks?.[currentSession.tasks.length - 1];
-
-          if (latestTaskId && latestTaskId !== taskId) {
-            console.log(
-              `⏭️ [Executor] Task ${taskId.slice(0, 8)} is not the latest (latest: ${latestTaskId.slice(0, 8)}), skipping IDLE update`
-            );
-            // Skip the update - a newer task owns the session state
-          } else if (currentSession.status === SessionStatus.RUNNING) {
-            await app.service('sessions').patch(
-              sessionId,
-              {
-                status: SessionStatus.IDLE,
-                ready_for_prompt: true,
-              },
-              params
-            );
-            console.log(
-              `✅ [Executor] Session ${sessionId.slice(0, 8)} status updated to IDLE after executor exit (fallback)`
-            );
-          } else {
-            console.log(
-              `ℹ️  [Executor] Session ${sessionId.slice(0, 8)} already in ${currentSession.status} state, skipping IDLE update`
-            );
-          }
+          const worktree = await app.service('worktrees').get(session.worktree_id, params);
+          cwd = worktree.path;
         } catch (error) {
-          console.error(`❌ [Executor] Failed to update session status to IDLE:`, error);
+          console.warn(`Could not get worktree path for ${session.worktree_id}:`, error);
         }
       }
 
-      // Revoke session token after executor exits
-      appWithExecutor.sessionTokenService?.revokeToken(sessionToken);
-    });
+      // Spawn executor process with Feathers/WebSocket mode
+      const dirname =
+        typeof __dirname !== 'undefined' ? __dirname : path.dirname(fileURLToPath(import.meta.url));
 
-    return {
-      success: true,
-      taskId: taskId,
-      status: 'running',
-      streaming: data.stream !== false,
-    };
-  });
+      // Try multiple possible paths for executor (development vs bundled)
+      const { existsSync } = await import('node:fs');
+      const possiblePaths = [
+        path.join(dirname, '../executor/cli.js'), // Bundled in agor-live
+        path.join(dirname, '../../../packages/executor/bin/agor-executor'), // Development - bin script with fallback to tsx
+        path.join(dirname, '../../../packages/executor/dist/cli.js'), // Development from apps/agor-daemon/dist (if built)
+      ];
+
+      const executorPath = possiblePaths.find((p) => existsSync(p));
+      if (!executorPath) {
+        throw new Error(
+          `Executor binary not found. Tried:\n${possiblePaths.map((p) => `  - ${p}`).join('\n')}`
+        );
+      }
+
+      console.log(`[Daemon] Using executor at: ${executorPath}`);
+
+      // =========================================================================
+      // DETERMINE UNIX USER FOR EXECUTOR BASED ON unix_user_mode
+      // Uses centralized logic from @agor/core/unix
+      // =========================================================================
+      const {
+        resolveUnixUserForImpersonation,
+        validateResolvedUnixUser,
+        UnixUserNotFoundError,
+        buildSpawnArgs,
+      } = await import('@agor/core/unix');
+
+      const unixUserMode = (config.execution?.unix_user_mode ?? 'simple') as UnixUserMode;
+      const configExecutorUser = config.execution?.executor_unix_user;
+      const sessionUnixUser = session.unix_username;
+
+      console.log('[Daemon] Determining executor Unix user:', {
+        sessionId: session.session_id.slice(0, 8),
+        unixUserMode,
+        sessionUnixUser,
+        configExecutorUser,
+      });
+
+      // Use centralized impersonation resolution logic
+      const impersonationResult = resolveUnixUserForImpersonation({
+        mode: unixUserMode,
+        userUnixUsername: sessionUnixUser,
+        executorUnixUser: configExecutorUser,
+      });
+
+      const executorUnixUser = impersonationResult.unixUser;
+      const impersonationReason = impersonationResult.reason;
+
+      console.log(`[Daemon] Executor impersonation: ${impersonationReason}`);
+
+      // Determine permission mode: explicit override > session config > 'default'
+      // This ensures session settings (like bypassPermissions) are preserved unless explicitly overridden
+      // Note: 'default' is not part of the executor's Zod schema, so we convert it to undefined
+      const effectivePermissionMode =
+        data.permissionMode || session.permission_config?.mode || undefined;
+      const permissionModeForPayload =
+        effectivePermissionMode === 'default' ? undefined : effectivePermissionMode;
+
+      // Validate Unix user exists for modes that require it
+      try {
+        validateResolvedUnixUser(unixUserMode, executorUnixUser);
+      } catch (err) {
+        if (err instanceof UnixUserNotFoundError) {
+          throw new Error(
+            `${(err as InstanceType<typeof UnixUserNotFoundError>).message}. Ensure the Unix user is created before attempting to execute sessions.`
+          );
+        }
+        throw err;
+      }
+
+      // Resolve user environment variables (includes user's encrypted env vars like GITHUB_TOKEN)
+      // Use the authenticated user (whoever is executing the command), not session creator
+      const userId = (params as AuthenticatedParams).user?.user_id as
+        | import('@agor/core/types').UserID
+        | undefined;
+      // When impersonating, strip HOME/USER/LOGNAME/SHELL so sudo -u can set them
+      const executorEnv = await createUserProcessEnvironment(
+        userId,
+        db,
+        undefined,
+        !!executorUnixUser
+      );
+
+      // Add DAEMON_URL to environment so executor can connect back
+      executorEnv.DAEMON_URL = daemonUrl;
+
+      // =========================================================================
+      // PHASE 4: JSON-OVER-STDIN WITH IMPERSONATION AT SPAWN
+      //
+      // Impersonation happens at spawn time using buildSpawnArgs():
+      // - When asUser is set, spawns via `sudo -u $asUser bash -c 'node executor --stdin'`
+      // - Executor runs directly as target user with fresh group memberships
+      // - No "node calling node" indirection
+      //
+      // Benefits:
+      // - Single spawn, not node-within-node
+      // - Fresh group memberships (sudo -u calls initgroups())
+      // - k8s compatible (can use pod security context instead)
+      // - Security: Uses sudo -u (not sudo su) to avoid whitelisting /usr/bin/su
+      // =========================================================================
+
+      // Build JSON payload for executor (Phase 2 --stdin mode)
+      // Note: asUser is NOT in payload - impersonation happens at spawn time
+      const executorPayload = {
+        command: 'prompt' as const,
+        sessionToken,
+        daemonUrl,
+        env: executorEnv,
+        params: {
+          sessionId,
+          taskId,
+          prompt: data.prompt,
+          tool: session.agentic_tool as 'claude-code' | 'gemini' | 'codex' | 'opencode',
+          permissionMode: permissionModeForPayload as 'ask' | 'auto' | 'allow-all' | undefined,
+          cwd,
+          messageSource: data.messageSource,
+        },
+      };
+
+      // Build spawn command - handles impersonation via sudo -u when executorUnixUser is set
+      const { cmd, args } = buildSpawnArgs('node', [executorPath, '--stdin'], {
+        asUser: executorUnixUser || undefined,
+        env: executorUnixUser ? executorEnv : undefined, // Only inject env when impersonating
+      });
+
+      if (executorUnixUser) {
+        console.log(`[Daemon] Spawning executor as user: ${executorUnixUser}`);
+      } else {
+        console.log(`[Daemon] Spawning executor as current user (no impersonation)`);
+      }
+
+      // Spawn executor with --stdin mode, pipe JSON payload via stdin
+      const executorProcess = spawn(cmd, args, {
+        cwd,
+        env: executorUnixUser ? undefined : executorEnv, // When impersonating, env is in the command
+        stdio: ['pipe', 'pipe', 'pipe'], // Enable stdin for JSON payload
+      });
+
+      // Write JSON payload to stdin
+      executorProcess.stdin?.write(JSON.stringify(executorPayload));
+      executorProcess.stdin?.end();
+
+      // Log executor output
+      executorProcess.stdout?.on('data', (data) => {
+        console.log(`[Executor ${sessionId.slice(0, 8)}] ${data.toString().trim()}`);
+      });
+
+      executorProcess.stderr?.on('data', (data) => {
+        console.error(`[Executor ${sessionId.slice(0, 8)}] ${data.toString().trim()}`);
+      });
+
+      executorProcess.on('exit', async (code) => {
+        console.log(`[Executor ${sessionId.slice(0, 8)}] Exited with code ${code}`);
+
+        // Safety net: Update session status back to IDLE when executor completes
+        // The primary session status update happens in TasksService.patch() when task status changes
+        // This is a fallback in case the task status update didn't trigger session status change
+        if (code === 0) {
+          try {
+            // CRITICAL: Check if THIS task is still the current/latest task before updating
+            // If a new task has started while this executor was exiting, we must NOT
+            // set the session to IDLE - that would break the running task.
+            const currentSession = await app.service('sessions').get(sessionId, params);
+            const latestTaskId = currentSession.tasks?.[currentSession.tasks.length - 1];
+
+            if (latestTaskId && latestTaskId !== taskId) {
+              console.log(
+                `⏭️ [Executor] Task ${taskId.slice(0, 8)} is not the latest (latest: ${latestTaskId.slice(0, 8)}), skipping IDLE update`
+              );
+              // Skip the update - a newer task owns the session state
+            } else if (currentSession.status === SessionStatus.RUNNING) {
+              await app.service('sessions').patch(
+                sessionId,
+                {
+                  status: SessionStatus.IDLE,
+                  ready_for_prompt: true,
+                },
+                params
+              );
+              console.log(
+                `✅ [Executor] Session ${sessionId.slice(0, 8)} status updated to IDLE after executor exit (fallback)`
+              );
+            } else {
+              console.log(
+                `ℹ️  [Executor] Session ${sessionId.slice(0, 8)} already in ${currentSession.status} state, skipping IDLE update`
+              );
+            }
+          } catch (error) {
+            console.error(`❌ [Executor] Failed to update session status to IDLE:`, error);
+          }
+        }
+
+        // Revoke session token after executor exits
+        appWithExecutor.sessionTokenService?.revokeToken(sessionToken);
+      });
+
+      return {
+        success: true,
+        taskId: taskId,
+        status: 'running',
+        streaming: data.stream !== false,
+      };
+    }
+  );
 
   sessionsService.setStopHandler(async (sessionId, data, _params) => {
     // Emit task_stop event for Feathers/WebSocket executors
@@ -3703,12 +3716,14 @@ async function main() {
           prompt: string;
           permissionMode?: import('@agor/core/types').PermissionMode;
           stream?: boolean;
+          messageSource?: 'gateway' | 'agor';
         },
         params: RouteParams
       ) {
         console.log(`📨 [Daemon] Prompt request for session ${params.route?.id?.substring(0, 8)}`);
         console.log(`   Permission mode: ${data.permissionMode || 'not specified'}`);
         console.log(`   Streaming: ${data.stream !== false}`);
+        console.log(`   Message source: ${data.messageSource || 'not specified'}`);
 
         const id = params.route?.id;
         if (!id) throw new Error('Session ID required');
@@ -3863,7 +3878,9 @@ async function main() {
                 prompt: data.prompt,
                 permissionMode: data.permissionMode,
                 stream: useStreaming,
-              },
+                messageSource: data.messageSource,
+                // biome-ignore lint/suspicious/noExplicitAny: TypeScript incorrectly infers SessionsService.executeTask data parameter type - messageSource is defined in the type but not recognized
+              } as any,
               params
             );
 

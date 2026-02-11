@@ -119,7 +119,9 @@ export class GeminiTool implements ITool {
     prompt: string,
     taskId?: TaskID,
     permissionMode?: PermissionMode,
-    streamingCallbacks?: StreamingCallbacks
+    streamingCallbacks?: StreamingCallbacks,
+    abortController?: AbortController,
+    messageSource?: 'gateway' | 'agor'
   ): Promise<GeminiExecutionResult> {
     if (!this.promptService || !this.messagesRepo) {
       throw new Error('GeminiTool not initialized with repositories for live execution');
@@ -134,7 +136,13 @@ export class GeminiTool implements ITool {
     let nextIndex = existingMessages.length;
 
     // Create user message
-    const userMessage = await this.createUserMessage(sessionId, prompt, taskId, nextIndex++);
+    const userMessage = await this.createUserMessage(
+      sessionId,
+      prompt,
+      taskId,
+      nextIndex++,
+      messageSource
+    );
 
     // Execute prompt via Gemini SDK with streaming
     const assistantMessageIds: MessageID[] = [];
@@ -250,7 +258,8 @@ export class GeminiTool implements ITool {
     sessionId: SessionID,
     prompt: string,
     taskId: TaskID | undefined,
-    nextIndex: number
+    nextIndex: number,
+    messageSource?: 'gateway' | 'agor'
   ): Promise<Message> {
     const userMessage: Message = {
       message_id: generateId() as MessageID,
@@ -262,6 +271,7 @@ export class GeminiTool implements ITool {
       content_preview: prompt.substring(0, 200),
       content: prompt,
       task_id: taskId,
+      metadata: messageSource ? { source: messageSource } : undefined,
     };
 
     await this.messagesService?.create(userMessage);
@@ -338,7 +348,8 @@ export class GeminiTool implements ITool {
     sessionId: SessionID,
     prompt: string,
     taskId?: TaskID,
-    permissionMode?: PermissionMode
+    permissionMode?: PermissionMode,
+    messageSource?: 'gateway' | 'agor'
   ): Promise<GeminiExecutionResult> {
     if (!this.promptService || !this.messagesRepo) {
       throw new Error('GeminiTool not initialized with repositories for live execution');
@@ -353,7 +364,13 @@ export class GeminiTool implements ITool {
     let nextIndex = existingMessages.length;
 
     // Create user message
-    const userMessage = await this.createUserMessage(sessionId, prompt, taskId, nextIndex++);
+    const userMessage = await this.createUserMessage(
+      sessionId,
+      prompt,
+      taskId,
+      nextIndex++,
+      messageSource
+    );
 
     // Execute prompt via Gemini SDK
     const assistantMessageIds: MessageID[] = [];

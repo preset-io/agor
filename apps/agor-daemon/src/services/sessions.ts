@@ -307,9 +307,11 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
   private executeHandler?: (
     sessionId: string,
     data: {
+      taskId: string;
       prompt: string;
       permissionMode?: import('@agor/core/types').PermissionMode;
       stream?: boolean;
+      messageSource?: 'gateway' | 'agor';
     },
     params?: SessionParams
   ) => Promise<{
@@ -323,9 +325,11 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     handler: (
       sessionId: string,
       data: {
+        taskId: string;
         prompt: string;
         permissionMode?: import('@agor/core/types').PermissionMode;
         stream?: boolean;
+        messageSource?: 'gateway' | 'agor';
       },
       params?: SessionParams
     ) => Promise<{
@@ -341,9 +345,11 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
   async executeTask(
     id: string,
     data: {
+      taskId: string;
       prompt: string;
       permissionMode?: import('@agor/core/types').PermissionMode;
       stream?: boolean;
+      messageSource?: 'gateway' | 'agor';
     },
     params?: SessionParams
   ): Promise<{

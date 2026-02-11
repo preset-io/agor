@@ -22,6 +22,7 @@ export async function executeClaudeCodeTask(params: {
   prompt: string;
   permissionMode?: PermissionMode;
   abortController: AbortController;
+  messageSource?: 'gateway' | 'agor';
 }): Promise<void> {
   const { client, sessionId } = params;
 

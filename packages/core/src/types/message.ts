@@ -162,6 +162,14 @@ export interface Message {
     /** Whether this is a meta/synthetic message */
     is_meta?: boolean;
 
+    /**
+     * Message source - where the message originated
+     * - 'gateway': Message came from external platform (Slack, Discord, etc.)
+     * - 'agor': Message originated from Agor UI
+     * - undefined: Legacy message or source not tracked
+     */
+    source?: 'gateway' | 'agor';
+
     /** Additional agent-specific fields */
     [key: string]: unknown;
   };

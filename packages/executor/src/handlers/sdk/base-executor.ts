@@ -30,7 +30,8 @@ export interface BaseTool {
     taskId?: TaskID,
     permissionMode?: PermissionMode,
     callbacks?: StreamingCallbacks,
-    abortController?: AbortController
+    abortController?: AbortController,
+    messageSource?: 'gateway' | 'agor'
   ): Promise<{
     userMessageId: MessageID;
     assistantMessageIds: MessageID[];
@@ -275,6 +276,7 @@ export async function executeToolTask(params: {
   abortController: AbortController;
   apiKeyEnvVar: string;
   toolName: string;
+  messageSource?: 'gateway' | 'agor';
   createTool: (
     repos: ReturnType<typeof createFeathersBackedRepositories>,
     apiKey: string,
@@ -352,7 +354,8 @@ export async function executeToolTask(params: {
       taskId,
       permissionMode,
       ctx.callbacks,
-      params.abortController
+      params.abortController,
+      params.messageSource
     );
 
     console.log(

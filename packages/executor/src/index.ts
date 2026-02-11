@@ -20,6 +20,7 @@ export interface ExecutorConfig {
   tool: 'claude-code' | 'gemini' | 'codex' | 'opencode';
   permissionMode?: PermissionMode;
   daemonUrl: string;
+  messageSource?: 'gateway' | 'agor';
 }
 
 export class AgorExecutor {
@@ -181,6 +182,7 @@ export class AgorExecutor {
       prompt: this.config.prompt,
       permissionMode: this.config.permissionMode,
       abortController: this.abortController,
+      messageSource: this.config.messageSource,
     });
 
     this.isRunning = false;
