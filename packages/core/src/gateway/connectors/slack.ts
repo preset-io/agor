@@ -84,6 +84,8 @@ function parseThreadId(threadId: string): { channel: string; thread_ts: string }
 function hasActiveMention(text: string, mentionPattern: RegExp): boolean {
   // Strip triple-backtick blocks first (```...```), then inline code (`...`)
   const stripped = text.replace(/```[\s\S]*?```/g, '').replace(/`[^`]*`/g, '');
+  // Reset lastIndex in case the pattern has global/sticky flags (defensive)
+  mentionPattern.lastIndex = 0;
   return mentionPattern.test(stripped);
 }
 
@@ -337,12 +339,18 @@ export class SlackConnector implements GatewayConnector {
       // - Skip 'app_mention' events where the mention is only inside code blocks
       //   (those are not "real" mentions and should be handled as plain messages)
       const isThreadReply = !!event.thread_ts;
-      // app_mention events often lack channel_type, so also infer from channel ID prefix
+      // Determine if this is a channel/group message for dedup purposes.
+      // app_mention events often lack channel_type, so infer from channel ID prefix.
+      // IMPORTANT: Only use prefix inference for app_mention events. For message events,
+      // rely on the explicit channel_type to avoid misclassifying MPIMs (which also
+      // use G* prefix) and accidentally dropping messages.
       const channelPrefix = (event.channel as string | undefined)?.charAt(0);
       const isChannelMessage =
         event.channel_type === 'channel' ||
         event.channel_type === 'group' ||
-        (!event.channel_type && (channelPrefix === 'C' || channelPrefix === 'G'));
+        (eventType === 'app_mention' &&
+          !event.channel_type &&
+          (channelPrefix === 'C' || channelPrefix === 'G'));
 
       // CRITICAL: Prevent duplicates in channels/groups when bot ID unavailable
       // Strategy depends on require_mention setting:
