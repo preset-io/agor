@@ -45,3 +45,6 @@ jobs:
 
       - name: Build
         run: pnpm turbo run build --filter='!@agor/docs'
+
+      - name: Test
+        run: pnpm turbo run test

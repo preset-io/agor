@@ -38,6 +38,7 @@ import {
 import { StreamdownDemoPage } from './pages/StreamdownDemoPage';
 import { isMobileDevice } from './utils/deviceDetection';
 import { useThemedMessage } from './utils/message';
+import { buildOAuthAutoContinuePrompt, shouldProcessOAuthRequired } from './utils/oauth-helpers';
 
 /**
  * DeviceRouter - Redirects users to mobile or desktop site based on device detection
@@ -190,18 +191,12 @@ function AppContent() {
     }) => {
       console.log('[OAuth] Received oauth:auth_required event:', data);
 
-      // Ignore if OAuth flow is already in progress
-      if (pendingOAuthServer) {
-        console.log(
-          '[OAuth] Ignoring - OAuth flow already in progress for:',
-          pendingOAuthServer.name
-        );
-        return;
-      }
-
-      // Ignore if we're in cooldown period (prevents rapid re-triggers after completion)
-      if (Date.now() < oauthCooldownUntil) {
-        console.log('[OAuth] Ignoring - in cooldown period');
+      const { shouldProcess, reason } = shouldProcessOAuthRequired(
+        pendingOAuthServer,
+        oauthCooldownUntil
+      );
+      if (!shouldProcess) {
+        console.log(`[OAuth] Ignoring - ${reason}`);
         return;
       }
 
@@ -286,11 +281,12 @@ function AppContent() {
         );
 
         // Auto-continue the session that was waiting for OAuth
-        if (pendingOAuthServer?.sessionId) {
+        const autoContinue = buildOAuthAutoContinuePrompt(pendingOAuthServer);
+        if (autoContinue) {
           try {
-            await client.service(`sessions/${pendingOAuthServer.sessionId}/prompt`).create({
-              prompt: `OAuth authentication for "${pendingOAuthServer.name}" MCP server completed successfully. The MCP tools are now available. Please continue with what you were doing.`,
-              messageSource: 'agor',
+            await client.service(`sessions/${autoContinue.sessionId}/prompt`).create({
+              prompt: autoContinue.prompt,
+              messageSource: autoContinue.messageSource,
             });
           } catch (err) {
             console.warn('[OAuth] Failed to auto-continue session:', err);

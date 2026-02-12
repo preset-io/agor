@@ -99,6 +99,7 @@ import type {
 import { SessionStatus, TaskStatus } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
 
+import { performOAuthDisconnect } from './services/oauth-disconnect.js';
 // Executor spawning utility for fire-and-forget Unix operations
 import {
   configureDaemonUrl,
@@ -1725,75 +1726,16 @@ async function main() {
   // Disconnect OAuth - delete per-user OAuth token and clear all caches for an MCP server
   app.use('/mcp-servers/oauth-disconnect', {
     async create(data: { mcp_server_id: string }, params?: AuthenticatedParams) {
-      const userId = params?.user?.user_id;
-      if (!userId) {
-        return { success: false, error: 'User not authenticated' };
-      }
+      const { clearAuthCodeTokenCache } = await import('@agor/core/tools/mcp/oauth-mcp-transport');
 
-      const { mcp_server_id } = data;
-      if (!mcp_server_id) {
-        return { success: false, error: 'MCP server ID is required' };
-      }
-
-      console.log(
-        `[OAuth Disconnect] Deleting token for user ${userId.substring(0, 8)}, server ${mcp_server_id.substring(0, 8)}`
-      );
-
-      try {
-        // 1. Delete per-user token from database
-        const userTokenRepo = new UserMCPOAuthTokenRepository(db);
-        const deleted = await userTokenRepo.deleteToken(
-          userId as import('@agor/core/types').UserID,
-          mcp_server_id as import('@agor/core/types').MCPServerID
-        );
-
-        // 2. Clear in-memory caches (daemon-level + core-level)
-        const mcpServerRepo = new MCPServerRepository(db);
-        const server = await mcpServerRepo.findById(mcp_server_id);
-        if (server?.url) {
-          // Clear daemon-level oauth21TokenCache by origin
-          try {
-            const origin = new URL(server.url).origin;
-            oauth21TokenCache.delete(origin);
-            console.log(`[OAuth Disconnect] Cleared daemon cache for origin: ${origin}`);
-          } catch {
-            // Invalid URL, skip cache clear
-          }
-
-          // Clear core-level authCodeTokenCache (browser OAuth flow cache)
-          const { clearAuthCodeTokenCache } = await import(
-            '@agor/core/tools/mcp/oauth-mcp-transport'
-          );
-          clearAuthCodeTokenCache(); // Clear all cached tokens
-          console.log('[OAuth Disconnect] Cleared core OAuth token cache');
-        }
-
-        // 3. Clear oauth_access_token from server's auth config (shared mode token)
-        if (server?.auth?.oauth_access_token) {
-          await mcpServerRepo.update(mcp_server_id, {
-            auth: {
-              ...server.auth,
-              oauth_access_token: undefined,
-              oauth_token_expires_at: undefined,
-            },
-          });
-          console.log('[OAuth Disconnect] Cleared shared OAuth token from server config');
-        }
-
-        if (deleted) {
-          console.log('[OAuth Disconnect] Token deleted successfully');
-          return { success: true, message: 'OAuth connection removed' };
-        } else {
-          console.log('[OAuth Disconnect] No per-user token found, caches cleared');
-          return { success: true, message: 'OAuth connection removed' };
-        }
-      } catch (error) {
-        console.error('[OAuth Disconnect] Error:', error);
-        return {
-          success: false,
-          error: error instanceof Error ? error.message : String(error),
-        };
-      }
+      return performOAuthDisconnect({
+        userId: params?.user?.user_id,
+        mcpServerId: data.mcp_server_id,
+        userTokenRepo: new UserMCPOAuthTokenRepository(db),
+        mcpServerRepo: new MCPServerRepository(db),
+        oauthTokenCache: oauth21TokenCache,
+        clearCoreTokenCache: clearAuthCodeTokenCache,
+      });
     },
   });
 
