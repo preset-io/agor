@@ -81,6 +81,7 @@ export enum PermissionStatus {
   PENDING = 'pending',
   APPROVED = 'approved',
   DENIED = 'denied',
+  TIMED_OUT = 'timed_out',
 }
 
 /**

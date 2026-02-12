@@ -225,24 +225,35 @@ export function createCanUseToolCallback(
         options.signal
       );
 
-      // Update permission request message with approval/denial
+      // Update permission request message with approval/denial/timeout
       if (deps.messagesService) {
         const baseContent =
           typeof permissionMessage.content === 'object' && !Array.isArray(permissionMessage.content)
             ? permissionMessage.content
             : {};
+
+        // Determine status: timeout gets distinct TIMED_OUT, otherwise APPROVED/DENIED
+        let resolvedStatus: PermissionStatus;
+        if (decision.allow) {
+          resolvedStatus = PermissionStatus.APPROVED;
+        } else if (decision.reason === 'Timeout') {
+          resolvedStatus = PermissionStatus.TIMED_OUT;
+        } else {
+          resolvedStatus = PermissionStatus.DENIED;
+        }
+
         // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service has patch method but type definition is incomplete
         await (deps.messagesService as any).patch(permissionMessage.message_id, {
           content: {
             ...(baseContent as Record<string, unknown>),
-            status: decision.allow ? PermissionStatus.APPROVED : PermissionStatus.DENIED,
+            status: resolvedStatus,
             scope: decision.remember ? decision.scope : undefined,
             approved_by: decision.decidedBy,
             approved_at: new Date().toISOString(),
           },
         });
         console.log(
-          `✅ [canUseTool] Permission request updated: ${decision.allow ? 'approved' : 'denied'}`
+          `✅ [canUseTool] Permission request updated: ${resolvedStatus}`
         );
       }
 
