@@ -159,6 +159,7 @@ export class CodexTool implements ITool {
     let _streamStartTime = Date.now();
     let _firstTokenTime: number | null = null;
     let rawSdkResponse: unknown;
+    let streamStarted = false; // tracks whether onStreamStart succeeded (for safe onStreamEnd)
     let wasStopped = false;
 
     for await (const event of this.promptService.promptSessionStreaming(
@@ -205,22 +206,51 @@ export class CodexTool implements ITool {
       if (event.type === 'partial' && event.textChunk) {
         // Start new message if needed
         if (!currentMessageId) {
-          currentMessageId = generateId() as MessageID;
+          const newMessageId = generateId() as MessageID;
           _firstTokenTime = Date.now();
 
           if (streamingCallbacks) {
-            streamingCallbacks.onStreamStart(currentMessageId, {
-              session_id: sessionId,
-              task_id: taskId,
-              role: MessageRole.ASSISTANT,
-              timestamp: new Date().toISOString(),
-            });
+            try {
+              await streamingCallbacks.onStreamStart(newMessageId, {
+                session_id: sessionId,
+                task_id: taskId,
+                role: MessageRole.ASSISTANT,
+                timestamp: new Date().toISOString(),
+              });
+              // Only track message ID after successful start
+              currentMessageId = newMessageId;
+              streamStarted = true;
+            } catch (err) {
+              console.error(`[Codex] Streaming start failed for ${newMessageId}:`, err);
+              try {
+                await streamingCallbacks.onStreamError(
+                  newMessageId,
+                  err instanceof Error ? err : new Error(String(err))
+                );
+              } catch {
+                /* best-effort */
+              }
+            }
+          } else {
+            currentMessageId = newMessageId;
           }
         }
 
         // Emit chunk immediately
-        if (streamingCallbacks) {
-          streamingCallbacks.onStreamChunk(currentMessageId, event.textChunk);
+        if (streamingCallbacks && currentMessageId) {
+          try {
+            await streamingCallbacks.onStreamChunk(currentMessageId, event.textChunk);
+          } catch (err) {
+            console.error(`[Codex] Streaming chunk failed for ${currentMessageId}:`, err);
+            try {
+              await streamingCallbacks.onStreamError(
+                currentMessageId,
+                err instanceof Error ? err : new Error(String(err))
+              );
+            } catch {
+              /* best-effort */
+            }
+          }
         }
       }
       // Handle tool completion (create message immediately for live updates)
@@ -301,10 +331,13 @@ export class CodexTool implements ITool {
                   role: MessageRole.ASSISTANT,
                   timestamp: new Date().toISOString(),
                 });
+                streamStarted = true;
                 await streamingCallbacks.onStreamChunk(assistantMessageId, fullText);
               }
-              // Always close the stream (partial path started it, complete path must end it)
-              await streamingCallbacks.onStreamEnd(assistantMessageId);
+              // Only close stream if one was successfully started
+              if (streamStarted) {
+                await streamingCallbacks.onStreamEnd(assistantMessageId);
+              }
             } catch (err) {
               console.error(`[Codex] Streaming callback failed for ${assistantMessageId}:`, err);
               // Notify UI so it can clear spinner/pending state
@@ -334,6 +367,7 @@ export class CodexTool implements ITool {
 
           // Reset for next message
           currentMessageId = null;
+          streamStarted = false;
         }
 
         _streamStartTime = Date.now();
