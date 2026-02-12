@@ -505,6 +505,10 @@ export class SlackConnector implements GatewayConnector {
           channel_type: event.channel_type,
           requires_mapping_verification: allowedViaThreadReplyException,
           ...(slackUserEmail ? { slack_user_email: slackUserEmail } : {}),
+          // Signal that user alignment was attempted so the gateway can
+          // reject (instead of silently falling back to channel owner)
+          // when the email couldn't be resolved.
+          ...(this.config.align_slack_users ? { align_slack_users: true } : {}),
         },
       });
     });
