@@ -14,7 +14,7 @@ import {
   PermissionScope,
   PermissionStatus,
 } from '@agor/core/types';
-import { CheckOutlined, CloseOutlined, LockOutlined } from '@ant-design/icons';
+import { CheckOutlined, ClockCircleOutlined, CloseOutlined, LockOutlined } from '@ant-design/icons';
 import { Button, Card, Descriptions, Radio, Select, Space, Typography, theme } from 'antd';
 import type React from 'react';
 import { useState } from 'react';
@@ -45,9 +45,10 @@ export const PermissionRequestBlock: React.FC<PermissionRequestBlockProps> = ({
 
   const { tool_name, tool_input, status, approved_at } = content;
 
-  // Determine the state: active, approved, denied, or waiting
+  // Determine the state: active, approved, denied, timed out, or waiting
   const isApproved = status === PermissionStatus.APPROVED;
   const isDenied = status === PermissionStatus.DENIED;
+  const isTimedOut = status === PermissionStatus.TIMED_OUT;
 
   // State-based styling
   const getStateStyle = () => {
@@ -76,6 +77,13 @@ export const PermissionRequestBlock: React.FC<PermissionRequestBlockProps> = ({
         border: `1px solid ${token.colorErrorBorder}`,
       };
     }
+    if (isTimedOut) {
+      return {
+        background: 'rgba(0, 0, 0, 0.02)',
+        border: `1px solid ${token.colorBorder}`,
+        opacity: 0.8,
+      };
+    }
     return {};
   };
 
@@ -83,6 +91,8 @@ export const PermissionRequestBlock: React.FC<PermissionRequestBlockProps> = ({
     if (isActive) return <LockOutlined style={{ fontSize: 20, color: token.colorWarning }} />;
     if (isApproved) return <CheckOutlined style={{ fontSize: 20, color: token.colorSuccess }} />;
     if (isDenied) return <CloseOutlined style={{ fontSize: 20, color: token.colorError }} />;
+    if (isTimedOut)
+      return <ClockCircleOutlined style={{ fontSize: 20, color: token.colorTextSecondary }} />;
     return null;
   };
 
@@ -91,6 +101,7 @@ export const PermissionRequestBlock: React.FC<PermissionRequestBlockProps> = ({
     if (isActive) return 'Permission Required';
     if (isApproved) return 'Permission Approved';
     if (isDenied) return 'Permission Denied';
+    if (isTimedOut) return 'Permission Request Timed Out';
     return 'Permission Request';
   };
 
@@ -101,6 +112,9 @@ export const PermissionRequestBlock: React.FC<PermissionRequestBlockProps> = ({
     }
     if (isDenied && approved_at) {
       return `Denied ${new Date(approved_at).toLocaleString()}`;
+    }
+    if (isTimedOut && approved_at) {
+      return `Timed out ${new Date(approved_at).toLocaleString()}`;
     }
     return '';
   };

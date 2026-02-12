@@ -42,12 +42,32 @@ export class MessagesService extends DrizzleService<Message, Partial<Message>, M
   }
 
   /**
+   * Apply non-operator query fields (type, role, etc.) as filters on a message array.
+   * Called in shortcut paths (session_id, task_id) which bypass the ORM's query handling.
+   */
+  private applyQueryFilters(msgs: Message[], query: Record<string, unknown>): Message[] {
+    let filtered = msgs;
+    for (const [key, value] of Object.entries(query)) {
+      if (key.startsWith('$')) continue; // Skip $limit, $skip, $sort
+      if (key === 'session_id') continue; // Already used for repo lookup
+      if (key === 'task_id') continue; // Already used for repo lookup
+      filtered = filtered.filter(
+        (msg) => (msg as unknown as Record<string, unknown>)[key] === value
+      );
+    }
+    return filtered;
+  }
+
+  /**
    * Override find to support task-based and session-based filtering
    */
   async find(params?: MessageParams): Promise<Message[] | Paginated<Message>> {
     // If filtering by task_id, use repository method
     if (params?.query?.task_id) {
-      const messages = await this.messagesRepo.findByTaskId(params.query.task_id);
+      let messages = await this.messagesRepo.findByTaskId(params.query.task_id);
+
+      // Apply additional query filters (type, role, etc.)
+      messages = this.applyQueryFilters(messages, params.query);
 
       // Apply pagination if enabled
       if (this.paginate) {
@@ -67,7 +87,10 @@ export class MessagesService extends DrizzleService<Message, Partial<Message>, M
 
     // If filtering by session_id, use repository method
     if (params?.query?.session_id) {
-      const messages = await this.messagesRepo.findBySessionId(params.query.session_id);
+      let messages = await this.messagesRepo.findBySessionId(params.query.session_id);
+
+      // Apply additional query filters (type, role, etc.)
+      messages = this.applyQueryFilters(messages, params.query);
 
       // Apply pagination if enabled
       if (this.paginate) {

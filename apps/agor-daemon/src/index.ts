@@ -4637,7 +4637,6 @@ async function main() {
           query: {
             session_id: id,
             type: 'permission_request',
-            $limit: 100, // Get recent permission requests
           },
         });
 
@@ -4649,7 +4648,9 @@ async function main() {
         });
 
         if (!permissionMessage) {
-          throw new Error(`Permission request ${data.requestId} not found`);
+          throw new Error(
+            `Permission request ${data.requestId} not found (found ${messageList.length} permission_request messages in session ${id})`
+          );
         }
 
         // Type-safe access to permission content
