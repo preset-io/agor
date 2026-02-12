@@ -291,20 +291,31 @@ export class CodexTool implements ITool {
           // Codex SDK doesn't support token-level text streaming, but we can still
           // use streaming callbacks to show text immediately via WebSocket before DB write.
           // This sends the complete text as a single "chunk" for instant display.
-          // Guard: skip if currentMessageId is set (partial path already streamed this message).
-          if (streamingCallbacks && fullText && !currentMessageId) {
+          if (streamingCallbacks && fullText) {
             try {
-              await streamingCallbacks.onStreamStart(assistantMessageId, {
-                session_id: sessionId,
-                task_id: taskId,
-                role: MessageRole.ASSISTANT,
-                timestamp: new Date().toISOString(),
-              });
-              await streamingCallbacks.onStreamChunk(assistantMessageId, fullText);
+              if (!currentMessageId) {
+                // No partial path — send full start/chunk/end sequence
+                await streamingCallbacks.onStreamStart(assistantMessageId, {
+                  session_id: sessionId,
+                  task_id: taskId,
+                  role: MessageRole.ASSISTANT,
+                  timestamp: new Date().toISOString(),
+                });
+                await streamingCallbacks.onStreamChunk(assistantMessageId, fullText);
+              }
+              // Always close the stream (partial path started it, complete path must end it)
               await streamingCallbacks.onStreamEnd(assistantMessageId);
             } catch (err) {
               console.error(`[Codex] Streaming callback failed for ${assistantMessageId}:`, err);
-              // Don't block message creation if streaming fails
+              // Notify UI so it can clear spinner/pending state
+              try {
+                await streamingCallbacks.onStreamError(
+                  assistantMessageId,
+                  err instanceof Error ? err : new Error(String(err))
+                );
+              } catch {
+                /* best-effort */
+              }
             }
           }
 
