@@ -183,6 +183,21 @@ export class GatewayService {
     // without explicitly mentioning the bot. Only threads where the bot was mentioned
     // (creating a mapping) can continue conversations without mentions.
     if (!existingMapping && data.metadata?.requires_mapping_verification) {
+      // Before sending a rejection message, check if this thread is owned by a
+      // DIFFERENT gateway channel on the same daemon. If so, silently drop the
+      // message — we must not interfere with another gateway's thread.
+      const otherChannelMapping = await this.threadMapRepo.findByThread(data.thread_id);
+      if (otherChannelMapping) {
+        console.log(
+          `[gateway] IGNORED: Thread ${data.thread_id} owned by channel ${otherChannelMapping.channel_id.substring(0, 8)}, not ours (${channel.id.substring(0, 8)}). Silently dropping.`
+        );
+        return {
+          success: false,
+          sessionId: '',
+          created: false,
+        };
+      }
+
       console.log(
         `[gateway] REJECTED: Thread reply without mention in unmapped thread: channel=${channel.id.substring(0, 8)}, thread=${data.thread_id}`
       );

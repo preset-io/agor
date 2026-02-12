@@ -257,6 +257,27 @@ export class ThreadSessionMapRepository
   }
 
   /**
+   * Find any mapping for a thread ID, regardless of channel.
+   * Used to detect cross-channel thread ownership (e.g., thread belongs
+   * to a different gateway channel on the same daemon).
+   */
+  async findByThread(threadId: string): Promise<ThreadSessionMap | null> {
+    try {
+      const row = await select(this.db)
+        .from(threadSessionMap)
+        .where(eq(threadSessionMap.thread_id, threadId))
+        .one();
+
+      return row ? this.rowToMapping(row) : null;
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to find mapping by thread: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
    * Find mapping by session ID (outbound routing lookup)
    */
   async findBySession(sessionId: string): Promise<ThreadSessionMap | null> {

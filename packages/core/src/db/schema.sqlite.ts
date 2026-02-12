@@ -1001,6 +1001,7 @@ export const threadSessionMap = sqliteTable(
       table.thread_id
     ),
     sessionIdx: index('idx_thread_map_session_id').on(table.session_id),
+    threadIdx: index('idx_thread_map_thread_id').on(table.thread_id),
     channelStatusIdx: index('idx_thread_map_channel_status').on(table.channel_id, table.status),
   })
 );
