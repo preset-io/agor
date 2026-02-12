@@ -252,9 +252,7 @@ export function createCanUseToolCallback(
             approved_at: new Date().toISOString(),
           },
         });
-        console.log(
-          `✅ [canUseTool] Permission request updated: ${resolvedStatus}`
-        );
+        console.log(`✅ [canUseTool] Permission request updated: ${resolvedStatus}`);
       }
 
       // Update task status
