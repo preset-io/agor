@@ -317,6 +317,16 @@ export interface AgorCredentials {
 }
 
 /**
+ * Onboarding settings (stored by CLI init, consumed by UI wizard)
+ */
+export interface AgorOnboardingSettings {
+  /** Whether command center setup was requested during init */
+  commandCenterPending?: boolean;
+  /** Clone URL for the openclaw repo */
+  openclawRepoUrl?: string;
+}
+
+/**
  * Complete Agor configuration
  */
 export interface AgorConfig {
@@ -349,6 +359,9 @@ export interface AgorConfig {
 
   /** Tool credentials (API keys, tokens) */
   credentials?: AgorCredentials;
+
+  /** Onboarding settings (CLI init → UI wizard) */
+  onboarding?: AgorOnboardingSettings;
 }
 
 /**
@@ -364,4 +377,5 @@ export type ConfigKey =
   | `codex.${keyof AgorCodexSettings}`
   | `execution.${keyof AgorExecutionSettings}`
   | `paths.${keyof AgorPathSettings}`
-  | `credentials.${keyof AgorCredentials}`;
+  | `credentials.${keyof AgorCredentials}`
+  | `onboarding.${keyof AgorOnboardingSettings}`;

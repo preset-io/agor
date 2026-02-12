@@ -390,6 +390,11 @@ export default class Init extends Command {
       }
     }
 
+    // Prompt for command center setup (unless --force or skipped prompts)
+    if (!skipPrompts) {
+      await this.promptCommandCenter();
+    }
+
     // Success summary
     this.log('');
     this.log(chalk.green.bold('✅ Agor initialized successfully!'));
@@ -537,6 +542,56 @@ export default class Init extends Command {
     });
 
     this.log(`${chalk.green('   ✓')} Admin user created (${chalk.gray(email)})`);
+  }
+
+  /**
+   * Prompt user for command center setup
+   *
+   * Stores intent in config.yaml for the UI wizard to pick up.
+   * The openclaw repo is public, so HTTPS always works.
+   */
+  private async promptCommandCenter(): Promise<void> {
+    this.log('');
+    this.log(chalk.bold('🎯 Command Center'));
+    this.log('');
+    this.log(
+      chalk.gray(
+        'The command center is an AI-powered workspace where you can manage your Agor instance.'
+      )
+    );
+    this.log(
+      chalk.gray('It includes pre-configured tasks, templates, and an AI agent ready to help.')
+    );
+    this.log('');
+
+    const { setupCommandCenter } = await inquirer.prompt([
+      {
+        type: 'confirm',
+        name: 'setupCommandCenter',
+        message: 'Set up your command center?',
+        default: true,
+      },
+    ]);
+
+    if (setupCommandCenter) {
+      const openclawRepoUrl = 'https://github.com/mistercrunch/agor-openclaw.git';
+      await setConfigValue('onboarding.commandCenterPending', true);
+      await setConfigValue('onboarding.openclawRepoUrl', openclawRepoUrl);
+      this.log(`${chalk.green('   ✓')} Command center setup queued for the UI wizard`);
+
+      // Check for ANTHROPIC_API_KEY
+      if (!process.env.ANTHROPIC_API_KEY) {
+        this.log('');
+        this.log(
+          chalk.yellow(
+            '   💡 Tip: Set ANTHROPIC_API_KEY in your environment for Claude Code agents'
+          )
+        );
+        this.log(chalk.gray('   You can also configure API keys in the UI after setup'));
+      }
+    } else {
+      this.log(chalk.gray('   Skipped. You can set this up later from the UI.'));
+    }
   }
 
   /**

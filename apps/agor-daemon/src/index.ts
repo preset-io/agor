@@ -5826,6 +5826,17 @@ async function main() {
           label: config.daemon?.instanceLabel,
           description: config.daemon?.instanceDescription,
         },
+        onboarding: {
+          commandCenterPending: config.onboarding?.commandCenterPending ?? false,
+          openclawRepoUrl: config.onboarding?.openclawRepoUrl,
+          systemCredentials: {
+            ANTHROPIC_API_KEY: !!(
+              config.credentials?.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY
+            ),
+            OPENAI_API_KEY: !!(config.credentials?.OPENAI_API_KEY || process.env.OPENAI_API_KEY),
+            GEMINI_API_KEY: !!(config.credentials?.GEMINI_API_KEY || process.env.GEMINI_API_KEY),
+          },
+        },
       };
 
       // If user is authenticated (via requireAuth hook check), provide detailed info

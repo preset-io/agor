@@ -27,7 +27,6 @@ import { BoardSwitcher } from '../BoardSwitcher';
 import { BrandLogo } from '../BrandLogo';
 import { ConnectionStatus } from '../ConnectionStatus';
 import { Facepile } from '../Facepile';
-import { GettingStartedPopover } from '../GettingStartedPopover';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { ThemeSwitcher } from '../ThemeSwitcher';
 
@@ -56,13 +55,6 @@ export interface AppHeaderProps {
   currentBoardId?: string;
   onBoardChange?: (boardId: string) => void;
   worktreeById?: Map<string, Worktree>;
-  repoCount?: number;
-  worktreeCount?: number;
-  hasAuthentication?: boolean;
-  onDismissOnboarding?: () => void;
-  onOpenRepoSettings?: () => void;
-  onOpenAuthSettings?: () => void;
-  onOpenNewWorktree?: () => void;
   boardById?: Map<string, Board>; // For looking up board names
   onUserClick?: (
     userId: string,
@@ -98,13 +90,6 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   currentBoardId,
   onBoardChange,
   worktreeById = new Map(),
-  repoCount = 0,
-  worktreeCount = 0,
-  hasAuthentication = false,
-  onDismissOnboarding,
-  onOpenRepoSettings,
-  onOpenAuthSettings,
-  onOpenNewWorktree,
   boardById,
   onUserClick,
   instanceLabel,
@@ -276,53 +261,15 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             />
           </Tooltip>
         )}
-        {user && !user.onboarding_completed ? (
-          <GettingStartedPopover
-            stats={{
-              repoCount,
-              worktreeCount,
-              hasAuthentication,
-            }}
-            user={user}
-            onOpenSettings={() => onSettingsClick?.()}
-            onOpenRepoSettings={onOpenRepoSettings}
-            onOpenAuthSettings={onOpenAuthSettings}
-            onOpenNewWorktree={onOpenNewWorktree}
-            onDismiss={onDismissOnboarding}
-          >
-            <Tooltip title="Getting Started" placement="bottom">
-              <Button
-                type="text"
-                icon={<QuestionCircleOutlined style={{ fontSize: token.fontSizeLG }} />}
-                style={{
-                  position: 'relative',
-                }}
-              >
-                <span
-                  style={{
-                    position: 'absolute',
-                    top: 8,
-                    right: 8,
-                    width: 8,
-                    height: 8,
-                    borderRadius: '50%',
-                    backgroundColor: token.colorError,
-                  }}
-                />
-              </Button>
-            </Tooltip>
-          </GettingStartedPopover>
-        ) : (
-          <Tooltip title="Documentation" placement="bottom">
-            <Button
-              type="text"
-              icon={<QuestionCircleOutlined style={{ fontSize: token.fontSizeLG }} />}
-              href="https://agor.live/guide/getting-started"
-              target="_blank"
-              rel="noopener noreferrer"
-            />
-          </Tooltip>
-        )}
+        <Tooltip title="Documentation" placement="bottom">
+          <Button
+            type="text"
+            icon={<QuestionCircleOutlined style={{ fontSize: token.fontSizeLG }} />}
+            href="https://agor.live/guide/getting-started"
+            target="_blank"
+            rel="noopener noreferrer"
+          />
+        </Tooltip>
         <ThemeSwitcher onOpenThemeEditor={onThemeEditorClick} />
         <Tooltip title="Settings" placement="bottom">
           <Button

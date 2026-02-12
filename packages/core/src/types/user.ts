@@ -88,11 +88,26 @@ export interface EventStreamPreferences {
 }
 
 /**
+ * Per-user onboarding state (stored in user.preferences)
+ */
+export interface OnboardingState {
+  /** Which path the user took */
+  path?: 'command-center' | 'own-repo';
+  /** The worktree ID created during onboarding */
+  worktreeId?: string;
+  /** The board ID created for this user */
+  boardId?: string;
+}
+
+/**
  * User preferences structure
  */
 export interface UserPreferences {
   audio?: AudioPreferences;
   eventStream?: EventStreamPreferences;
+  onboarding?: OnboardingState;
+  /** The user's personal/main board ID (created during onboarding or later) */
+  mainBoardId?: string;
   // Future preferences can be added here
   [key: string]: unknown;
 }

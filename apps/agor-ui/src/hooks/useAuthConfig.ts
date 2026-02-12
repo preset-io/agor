@@ -18,6 +18,18 @@ interface InstanceConfig {
   description?: string;
 }
 
+interface SystemCredentials {
+  ANTHROPIC_API_KEY?: boolean;
+  OPENAI_API_KEY?: boolean;
+  GEMINI_API_KEY?: boolean;
+}
+
+interface OnboardingConfig {
+  commandCenterPending?: boolean;
+  openclawRepoUrl?: string;
+  systemCredentials?: SystemCredentials;
+}
+
 interface HealthResponse {
   status: string;
   timestamp: number;
@@ -25,11 +37,13 @@ interface HealthResponse {
   database: string;
   auth: AuthConfig;
   instance?: InstanceConfig;
+  onboarding?: OnboardingConfig;
 }
 
 export function useAuthConfig() {
   const [config, setConfig] = useState<AuthConfig | null>(null);
   const [instanceConfig, setInstanceConfig] = useState<InstanceConfig | null>(null);
+  const [onboardingConfig, setOnboardingConfig] = useState<OnboardingConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
@@ -44,12 +58,14 @@ export function useAuthConfig() {
         const health: HealthResponse = await response.json();
         setConfig(health.auth);
         setInstanceConfig(health.instance ?? null);
+        setOnboardingConfig(health.onboarding ?? null);
         setError(null);
       } catch (err) {
         setError(err instanceof Error ? err : new Error(String(err)));
         // Default to requiring auth on error (secure by default)
         setConfig({ requireAuth: true, allowAnonymous: false });
         setInstanceConfig(null);
+        setOnboardingConfig(null);
       } finally {
         setLoading(false);
       }
@@ -58,5 +74,5 @@ export function useAuthConfig() {
     fetchAuthConfig();
   }, []);
 
-  return { config, instanceConfig, loading, error };
+  return { config, instanceConfig, onboardingConfig, loading, error };
 }

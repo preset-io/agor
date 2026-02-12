@@ -164,6 +164,19 @@ export class ConfigService {
       }
     }
 
+    // Allow updating onboarding configuration
+    if (data.onboarding) {
+      if (!config.onboarding) {
+        config.onboarding = {};
+      }
+      if (data.onboarding.commandCenterPending !== undefined) {
+        config.onboarding.commandCenterPending = data.onboarding.commandCenterPending;
+      }
+      if (data.onboarding.openclawRepoUrl !== undefined) {
+        config.onboarding.openclawRepoUrl = data.onboarding.openclawRepoUrl;
+      }
+    }
+
     // Allow updating codex configuration
     if (data.codex) {
       if (!config.codex) {

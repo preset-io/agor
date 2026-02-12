@@ -619,35 +619,6 @@ export const App: React.FC<AppProps> = ({
             currentBoardId={currentBoardId}
             onBoardChange={setCurrentBoardId}
             worktreeById={worktreeById}
-            repoCount={repoById.size}
-            worktreeCount={worktreeById.size}
-            hasAuthentication={
-              // Check if user has any AI provider credentials configured
-              !!(
-                user?.api_keys?.ANTHROPIC_API_KEY ||
-                user?.api_keys?.OPENAI_API_KEY ||
-                user?.api_keys?.GEMINI_API_KEY ||
-                user?.env_vars?.ANTHROPIC_API_KEY ||
-                user?.env_vars?.OPENAI_API_KEY ||
-                user?.env_vars?.GEMINI_API_KEY
-              )
-            }
-            onDismissOnboarding={
-              onUpdateUser
-                ? () => {
-                    if (user) {
-                      onUpdateUser(user.user_id, { onboarding_completed: true });
-                    }
-                  }
-                : undefined
-            }
-            onOpenRepoSettings={() => openSettings('repos')}
-            onOpenAuthSettings={() => openSettings('agentic-tools')}
-            onOpenNewWorktree={() => {
-              const center = sessionCanvasRef.current?.getViewportCenter();
-              setNewWorktreeDefaultPosition(center || null);
-              setNewWorktreeModalOpen(true);
-            }}
             boardById={boardById}
             onUserClick={(userId: string, boardId?: BoardID, cursor?: { x: number; y: number }) => {
               // Navigate to the user's board

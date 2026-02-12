@@ -23,6 +23,7 @@ import { App as AgorApp } from './components/App';
 import { ForcePasswordChangeModal } from './components/ForcePasswordChangeModal';
 import { LoginPage } from './components/LoginPage';
 import { MobileApp } from './components/mobile/MobileApp';
+import { OnboardingWizard } from './components/OnboardingWizard';
 import { SandboxBanner } from './components/SandboxBanner';
 import type { WorktreeUpdate } from './components/WorktreeModal/tabs/GeneralTab';
 import { ConnectionProvider } from './contexts/ConnectionContext';
@@ -89,11 +90,13 @@ function AppContent() {
   const { token } = theme.useToken();
   const { getCurrentThemeConfig } = useTheme();
   const { showSuccess, showError, showLoading, destroy } = useThemedMessage();
+  const navigate = useNavigate();
 
   // Fetch daemon auth and instance configuration
   const {
     config: authConfig,
     instanceConfig,
+    onboardingConfig,
     loading: authConfigLoading,
     error: authConfigError,
   } = useAuthConfig();
@@ -309,6 +312,64 @@ function AppContent() {
   // This ensures we get the latest onboarding_completed status
   // Fall back to user from auth if users Map hasn't loaded yet
   const currentUser = user ? userById.get(user.user_id) || user : null;
+
+  // Onboarding wizard state
+  const [onboardingWizardOpen, setOnboardingWizardOpen] = useState(false);
+
+  // Trigger wizard when user is loaded and hasn't completed onboarding
+  useEffect(() => {
+    if (
+      currentUser &&
+      currentUser.onboarding_completed === false &&
+      !currentUser.must_change_password &&
+      connected &&
+      !loading
+    ) {
+      setOnboardingWizardOpen(true);
+    }
+  }, [currentUser, connected, loading]);
+
+  // Handle wizard completion
+  const handleOnboardingComplete = async (result: {
+    worktreeId: string;
+    sessionId: string;
+    boardId: string;
+    path: 'command-center' | 'own-repo';
+  }) => {
+    setOnboardingWizardOpen(false);
+
+    if (!currentUser) return;
+
+    // Mark onboarding complete and store result in preferences
+    handleUpdateUser(currentUser.user_id, {
+      onboarding_completed: true,
+      preferences: {
+        ...currentUser.preferences,
+        mainBoardId: result.boardId || currentUser.preferences?.mainBoardId,
+        onboarding: {
+          path: result.path,
+          worktreeId: result.worktreeId,
+          boardId: result.boardId,
+        },
+      },
+    });
+
+    // Clear the command center pending flag if applicable
+    if (result.path === 'command-center' && client) {
+      try {
+        await client.service('config').patch(null, { onboarding: { commandCenterPending: false } });
+      } catch {
+        // Non-critical — ignore
+      }
+    }
+
+    // Navigate to the user's board + session
+    if (result.boardId && result.sessionId) {
+      navigate(`/b/${result.boardId}/${result.sessionId}/`);
+    } else if (result.boardId) {
+      navigate(`/b/${result.boardId}/`);
+    }
+  };
 
   // NOW handle conditional rendering based on state
   // Show loading while fetching auth config
@@ -1187,6 +1248,25 @@ function AppContent() {
           style={{ marginTop: 8 }}
         />
       </Modal>
+
+      {/* Onboarding Wizard - shown for new users */}
+      <OnboardingWizard
+        open={onboardingWizardOpen}
+        onComplete={handleOnboardingComplete}
+        repoById={repoById}
+        worktreeById={worktreeById}
+        boardById={boardById}
+        user={currentUser}
+        client={client}
+        onCreateRepo={handleCreateRepo}
+        onCreateLocalRepo={handleCreateLocalRepo}
+        onCreateWorktree={handleCreateWorktree}
+        onCreateSession={handleCreateSession}
+        onUpdateUser={handleUpdateUser}
+        commandCenterPending={onboardingConfig?.commandCenterPending}
+        openclawRepoUrl={onboardingConfig?.openclawRepoUrl}
+        systemCredentials={onboardingConfig?.systemCredentials}
+      />
 
       <DeviceRouter />
       <Routes>
