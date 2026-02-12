@@ -166,7 +166,9 @@ export class GatewayService {
     // in threads that have nothing to do with Agor. Sending a visible rejection would
     // cause the bot to spam every active thread in the channel.
     if (!existingMapping && data.metadata?.requires_mapping_verification) {
-      console.log(
+      // Use debug level — this fires for every non-Agor thread reply in monitored
+      // channels and would create excessive log noise at info level.
+      console.debug(
         `[gateway] IGNORED: Thread reply without mention in unmapped thread: channel=${channel.id.substring(0, 8)}, thread=${data.thread_id}`
       );
       return {
