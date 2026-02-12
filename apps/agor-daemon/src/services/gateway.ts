@@ -134,13 +134,57 @@ export class GatewayService {
       throw new Error('Channel is disabled');
     }
 
-    // 2. Fetch channel owner user (needed for auth context + agentic defaults)
+    // 2. Look up existing thread mapping
+    const existingMapping = await this.threadMapRepo.findByChannelAndThread(
+      channel.id,
+      data.thread_id
+    );
+
+    // 3. Cross-channel ownership check (MUST happen before any sendDebugMessage calls).
+    // If this thread is owned by a DIFFERENT gateway channel on the same daemon,
+    // silently drop the message — we must not interfere with another gateway's thread.
+    // This covers all rejection paths: unmapped thread replies, user alignment failures, etc.
+    if (!existingMapping) {
+      const otherChannelMapping = await this.threadMapRepo.findByThread(data.thread_id);
+      if (otherChannelMapping) {
+        console.log(
+          `[gateway] IGNORED: Thread ${data.thread_id} owned by channel ${otherChannelMapping.channel_id.substring(0, 8)}, not ours (${channel.id.substring(0, 8)}). Silently dropping.`
+        );
+        return {
+          success: false,
+          sessionId: '',
+          created: false,
+        };
+      }
+    }
+
+    // 4. Reject unmapped thread replies that came through without mention.
+    // This prevents unauthorized session creation when users reply to random threads
+    // without explicitly mentioning the bot. Only threads where the bot was mentioned
+    // (creating a mapping) can continue conversations without mentions.
+    if (!existingMapping && data.metadata?.requires_mapping_verification) {
+      console.log(
+        `[gateway] REJECTED: Thread reply without mention in unmapped thread: channel=${channel.id.substring(0, 8)}, thread=${data.thread_id}`
+      );
+      this.sendDebugMessage(
+        channel,
+        data.thread_id,
+        'To start a conversation in this thread, please @mention me in your message.'
+      );
+      return {
+        success: false,
+        sessionId: '',
+        created: false,
+      };
+    }
+
+    // 5. Fetch channel owner user (needed for auth context + agentic defaults)
     const usersService = this.app.service('users') as {
       get: (id: string) => Promise<User>;
     };
     const channelOwner = await usersService.get(channel.agor_user_id);
 
-    // 3. Resolve effective user (Slack user alignment or channel owner fallback)
+    // 6. Resolve effective user (Slack user alignment or channel owner fallback)
     let user = channelOwner;
     // Check both the channel config and the connector-reported metadata flag.
     // The metadata flag signals the connector actually attempted alignment for
@@ -190,47 +234,6 @@ export class GatewayService {
           created: false,
         };
       }
-    }
-
-    // 4. Look up existing thread mapping
-    const existingMapping = await this.threadMapRepo.findByChannelAndThread(
-      channel.id,
-      data.thread_id
-    );
-
-    // SECURITY FIX: Reject unmapped thread replies that came through without mention.
-    // This prevents unauthorized session creation when users reply to random threads
-    // without explicitly mentioning the bot. Only threads where the bot was mentioned
-    // (creating a mapping) can continue conversations without mentions.
-    if (!existingMapping && data.metadata?.requires_mapping_verification) {
-      // Before sending a rejection message, check if this thread is owned by a
-      // DIFFERENT gateway channel on the same daemon. If so, silently drop the
-      // message — we must not interfere with another gateway's thread.
-      const otherChannelMapping = await this.threadMapRepo.findByThread(data.thread_id);
-      if (otherChannelMapping) {
-        console.log(
-          `[gateway] IGNORED: Thread ${data.thread_id} owned by channel ${otherChannelMapping.channel_id.substring(0, 8)}, not ours (${channel.id.substring(0, 8)}). Silently dropping.`
-        );
-        return {
-          success: false,
-          sessionId: '',
-          created: false,
-        };
-      }
-
-      console.log(
-        `[gateway] REJECTED: Thread reply without mention in unmapped thread: channel=${channel.id.substring(0, 8)}, thread=${data.thread_id}`
-      );
-      this.sendDebugMessage(
-        channel,
-        data.thread_id,
-        'To start a conversation in this thread, please @mention me in your message.'
-      );
-      return {
-        success: false,
-        sessionId: '',
-        created: false,
-      };
     }
 
     let sessionId: string;
