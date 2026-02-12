@@ -1722,7 +1722,7 @@ async function main() {
     before: { create: [requireAuth] },
   });
 
-  // Disconnect OAuth - delete per-user OAuth token for an MCP server
+  // Disconnect OAuth - delete per-user OAuth token and clear all caches for an MCP server
   app.use('/mcp-servers/oauth-disconnect', {
     async create(data: { mcp_server_id: string }, params?: AuthenticatedParams) {
       const userId = params?.user?.user_id;
@@ -1740,18 +1740,52 @@ async function main() {
       );
 
       try {
+        // 1. Delete per-user token from database
         const userTokenRepo = new UserMCPOAuthTokenRepository(db);
         const deleted = await userTokenRepo.deleteToken(
           userId as import('@agor/core/types').UserID,
           mcp_server_id as import('@agor/core/types').MCPServerID
         );
 
+        // 2. Clear in-memory caches (daemon-level + core-level)
+        const mcpServerRepo = new MCPServerRepository(db);
+        const server = await mcpServerRepo.findById(mcp_server_id);
+        if (server?.url) {
+          // Clear daemon-level oauth21TokenCache by origin
+          try {
+            const origin = new URL(server.url).origin;
+            oauth21TokenCache.delete(origin);
+            console.log(`[OAuth Disconnect] Cleared daemon cache for origin: ${origin}`);
+          } catch {
+            // Invalid URL, skip cache clear
+          }
+
+          // Clear core-level authCodeTokenCache (browser OAuth flow cache)
+          const { clearAuthCodeTokenCache } = await import(
+            '@agor/core/tools/mcp/oauth-mcp-transport'
+          );
+          clearAuthCodeTokenCache(); // Clear all cached tokens
+          console.log('[OAuth Disconnect] Cleared core OAuth token cache');
+        }
+
+        // 3. Clear oauth_access_token from server's auth config (shared mode token)
+        if (server?.auth?.oauth_access_token) {
+          await mcpServerRepo.update(mcp_server_id, {
+            auth: {
+              ...server.auth,
+              oauth_access_token: undefined,
+              oauth_token_expires_at: undefined,
+            },
+          });
+          console.log('[OAuth Disconnect] Cleared shared OAuth token from server config');
+        }
+
         if (deleted) {
           console.log('[OAuth Disconnect] Token deleted successfully');
           return { success: true, message: 'OAuth connection removed' };
         } else {
-          console.log('[OAuth Disconnect] No token found to delete');
-          return { success: true, message: 'No OAuth connection found' };
+          console.log('[OAuth Disconnect] No per-user token found, caches cleared');
+          return { success: true, message: 'OAuth connection removed' };
         }
       } catch (error) {
         console.error('[OAuth Disconnect] Error:', error);

@@ -3201,7 +3201,7 @@ export function setupMCPRoutes(app: Application, db: Database): void {
             try {
               const server = await app.service('mcp-servers').get(serverId, baseServiceParams);
               const authType = server.auth?.type || 'none';
-              const oauthMode = server.auth?.oauth_mode;
+              const oauthMode = server.auth?.oauth_mode || 'per_user';
 
               // Check OAuth authentication status if applicable
               let oauthAuthenticated = false;
@@ -3248,7 +3248,7 @@ export function setupMCPRoutes(app: Application, db: Database): void {
           for (const server of Array.isArray(globalServers) ? globalServers : globalServers.data) {
             if (!mcpServerIds.includes(server.mcp_server_id)) {
               const authType = server.auth?.type || 'none';
-              const oauthMode = server.auth?.oauth_mode;
+              const oauthMode = server.auth?.oauth_mode || 'per_user';
 
               let oauthAuthenticated = false;
               if (authType === 'oauth' && oauthMode === 'per_user') {
@@ -3348,7 +3348,7 @@ export function setupMCPRoutes(app: Application, db: Database): void {
           }
 
           const authType = server.auth?.type || 'none';
-          const oauthMode = server.auth?.oauth_mode;
+          const oauthMode = server.auth?.oauth_mode || 'per_user';
 
           let oauthAuthenticated = false;
           let tokenExpiry: number | undefined;

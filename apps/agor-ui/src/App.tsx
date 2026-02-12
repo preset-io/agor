@@ -174,6 +174,7 @@ function AppContent() {
     serverId: string;
     name: string;
     url: string;
+    sessionId?: string;
   } | null>(null);
   const [oauthCallbackUrl, setOauthCallbackUrl] = useState('');
   const [oauthFlowStarted, setOauthFlowStarted] = useState(false);
@@ -207,7 +208,7 @@ function AppContent() {
       // Start OAuth flow for the first server that needs it
       if (data.servers.length > 0) {
         const server = data.servers[0];
-        setPendingOAuthServer(server);
+        setPendingOAuthServer({ ...server, sessionId: data.session_id });
         setOauthCallbackUrl('');
         setOauthFlowStarted(false);
       }
@@ -283,6 +284,19 @@ function AppContent() {
         showSuccess(
           data.message || 'OAuth authentication successful! MCP tools are now available.'
         );
+
+        // Auto-continue the session that was waiting for OAuth
+        if (pendingOAuthServer?.sessionId) {
+          try {
+            await client.service(`sessions/${pendingOAuthServer.sessionId}/prompt`).create({
+              prompt: `OAuth authentication for "${pendingOAuthServer.name}" MCP server completed successfully. The MCP tools are now available. Please continue with what you were doing.`,
+              messageSource: 'agor',
+            });
+          } catch (err) {
+            console.warn('[OAuth] Failed to auto-continue session:', err);
+          }
+        }
+
         setPendingOAuthServer(null);
         setOauthCallbackUrl('');
         // Set 10 second cooldown to prevent immediate re-triggers

@@ -212,6 +212,12 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
   const [completingOAuth, setCompletingOAuth] = useState(false);
   const [disconnectingOAuth, setDisconnectingOAuth] = useState(false);
 
+  // Track effective server ID (may differ from prop after onSaveFirst creates a new server)
+  const [effectiveServerId, setEffectiveServerId] = useState<string | undefined>(serverId);
+  useEffect(() => {
+    setEffectiveServerId(serverId);
+  }, [serverId]);
+
   // Start the browser-based OAuth 2.1 flow (two-phase for remote daemon)
   const handleStartOAuthFlow = async () => {
     if (!client) {
@@ -219,18 +225,19 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
       return;
     }
 
-    // Track the effective server ID (may be set after saving)
-    let effectiveServerId = serverId;
+    // Track the target server ID (may be set after saving)
+    let targetServerId = effectiveServerId;
 
     // If no serverId and we have onSaveFirst callback, save the server first
-    if (!effectiveServerId && onSaveFirst) {
+    if (!targetServerId && onSaveFirst) {
       showInfo('Saving MCP server before testing...');
       const newServerId = await onSaveFirst();
       if (!newServerId) {
         showError('Failed to save MCP server');
         return;
       }
-      effectiveServerId = newServerId;
+      targetServerId = newServerId;
+      setEffectiveServerId(newServerId);
     }
 
     const values = form.getFieldsValue();
@@ -255,7 +262,7 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
       // Use the new two-phase OAuth flow
       const data = (await client.service('mcp-servers/oauth-start').create({
         mcp_url: requestData.mcp_url,
-        mcp_server_id: effectiveServerId,
+        mcp_server_id: targetServerId,
         client_id: requestData.client_id,
       })) as {
         success: boolean;
@@ -322,7 +329,7 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
       return;
     }
 
-    if (!serverId) {
+    if (!effectiveServerId) {
       showError('Cannot disconnect: MCP server must be saved first');
       return;
     }
@@ -330,7 +337,7 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
     setDisconnectingOAuth(true);
     try {
       const data = (await client.service('mcp-servers/oauth-disconnect').create({
-        mcp_server_id: serverId,
+        mcp_server_id: effectiveServerId,
       })) as { success: boolean; message?: string; error?: string };
 
       if (data.success) {
@@ -809,7 +816,7 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                         Start OAuth Flow
                       </Button>
                     )}
-                    {authType === 'oauth' && serverId && !oauthBrowserFlowAvailable && (
+                    {authType === 'oauth' && effectiveServerId && !oauthBrowserFlowAvailable && (
                       <Button
                         type="default"
                         danger
@@ -853,7 +860,7 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                   <div style={{ marginTop: 8 }}>
                     <Alert
                       type="success"
-                      message={`Connected: ${testResult.toolCount} tools, ${testResult.resourceCount} resources`}
+                      message={`Connected: ${testResult.toolCount} tools, ${testResult.resourceCount} resources, ${testResult.promptCount} prompts`}
                       showIcon
                       style={{ marginBottom: 8 }}
                     />
@@ -1039,6 +1046,8 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   const [transport, setTransport] = useState<'stdio' | 'http' | 'sse'>('stdio');
   const [authType, setAuthType] = useState<'none' | 'bearer' | 'jwt' | 'oauth'>('none');
   const [testing, setTesting] = useState(false);
+  // Track if server was already created by onSaveFirst during OAuth flow
+  const [alreadyCreatedInOAuthFlow, setAlreadyCreatedInOAuthFlow] = useState(false);
   const [testResult, setTestResult] = useState<{
     success: boolean;
     toolCount: number;
@@ -1060,7 +1069,70 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     }
   }, [mcpServerById, editingServer]);
 
+  // Save server first for OAuth flow in create mode (returns new server ID)
+  const handleSaveFirstForCreate = async (): Promise<string | null> => {
+    if (!client) return null;
+    try {
+      const values = await form.validateFields();
+      const data: CreateMCPServerInput = {
+        name: values.name,
+        display_name: values.display_name,
+        description: values.description,
+        transport: values.transport,
+        scope: values.scope || 'global',
+        enabled: values.enabled ?? true,
+        source: 'user',
+      };
+
+      if (values.transport === 'stdio') {
+        data.command = values.command;
+        data.args = values.args?.split(',').map((arg: string) => arg.trim()) || [];
+      } else {
+        data.url = values.url;
+      }
+
+      if (values.auth_type && values.auth_type !== 'none') {
+        data.auth = { type: values.auth_type };
+        if (values.auth_type === 'bearer') {
+          data.auth.token = values.auth_token;
+        } else if (values.auth_type === 'jwt') {
+          data.auth.api_url = values.jwt_api_url;
+          data.auth.api_token = values.jwt_api_token;
+          data.auth.api_secret = values.jwt_api_secret;
+        } else if (values.auth_type === 'oauth') {
+          const oauthConfig = extractOAuthConfig(values);
+          Object.assign(data.auth, oauthConfig);
+        }
+      }
+
+      if (values.env) {
+        try {
+          data.env = JSON.parse(values.env);
+        } catch {
+          // Invalid JSON, skip
+        }
+      }
+
+      const result = await client.service('mcp-servers').create(data);
+      setAlreadyCreatedInOAuthFlow(true);
+      return (result as MCPServer).mcp_server_id || null;
+    } catch {
+      return null;
+    }
+  };
+
   const handleCreate = () => {
+    // If server was already created during OAuth flow, just close the modal
+    if (alreadyCreatedInOAuthFlow) {
+      form.resetFields();
+      setCreateModalOpen(false);
+      setTransport('stdio');
+      setAuthType('none');
+      setTestResult(null);
+      setAlreadyCreatedInOAuthFlow(false);
+      return;
+    }
+
     form
       .validateFields()
       .then((values) => {
@@ -1559,8 +1631,9 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
           setTransport('stdio');
           setAuthType('none');
           setTestResult(null);
+          setAlreadyCreatedInOAuthFlow(false);
         }}
-        okText="Create"
+        okText={alreadyCreatedInOAuthFlow ? 'Done' : 'Create'}
         width={600}
       >
         <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
@@ -1575,6 +1648,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
             onTestConnection={() => handleTestConnection()}
             testing={testing}
             testResult={testResult}
+            onSaveFirst={handleSaveFirstForCreate}
           />
         </Form>
       </Modal>
