@@ -855,12 +855,19 @@ export class CodexPromptService {
                 };
               }
 
-              // Store text items for final message
+              // Emit intermediate text messages immediately (instead of batching to turn end)
+              // Codex can emit multiple agent_message items per turn, interleaved with tool calls.
+              // Yielding them immediately gives a "chatty" UX where users see text as it arrives.
               if ('text' in event.item && event.item.type === 'agent_message') {
-                currentMessage.push({
-                  type: 'text',
-                  text: event.item.text as string,
-                });
+                const textContent = [{ type: 'text', text: event.item.text as string }];
+
+                yield {
+                  type: 'complete',
+                  content: textContent,
+                  threadId: thread.id || '',
+                  resolvedModel: resolvedModel || DEFAULT_CODEX_MODEL,
+                  // No usage data for intermediate messages - only final turn.completed has it
+                };
               }
             }
             break;

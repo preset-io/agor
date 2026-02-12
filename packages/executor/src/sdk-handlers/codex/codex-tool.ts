@@ -199,9 +199,9 @@ export class CodexTool implements ITool {
       }
 
       // Handle partial streaming events (token-level chunks)
-      // NOTE: Based on official OpenAI sample, partial events are never emitted by Codex SDK
-      // agent_message text arrives all at once in the 'complete' event, not streamed incrementally
-      // This code is kept for future compatibility if OpenAI adds true streaming
+      // NOTE: Codex SDK does NOT emit partial/delta events for text — agent_message text
+      // arrives all at once via item.completed → complete events (which are handled below).
+      // This code path is kept for future compatibility if OpenAI adds true token-level streaming.
       if (event.type === 'partial' && event.textChunk) {
         // Start new message if needed
         if (!currentMessageId) {
@@ -280,17 +280,27 @@ export class CodexTool implements ITool {
 
         // Only create message if there's text content (not just tools)
         if (textOnlyContent.length > 0) {
-          // Extract full text for client-side streaming
-          const _fullText = textOnlyContent
+          // Extract full text for streaming callback
+          const fullText = textOnlyContent
             .map((block) => (block as { text?: string }).text || '')
             .join('');
 
           // Use existing message ID from streaming (if any) or generate new
           const assistantMessageId = currentMessageId || (generateId() as MessageID);
 
-          // NOTE: Codex SDK doesn't support true streaming for text responses
-          // It only emits item.completed with the full text, no item.updated events
-          // Text is displayed immediately when the complete event arrives
+          // Codex SDK doesn't support token-level text streaming, but we can still
+          // use streaming callbacks to show text immediately via WebSocket before DB write.
+          // This sends the complete text as a single "chunk" for instant display.
+          if (streamingCallbacks && fullText) {
+            streamingCallbacks.onStreamStart(assistantMessageId, {
+              session_id: sessionId,
+              task_id: taskId,
+              role: MessageRole.ASSISTANT,
+              timestamp: new Date().toISOString(),
+            });
+            streamingCallbacks.onStreamChunk(assistantMessageId, fullText);
+            streamingCallbacks.onStreamEnd(assistantMessageId);
+          }
 
           // Create complete message in DB (text only, tools already saved)
           await this.createAssistantMessage(

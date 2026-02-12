@@ -11,7 +11,7 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 
 | Feature                     | Claude Code         | Codex                     | Gemini              | Notes                                                                                   |
 | --------------------------- | ------------------- | ------------------------- | ------------------- | --------------------------------------------------------------------------------------- |
-| **Streaming responses**     | ✅ Yes              | ✅ Yes                    | ✅ Yes              | All support token-level streaming for typewriter effect                                 |
+| **Streaming responses**     | ✅ Text + tools     | ⚠️ Tools only             | ✅ Text + tools     | Claude & Gemini stream text token-by-token; Codex streams tool events only (text arrives all at once) |
 | **Stop mid-execution**      | ✅ Yes              | ⚠️ Limited                | ⚠️ Limited          | Claude has `interrupt()`, others may lose partial work                                  |
 | **Session import/export**   | ✅ Yes              | ❌ No                     | ❌ No               | Only Claude Code stores sessions as JSONL transcripts                                   |
 | **Session forkable**        | ✅ Yes (via replay) | ✅ Yes (via replay)       | ✅ Yes (via replay) | Agor emulates forking by replaying messages to new session                              |
@@ -36,27 +36,31 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 
 ### 1. Streaming Responses
 
-**All SDKs support streaming, but with different patterns:**
+**Streaming support varies significantly between agents:**
 
-**Claude Code:**
+**Claude Code:** ✅ **Full text + tool streaming**
 
-- Token-level streaming via async generators
-- True real-time with minimal latency
+- Token-level text streaming via async generators (`content_block_delta` events)
+- True real-time typewriter effect with minimal latency
+- Tool execution events stream in real-time (`tool_use` start/complete)
 - Supports stopping mid-stream
 
-**Codex:**
+**Codex:** ⚠️ **Tool event streaming only (no text streaming)**
 
-- Streaming via OpenAI's SSE (Server-Sent Events)
-- Chunks may be larger than tokens
-- Good real-time performance
+- Tool execution events stream in real-time via `runStreamed()` (`item.started`, `item.completed`)
+- **Text responses arrive all at once** in `item.completed` for `agent_message` items — no partial text delivery
+- The Codex SDK does not emit `item.updated` for text content (only for `todo_list` items)
+- Agor displays text immediately when the complete event arrives, but there is no typewriter effect
+- This is an upstream SDK limitation, not an Agor limitation
 
-**Gemini:**
+**Gemini:** ✅ **Full text + tool streaming**
 
-- Streaming via `sendMessageStream()`
-- Token-level chunks
-- Reliable streaming performance
+- Token-level text streaming via `sendMessageStream()` (`Content` events)
+- True real-time typewriter effect
+- Tool call request/response events stream in real-time
+- 13 distinct event types for rich progress feedback
 
-**Agor Implementation:** StreamingCallbacks interface provides unified streaming for all agents.
+**Agor Implementation:** StreamingCallbacks interface provides unified streaming for all agents. Claude and Gemini get the full typewriter experience; Codex text appears instantly once the model finishes generating.
 
 ---
 
@@ -597,12 +601,13 @@ When expanded:
 - Basic permissions are sufficient
 - You want token/cost/context pills powered by OpenAI usage data
 - You have an `AGENTS.md` project instructions file
+- Note: Text responses appear all at once (no typewriter streaming)
 
 ### Use Gemini when:
 
 - You prefer Google's models
 - Cost is a primary concern (Gemini pricing)
-- Streaming is important (Gemini has good streaming)
+- Real-time text streaming is important (Gemini has full token-level streaming)
 - You need MCP integration with Google's SDK (full support via Agor UI)
 
 ---
@@ -615,6 +620,7 @@ As agent SDKs evolve, Agor will gain new capabilities.
 
 Agent integration priorities:
 
+- **Codex text streaming** - The Codex SDK (`@openai/codex-sdk`) does not support token-level text streaming as of v0.99.0. When OpenAI adds `item.updated` support for `agent_message` items (or a new text delta event), Agor's code is already prepared to handle it
 - **Token tracking for Gemini** - Extract usage data from Google APIs (Codex shipped Jan 2025)
 - **Gemini project files** - If Google adds instruction file support
 - **Better stop controls** - More graceful cancellation for all agents

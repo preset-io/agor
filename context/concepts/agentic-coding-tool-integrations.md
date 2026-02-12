@@ -21,7 +21,7 @@ All three use official SDKs for programmatic control, streaming, and session man
 | Feature                           | Claude Code          | Codex               | Gemini             |
 | --------------------------------- | -------------------- | ------------------- | ------------------ |
 | **SDK Available**                 | ✅ Official          | ✅ Official         | ✅ Official        |
-| **Streaming Support**             | ✅ Token-level       | ✅ Event-based      | ✅ Token-level     |
+| **Streaming Support**             | ✅ Text + tools      | ⚠️ Tools only       | ✅ Text + tools    |
 | **Usage/Token Tracking**          | ✅ Full support      | ⚠️ Not exposed      | ⚠️ Not tested      |
 | **Permission Modes**              | ✅ 4 modes           | ✅ 4 modes (hybrid) | ✅ 3 modes         |
 | **Mid-Session Permission Change** | ✅ Via hooks         | ✅ Via /approvals   | ⚠️ Needs testing   |
@@ -37,25 +37,32 @@ All three use official SDKs for programmatic control, streaming, and session man
 
 #### 1. Streaming Support
 
-**Claude Code:** Token-level streaming via `promptSessionStreaming()` with `includePartialMessages: true`
+**Claude Code:** ✅ Token-level text streaming + tool event streaming
 
-- Event types: `stream_event` with `content_block_delta`
-- Granularity: Individual tokens
-- Pattern: AsyncGenerator
+- Text streaming: `stream_event` → `content_block_delta` → individual tokens
+- Tool streaming: `tool_use` start/complete events
+- Pattern: AsyncGenerator via `promptSessionStreaming()` with `includePartialMessages: true`
+- UX: Full typewriter effect for text responses
 
-**Codex:** Event-based streaming via `runStreamed()`
+**Codex:** ⚠️ Tool event streaming only (NO text streaming)
 
-- Event types: `item.updated`, `item.started`, `item.completed`, `turn.completed`
-- Granularity: Progressive text deltas
-- Pattern: AsyncGenerator
+- Tool streaming: `item.started`, `item.completed`, `turn.completed` events
+- Text arrives **all at once** in `item.completed` for `agent_message` items
+- `item.updated` only fires for `todo_list` items, NOT for text content
+- No `content_delta` or `text_delta` equivalent — this is an **upstream SDK limitation**
+- However: Multiple `agent_message` items CAN be emitted per turn (interleaved with tools)
+- Pattern: AsyncGenerator via `runStreamed()`
+- UX: Text appears instantly when model finishes generating (no typewriter)
 
-**Gemini:** Token-level streaming via `sendMessageStream()`
+**Gemini:** ✅ Token-level text streaming + tool event streaming
 
-- Event types: 13 types (content, tool_call_request, thought, error, etc.)
-- Granularity: Text chunks + rich events
-- Pattern: AsyncGenerator
+- Text streaming: `GeminiEventType.Content` → individual text chunks
+- Tool streaming: `tool_call_request`, `tool_call_response` events
+- 13 distinct event types for rich progress feedback
+- Pattern: AsyncGenerator via `sendMessageStream()`
+- UX: Full typewriter effect for text responses
 
-**Agor Integration:** All three support `type: 'partial'` events with `textChunk` for typewriter effect.
+**Agor Integration:** Claude and Gemini support `type: 'partial'` events with `textChunk` for typewriter effect. Codex emits `tool_complete` events in real-time but text only via `complete` events.
 
 ---
 
