@@ -82,8 +82,8 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
 }) => {
   const { showSuccess, showError, showWarning, showInfo } = useThemedMessage();
   const [testingAuth, setTestingAuth] = useState(false);
-  const [oauthBrowserFlowAvailable, setOauthBrowserFlowAvailable] = useState(false);
-  const [startingOAuthFlow, setStartingOAuthFlow] = useState(false);
+  const [_oauthBrowserFlowAvailable, setOauthBrowserFlowAvailable] = useState(false);
+  const [_startingOAuthFlow, setStartingOAuthFlow] = useState(false);
 
   // Two-phase OAuth flow state
   const [oauthCallbackModalVisible, setOauthCallbackModalVisible] = useState(false);
@@ -99,7 +99,9 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
   }, [serverId]);
 
   // Start the browser-based OAuth 2.1 flow (two-phase for remote daemon)
-  const handleStartOAuthFlow = async () => {
+  // Kept for potential future manual re-auth trigger; currently unused since
+  // Test Connection auto-triggers OAuth via the daemon's discover endpoint.
+  const _handleStartOAuthFlow = async () => {
     if (!client) {
       showError('Client not available');
       return;
@@ -681,31 +683,14 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                 </>
               )}
 
-              {authType !== 'none' && (
+              {/* Test Authentication - only for non-OAuth auth types (JWT, Bearer) */}
+              {/* OAuth auth is handled automatically by Test Connection */}
+              {authType !== 'none' && authType !== 'oauth' && (
                 <Form.Item>
                   <Space>
                     <Button type="default" loading={testingAuth} onClick={handleTestAuth}>
                       Test Authentication
                     </Button>
-                    {authType === 'oauth' && oauthBrowserFlowAvailable && (
-                      <Button
-                        type="primary"
-                        loading={startingOAuthFlow}
-                        onClick={handleStartOAuthFlow}
-                      >
-                        Start OAuth Flow
-                      </Button>
-                    )}
-                    {authType === 'oauth' && effectiveServerId && !oauthBrowserFlowAvailable && (
-                      <Button
-                        type="default"
-                        danger
-                        loading={disconnectingOAuth}
-                        onClick={handleDisconnectOAuth}
-                      >
-                        Disconnect OAuth
-                      </Button>
-                    )}
                   </Space>
                 </Form.Item>
               )}
@@ -727,14 +712,26 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           {transport !== 'stdio' && (
             <div style={{ borderTop: '1px solid #303030', marginTop: 16, paddingTop: 16 }}>
               <Space direction="vertical" style={{ width: '100%' }}>
-                <Button
-                  type="default"
-                  icon={<ApiOutlined />}
-                  onClick={onTestConnection}
-                  loading={testing}
-                >
-                  {testing ? 'Testing...' : 'Test Connection'}
-                </Button>
+                <Space>
+                  <Button
+                    type="default"
+                    icon={<ApiOutlined />}
+                    onClick={onTestConnection}
+                    loading={testing}
+                  >
+                    {testing ? 'Testing...' : 'Test Connection'}
+                  </Button>
+                  {authType === 'oauth' && effectiveServerId && (
+                    <Button
+                      type="default"
+                      danger
+                      loading={disconnectingOAuth}
+                      onClick={handleDisconnectOAuth}
+                    >
+                      Disconnect OAuth
+                    </Button>
+                  )}
+                </Space>
 
                 {testResult?.success && (
                   <div style={{ marginTop: 8 }}>

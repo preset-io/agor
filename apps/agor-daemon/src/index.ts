@@ -180,6 +180,12 @@ function getOAuth21Token(mcpUrl: string): string | undefined {
   return cached.token;
 }
 
+function clearOAuth21Token(mcpUrl: string): void {
+  const origin = new URL(mcpUrl).origin;
+  oauth21TokenCache.delete(origin);
+  console.log(`[OAuth 2.1 Cache] Token cleared for ${origin}`);
+}
+
 /**
  * Get OAuth 2.1 token from database for a specific MCP server
  */
@@ -1924,6 +1930,58 @@ async function main() {
         // Get auth headers (pass MCP URL for OAuth 2.1 token lookup)
         let authHeaders = await resolveMCPAuthHeaders(serverConfig.auth, serverConfig.url);
 
+        // Helper: Open OAuth browser via WebSocket event to client
+        const openOAuthBrowser = async (authUrl: string) => {
+          const connection = params?.connection as { id?: string } | undefined;
+          const socketId = connection?.id;
+          if (socketId && app.io) {
+            console.log('[MCP Discovery] Emitting oauth:open_browser event to socket:', socketId);
+            app.io.to(socketId).emit('oauth:open_browser', { authUrl });
+          } else {
+            console.log('[MCP Discovery] No socket connection, auth URL:', authUrl);
+            console.log('[MCP Discovery] connection object:', connection);
+            if (app.io) {
+              console.log('[MCP Discovery] Broadcasting oauth:open_browser to all clients');
+              app.io.emit('oauth:open_browser', { authUrl });
+            }
+          }
+        };
+
+        // Helper: Probe URL for OAuth 2.1 and acquire token via browser flow
+        const probeAndAcquireOAuthToken = async (mcpUrl: string): Promise<string | undefined> => {
+          try {
+            console.log('[MCP Discovery] Probing for OAuth 2.1...');
+            const probeResponse = await fetch(mcpUrl, {
+              method: 'GET',
+              headers: { Accept: 'application/json' },
+            });
+
+            const wwwAuthenticate = probeResponse.headers.get('www-authenticate');
+
+            if (probeResponse.status === 401 && wwwAuthenticate?.includes('resource_metadata=')) {
+              console.log('[MCP Discovery] OAuth 2.1 detected, starting browser flow...');
+
+              const { performMCPOAuthFlow } = await import(
+                '@agor/core/tools/mcp/oauth-mcp-transport'
+              );
+
+              const token = await performMCPOAuthFlow(wwwAuthenticate, undefined, openOAuthBrowser);
+
+              cacheOAuth21Token(mcpUrl, token, 3600);
+              if (serverId) {
+                await saveOAuth21TokenToDB(mcpServerRepo, serverId, token, 3600);
+              }
+
+              return token;
+            }
+
+            return undefined;
+          } catch (error) {
+            console.error('[MCP Discovery] OAuth token acquisition failed:', error);
+            return undefined;
+          }
+        };
+
         // If no auth headers and auth type is oauth, try to get/obtain OAuth 2.1 token
         if (!authHeaders && serverConfig.auth?.type === 'oauth' && serverConfig.url) {
           // First check daemon-level cache
@@ -1951,63 +2009,10 @@ async function main() {
           }
 
           if (!cachedToken) {
-            // No cached token - probe the URL to see if it needs OAuth 2.1
-            console.log('[MCP Discovery] No cached token, probing for OAuth 2.1...');
-            try {
-              const probeResponse = await fetch(serverConfig.url, {
-                method: 'GET',
-                headers: { Accept: 'application/json' },
-              });
-
-              const wwwAuthenticate = probeResponse.headers.get('www-authenticate');
-
-              if (probeResponse.status === 401 && wwwAuthenticate?.includes('resource_metadata=')) {
-                console.log('[MCP Discovery] OAuth 2.1 detected, starting browser flow...');
-
-                // Import and run the OAuth 2.1 flow
-                const { performMCPOAuthFlow } = await import(
-                  '@agor/core/tools/mcp/oauth-mcp-transport'
-                );
-
-                // Custom browser opener: emit WebSocket event to client
-                const browserOpener = async (authUrl: string) => {
-                  const connection = params?.connection as { id?: string } | undefined;
-                  const socketId = connection?.id;
-                  if (socketId && app.io) {
-                    console.log(
-                      '[MCP Discovery] Emitting oauth:open_browser event to socket:',
-                      socketId
-                    );
-                    app.io.to(socketId).emit('oauth:open_browser', { authUrl });
-                  } else {
-                    console.log('[MCP Discovery] No socket connection, auth URL:', authUrl);
-                    console.log('[MCP Discovery] connection object:', connection);
-                    // Fallback: broadcast to ALL connected clients
-                    if (app.io) {
-                      console.log('[MCP Discovery] Broadcasting oauth:open_browser to all clients');
-                      app.io.emit('oauth:open_browser', { authUrl });
-                    }
-                  }
-                };
-
-                const token = await performMCPOAuthFlow(
-                  wwwAuthenticate,
-                  undefined, // Let it use DCR
-                  browserOpener
-                );
-
-                // Cache the token in memory
-                cacheOAuth21Token(serverConfig.url, token, 3600);
-
-                // Save to database if we have a server ID
-                if (serverId) {
-                  await saveOAuth21TokenToDB(mcpServerRepo, serverId, token, 3600);
-                }
-
-                cachedToken = token;
-              }
-            } catch (oauthError) {
-              console.error('[MCP Discovery] OAuth 2.1 flow failed:', oauthError);
+            console.log('[MCP Discovery] No cached token, attempting OAuth 2.1 flow...');
+            const freshToken = await probeAndAcquireOAuthToken(serverConfig.url);
+            if (freshToken) {
+              cachedToken = freshToken;
             }
           }
 
@@ -2030,71 +2035,68 @@ async function main() {
           Object.assign(headers, authHeaders);
         }
 
-        // Workaround for MCP SDK session ID bug:
-        // The SDK captures session ID from response but doesn't include it in subsequent requests.
-        // We manually track and inject the session ID.
-        let capturedSessionId: string | undefined;
+        // Helper: Create MCP transport and client with session ID tracking
+        // (Workaround for MCP SDK session ID bug: SDK captures session ID from
+        // response but doesn't include it in subsequent requests)
+        const createMCPConnection = (connHeaders: Record<string, string>) => {
+          let sessionId: string | undefined;
 
-        const sessionAwareFetch: typeof fetch = async (input, init) => {
-          // Inject session ID into request if we have one
-          if (capturedSessionId && init?.headers) {
-            const headersObj =
-              init.headers instanceof Headers
-                ? Object.fromEntries(init.headers.entries())
-                : (init.headers as Record<string, string>);
+          const connSessionAwareFetch: typeof fetch = async (input, init) => {
+            if (sessionId && init?.headers) {
+              const headersObj =
+                init.headers instanceof Headers
+                  ? Object.fromEntries(init.headers.entries())
+                  : (init.headers as Record<string, string>);
 
-            // Only add if not already present
-            if (!headersObj['mcp-session-id']) {
-              console.log('[MCP Discovery] Injecting session ID into request:', capturedSessionId);
-              init = {
-                ...init,
-                headers: {
-                  ...headersObj,
-                  'mcp-session-id': capturedSessionId,
-                },
-              };
+              if (!headersObj['mcp-session-id']) {
+                console.log('[MCP Discovery] Injecting session ID into request:', sessionId);
+                init = {
+                  ...init,
+                  headers: {
+                    ...headersObj,
+                    'mcp-session-id': sessionId,
+                  },
+                };
+              }
             }
-          }
 
-          const response = await fetch(input, init);
+            const response = await fetch(input, init);
 
-          // Capture session ID from response
-          const sessionId = response.headers.get('mcp-session-id');
-          if (sessionId) {
-            capturedSessionId = sessionId;
-            console.log('[MCP Discovery] Captured session ID:', sessionId);
-          }
+            const respSessionId = response.headers.get('mcp-session-id');
+            if (respSessionId) {
+              sessionId = respSessionId;
+              console.log('[MCP Discovery] Captured session ID:', respSessionId);
+            }
 
-          console.log(
-            '[MCP Discovery] Response:',
-            response.status,
-            response.statusText,
-            'session-id:',
-            sessionId || '<none>'
+            console.log(
+              '[MCP Discovery] Response:',
+              response.status,
+              response.statusText,
+              'session-id:',
+              respSessionId || '<none>'
+            );
+
+            return response;
+          };
+
+          const transport = new StreamableHTTPClientTransport(new URL(serverConfig.url!), {
+            fetch: connSessionAwareFetch,
+            requestInit: { headers: connHeaders },
+          });
+
+          const mcpClient = new Client(
+            { name: 'agor-discovery', version: '1.0.0' },
+            { capabilities: {} }
           );
 
-          return response;
+          return { transport, client: mcpClient };
         };
 
-        // Create Streamable HTTP transport (supports both SSE and regular HTTP)
-        const httpTransport = new StreamableHTTPClientTransport(new URL(serverConfig.url), {
-          fetch: sessionAwareFetch,
-          requestInit: {
-            headers,
-          },
-        });
+        // Track whether we used a cached OAuth token (for retry logic)
+        const hadCachedOAuthToken = !!(authHeaders && serverConfig.auth?.type === 'oauth');
 
-        // Create MCP client
-        const client = new Client(
-          {
-            name: 'agor-discovery',
-            version: '1.0.0',
-          },
-          {
-            capabilities: {},
-          }
-        );
-
+        // Create initial MCP connection
+        let { transport: httpTransport, client } = createMCPConnection(headers);
         let connected = false;
 
         try {
@@ -2102,26 +2104,66 @@ async function main() {
           console.log('[MCP Discovery] URL:', serverConfig.url);
           console.log('[MCP Discovery] Headers:', JSON.stringify(headers, null, 2));
 
-          // Add timeout to prevent hanging indefinitely (10s should be plenty)
-          const connectTimeout = new Promise<never>((_, reject) => {
-            setTimeout(() => {
-              console.error(
-                '[MCP Discovery] ❌ Connection timeout - server did not respond in 10 seconds'
-              );
-              console.error(
-                '[MCP Discovery] This likely means the MCP SDK cannot establish a connection'
-              );
-              reject(new Error('Connection timeout after 10 seconds'));
-            }, 10000);
-          });
+          // Helper: connect with 10s timeout
+          const connectWithTimeout = async (
+            mcpClient: InstanceType<typeof Client>,
+            mcpTransport: InstanceType<typeof StreamableHTTPClientTransport>
+          ) => {
+            const timeout = new Promise<never>((_, reject) => {
+              setTimeout(() => {
+                console.error(
+                  '[MCP Discovery] ❌ Connection timeout - server did not respond in 10 seconds'
+                );
+                reject(new Error('Connection timeout after 10 seconds'));
+              }, 10000);
+            });
+            const conn = mcpClient.connect(mcpTransport).catch((err: unknown) => {
+              console.error('[MCP Discovery] ❌ Connection error during connect():', err);
+              throw err;
+            });
+            await Promise.race([conn, timeout]);
+          };
 
           console.log('[MCP Discovery] Calling client.connect()...');
-          const connectPromise = client.connect(httpTransport).catch((err) => {
-            console.error('[MCP Discovery] ❌ Connection error during connect():', err);
-            throw err;
-          });
+          try {
+            await connectWithTimeout(client, httpTransport);
+          } catch (connectError) {
+            // If we used a cached OAuth token, clear it and try re-acquiring via browser flow
+            if (hadCachedOAuthToken && serverConfig.url && serverConfig.auth?.type === 'oauth') {
+              console.log(
+                '[MCP Discovery] Connection failed with cached OAuth token, attempting re-auth...'
+              );
 
-          await Promise.race([connectPromise, connectTimeout]);
+              // Clear the stale cached token
+              clearOAuth21Token(serverConfig.url);
+
+              // Acquire a fresh token via OAuth browser flow
+              const freshToken = await probeAndAcquireOAuthToken(serverConfig.url);
+
+              if (freshToken) {
+                console.log('[MCP Discovery] Got fresh OAuth token, retrying connection...');
+
+                // Build fresh headers with new token
+                const freshHeaders: Record<string, string> = {
+                  Accept: 'application/json, text/event-stream',
+                  Authorization: `Bearer ${freshToken}`,
+                };
+
+                // Create new transport and client for retry
+                const retry = createMCPConnection(freshHeaders);
+                httpTransport = retry.transport;
+                client = retry.client;
+
+                // Retry connection with fresh token
+                await connectWithTimeout(client, httpTransport);
+              } else {
+                throw connectError;
+              }
+            } else {
+              throw connectError;
+            }
+          }
+
           connected = true;
           console.log('[MCP Discovery] ✅ Successfully connected!');
 
