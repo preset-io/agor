@@ -1,4 +1,4 @@
-CREATE TABLE "user_mcp_oauth_tokens" (
+CREATE TABLE IF NOT EXISTS "user_mcp_oauth_tokens" (
 	"user_id" varchar(36) NOT NULL,
 	"mcp_server_id" varchar(36) NOT NULL,
 	"oauth_access_token" text NOT NULL,
@@ -8,8 +8,14 @@ CREATE TABLE "user_mcp_oauth_tokens" (
 	"updated_at" timestamp with time zone
 );
 --> statement-breakpoint
-ALTER TABLE "user_mcp_oauth_tokens" ADD CONSTRAINT "user_mcp_oauth_tokens_user_id_users_user_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("user_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "user_mcp_oauth_tokens" ADD CONSTRAINT "user_mcp_oauth_tokens_mcp_server_id_mcp_servers_mcp_server_id_fk" FOREIGN KEY ("mcp_server_id") REFERENCES "public"."mcp_servers"("mcp_server_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-CREATE INDEX "user_mcp_oauth_tokens_pk" ON "user_mcp_oauth_tokens" USING btree ("user_id","mcp_server_id");--> statement-breakpoint
-CREATE INDEX "user_mcp_oauth_tokens_user_idx" ON "user_mcp_oauth_tokens" USING btree ("user_id");--> statement-breakpoint
-CREATE INDEX "user_mcp_oauth_tokens_server_idx" ON "user_mcp_oauth_tokens" USING btree ("mcp_server_id");
+DO $$ BEGIN
+  ALTER TABLE "user_mcp_oauth_tokens" ADD CONSTRAINT "user_mcp_oauth_tokens_user_id_users_user_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("user_id") ON DELETE cascade ON UPDATE no action;
+EXCEPTION WHEN duplicate_object THEN null;
+END $$;--> statement-breakpoint
+DO $$ BEGIN
+  ALTER TABLE "user_mcp_oauth_tokens" ADD CONSTRAINT "user_mcp_oauth_tokens_mcp_server_id_mcp_servers_mcp_server_id_fk" FOREIGN KEY ("mcp_server_id") REFERENCES "public"."mcp_servers"("mcp_server_id") ON DELETE cascade ON UPDATE no action;
+EXCEPTION WHEN duplicate_object THEN null;
+END $$;--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "user_mcp_oauth_tokens_pk" ON "user_mcp_oauth_tokens" USING btree ("user_id","mcp_server_id");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "user_mcp_oauth_tokens_user_idx" ON "user_mcp_oauth_tokens" USING btree ("user_id");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "user_mcp_oauth_tokens_server_idx" ON "user_mcp_oauth_tokens" USING btree ("mcp_server_id");
