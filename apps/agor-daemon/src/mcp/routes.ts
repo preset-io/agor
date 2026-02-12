@@ -6,8 +6,9 @@
  */
 
 import { extractSlugFromUrl, isValidGitUrl, isValidSlug } from '@agor/core/config';
+import type { Database } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { AgenticToolName, Board } from '@agor/core/types';
+import type { AgenticToolName, Board, MCPServer } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
 import { normalizeOptionalHttpUrl } from '@agor/core/utils/url';
 import type { Request, Response } from 'express';
@@ -31,7 +32,7 @@ function coerceString(value: unknown): string | undefined {
 /**
  * Setup MCP routes on FeathersJS app
  */
-export function setupMCPRoutes(app: Application): void {
+export function setupMCPRoutes(app: Application, db: Database): void {
   // MCP endpoint: POST /mcp
   // Expects: sessionToken query param
   // Returns: MCP JSON-RPC response
@@ -988,6 +989,58 @@ export function setupMCPRoutes(app: Application): void {
                   offset: {
                     type: 'number',
                     description: 'Number of results to skip for pagination (default: 0)',
+                  },
+                },
+              },
+            },
+
+            // MCP Server tools - for checking and managing OAuth authentication
+            {
+              name: 'agor_mcp_servers_list',
+              description:
+                "List MCP servers available to the current session. Shows each server's name, transport type, authentication type, and OAuth connection status. Use this to see which external tools/services are configured and whether they need authentication.",
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  includeDisabled: {
+                    type: 'boolean',
+                    description: 'Include disabled MCP servers (default: false)',
+                  },
+                },
+              },
+            },
+            {
+              name: 'agor_mcp_servers_auth_status',
+              description:
+                'Check the OAuth authentication status for an MCP server. Returns whether the current user is authenticated. If NOT authenticated, you MUST immediately call agor_mcp_servers_request_oauth to trigger the OAuth popup in the UI. Do not just tell the user to authenticate manually.',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  mcpServerId: {
+                    type: 'string',
+                    description: 'MCP server ID to check (UUIDv7 or short ID)',
+                  },
+                  mcpServerName: {
+                    type: 'string',
+                    description: 'MCP server name to check (alternative to mcpServerId)',
+                  },
+                },
+              },
+            },
+            {
+              name: 'agor_mcp_servers_request_oauth',
+              description:
+                'TRIGGER OAuth authentication popup in the Agor UI. Call this immediately when you detect an MCP server needs OAuth (e.g., when agor_mcp_servers_auth_status shows oauth_authenticated=false, or when MCP tools fail). This displays a modal/notification in the UI prompting the user to authenticate. The user will complete OAuth in their browser, and once done the MCP tools will become available.',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  mcpServerId: {
+                    type: 'string',
+                    description: 'MCP server ID to authenticate (UUIDv7 or short ID)',
+                  },
+                  mcpServerName: {
+                    type: 'string',
+                    description: 'MCP server name to authenticate (alternative to mcpServerId)',
                   },
                 },
               },
@@ -3111,6 +3164,354 @@ export function setupMCPRoutes(app: Application): void {
               },
             ],
           };
+        } else if (name === 'agor_mcp_servers_list') {
+          // List MCP servers available to the session
+          const includeDisabled = args?.includeDisabled === true;
+
+          // Get session MCP servers with their full details
+          const sessionMCPServers = await app.service('session-mcp-servers').find({
+            ...baseServiceParams,
+            query: {
+              session_id: context.sessionId,
+              ...(includeDisabled ? {} : { enabled: true }),
+              $limit: 100,
+            },
+          });
+
+          // Get full server details for each attached server
+          const servers: Array<{
+            mcp_server_id: string;
+            name: string;
+            display_name?: string;
+            transport: string;
+            auth_type: string;
+            oauth_mode?: string;
+            oauth_authenticated: boolean;
+            enabled: boolean;
+          }> = [];
+
+          const sessionMCPData = Array.isArray(sessionMCPServers)
+            ? sessionMCPServers
+            : sessionMCPServers.data;
+          const mcpServerIds = sessionMCPData.map(
+            (sms: { mcp_server_id: string }) => sms.mcp_server_id
+          );
+
+          for (const serverId of mcpServerIds) {
+            try {
+              const server = await app.service('mcp-servers').get(serverId, baseServiceParams);
+              const authType = server.auth?.type || 'none';
+              const oauthMode = server.auth?.oauth_mode;
+
+              // Check OAuth authentication status if applicable
+              let oauthAuthenticated = false;
+              if (authType === 'oauth' && oauthMode === 'per_user') {
+                // Check if user has a valid token for this server
+                const { UserMCPOAuthTokenRepository } = await import('@agor/core/db');
+                const userTokenRepo = new UserMCPOAuthTokenRepository(db);
+                const token = await userTokenRepo.getValidToken(context.userId, serverId);
+                oauthAuthenticated = !!token;
+              } else if (authType === 'oauth' && oauthMode === 'shared') {
+                // Shared OAuth - check if server has a valid token configured
+                oauthAuthenticated = !!server.auth?.oauth_access_token;
+              } else if (authType !== 'oauth') {
+                // Non-OAuth auth types are considered "authenticated" by default
+                oauthAuthenticated = true;
+              }
+
+              servers.push({
+                mcp_server_id: server.mcp_server_id,
+                name: server.name,
+                display_name: server.display_name,
+                transport: server.transport,
+                auth_type: authType,
+                oauth_mode: oauthMode,
+                oauth_authenticated: oauthAuthenticated,
+                enabled: server.enabled,
+              });
+            } catch (error) {
+              // Skip servers that can't be fetched
+              console.warn(`⚠️  Failed to fetch MCP server ${serverId}:`, error);
+            }
+          }
+
+          // Also include global MCP servers not explicitly attached
+          const globalServers = await app.service('mcp-servers').find({
+            ...baseServiceParams,
+            query: {
+              scope: 'global',
+              enabled: true,
+              $limit: 100,
+            },
+          });
+
+          for (const server of Array.isArray(globalServers) ? globalServers : globalServers.data) {
+            if (!mcpServerIds.includes(server.mcp_server_id)) {
+              const authType = server.auth?.type || 'none';
+              const oauthMode = server.auth?.oauth_mode;
+
+              let oauthAuthenticated = false;
+              if (authType === 'oauth' && oauthMode === 'per_user') {
+                const { UserMCPOAuthTokenRepository } = await import('@agor/core/db');
+                const userTokenRepo = new UserMCPOAuthTokenRepository(db);
+                const token = await userTokenRepo.getValidToken(
+                  context.userId,
+                  server.mcp_server_id
+                );
+                oauthAuthenticated = !!token;
+              } else if (authType === 'oauth' && oauthMode === 'shared') {
+                oauthAuthenticated = !!server.auth?.oauth_access_token;
+              } else if (authType !== 'oauth') {
+                oauthAuthenticated = true;
+              }
+
+              servers.push({
+                mcp_server_id: server.mcp_server_id,
+                name: server.name,
+                display_name: server.display_name,
+                transport: server.transport,
+                auth_type: authType,
+                oauth_mode: oauthMode,
+                oauth_authenticated: oauthAuthenticated,
+                enabled: server.enabled,
+              });
+            }
+          }
+
+          mcpResponse = {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(
+                  {
+                    session_id: context.sessionId,
+                    mcp_servers: servers,
+                    summary: {
+                      total: servers.length,
+                      oauth_servers: servers.filter((s) => s.auth_type === 'oauth').length,
+                      authenticated: servers.filter((s) => s.oauth_authenticated).length,
+                      needs_auth: servers.filter(
+                        (s) => s.auth_type === 'oauth' && !s.oauth_authenticated
+                      ).length,
+                    },
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        } else if (name === 'agor_mcp_servers_auth_status') {
+          // Check OAuth authentication status for a specific MCP server
+          let server: MCPServer;
+
+          if (args?.mcpServerId) {
+            try {
+              server = await app.service('mcp-servers').get(args.mcpServerId, baseServiceParams);
+            } catch (_error) {
+              return res.status(404).json({
+                jsonrpc: '2.0',
+                id: mcpRequest.id,
+                error: {
+                  code: -32602,
+                  message: `MCP server not found: ${args.mcpServerId}`,
+                },
+              });
+            }
+          } else if (args?.mcpServerName) {
+            // Find by name
+            const servers = await app.service('mcp-servers').find({
+              ...baseServiceParams,
+              query: { name: args.mcpServerName, $limit: 1 },
+            });
+            const serverList = Array.isArray(servers) ? servers : servers.data;
+            if (serverList.length === 0) {
+              return res.status(404).json({
+                jsonrpc: '2.0',
+                id: mcpRequest.id,
+                error: {
+                  code: -32602,
+                  message: `MCP server not found with name: ${args.mcpServerName}`,
+                },
+              });
+            }
+            server = serverList[0];
+          } else {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message: 'Invalid params: mcpServerId or mcpServerName is required',
+              },
+            });
+          }
+
+          const authType = server.auth?.type || 'none';
+          const oauthMode = server.auth?.oauth_mode;
+
+          let oauthAuthenticated = false;
+          let tokenExpiry: number | undefined;
+
+          if (authType === 'oauth' && oauthMode === 'per_user') {
+            const { UserMCPOAuthTokenRepository } = await import('@agor/core/db');
+            const userTokenRepo = new UserMCPOAuthTokenRepository(db);
+            const tokenData = await userTokenRepo.getToken(context.userId, server.mcp_server_id);
+            if (tokenData) {
+              // Check if token is expired (oauth_token_expires_at is a Date object)
+              if (
+                !tokenData.oauth_token_expires_at ||
+                tokenData.oauth_token_expires_at > new Date()
+              ) {
+                oauthAuthenticated = true;
+                tokenExpiry = tokenData.oauth_token_expires_at?.getTime();
+              }
+            }
+          } else if (authType === 'oauth' && oauthMode === 'shared') {
+            oauthAuthenticated = !!server.auth?.oauth_access_token;
+          } else if (authType !== 'oauth') {
+            oauthAuthenticated = true;
+          }
+
+          const status = {
+            mcp_server_id: server.mcp_server_id,
+            name: server.name,
+            display_name: server.display_name,
+            auth_type: authType,
+            oauth_mode: oauthMode,
+            oauth_authenticated: oauthAuthenticated,
+            token_expires_at: tokenExpiry ? new Date(tokenExpiry).toISOString() : undefined,
+            instructions:
+              !oauthAuthenticated && authType === 'oauth'
+                ? `To authenticate with "${server.display_name || server.name}", go to Settings → MCP Servers → ${server.display_name || server.name} → Click "Test Authentication" then "Start OAuth Flow". After completing the OAuth flow in your browser, the MCP tools will become available.`
+                : undefined,
+          };
+
+          mcpResponse = {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(status, null, 2),
+              },
+            ],
+          };
+        } else if (name === 'agor_mcp_servers_request_oauth') {
+          // Request OAuth authentication - notify the user in the UI
+          let server: MCPServer;
+
+          if (args?.mcpServerId) {
+            try {
+              server = await app.service('mcp-servers').get(args.mcpServerId, baseServiceParams);
+            } catch (_error) {
+              return res.status(404).json({
+                jsonrpc: '2.0',
+                id: mcpRequest.id,
+                error: {
+                  code: -32602,
+                  message: `MCP server not found: ${args.mcpServerId}`,
+                },
+              });
+            }
+          } else if (args?.mcpServerName) {
+            const servers = await app.service('mcp-servers').find({
+              ...baseServiceParams,
+              query: { name: args.mcpServerName, $limit: 1 },
+            });
+            const serverList = Array.isArray(servers) ? servers : servers.data;
+            if (serverList.length === 0) {
+              return res.status(404).json({
+                jsonrpc: '2.0',
+                id: mcpRequest.id,
+                error: {
+                  code: -32602,
+                  message: `MCP server not found with name: ${args.mcpServerName}`,
+                },
+              });
+            }
+            server = serverList[0];
+          } else {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message: 'Invalid params: mcpServerId or mcpServerName is required',
+              },
+            });
+          }
+
+          const authType = server.auth?.type || 'none';
+
+          if (authType !== 'oauth') {
+            mcpResponse = {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify(
+                    {
+                      success: false,
+                      error: `MCP server "${server.display_name || server.name}" does not use OAuth authentication (auth_type: ${authType})`,
+                    },
+                    null,
+                    2
+                  ),
+                },
+              ],
+            };
+          } else {
+            // Emit OAuth authentication request event to the UI
+            // The UI listens for this event on the session channel
+            try {
+              await app.service('mcp-servers/oauth-notify').create(
+                {
+                  session_id: context.sessionId,
+                  servers: [
+                    {
+                      name: server.display_name || server.name,
+                      serverId: server.mcp_server_id,
+                      url: server.url || '',
+                    },
+                  ],
+                },
+                baseServiceParams
+              );
+
+              mcpResponse = {
+                content: [
+                  {
+                    type: 'text',
+                    text: JSON.stringify(
+                      {
+                        success: true,
+                        message: `OAuth authentication request sent to the Agor UI. The user has been notified to authenticate with "${server.display_name || server.name}". They should go to Settings → MCP Servers → ${server.display_name || server.name} → Start OAuth Flow.`,
+                        mcp_server_id: server.mcp_server_id,
+                        mcp_server_name: server.name,
+                      },
+                      null,
+                      2
+                    ),
+                  },
+                ],
+              };
+            } catch (error) {
+              mcpResponse = {
+                content: [
+                  {
+                    type: 'text',
+                    text: JSON.stringify(
+                      {
+                        success: false,
+                        error: `Failed to send OAuth notification: ${error instanceof Error ? error.message : String(error)}`,
+                        instructions: `Please ask the user to manually go to Settings → MCP Servers → ${server.display_name || server.name} → Start OAuth Flow`,
+                      },
+                      null,
+                      2
+                    ),
+                  },
+                ],
+              };
+            }
+          }
         } else {
           return res.status(400).json({
             jsonrpc: '2.0',

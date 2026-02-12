@@ -142,8 +142,13 @@ export async function setupQuery(
   query: InterruptibleQuery;
   resolvedModel: string;
   getStderr: () => string;
+  /** OAuth MCP servers that need authentication before they can be used */
+  oauthServersNeedingAuth: Array<{ name: string; serverId: string; url: string }>;
 }> {
   const { taskId, permissionMode, resume = true, abortController } = options;
+
+  // Track OAuth MCP servers that need authentication
+  const oauthServersNeedingAuth: Array<{ name: string; serverId: string; url: string }> = [];
 
   const session = await deps.sessionsRepo.findById(sessionId);
   if (!session) {
@@ -153,17 +158,22 @@ export async function setupQuery(
   // Determine which user's context to use for environment variables and API keys
   // Priority: task creator (if task exists) > session owner (fallback)
   let contextUserId = session.created_by as UserID | undefined;
+  console.log(
+    `[Query Builder] Initial contextUserId from session.created_by: ${contextUserId || 'NOT SET'}`
+  );
 
   if (taskId && deps.tasksService) {
     try {
       const task = await deps.tasksService.get(taskId);
       if (task?.created_by) {
         contextUserId = task.created_by as UserID;
+        console.log(`[Query Builder] Updated contextUserId from task.created_by: ${contextUserId}`);
       }
     } catch (_err) {
       // Fall back to session owner if task not found
     }
   }
+  console.log(`[Query Builder] Final contextUserId: ${contextUserId || 'NOT SET'}`);
 
   // Determine model to use (session config or default)
   const modelConfig = session.model_config;
@@ -513,9 +523,11 @@ export async function setupQuery(
   if (deps.sessionMCPRepo && deps.mcpServerRepo) {
     try {
       // Use shared MCP scoping utility
+      // Pass forUserId to enable per-user OAuth token injection
       const serversWithSource = await getMcpServersForSession(sessionId, {
         sessionMCPRepo: deps.sessionMCPRepo,
         mcpServerRepo: deps.mcpServerRepo,
+        forUserId: contextUserId,
       });
 
       if (serversWithSource.length > 0) {
@@ -549,13 +561,19 @@ export async function setupQuery(
               serverConfig.headers = headers;
               console.log(`     🔐 Added Authorization header for ${server.name}`);
             } else if (server.auth?.type === 'oauth' && transport !== 'stdio') {
-              // OAuth server but no token - warn user they need to authenticate
+              // OAuth server but no token - track for notification
               console.warn(
                 `   ⚠️  MCP server "${server.name}" requires OAuth authentication but no valid token found`
               );
               console.warn(
-                `      💡 Go to Settings → MCP Servers → ${server.name} → Test Authentication to authenticate`
+                `      💡 Go to Settings → MCP Servers → ${server.name} → Start OAuth Flow to authenticate`
               );
+              // Add to list for UI notification
+              oauthServersNeedingAuth.push({
+                name: server.name,
+                serverId: server.mcp_server_id,
+                url: server.url || '',
+              });
             }
           } catch (error) {
             console.warn(
@@ -627,5 +645,10 @@ export async function setupQuery(
 
   // Cast to InterruptibleQuery - the SDK's query() returns an AsyncGenerator with interrupt() method
   // This is safe because the SDK guarantees interrupt() exists at runtime
-  return { query: result as unknown as InterruptibleQuery, resolvedModel: model, getStderr };
+  return {
+    query: result as unknown as InterruptibleQuery,
+    resolvedModel: model,
+    getStderr,
+    oauthServersNeedingAuth,
+  };
 }

@@ -718,6 +718,8 @@ export const mcpServers = pgTable(
           oauth_access_token?: string;
           oauth_token_expires_at?: number; // Unix timestamp in milliseconds
           oauth_refresh_token?: string;
+          // OAuth mode: 'per_user' stores tokens per-user, 'shared' uses single token for all users
+          oauth_mode?: 'per_user' | 'shared';
           // Common
           insecure?: boolean;
         };
@@ -816,6 +818,36 @@ export const sessionMcpServers = pgTable(
     sessionIdx: index('session_mcp_servers_session_idx').on(table.session_id),
     serverIdx: index('session_mcp_servers_server_idx').on(table.mcp_server_id),
     enabledIdx: index('session_mcp_servers_enabled_idx').on(table.session_id, table.enabled),
+  })
+);
+
+/**
+ * User MCP OAuth Tokens table - Per-user OAuth 2.1 tokens for MCP servers
+ *
+ * Used when MCP servers are configured with oauth_mode: 'per_user'.
+ * Each user gets their own OAuth token for each MCP server.
+ */
+export const userMcpOauthTokens = pgTable(
+  'user_mcp_oauth_tokens',
+  {
+    user_id: varchar('user_id', { length: 36 })
+      .notNull()
+      .references(() => users.user_id, { onDelete: 'cascade' }),
+    mcp_server_id: varchar('mcp_server_id', { length: 36 })
+      .notNull()
+      .references(() => mcpServers.mcp_server_id, { onDelete: 'cascade' }),
+    oauth_access_token: text('oauth_access_token').notNull(),
+    oauth_token_expires_at: t.timestamp('oauth_token_expires_at'), // Unix timestamp in milliseconds
+    oauth_refresh_token: text('oauth_refresh_token'),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at'),
+  },
+  (table) => ({
+    // Composite primary key via unique index
+    pk: index('user_mcp_oauth_tokens_pk').on(table.user_id, table.mcp_server_id),
+    // Indexes for queries
+    userIdx: index('user_mcp_oauth_tokens_user_idx').on(table.user_id),
+    serverIdx: index('user_mcp_oauth_tokens_server_idx').on(table.mcp_server_id),
   })
 );
 
@@ -1025,6 +1057,8 @@ export type MCPServerRow = typeof mcpServers.$inferSelect;
 export type MCPServerInsert = typeof mcpServers.$inferInsert;
 export type SessionMCPServerRow = typeof sessionMcpServers.$inferSelect;
 export type SessionMCPServerInsert = typeof sessionMcpServers.$inferInsert;
+export type UserMCPOAuthTokenRow = typeof userMcpOauthTokens.$inferSelect;
+export type UserMCPOAuthTokenInsert = typeof userMcpOauthTokens.$inferInsert;
 export type BoardObjectRow = typeof boardObjects.$inferSelect;
 export type BoardObjectInsert = typeof boardObjects.$inferInsert;
 export type BoardCommentRow = typeof boardComments.$inferSelect;

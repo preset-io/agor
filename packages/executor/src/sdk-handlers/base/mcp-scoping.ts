@@ -38,6 +38,11 @@ export interface MCPServerWithSource {
 export interface MCPResolutionDeps {
   sessionMCPRepo?: SessionMCPServerRepository;
   mcpServerRepo?: MCPServerRepository;
+  /**
+   * User ID to use for fetching per-user OAuth tokens.
+   * When provided, MCP servers with per-user OAuth will have tokens injected.
+   */
+  forUserId?: string;
 }
 
 /**
@@ -75,15 +80,21 @@ export async function getMcpServersForSession(
 
   try {
     console.log('🔌 Resolving MCP servers for session...');
+    console.log(`   [MCP Scoping] forUserId: ${deps.forUserId || 'NOT SET'}`);
 
     // Track seen server IDs to prevent duplicates
     const seenServerIds = new Set<string>();
 
     // STEP 1: Get ALL global-scoped MCP servers (available to all sessions)
-    const globalServers = await deps.mcpServerRepo.findAll({
-      scope: 'global',
-      enabled: true,
-    });
+    // Pass forUserId for per-user OAuth token injection
+    console.log(`   [MCP Scoping] Calling findAll with forUserId: ${deps.forUserId || 'NOT SET'}`);
+    const globalServers = await deps.mcpServerRepo.findAll(
+      {
+        scope: 'global',
+        enabled: true,
+      },
+      deps.forUserId
+    );
 
     console.log(`   📍 Global scope: ${globalServers?.length ?? 0} server(s)`);
 

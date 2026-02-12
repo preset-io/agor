@@ -31,6 +31,7 @@ export const users = schema.users;
 export const mcpServers = schema.mcpServers;
 export const boardObjects = schema.boardObjects;
 export const sessionMcpServers = schema.sessionMcpServers;
+export const userMcpOauthTokens = schema.userMcpOauthTokens;
 export const boardComments = schema.boardComments;
 export const gatewayChannels = schema.gatewayChannels;
 export const threadSessionMap = schema.threadSessionMap;

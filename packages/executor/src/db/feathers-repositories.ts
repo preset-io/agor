@@ -122,7 +122,7 @@ export class FeathersMCPServersRepository {
     }
   }
 
-  async findAll(filters?: MCPServerFilters): Promise<MCPServer[]> {
+  async findAll(filters?: MCPServerFilters, forUserId?: string): Promise<MCPServer[]> {
     const service = this.client.service('mcp-servers');
     const query: Record<string, unknown> = { $limit: 1000 };
 
@@ -140,6 +140,16 @@ export class FeathersMCPServersRepository {
       query.enabled = filters.enabled;
     }
 
+    // Pass user ID for per-user OAuth token injection
+    // This allows the daemon to inject per-user tokens even when socket auth isn't available
+    if (forUserId) {
+      query.forUserId = forUserId;
+      console.log(`[MCP Repo] Adding forUserId to query: ${forUserId}`);
+    } else {
+      console.log(`[MCP Repo] No forUserId provided`);
+    }
+
+    console.log(`[MCP Repo] Query to daemon:`, JSON.stringify(query));
     const result = await service.find({ query });
     return Array.isArray(result) ? result : result.data;
   }
@@ -287,5 +297,7 @@ export function createFeathersBackedRepositories(client: AgorClient) {
     messagesService: client.service('messages'),
     tasksService: client.service('tasks'),
     sessionsService: client.service('sessions'),
+    // Service for notifying UI about OAuth authentication requirements
+    mcpOAuthNotifyService: client.service('mcp-servers/oauth-notify'),
   };
 }

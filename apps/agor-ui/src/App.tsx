@@ -15,7 +15,7 @@ import type {
   UUID,
   Worktree,
 } from '@agor/core/types';
-import { Alert, App as AntApp, ConfigProvider, Spin, theme } from 'antd';
+import { Alert, App as AntApp, ConfigProvider, Input, Modal, Spin, theme } from 'antd';
 import { useEffect, useState } from 'react';
 import { BrowserRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { AVAILABLE_AGENTS } from './components/AgentSelectionGrid';
@@ -168,6 +168,132 @@ function AppContent() {
       setHasLoadedOnce(true);
     }
   }, [loading, sessionById.size, boardById.size, repoById.size]);
+
+  // State for OAuth flow triggered by MCP tools
+  const [pendingOAuthServer, setPendingOAuthServer] = useState<{
+    serverId: string;
+    name: string;
+    url: string;
+  } | null>(null);
+  const [oauthCallbackUrl, setOauthCallbackUrl] = useState('');
+  const [oauthFlowStarted, setOauthFlowStarted] = useState(false);
+  const [oauthCooldownUntil, setOauthCooldownUntil] = useState<number>(0);
+
+  // Listen for OAuth authentication required events from MCP tools
+  useEffect(() => {
+    if (!client?.io) return;
+
+    const handleOAuthRequired = (data: {
+      session_id: string;
+      servers: Array<{ name: string; serverId: string; url: string }>;
+    }) => {
+      console.log('[OAuth] Received oauth:auth_required event:', data);
+
+      // Ignore if OAuth flow is already in progress
+      if (pendingOAuthServer) {
+        console.log(
+          '[OAuth] Ignoring - OAuth flow already in progress for:',
+          pendingOAuthServer.name
+        );
+        return;
+      }
+
+      // Ignore if we're in cooldown period (prevents rapid re-triggers after completion)
+      if (Date.now() < oauthCooldownUntil) {
+        console.log('[OAuth] Ignoring - in cooldown period');
+        return;
+      }
+
+      // Start OAuth flow for the first server that needs it
+      if (data.servers.length > 0) {
+        const server = data.servers[0];
+        setPendingOAuthServer(server);
+        setOauthCallbackUrl('');
+        setOauthFlowStarted(false);
+      }
+    };
+
+    client.io.on('oauth:auth_required', handleOAuthRequired);
+
+    return () => {
+      client.io.off('oauth:auth_required', handleOAuthRequired);
+    };
+  }, [client, pendingOAuthServer, oauthCooldownUntil]);
+
+  // Auto-start OAuth flow when pendingOAuthServer is set
+  useEffect(() => {
+    if (!client || !pendingOAuthServer || oauthFlowStarted) return;
+
+    const startOAuthFlow = async () => {
+      setOauthFlowStarted(true);
+
+      // Set up listener for oauth:open_browser event
+      const handleOpenBrowser = ({ authUrl }: { authUrl: string }) => {
+        console.log('[OAuth] Opening browser for auth:', authUrl);
+        window.open(authUrl, '_blank', 'noopener,noreferrer');
+      };
+      client.io.on('oauth:open_browser', handleOpenBrowser);
+
+      try {
+        const mcpServer = mcpServerById.get(pendingOAuthServer.serverId);
+        const data = (await client.service('mcp-servers/oauth-start').create({
+          mcp_url: mcpServer?.url || pendingOAuthServer.url,
+          mcp_server_id: pendingOAuthServer.serverId,
+          client_id: mcpServer?.auth?.oauth_client_id,
+        })) as {
+          success: boolean;
+          error?: string;
+          authorizationUrl?: string;
+          state?: string;
+        };
+
+        if (!data.success) {
+          showError(data.error || 'Failed to start OAuth flow');
+          setPendingOAuthServer(null);
+        }
+        // If success, the modal will show for callback URL input
+      } catch (error) {
+        showError(`OAuth error: ${error instanceof Error ? error.message : String(error)}`);
+        setPendingOAuthServer(null);
+      } finally {
+        client.io.off('oauth:open_browser', handleOpenBrowser);
+      }
+    };
+
+    startOAuthFlow();
+  }, [client, pendingOAuthServer, oauthFlowStarted, mcpServerById, showError]);
+
+  // Handle OAuth callback URL submission
+  const handleOAuthCallbackSubmit = async () => {
+    if (!client || !oauthCallbackUrl.trim()) {
+      showError('Please paste the callback URL');
+      return;
+    }
+
+    try {
+      const data = (await client.service('mcp-servers/oauth-complete').create({
+        callback_url: oauthCallbackUrl.trim(),
+      })) as {
+        success: boolean;
+        error?: string;
+        message?: string;
+      };
+
+      if (data.success) {
+        showSuccess(
+          data.message || 'OAuth authentication successful! MCP tools are now available.'
+        );
+        setPendingOAuthServer(null);
+        setOauthCallbackUrl('');
+        // Set 10 second cooldown to prevent immediate re-triggers
+        setOauthCooldownUntil(Date.now() + 10000);
+      } else {
+        showError(data.error || 'Failed to complete OAuth flow');
+      }
+    } catch (error) {
+      showError(`OAuth error: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
 
   // Get current user from users Map (real-time updates via WebSocket)
   // This ensures we get the latest onboarding_completed status
@@ -1023,6 +1149,35 @@ function AppContent() {
         onChangePassword={handleForcePasswordChange}
         onLogout={logout}
       />
+
+      {/* OAuth Callback Modal - shown when MCP server needs OAuth authentication */}
+      <Modal
+        title={`OAuth Authentication - ${pendingOAuthServer?.name || 'MCP Server'}`}
+        open={!!pendingOAuthServer && oauthFlowStarted}
+        onOk={handleOAuthCallbackSubmit}
+        onCancel={() => {
+          setPendingOAuthServer(null);
+          setOauthCallbackUrl('');
+        }}
+        okText="Complete Authentication"
+        cancelText="Cancel"
+      >
+        <p>
+          A browser window has been opened for OAuth authentication. After you complete the login,
+          you will be redirected to a callback URL.
+        </p>
+        <p>
+          <strong>Please copy and paste the entire callback URL here:</strong>
+        </p>
+        <Input.TextArea
+          value={oauthCallbackUrl}
+          onChange={(e) => setOauthCallbackUrl(e.target.value)}
+          placeholder="Paste the callback URL here (e.g., http://localhost:3030/oauth/callback?code=...)"
+          rows={3}
+          style={{ marginTop: 8 }}
+        />
+      </Modal>
+
       <DeviceRouter />
       <Routes>
         {/* Demo route */}

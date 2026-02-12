@@ -50,6 +50,7 @@ function extractOAuthConfig(values: Record<string, unknown>): {
   oauth_client_secret?: string;
   oauth_scope?: string;
   oauth_grant_type?: string;
+  oauth_mode?: 'per_user' | 'shared';
 } {
   const config: {
     oauth_token_url?: string;
@@ -57,6 +58,7 @@ function extractOAuthConfig(values: Record<string, unknown>): {
     oauth_client_secret?: string;
     oauth_scope?: string;
     oauth_grant_type?: string;
+    oauth_mode?: 'per_user' | 'shared';
   } = {};
 
   // Only include token URL if it's provided (can be template or real value)
@@ -82,6 +84,9 @@ function extractOAuthConfig(values: Record<string, unknown>): {
   // Grant type defaults to client_credentials
   config.oauth_grant_type =
     typeof values.oauth_grant_type === 'string' ? values.oauth_grant_type : 'client_credentials';
+
+  // OAuth mode defaults to shared
+  config.oauth_mode = values.oauth_mode === 'per_user' ? 'per_user' : 'shared';
 
   return config;
 }
@@ -177,6 +182,8 @@ interface MCPServerFormFieldsProps {
     resources?: Array<{ name: string; uri: string; mimeType?: string }>;
     prompts?: Array<{ name: string; description: string }>;
   } | null;
+  /** Callback to save server first before OAuth flow (for new servers) */
+  onSaveFirst?: () => Promise<string | null>;
 }
 
 const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
@@ -191,6 +198,7 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
   onTestConnection,
   testing = false,
   testResult,
+  onSaveFirst,
 }) => {
   const { showSuccess, showError, showWarning, showInfo } = useThemedMessage();
   const [testingAuth, setTestingAuth] = useState(false);
@@ -202,6 +210,7 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
   const [oauthCallbackUrl, setOauthCallbackUrl] = useState('');
   const [_oauthState, setOauthState] = useState<string | null>(null);
   const [completingOAuth, setCompletingOAuth] = useState(false);
+  const [disconnectingOAuth, setDisconnectingOAuth] = useState(false);
 
   // Start the browser-based OAuth 2.1 flow (two-phase for remote daemon)
   const handleStartOAuthFlow = async () => {
@@ -303,6 +312,38 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
       showError(`OAuth error: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setCompletingOAuth(false);
+    }
+  };
+
+  // Disconnect OAuth - remove stored tokens
+  const handleDisconnectOAuth = async () => {
+    if (!client) {
+      showError('Client not available');
+      return;
+    }
+
+    if (!serverId) {
+      showError('Cannot disconnect: MCP server must be saved first');
+      return;
+    }
+
+    setDisconnectingOAuth(true);
+    try {
+      const data = (await client.service('mcp-servers/oauth-disconnect').create({
+        mcp_server_id: serverId,
+      })) as { success: boolean; message?: string; error?: string };
+
+      if (data.success) {
+        showSuccess(data.message || 'OAuth connection removed');
+        // Show the "Start OAuth Flow" button again so user can re-authenticate
+        setOauthBrowserFlowAvailable(true);
+      } else {
+        showError(data.error || 'Failed to disconnect OAuth');
+      }
+    } catch (error) {
+      showError(`Disconnect error: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setDisconnectingOAuth(false);
     }
   };
 
@@ -718,6 +759,22 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                     </Select>
                   </Form.Item>
 
+                  <Form.Item
+                    label="OAuth Mode"
+                    name="oauth_mode"
+                    initialValue="per_user"
+                    tooltip="Per User: Each user authenticates separately (recommended). Shared: One token for all users."
+                  >
+                    <Select>
+                      <Select.Option value="per_user">
+                        Per User (each user authenticates) - Recommended
+                      </Select.Option>
+                      <Select.Option value="shared">
+                        Shared (single token for all users)
+                      </Select.Option>
+                    </Select>
+                  </Form.Item>
+
                   <Alert
                     message="OAuth 2.1 Auto-Discovery"
                     description={
@@ -750,6 +807,16 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                         onClick={handleStartOAuthFlow}
                       >
                         Start OAuth Flow
+                      </Button>
+                    )}
+                    {authType === 'oauth' && serverId && !oauthBrowserFlowAvailable && (
+                      <Button
+                        type="default"
+                        danger
+                        loading={disconnectingOAuth}
+                        onClick={handleDisconnectOAuth}
+                      >
+                        Disconnect OAuth
                       </Button>
                     )}
                   </Space>
@@ -1098,6 +1165,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
             oauth_client_secret?: string;
             oauth_scope?: string;
             oauth_grant_type?: string;
+            oauth_mode?: 'per_user' | 'shared';
           }
         | undefined;
 
@@ -1226,6 +1294,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       formValues.oauth_client_secret = server.auth?.oauth_client_secret;
       formValues.oauth_scope = server.auth?.oauth_scope;
       formValues.oauth_grant_type = server.auth?.oauth_grant_type || 'client_credentials';
+      formValues.oauth_mode = server.auth?.oauth_mode || 'per_user';
     }
 
     form.setFieldsValue(formValues);

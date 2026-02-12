@@ -66,7 +66,9 @@ export class ClaudePromptService {
     private worktreesRepo?: WorktreeRepository,
     private reposRepo?: import('../../db/feathers-repositories').RepoRepository,
     private messagesService?: import('./claude-tool').MessagesService, // FeathersJS Messages service for creating permission requests
-    private mcpEnabled?: boolean
+    private mcpEnabled?: boolean,
+    // biome-ignore lint/suspicious/noExplicitAny: Feathers service type
+    private mcpOAuthNotifyService?: any // Service for notifying UI about OAuth requirements
   ) {
     // No client initialization needed - Agent SDK is stateless
   }
@@ -93,7 +95,11 @@ export class ClaudePromptService {
     _chunkCallback?: (messageId: string, chunk: string) => void,
     abortController?: AbortController
   ): AsyncGenerator<ProcessedEvent> {
-    const { query: result, getStderr } = await setupQuery(
+    const {
+      query: result,
+      getStderr,
+      oauthServersNeedingAuth,
+    } = await setupQuery(
       sessionId,
       prompt,
       {
@@ -118,6 +124,22 @@ export class ClaudePromptService {
         abortController,
       }
     );
+
+    // Notify UI if OAuth MCP servers need authentication
+    if (oauthServersNeedingAuth.length > 0 && this.mcpOAuthNotifyService) {
+      try {
+        // Call the daemon's oauth-notify service to broadcast to UI
+        await this.mcpOAuthNotifyService.create({
+          session_id: sessionId,
+          servers: oauthServersNeedingAuth,
+        });
+        console.log(
+          `[OAuth] Notified UI about ${oauthServersNeedingAuth.length} server(s) needing auth`
+        );
+      } catch (error) {
+        console.warn('[OAuth] Failed to notify UI about OAuth requirements:', error);
+      }
+    }
 
     // Get session for reference (needed to check existing sdk_session_id)
     const session = await this.sessionsRepo?.findById(sessionId);
@@ -232,7 +254,7 @@ export class ClaudePromptService {
    * @returns Complete assistant response with metadata
    */
   async promptSession(sessionId: SessionID, prompt: string): Promise<PromptResult> {
-    const { query: result } = await setupQuery(
+    const { query: result, oauthServersNeedingAuth } = await setupQuery(
       sessionId,
       prompt,
       {
@@ -256,6 +278,18 @@ export class ClaudePromptService {
         resume: false,
       }
     );
+
+    // Notify UI if OAuth MCP servers need authentication
+    if (oauthServersNeedingAuth.length > 0 && this.mcpOAuthNotifyService) {
+      try {
+        await this.mcpOAuthNotifyService.create({
+          session_id: sessionId,
+          servers: oauthServersNeedingAuth,
+        });
+      } catch (error) {
+        console.warn('[OAuth] Failed to notify UI about OAuth requirements:', error);
+      }
+    }
 
     // Get session for reference
     const session = await this.sessionsRepo?.findById(sessionId);

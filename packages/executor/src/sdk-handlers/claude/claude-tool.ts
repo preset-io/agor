@@ -117,7 +117,9 @@ export class ClaudeTool implements ITool {
     worktreesRepo?: WorktreeRepository,
     reposRepo?: RepoRepository,
     mcpEnabled?: boolean,
-    _useNativeAuth?: boolean // Claude supports `claude login` OAuth, but no special handling needed in tool
+    _useNativeAuth?: boolean, // Claude supports `claude login` OAuth, but no special handling needed in tool
+    // biome-ignore lint/suspicious/noExplicitAny: Feathers service type
+    mcpOAuthNotifyService?: any // Service for notifying UI about OAuth requirements
   ) {
     if (messagesRepo && sessionsRepo) {
       this.promptService = new ClaudePromptService(
@@ -132,7 +134,8 @@ export class ClaudeTool implements ITool {
         worktreesRepo,
         reposRepo,
         messagesService,
-        mcpEnabled
+        mcpEnabled,
+        mcpOAuthNotifyService
       );
     }
   }

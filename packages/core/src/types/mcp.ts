@@ -51,6 +51,8 @@ export interface MCPAuth {
   oauth_access_token?: string;
   oauth_token_expires_at?: number; // Unix timestamp in milliseconds
   oauth_refresh_token?: string;
+  // OAuth mode: 'per_user' stores tokens per-user, 'shared' uses single token for all users
+  oauth_mode?: 'per_user' | 'shared';
   // Common
   insecure?: boolean;
 }

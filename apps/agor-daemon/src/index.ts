@@ -46,6 +46,7 @@ import {
   select,
   sessionMcpServers,
   TaskRepository,
+  UserMCPOAuthTokenRepository,
   UsersRepository,
   WorktreeRepository,
 } from '@agor/core/db';
@@ -82,6 +83,7 @@ import type {
   Board,
   HookContext,
   Id,
+  MCPServer,
   Message,
   MessageSource,
   Paginated,
@@ -1494,6 +1496,8 @@ async function main() {
         authorizationUrl: string;
       };
       mcpServerId?: string;
+      userId?: string; // User ID for per-user OAuth tokens
+      oauthMode?: 'per_user' | 'shared'; // OAuth mode from MCP server config
       createdAt: number;
     }
   >();
@@ -1523,6 +1527,21 @@ async function main() {
       try {
         console.log('[OAuth Start] Starting two-phase OAuth flow for:', data.mcp_url);
 
+        // Get user ID from authenticated params
+        const userId = params?.user?.user_id;
+        console.log('[OAuth Start] User ID:', userId);
+
+        // Get OAuth mode from MCP server config if server ID is provided
+        let oauthMode: 'per_user' | 'shared' | undefined;
+        if (data.mcp_server_id) {
+          const mcpServerRepo = new MCPServerRepository(db);
+          const server = await mcpServerRepo.findById(data.mcp_server_id);
+          if (server?.auth?.type === 'oauth') {
+            oauthMode = server.auth.oauth_mode || 'per_user';
+            console.log('[OAuth Start] OAuth mode from server config:', oauthMode);
+          }
+        }
+
         // Probe the MCP URL to get WWW-Authenticate header
         const probeResponse = await fetch(data.mcp_url, {
           method: 'GET',
@@ -1544,14 +1563,16 @@ async function main() {
         // Start the flow - this returns auth URL and context
         const context = await startMCPOAuthFlow(wwwAuthenticate, data.client_id);
 
-        // Store the context for later completion
+        // Store the context for later completion (including user ID and OAuth mode)
         pendingOAuthFlows.set(context.state, {
           context,
           mcpServerId: data.mcp_server_id,
+          userId,
+          oauthMode,
           createdAt: Date.now(),
         });
 
-        console.log('[OAuth Start] Flow started, state:', context.state);
+        console.log('[OAuth Start] Flow started, state:', context.state, 'oauthMode:', oauthMode);
 
         // Emit WebSocket event to open browser on client
         const connection = params?.connection as { id?: string } | undefined;
@@ -1628,10 +1649,30 @@ async function main() {
         // Cache the token at daemon level
         cacheOAuth21Token(pendingFlow.context.metadataUrl, token, 3600);
 
-        // Save to database if we have a server ID
+        // Save to database based on OAuth mode
         if (pendingFlow.mcpServerId) {
-          const mcpServerRepo = new MCPServerRepository(db);
-          await saveOAuth21TokenToDB(mcpServerRepo, pendingFlow.mcpServerId, token, 3600);
+          const oauthMode = pendingFlow.oauthMode || 'per_user';
+
+          if (oauthMode === 'per_user' && pendingFlow.userId) {
+            // Per-user mode: save to user_mcp_oauth_tokens table
+            const userTokenRepo = new UserMCPOAuthTokenRepository(db);
+            await userTokenRepo.saveToken(
+              pendingFlow.userId as import('@agor/core/types').UserID,
+              pendingFlow.mcpServerId as import('@agor/core/types').MCPServerID,
+              token,
+              3600 // 1 hour expiry
+            );
+            console.log(
+              `[OAuth Complete] Per-user token saved for user ${pendingFlow.userId}, server ${pendingFlow.mcpServerId}`
+            );
+          } else {
+            // Shared mode: save to MCP server's auth config
+            const mcpServerRepo = new MCPServerRepository(db);
+            await saveOAuth21TokenToDB(mcpServerRepo, pendingFlow.mcpServerId, token, 3600);
+            console.log(
+              `[OAuth Complete] Shared token saved for server ${pendingFlow.mcpServerId}`
+            );
+          }
         }
 
         console.log('[OAuth Complete] Flow completed successfully');
@@ -1652,6 +1693,77 @@ async function main() {
   });
 
   app.service('mcp-servers/oauth-complete').hooks({
+    before: { create: [requireAuth] },
+  });
+
+  // Notify UI that OAuth authentication is needed for MCP servers
+  // Called by executor when MCP servers require authentication
+  app.use('/mcp-servers/oauth-notify', {
+    async create(data: {
+      session_id: string;
+      servers: Array<{ name: string; serverId: string; url: string }>;
+    }) {
+      console.log(
+        `[OAuth Notify] Broadcasting oauth_auth_required for session ${data.session_id}, ` +
+          `servers: ${data.servers.map((s) => s.name).join(', ')}`
+      );
+
+      // Broadcast to all authenticated clients
+      app.io.emit('oauth:auth_required', {
+        session_id: data.session_id,
+        servers: data.servers,
+      });
+
+      return { success: true };
+    },
+  });
+
+  app.service('mcp-servers/oauth-notify').hooks({
+    before: { create: [requireAuth] },
+  });
+
+  // Disconnect OAuth - delete per-user OAuth token for an MCP server
+  app.use('/mcp-servers/oauth-disconnect', {
+    async create(data: { mcp_server_id: string }, params?: AuthenticatedParams) {
+      const userId = params?.user?.user_id;
+      if (!userId) {
+        return { success: false, error: 'User not authenticated' };
+      }
+
+      const { mcp_server_id } = data;
+      if (!mcp_server_id) {
+        return { success: false, error: 'MCP server ID is required' };
+      }
+
+      console.log(
+        `[OAuth Disconnect] Deleting token for user ${userId.substring(0, 8)}, server ${mcp_server_id.substring(0, 8)}`
+      );
+
+      try {
+        const userTokenRepo = new UserMCPOAuthTokenRepository(db);
+        const deleted = await userTokenRepo.deleteToken(
+          userId as import('@agor/core/types').UserID,
+          mcp_server_id as import('@agor/core/types').MCPServerID
+        );
+
+        if (deleted) {
+          console.log('[OAuth Disconnect] Token deleted successfully');
+          return { success: true, message: 'OAuth connection removed' };
+        } else {
+          console.log('[OAuth Disconnect] No token found to delete');
+          return { success: true, message: 'No OAuth connection found' };
+        }
+      } catch (error) {
+        console.error('[OAuth Disconnect] Error:', error);
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+  });
+
+  app.service('mcp-servers/oauth-disconnect').hooks({
     before: { create: [requireAuth] },
   });
 
@@ -2654,6 +2766,93 @@ async function main() {
     },
   });
 
+  // Hook to inject per-user OAuth tokens into MCP server responses
+  const injectPerUserOAuthTokens = async (context: HookContext) => {
+    // Try multiple sources for user ID:
+    // 1. params.user (from socket authentication)
+    // 2. query.forUserId (explicitly passed from executor for per-user OAuth)
+    const queryForUserId = (context.params?.query as Record<string, unknown>)?.forUserId as
+      | string
+      | undefined;
+    const userId = context.params?.user?.user_id || queryForUserId;
+    const source = context.params?.user?.user_id
+      ? 'socket-auth'
+      : queryForUserId
+        ? 'query-param'
+        : 'none';
+    console.log(
+      `[MCP OAuth] injectPerUserOAuthTokens called - userId: ${userId || 'NONE'}, ` +
+        `source: ${source}, provider: ${context.params?.provider || 'internal'}, ` +
+        `method: ${context.method}, resultCount: ${Array.isArray(context.result) ? context.result.length : 1}`
+    );
+    if (!userId) {
+      console.log('[MCP OAuth] No user ID - skipping token injection');
+      return context;
+    }
+
+    const injectToken = async (server: MCPServer) => {
+      // Only process OAuth servers with per_user mode
+      if (server.auth?.type !== 'oauth' || server.auth?.oauth_mode !== 'per_user') {
+        console.log(
+          `[MCP OAuth] Server ${server.name}: authType=${server.auth?.type}, ` +
+            `oauthMode=${server.auth?.oauth_mode} - skipping (not per_user OAuth)`
+        );
+        return server;
+      }
+
+      console.log(
+        `[MCP OAuth] Server ${server.name}: per_user OAuth mode - checking for user token...`
+      );
+
+      try {
+        const userTokenRepo = new UserMCPOAuthTokenRepository(db);
+        const token = await userTokenRepo.getValidToken(
+          userId as import('@agor/core/types').UserID,
+          server.mcp_server_id
+        );
+
+        if (token) {
+          console.log(
+            `[MCP OAuth] ✅ Found valid token for user ${userId.substring(0, 8)}, ` +
+              `server ${server.name} - injecting into auth config`
+          );
+          // Inject per-user token into the server's auth config
+          return {
+            ...server,
+            auth: {
+              ...server.auth,
+              oauth_access_token: token,
+              // Don't include expiry - the token is already validated
+            },
+          };
+        } else {
+          console.log(
+            `[MCP OAuth] ❌ No valid token for user ${userId.substring(0, 8)}, ` +
+              `server ${server.name} - user needs to authenticate`
+          );
+        }
+      } catch (error) {
+        console.warn(
+          `[MCP OAuth] Failed to get per-user token for ${server.name}:`,
+          error instanceof Error ? error.message : error
+        );
+      }
+
+      return server;
+    };
+
+    // Handle both single result and array/paginated results
+    if (Array.isArray(context.result)) {
+      context.result = await Promise.all(context.result.map(injectToken));
+    } else if (context.result?.data && Array.isArray(context.result.data)) {
+      context.result.data = await Promise.all(context.result.data.map(injectToken));
+    } else if (context.result?.mcp_server_id) {
+      context.result = await injectToken(context.result);
+    }
+
+    return context;
+  };
+
   app.service('mcp-servers').hooks({
     before: {
       all: [
@@ -2665,12 +2864,19 @@ async function main() {
       patch: [requireMinimumRole('admin', 'update MCP servers')],
       remove: [requireMinimumRole('admin', 'delete MCP servers')],
     },
+    after: {
+      find: [injectPerUserOAuthTokens],
+      get: [injectPerUserOAuthTokens],
+    },
   });
 
   app.service('session-mcp-servers').hooks({
     before: {
       all: [requireAuth],
       find: [requireMinimumRole('member', 'list session MCP servers')],
+    },
+    after: {
+      find: [injectPerUserOAuthTokens],
     },
   });
 
@@ -5776,7 +5982,7 @@ async function main() {
   // Setup MCP routes (if enabled)
   if (config.daemon?.mcpEnabled !== false) {
     const { setupMCPRoutes } = await import('./mcp/routes.js');
-    setupMCPRoutes(app);
+    setupMCPRoutes(app, db);
     console.log('✅ MCP server enabled at POST /mcp');
   } else {
     console.log('🔒 MCP server disabled via config (daemon.mcpEnabled=false)');
