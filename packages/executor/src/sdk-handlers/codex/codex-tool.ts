@@ -291,15 +291,21 @@ export class CodexTool implements ITool {
           // Codex SDK doesn't support token-level text streaming, but we can still
           // use streaming callbacks to show text immediately via WebSocket before DB write.
           // This sends the complete text as a single "chunk" for instant display.
-          if (streamingCallbacks && fullText) {
-            streamingCallbacks.onStreamStart(assistantMessageId, {
-              session_id: sessionId,
-              task_id: taskId,
-              role: MessageRole.ASSISTANT,
-              timestamp: new Date().toISOString(),
-            });
-            streamingCallbacks.onStreamChunk(assistantMessageId, fullText);
-            streamingCallbacks.onStreamEnd(assistantMessageId);
+          // Guard: skip if currentMessageId is set (partial path already streamed this message).
+          if (streamingCallbacks && fullText && !currentMessageId) {
+            try {
+              await streamingCallbacks.onStreamStart(assistantMessageId, {
+                session_id: sessionId,
+                task_id: taskId,
+                role: MessageRole.ASSISTANT,
+                timestamp: new Date().toISOString(),
+              });
+              await streamingCallbacks.onStreamChunk(assistantMessageId, fullText);
+              await streamingCallbacks.onStreamEnd(assistantMessageId);
+            } catch (err) {
+              console.error(`[Codex] Streaming callback failed for ${assistantMessageId}:`, err);
+              // Don't block message creation if streaming fails
+            }
           }
 
           // Create complete message in DB (text only, tools already saved)
