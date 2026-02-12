@@ -162,14 +162,12 @@ export class GatewayService {
     // This prevents unauthorized session creation when users reply to random threads
     // without explicitly mentioning the bot. Only threads where the bot was mentioned
     // (creating a mapping) can continue conversations without mentions.
+    // IMPORTANT: Silently drop — do NOT send a debug message. These are normal messages
+    // in threads that have nothing to do with Agor. Sending a visible rejection would
+    // cause the bot to spam every active thread in the channel.
     if (!existingMapping && data.metadata?.requires_mapping_verification) {
       console.log(
-        `[gateway] REJECTED: Thread reply without mention in unmapped thread: channel=${channel.id.substring(0, 8)}, thread=${data.thread_id}`
-      );
-      this.sendDebugMessage(
-        channel,
-        data.thread_id,
-        'To start a conversation in this thread, please @mention me in your message.'
+        `[gateway] IGNORED: Thread reply without mention in unmapped thread: channel=${channel.id.substring(0, 8)}, thread=${data.thread_id}`
       );
       return {
         success: false,
