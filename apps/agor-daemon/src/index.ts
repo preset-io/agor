@@ -383,9 +383,7 @@ interface RouteParams extends Params {
 }
 
 // Determine database URL using centralized logic from @agor/core/db
-// Priority:
-// 1. If AGOR_DB_DIALECT=postgresql, use DATABASE_URL (required for Postgres)
-// 2. Otherwise, use AGOR_DB_PATH or default SQLite path
+// Priority: env vars > config.yaml > defaults (see getDatabaseUrl for details)
 const DB_PATH = getDatabaseUrl();
 
 // Main async function

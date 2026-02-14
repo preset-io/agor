@@ -20,6 +20,7 @@ import {
   StopOutlined,
 } from '@ant-design/icons';
 import { App, Badge, Button, Space, Spin, Tooltip, Typography, theme } from 'antd';
+import Handlebars from 'handlebars';
 import React from 'react';
 import { getDaemonUrl } from '../../config/daemon';
 import { useAppActions } from '../../contexts/AppActionsContext';
@@ -45,6 +46,13 @@ import {
 import { ThinkingModeSelector } from '../ThinkingModeSelector';
 import { ToolIcon } from '../ToolIcon';
 import { SessionPanelContent } from './SessionPanelContent';
+
+// Register helper to check if value is defined (not undefined)
+// This allows us to distinguish between false and undefined in templates
+Handlebars.registerHelper('isDefined', (value: unknown) => value !== undefined);
+
+// Compile template once at module load (after helper registration)
+const compiledSpawnTemplate = Handlebars.compile(spawnSubsessionTemplate);
 
 // Re-export PermissionMode from SDK for convenience
 export type { PermissionMode };
@@ -415,12 +423,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         config.includeOriginalPrompt !== undefined ||
         config.extraInstructions !== undefined;
 
-      const Handlebars = await import('handlebars');
-      Handlebars.registerHelper('isDefined', (value) => value !== undefined);
-
-      const compiledTemplate = Handlebars.compile(spawnSubsessionTemplate);
-
-      const metaPrompt = compiledTemplate({
+      const metaPrompt = compiledSpawnTemplate({
         userPrompt: config.prompt || '',
         hasConfig,
         agenticTool: config.agent,

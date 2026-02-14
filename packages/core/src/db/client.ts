@@ -12,6 +12,7 @@ import { drizzle as drizzleSQLite } from 'drizzle-orm/libsql';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { drizzle as drizzlePostgres } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
+import { loadConfigSync } from '../config/config-manager';
 import * as postgresSchema from './schema.postgres';
 
 // Import both schemas explicitly
@@ -285,21 +286,65 @@ export type Database =
 export const DEFAULT_DB_PATH = 'file:~/.agor/agor.db';
 
 /**
- * Resolve database URL from environment variables
+ * Resolve database URL from environment and config
  *
  * Priority:
- * 1. If AGOR_DB_DIALECT=postgresql, use DATABASE_URL (required for Postgres)
- * 2. Otherwise, use AGOR_DB_PATH or default SQLite path
+ * 1. AGOR_DB_DIALECT + DATABASE_URL/AGOR_DB_PATH environment variables
+ * 2. database.dialect + database.postgresql.url / database.sqlite.path from config.yaml
+ * 3. Default SQLite path (~/.agor/agor.db)
  *
  * This ensures consistent database URL resolution across CLI and daemon.
  *
  * @returns Database URL string
  */
 export function getDatabaseUrl(): string {
+  // Environment variables take highest priority
   if (process.env.AGOR_DB_DIALECT === 'postgresql') {
     return process.env.DATABASE_URL || 'postgresql://localhost:5432/agor';
   }
-  return expandPath(process.env.AGOR_DB_PATH || DEFAULT_DB_PATH);
+  if (process.env.AGOR_DB_PATH) {
+    return expandPath(process.env.AGOR_DB_PATH);
+  }
+  if (process.env.DATABASE_URL) {
+    return process.env.DATABASE_URL;
+  }
+
+  // Fall back to config.yaml
+  try {
+    const config = loadConfigSync();
+    const dbConfig = config.database;
+
+    if (dbConfig) {
+      const dialect = dbConfig.dialect || getDatabaseDialect();
+
+      if (dialect === 'postgresql') {
+        // Build URL from individual params or use url directly
+        if (dbConfig.postgresql?.url) {
+          return dbConfig.postgresql.url;
+        }
+        if (dbConfig.postgresql?.host) {
+          const pg = dbConfig.postgresql;
+          const user = pg.user || 'postgres';
+          const password = pg.password ? `:${pg.password}` : '';
+          const host = pg.host;
+          const port = pg.port || 5432;
+          const database = pg.database || 'agor';
+          return `postgresql://${user}${password}@${host}:${port}/${database}`;
+        }
+      }
+
+      if (dialect === 'sqlite' && dbConfig.sqlite?.path) {
+        const sqlitePath = dbConfig.sqlite.path;
+        // Ensure file: prefix for consistency
+        const prefixed = sqlitePath.startsWith('file:') ? sqlitePath : `file:${sqlitePath}`;
+        return expandPath(prefixed);
+      }
+    }
+  } catch {
+    // Config not available — fall through to default
+  }
+
+  return expandPath(DEFAULT_DB_PATH);
 }
 
 /**

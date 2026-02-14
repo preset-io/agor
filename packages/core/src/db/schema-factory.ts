@@ -10,6 +10,8 @@
  * with factory patterns. See the comment in those files for details.
  */
 
+import { loadConfigSync } from '../config/config-manager';
+
 /**
  * Supported database dialects
  */
@@ -53,9 +55,10 @@ export function detectDialectFromUrl(url: string): DatabaseDialect | null {
  *
  * Priority:
  * 1. AGOR_DB_DIALECT environment variable
- * 2. Auto-detect from DATABASE_URL
- * 3. Database config from config file (future)
- * 4. Default to 'sqlite'
+ * 2. Auto-detect from DATABASE_URL environment variable
+ * 3. database.dialect from ~/.agor/config.yaml
+ * 4. Auto-detect from database.postgresql.url in config
+ * 5. Default to 'sqlite'
  */
 export function getDatabaseDialect(): DatabaseDialect {
   const envDialect = process.env.AGOR_DB_DIALECT;
@@ -63,7 +66,7 @@ export function getDatabaseDialect(): DatabaseDialect {
     return envDialect;
   }
 
-  // Auto-detect from DATABASE_URL
+  // Auto-detect from DATABASE_URL env var
   const databaseUrl = process.env.DATABASE_URL;
   if (databaseUrl) {
     const detected = detectDialectFromUrl(databaseUrl);
@@ -72,9 +75,20 @@ export function getDatabaseDialect(): DatabaseDialect {
     }
   }
 
-  // Future: Load from config file
-  // const config = loadConfigSync();
-  // return config.database?.dialect || 'sqlite';
+  // Load from config file
+  try {
+    const config = loadConfigSync();
+    if (config.database?.dialect === 'postgresql' || config.database?.dialect === 'sqlite') {
+      return config.database.dialect;
+    }
+    // If no explicit dialect but postgresql config exists with a URL, infer it
+    if (config.database?.postgresql?.url) {
+      const detected = detectDialectFromUrl(config.database.postgresql.url);
+      if (detected) return detected;
+    }
+  } catch {
+    // Config not available (e.g., during bundling or tests) — fall through
+  }
 
   return 'sqlite';
 }
