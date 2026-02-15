@@ -29,7 +29,7 @@ import {
 } from '@ant-design/icons';
 import { Button, Input, Modal, Popover, Slider, Tooltip, Typography, theme } from 'antd';
 import Handlebars from 'handlebars';
-import {
+import React, {
   forwardRef,
   useCallback,
   useEffect,
@@ -143,8 +143,8 @@ interface SessionNodeData {
   zoneColor?: string;
 }
 
-// Custom node component that renders SessionCard
-const SessionNode = ({ data }: { data: SessionNodeData }) => {
+// Custom node component that renders SessionCard (memoized to prevent re-renders on unrelated node changes)
+const SessionNode = React.memo(({ data }: { data: SessionNodeData }) => {
   return (
     <div className="session-node">
       <SessionCard
@@ -163,7 +163,7 @@ const SessionNode = ({ data }: { data: SessionNodeData }) => {
       />
     </div>
   );
-};
+});
 
 interface WorktreeNodeData {
   worktree: Worktree;
@@ -198,8 +198,8 @@ interface WorktreeNodeData {
   client: AgorClient | null;
 }
 
-// Custom node component that renders WorktreeCard
-const WorktreeNode = ({ data }: { data: WorktreeNodeData }) => {
+// Custom node component that renders WorktreeCard (memoized to prevent re-renders on unrelated node changes)
+const WorktreeNode = React.memo(({ data }: { data: WorktreeNodeData }) => {
   return (
     <div className="worktree-node">
       <WorktreeCard
@@ -229,7 +229,7 @@ const WorktreeNode = ({ data }: { data: WorktreeNodeData }) => {
       />
     </div>
   );
-};
+});
 
 // Define nodeTypes outside component to avoid recreation on every render
 const nodeTypes = {
@@ -896,6 +896,36 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       });
     }, [initialNodes, setNodes]);
 
+    // Memoized MiniMap nodeColor callback to prevent MiniMap canvas repaints on every render
+    const miniMapNodeColor = useCallback(
+      (node: Node) => {
+        if (node.type === 'cursor') return token.colorWarning;
+        if (node.type === 'comment') return token.colorText;
+        if (node.type === 'markdown') return `${token.colorText}B3`;
+        if (node.type === 'zone') return `${token.colorText}66`;
+        const session = node.data.session as Session;
+        if (!session) return token.colorPrimaryBorder;
+        switch (session.status) {
+          case 'running':
+            return token.colorPrimary;
+          case 'completed':
+            return token.colorSuccess;
+          case 'failed':
+            return token.colorError;
+          default:
+            return token.colorPrimaryBorder;
+        }
+      },
+      [
+        token.colorWarning,
+        token.colorText,
+        token.colorPrimaryBorder,
+        token.colorPrimary,
+        token.colorSuccess,
+        token.colorError,
+      ]
+    );
+
     // Helper: Partition nodes by type
     const partitionNodesByType = useCallback((nodes: Node[]) => {
       return {
@@ -944,15 +974,19 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       });
     }, [getBoardObjectNodes, setNodes, applyZOrder, partitionNodesByType]);
 
-    // Sync CURSOR nodes separately
+    // Sync CURSOR nodes separately - optimized to avoid re-partitioning all nodes
     useEffect(() => {
       if (isDraggingRef.current) return;
 
       setNodes((currentNodes) => {
-        const { zones, markdown, worktrees, comments } = partitionNodesByType(currentNodes);
-        return applyZOrder(zones, markdown, worktrees, comments, cursorNodes);
+        // Remove old cursor nodes and append new ones (cursors are always last for z-order)
+        const nonCursorNodes = currentNodes.filter((n) => n.type !== 'cursor');
+        if (cursorNodes.length === 0 && nonCursorNodes.length === currentNodes.length) {
+          return currentNodes; // No change needed - avoid creating new array
+        }
+        return [...nonCursorNodes, ...cursorNodes];
       });
-    }, [cursorNodes, setNodes, applyZOrder, partitionNodesByType]);
+    }, [cursorNodes, setNodes]);
 
     // Sync COMMENT nodes separately
     useEffect(() => {
@@ -2072,34 +2106,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               </Tooltip>
             </Controls>
             <MiniMap
-              nodeColor={(node) => {
-                // Handle cursor nodes (show as bright color)
-                if (node.type === 'cursor') return token.colorWarning;
-
-                // Handle comment nodes - 100% alpha for top hierarchy
-                if (node.type === 'comment') return token.colorText;
-
-                // Handle markdown notes - 70% alpha for middle layer
-                if (node.type === 'markdown') return `${token.colorText}B3`;
-
-                // Handle board objects (zones) - 40% alpha for middle-low layer
-                if (node.type === 'zone') return `${token.colorText}66`;
-
-                // Handle session/worktree nodes - primary border color for middle-high layer
-                const session = node.data.session as Session;
-                if (!session) return token.colorPrimaryBorder;
-
-                switch (session.status) {
-                  case 'running':
-                    return token.colorPrimary;
-                  case 'completed':
-                    return token.colorSuccess;
-                  case 'failed':
-                    return token.colorError;
-                  default:
-                    return token.colorPrimaryBorder;
-                }
-              }}
+              nodeColor={miniMapNodeColor}
               pannable
               zoomable
               style={{

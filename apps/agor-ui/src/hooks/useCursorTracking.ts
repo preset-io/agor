@@ -6,7 +6,7 @@
 
 import type { AgorClient } from '@agor/core/api';
 import type { BoardID, CursorMoveEvent } from '@agor/core/types';
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactFlowInstance } from 'reactflow';
 import { PRESENCE_CONFIG } from '../config/presence';
 
@@ -26,6 +26,21 @@ interface UseCursorTrackingOptions {
 export function useCursorTracking(options: UseCursorTrackingOptions) {
   const { client, boardId, reactFlowInstance, enabled = true } = options;
 
+  // Pause cursor tracking when tab is hidden to save CPU
+  const [isTabVisible, setIsTabVisible] = useState(
+    typeof document !== 'undefined' ? !document.hidden : true
+  );
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const handleVisibilityChange = () => setIsTabVisible(!document.hidden);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, []);
+
+  // Track visibility via ref so emitCursorPosition can check without re-creating the callback
+  const isTabVisibleRef = useRef(isTabVisible);
+  isTabVisibleRef.current = isTabVisible;
+
   // Track last emit timestamp for throttling
   const lastEmitRef = useRef<number>(0);
   const throttleTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -35,7 +50,7 @@ export function useCursorTracking(options: UseCursorTrackingOptions) {
   // Emit cursor position to server
   const emitCursorPosition = useCallback(
     (x: number, y: number) => {
-      if (!client?.io || !boardId || !enabled) return;
+      if (!client?.io || !boardId || !enabled || !isTabVisibleRef.current) return;
 
       // Always update latest position
       latestPositionRef.current = { x, y };
@@ -82,7 +97,7 @@ export function useCursorTracking(options: UseCursorTrackingOptions) {
   );
 
   useEffect(() => {
-    if (!enabled || !client?.io || !boardId || !reactFlowInstance) return;
+    if (!enabled || !isTabVisible || !client?.io || !boardId || !reactFlowInstance) return;
 
     // Handle mouse move on React Flow canvas
     const handleMouseMove = (event: MouseEvent) => {
@@ -116,7 +131,7 @@ export function useCursorTracking(options: UseCursorTrackingOptions) {
         throttleTimeoutRef.current = null;
       }
     };
-  }, [client, boardId, reactFlowInstance, enabled, emitCursorPosition]);
+  }, [client, boardId, reactFlowInstance, enabled, isTabVisible, emitCursorPosition]);
 
   return { emitCursorPosition };
 }

@@ -69,7 +69,6 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
 
         // Update cursor map (for rendering cursors) - board-scoped only
         setCursorMap((prev) => {
-          const next = new Map(prev);
           const existing = prev.get(event.userId);
 
           // Only update if this event is newer than the existing one (prevent out-of-order updates)
@@ -77,6 +76,8 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
             return prev; // Reject stale update
           }
 
+          // Only create new Map after confirming we need to update
+          const next = new Map(prev);
           next.set(event.userId, updateData);
           return next;
         });
@@ -93,7 +94,6 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
 
         // Update presence map (for facepile)
         setPresenceMap((prev) => {
-          const next = new Map(prev);
           const existing = prev.get(event.userId);
 
           // Only update if this event is newer than the existing one
@@ -101,6 +101,8 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
             return prev; // Reject stale update
           }
 
+          // Only create new Map after confirming we need to update
+          const next = new Map(prev);
           next.set(event.userId, presenceData);
           return next;
         });
@@ -112,6 +114,7 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
       // For cursor rendering, only handle current board
       if (event.boardId === boardId) {
         setCursorMap((prev) => {
+          if (!prev.has(event.userId)) return prev; // No-op if user not tracked
           const next = new Map(prev);
           next.delete(event.userId);
           return next;
@@ -121,23 +124,23 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
       // For presence (facepile), handle globally or board-scoped
       if (globalPresence || event.boardId === boardId) {
         setPresenceMap((prev) => {
-          const next = new Map(prev);
+          if (!prev.has(event.userId)) return prev; // No-op if user not tracked
 
           // In global presence mode, only delete if the stored boardId matches the leave event
-          // This prevents removing users who switched boards but haven't moved their cursor yet
           if (globalPresence) {
             const existing = prev.get(event.userId);
             if (existing && existing.boardId === event.boardId) {
+              const next = new Map(prev);
               next.delete(event.userId);
-            } else {
-              // User is on a different board now, keep them in the map
-              return prev;
+              return next;
             }
-          } else {
-            // Board-scoped mode: always delete on leave
-            next.delete(event.userId);
+            // User is on a different board now, keep them in the map
+            return prev;
           }
 
+          // Board-scoped mode: always delete on leave
+          const next = new Map(prev);
+          next.delete(event.userId);
           return next;
         });
       }
@@ -148,11 +151,12 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
     client.io.on('cursor-left', handleCursorLeft);
 
     // Cleanup stale cursors every 5 seconds (for cursor rendering)
+    // Uses functional setState to avoid triggering re-renders when nothing changed
     const cursorCleanupInterval = setInterval(() => {
-      const now = Date.now();
-
-      // Check if there are any stale cursors BEFORE calling setCursorMap
       setCursorMap((prev) => {
+        if (prev.size === 0) return prev; // Nothing to clean up
+
+        const now = Date.now();
         let hasChanges = false;
 
         // First pass: check if any cursors are stale
@@ -181,19 +185,30 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
 
     // Cleanup stale presence every 30 seconds (for facepile)
     const presenceCleanupInterval = setInterval(() => {
-      const now = Date.now();
       setPresenceMap((prev) => {
-        const next = new Map(prev);
+        if (prev.size === 0) return prev; // Nothing to clean up
+
+        const now = Date.now();
         let hasChanges = false;
 
-        for (const [userId, cursor] of next.entries()) {
+        // First pass: check if any entries are stale
+        for (const [_userId, cursor] of prev.entries()) {
           if (now - cursor.timestamp > PRESENCE_CONFIG.ACTIVE_USER_TIMEOUT_MS) {
-            next.delete(userId);
             hasChanges = true;
+            break;
           }
         }
 
-        return hasChanges ? next : prev;
+        if (!hasChanges) return prev;
+
+        // Second pass: create new map without stale entries
+        const next = new Map(prev);
+        for (const [userId, cursor] of prev.entries()) {
+          if (now - cursor.timestamp > PRESENCE_CONFIG.ACTIVE_USER_TIMEOUT_MS) {
+            next.delete(userId);
+          }
+        }
+        return next;
       });
     }, 30000);
 

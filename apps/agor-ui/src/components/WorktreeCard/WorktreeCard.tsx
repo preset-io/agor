@@ -33,23 +33,6 @@ import { buildSessionTree, type SessionTreeNode } from './buildSessionTree';
 const _WORKTREE_CARD_MAX_WIDTH = 600;
 const NOTES_MAX_LENGTH = 200; // Character limit for truncated notes
 
-// Inject CSS animation for pulsing glow effect
-if (typeof document !== 'undefined' && !document.getElementById('worktree-card-animations')) {
-  const style = document.createElement('style');
-  style.id = 'worktree-card-animations';
-  style.textContent = `
-    @keyframes worktree-card-pulse {
-      0%, 100% {
-        filter: brightness(1);
-      }
-      50% {
-        filter: brightness(1.3);
-      }
-    }
-  `;
-  document.head.appendChild(style);
-}
-
 interface WorktreeCardProps {
   worktree: Worktree;
   repo: Repo;
@@ -637,8 +620,7 @@ const WorktreeCardComponent = ({
         transition: 'box-shadow 1s ease-in-out, border 1s ease-in-out',
         ...(needsAttention && !inPopover
           ? {
-              // Intense multi-layer glow for dark mode visibility
-              animation: 'worktree-card-pulse 2s ease-in-out infinite',
+              // Static multi-layer glow (no animation — avoids continuous GPU work)
               boxShadow: attentionGlowShadow,
               border: 'none',
             }
