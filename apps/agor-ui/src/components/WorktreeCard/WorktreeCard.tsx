@@ -1,5 +1,6 @@
 import type { AgorClient } from '@agor/core/api';
 import type { Repo, Session, SpawnConfig, User, Worktree } from '@agor/core/types';
+import { getPersistedAgentConfig, isPersistedAgent } from '@agor/core/types';
 import {
   BranchesOutlined,
   ClockCircleOutlined,
@@ -11,6 +12,7 @@ import {
   MessageOutlined,
   PlusOutlined,
   PushpinFilled,
+  RobotOutlined,
   SubnodeOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
@@ -226,6 +228,10 @@ const WorktreeCardComponent = ({
   // Check if worktree is still being created on filesystem
   const isCreating = worktree.filesystem_status === 'creating';
   const isFailed = worktree.filesystem_status === 'failed';
+
+  // Check if this worktree is a persisted agent
+  const agentConfig = useMemo(() => getPersistedAgentConfig(worktree), [worktree]);
+  const isAgent = isPersistedAgent(worktree);
 
   // Check if worktree needs attention (newly created OR has ready sessions)
   // Don't highlight if a session from this worktree is currently open in the drawer
@@ -626,7 +632,9 @@ const WorktreeCardComponent = ({
             }
           : isPinned && zoneColor
             ? { borderColor: zoneColor, borderWidth: 1 }
-            : {}),
+            : isAgent
+              ? { borderColor: token.colorInfo, borderWidth: 1 }
+              : {}),
       }}
       styles={{
         body: { padding: 16 },
@@ -656,6 +664,13 @@ const WorktreeCardComponent = ({
             >
               {isCreating || hasRunningSession ? (
                 <Spin size="large" />
+              ) : isAgent ? (
+                <RobotOutlined
+                  style={{
+                    fontSize: 32,
+                    color: isFailed ? token.colorError : token.colorInfo,
+                  }}
+                />
               ) : (
                 <BranchesOutlined
                   style={{
@@ -668,10 +683,10 @@ const WorktreeCardComponent = ({
           )}
           <div style={{ display: 'flex', flexDirection: 'column' }}>
             <Typography.Text strong className="nodrag">
-              {worktree.name}
+              {agentConfig?.displayName ?? worktree.name}
             </Typography.Text>
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {repo.slug}
+              {agentConfig ? `${repo.slug} / ${worktree.name}` : repo.slug}
             </Typography.Text>
           </div>
         </Space>

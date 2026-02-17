@@ -92,7 +92,7 @@ export interface EventStreamPreferences {
  */
 export interface OnboardingState {
   /** Which path the user took */
-  path?: 'command-center' | 'own-repo';
+  path?: 'persisted-agent' | 'own-repo';
   /** The worktree ID created during onboarding */
   worktreeId?: string;
   /** The board ID created for this user */

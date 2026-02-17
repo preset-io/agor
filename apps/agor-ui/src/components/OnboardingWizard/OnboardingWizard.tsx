@@ -2,7 +2,7 @@
  * OnboardingWizard - Multi-step wizard for new user onboarding
  *
  * Two paths:
- * - Command Center: Clone agor-openclaw repo -> create board -> create worktree -> API keys -> launch
+ * - Persisted Agent: Clone agor-openclaw repo -> create board -> create worktree -> API keys -> launch
  * - Own Repo: Add user repo -> create board -> create worktree -> API keys -> launch
  *
  * Replaces GettingStartedPopover entirely.
@@ -11,6 +11,7 @@
 import type {
   AgenticToolName,
   Board,
+  PersistedAgentConfig,
   Repo,
   UpdateUserInput,
   User,
@@ -55,7 +56,7 @@ const CLONE_TIMEOUT_MS = 120_000;
 
 // ─── Types ──────────────────────────────────────────────
 
-type WizardPath = 'command-center' | 'own-repo';
+type WizardPath = 'persisted-agent' | 'own-repo';
 
 type WizardStep = 'welcome' | 'add-repo' | 'clone' | 'board' | 'worktree' | 'api-keys' | 'launch';
 
@@ -94,10 +95,11 @@ export interface OnboardingWizardProps {
   ) => Promise<Worktree | null>;
   onCreateSession: (config: NewSessionConfig, boardId: string) => Promise<string | null>;
   onUpdateUser: (userId: string, updates: UpdateUserInput) => void;
+  onUpdateWorktree?: (worktreeId: string, updates: Partial<Worktree>) => void;
 
   // Config from health endpoint
-  commandCenterPending?: boolean;
-  openclawRepoUrl?: string;
+  persistedAgentPending?: boolean;
+  frameworkRepoUrl?: string;
   systemCredentials?: {
     ANTHROPIC_API_KEY?: boolean;
     OPENAI_API_KEY?: boolean;
@@ -122,7 +124,7 @@ function getUsernameSlug(user?: User | null): string {
 }
 
 function getStepsForPath(path: WizardPath | null): WizardStep[] {
-  if (path === 'command-center') {
+  if (path === 'persisted-agent') {
     return ['welcome', 'clone', 'board', 'worktree', 'api-keys', 'launch'];
   }
   if (path === 'own-repo') {
@@ -192,8 +194,9 @@ export function OnboardingWizard({
   onCreateWorktree,
   onCreateSession,
   onUpdateUser,
-  commandCenterPending,
-  openclawRepoUrl,
+  onUpdateWorktree,
+  persistedAgentPending,
+  frameworkRepoUrl,
   systemCredentials,
 }: OnboardingWizardProps) {
   const { token } = useToken();
@@ -226,7 +229,7 @@ export function OnboardingWizard({
   const steps = useMemo(() => getStepsForPath(path), [path]);
   const stepIndex = getStepIndex(steps, currentStep);
   const usernameSlug = getUsernameSlug(user);
-  const effectiveOpenclawUrl = openclawRepoUrl || OPENCLAW_REPO_URL;
+  const effectiveOpenclawUrl = frameworkRepoUrl || OPENCLAW_REPO_URL;
 
   const hasAnthropicKey = !!(
     user?.api_keys?.ANTHROPIC_API_KEY ||
@@ -268,9 +271,9 @@ export function OnboardingWizard({
     const mainBoardId = user.preferences?.mainBoardId;
 
     if (!onboarding?.path) {
-      // No prior state — check if CLI set the command center flag
-      if (commandCenterPending && !path) {
-        setPath('command-center');
+      // No prior state — check if CLI set the persisted agent flag
+      if (persistedAgentPending && !path) {
+        setPath('persisted-agent');
       }
       return;
     }
@@ -297,7 +300,7 @@ export function OnboardingWizard({
     } else if (mainBoardId && boardById.has(mainBoardId)) {
       // Board exists — go to worktree creation
       setCurrentStep('worktree');
-    } else if (onboarding.path === 'command-center') {
+    } else if (onboarding.path === 'persisted-agent') {
       // Check if the openclaw repo already exists
       let foundRepo = false;
       for (const [id, repo] of repoById) {
@@ -311,7 +314,7 @@ export function OnboardingWizard({
     } else {
       setCurrentStep('add-repo');
     }
-  }, [open, user, commandCenterPending, path, repoById, boardById, worktreeById]);
+  }, [open, user, persistedAgentPending, path, repoById, boardById, worktreeById]);
 
   // Initialize branch name when user is available
   useEffect(() => {
@@ -331,7 +334,7 @@ export function OnboardingWizard({
   useEffect(() => {
     if (currentStep !== 'clone' || !loading) return;
 
-    if (path === 'command-center') {
+    if (path === 'persisted-agent') {
       // Look for openclaw repo
       for (const [id, repo] of repoById) {
         if (repo.slug === OPENCLAW_REPO_SLUG || repo.remote_url?.includes('agor-openclaw')) {
@@ -432,7 +435,7 @@ export function OnboardingWizard({
       // Persist chosen path immediately
       saveOnboardingProgress({ path: selectedPath });
 
-      if (selectedPath === 'command-center') {
+      if (selectedPath === 'persisted-agent') {
         // Check if openclaw repo already exists
         for (const [id, repo] of repoById) {
           if (repo.slug === OPENCLAW_REPO_SLUG || repo.remote_url?.includes('agor-openclaw')) {
@@ -453,7 +456,7 @@ export function OnboardingWizard({
     setError(null);
     setLoading(true);
 
-    if (path === 'command-center') {
+    if (path === 'persisted-agent') {
       onCreateRepo({
         url: effectiveOpenclawUrl,
         slug: OPENCLAW_REPO_SLUG,
@@ -530,7 +533,7 @@ export function OnboardingWizard({
     setError(null);
     setLoading(true);
 
-    const wtName = path === 'command-center' ? 'command-center' : worktreeName;
+    const wtName = path === 'persisted-agent' ? 'persisted-agent' : worktreeName;
     const ref = sanitizeBranchName(branchName);
 
     try {
@@ -547,6 +550,20 @@ export function OnboardingWizard({
         setCreatedWorktreeId(worktree.worktree_id);
         // Persist worktree ID so restarts don't re-create it
         saveOnboardingProgress({ worktreeId: worktree.worktree_id });
+
+        // Tag persisted agent worktrees
+        if (path === 'persisted-agent' && onUpdateWorktree) {
+          const agentConfig: PersistedAgentConfig = {
+            kind: 'persisted-agent',
+            displayName: 'Persisted Agent',
+            frameworkRepo: OPENCLAW_REPO_SLUG,
+            createdViaOnboarding: true,
+          };
+          onUpdateWorktree(worktree.worktree_id, {
+            custom_context: { ...worktree.custom_context, agent: agentConfig },
+          });
+        }
+
         setLoading(false);
         setCurrentStep('api-keys');
       } else {
@@ -564,6 +581,7 @@ export function OnboardingWizard({
     worktreeName,
     branchName,
     onCreateWorktree,
+    onUpdateWorktree,
     saveOnboardingProgress,
   ]);
 
@@ -640,7 +658,7 @@ export function OnboardingWizard({
       worktreeId: '',
       sessionId: '',
       boardId: '',
-      path: 'command-center',
+      path: 'persisted-agent',
     });
   }, [user, onUpdateUser, onComplete]);
 
@@ -673,10 +691,10 @@ export function OnboardingWizard({
           size="large"
           block
           icon={<ThunderboltOutlined />}
-          onClick={() => handleSelectPath('command-center')}
+          onClick={() => handleSelectPath('persisted-agent')}
           style={{ height: 56, fontSize: 16 }}
         >
-          Set up your command center
+          Set up your persisted agent
         </Button>
         <Text type="secondary" style={{ display: 'block', fontSize: 12, marginTop: -8 }}>
           Clone the agor-openclaw workspace with pre-configured tasks and templates
@@ -780,7 +798,7 @@ export function OnboardingWizard({
         <>
           <Spin size="large" />
           <Paragraph style={{ marginTop: 16 }}>
-            {path === 'command-center'
+            {path === 'persisted-agent'
               ? 'Cloning agor-openclaw repository...'
               : 'Setting up your repository...'}
           </Paragraph>
@@ -804,7 +822,7 @@ export function OnboardingWizard({
             status="success"
             title="Repository Ready"
             subTitle={
-              path === 'command-center'
+              path === 'persisted-agent'
                 ? 'agor-openclaw has been cloned successfully.'
                 : 'Your repository is ready.'
             }
@@ -867,8 +885,8 @@ export function OnboardingWizard({
       <Title level={4}>Create Your Worktree</Title>
       <Paragraph type="secondary">
         A worktree is an isolated copy of your repo with its own branch.
-        {path === 'command-center'
-          ? ' We\'ll set up a "command-center" worktree for you.'
+        {path === 'persisted-agent'
+          ? " We'll set up a worktree for your persisted agent."
           : ' Choose a name and branch for your worktree.'}
       </Paragraph>
 
@@ -1018,8 +1036,8 @@ export function OnboardingWizard({
         <>
           <Title level={4}>Ready to Launch</Title>
           <Paragraph type="secondary">
-            {path === 'command-center'
-              ? "Your command center is set up. Let's create your first agent session!"
+            {path === 'persisted-agent'
+              ? "Your persisted agent is set up. Let's create your first session!"
               : "Your worktree is ready. Let's launch an agent session!"}
           </Paragraph>
 
@@ -1047,7 +1065,7 @@ export function OnboardingWizard({
           <Result
             status="success"
             title={
-              path === 'command-center'
+              path === 'persisted-agent'
                 ? 'Say hello to your agent!'
                 : 'Tell your agent what to work on!'
             }
@@ -1126,10 +1144,10 @@ export function OnboardingWizard({
 
   // ─── Auto-trigger steps that should auto-start ────
   useEffect(() => {
-    // Auto-start clone when entering clone step for command center
+    // Auto-start clone when entering clone step for persisted agent
     if (
       currentStep === 'clone' &&
-      path === 'command-center' &&
+      path === 'persisted-agent' &&
       !loading &&
       !error &&
       !createdRepoId

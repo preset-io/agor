@@ -202,9 +202,10 @@ export interface Worktree {
   // ===== Custom Context =====
 
   /**
-   * Custom context for Handlebars templates
+   * Custom context for Handlebars templates and agent metadata
    *
    * User-defined variables for zone triggers, reports, etc.
+   * Also stores persisted agent config under the 'agent' key.
    */
   custom_context?: Record<string, unknown>;
 
@@ -576,4 +577,47 @@ export interface RepoEnvironmentConfig {
    * - "kubectl logs deployment/{{worktree.name}} --tail=100"
    */
   logs_command?: string;
+}
+
+// ===== Persisted Agents =====
+
+/**
+ * Configuration for a persisted agent, stored in worktree.custom_context.agent
+ *
+ * Marks a worktree as a long-lived "persisted agent" that manages
+ * other worktrees and agents, based on a framework repo.
+ */
+export interface PersistedAgentConfig {
+  /** Discriminator for type narrowing */
+  kind: 'persisted-agent';
+  /** Human-friendly display name (e.g., "My Agent") */
+  displayName: string;
+  /** Template repo slug this agent was created from */
+  frameworkRepo?: string;
+  /** Framework version at creation time, for upgrade detection */
+  frameworkVersion?: string;
+  /** Whether this was created via the onboarding wizard */
+  createdViaOnboarding?: boolean;
+}
+
+/**
+ * Type guard: checks if a worktree is a persisted agent
+ */
+export function isPersistedAgent(worktree: { custom_context?: Record<string, unknown> }): boolean {
+  const agent = worktree.custom_context?.agent;
+  return (
+    agent != null &&
+    typeof agent === 'object' &&
+    (agent as Record<string, unknown>).kind === 'persisted-agent'
+  );
+}
+
+/**
+ * Extract the persisted agent config from a worktree, if present.
+ */
+export function getPersistedAgentConfig(worktree: {
+  custom_context?: Record<string, unknown>;
+}): PersistedAgentConfig | null {
+  if (!isPersistedAgent(worktree)) return null;
+  return worktree.custom_context!.agent as PersistedAgentConfig;
 }

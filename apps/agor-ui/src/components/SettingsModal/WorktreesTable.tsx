@@ -1,5 +1,6 @@
 import { renderTemplate } from '@agor/core/templates/handlebars-helpers';
 import type { Board, Repo, Session, Worktree } from '@agor/core/types';
+import { isPersistedAgent } from '@agor/core/types';
 import {
   BranchesOutlined,
   CheckCircleOutlined,
@@ -15,6 +16,7 @@ import {
   PlayCircleOutlined,
   PlusOutlined,
   PoweroffOutlined,
+  RobotOutlined,
   WarningOutlined,
 } from '@ant-design/icons';
 import {
@@ -86,7 +88,9 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
   const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null);
   const [isFormValid, setIsFormValid] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  const [archiveFilter, setArchiveFilter] = useState<'all' | 'active' | 'archived'>('active');
+  const [archiveFilter, setArchiveFilter] = useState<'all' | 'active' | 'archived' | 'agents'>(
+    'active'
+  );
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
   const [selectedWorktree, setSelectedWorktree] = useState<Worktree | null>(null);
   const [hoveredArchiveButton, setHoveredArchiveButton] = useState<string | null>(null);
@@ -268,9 +272,13 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
       title: 'Name',
       dataIndex: 'name',
       key: 'name',
-      render: (name: string, _record: Worktree) => (
+      render: (name: string, record: Worktree) => (
         <Space>
-          <BranchesOutlined />
+          {isPersistedAgent(record) ? (
+            <RobotOutlined style={{ color: token.colorInfo }} />
+          ) : (
+            <BranchesOutlined />
+          )}
           <Typography.Text strong>{name}</Typography.Text>
         </Space>
       ),
@@ -463,12 +471,14 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
       (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
     );
 
-    // Filter by archive status
+    // Filter by archive status / type
     let filtered = sorted;
     if (archiveFilter === 'active') {
       filtered = sorted.filter((w) => !w.archived);
     } else if (archiveFilter === 'archived') {
       filtered = sorted.filter((w) => w.archived);
+    } else if (archiveFilter === 'agents') {
+      filtered = sorted.filter((w) => !w.archived && isPersistedAgent(w));
     }
 
     // Filter by search term
@@ -521,6 +531,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
               style={{ width: 120 }}
               options={[
                 { value: 'active', label: 'Active' },
+                { value: 'agents', label: 'Agents' },
                 { value: 'all', label: 'All' },
                 { value: 'archived', label: 'Archived' },
               ]}

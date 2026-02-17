@@ -320,10 +320,10 @@ export interface AgorCredentials {
  * Onboarding settings (stored by CLI init, consumed by UI wizard)
  */
 export interface AgorOnboardingSettings {
-  /** Whether command center setup was requested during init */
-  commandCenterPending?: boolean;
-  /** Clone URL for the openclaw repo */
-  openclawRepoUrl?: string;
+  /** Whether persisted agent setup was requested during init */
+  persistedAgentPending?: boolean;
+  /** Clone URL for the framework repo */
+  frameworkRepoUrl?: string;
 }
 
 /**

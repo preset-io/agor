@@ -390,9 +390,9 @@ export default class Init extends Command {
       }
     }
 
-    // Prompt for command center setup (unless --force or skipped prompts)
+    // Prompt for persisted agent setup (unless --force or skipped prompts)
     if (!skipPrompts) {
-      await this.promptCommandCenter();
+      await this.promptPersistedAgent();
     }
 
     // Success summary
@@ -545,18 +545,18 @@ export default class Init extends Command {
   }
 
   /**
-   * Prompt user for command center setup
+   * Prompt user for persisted agent setup
    *
    * Stores intent in config.yaml for the UI wizard to pick up.
    * The openclaw repo is public, so HTTPS always works.
    */
-  private async promptCommandCenter(): Promise<void> {
+  private async promptPersistedAgent(): Promise<void> {
     this.log('');
-    this.log(chalk.bold('🎯 Command Center'));
+    this.log(chalk.bold('🤖 Persisted Agent'));
     this.log('');
     this.log(
       chalk.gray(
-        'The command center is an AI-powered workspace where you can manage your Agor instance.'
+        'A persisted agent is a long-lived AI-powered workspace for managing your Agor instance.'
       )
     );
     this.log(
@@ -564,20 +564,20 @@ export default class Init extends Command {
     );
     this.log('');
 
-    const { setupCommandCenter } = await inquirer.prompt([
+    const { setupPersistedAgent } = await inquirer.prompt([
       {
         type: 'confirm',
-        name: 'setupCommandCenter',
-        message: 'Set up your command center?',
+        name: 'setupPersistedAgent',
+        message: 'Set up your persisted agent?',
         default: true,
       },
     ]);
 
-    if (setupCommandCenter) {
-      const openclawRepoUrl = 'https://github.com/mistercrunch/agor-openclaw.git';
-      await setConfigValue('onboarding.commandCenterPending', true);
-      await setConfigValue('onboarding.openclawRepoUrl', openclawRepoUrl);
-      this.log(`${chalk.green('   ✓')} Command center setup queued for the UI wizard`);
+    if (setupPersistedAgent) {
+      const frameworkRepoUrl = 'https://github.com/mistercrunch/agor-openclaw.git';
+      await setConfigValue('onboarding.persistedAgentPending', true);
+      await setConfigValue('onboarding.frameworkRepoUrl', frameworkRepoUrl);
+      this.log(`${chalk.green('   ✓')} Persisted agent setup queued for the UI wizard`);
 
       // Check for ANTHROPIC_API_KEY
       if (!process.env.ANTHROPIC_API_KEY) {

@@ -334,7 +334,7 @@ function AppContent() {
     worktreeId: string;
     sessionId: string;
     boardId: string;
-    path: 'command-center' | 'own-repo';
+    path: 'persisted-agent' | 'own-repo';
   }) => {
     setOnboardingWizardOpen(false);
 
@@ -354,10 +354,12 @@ function AppContent() {
       },
     });
 
-    // Clear the command center pending flag if applicable
-    if (result.path === 'command-center' && client) {
+    // Clear the persisted agent pending flag if applicable
+    if (result.path === 'persisted-agent' && client) {
       try {
-        await client.service('config').patch(null, { onboarding: { commandCenterPending: false } });
+        await client
+          .service('config')
+          .patch(null, { onboarding: { persistedAgentPending: false } });
       } catch {
         // Non-critical — ignore
       }
@@ -1263,8 +1265,9 @@ function AppContent() {
         onCreateWorktree={handleCreateWorktree}
         onCreateSession={handleCreateSession}
         onUpdateUser={handleUpdateUser}
-        commandCenterPending={onboardingConfig?.commandCenterPending}
-        openclawRepoUrl={onboardingConfig?.openclawRepoUrl}
+        onUpdateWorktree={handleUpdateWorktree}
+        persistedAgentPending={onboardingConfig?.persistedAgentPending}
+        frameworkRepoUrl={onboardingConfig?.frameworkRepoUrl}
         systemCredentials={onboardingConfig?.systemCredentials}
       />
 

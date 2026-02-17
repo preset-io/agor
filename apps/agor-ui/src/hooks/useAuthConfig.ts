@@ -25,8 +25,8 @@ interface SystemCredentials {
 }
 
 interface OnboardingConfig {
-  commandCenterPending?: boolean;
-  openclawRepoUrl?: string;
+  persistedAgentPending?: boolean;
+  frameworkRepoUrl?: string;
   systemCredentials?: SystemCredentials;
 }
 

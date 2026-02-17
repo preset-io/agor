@@ -5827,8 +5827,8 @@ async function main() {
           description: config.daemon?.instanceDescription,
         },
         onboarding: {
-          commandCenterPending: config.onboarding?.commandCenterPending ?? false,
-          openclawRepoUrl: config.onboarding?.openclawRepoUrl,
+          persistedAgentPending: config.onboarding?.persistedAgentPending ?? false,
+          frameworkRepoUrl: config.onboarding?.frameworkRepoUrl,
           systemCredentials: {
             ANTHROPIC_API_KEY: !!(
               config.credentials?.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY

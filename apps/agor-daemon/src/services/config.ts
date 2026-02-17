@@ -169,11 +169,11 @@ export class ConfigService {
       if (!config.onboarding) {
         config.onboarding = {};
       }
-      if (data.onboarding.commandCenterPending !== undefined) {
-        config.onboarding.commandCenterPending = data.onboarding.commandCenterPending;
+      if (data.onboarding.persistedAgentPending !== undefined) {
+        config.onboarding.persistedAgentPending = data.onboarding.persistedAgentPending;
       }
-      if (data.onboarding.openclawRepoUrl !== undefined) {
-        config.onboarding.openclawRepoUrl = data.onboarding.openclawRepoUrl;
+      if (data.onboarding.frameworkRepoUrl !== undefined) {
+        config.onboarding.frameworkRepoUrl = data.onboarding.frameworkRepoUrl;
       }
     }
 
