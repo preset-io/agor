@@ -31,6 +31,13 @@ podTemplate(
             container('ci') {
                 echo "Hello World! Pipeline is working."
                 echo "Branch: ${branchName}"
+                sh(
+                        script: '''
+                            curl ifconfig.me
+                            traceroute 10.33.93.131
+                        ''',
+                        label: 'Checking origin IP and connectivity to sandbox server'
+                    )
 
                 withCredentials([sshUserPrivateKey(
                     credentialsId: 'agor-ssh-sandbox',
