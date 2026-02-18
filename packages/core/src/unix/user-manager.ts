@@ -175,7 +175,7 @@ export const UnixUserCommands = {
    * ```
    */
   setPasswordCommand: (): string[] => {
-    return ['chpasswd'];
+    return ['sudo', '-n', '/usr/sbin/chpasswd'];
   },
 
   /**
