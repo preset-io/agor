@@ -8,13 +8,20 @@
 
 import { generateId } from '@agor/core';
 import type { Message, MessageID, SessionID, TaskID } from '@agor/core/types';
-import { MessageRole, PermissionScope, PermissionStatus, TaskStatus } from '@agor/core/types';
+import {
+  InputRequestStatus,
+  MessageRole,
+  PermissionScope,
+  PermissionStatus,
+  TaskStatus,
+} from '@agor/core/types';
 import type {
   MCPServerRepository,
   MessagesRepository,
   SessionMCPServerRepository,
   SessionRepository,
 } from '../../../db/feathers-repositories.js';
+import type { InputRequestService } from '../../../input-requests/input-request-service.js';
 import type { PermissionService } from '../../../permissions/permission-service.js';
 import type { MessagesService, SessionsService, TasksService } from '../claude-tool.js';
 
@@ -30,6 +37,7 @@ export function createCanUseToolCallback(
   taskId: TaskID,
   deps: {
     permissionService: PermissionService;
+    inputRequestService?: InputRequestService;
     tasksService: TasksService;
     sessionsRepo: SessionRepository;
     messagesRepo: MessagesRepository;
@@ -127,6 +135,158 @@ export function createCanUseToolCallback(
           `⚠️ [canUseTool] MCP tool "${toolName}" has invalid format, requiring manual approval`
         );
         // Fall through to normal permission flow for malformed tool names
+      }
+    }
+
+    // Intercept AskUserQuestion tool — route through InputRequestService
+    // instead of the normal permission flow
+    if (toolName === 'AskUserQuestion' && deps.inputRequestService) {
+      // Track lock release for AskUserQuestion flow
+      let releaseInputLock: (() => void) | undefined;
+
+      try {
+        // Wait for any pending permission/input check to finish
+        const existingLock = deps.permissionLocks.get(sessionId);
+        if (existingLock) {
+          await existingLock;
+        }
+
+        // Create lock for this input request
+        const newLock = new Promise<void>((resolve) => {
+          releaseInputLock = resolve;
+        });
+        deps.permissionLocks.set(sessionId, newLock);
+
+        const requestId = generateId();
+        const timestamp = new Date().toISOString();
+
+        // Extract questions from toolInput (matches AskUserQuestionInput schema)
+        const questions =
+          (toolInput.questions as Array<{
+            question: string;
+            header: string;
+            options: Array<{
+              label: string;
+              description: string;
+              markdown?: string;
+            }>;
+            multiSelect: boolean;
+          }>) || [];
+
+        // Get current message index
+        const existingMessages = await deps.messagesRepo.findBySessionId(sessionId);
+        const nextIndex = existingMessages.length;
+
+        // Create input_request message
+        const inputMessage: Message = {
+          message_id: generateId() as MessageID,
+          session_id: sessionId,
+          task_id: taskId,
+          type: 'input_request',
+          role: MessageRole.SYSTEM,
+          index: nextIndex,
+          timestamp,
+          content_preview: `Question: ${questions[0]?.question || 'User input requested'}`,
+          content: {
+            request_id: requestId,
+            task_id: taskId,
+            questions,
+            status: InputRequestStatus.PENDING,
+          },
+        };
+
+        if (deps.messagesService) {
+          await deps.messagesService.create(inputMessage);
+        }
+
+        // Update task/session status to awaiting_input
+        await deps.tasksService.patch(taskId, {
+          status: TaskStatus.AWAITING_INPUT,
+        });
+        if (deps.sessionsService) {
+          await deps.sessionsService.patch(sessionId, {
+            status: 'awaiting_input' as const,
+          });
+        }
+
+        // Emit WebSocket event for UI
+        deps.inputRequestService.emitRequest(sessionId, {
+          requestId,
+          taskId,
+          questions,
+          timestamp,
+        });
+
+        // Wait for UI response (Promise pauses SDK execution)
+        const response = await deps.inputRequestService.waitForResponse(
+          requestId,
+          taskId,
+          sessionId,
+          options.signal
+        );
+
+        // Determine if this was a timeout (empty answers from system)
+        const isTimeout =
+          response.respondedBy === 'system' && Object.keys(response.answers).length === 0;
+
+        // Update the input_request message with response
+        if (deps.messagesService) {
+          const baseContent =
+            typeof inputMessage.content === 'object' && !Array.isArray(inputMessage.content)
+              ? inputMessage.content
+              : {};
+
+          // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service has patch method but type definition is incomplete
+          await (deps.messagesService as any).patch(inputMessage.message_id, {
+            content: {
+              ...(baseContent as Record<string, unknown>),
+              status: isTimeout ? InputRequestStatus.TIMED_OUT : InputRequestStatus.ANSWERED,
+              answers: response.answers,
+              annotations: response.annotations,
+              answered_by: response.respondedBy,
+              answered_at: new Date().toISOString(),
+            },
+          });
+        }
+
+        // Restore task/session status to running
+        await deps.tasksService.patch(taskId, {
+          status: TaskStatus.RUNNING,
+        });
+        if (deps.sessionsService) {
+          await deps.sessionsService.patch(sessionId, {
+            status: 'running' as const,
+          });
+        }
+
+        if (isTimeout) {
+          // On timeout, deny the tool use (Claude will see the denial)
+          return {
+            behavior: 'deny' as const,
+            message: 'User input request timed out',
+          };
+        }
+
+        // Return answers via updatedInput so Claude receives them
+        return {
+          behavior: 'allow' as const,
+          updatedInput: {
+            ...toolInput,
+            answers: response.answers,
+            annotations: response.annotations,
+          },
+        };
+      } catch (error) {
+        console.error('[canUseTool] Error in AskUserQuestion flow:', error);
+        return {
+          behavior: 'deny' as const,
+          message: error instanceof Error ? error.message : 'Unknown error in input request flow',
+        };
+      } finally {
+        if (releaseInputLock) {
+          releaseInputLock();
+          deps.permissionLocks.delete(sessionId);
+        }
       }
     }
 

@@ -21,6 +21,7 @@ import type {
   SessionRepository,
   WorktreeRepository,
 } from '../../db/feathers-repositories.js';
+import type { InputRequestService } from '../../input-requests/input-request-service.js';
 import type { PermissionService } from '../../permissions/permission-service.js';
 import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response.js';
 // Removed import of calculateModelContextWindowUsage - inlined instead
@@ -119,7 +120,8 @@ export class ClaudeTool implements ITool {
     mcpEnabled?: boolean,
     _useNativeAuth?: boolean, // Claude supports `claude login` OAuth, but no special handling needed in tool
     // biome-ignore lint/suspicious/noExplicitAny: Feathers service type
-    mcpOAuthNotifyService?: any // Service for notifying UI about OAuth requirements
+    mcpOAuthNotifyService?: any, // Service for notifying UI about OAuth requirements
+    inputRequestService?: InputRequestService
   ) {
     if (messagesRepo && sessionsRepo) {
       this.promptService = new ClaudePromptService(
@@ -135,7 +137,8 @@ export class ClaudeTool implements ITool {
         reposRepo,
         messagesService,
         mcpEnabled,
-        mcpOAuthNotifyService
+        mcpOAuthNotifyService,
+        inputRequestService
       );
     }
   }

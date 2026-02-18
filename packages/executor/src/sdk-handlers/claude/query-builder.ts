@@ -24,6 +24,7 @@ import type {
   SessionRepository,
   WorktreeRepository,
 } from '../../db/feathers-repositories.js';
+import type { InputRequestService } from '../../input-requests/input-request-service.js';
 import type { PermissionService } from '../../permissions/permission-service.js';
 import type { MCPServersConfig, SessionID, TaskID, UserID } from '../../types.js';
 import { getMcpServersForSession } from '../base/mcp-scoping.js';
@@ -104,6 +105,7 @@ export interface QuerySetupDeps {
   sessionMCPRepo?: SessionMCPServerRepository;
   mcpServerRepo?: MCPServerRepository;
   permissionService?: PermissionService;
+  inputRequestService?: InputRequestService;
   tasksService?: TasksService;
   sessionsService?: SessionsService;
   messagesService?: MessagesService;
@@ -333,6 +335,7 @@ export async function setupQuery(
   ) {
     queryOptions.canUseTool = createCanUseToolCallback(sessionId, taskId, {
       permissionService: deps.permissionService,
+      inputRequestService: deps.inputRequestService,
       tasksService: deps.tasksService!,
       sessionsRepo: deps.sessionsRepo,
       messagesRepo: deps.messagesRepo!,
