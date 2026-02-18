@@ -237,7 +237,7 @@ describe('PermissionService.waitForDecision', () => {
     expect(result.allow).toBe(false);
   });
 
-  it('should timeout after 60 seconds with deny decision', async () => {
+  it('should timeout after default 120 seconds with deny decision', async () => {
     const requestId = 'req-timeout';
     const taskId = 'task-timeout' as TaskID;
     const signal = new AbortController().signal;
@@ -249,14 +249,60 @@ describe('PermissionService.waitForDecision', () => {
       signal
     );
 
-    // Fast-forward 60 seconds
-    vi.advanceTimersByTime(60000);
+    // Fast-forward 120 seconds (new default)
+    vi.advanceTimersByTime(120000);
 
     const result = await waitPromise;
     expect(result.allow).toBe(false);
     expect(result.reason).toBe('Timeout');
     expect(result.decidedBy).toBe('system');
     expect(result.scope).toBe(PermissionScope.ONCE);
+  });
+
+  it('should emit permission:timeout event on timeout', async () => {
+    const requestId = 'req-timeout-event';
+    const taskId = 'task-timeout-event' as TaskID;
+    const sessionId = 'session-timeout-event' as SessionID;
+    const signal = new AbortController().signal;
+
+    const waitPromise = service.waitForDecision(requestId, taskId, sessionId, signal);
+
+    vi.advanceTimersByTime(120000);
+
+    await waitPromise;
+
+    // Verify permission:timeout event was emitted
+    expect(emitEvent).toHaveBeenCalledWith('permission:timeout', {
+      requestId,
+      sessionId,
+      taskId,
+    });
+  });
+
+  it('should use custom timeout value from constructor', async () => {
+    const customEmit = vi.fn();
+    const customService = new PermissionService(customEmit as any, 5000);
+    const requestId = 'req-custom-timeout';
+    const taskId = 'task-custom-timeout' as TaskID;
+    const signal = new AbortController().signal;
+
+    const waitPromise = customService.waitForDecision(
+      requestId,
+      taskId,
+      'session-test' as SessionID,
+      signal
+    );
+
+    // Should not timeout at 4 seconds
+    vi.advanceTimersByTime(4000);
+
+    // Resolve a check - the promise should still be pending
+    // Advance to 5 seconds to trigger timeout
+    vi.advanceTimersByTime(1000);
+
+    const result = await waitPromise;
+    expect(result.allow).toBe(false);
+    expect(result.reason).toBe('Timeout');
   });
 
   it('should handle abort signal', async () => {
@@ -297,7 +343,7 @@ describe('PermissionService.waitForDecision', () => {
     await waitPromise;
 
     // Verify timeout was cleared (advancing time should not trigger timeout)
-    vi.advanceTimersByTime(60000);
+    vi.advanceTimersByTime(120000);
 
     // No additional resolution should occur
     const decision = createDecision({ requestId, taskId });
@@ -412,7 +458,7 @@ describe('PermissionService.waitForDecision', () => {
       signal
     );
 
-    vi.advanceTimersByTime(60000);
+    vi.advanceTimersByTime(120000);
 
     const result = await waitPromise;
     expect(result.taskId).toBe(taskId);
@@ -490,7 +536,7 @@ describe('PermissionService.resolvePermission', () => {
     await waitPromise;
 
     // Timeout should not fire
-    vi.advanceTimersByTime(60000);
+    vi.advanceTimersByTime(120000);
     // Test passes if no additional resolution occurs
   });
 
@@ -711,7 +757,7 @@ describe('PermissionService edge cases', () => {
 
     // Since signal is already aborted, event listener won't fire
     // This will hit the timeout instead
-    vi.advanceTimersByTime(60000);
+    vi.advanceTimersByTime(120000);
 
     const result = await waitPromise;
     expect(result.allow).toBe(false);

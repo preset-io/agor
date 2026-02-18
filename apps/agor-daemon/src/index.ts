@@ -96,7 +96,7 @@ import type {
   TaskID,
   User,
 } from '@agor/core/types';
-import { SessionStatus, TaskStatus } from '@agor/core/types';
+import { PermissionStatus, SessionStatus, TaskStatus } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
 
 import { performOAuthDisconnect } from './services/oauth-disconnect.js';
@@ -659,6 +659,8 @@ async function main() {
       'task_stop', // Custom event for stopping tasks via WebSocket
       'task_stop_ack', // Executor acknowledges receipt of stop signal
       'task_stopped_complete', // Executor confirms task fully stopped
+      'permission:request', // Permission request broadcast to UI clients
+      'permission:timeout', // Permission request timed out notification
     ],
   });
 
@@ -3937,10 +3939,11 @@ async function main() {
 
   // Initialize PermissionService for UI-based permission prompts
   // Emits WebSocket events via sessions service for permission requests
+  const permissionTimeoutMs = config.execution?.permission_timeout_ms ?? 120_000;
   const permissionService = new PermissionService((event, data) => {
     // Emit events through sessions service for WebSocket broadcasting
     app.service('sessions').emit(event, data);
-  });
+  }, permissionTimeoutMs);
 
   // NOTE: Direct tool execution path disabled - all SDK execution now goes through executor
   // Tools moved to @agor/executor package for isolation
@@ -5131,6 +5134,16 @@ async function main() {
 
         // Type-safe access to permission content
         const permissionContent = permissionMessage.content as PermissionRequestContent;
+
+        // If already resolved (timed out, approved, or denied), return informative response
+        if (permissionContent.status !== PermissionStatus.PENDING) {
+          return {
+            success: false,
+            alreadyResolved: true,
+            status: permissionContent.status,
+            message: `Permission request already ${permissionContent.status}`,
+          };
+        }
 
         // Resolve task_id with fallback for backward compatibility:
         // 1. Try content.task_id (new messages)

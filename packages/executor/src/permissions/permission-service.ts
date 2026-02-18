@@ -4,6 +4,13 @@
  * Handles async permission requests from Claude Agent SDK PreToolUse hooks.
  * Emits events via Feathers WebSocket to daemon for broadcasting to UI clients.
  *
+ * ## Why this is separate from packages/core/src/permissions/permission-service.ts
+ *
+ * The core version is used by the daemon for in-process tool execution (sync emitEvent).
+ * This executor version uses async emitEvent (events go over Feathers WebSocket to daemon).
+ * The two share the same logic but differ in their emitEvent signature (sync vs async),
+ * which makes them incompatible as a single class without adding unnecessary abstraction.
+ *
  * ## Flow in Feathers/WebSocket Architecture:
  *
  * 1. PreToolUse hook fires → PermissionService.emitRequest()
@@ -57,8 +64,12 @@ export class PermissionService {
 
   /**
    * @param emitEvent - Function to emit events via IPC to daemon
+   * @param timeoutMs - Permission request timeout in ms (default: 120000 = 2 minutes)
    */
-  constructor(private emitEvent: (event: string, data: unknown) => Promise<void>) {}
+  constructor(
+    private emitEvent: (event: string, data: unknown) => Promise<void>,
+    private timeoutMs: number = 120_000
+  ) {}
 
   /**
    * Emit a permission request event to daemon (which broadcasts via WebSocket)
@@ -101,10 +112,14 @@ export class PermissionService {
         });
       });
 
-      // Timeout after 60 seconds
+      // Timeout (configurable via constructor, default 2 minutes)
       const timeout = setTimeout(() => {
         this.pendingRequests.delete(requestId);
         console.warn(`⚠️  [executor] Permission request timeout: ${requestId}`);
+
+        // Broadcast timeout to UI via daemon
+        this.emitEvent('permission:timeout', { requestId, sessionId, taskId });
+
         resolve({
           requestId,
           taskId,
@@ -114,7 +129,7 @@ export class PermissionService {
           scope: PermissionScope.ONCE,
           decidedBy: 'system',
         });
-      }, 60000);
+      }, this.timeoutMs);
 
       this.pendingRequests.set(requestId, { sessionId, resolve, timeout });
       console.log(`🛡️  [executor] Waiting for permission decision: ${requestId}`);

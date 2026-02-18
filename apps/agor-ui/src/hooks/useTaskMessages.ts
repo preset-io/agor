@@ -7,7 +7,8 @@
 
 import type { AgorClient } from '@agor/core/api';
 import { PAGINATION } from '@agor/core/config/browser';
-import type { Message, TaskID } from '@agor/core/types';
+import type { Message, PermissionRequestContent, TaskID } from '@agor/core/types';
+import { PermissionStatus } from '@agor/core/types';
 import { useCallback, useEffect, useState } from 'react';
 import { flushSync } from 'react-dom';
 
@@ -113,10 +114,32 @@ export function useTaskMessages(
       }
     };
 
+    // Listen for permission:timeout on sessions service as a fallback.
+    // The primary mechanism is message patching (executor patches the permission message
+    // with TIMED_OUT status, which arrives via handleMessagePatched above). This listener
+    // handles the case where the patch event is missed or arrives late.
+    const sessionsService = client.service('sessions');
+    const handlePermissionTimeout = (data: { requestId: string; taskId: string }) => {
+      if (data.taskId !== taskId) return;
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.type !== 'permission_request') return m;
+          const content = m.content as PermissionRequestContent;
+          if (content.request_id !== data.requestId) return m;
+          if (content.status !== PermissionStatus.PENDING) return m;
+          return {
+            ...m,
+            content: { ...content, status: PermissionStatus.TIMED_OUT },
+          };
+        })
+      );
+    };
+
     messagesService.on('created', handleMessageCreated);
     messagesService.on('patched', handleMessagePatched);
     messagesService.on('updated', handleMessagePatched);
     messagesService.on('removed', handleMessageRemoved);
+    sessionsService.on('permission:timeout', handlePermissionTimeout);
 
     // Cleanup listeners
     return () => {
@@ -124,6 +147,7 @@ export function useTaskMessages(
       messagesService.removeListener('patched', handleMessagePatched);
       messagesService.removeListener('updated', handleMessagePatched);
       messagesService.removeListener('removed', handleMessageRemoved);
+      sessionsService.removeListener('permission:timeout', handlePermissionTimeout);
     };
   }, [client, taskId, enabled, fetchMessages]);
 

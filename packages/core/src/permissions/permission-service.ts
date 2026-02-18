@@ -66,7 +66,10 @@ export class PermissionService {
     }
   >();
 
-  constructor(private emitEvent: (event: string, data: unknown) => void) {}
+  constructor(
+    private emitEvent: (event: string, data: unknown) => void,
+    private timeoutMs: number = 120_000
+  ) {}
 
   /**
    * Emit a permission request event to the UI
@@ -118,10 +121,14 @@ export class PermissionService {
         });
       });
 
-      // Timeout after 60 seconds (fail-safe)
+      // Timeout (fail-safe, configurable via constructor, default 2 minutes)
       const timeout = setTimeout(() => {
         this.pendingRequests.delete(requestId);
         console.warn(`⚠️  Permission request timeout: ${requestId}`);
+
+        // Broadcast timeout to UI so it can update the permission block state
+        this.emitEvent('permission:timeout', { requestId, sessionId, taskId });
+
         resolve({
           requestId,
           taskId,
@@ -131,7 +138,7 @@ export class PermissionService {
           scope: PermissionScope.ONCE,
           decidedBy: 'system', // System-initiated timeout
         });
-      }, 60000);
+      }, this.timeoutMs);
 
       this.pendingRequests.set(requestId, { sessionId, resolve, timeout });
     });

@@ -205,7 +205,7 @@ export const App: React.FC<AppProps> = ({
   instanceLabel,
   instanceDescription,
 }) => {
-  const { showWarning } = useThemedMessage();
+  const { showWarning, showInfo } = useThemedMessage();
   const sessionCanvasRef = useRef<SessionCanvasRef>(null);
   const [newSessionWorktreeId, setNewSessionWorktreeId] = useState<string | null>(null);
   const [newWorktreeModalOpen, setNewWorktreeModalOpen] = useState(false);
@@ -435,7 +435,7 @@ export const App: React.FC<AppProps> = ({
 
       try {
         // Call the permission decision endpoint
-        await client.service(`sessions/${sessionId}/permission-decision`).create({
+        const result = await client.service(`sessions/${sessionId}/permission-decision`).create({
           requestId,
           taskId,
           allow,
@@ -444,11 +444,27 @@ export const App: React.FC<AppProps> = ({
           scope,
           decidedBy: user?.user_id || 'anonymous',
         });
+
+        // Handle already-resolved permissions (e.g., timed out before user clicked)
+        const response = result as
+          | { success: true }
+          | { success: false; alreadyResolved: true; status: string; message: string };
+        if ('alreadyResolved' in response && response.alreadyResolved) {
+          const label =
+            response.status === 'timed_out'
+              ? 'timed out'
+              : response.status === 'approved'
+                ? 'been approved'
+                : response.status === 'denied'
+                  ? 'been denied'
+                  : 'been resolved';
+          showInfo(`This permission has already ${label}`);
+        }
       } catch (error) {
         console.error('❌ Failed to send permission decision:', error);
       }
     },
-    [client, user?.user_id]
+    [client, user?.user_id, showInfo]
   );
 
   const selectedSession = selectedSessionId ? sessionById.get(selectedSessionId) || null : null;
