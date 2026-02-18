@@ -81,19 +81,21 @@ export default class SessionList extends BaseCommand {
    * Format status with color
    */
   private formatStatus(status: Session['status']): string {
-    const icons = {
+    const icons: Record<string, string> = {
       running: chalk.blue('●'),
       stopping: chalk.yellow('◐'),
       awaiting_permission: chalk.yellow('⏸'),
+      awaiting_input: chalk.yellow('❓'),
       completed: chalk.green('✓'),
       failed: chalk.red('✗'),
       idle: chalk.gray('○'),
     };
 
-    const labels = {
+    const labels: Record<string, string> = {
       running: chalk.blue('Running'),
       stopping: chalk.yellow('Stopping'),
       awaiting_permission: chalk.yellow('Awaiting Permission'),
+      awaiting_input: chalk.yellow('Awaiting Input'),
       completed: chalk.green('Done'),
       failed: chalk.red('Failed'),
       idle: chalk.gray('Idle'),

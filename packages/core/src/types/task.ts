@@ -7,6 +7,7 @@ export const TaskStatus = {
   RUNNING: 'running',
   STOPPING: 'stopping', // Stop requested, waiting for SDK to halt
   AWAITING_PERMISSION: 'awaiting_permission',
+  AWAITING_INPUT: 'awaiting_input', // Waiting for user to answer AskUserQuestion
   COMPLETED: 'completed',
   FAILED: 'failed',
   STOPPED: 'stopped', // User-requested stop (distinct from failed)

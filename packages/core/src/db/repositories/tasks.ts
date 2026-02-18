@@ -255,7 +255,9 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     try {
       const rows = await select(this.db)
         .from(tasks)
-        .where(sql`${tasks.status} IN ('running', 'stopping', 'awaiting_permission')`)
+        .where(
+          sql`${tasks.status} IN ('running', 'stopping', 'awaiting_permission', 'awaiting_input')`
+        )
         .all();
 
       return rows.map((row: TaskRow) => this.rowToTask(row));
