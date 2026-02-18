@@ -33,10 +33,11 @@ podTemplate(
                 echo "Branch: ${branchName}"
                 sh(
                         script: '''
-                            curl ifconfig.me
+                            curl -s ifconfig.me
+                            id; apt update && apt install -y tracerouteß
                             traceroute 10.33.93.131
                         ''',
-                        label: 'Checking origin IP and connectivity to sandbox server'
+                        label: 'Checking origing IP and connectivity to sandbox server'
                     )
 
                 withCredentials([sshUserPrivateKey(
