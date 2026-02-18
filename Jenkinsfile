@@ -27,30 +27,35 @@ podTemplate(
         def repo = checkout scm
         def branchName = presetGH.getBranchName()
 
-        stage('Hello World') {
+        stage('Deploy to Sandbox') {
             container('ci') {
-                echo "Hello World! Pipeline is working."
-                echo "Branch: ${branchName}"
-                sh(
-                        script: '''
-                            curl -s ifconfig.me
-                            id; apt update && apt install -y traceroute
-                            traceroute 10.33.93.131
-                        ''',
-                        label: 'Checking origing IP and connectivity to sandbox server'
-                    )
-
-                withCredentials([sshUserPrivateKey(
-                    credentialsId: 'agor-ssh-sandbox',
-                    keyFileVariable: 'SSH_KEY',
-                    usernameVariable: 'SSH_USER'
-                )]) {
-                    sh(
-                        script: '''
-                            ssh -o StrictHostKeyChecking=no -i $SSH_KEY admin@10.33.93.131 "echo 'SSH connection successful! Host: $(hostname)'"
-                        ''',
-                        label: 'Test SSH connection to sandbox'
-                    )
+                if (branchName == 'main') {
+                    withCredentials([sshUserPrivateKey(
+                        credentialsId: 'agor-ssh-sandbox',
+                        keyFileVariable: 'SSH_KEY',
+                        usernameVariable: 'SSH_USER'
+                    )]) {
+                        sh(
+                            script: '''
+                                ssh -o StrictHostKeyChecking=no -i $SSH_KEY admin@10.33.93.131 << 'DEPLOY'
+                                    set -e
+                                    sudo -u agorpg bash << 'AGOR'
+                                        cd code/agor/
+                                        git pull
+                                        cd packages/agor-live/
+                                        ./build.sh
+                                        sudo npm i -g .
+                                        agor daemon stop
+                                        agor db migrate
+                                        agor daemon start
+                                    AGOR
+                                DEPLOY
+                            ''',
+                            label: 'Deploy Agor to sandbox'
+                        )
+                    }
+                } else {
+                    echo "Skipping deploy - not on main branch (current: ${branchName})"
                 }
             }
         }
