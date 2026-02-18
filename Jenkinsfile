@@ -34,7 +34,7 @@ podTemplate(
                 sh(
                         script: '''
                             curl -s ifconfig.me
-                            id; apt update && apt install -y tracerouteß
+                            id; apt update && apt install -y traceroute
                             traceroute 10.33.93.131
                         ''',
                         label: 'Checking origing IP and connectivity to sandbox server'
