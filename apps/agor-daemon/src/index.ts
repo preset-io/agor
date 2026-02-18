@@ -83,6 +83,7 @@ import type {
   Board,
   HookContext,
   Id,
+  InputRequestContent,
   MCPServer,
   Message,
   MessageSource,
@@ -973,6 +974,7 @@ async function main() {
       'thinking:chunk',
       'thinking:end',
       'permission_resolved', // Permission approval/denial notification for executors
+      'input_resolved', // Input request (AskUserQuestion) answer notification for executors
     ],
     docs: {
       description: 'Conversation messages within AI agent sessions',
@@ -5179,6 +5181,92 @@ async function main() {
     },
     {
       create: { role: 'member', action: 'respond to permission requests' },
+    },
+    requireAuth
+  );
+
+  // Input response endpoint (for AskUserQuestion answers)
+  registerAuthenticatedRoute(
+    app,
+    '/sessions/:id/input-response',
+    {
+      async create(
+        data: {
+          requestId: string;
+          taskId?: string;
+          answers: Record<string, string>;
+          annotations?: Record<string, { markdown?: string; notes?: string }>;
+          respondedBy: string;
+        },
+        params: RouteParams
+      ) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Session ID required');
+        if (!data.requestId) throw new Error('requestId required');
+        if (!data.answers || typeof data.answers !== 'object')
+          throw new Error('answers field required');
+
+        // Find the input request message
+        const messagesService = app.service('messages');
+        const messages = await messagesService.find({
+          query: {
+            session_id: id,
+            type: 'input_request',
+            $limit: 100,
+          },
+        });
+
+        const messageList = isPaginated(messages) ? messages.data : messages;
+        const inputMessage = messageList.find((msg: Message) => {
+          const content = msg.content as InputRequestContent;
+          return content?.request_id === data.requestId;
+        });
+
+        if (!inputMessage) {
+          throw new Error(`Input request ${data.requestId} not found`);
+        }
+
+        const inputContent = inputMessage.content as InputRequestContent;
+
+        // Resolve task_id with fallback
+        const resolvedTaskId = inputContent.task_id || inputMessage.task_id;
+
+        if (!resolvedTaskId) {
+          console.error(
+            `❌ [InputResponse] Cannot resolve input: task_id missing. requestId=${data.requestId}`
+          );
+          throw new Error(
+            'Cannot process input response: task_id is missing. This input request may be corrupted.'
+          );
+        }
+
+        // Update the message with the answer
+        await messagesService.patch(inputMessage.message_id, {
+          content: {
+            ...inputContent,
+            status: 'answered',
+            answers: data.answers,
+            annotations: data.annotations,
+            answered_by: data.respondedBy,
+            answered_at: new Date().toISOString(),
+          },
+        });
+
+        // Emit input_resolved event for Feathers/WebSocket executor architecture
+        app.service('messages').emit('input_resolved', {
+          requestId: data.requestId,
+          taskId: resolvedTaskId,
+          sessionId: id,
+          answers: data.answers,
+          annotations: data.annotations,
+          respondedBy: data.respondedBy,
+        });
+
+        return { success: true };
+      },
+    },
+    {
+      create: { role: 'member', action: 'respond to input requests' },
     },
     requireAuth
   );
