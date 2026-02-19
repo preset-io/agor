@@ -41,6 +41,8 @@ export const TaskStatusIcon: React.FC<TaskStatusIconProps> = ({ status, size = 1
       return <LoadingOutlined style={{ ...iconStyle, color: token.colorWarning }} />;
     case TaskStatus.AWAITING_PERMISSION:
     case 'awaiting_permission': // SessionStatus.AWAITING_PERMISSION
+    case TaskStatus.AWAITING_INPUT:
+    case 'awaiting_input': // SessionStatus.AWAITING_INPUT
       return <PauseCircleOutlined style={{ ...iconStyle, color: token.colorWarning }} />;
     case TaskStatus.FAILED:
     case 'failed': // SessionStatus.FAILED

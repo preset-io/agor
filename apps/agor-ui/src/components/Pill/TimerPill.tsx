@@ -31,6 +31,7 @@ const ACTIVE_STATUSES: TimerStatus[] = [
   TaskStatus.RUNNING,
   TaskStatus.STOPPING,
   TaskStatus.AWAITING_PERMISSION,
+  TaskStatus.AWAITING_INPUT,
 ];
 
 const statusConfig: Record<
@@ -50,6 +51,10 @@ const statusConfig: Record<
     color: PILL_COLORS.warning,
   },
   [TaskStatus.AWAITING_PERMISSION]: {
+    icon: <PauseCircleOutlined />,
+    color: PILL_COLORS.warning,
+  },
+  [TaskStatus.AWAITING_INPUT]: {
     icon: <PauseCircleOutlined />,
     color: PILL_COLORS.warning,
   },

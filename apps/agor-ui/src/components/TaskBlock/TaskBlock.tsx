@@ -86,6 +86,13 @@ interface TaskBlockProps {
     allow: boolean,
     scope: PermissionScope
   ) => void;
+  onInputResponse?: (
+    sessionId: string,
+    requestId: string,
+    taskId: string,
+    answers: Record<string, string>,
+    annotations?: Record<string, { markdown?: string; notes?: string }>
+  ) => void;
   worktreeName?: string;
   scheduledFromWorktree?: boolean;
   scheduledRunAt?: number;
@@ -343,6 +350,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     onExpandChange,
     sessionId,
     onPermissionDecision,
+    onInputResponse,
     worktreeName,
     scheduledFromWorktree,
     scheduledRunAt,
@@ -585,6 +593,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                           isTaskRunning={task.status === TaskStatus.RUNNING}
                           sessionId={sessionId}
                           onPermissionDecision={onPermissionDecision}
+                          onInputResponse={onInputResponse}
                           isFirstPendingPermission={isFirstPending}
                           isLatestMessage={isLatestMessage}
                           taskId={task.task_id}
