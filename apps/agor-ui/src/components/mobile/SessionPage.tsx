@@ -1,8 +1,8 @@
 import type { AgorClient } from '@agor/core/api';
 import type { PermissionMode, Repo, Session, SessionID, User, Worktree } from '@agor/core/types';
-import { PermissionScope } from '@agor/core/types';
 import { Alert, Spin } from 'antd';
 import { useParams } from 'react-router-dom';
+import { useAppActions } from '../../contexts/AppActionsContext';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { ConversationView } from '../ConversationView';
 import { MobileHeader } from './MobileHeader';
@@ -34,6 +34,7 @@ export const SessionPage: React.FC<SessionPageProps> = ({
   onUpdateDraft,
 }) => {
   const { sessionId } = useParams<{ sessionId: string }>();
+  const { onPermissionDecision, onInputResponse } = useAppActions();
 
   const session = sessionId ? sessionById.get(sessionId) : undefined;
   const worktree = session?.worktree_id ? worktreeById.get(session.worktree_id) || null : null;
@@ -65,52 +66,6 @@ export const SessionPage: React.FC<SessionPageProps> = ({
     onSendPrompt?.(sessionId, prompt);
   };
 
-  const handlePermissionDecision = async (
-    _sessionId: string,
-    requestId: string,
-    taskId: string,
-    allow: boolean,
-    scope: PermissionScope
-  ) => {
-    if (!client) return;
-
-    try {
-      await client.service(`sessions/${_sessionId}/permission-decision`).create({
-        requestId,
-        taskId,
-        allow,
-        reason: allow ? 'Approved by user' : 'Denied by user',
-        remember: scope !== PermissionScope.ONCE,
-        scope,
-        decidedBy: currentUser?.user_id || 'anonymous',
-      });
-    } catch (error) {
-      console.error('Failed to send permission decision:', error);
-    }
-  };
-
-  const handleInputResponse = async (
-    _sessionId: string,
-    requestId: string,
-    taskId: string,
-    answers: Record<string, string>,
-    annotations?: Record<string, { markdown?: string; notes?: string }>
-  ) => {
-    if (!client) return;
-
-    try {
-      await client.service(`sessions/${_sessionId}/input-response`).create({
-        requestId,
-        taskId,
-        answers,
-        annotations,
-        respondedBy: currentUser?.user_id || 'anonymous',
-      });
-    } catch (error) {
-      console.error('Failed to send input response:', error);
-    }
-  };
-
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
       <MobileHeader
@@ -136,8 +91,8 @@ export const SessionPage: React.FC<SessionPageProps> = ({
           sessionModel={session.model_config?.model}
           userById={userById}
           currentUserId={currentUser?.user_id}
-          onPermissionDecision={handlePermissionDecision}
-          onInputResponse={handleInputResponse}
+          onPermissionDecision={onPermissionDecision}
+          onInputResponse={onInputResponse}
           scheduledFromWorktree={session.scheduled_from_worktree}
           scheduledRunAt={session.scheduled_run_at}
           genealogy={session.genealogy}

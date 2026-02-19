@@ -8,6 +8,7 @@ import {
   CloseCircleOutlined,
   HourglassOutlined,
   PauseCircleOutlined,
+  QuestionCircleOutlined,
   StopOutlined,
 } from '@ant-design/icons';
 import { Tooltip, theme } from 'antd';
@@ -55,7 +56,7 @@ const statusConfig: Record<
     color: PILL_COLORS.warning,
   },
   [TaskStatus.AWAITING_INPUT]: {
-    icon: <PauseCircleOutlined />,
+    icon: <QuestionCircleOutlined />,
     color: PILL_COLORS.warning,
   },
   [TaskStatus.COMPLETED]: {

@@ -82,6 +82,18 @@ export class InputRequestService {
     signal: AbortSignal
   ): Promise<InputResponse> {
     return new Promise((resolve) => {
+      // Check if already aborted before setting up listeners
+      if (signal.aborted) {
+        console.log(`❓ [executor] Input request already aborted: ${requestId}`);
+        resolve({
+          requestId,
+          taskId,
+          answers: {},
+          respondedBy: 'system',
+        });
+        return;
+      }
+
       // Handle cancellation
       signal.addEventListener('abort', () => {
         const pending = this.pendingRequests.get(requestId);

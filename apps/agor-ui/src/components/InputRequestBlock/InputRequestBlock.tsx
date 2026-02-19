@@ -217,11 +217,17 @@ export const InputRequestBlock: React.FC<InputRequestBlockProps> = ({
             {/* Active: multi-select */}
             {isActive && q.multiSelect && (
               <Checkbox.Group
-                value={(selectedAnswers[q.question] || '').split(',').filter(Boolean)}
+                value={(() => {
+                  try {
+                    return JSON.parse(selectedAnswers[q.question] || '[]');
+                  } catch {
+                    return [];
+                  }
+                })()}
                 onChange={(vals) => {
                   setSelectedAnswers((prev) => ({
                     ...prev,
-                    [q.question]: (vals as string[]).join(','),
+                    [q.question]: JSON.stringify(vals),
                   }));
                 }}
                 style={{ width: '100%' }}
