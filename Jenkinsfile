@@ -38,7 +38,7 @@ podTemplate(
                         sh(
                             script: '''
                                 ssh -o StrictHostKeyChecking=no -i $SSH_KEY admin@10.33.93.131 \
-                                    'sudo su - agorpg -c "set -e; cd ~/code/agor/ && git pull && cd packages/agor-live/ && ./build.sh && sudo npm i -g . && (agor daemon stop; true) && echo y | agor db migrate && agor daemon start"'
+                                    'sudo su - agorpg -c "set -e; cd ~/code/agor/ && git pull && cd packages/agor-live/ && ./build.sh && sudo npm i -g . && (agor daemon stop; true) && agor db migrate --yes && agor daemon start"'
                             ''',
                             label: 'Deploy Agor to sandbox'
                         )

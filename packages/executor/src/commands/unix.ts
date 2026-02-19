@@ -602,7 +602,9 @@ export async function handleUnixSyncUser(
       // Use chpasswd with stdin for security (password not in process list)
       const { spawn } = await import('node:child_process');
       await new Promise<void>((resolve, reject) => {
-        const proc = spawn('chpasswd', [], { stdio: ['pipe', 'pipe', 'pipe'] });
+        const proc = spawn('sudo', ['-n', '/usr/sbin/chpasswd'], {
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
         proc.stdin.write(`${unixUsername}:${payload.params.password}\n`);
         proc.stdin.end();
         proc.on('close', (code) => {
