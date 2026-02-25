@@ -62,7 +62,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
 }) => {
   const [form] = Form.useForm();
   const [selectedAgent, setSelectedAgent] = useState<string>('claude-code');
-  const [isFormValid, setIsFormValid] = useState(false);
+  const [isFormValid, setIsFormValid] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
 
   // Reset form when modal opens, using user defaults if available
@@ -85,7 +85,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
       codexApprovalPolicy: agentDefaults?.codexApprovalPolicy || 'on-request',
       codexNetworkAccess: agentDefaults?.codexNetworkAccess ?? false,
     });
-    setIsFormValid(false);
+    setIsFormValid(true);
   }, [open, form, currentUser]);
 
   // Update permission mode and other defaults when agent changes
