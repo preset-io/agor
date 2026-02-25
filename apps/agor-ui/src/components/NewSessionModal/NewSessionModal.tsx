@@ -62,8 +62,8 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
 }) => {
   const [form] = Form.useForm();
   const [selectedAgent, setSelectedAgent] = useState<string>('claude-code');
-  const [isFormValid, setIsFormValid] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
+  const isFormValid = !!selectedAgent;
 
   // Reset form when modal opens, using user defaults if available
   useEffect(() => {
@@ -85,7 +85,6 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
       codexApprovalPolicy: agentDefaults?.codexApprovalPolicy || 'on-request',
       codexNetworkAccess: agentDefaults?.codexNetworkAccess ?? false,
     });
-    setIsFormValid(true);
   }, [open, form, currentUser]);
 
   // Update permission mode and other defaults when agent changes
@@ -113,11 +112,6 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
       });
     }
   }, [selectedAgent, form, currentUser]);
-
-  const handleFormChange = () => {
-    const hasAgent = !!selectedAgent;
-    setIsFormValid(hasAgent);
-  };
 
   const handleCreate = () => {
     form.validateFields().then((values) => {
@@ -178,13 +172,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         loading: isCreating,
       }}
     >
-      <Form
-        form={form}
-        layout="vertical"
-        style={{ marginTop: 16 }}
-        onFieldsChange={handleFormChange}
-        preserve={false}
-      >
+      <Form form={form} layout="vertical" style={{ marginTop: 16 }} preserve={false}>
         {/* Worktree Info */}
         {worktree && (
           <Alert
