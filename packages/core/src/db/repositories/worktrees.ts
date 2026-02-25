@@ -297,6 +297,20 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
     return row ? this.rowToWorktree(row) : null;
   }
 
+  /**
+   * Find active (non-archived) worktree by repo_id and name
+   */
+  async findActiveByRepoAndName(repoId: UUID, name: string): Promise<Worktree | null> {
+    const row = await select(this.db)
+      .from(worktrees)
+      .where(
+        sql`${worktrees.repo_id} = ${repoId} AND ${worktrees.name} = ${name} AND ${worktrees.archived} = 0`
+      )
+      .one();
+
+    return row ? this.rowToWorktree(row) : null;
+  }
+
   // ===== RBAC: Ownership Management =====
 
   /**
