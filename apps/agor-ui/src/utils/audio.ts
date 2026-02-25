@@ -47,6 +47,10 @@ function getChimeAssetPath(chime: ChimeSound | string): string | null {
   return relativePath;
 }
 
+/** Minimum duration bounds for the chimes setting (in seconds) */
+export const MIN_DURATION_MIN = 0;
+export const MIN_DURATION_MAX = 300;
+
 /**
  * Default audio preferences
  */
@@ -54,7 +58,7 @@ export const DEFAULT_AUDIO_PREFERENCES: AudioPreferences = {
   enabled: false,
   chime: 'gentle-chime',
   volume: 0.5,
-  minDurationSeconds: 5,
+  minDurationSeconds: 30,
 };
 
 /**

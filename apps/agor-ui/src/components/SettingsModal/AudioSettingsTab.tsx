@@ -25,6 +25,8 @@ import {
   DEFAULT_AUDIO_PREFERENCES,
   getAvailableChimes,
   getChimeDisplayName,
+  MIN_DURATION_MAX,
+  MIN_DURATION_MIN,
   previewChimeSound,
 } from '../../utils/audio';
 import { useThemedMessage } from '../../utils/message';
@@ -225,8 +227,8 @@ export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({ user, form }
                 >
                   <Space.Compact style={{ width: '100%' }}>
                     <InputNumber
-                      min={0}
-                      max={60}
+                      min={MIN_DURATION_MIN}
+                      max={MIN_DURATION_MAX}
                       step={1}
                       style={{ width: '100%' }}
                       disabled={!form.getFieldValue('enabled')}

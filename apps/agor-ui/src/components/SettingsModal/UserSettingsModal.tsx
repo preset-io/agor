@@ -26,6 +26,7 @@ import {
   theme,
 } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
+import { DEFAULT_AUDIO_PREFERENCES } from '../../utils/audio';
 import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
 import { ApiKeyFields, type ApiKeyStatus } from '../ApiKeyFields';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
@@ -124,10 +125,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       // Initialize audio form with user's preferences
       const audioPrefs = userData.preferences?.audio;
       audioForm.setFieldsValue({
-        enabled: audioPrefs?.enabled ?? true,
-        chime: audioPrefs?.chime ?? 'bell',
-        volume: audioPrefs?.volume ?? 50,
-        minDurationSeconds: audioPrefs?.minDurationSeconds ?? 5,
+        enabled: audioPrefs?.enabled ?? DEFAULT_AUDIO_PREFERENCES.enabled,
+        chime: audioPrefs?.chime ?? DEFAULT_AUDIO_PREFERENCES.chime,
+        volume: audioPrefs?.volume ?? DEFAULT_AUDIO_PREFERENCES.volume,
+        minDurationSeconds:
+          audioPrefs?.minDurationSeconds ?? DEFAULT_AUDIO_PREFERENCES.minDurationSeconds,
       });
     },
     [form, claudeForm, codexForm, geminiForm, audioForm]
