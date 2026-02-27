@@ -585,7 +585,7 @@ export function setupMCPRoutes(app: Application, db: Database): void {
             {
               name: 'agor_environment_health',
               description:
-                'Check the health status of a worktree environment by running its configured health command',
+                'Check the health status of a worktree environment by running its configured health command. Returns started_at timestamp and uptime_seconds when environment is running.',
               inputSchema: {
                 type: 'object',
                 properties: {
@@ -2652,6 +2652,10 @@ export function setupMCPRoutes(app: Application, db: Database): void {
             worktreeId as import('@agor/core/types').WorktreeID,
             baseServiceParams
           );
+          const startedAt = worktree.environment_instance?.process?.started_at;
+          const uptimeSeconds = startedAt
+            ? Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000)
+            : null;
           mcpResponse = {
             content: [
               {
@@ -2660,6 +2664,8 @@ export function setupMCPRoutes(app: Application, db: Database): void {
                   {
                     status: worktree.environment_instance?.status || 'unknown',
                     lastHealthCheck: worktree.environment_instance?.last_health_check,
+                    started_at: startedAt || null,
+                    uptime_seconds: uptimeSeconds,
                     worktree,
                   },
                   null,

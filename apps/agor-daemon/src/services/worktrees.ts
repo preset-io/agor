@@ -703,11 +703,14 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       throw new Error('Environment is already running');
     }
 
-    // Set status to 'starting'
+    // Set status to 'starting' and record start timestamp
     await this.updateEnvironment(
       id,
       {
         status: 'starting',
+        process: {
+          started_at: new Date().toISOString(),
+        },
         last_health_check: undefined,
       },
       params
