@@ -303,7 +303,7 @@ Highlights:
 
 ## Community
 
-- **[Discord](https://discord.gg/HZKWXfgc)** - Join our Discord community for support and discussion
+- **[Discord](https://discord.gg/Qh4TrFQZpd)** - Join our Discord community for support and discussion
 - **[GitHub Discussions](https://github.com/preset-io/agor/discussions)** - Ask questions, share ideas
 - **[GitHub Issues](https://github.com/preset-io/agor/issues)** - Report bugs, request features
 

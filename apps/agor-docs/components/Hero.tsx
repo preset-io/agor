@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { GifGallery } from './GifGallery';
 import styles from './Hero.module.css';
 import { ParticleBackground } from './ParticleBackground';
+import { DISCORD_INVITE_URL, GITHUB_REPO_URL } from '../lib/links';
 
 interface HeroProps {
   title: string;
@@ -39,7 +40,7 @@ export function Hero({
               {ctaText}
             </Link>
             <Link
-              href="https://github.com/preset-io/agor"
+              href={GITHUB_REPO_URL}
               target="_blank"
               rel="noopener noreferrer"
               className={styles.secondaryButton}
@@ -47,7 +48,7 @@ export function Hero({
               View on GitHub →
             </Link>
             <Link
-              href="https://discord.gg/HZKWXfgc"
+              href={DISCORD_INVITE_URL}
               target="_blank"
               rel="noopener noreferrer"
               className={styles.secondaryButton}

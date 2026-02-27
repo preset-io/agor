@@ -1,6 +1,7 @@
 import { useRouter } from 'next/router';
 import type { DocsThemeConfig } from 'nextra-theme-docs';
 import { useConfig } from 'nextra-theme-docs';
+import { DISCORD_INVITE_URL, GITHUB_REPO_URL } from './lib/links';
 
 const basePath = process.env.NEXT_PUBLIC_BASE_PATH || '';
 const defaultSiteUrl = 'https://agor.live';
@@ -31,10 +32,10 @@ const config: DocsThemeConfig = {
     </span>
   ),
   project: {
-    link: 'https://github.com/preset-io/agor',
+    link: GITHUB_REPO_URL,
   },
   chat: {
-    link: 'https://discord.gg/HZKWXfgc',
+    link: DISCORD_INVITE_URL,
   },
   docsRepositoryBase: 'https://github.com/preset-io/agor/tree/main/apps/agor-docs',
 
