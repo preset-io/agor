@@ -585,7 +585,7 @@ export function setupMCPRoutes(app: Application, db: Database): void {
             {
               name: 'agor_environment_health',
               description:
-                'Check the health status of a worktree environment by running its configured health command. Returns started_at timestamp and uptime_seconds when environment is running.',
+                'Check the health status of a worktree environment by running its configured health command. Returns started_at timestamp and uptime_seconds when environment is starting or running.',
               inputSchema: {
                 type: 'object',
                 properties: {
