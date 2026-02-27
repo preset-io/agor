@@ -704,11 +704,13 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     }
 
     // Set status to 'starting' and record start timestamp
+    // Merge with existing process fields (e.g. pid from a failed stop) rather than replacing
     await this.updateEnvironment(
       id,
       {
         status: 'starting',
         process: {
+          ...worktree.environment_instance?.process,
           started_at: new Date().toISOString(),
         },
         last_health_check: undefined,

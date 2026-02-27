@@ -2652,19 +2652,25 @@ export function setupMCPRoutes(app: Application, db: Database): void {
             worktreeId as import('@agor/core/types').WorktreeID,
             baseServiceParams
           );
-          const startedAt = worktree.environment_instance?.process?.started_at;
-          const uptimeSeconds = startedAt
-            ? Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000)
+          const envStatus = worktree.environment_instance?.status;
+          const isActive = envStatus === 'running' || envStatus === 'starting';
+          const startedAt = isActive
+            ? (worktree.environment_instance?.process?.started_at ?? null)
             : null;
+          let uptimeSeconds: number | null = null;
+          if (startedAt) {
+            const elapsed = Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000);
+            uptimeSeconds = elapsed >= 0 ? elapsed : null;
+          }
           mcpResponse = {
             content: [
               {
                 type: 'text',
                 text: JSON.stringify(
                   {
-                    status: worktree.environment_instance?.status || 'unknown',
+                    status: envStatus || 'unknown',
                     lastHealthCheck: worktree.environment_instance?.last_health_check,
-                    started_at: startedAt || null,
+                    started_at: startedAt,
                     uptime_seconds: uptimeSeconds,
                     worktree,
                   },
