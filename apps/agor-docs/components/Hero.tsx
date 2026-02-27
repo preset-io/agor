@@ -1,8 +1,8 @@
 import Link from 'next/link';
+import { DISCORD_INVITE_URL, GITHUB_REPO_URL } from '../lib/links';
 import { GifGallery } from './GifGallery';
 import styles from './Hero.module.css';
 import { ParticleBackground } from './ParticleBackground';
-import { DISCORD_INVITE_URL, GITHUB_REPO_URL } from '../lib/links';
 
 interface HeroProps {
   title: string;

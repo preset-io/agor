@@ -6,7 +6,7 @@
  */
 
 import type { Message, MessageID, SessionID, TaskID, UUID } from '@agor/core/types';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { type MessageInsert, type MessageRow, messages } from '../schema';
@@ -106,6 +106,19 @@ export class MessagesRepository {
     const rows = await select(this.db)
       .from(messages)
       .where(eq(messages.session_id, sessionId))
+      .orderBy(messages.index)
+      .all();
+
+    return rows.map((r: MessageRow) => this.rowToMessage(r));
+  }
+
+  /**
+   * Get all messages for a session filtered by type (ordered by index)
+   */
+  async findBySessionIdAndType(sessionId: SessionID, type: Message['type']): Promise<Message[]> {
+    const rows = await select(this.db)
+      .from(messages)
+      .where(and(eq(messages.session_id, sessionId), eq(messages.type, type)))
       .orderBy(messages.index)
       .all();
 
@@ -214,7 +227,6 @@ export class MessagesRepository {
     }
 
     const { generateId } = await import('../../lib/ids');
-    const { and } = await import('drizzle-orm');
 
     // Get current max queue position for session
     const result = await select(this.db)
@@ -254,7 +266,7 @@ export class MessagesRepository {
    * Find queued messages for a session
    */
   async findQueued(sessionId: SessionID): Promise<Message[]> {
-    const { and, asc } = await import('drizzle-orm');
+    const { asc } = await import('drizzle-orm');
 
     const rows = await select(this.db)
       .from(messages)

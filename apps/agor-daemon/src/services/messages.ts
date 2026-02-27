@@ -67,7 +67,10 @@ export class MessagesService extends DrizzleService<Message, Partial<Message>, M
 
     // If filtering by session_id, use repository method
     if (params?.query?.session_id) {
-      const messages = await this.messagesRepo.findBySessionId(params.query.session_id);
+      // Use type-filtered query when type is specified (e.g., 'permission_request')
+      const messages = params.query.type
+        ? await this.messagesRepo.findBySessionIdAndType(params.query.session_id, params.query.type)
+        : await this.messagesRepo.findBySessionId(params.query.session_id);
 
       // Apply pagination if enabled
       if (this.paginate) {

@@ -5108,13 +5108,14 @@ async function main() {
         if (!data.requestId) throw new Error('requestId required');
         if (typeof data.allow !== 'boolean') throw new Error('allow field required');
 
-        // Find the permission request message
+        // Find the permission request message by querying only permission_request type messages.
+        // No $limit override — the type filter at DB level ensures we only fetch
+        // permission_request messages, not all session messages.
         const messagesService = app.service('messages');
         const messages = await messagesService.find({
           query: {
             session_id: id,
             type: 'permission_request',
-            $limit: 100, // Get recent permission requests
           },
         });
 
