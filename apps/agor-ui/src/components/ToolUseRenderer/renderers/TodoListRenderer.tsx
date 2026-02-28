@@ -12,7 +12,7 @@ import { CheckCircleFilled } from '@ant-design/icons';
 import { Spin, theme } from 'antd';
 import type React from 'react';
 
-interface TodoItem {
+export interface TodoItem {
   content: string;
   activeForm: string;
   status: 'pending' | 'in_progress' | 'completed';
@@ -20,6 +20,23 @@ interface TodoItem {
 
 interface TodoWriteInput {
   todos: TodoItem[];
+}
+
+/**
+ * Parse a todos value that may be either a TodoItem[] array or a JSON string.
+ * Tool input from message data may arrive serialized; this normalizes both forms.
+ */
+export function parseTodosInput(raw: unknown): TodoItem[] {
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    } catch {
+      // Invalid JSON — fall through to empty
+    }
+  }
+  return [];
 }
 
 interface TodoListRendererProps {
@@ -144,21 +161,8 @@ const TodoItemRow: React.FC<{ todo: TodoItem; index: number }> = ({ todo, index 
 export const TodoListRenderer: React.FC<TodoListRendererProps> = ({ toolUseId, input }) => {
   const { token } = theme.useToken();
 
-  // Extract todos array - handle both parsed arrays and JSON strings
-  // (tool input from message data may arrive as a serialized JSON string)
-  const todos = (() => {
-    const raw = input?.todos;
-    if (Array.isArray(raw)) return raw;
-    if (typeof raw === 'string') {
-      try {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) return parsed;
-      } catch {
-        // Invalid JSON — fall through to empty
-      }
-    }
-    return [];
-  })();
+  // Extract todos array — handles both parsed arrays and JSON strings
+  const todos = parseTodosInput(input?.todos);
 
   if (todos.length === 0) {
     return null;
