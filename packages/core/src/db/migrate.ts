@@ -140,8 +140,13 @@ function getMigrationsFolder(db: Database): string {
 /**
  * Check migration status and return pending migrations
  *
- * Drizzle stores SHA256 hashes of SQL file content in the hash column.
- * We compute hashes of our migration files and compare against the database.
+ * Uses the same timestamp-based logic as Drizzle's migrator:
+ * - Gets the max created_at (= folderMillis) from __drizzle_migrations
+ * - A migration is "pending" if its journal `when` timestamp > max applied timestamp
+ *
+ * This matches Drizzle's actual check (drizzle-orm/migrator.js), which compares
+ * folderMillis against the last applied migration's created_at, NOT hashes.
+ * Hash-based checking breaks when migration files are modified after being applied.
  *
  * @returns Object with hasPending flag and list of pending migration tags
  */
@@ -154,59 +159,43 @@ export async function checkMigrationStatus(
     // Read expected migrations from journal
     const journalPath = join(migrationsFolder, 'meta', '_journal.json');
     const { readFile } = await import('node:fs/promises');
-    const { createHash } = await import('node:crypto');
     const journalContent = await readFile(journalPath, 'utf-8');
     const journal = JSON.parse(journalContent);
-    const expectedMigrations: { tag: string; hash: string }[] = [];
+    const journalEntries: { tag: string; when: number }[] = journal.entries.map(
+      (e: { tag: string; when: number }) => ({ tag: e.tag, when: e.when })
+    );
 
-    // Compute hash for each migration SQL file
-    for (const entry of journal.entries) {
-      const sqlPath = join(migrationsFolder, `${entry.tag}.sql`);
-      try {
-        const sqlContent = await readFile(sqlPath, 'utf-8');
-        const hash = createHash('sha256').update(sqlContent).digest('hex');
-        expectedMigrations.push({ tag: entry.tag, hash });
-      } catch (err) {
-        console.warn(`Warning: Could not read migration file ${entry.tag}.sql:`, err);
-      }
-    }
-
-    // Get applied migrations from database
+    // Get max applied timestamp from database (Drizzle's watermark)
     const hasTable = await hasMigrationsTable(db);
     if (!hasTable) {
-      // No migrations table = fresh database, all migrations pending
       return {
         hasPending: true,
-        pending: expectedMigrations.map((m) => m.tag),
+        pending: journalEntries.map((e) => e.tag),
         applied: [],
       };
     }
 
-    let appliedHashes: string[] = [];
+    let maxAppliedMillis = 0;
     if (isSQLiteDatabase(db)) {
-      const result = await db.run(sql`SELECT hash FROM __drizzle_migrations ORDER BY id`);
-      appliedHashes = result.rows.map((row: Record<string, unknown>) => String(row.hash));
+      const result = await db.run(sql`SELECT MAX(created_at) as max_ts FROM __drizzle_migrations`);
+      const row = result.rows[0] as Record<string, unknown> | undefined;
+      maxAppliedMillis = row ? Number(row.max_ts ?? 0) : 0;
     } else if (isPostgresDatabase(db)) {
       const result = await db.execute(
-        sql`SELECT hash FROM drizzle.__drizzle_migrations ORDER BY id`
+        sql`SELECT MAX(created_at) as max_ts FROM drizzle.__drizzle_migrations`
       );
-      appliedHashes = result.map((row: Record<string, unknown>) => String(row.hash));
+      const row = result[0] as Record<string, unknown> | undefined;
+      maxAppliedMillis = row ? Number(row.max_ts ?? 0) : 0;
     }
 
-    // Find pending migrations (hash not in database)
-    const pending = expectedMigrations
-      .filter((m) => !appliedHashes.includes(m.hash))
-      .map((m) => m.tag);
-
-    // Find applied migration tags (hash exists in database)
-    const appliedTags = expectedMigrations
-      .filter((m) => appliedHashes.includes(m.hash))
-      .map((m) => m.tag);
+    // Mirror Drizzle's logic: pending if folderMillis > last applied created_at
+    const pending = journalEntries.filter((e) => e.when > maxAppliedMillis).map((e) => e.tag);
+    const applied = journalEntries.filter((e) => e.when <= maxAppliedMillis).map((e) => e.tag);
 
     return {
       hasPending: pending.length > 0,
       pending,
-      applied: appliedTags,
+      applied,
     };
   } catch (error) {
     throw new MigrationError(
