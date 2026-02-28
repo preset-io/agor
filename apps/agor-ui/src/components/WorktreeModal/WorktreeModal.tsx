@@ -9,7 +9,7 @@ import type {
   Worktree,
 } from '@agor/core/types';
 import { getPersistedAgentConfig, isPersistedAgent } from '@agor/core/types';
-import { Modal, Tabs } from 'antd';
+import { Badge, Modal, Tabs } from 'antd';
 import { useMemo, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
 import { AgentTab } from './tabs/AgentTab';
@@ -108,7 +108,11 @@ export const WorktreeModal: React.FC<WorktreeModalProps> = ({
     },
     {
       key: 'sessions',
-      label: `Sessions (${sessions.length})`,
+      label: (
+        <span>
+          Sessions <Badge count={sessions.length} showZero size="small" />
+        </span>
+      ),
       children: (
         <SessionsTab
           worktree={worktree}
