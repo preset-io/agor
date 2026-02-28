@@ -91,7 +91,8 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({ sessions, client, onSess
     }
 
     // Sort: running first, then by created_at descending
-    return result.sort((a, b) => {
+    // Spread into new array to avoid mutating the prop array
+    return [...result].sort((a, b) => {
       const aRunning = a.status === 'running' || a.status === 'stopping' ? 1 : 0;
       const bRunning = b.status === 'running' || b.status === 'stopping' ? 1 : 0;
       if (aRunning !== bRunning) return bRunning - aRunning;
@@ -111,7 +112,10 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({ sessions, client, onSess
         <Space size={8} align="center" style={{ minWidth: 0 }}>
           <ToolIcon tool={session.agentic_tool} size={18} />
           <Typography.Link
-            onClick={() => onSessionClick?.(session.session_id)}
+            onClick={(e) => {
+              e.stopPropagation();
+              onSessionClick?.(session.session_id);
+            }}
             style={{
               overflow: 'hidden',
               textOverflow: 'ellipsis',
@@ -175,7 +179,6 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({ sessions, client, onSess
         </Tooltip>
       ),
       sorter: (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
-      defaultSortOrder: 'descend' as const,
     },
     {
       title: '',
