@@ -187,30 +187,33 @@ const WorktreeCardComponent = ({
     [hasGatewaySource]
   );
 
+  // Filter out archived sessions from board card display
+  const activeSessions = useMemo(() => sessions.filter((s) => !s.archived), [sessions]);
+
   // Separate sessions by type: manual, scheduled, and gateway
   const manualSessions = useMemo(
-    () => sessions.filter((s) => !s.scheduled_from_worktree && !isGatewaySession(s)),
-    [sessions, isGatewaySession]
+    () => activeSessions.filter((s) => !s.scheduled_from_worktree && !isGatewaySession(s)),
+    [activeSessions, isGatewaySession]
   );
   const scheduledSessions = useMemo(
     () =>
-      sessions
+      activeSessions
         .filter((s) => s.scheduled_from_worktree)
         .sort((a, b) => (b.scheduled_run_at || 0) - (a.scheduled_run_at || 0)), // Most recent first
-    [sessions]
+    [activeSessions]
   );
   const gatewaySessions = useMemo(
-    () => sessions.filter((s) => isGatewaySession(s)),
-    [sessions, isGatewaySession]
+    () => activeSessions.filter((s) => isGatewaySession(s)),
+    [activeSessions, isGatewaySession]
   );
 
   // Build genealogy tree structure (only for manual sessions)
   const sessionTreeData = useMemo(() => buildSessionTree(manualSessions), [manualSessions]);
 
-  // Check if any session is running or stopping
+  // Check if any active (non-archived) session is running or stopping
   const hasRunningSession = useMemo(
-    () => sessions.some((s) => s.status === 'running' || s.status === 'stopping'),
-    [sessions]
+    () => activeSessions.some((s) => s.status === 'running' || s.status === 'stopping'),
+    [activeSessions]
   );
 
   // Check if any scheduled session is running (for collapse header spinner)
@@ -236,12 +239,12 @@ const WorktreeCardComponent = ({
   // Check if worktree needs attention (newly created OR has ready sessions)
   // Don't highlight if a session from this worktree is currently open in the drawer
   const needsAttention = useMemo(() => {
-    const hasReadySession = sessions.some((s) => s.ready_for_prompt === true);
-    const hasOpenSession = sessions.some((s) => s.session_id === selectedSessionId);
+    const hasReadySession = activeSessions.some((s) => s.ready_for_prompt === true);
+    const hasOpenSession = activeSessions.some((s) => s.session_id === selectedSessionId);
     const shouldHighlight = (worktree.needs_attention || hasReadySession) && !hasOpenSession;
 
     return shouldHighlight;
-  }, [sessions, worktree.needs_attention, selectedSessionId]);
+  }, [activeSessions, worktree.needs_attention, selectedSessionId]);
 
   // Auto-expand all nodes on mount and when new nodes with children are added
   useEffect(() => {
@@ -832,8 +835,8 @@ const WorktreeCardComponent = ({
 
       {/* Sessions & Scheduled Runs - collapsible sections */}
       <div className="nodrag">
-        {sessions.length === 0 ? (
-          // No sessions at all: show create button without collapse wrapper
+        {activeSessions.length === 0 ? (
+          // No active sessions: show create button without collapse wrapper
           <div
             style={{
               display: 'flex',

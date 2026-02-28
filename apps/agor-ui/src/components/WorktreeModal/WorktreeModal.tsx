@@ -17,6 +17,7 @@ import { EnvironmentTab } from './tabs/EnvironmentTab';
 import { FilesTab } from './tabs/FilesTab';
 import { GeneralTab, type WorktreeUpdate } from './tabs/GeneralTab';
 import { ScheduleTab } from './tabs/ScheduleTab';
+import { SessionsTab } from './tabs/SessionsTab';
 
 export interface WorktreeModalProps {
   open: boolean;
@@ -39,6 +40,7 @@ export interface WorktreeModalProps {
     }
   ) => void;
   onOpenSettings?: () => void; // Navigate to Settings → Repositories
+  onSessionClick?: (sessionId: string) => void;
 }
 
 export const WorktreeModal: React.FC<WorktreeModalProps> = ({
@@ -56,6 +58,7 @@ export const WorktreeModal: React.FC<WorktreeModalProps> = ({
   onUpdateRepo,
   onArchiveOrDelete,
   onOpenSettings,
+  onSessionClick,
 }) => {
   const [activeTab, setActiveTab] = useState('general');
 
@@ -100,6 +103,21 @@ export const WorktreeModal: React.FC<WorktreeModalProps> = ({
           onUpdate={onUpdateWorktree}
           onArchiveOrDelete={onArchiveOrDelete}
           onClose={onClose}
+        />
+      ),
+    },
+    {
+      key: 'sessions',
+      label: `Sessions (${sessions.length})`,
+      children: (
+        <SessionsTab
+          worktree={worktree}
+          sessions={sessions}
+          client={client}
+          onSessionClick={(sessionId) => {
+            onSessionClick?.(sessionId);
+            onClose();
+          }}
         />
       ),
     },

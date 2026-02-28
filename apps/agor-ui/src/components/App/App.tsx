@@ -928,6 +928,7 @@ export const App: React.FC<AppProps> = ({
               setWorktreeModalWorktreeId(null);
               openSettings();
             }}
+            onSessionClick={setSelectedSessionId}
           />
           <WorktreeListDrawer
             open={listDrawerOpen}
