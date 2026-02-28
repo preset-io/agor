@@ -144,8 +144,21 @@ const TodoItemRow: React.FC<{ todo: TodoItem; index: number }> = ({ todo, index 
 export const TodoListRenderer: React.FC<TodoListRendererProps> = ({ toolUseId, input }) => {
   const { token } = theme.useToken();
 
-  // Extract todos array
-  const todos = input?.todos || [];
+  // Extract todos array - handle both parsed arrays and JSON strings
+  // (tool input from message data may arrive as a serialized JSON string)
+  const todos = (() => {
+    const raw = input?.todos;
+    if (Array.isArray(raw)) return raw;
+    if (typeof raw === 'string') {
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      } catch {
+        // Invalid JSON — fall through to empty
+      }
+    }
+    return [];
+  })();
 
   if (todos.length === 0) {
     return null;

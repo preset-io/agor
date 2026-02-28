@@ -50,8 +50,18 @@ export function StickyTodoRenderer({ messages }: StickyTodoRendererProps) {
           if (block.type === 'tool_use' && block.name === 'TodoWrite') {
             // Found the latest TodoWrite - return its todos and exit immediately
             const input = block.input as Record<string, unknown> | undefined;
-            const todos = input?.todos as TodoItem[] | undefined;
-            return todos || null;
+            const raw = input?.todos;
+            // Handle both parsed arrays and JSON strings (tool input may be serialized)
+            if (Array.isArray(raw)) return raw as TodoItem[];
+            if (typeof raw === 'string') {
+              try {
+                const parsed = JSON.parse(raw);
+                if (Array.isArray(parsed)) return parsed as TodoItem[];
+              } catch {
+                // Invalid JSON
+              }
+            }
+            return null;
           }
         }
       }
