@@ -110,7 +110,7 @@ export const WorktreeModal: React.FC<WorktreeModalProps> = ({
       key: 'sessions',
       label: (
         <span>
-          Sessions <Badge count={sessions.length} showZero size="small" />
+          Sessions <Badge count={sessions.length} showZero size="small" color="default" />
         </span>
       ),
       children: (
