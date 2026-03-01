@@ -233,7 +233,7 @@ export class OpenCodeTool implements ITool {
             } else if (server.transport === 'http' || server.transport === 'sse') {
               const headers: Record<string, string> = {};
               if (server.auth?.token) {
-                headers['Authorization'] = `Bearer ${server.auth.token}`;
+                headers.Authorization = `Bearer ${server.auth.token}`;
               }
               await client.mcp.add({
                 body: {
@@ -505,7 +505,6 @@ export class OpenCodeTool implements ITool {
 
               // OpenCode sends full text each time, not deltas
               // We need to calculate the delta ourselves
-              // biome-ignore lint/suspicious/noExplicitAny: Part types vary, text field is runtime checked
               const newText =
                 // biome-ignore lint/suspicious/noExplicitAny: Part types vary, text field is runtime checked
                 'text' in part && typeof (part as any).text === 'string'
@@ -578,7 +577,6 @@ export class OpenCodeTool implements ITool {
             }
 
             // Check for session idle status - indicates response is complete
-            // biome-ignore lint/suspicious/noExplicitAny: Event types incomplete, runtime check needed
             if (
               // biome-ignore lint/suspicious/noExplicitAny: Event types incomplete, runtime check needed
               (event as any).type === 'session.status' &&
@@ -610,7 +608,6 @@ export class OpenCodeTool implements ITool {
       console.log('[OpenCodeTool] ===================================');
 
       // Check for error in response
-      // biome-ignore lint/suspicious/noExplicitAny: Response structure varies, runtime check needed
       let hasError = false;
       let errorMessage = '';
       // biome-ignore lint/suspicious/noExplicitAny: Response structure varies, runtime check needed
