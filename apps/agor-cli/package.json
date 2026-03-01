@@ -21,7 +21,7 @@
     "inquirer": "^12.10.0"
   },
   "devDependencies": {
-    "@types/node": "^22.10.2",
+    "@types/node": "^25.3.3",
     "glob": "^11.1.0",
     "oclif": "^4.22.81",
     "tsup": "^8.5.1",
