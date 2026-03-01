@@ -52,13 +52,29 @@ export async function executeOpenCodeTask(params: {
     // Default to localhost if OpenCode runs in same container, or host.docker.internal if on host
     const serverUrl = process.env.OPENCODE_SERVER_URL || 'http://localhost:4096';
 
+    // Resolve worktree path from session's worktree_id
+    let worktreePath: string | undefined;
+    if (session.worktree_id) {
+      try {
+        const worktree = await repos.worktrees.findById(session.worktree_id);
+        if (worktree) {
+          worktreePath = worktree.path;
+          console.log(`[opencode] Using worktree directory: ${worktreePath}`);
+        }
+      } catch (error) {
+        console.warn(`[opencode] Could not resolve worktree ${session.worktree_id}:`, error);
+      }
+    }
+
     // Create Tool instance with config
     const tool = new OpenCodeTool(
       {
         enabled: true,
         serverUrl,
       },
-      repos.messagesService
+      repos.messagesService,
+      repos.sessionMCP,
+      repos.mcpServers
     );
 
     let opencodeSessionId: string;
@@ -93,12 +109,14 @@ export async function executeOpenCodeTask(params: {
       console.log('[opencode] Stored OpenCode session ID in Agor session');
     }
 
-    // Set session context with model and provider from session config
+    // Set session context with model, provider, worktree path, and MCP token from session config
     tool.setSessionContext(
       sessionId,
       opencodeSessionId,
       session.model_config?.model,
-      session.model_config?.provider
+      session.model_config?.provider,
+      worktreePath,
+      session.mcp_token
     );
 
     // Get existing messages to determine next index
