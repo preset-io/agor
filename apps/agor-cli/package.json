@@ -14,8 +14,8 @@
   },
   "dependencies": {
     "@agor/core": "workspace:*",
-    "@oclif/core": "^4.6.0",
-    "@oclif/plugin-help": "^6.2.18",
+    "@oclif/core": "^4.8.2",
+    "@oclif/plugin-help": "^6.2.37",
     "chalk": "^5.6.2",
     "cli-table3": "^0.6.5",
     "inquirer": "^12.10.0"
@@ -23,9 +23,9 @@
   "devDependencies": {
     "@types/node": "^22.10.2",
     "glob": "^11.1.0",
-    "oclif": "^4.22.32",
-    "tsup": "^8.3.5",
-    "tsx": "^4.19.2",
+    "oclif": "^4.22.81",
+    "tsup": "^8.5.1",
+    "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   },
   "oclif": {

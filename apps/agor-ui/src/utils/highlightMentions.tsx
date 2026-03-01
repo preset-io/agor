@@ -12,6 +12,7 @@ import type React from 'react';
  * Use this for non-markdown contexts
  */
 export function highlightMentionsInText(text: string): React.ReactNode {
+  // biome-ignore lint/correctness/useHookAtTopLevel: This function is called within React components only
   const { token } = theme.useToken();
 
   // Match @ followed by either:

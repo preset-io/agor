@@ -38,14 +38,14 @@
     "check:agor-live-deps": "node scripts/sync-agor-live-deps.mjs --check"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.2.6",
+    "@biomejs/biome": "^2.4.4",
     "@google-analytics/admin": "^9.0.1",
     "husky": "^9.1.7",
-    "knip": "^5.66.2",
-    "lint-staged": "^16.2.5",
-    "prettier": "^3.6.2",
-    "tsx": "^4.20.6",
-    "turbo": "^2.5.8",
+    "knip": "^5.85.0",
+    "lint-staged": "^16.3.1",
+    "prettier": "^3.8.1",
+    "tsx": "^4.21.0",
+    "turbo": "^2.8.12",
     "typescript": "^5.9.3"
   },
   "packageManager": "pnpm@9.15.1",
@@ -56,9 +56,9 @@
   "pnpm": {
     "overrides": {
       "@esbuild-kit/core-utils>esbuild": "0.25.4",
-      "@google/genai": "^1.34.0",
+      "@google/genai": "^1.43.0",
       "@isaacs/brace-expansion": ">=5.0.1",
-      "@modelcontextprotocol/sdk": ">=1.26.0",
+      "@modelcontextprotocol/sdk": ">=1.27.1",
       "esbuild": ">=0.25.0",
       "fast-xml-parser": ">=5.3.4",
       "glob": "^11.1.0",
