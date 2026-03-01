@@ -294,7 +294,8 @@ export class OpenCodeTool implements ITool {
    * Create a new OpenCode session
    */
   async createSession?(config: CreateSessionConfig): Promise<SessionHandle> {
-    const client = this.getClient();
+    // Use directory-scoped client if workingDirectory is provided (worktree path)
+    const client = this.getClientForDirectory(config.workingDirectory);
 
     try {
       // Note: OpenCode SDK session.create doesn't support model parameter

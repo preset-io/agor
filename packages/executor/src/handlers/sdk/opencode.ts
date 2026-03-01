@@ -93,6 +93,7 @@ export async function executeOpenCodeTask(params: {
         projectName: 'agor',
         model: session.model_config?.model,
         provider: session.model_config?.provider,
+        workingDirectory: worktreePath,
       });
 
       if (!sessionHandle) {

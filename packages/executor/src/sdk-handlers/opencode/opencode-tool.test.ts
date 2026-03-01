@@ -572,4 +572,68 @@ describe('OpenCodeTool', () => {
       expect(result?.status).toBe('failed');
     });
   });
+
+  describe('createSession with workingDirectory', () => {
+    it('should use directory-scoped client when workingDirectory is provided', async () => {
+      const tool = new OpenCodeTool(
+        { enabled: true, serverUrl: 'http://localhost:4096' },
+        mockMessagesService
+      );
+
+      await tool.createSession?.({
+        title: 'Test Session',
+        workingDirectory: '/path/to/worktree',
+      });
+
+      // Should have created a client with directory set
+      const dirClient = createdClients.find((c) => c.directory === '/path/to/worktree');
+      expect(dirClient).toBeDefined();
+    });
+
+    it('should use default client when workingDirectory is not provided', async () => {
+      const tool = new OpenCodeTool(
+        { enabled: true, serverUrl: 'http://localhost:4096' },
+        mockMessagesService
+      );
+
+      await tool.createSession?.({
+        title: 'Test Session',
+      });
+
+      // Should have created a client without directory
+      expect(createdClients.length).toBe(1);
+      expect(createdClients[0].directory).toBeUndefined();
+    });
+
+    it('should reuse cached directory client across createSession and executeTask', async () => {
+      const tool = new OpenCodeTool(
+        { enabled: true, serverUrl: 'http://localhost:4096' },
+        mockMessagesService,
+        mockSessionMCPRepo,
+        mockMCPServerRepo
+      );
+
+      // Create session with directory
+      const result = await tool.createSession?.({
+        title: 'Test',
+        workingDirectory: '/shared/path',
+      });
+
+      // Set context with same directory
+      tool.setSessionContext(
+        'session-shared',
+        result!.sessionId,
+        undefined,
+        undefined,
+        '/shared/path'
+      );
+
+      // Execute task - should reuse the same client
+      await tool.executeTask?.('session-shared', 'test', 'task-shared');
+
+      // Only 1 client should have been created for /shared/path
+      const dirClients = createdClients.filter((c) => c.directory === '/shared/path');
+      expect(dirClients.length).toBe(1);
+    });
+  });
 });
