@@ -51,16 +51,32 @@ import { SessionPanelContent } from './SessionPanelContent';
 // This allows us to distinguish between false and undefined in templates
 Handlebars.registerHelper('isDefined', (value: unknown) => value !== undefined);
 
-// Compile template once at module load (after helper registration)
-const compiledSpawnTemplate = Handlebars.compile(spawnSubsessionTemplate);
-
 // Re-export PermissionMode from SDK for convenience
 export type { PermissionMode };
 
-// Compile the spawn subsession template once at module level
-const compiledSpawnSubsessionTemplate = compileTemplate<{ userPrompt: string }>(
-  spawnSubsessionTemplate
-);
+/** Context shape for the spawn subsession Handlebars template */
+interface SpawnTemplateContext {
+  userPrompt: string;
+  hasConfig?: boolean;
+  agenticTool?: string;
+  permissionMode?: PermissionMode;
+  modelConfig?: SpawnConfig['modelConfig'];
+  codexSandboxMode?: CodexSandboxMode;
+  codexApprovalPolicy?: CodexApprovalPolicy;
+  codexNetworkAccess?: boolean;
+  mcpServerIds?: string[];
+  hasCallbackConfig?: boolean;
+  callbackConfig?: {
+    enableCallback?: boolean;
+    includeLastMessage?: boolean;
+    includeOriginalPrompt?: boolean;
+  };
+  extraInstructions?: string;
+}
+
+// Compile the spawn subsession template once at module level (after helper registration)
+const compiledSpawnSubsessionTemplate =
+  compileTemplate<SpawnTemplateContext>(spawnSubsessionTemplate);
 
 export interface SessionPanelProps {
   client: AgorClient | null;
@@ -423,7 +439,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         config.includeOriginalPrompt !== undefined ||
         config.extraInstructions !== undefined;
 
-      const metaPrompt = compiledSpawnTemplate({
+      const metaPrompt = compiledSpawnSubsessionTemplate({
         userPrompt: config.prompt || '',
         hasConfig,
         agenticTool: config.agent,

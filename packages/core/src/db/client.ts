@@ -324,8 +324,8 @@ export function getDatabaseUrl(): string {
         }
         if (dbConfig.postgresql?.host) {
           const pg = dbConfig.postgresql;
-          const user = pg.user || 'postgres';
-          const password = pg.password ? `:${pg.password}` : '';
+          const user = encodeURIComponent(pg.user || 'postgres');
+          const password = pg.password ? `:${encodeURIComponent(pg.password)}` : '';
           const host = pg.host;
           const port = pg.port || 5432;
           const database = pg.database || 'agor';
