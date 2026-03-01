@@ -5,18 +5,7 @@
  */
 
 import type { AgenticToolName, SessionStatus, UUID, Worktree, WorktreeID } from '@agor/core/types';
-import {
-  and,
-  desc,
-  eq,
-  getTableColumns,
-  inArray,
-  isNotNull,
-  isNull,
-  like,
-  or,
-  sql,
-} from 'drizzle-orm';
+import { and, desc, eq, getTableColumns, inArray, isNotNull, isNull, like, or } from 'drizzle-orm';
 import { formatShortId, generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
@@ -291,7 +280,7 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
   async findByRepoAndName(repoId: UUID, name: string): Promise<Worktree | null> {
     const row = await select(this.db)
       .from(worktrees)
-      .where(sql`${worktrees.repo_id} = ${repoId} AND ${worktrees.name} = ${name}`)
+      .where(and(eq(worktrees.repo_id, repoId), eq(worktrees.name, name)))
       .one();
 
     return row ? this.rowToWorktree(row) : null;
@@ -304,7 +293,7 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
     const row = await select(this.db)
       .from(worktrees)
       .where(
-        sql`${worktrees.repo_id} = ${repoId} AND ${worktrees.name} = ${name} AND ${worktrees.archived} = 0`
+        and(eq(worktrees.repo_id, repoId), eq(worktrees.name, name), eq(worktrees.archived, false))
       )
       .one();
 
