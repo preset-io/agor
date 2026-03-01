@@ -1,5 +1,11 @@
 version: 2
 updates:
+  # Root workspace (devDependencies only)
+  - package-ecosystem: 'npm'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+
   # Apps
   - package-ecosystem: 'npm'
     directory: '/apps/agor-cli'
@@ -21,7 +27,7 @@ updates:
     schedule:
       interval: 'weekly'
 
-  # Packages (excluding agor-live meta-package)
+  # Packages
   - package-ecosystem: 'npm'
     directory: '/packages/core'
     schedule:
@@ -32,5 +38,12 @@ updates:
     schedule:
       interval: 'weekly'
 
-  # Note: packages/agor-live is intentionally excluded as it's a meta-package
-  # whose dependencies are derived from other packages in the monorepo
+  # packages/agor-live is a meta-package whose dependencies are synced from
+  # other monorepo packages (see scripts/sync-agor-live-deps.mjs). Explicitly
+  # listed here with a wildcard ignore to prevent Dependabot from opening PRs.
+  - package-ecosystem: 'npm'
+    directory: '/packages/agor-live'
+    schedule:
+      interval: 'weekly'
+    ignore:
+      - dependency-name: '*'
