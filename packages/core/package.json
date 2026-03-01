@@ -205,7 +205,7 @@
     "@google/genai": "^1.43.0",
     "@iarna/toml": "^2.2.5",
     "@libsql/client": "^0.15.15",
-    "@openai/codex-sdk": "^0.98.0",
+    "@openai/codex-sdk": "^0.106.0",
     "@opencode-ai/sdk": "^1.1.53",
     "@slack/socket-mode": "^2.0.5",
     "@slack/web-api": "^7.14.1",
