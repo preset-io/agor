@@ -454,14 +454,45 @@ export class OpenCodeTool implements ITool {
         console.log('[OpenCodeTool] Listening for events...');
 
         for await (const event of eventStream.stream) {
-          // Log EVERY event for debugging
-          console.log('[OpenCodeTool] ========== RAW EVENT ==========');
-          console.log('[OpenCodeTool] Event type:', event.type);
-          console.log('[OpenCodeTool] Event data:', JSON.stringify(event, null, 2));
-          console.log('[OpenCodeTool] ================================');
+          // Log event type (skip noisy heartbeats)
+          const eventType = event.type as string;
+          if (eventType !== 'server.heartbeat') {
+            console.log('[OpenCodeTool] Event:', eventType);
+          }
 
           // Check if this event is for our session
           if ('properties' in event) {
+            // Handle permission.asked / permission.updated events BEFORE processing messages.
+            // When OpenCode needs permission (e.g., external_directory access), it emits this
+            // event and waits for a response. Without auto-granting, the session hangs forever.
+            if (
+              (eventType === 'permission.asked' || eventType === 'permission.updated') &&
+              'id' in event.properties &&
+              'sessionID' in event.properties &&
+              event.properties.sessionID === context.opencodeSessionId
+            ) {
+              const permId = event.properties.id as string;
+              const permType = (
+                'type' in event.properties ? event.properties.type : 'unknown'
+              ) as string;
+              console.log(
+                `[OpenCodeTool] Auto-granting permission: id=${permId}, type=${permType}`
+              );
+              try {
+                await client.postSessionIdPermissionsPermissionId({
+                  path: {
+                    id: context.opencodeSessionId,
+                    permissionID: permId,
+                  },
+                  body: { response: 'always' },
+                });
+                console.log(`[OpenCodeTool] Permission auto-granted (always): id=${permId}`);
+              } catch (permErr) {
+                console.error('[OpenCodeTool] Failed to auto-grant permission:', permErr);
+              }
+              continue;
+            }
+
             // First, identify the assistant message when it's created
             if (
               event.type === 'message.updated' &&
