@@ -32,7 +32,7 @@ import { WorktreeModal } from '../WorktreeModal';
 import type { WorktreeUpdate } from '../WorktreeModal/tabs/GeneralTab';
 import { AboutTab } from './AboutTab';
 import { AgenticToolsSection } from './AgenticToolsSection';
-import { AgentsTable } from './AgentsTable';
+import { AssistantsTable } from './AssistantsTable';
 import { BoardsTable } from './BoardsTable';
 import { GatewayChannelsTable } from './GatewayChannelsTable';
 import { MCPServersTable } from './MCPServersTable';
@@ -195,8 +195,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           icon: <BranchesOutlined />,
         },
         {
-          key: 'agents',
-          label: 'Agents',
+          key: 'assistants',
+          label: 'Assistants',
           icon: <RobotOutlined />,
         },
       ],
@@ -289,9 +289,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             onStopEnvironment={onStopEnvironment}
           />
         );
-      case 'agents':
+      case 'assistants':
         return (
-          <AgentsTable
+          <AssistantsTable
             worktreeById={worktreeById}
             repoById={repoById}
             boardById={boardById}

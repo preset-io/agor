@@ -320,7 +320,9 @@ export interface AgorCredentials {
  * Onboarding settings (stored by CLI init, consumed by UI wizard)
  */
 export interface AgorOnboardingSettings {
-  /** Whether persisted agent setup was requested during init */
+  /** Whether assistant setup was requested during init */
+  assistantPending?: boolean;
+  /** @deprecated Use assistantPending instead */
   persistedAgentPending?: boolean;
   /** Clone URL for the framework repo */
   frameworkRepoUrl?: string;

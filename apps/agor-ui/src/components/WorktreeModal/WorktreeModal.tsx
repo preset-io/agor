@@ -8,11 +8,11 @@ import type {
   User,
   Worktree,
 } from '@agor/core/types';
-import { getPersistedAgentConfig, isPersistedAgent } from '@agor/core/types';
+import { getAssistantConfig, isAssistant } from '@agor/core/types';
 import { Badge, Modal, Tabs, theme } from 'antd';
 import { useMemo, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
-import { AgentTab } from './tabs/AgentTab';
+import { AssistantTab } from './tabs/AssistantTab';
 import { EnvironmentTab } from './tabs/EnvironmentTab';
 import { FilesTab } from './tabs/FilesTab';
 import { GeneralTab, type WorktreeUpdate } from './tabs/GeneralTab';
@@ -63,9 +63,9 @@ export const WorktreeModal: React.FC<WorktreeModalProps> = ({
   const { token } = theme.useToken();
   const [activeTab, setActiveTab] = useState('general');
 
-  const isAgent = worktree ? isPersistedAgent(worktree) : false;
-  const agentConfig = useMemo(
-    () => (worktree ? getPersistedAgentConfig(worktree) : null),
+  const isAnAssistant = worktree ? isAssistant(worktree) : false;
+  const assistantConfig = useMemo(
+    () => (worktree ? getAssistantConfig(worktree) : null),
     [worktree]
   );
 
@@ -73,19 +73,19 @@ export const WorktreeModal: React.FC<WorktreeModalProps> = ({
     return null;
   }
 
-  const title = isAgent
-    ? `Agent: ${agentConfig?.displayName ?? worktree.name}`
+  const title = isAnAssistant
+    ? `Assistant: ${assistantConfig?.displayName ?? worktree.name}`
     : `Worktree: ${worktree.name}`;
 
   const tabItems = [
-    // Agent tab — only for persisted agents, shown first
-    ...(isAgent
+    // Assistant tab — only for assistants, shown first
+    ...(isAnAssistant
       ? [
           {
-            key: 'agent',
-            label: 'Agent',
+            key: 'assistant',
+            label: 'Assistant',
             children: (
-              <AgentTab worktree={worktree} onUpdate={onUpdateWorktree} onClose={onClose} />
+              <AssistantTab worktree={worktree} onUpdate={onUpdateWorktree} onClose={onClose} />
             ),
           },
         ]

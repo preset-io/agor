@@ -25,6 +25,8 @@ interface SystemCredentials {
 }
 
 interface OnboardingConfig {
+  assistantPending?: boolean;
+  /** @deprecated Use assistantPending instead */
   persistedAgentPending?: boolean;
   frameworkRepoUrl?: string;
   systemCredentials?: SystemCredentials;

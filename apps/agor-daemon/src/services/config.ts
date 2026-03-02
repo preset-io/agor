@@ -169,8 +169,12 @@ export class ConfigService {
       if (!config.onboarding) {
         config.onboarding = {};
       }
+      if (data.onboarding.assistantPending !== undefined) {
+        config.onboarding.assistantPending = data.onboarding.assistantPending;
+      }
+      // Backward compat: also handle legacy field name
       if (data.onboarding.persistedAgentPending !== undefined) {
-        config.onboarding.persistedAgentPending = data.onboarding.persistedAgentPending;
+        config.onboarding.assistantPending = data.onboarding.persistedAgentPending;
       }
       if (data.onboarding.frameworkRepoUrl !== undefined) {
         config.onboarding.frameworkRepoUrl = data.onboarding.frameworkRepoUrl;

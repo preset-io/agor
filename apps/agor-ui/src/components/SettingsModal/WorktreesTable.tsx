@@ -1,5 +1,5 @@
 import type { Board, Repo, Session, Worktree } from '@agor/core/types';
-import { isPersistedAgent } from '@agor/core/types';
+import { isAssistant } from '@agor/core/types';
 import {
   BranchesOutlined,
   CodeSandboxOutlined,
@@ -79,7 +79,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
   const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null);
   const [isFormValid, setIsFormValid] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  const [archiveFilter, setArchiveFilter] = useState<'all' | 'active' | 'archived' | 'agents'>(
+  const [archiveFilter, setArchiveFilter] = useState<'all' | 'active' | 'archived' | 'assistants'>(
     'active'
   );
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
@@ -205,7 +205,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
       key: 'name',
       render: (name: string, record: Worktree) => (
         <Space>
-          {isPersistedAgent(record) ? (
+          {isAssistant(record) ? (
             <RobotOutlined style={{ color: token.colorInfo }} />
           ) : (
             <BranchesOutlined />
@@ -343,8 +343,8 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
       filtered = sorted.filter((w) => !w.archived);
     } else if (archiveFilter === 'archived') {
       filtered = sorted.filter((w) => w.archived);
-    } else if (archiveFilter === 'agents') {
-      filtered = sorted.filter((w) => !w.archived && isPersistedAgent(w));
+    } else if (archiveFilter === 'assistants') {
+      filtered = sorted.filter((w) => !w.archived && isAssistant(w));
     }
 
     // Filter by search term
@@ -397,7 +397,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
               style={{ width: 120 }}
               options={[
                 { value: 'active', label: 'Active' },
-                { value: 'agents', label: 'Agents' },
+                { value: 'assistants', label: 'Assistants' },
                 { value: 'all', label: 'All' },
                 { value: 'archived', label: 'Archived' },
               ]}

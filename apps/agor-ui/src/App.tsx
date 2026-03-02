@@ -334,7 +334,7 @@ function AppContent() {
     worktreeId: string;
     sessionId: string;
     boardId: string;
-    path: 'persisted-agent' | 'own-repo';
+    path: 'assistant' | 'own-repo';
   }) => {
     setOnboardingWizardOpen(false);
 
@@ -354,12 +354,10 @@ function AppContent() {
       },
     });
 
-    // Clear the persisted agent pending flag if applicable
-    if (result.path === 'persisted-agent' && client) {
+    // Clear the assistant pending flag if applicable
+    if (result.path === 'assistant' && client) {
       try {
-        await client
-          .service('config')
-          .patch(null, { onboarding: { persistedAgentPending: false } });
+        await client.service('config').patch(null, { onboarding: { assistantPending: false } });
       } catch {
         // Non-critical — ignore
       }
@@ -1266,7 +1264,9 @@ function AppContent() {
         onCreateSession={handleCreateSession}
         onUpdateUser={handleUpdateUser}
         onUpdateWorktree={handleUpdateWorktree}
-        persistedAgentPending={onboardingConfig?.persistedAgentPending}
+        assistantPending={
+          onboardingConfig?.assistantPending ?? onboardingConfig?.persistedAgentPending
+        }
         frameworkRepoUrl={onboardingConfig?.frameworkRepoUrl}
         systemCredentials={onboardingConfig?.systemCredentials}
       />

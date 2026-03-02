@@ -5825,7 +5825,10 @@ async function main() {
           description: config.daemon?.instanceDescription,
         },
         onboarding: {
-          persistedAgentPending: config.onboarding?.persistedAgentPending ?? false,
+          assistantPending:
+            config.onboarding?.assistantPending ??
+            config.onboarding?.persistedAgentPending ??
+            false,
           frameworkRepoUrl: config.onboarding?.frameworkRepoUrl,
           systemCredentials: {
             ANTHROPIC_API_KEY: !!(

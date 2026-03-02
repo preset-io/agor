@@ -1,6 +1,6 @@
 import type { AgorClient } from '@agor/core/api';
-import type { Board, PersistedAgentConfig, Repo, Session, Worktree } from '@agor/core/types';
-import { getPersistedAgentConfig, isPersistedAgent } from '@agor/core/types';
+import type { AssistantConfig, Board, Repo, Session, Worktree } from '@agor/core/types';
+import { getAssistantConfig, isAssistant } from '@agor/core/types';
 import {
   DeleteOutlined,
   EditOutlined,
@@ -30,12 +30,12 @@ import { ArchiveDeleteWorktreeModal } from '../ArchiveDeleteWorktreeModal';
 import type { WorktreeUpdate } from '../WorktreeModal/tabs/GeneralTab';
 import { renderEnvCell } from './WorktreeEnvColumn';
 
-const OPENCLAW_REPO_SLUG = 'mistercrunch/agor-openclaw';
+const FRAMEWORK_REPO_SLUG = 'mistercrunch/agor-openclaw';
 
 /** Special sentinel for "create new board" option */
 const CREATE_NEW_BOARD = '__create_new__';
 
-interface AgentsTableProps {
+interface AssistantsTableProps {
   worktreeById: Map<string, Worktree>;
   repoById: Map<string, Repo>;
   boardById: Map<string, Board>;
@@ -73,7 +73,7 @@ function slugify(name: string): string {
     .replace(/^-|-$/g, '');
 }
 
-export const AgentsTable: React.FC<AgentsTableProps> = ({
+export const AssistantsTable: React.FC<AssistantsTableProps> = ({
   worktreeById,
   repoById,
   boardById,
@@ -90,10 +90,10 @@ export const AgentsTable: React.FC<AgentsTableProps> = ({
   const boards = mapToArray(boardById);
   const { token } = theme.useToken();
 
-  // Find the openclaw repo if available
-  const openclawRepo = useMemo(
+  // Find the framework repo if available
+  const frameworkRepo = useMemo(
     () =>
-      repos.find((r) => r.slug === OPENCLAW_REPO_SLUG || r.remote_url?.includes('agor-openclaw')),
+      repos.find((r) => r.slug === FRAMEWORK_REPO_SLUG || r.remote_url?.includes('agor-openclaw')),
     [repos]
   );
 
@@ -111,10 +111,10 @@ export const AgentsTable: React.FC<AgentsTableProps> = ({
   const validateForm = useCallback(() => {
     const values = form.getFieldsValue();
     const hasDisplayName = !!values.displayName?.trim();
-    // Repo defaults to openclaw, so always valid unless advanced override clears it
-    const hasRepo = openclawRepo ? true : !!values.repoId;
+    // Repo defaults to framework repo, so always valid unless advanced override clears it
+    const hasRepo = frameworkRepo ? true : !!values.repoId;
     setIsFormValid(hasDisplayName && hasRepo);
-  }, [form, openclawRepo]);
+  }, [form, frameworkRepo]);
 
   // Auto-generate worktree name from display name
   const handleDisplayNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -134,8 +134,8 @@ export const AgentsTable: React.FC<AgentsTableProps> = ({
       const values = await form.validateFields();
       setCreating(true);
 
-      // Resolve repo — default to openclaw
-      const repoId = values.repoId || openclawRepo?.repo_id;
+      // Resolve repo — default to framework repo
+      const repoId = values.repoId || frameworkRepo?.repo_id;
       if (!repoId) return;
 
       const repo = repoById.get(repoId);
@@ -145,12 +145,12 @@ export const AgentsTable: React.FC<AgentsTableProps> = ({
       // Resolve board — create new or use existing
       let boardId: string | undefined;
       if (values.boardChoice === CREATE_NEW_BOARD) {
-        // Create a new board named after the agent
+        // Create a new board named after the assistant
         if (client) {
           try {
             const newBoard = (await client.service('boards').create({
               name: values.displayName.trim(),
-              icon: '🤖',
+              icon: '\u{1F916}',
             })) as Board;
             boardId = newBoard.board_id;
           } catch (err) {
@@ -161,7 +161,7 @@ export const AgentsTable: React.FC<AgentsTableProps> = ({
         boardId = values.boardChoice;
       }
 
-      // Phase 1: Create the worktree
+      // Step 1: Create the worktree
       const worktree = await onCreateWorktree?.(repoId, {
         name: worktreeName,
         ref: worktreeName,
@@ -172,22 +172,22 @@ export const AgentsTable: React.FC<AgentsTableProps> = ({
       });
 
       if (worktree) {
-        // Phase 2: Tag as persisted agent
-        const agentConfig: PersistedAgentConfig = {
-          kind: 'persisted-agent',
+        // Step 2: Tag as assistant
+        const assistantConfig: AssistantConfig = {
+          kind: 'assistant',
           displayName: values.displayName.trim(),
           frameworkRepo: repo?.slug,
           createdViaOnboarding: false,
         };
         onUpdateWorktree?.(worktree.worktree_id, {
-          custom_context: { agent: agentConfig },
+          custom_context: { assistant: assistantConfig },
         });
       }
 
       setCreateModalOpen(false);
       form.resetFields();
     } catch (error) {
-      console.error('Agent creation failed:', error);
+      console.error('Assistant creation failed:', error);
     } finally {
       setCreating(false);
     }
@@ -199,17 +199,17 @@ export const AgentsTable: React.FC<AgentsTableProps> = ({
     setIsFormValid(false);
   };
 
-  // Filter to only agent worktrees
-  const agents = useMemo(() => {
+  // Filter to only assistant worktrees
+  const assistants = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
-    const agentWorktrees = Array.from(worktreeById.values())
-      .filter((w) => !w.archived && isPersistedAgent(w))
+    const assistantWorktrees = Array.from(worktreeById.values())
+      .filter((w) => !w.archived && isAssistant(w))
       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
-    if (!term) return agentWorktrees;
+    if (!term) return assistantWorktrees;
 
-    return agentWorktrees.filter((w) => {
-      const config = getPersistedAgentConfig(w);
+    return assistantWorktrees.filter((w) => {
+      const config = getAssistantConfig(w);
       const repo = repoById.get(w.repo_id);
       const haystacks = [config?.displayName, w.name, repo?.name, repo?.slug];
       return haystacks.some((v) => v?.toLowerCase().includes(term));
@@ -218,10 +218,10 @@ export const AgentsTable: React.FC<AgentsTableProps> = ({
 
   const columns = [
     {
-      title: 'Agent',
-      key: 'agent',
+      title: 'Assistant',
+      key: 'assistant',
       render: (_: unknown, record: Worktree) => {
-        const config = getPersistedAgentConfig(record);
+        const config = getAssistantConfig(record);
         return (
           <Space>
             <RobotOutlined style={{ color: token.colorInfo }} />
@@ -298,7 +298,7 @@ export const AgentsTable: React.FC<AgentsTableProps> = ({
       width: 100,
       render: (_: unknown, record: Worktree) => (
         <Space size="small">
-          <Tooltip title="Edit agent">
+          <Tooltip title="Edit assistant">
             <Button
               type="text"
               size="small"
@@ -309,7 +309,7 @@ export const AgentsTable: React.FC<AgentsTableProps> = ({
               }}
             />
           </Tooltip>
-          <Tooltip title="Delete agent">
+          <Tooltip title="Delete assistant">
             <Button
               type="text"
               size="small"
@@ -331,11 +331,11 @@ export const AgentsTable: React.FC<AgentsTableProps> = ({
   const boardOptions = [
     {
       value: CREATE_NEW_BOARD,
-      label: '+ Create a new board for this agent (Recommended)',
+      label: '+ Create a new board for this assistant (Recommended)',
     },
     ...boards.map((board: Board) => ({
       value: board.board_id,
-      label: `${board.icon || '📋'} ${board.name}`,
+      label: `${board.icon || '\u{1F4CB}'} ${board.name}`,
     })),
   ];
 
@@ -347,13 +347,13 @@ export const AgentsTable: React.FC<AgentsTableProps> = ({
         style={{ marginBottom: token.sizeUnit * 2, width: '100%' }}
       >
         <Typography.Text type="secondary">
-          Persisted agents are long-lived worktrees backed by a framework repo. They manage other
-          worktrees and run autonomously.
+          Assistants are persistent AI companions backed by a framework repo. They maintain memory,
+          orchestrate work across worktrees, and run on scheduled heartbeats.
         </Typography.Text>
         <Space style={{ width: '100%', display: 'flex', justifyContent: 'space-between' }}>
           <Input
             allowClear
-            placeholder="Search agents..."
+            placeholder="Search assistants..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             style={{ maxWidth: token.sizeUnit * 40 }}
@@ -362,14 +362,14 @@ export const AgentsTable: React.FC<AgentsTableProps> = ({
             type="primary"
             icon={<PlusOutlined />}
             onClick={() => setCreateModalOpen(true)}
-            disabled={!openclawRepo && repos.length === 0}
+            disabled={!frameworkRepo && repos.length === 0}
           >
-            Create Agent
+            Create Assistant
           </Button>
         </Space>
       </Space>
 
-      {agents.length === 0 && !searchTerm && (
+      {assistants.length === 0 && !searchTerm && (
         <div
           style={{
             display: 'flex',
@@ -380,18 +380,18 @@ export const AgentsTable: React.FC<AgentsTableProps> = ({
         >
           <Empty
             image={<RobotOutlined style={{ fontSize: 48, color: token.colorTextDisabled }} />}
-            description="No agents yet"
+            description="No assistants yet"
           >
             <Typography.Text type="secondary">
-              Create a persisted agent to get started, or use the onboarding wizard.
+              Create an assistant to get started, or use the onboarding wizard.
             </Typography.Text>
           </Empty>
         </div>
       )}
 
-      {(agents.length > 0 || searchTerm) && (
+      {(assistants.length > 0 || searchTerm) && (
         <Table
-          dataSource={agents}
+          dataSource={assistants}
           columns={columns}
           rowKey="worktree_id"
           pagination={{ pageSize: 10 }}
@@ -403,9 +403,9 @@ export const AgentsTable: React.FC<AgentsTableProps> = ({
         />
       )}
 
-      {/* Create Agent Modal */}
+      {/* Create Assistant Modal */}
       <Modal
-        title="Create Agent"
+        title="Create Assistant"
         open={createModalOpen}
         onOk={handleCreate}
         onCancel={handleCancel}
@@ -422,7 +422,7 @@ export const AgentsTable: React.FC<AgentsTableProps> = ({
             name="displayName"
             label="Display Name"
             rules={[{ required: true, message: 'Please enter a display name' }]}
-            tooltip="Human-friendly name for this agent"
+            tooltip="Human-friendly name for this assistant"
           >
             <Input
               placeholder="e.g. PR Reviewer, Command Center"
@@ -449,7 +449,8 @@ export const AgentsTable: React.FC<AgentsTableProps> = ({
             style={{ marginBottom: 16 }}
             message={
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                While agents can act across boards, we recommend giving each agent its own board.
+                While assistants can act across boards, we recommend giving each assistant its own
+                board.
               </Typography.Text>
             }
           />
@@ -472,8 +473,8 @@ export const AgentsTable: React.FC<AgentsTableProps> = ({
                     <Form.Item name="repoId" label="Framework Repository">
                       <Select
                         placeholder={
-                          openclawRepo
-                            ? `${openclawRepo.name || openclawRepo.slug} (default)`
+                          frameworkRepo
+                            ? `${frameworkRepo.name || frameworkRepo.slug} (default)`
                             : 'Select repository...'
                         }
                         allowClear
@@ -503,12 +504,14 @@ export const AgentsTable: React.FC<AgentsTableProps> = ({
                       ]}
                       tooltip="Auto-generated from display name. Override if needed."
                     >
-                      <Input placeholder="private-my-agent" />
+                      <Input placeholder="private-my-assistant" />
                     </Form.Item>
 
                     <Form.Item name="sourceBranch" label="Source Branch">
                       <Input
-                        placeholder={openclawRepo ? openclawRepo.default_branch || 'main' : 'main'}
+                        placeholder={
+                          frameworkRepo ? frameworkRepo.default_branch || 'main' : 'main'
+                        }
                       />
                     </Form.Item>
                   </>

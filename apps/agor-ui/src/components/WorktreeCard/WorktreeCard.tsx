@@ -1,6 +1,6 @@
 import type { AgorClient } from '@agor/core/api';
 import type { Repo, Session, SpawnConfig, User, Worktree } from '@agor/core/types';
-import { getPersistedAgentConfig, isPersistedAgent } from '@agor/core/types';
+import { getAssistantConfig, isAssistant } from '@agor/core/types';
 import {
   BranchesOutlined,
   ClockCircleOutlined,
@@ -233,8 +233,8 @@ const WorktreeCardComponent = ({
   const isFailed = worktree.filesystem_status === 'failed';
 
   // Check if this worktree is a persisted agent
-  const agentConfig = useMemo(() => getPersistedAgentConfig(worktree), [worktree]);
-  const isAgent = isPersistedAgent(worktree);
+  const assistantConfig = useMemo(() => getAssistantConfig(worktree), [worktree]);
+  const isAgent = isAssistant(worktree);
 
   // Check if worktree needs attention (newly created OR has ready sessions)
   // Don't highlight if a session from this worktree is currently open in the drawer
@@ -686,10 +686,10 @@ const WorktreeCardComponent = ({
           )}
           <div style={{ display: 'flex', flexDirection: 'column' }}>
             <Typography.Text strong className="nodrag">
-              {agentConfig?.displayName ?? worktree.name}
+              {assistantConfig?.displayName ?? worktree.name}
             </Typography.Text>
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {agentConfig ? `${repo.slug} / ${worktree.name}` : repo.slug}
+              {assistantConfig ? `${repo.slug} / ${worktree.name}` : repo.slug}
             </Typography.Text>
           </div>
         </Space>

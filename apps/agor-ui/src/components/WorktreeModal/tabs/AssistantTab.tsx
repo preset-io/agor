@@ -1,5 +1,5 @@
-import type { PersistedAgentConfig, Worktree } from '@agor/core/types';
-import { getPersistedAgentConfig } from '@agor/core/types';
+import type { AssistantConfig, Worktree } from '@agor/core/types';
+import { getAssistantConfig } from '@agor/core/types';
 import { RobotOutlined } from '@ant-design/icons';
 import { Button, Descriptions, Form, Input, Space, Typography } from 'antd';
 import { useEffect, useState } from 'react';
@@ -7,14 +7,14 @@ import { useThemedMessage } from '../../../utils/message';
 import { Tag } from '../../Tag';
 import type { WorktreeUpdate } from './GeneralTab';
 
-interface AgentTabProps {
+interface AssistantTabProps {
   worktree: Worktree;
   onUpdate?: (worktreeId: string, updates: WorktreeUpdate) => void;
   onClose?: () => void;
 }
 
-export const AgentTab: React.FC<AgentTabProps> = ({ worktree, onUpdate, onClose }) => {
-  const config = getPersistedAgentConfig(worktree);
+export const AssistantTab: React.FC<AssistantTabProps> = ({ worktree, onUpdate, onClose }) => {
+  const config = getAssistantConfig(worktree);
   const { showSuccess } = useThemedMessage();
 
   const [displayName, setDisplayName] = useState(config?.displayName || '');
@@ -32,14 +32,15 @@ export const AgentTab: React.FC<AgentTabProps> = ({ worktree, onUpdate, onClose 
   const hasChanges = displayName.trim() !== config.displayName;
 
   const handleSave = () => {
-    const updatedConfig: PersistedAgentConfig = {
+    const updatedConfig: AssistantConfig = {
       ...config,
+      kind: 'assistant',
       displayName: displayName.trim(),
     };
     onUpdate?.(worktree.worktree_id, {
-      custom_context: { agent: updatedConfig },
+      custom_context: { assistant: updatedConfig },
     });
-    showSuccess('Agent updated');
+    showSuccess('Assistant updated');
     onClose?.();
   };
 
@@ -53,7 +54,7 @@ export const AgentTab: React.FC<AgentTabProps> = ({ worktree, onUpdate, onClose 
         <Space>
           <RobotOutlined style={{ fontSize: 20 }} />
           <Typography.Text strong style={{ fontSize: 16 }}>
-            Agent Configuration
+            Assistant Configuration
           </Typography.Text>
         </Space>
 
@@ -63,7 +64,7 @@ export const AgentTab: React.FC<AgentTabProps> = ({ worktree, onUpdate, onClose 
             <Input
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
-              placeholder="Agent display name"
+              placeholder="Assistant display name"
             />
           </Form.Item>
         </Form>

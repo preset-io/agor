@@ -579,20 +579,20 @@ export interface RepoEnvironmentConfig {
   logs_command?: string;
 }
 
-// ===== Persisted Agents =====
+// ===== Assistants =====
 
 /**
- * Configuration for a persisted agent, stored in worktree.custom_context.agent
+ * Configuration for an assistant, stored in worktree.custom_context.assistant
  *
- * Marks a worktree as a long-lived "persisted agent" that manages
- * other worktrees and agents, based on a framework repo.
+ * Marks a worktree as a long-lived "assistant" — a persistent AI companion
+ * that manages other worktrees, maintains memory, and orchestrates work.
  */
-export interface PersistedAgentConfig {
+export interface AssistantConfig {
   /** Discriminator for type narrowing */
-  kind: 'persisted-agent';
-  /** Human-friendly display name (e.g., "My Agent") */
+  kind: 'assistant';
+  /** Human-friendly display name (e.g., "My Assistant") */
   displayName: string;
-  /** Template repo slug this agent was created from */
+  /** Template repo slug this assistant was created from */
   frameworkRepo?: string;
   /** Framework version at creation time, for upgrade detection */
   frameworkVersion?: string;
@@ -600,24 +600,38 @@ export interface PersistedAgentConfig {
   createdViaOnboarding?: boolean;
 }
 
+/** @deprecated Use AssistantConfig instead */
+export type PersistedAgentConfig = AssistantConfig;
+
 /**
- * Type guard: checks if a worktree is a persisted agent
+ * Type guard: checks if a worktree is an assistant.
+ * Supports both new (`custom_context.assistant`) and legacy (`custom_context.agent`) storage.
  */
-export function isPersistedAgent(worktree: { custom_context?: Record<string, unknown> }): boolean {
-  const agent = worktree.custom_context?.agent;
+export function isAssistant(worktree: { custom_context?: Record<string, unknown> }): boolean {
+  const config = worktree.custom_context?.assistant ?? worktree.custom_context?.agent;
   return (
-    agent != null &&
-    typeof agent === 'object' &&
-    (agent as Record<string, unknown>).kind === 'persisted-agent'
+    config != null &&
+    typeof config === 'object' &&
+    ((config as Record<string, unknown>).kind === 'assistant' ||
+      (config as Record<string, unknown>).kind === 'persisted-agent')
   );
 }
 
+/** @deprecated Use isAssistant instead */
+export const isPersistedAgent = isAssistant;
+
 /**
- * Extract the persisted agent config from a worktree, if present.
+ * Extract the assistant config from a worktree, if present.
+ * Supports both new (`custom_context.assistant`) and legacy (`custom_context.agent`) storage.
  */
-export function getPersistedAgentConfig(worktree: {
+export function getAssistantConfig(worktree: {
   custom_context?: Record<string, unknown>;
-}): PersistedAgentConfig | null {
-  if (!isPersistedAgent(worktree)) return null;
-  return worktree.custom_context!.agent as PersistedAgentConfig;
+}): AssistantConfig | null {
+  if (!isAssistant(worktree)) return null;
+  const config = (worktree.custom_context!.assistant ??
+    worktree.custom_context!.agent) as AssistantConfig;
+  return config;
 }
+
+/** @deprecated Use getAssistantConfig instead */
+export const getPersistedAgentConfig = getAssistantConfig;

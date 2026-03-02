@@ -31,13 +31,13 @@ The Message Gateway connects external messaging platforms to Agor's agent sessio
 
 A **Channel** is a portal into a worktree. It defines:
 
-- **A home worktree** — the persistent worktree where every session spawned by this channel will operate. Think of it as a command center, like an `agor-openclaw` worktree that supervises a project.
+- **A home worktree** — the persistent worktree where every session spawned by this channel will operate. Think of it as a command center, like an [assistant](/guide/assistants) worktree that supervises a project.
 - **An agentic tool configuration** — which coding agent to use (Claude Code, Codex, Gemini, OpenCode), which model, permission mode, and which MCP servers to attach.
 - **Platform credentials** — bot token, app token, and other secrets needed to send and receive messages (encrypted at rest).
 
 You can create multiple channels for the same or different worktrees. For example:
 
-- **"Optimus Prime"** — Claude Code (Opus 4.6) on your main `agor-openclaw` worktree, with Slack + GitHub MCP servers
+- **"Optimus Prime"** — Claude Code (Opus 4.6) on your main assistant worktree, with Slack + GitHub MCP servers
 - **"Scout"** — Claude Code (Sonnet 4.5) on a lighter review worktree, trust mode, no MCP servers
 - **"Codex Runner"** — Codex on a `superset-frontend` worktree for quick JS tasks
 

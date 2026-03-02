@@ -390,9 +390,9 @@ export default class Init extends Command {
       }
     }
 
-    // Prompt for persisted agent setup (unless --force or skipped prompts)
+    // Prompt for assistant setup (unless --force or skipped prompts)
     if (!skipPrompts) {
-      await this.promptPersistedAgent();
+      await this.promptAssistantSetup();
     }
 
     // Success summary
@@ -545,46 +545,46 @@ export default class Init extends Command {
   }
 
   /**
-   * Prompt user for persisted agent setup
+   * Prompt user for assistant setup
    *
    * Stores intent in config.yaml for the UI wizard to pick up.
-   * The openclaw repo is public, so HTTPS always works.
+   * The framework repo is public, so HTTPS always works.
    */
-  private async promptPersistedAgent(): Promise<void> {
+  private async promptAssistantSetup(): Promise<void> {
     this.log('');
-    this.log(chalk.bold('🤖 Persisted Agent'));
+    this.log(chalk.bold('🤖 Assistant'));
     this.log('');
     this.log(
-      chalk.gray(
-        'A persisted agent is a long-lived AI-powered workspace for managing your Agor instance.'
-      )
+      chalk.gray('An assistant is a persistent AI companion that manages your Agor instance.')
     );
     this.log(
-      chalk.gray('It includes pre-configured tasks, templates, and an AI agent ready to help.')
+      chalk.gray(
+        'It maintains memory across sessions, orchestrates work, and learns your preferences.'
+      )
     );
     this.log('');
 
-    const { setupPersistedAgent } = await inquirer.prompt([
+    const { setupAssistant } = await inquirer.prompt([
       {
         type: 'confirm',
-        name: 'setupPersistedAgent',
-        message: 'Set up your persisted agent?',
+        name: 'setupAssistant',
+        message: 'Set up your assistant?',
         default: true,
       },
     ]);
 
-    if (setupPersistedAgent) {
+    if (setupAssistant) {
       const frameworkRepoUrl = 'https://github.com/mistercrunch/agor-openclaw.git';
-      await setConfigValue('onboarding.persistedAgentPending', true);
+      await setConfigValue('onboarding.assistantPending', true);
       await setConfigValue('onboarding.frameworkRepoUrl', frameworkRepoUrl);
-      this.log(`${chalk.green('   ✓')} Persisted agent setup queued for the UI wizard`);
+      this.log(`${chalk.green('   ✓')} Assistant setup queued for the UI wizard`);
 
       // Check for ANTHROPIC_API_KEY
       if (!process.env.ANTHROPIC_API_KEY) {
         this.log('');
         this.log(
           chalk.yellow(
-            '   💡 Tip: Set ANTHROPIC_API_KEY in your environment for Claude Code agents'
+            '   💡 Tip: Set ANTHROPIC_API_KEY in your environment for Claude Code sessions'
           )
         );
         this.log(chalk.gray('   You can also configure API keys in the UI after setup'));
