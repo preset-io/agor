@@ -172,26 +172,27 @@ export class OpenCodeTool implements ITool {
   /**
    * Inject MCP servers into OpenCode for the given session.
    *
-   * For the Agor MCP server: uses a session-specific name (agor_<shortId>) to avoid
-   * collisions with stale entries that OpenCode persists in its per-directory project config.
-   * OpenCode's client.mcp.add() silently ignores duplicate names, so each session needs
-   * a unique MCP server name to ensure the correct JWT token is used.
+   * Strategy: Use a session-specific MCP name (`agor_<shortId>`) to avoid conflicts with
+   * stale entries that may be cached in OpenCode's memory from previous sessions.
+   * The handler clears the `mcp` section in opencode.json to prevent stale entries from
+   * being loaded at server startup, and we inject fresh entries via mcp.add() each time.
    *
    * For user-defined MCP servers: uses a hash to avoid redundant re-injection.
    */
   private async ensureMcpServers(
     sessionId: string,
     client: ReturnType<typeof createOpencodeClient>,
-    mcpToken?: string
+    mcpToken?: string,
+    worktreePath?: string
   ): Promise<void> {
-    // Inject Agor MCP server with a session-specific name
-    // OpenCode persists MCP entries per-directory and silently ignores add() for existing names,
-    // so we use a unique name per session to ensure the correct token is always used.
     if (mcpToken) {
+      // Use session-specific MCP name to avoid conflicts with stale entries
+      const shortId = sessionId.substring(0, 8);
+      const mcpName = `agor_${shortId}`;
+
       try {
         const daemonUrl = await getDaemonUrl();
         const mcpUrl = `${daemonUrl}/mcp?sessionToken=${encodeURIComponent(mcpToken)}`;
-        const mcpName = `agor_${sessionId.substring(0, 8)}`;
 
         await client.mcp.add({
           body: {
@@ -202,14 +203,11 @@ export class OpenCodeTool implements ITool {
               enabled: true,
             },
           },
+          query: worktreePath ? { directory: worktreePath } : undefined,
         });
-
-        console.log(
-          `[OpenCodeTool] Injected Agor MCP server "${mcpName}" for session`,
-          sessionId.substring(0, 8)
-        );
+        console.log(`[OpenCodeTool] Injected Agor MCP as "${mcpName}" for session ${shortId}`);
       } catch (error) {
-        console.warn('[OpenCodeTool] Failed to inject Agor MCP server:', error);
+        console.warn(`[OpenCodeTool] Failed to inject Agor MCP server "${mcpName}":`, error);
       }
     }
 
@@ -387,8 +385,8 @@ export class OpenCodeTool implements ITool {
       const worktreePath = context.worktreePath;
       const client = this.getClientForDirectory(worktreePath);
 
-      // Inject MCP servers if not already done
-      await this.ensureMcpServers(sessionId, client, context.mcpToken);
+      // Inject MCP servers (uses session-specific name to avoid stale entry conflicts)
+      await this.ensureMcpServers(sessionId, client, context.mcpToken, worktreePath);
 
       // Prepare prompt options
       const promptOptions: {
