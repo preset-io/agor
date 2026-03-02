@@ -638,7 +638,7 @@ const WorktreeCardComponent = ({
             : isAgent
               ? { borderColor: token.colorInfo, borderWidth: 1 }
               : {}),
-        ...(isAgent ? { backgroundColor: token.colorInfoBg } : {}),
+        ...(isAgent ? { backgroundColor: token.colorInfoBgHover } : {}),
       }}
       styles={{
         body: { padding: 16 },
@@ -883,6 +883,7 @@ const WorktreeCardComponent = ({
                     key: 'sessions',
                     label: sessionListHeader,
                     children: sessionListContent,
+                    styles: { body: { background: 'transparent' } },
                   },
                 ]}
                 ghost
@@ -899,6 +900,7 @@ const WorktreeCardComponent = ({
                     key: 'scheduled-runs',
                     label: scheduledRunsHeader,
                     children: scheduledRunsContent,
+                    styles: { body: { background: 'transparent' } },
                   },
                 ]}
                 ghost
@@ -915,6 +917,7 @@ const WorktreeCardComponent = ({
                     key: 'gateway-sessions',
                     label: gatewaySessionsHeader,
                     children: gatewaySessionsContent,
+                    styles: { body: { background: 'transparent' } },
                   },
                 ]}
                 ghost
