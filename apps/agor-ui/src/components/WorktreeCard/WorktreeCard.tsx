@@ -329,7 +329,6 @@ const WorktreeCardComponent = ({
             : `1px solid rgba(255, 255, 255, 0.1)`,
           borderRadius: 4,
           padding: 8,
-          background: session.ready_for_prompt ? `${token.colorPrimary}15` : 'rgba(0, 0, 0, 0.2)',
           display: 'flex',
           alignItems: 'center',
           cursor: 'pointer',
@@ -461,7 +460,6 @@ const WorktreeCardComponent = ({
             border: `1px solid rgba(255, 255, 255, 0.1)`,
             borderRadius: 4,
             padding: 8,
-            background: 'rgba(0, 0, 0, 0.2)',
             display: 'flex',
             alignItems: 'center',
             cursor: 'pointer',
@@ -536,7 +534,6 @@ const WorktreeCardComponent = ({
               border: `1px solid rgba(255, 255, 255, 0.1)`,
               borderRadius: 4,
               padding: 8,
-              background: 'rgba(0, 0, 0, 0.2)',
               display: 'flex',
               alignItems: 'center',
               cursor: 'pointer',
@@ -649,7 +646,7 @@ const WorktreeCardComponent = ({
             : isAgent
               ? { borderColor: token.colorInfo, borderWidth: 1 }
               : {}),
-        ...(isAgent ? { backgroundColor: token.colorInfoBgHover } : {}),
+        ...(isAgent ? { backgroundColor: token.colorInfoBg } : {}),
       }}
       styles={{
         body: { padding: 16 },
