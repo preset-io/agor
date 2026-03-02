@@ -938,6 +938,11 @@ function getUrlDisplayLabel(url: string): string {
     }
 
     if (parsed.hostname === 'linear.app') {
+      // Linear URLs: /issue/TEAM-123/slug — extract the issue ID, not the slug
+      const issueIdx = pathParts.indexOf('issue');
+      if (issueIdx !== -1 && pathParts[issueIdx + 1]) {
+        return pathParts[issueIdx + 1];
+      }
       return pathParts[pathParts.length - 1] || parsed.hostname;
     }
 
@@ -947,13 +952,22 @@ function getUrlDisplayLabel(url: string): string {
   }
 }
 
+function isGitHubUrl(url: string): boolean {
+  try {
+    const { hostname } = new URL(url);
+    return hostname === 'github.com' || hostname.endsWith('.github.com');
+  } catch {
+    return false;
+  }
+}
+
 function getIssueIcon(url: string): React.ReactNode {
-  if (url.includes('github.com')) return <GithubOutlined />;
+  if (isGitHubUrl(url)) return <GithubOutlined />;
   return <LinkOutlined />;
 }
 
 function getPrIcon(url: string): React.ReactNode {
-  if (url.includes('github.com')) return <GithubOutlined />;
+  if (isGitHubUrl(url)) return <GithubOutlined />;
   return <BranchesOutlined />;
 }
 
