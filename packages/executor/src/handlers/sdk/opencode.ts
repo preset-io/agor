@@ -10,6 +10,7 @@
  */
 
 import { generateId } from '@agor/core';
+import { loadConfig } from '@agor/core/config';
 import type { MessageID, PermissionMode, SessionID, TaskID } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
@@ -48,9 +49,17 @@ export async function executeOpenCodeTask(params: {
     const repos = createFeathersBackedRepositories(client);
     const callbacks = createStreamingCallbacks(client, 'opencode', sessionId);
 
-    // Get OpenCode server URL from environment
-    // Default to localhost if OpenCode runs in same container, or host.docker.internal if on host
-    const serverUrl = process.env.OPENCODE_SERVER_URL || 'http://localhost:4096';
+    // Get OpenCode server URL: env var > config.yaml > default
+    let serverUrl = process.env.OPENCODE_SERVER_URL || '';
+    if (!serverUrl) {
+      try {
+        const config = await loadConfig();
+        serverUrl = config.opencode?.serverUrl || 'http://localhost:4096';
+      } catch {
+        serverUrl = 'http://localhost:4096';
+      }
+    }
+    console.log(`[opencode] Using server URL: ${serverUrl}`);
 
     // Resolve worktree path from session's worktree_id
     let worktreePath: string | undefined;

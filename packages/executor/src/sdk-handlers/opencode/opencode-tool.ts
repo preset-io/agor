@@ -170,42 +170,55 @@ export class OpenCodeTool implements ITool {
   }
 
   /**
-   * Inject MCP servers into OpenCode for the given session if not already injected.
-   * Uses a hash to avoid re-injection when nothing has changed.
+   * Inject MCP servers into OpenCode for the given session.
+   *
+   * For the Agor MCP server: uses a session-specific name (agor_<shortId>) to avoid
+   * collisions with stale entries that OpenCode persists in its per-directory project config.
+   * OpenCode's client.mcp.add() silently ignores duplicate names, so each session needs
+   * a unique MCP server name to ensure the correct JWT token is used.
+   *
+   * For user-defined MCP servers: uses a hash to avoid redundant re-injection.
    */
   private async ensureMcpServers(
     sessionId: string,
     client: ReturnType<typeof createOpencodeClient>,
     mcpToken?: string
   ): Promise<void> {
-    // Build a config hash to detect changes
-    const configHash = `${mcpToken ?? ''}:${sessionId}`;
-    if (this.injectedMcpHash.get(sessionId) === configHash) {
-      // Already injected with same config
-      return;
-    }
-
-    // Inject the Agor MCP server if we have a token
+    // Inject Agor MCP server with a session-specific name
+    // OpenCode persists MCP entries per-directory and silently ignores add() for existing names,
+    // so we use a unique name per session to ensure the correct token is always used.
     if (mcpToken) {
       try {
         const daemonUrl = await getDaemonUrl();
+        const mcpUrl = `${daemonUrl}/mcp?sessionToken=${encodeURIComponent(mcpToken)}`;
+        const mcpName = `agor_${sessionId.substring(0, 8)}`;
+
         await client.mcp.add({
           body: {
-            name: 'agor',
+            name: mcpName,
             config: {
               type: 'remote' as const,
-              url: `${daemonUrl}/mcp?sessionToken=${encodeURIComponent(mcpToken)}`,
+              url: mcpUrl,
               enabled: true,
             },
           },
         });
-        console.log('[OpenCodeTool] Injected Agor MCP server');
+
+        console.log(
+          `[OpenCodeTool] Injected Agor MCP server "${mcpName}" for session`,
+          sessionId.substring(0, 8)
+        );
       } catch (error) {
         console.warn('[OpenCodeTool] Failed to inject Agor MCP server:', error);
       }
     }
 
-    // Inject user-defined MCP servers if repos are available
+    // Inject user-defined MCP servers (use hash to avoid redundant re-injection)
+    const configHash = `${mcpToken ?? ''}:${sessionId}`;
+    if (this.injectedMcpHash.get(sessionId) === configHash) {
+      return;
+    }
+
     if (this.sessionMCPRepo && this.mcpServerRepo) {
       try {
         const servers = await getMcpServersForSession(sessionId as SessionID, {
@@ -214,7 +227,6 @@ export class OpenCodeTool implements ITool {
         });
 
         for (const { server } of servers) {
-          // Sanitize server name: lowercase, replace non-alphanumeric with underscore
           const sanitizedName = server.name.toLowerCase().replace(/[^a-z0-9]+/g, '_');
 
           try {
@@ -257,7 +269,6 @@ export class OpenCodeTool implements ITool {
       }
     }
 
-    // Store the hash to avoid re-injection
     this.injectedMcpHash.set(sessionId, configHash);
   }
 
