@@ -919,7 +919,7 @@ export const RepoPill: React.FC<RepoPillProps> = ({
  * Extract a concise display label from a URL.
  * GitHub: org/repo#123, Shortcut: story/12345, Jira/Linear: ticket ID, etc.
  */
-function getUrlDisplayLabel(url: string): string {
+export function getUrlDisplayLabel(url: string): string {
   try {
     const parsed = new URL(url);
     const pathParts = parsed.pathname.split('/').filter(Boolean);
@@ -952,7 +952,7 @@ function getUrlDisplayLabel(url: string): string {
   }
 }
 
-function isGitHubUrl(url: string): boolean {
+export function isGitHubUrl(url: string): boolean {
   try {
     const { hostname } = new URL(url);
     return hostname === 'github.com' || hostname.endsWith('.github.com');
