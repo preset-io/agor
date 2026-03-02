@@ -638,6 +638,7 @@ const WorktreeCardComponent = ({
             : isAgent
               ? { borderColor: token.colorInfo, borderWidth: 1 }
               : {}),
+        ...(isAgent ? { backgroundColor: token.colorInfoBg } : {}),
       }}
       styles={{
         body: { padding: 16 },
