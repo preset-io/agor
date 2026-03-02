@@ -16,7 +16,19 @@ import {
   SubnodeOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import { Badge, Button, Card, Collapse, Space, Spin, Tooltip, Tree, Typography, theme } from 'antd';
+import {
+  Badge,
+  Button,
+  Card,
+  Collapse,
+  ConfigProvider,
+  Space,
+  Spin,
+  Tooltip,
+  Tree,
+  Typography,
+  theme,
+} from 'antd';
 import { AggregationColor } from 'antd/es/color-picker/color';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
@@ -365,18 +377,17 @@ const WorktreeCardComponent = ({
 
   // Session list content (collapsible) - only used when sessions exist
   const sessionListContent = (
-    <Tree
-      treeData={sessionTreeData}
-      expandedKeys={expandedKeys}
-      onExpand={(keys) => setExpandedKeys(keys as React.Key[])}
-      showLine
-      showIcon={false}
-      selectable={false}
-      titleRender={renderSessionNode}
-      style={{
-        background: 'transparent',
-      }}
-    />
+    <ConfigProvider theme={{ components: { Tree: { colorBgContainer: 'transparent' } } }}>
+      <Tree
+        treeData={sessionTreeData}
+        expandedKeys={expandedKeys}
+        onExpand={(keys) => setExpandedKeys(keys as React.Key[])}
+        showLine
+        showIcon={false}
+        selectable={false}
+        titleRender={renderSessionNode}
+      />
+    </ConfigProvider>
   );
 
   // Session list collapse header
