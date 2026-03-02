@@ -1,35 +1,78 @@
 ---
 title: Assistants
-description: Persistent AI companions with memory, orchestration, and scheduled heartbeats
+description: Persistent AI companions with memory, skills, orchestration, and scheduled heartbeats
 ---
 
 # Assistants
 
-An **Assistant** is a persistent AI companion that lives in your Agor workspace. While a normal worktree is _where_ code gets written, an Assistant is a _who_ — a persistent entity that coordinates the what and where.
+An **Assistant** is a persistent AI companion that lives in your Agor workspace. While a normal worktree is _where_ code gets written, an Assistant is a _who_ — a persistent entity with memory, skills, and the ability to orchestrate work across your entire workspace.
+
+The assistant framework is heavily inspired by [OpenClaw](https://github.com/ricklamers/openclaw), a proven pattern for building persistent AI agents with file-based memory and identity. Agor's implementation adapts the core ideas — markdown-based memory, identity files, and scheduled loops — while making the assistant deeply aware of its environment through Agor's [MCP tools](/guide/internal-mcp). An Agor assistant can create worktrees, spawn sessions, manage boards, and coordinate multi-agent workflows — capabilities that go well beyond the original pattern.
+
+**Framework repository:** [github.com/preset-io/agor-assistant](https://github.com/preset-io/agor-assistant)
 
 ## How it works
 
-An Assistant is a special worktree backed by a **framework repository** — a template repo containing memory files, identity configuration, and task templates. When you create an assistant, Agor:
+An Assistant is a special worktree backed by the **framework repository** — a template repo containing memory files, identity configuration, skills, and task templates. When you create an assistant, Agor:
 
 1. Forks the framework repo into a new worktree
 2. Tags the worktree with assistant metadata (name, framework version)
 3. Creates a dedicated board for the assistant's work
-4. Launches your first session
+4. Launches your first session — triggering `BOOTSTRAP.md`
 
 From there, every session in that worktree picks up the assistant's accumulated memory and context.
 
-## Key features
+## Key concepts
+
+### BOOTSTRAP.md — First boot
+
+When an assistant is created for the first time, it runs through `BOOTSTRAP.md` — the initialization script that sets up identity, preferences, and initial state. This is where the assistant introduces itself, learns about you, and configures its working environment. Think of it as the assistant's "first day" checklist.
 
 ### Memory across sessions
 
-Assistants maintain file-based memory in their worktree:
+Assistants maintain file-based memory in their worktree. Memory is organized into two layers:
+
+**Identity files** (root of the worktree):
 
 - **SOUL.md** — Personality, communication style, core principles
-- **MEMORY.md** — Accumulated knowledge, observations, and learnings
 - **IDENTITY.md** — Who the assistant is, its name, and purpose
 - **USER.md** — Knowledge about you, your preferences, and patterns
 
-Each new session reads these files, giving the assistant continuity across conversations. As the assistant works, it updates these files — building a richer understanding over time.
+**Daily memory** (`memory/` directory):
+
+- **`memory/{YYYY-MM-DD}.md`** — Daily journal entries. Each day the assistant works, it appends observations, decisions, and learnings to that day's file. This creates a chronological, searchable record of everything the assistant has done and learned.
+
+Each new session reads the identity files and recent memory, giving the assistant continuity across conversations. As the assistant works, it updates these files — building a richer understanding over time. All memory is plain markdown — fully inspectable, editable, and version-controlled.
+
+### BOARD.md — Resident board semantics
+
+Every assistant has a `BOARD.md` file that describes the semantics of its main (resident) board. This file tells the assistant what each zone on the board means, how worktrees should be organized spatially, and what the overall layout represents. When the assistant creates or moves worktrees on its board, it refers to `BOARD.md` to understand the intended structure — ensuring consistent spatial organization across sessions.
+
+### HEARTBEAT.md — Scheduled tick workflows
+
+`HEARTBEAT.md` contains the instructions and workflows the assistant processes every time a scheduled tick occurs. Think of it as a flowchart in pseudo-code: a set of steps the assistant follows on each heartbeat, such as:
+
+- Check the status of in-progress worktrees
+- Review `BOARD.md` to assess spatial organization
+- Look for new issues or PRs to triage
+- Summarize progress to daily memory (`memory/{YYYY-MM-DD}.md`)
+- Start new work based on priorities
+
+Configure heartbeat frequency through Agor's [scheduler](/guide/scheduler) — from every few minutes to once a day.
+
+### Skills
+
+Assistants aren't limited to code generation — they can be equipped with **skills** that extend their capabilities through tools, APIs, and integrations. Skills are defined in the framework repo and give your assistant the ability to interact with external systems.
+
+Examples of what skills enable:
+
+- **SaaS integrations** — Query Jira for open tickets, post updates to Linear, fetch metrics from Datadog or PagerDuty
+- **Communication** — Send Slack messages, create GitHub issues, post comments on PRs
+- **CLI tools** — Run linters, test suites, deployment scripts, or any command-line tooling in your stack
+- **REST APIs** — Call internal or external APIs to fetch data, trigger webhooks, or sync state
+- **MCP servers** — Connect to any [MCP-compatible service](/guide/mcp-servers) for specialized capabilities (databases, cloud providers, monitoring systems)
+
+Skills make assistants practical for real workflows — not just coding, but the coordination and communication around it.
 
 ### Workspace orchestration
 
@@ -37,30 +80,19 @@ Through Agor's [MCP tools](/guide/internal-mcp), assistants can:
 
 - **Create worktrees** — Spin up new isolated work environments for specific tasks
 - **Spawn sessions** — Delegate work to child sessions with focused prompts
-- **Manage boards** — Organize worktrees across spatial canvases
+- **Manage boards** — Organize worktrees across spatial canvases (guided by `BOARD.md`)
 - **Check on work** — Review session status, read files, assess progress
 
 This makes assistants natural orchestrators — they can break down complex tasks, distribute work across multiple worktrees, and synthesize results.
-
-### Heartbeat scheduling
-
-Configure your assistant to run on a [schedule](/guide/scheduler):
-
-- **Periodic check-ins** — Review in-progress work every few hours
-- **Status updates** — Summarize what's happening across your workspace
-- **Proactive work** — Start new tasks based on priorities and patterns
-- **Monitoring** — Watch for issues, failing builds, or stale PRs
 
 ### Learning and adaptation
 
 As your assistant works with you, it naturally improves:
 
-- Learns your coding patterns and preferences
+- Learns your coding patterns and preferences (stored in `USER.md`)
 - Understands your repository structure and conventions
-- Builds knowledge about your team's workflows
-- Adapts its communication style to match yours
-
-All of this is stored in plain markdown files in the assistant's worktree — fully inspectable, editable, and version-controlled.
+- Builds knowledge about your team's workflows (daily memory)
+- Adapts its communication style to match yours (refined in `SOUL.md`)
 
 ## Creating an assistant
 
@@ -68,11 +100,11 @@ All of this is stored in plain markdown files in the assistant's worktree — fu
 
 When you first log into Agor, choose **"Set up your assistant"**. The wizard will:
 
-1. Clone the assistant framework repository
+1. Clone the [assistant framework repository](https://github.com/preset-io/agor-assistant)
 2. Create a personal board
 3. Set up a worktree with your own branch
 4. Configure API keys
-5. Launch your first session
+5. Launch your first session (which runs `BOOTSTRAP.md`)
 
 ### From Settings
 
@@ -93,7 +125,7 @@ These terms mean different things in Agor:
 
 | Term | Meaning | Example |
 |------|---------|---------|
-| **Assistant** | A persistent entity with memory and orchestration | "My PR Reviewer assistant" |
+| **Assistant** | A persistent entity with memory, skills, and orchestration | "My PR Reviewer assistant" |
 | **Agent** | The execution engine that powers a session | Claude Code, Codex, Gemini |
 
 An assistant _uses_ an agent to do its work. When you create a session for your assistant, you choose which agent runs it (Claude Code is the default).

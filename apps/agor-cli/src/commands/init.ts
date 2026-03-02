@@ -574,7 +574,7 @@ export default class Init extends Command {
     ]);
 
     if (setupAssistant) {
-      const frameworkRepoUrl = 'https://github.com/mistercrunch/agor-openclaw.git';
+      const frameworkRepoUrl = 'https://github.com/preset-io/agor-assistant.git';
       await setConfigValue('onboarding.assistantPending', true);
       await setConfigValue('onboarding.frameworkRepoUrl', frameworkRepoUrl);
       this.log(`${chalk.green('   ✓')} Assistant setup queued for the UI wizard`);

@@ -139,11 +139,11 @@ These are NOT renamed:
 - Archive/update "Agor OpenClaw" blog posts
 - Improve concepts documentation from real usage
 
-### Phase 4 (separate effort): Repository rename
-- Rename `mistercrunch/agor-openclaw` → `preset-io/agor-assistant`
-- Update `OPENCLAW_REPO_URL`, `OPENCLAW_REPO_SLUG` constants
-- Update all framework repo detection logic
-- Improve assistant template repo
+### Phase 4 (separate effort): Template repo improvements
+- ~~Rename `mistercrunch/agor-openclaw` → `preset-io/agor-assistant`~~ **DONE** (repo moved, all references updated)
+- ~~Update `FRAMEWORK_REPO_URL`, `FRAMEWORK_REPO_SLUG` constants~~ **DONE**
+- ~~Update all framework repo detection logic~~ **DONE** (backward compat kept for `agor-openclaw` URLs)
+- Improve assistant template repo content
 
 ---
 

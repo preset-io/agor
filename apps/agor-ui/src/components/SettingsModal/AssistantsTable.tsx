@@ -30,7 +30,7 @@ import { ArchiveDeleteWorktreeModal } from '../ArchiveDeleteWorktreeModal';
 import type { WorktreeUpdate } from '../WorktreeModal/tabs/GeneralTab';
 import { renderEnvCell } from './WorktreeEnvColumn';
 
-const FRAMEWORK_REPO_SLUG = 'mistercrunch/agor-openclaw';
+const FRAMEWORK_REPO_SLUG = 'preset-io/agor-assistant';
 
 /** Special sentinel for "create new board" option */
 const CREATE_NEW_BOARD = '__create_new__';
@@ -93,7 +93,12 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
   // Find the framework repo if available
   const frameworkRepo = useMemo(
     () =>
-      repos.find((r) => r.slug === FRAMEWORK_REPO_SLUG || r.remote_url?.includes('agor-openclaw')),
+      repos.find(
+        (r) =>
+          r.slug === FRAMEWORK_REPO_SLUG ||
+          r.remote_url?.includes('agor-assistant') ||
+          r.remote_url?.includes('agor-openclaw')
+      ),
     [repos]
   );
 

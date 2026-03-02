@@ -50,8 +50,8 @@ const { useToken } = theme;
 
 // ─── Constants ──────────────────────────────────────────
 
-const FRAMEWORK_REPO_URL = 'https://github.com/mistercrunch/agor-openclaw.git';
-const FRAMEWORK_REPO_SLUG = 'mistercrunch/agor-openclaw';
+const FRAMEWORK_REPO_URL = 'https://github.com/preset-io/agor-assistant.git';
+const FRAMEWORK_REPO_SLUG = 'preset-io/agor-assistant';
 const CLONE_TIMEOUT_MS = 120_000;
 
 // ─── Types ──────────────────────────────────────────────
@@ -307,7 +307,11 @@ export function OnboardingWizard({
       // Check if the framework repo already exists
       let foundRepo = false;
       for (const [id, repo] of repoById) {
-        if (repo.slug === FRAMEWORK_REPO_SLUG || repo.remote_url?.includes('agor-openclaw')) {
+        if (
+          repo.slug === FRAMEWORK_REPO_SLUG ||
+          repo.remote_url?.includes('agor-assistant') ||
+          repo.remote_url?.includes('agor-openclaw')
+        ) {
           setCreatedRepoId(id);
           foundRepo = true;
           break;
@@ -340,7 +344,11 @@ export function OnboardingWizard({
     if (path === 'assistant') {
       // Look for framework repo
       for (const [id, repo] of repoById) {
-        if (repo.slug === FRAMEWORK_REPO_SLUG || repo.remote_url?.includes('agor-openclaw')) {
+        if (
+          repo.slug === FRAMEWORK_REPO_SLUG ||
+          repo.remote_url?.includes('agor-assistant') ||
+          repo.remote_url?.includes('agor-openclaw')
+        ) {
           setCreatedRepoId(id);
           setLoading(false);
           setError(null);
@@ -441,7 +449,11 @@ export function OnboardingWizard({
       if (selectedPath === 'assistant') {
         // Check if framework repo already exists
         for (const [id, repo] of repoById) {
-          if (repo.slug === FRAMEWORK_REPO_SLUG || repo.remote_url?.includes('agor-openclaw')) {
+          if (
+            repo.slug === FRAMEWORK_REPO_SLUG ||
+            repo.remote_url?.includes('agor-assistant') ||
+            repo.remote_url?.includes('agor-openclaw')
+          ) {
             setCreatedRepoId(id);
             setCurrentStep('board');
             return;
