@@ -68,7 +68,7 @@ export class PermissionService {
 
   /**
    * @param emitEvent - Function to emit events via IPC to daemon
-   * @param timeoutMs - Permission request timeout in ms (default: 60 minutes)
+   * @param timeoutMs - Permission request timeout in ms (default: 10 minutes)
    */
   constructor(
     private emitEvent: (event: string, data: unknown) => Promise<void>,
@@ -116,7 +116,7 @@ export class PermissionService {
         });
       });
 
-      // Timeout (configurable, default 60 minutes)
+      // Timeout (configurable, default 10 minutes)
       const timeout = setTimeout(async () => {
         this.pendingRequests.delete(requestId);
         console.warn(`⏰ [executor] Permission request timed out: ${requestId}`);

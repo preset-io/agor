@@ -27,6 +27,7 @@ const statusColorMap: Record<string, string> = {
   running: 'processing',
   stopping: 'warning',
   awaiting_permission: 'warning',
+  timed_out: 'warning',
   completed: 'success',
   failed: 'error',
 };
@@ -154,6 +155,7 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({ sessions, client, onSess
         { text: 'Completed', value: 'completed' },
         { text: 'Failed', value: 'failed' },
         { text: 'Awaiting Permission', value: 'awaiting_permission' },
+        { text: 'Timed Out', value: 'timed_out' },
       ],
       onFilter: (value, record) => record.status === value,
     },
