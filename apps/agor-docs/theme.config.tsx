@@ -83,7 +83,8 @@ const config: DocsThemeConfig = {
       'Next-gen agent orchestration for AI coding. Multiplayer workspace for Claude Code, Codex, and Gemini.';
     const fullTitle =
       pageTitle === 'agor' ? 'agor – Next-gen agent orchestration' : `${pageTitle} – agor`;
-    const ogImage = frontMatter.ogImage || frontMatter.image || defaultOgImage;
+    const rawOgImage = frontMatter.ogImage || frontMatter.image || defaultOgImage;
+    const ogImage = rawOgImage.startsWith('http') ? rawOgImage : `${defaultSiteUrl}${rawOgImage}`;
     const ogType = frontMatter.date ? 'article' : 'website';
     const publishedTime = frontMatter.date ? new Date(frontMatter.date).toISOString() : undefined;
     const gaId = process.env.NEXT_PUBLIC_GA_ID;

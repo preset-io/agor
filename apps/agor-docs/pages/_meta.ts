@@ -9,7 +9,14 @@ export default {
   },
   guide: 'Guide',
   'api-reference': 'API Reference',
-  blog: 'Blog',
+  blog: {
+    title: 'Blog',
+    type: 'page',
+    theme: {
+      sidebar: false,
+      toc: false,
+    },
+  },
   security: 'Security',
   faq: 'FAQ',
 };

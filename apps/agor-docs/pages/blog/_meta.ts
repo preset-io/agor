@@ -1,4 +1,12 @@
 export default {
+  index: {
+    title: 'Blog',
+    theme: {
+      sidebar: false,
+      toc: false,
+      pagination: false,
+    },
+  },
   'agor-assistants': 'Introducing Agor Assistants',
   'agor-openclaw': 'Agor-OpenClaw Framework',
   'agor-cloud': 'Agor Cloud Private Beta',
