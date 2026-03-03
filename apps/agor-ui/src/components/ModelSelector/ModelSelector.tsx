@@ -130,9 +130,9 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   };
 
   return (
-    <Space direction="vertical" style={{ width: '100%' }}>
+    <Space orientation="vertical" style={{ width: '100%' }}>
       <Radio.Group value={mode} onChange={(e) => handleModeChange(e.target.value)}>
-        <Space direction="vertical">
+        <Space orientation="vertical">
           <Radio value="alias">
             <Space>
               Use model alias (recommended)

@@ -77,7 +77,7 @@ export const CompactionBlock: React.FC<CompactionBlockProps> = ({ messages, agen
             placement="start"
             avatar={avatar}
             content={
-              <Space direction="vertical" size="small" style={{ width: '100%' }}>
+              <Space orientation="vertical" size="small" style={{ width: '100%' }}>
                 <Space>
                   <CheckCircleFilled style={{ color: token.colorSuccess, fontSize: 14 }} />
                   <Text type="secondary">Context compacted successfully</Text>

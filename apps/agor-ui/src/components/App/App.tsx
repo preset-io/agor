@@ -645,6 +645,8 @@ export const App: React.FC<AppProps> = ({
               }}
             >
               <Panel
+                id="comments-panel"
+                order={1}
                 ref={commentsPanelRef}
                 collapsible
                 defaultSize={commentsPanelCollapsed ? 0 : commentsPanelSize}
@@ -697,6 +699,8 @@ export const App: React.FC<AppProps> = ({
                 }}
               />
               <Panel
+                id="content-panel"
+                order={2}
                 defaultSize={commentsPanelCollapsed ? 100 : 100 - commentsPanelSize}
                 minSize={40}
               >
@@ -712,6 +716,8 @@ export const App: React.FC<AppProps> = ({
                   }}
                 >
                   <Panel
+                    id="canvas-panel"
+                    order={1}
                     defaultSize={selectedSessionId ? 100 - sessionPanelSize : 100}
                     minSize={20}
                   >
@@ -793,7 +799,13 @@ export const App: React.FC<AppProps> = ({
                             'var(--ant-color-border-secondary)';
                         }}
                       />
-                      <Panel defaultSize={sessionPanelSize} minSize={25} maxSize={75}>
+                      <Panel
+                        id="session-panel"
+                        order={2}
+                        defaultSize={sessionPanelSize}
+                        minSize={25}
+                        maxSize={75}
+                      >
                         {selectedSessionId ? (
                           <SessionPanel
                             client={client}

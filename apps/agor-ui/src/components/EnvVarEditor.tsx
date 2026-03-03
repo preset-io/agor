@@ -155,7 +155,7 @@ export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
   }));
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+    <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
       <Text type="secondary">
         Environment variables are encrypted at rest and available to all agent operations
         (subprocesses, terminal sessions, environment commands). Common variables: GITHUB_TOKEN,
@@ -181,7 +181,7 @@ export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
       />
 
       {/* Add New Variable Form */}
-      <Space direction="vertical" size="small" style={{ width: '100%' }}>
+      <Space orientation="vertical" size="small" style={{ width: '100%' }}>
         <Text strong>Add New Variable</Text>
         <Space.Compact style={{ width: '100%' }}>
           <Input

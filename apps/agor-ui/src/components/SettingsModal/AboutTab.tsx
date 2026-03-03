@@ -89,7 +89,7 @@ export const AboutTab: React.FC<AboutTabProps> = ({
 
       {/* Content */}
       <div style={{ position: 'relative', zIndex: 1 }}>
-        <Space direction="vertical" size="large" style={{ width: '100%' }}>
+        <Space orientation="vertical" size="large" style={{ width: '100%' }}>
           {/* Connection Info */}
           <Card
             title="Connection Info"

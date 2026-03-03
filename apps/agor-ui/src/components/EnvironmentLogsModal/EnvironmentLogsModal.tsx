@@ -151,7 +151,7 @@ export const EnvironmentLogsModal: React.FC<EnvironmentLogsModalProps> = ({
         </Button>,
       ]}
     >
-      <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+      <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
         {/* Timestamp and truncation warning */}
         {logs && !logs.error && (
           <div>

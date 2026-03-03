@@ -347,7 +347,7 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
   return (
     <div>
       <Space
-        direction="vertical"
+        orientation="vertical"
         size={token.sizeUnit * 2}
         style={{ marginBottom: token.sizeUnit * 2, width: '100%' }}
       >

@@ -241,7 +241,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({
       )}
 
       {repos.length > 0 && (
-        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+        <Space orientation="vertical" size={16} style={{ width: '100%' }}>
           {repos.map((repo: Repo) => {
             const isLocal = repo.repo_type === 'local';
             const tagColor = isLocal ? 'green' : 'blue';
@@ -279,7 +279,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({
                 }
               >
                 {/* Repo metadata */}
-                <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                <Space orientation="vertical" size={8} style={{ width: '100%' }}>
                   <div>
                     <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                       Slug:{' '}
@@ -421,7 +421,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({
         footer={null}
       >
         {repoToDelete && (
-          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+          <Space orientation="vertical" size={16} style={{ width: '100%' }}>
             <Typography.Text>
               How would you like to delete{' '}
               <Typography.Text strong>"{repoToDelete.name}"</Typography.Text>?
@@ -430,7 +430,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({
             {repoToDelete.repo_type === 'local' ? (
               // For local repos, only show database removal option
               <Card style={{ marginBottom: 8 }} styles={{ body: { padding: 16 } }}>
-                <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                <Space orientation="vertical" size={8} style={{ width: '100%' }}>
                   <Typography.Text strong>Remove from Agor</Typography.Text>
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                     Remove this repository from Agor's database only. Your local files at{' '}
@@ -450,7 +450,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({
               // For remote repos, show both options
               <>
                 <Card style={{ marginBottom: 8 }} styles={{ body: { padding: 16 } }}>
-                  <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                  <Space orientation="vertical" size={8} style={{ width: '100%' }}>
                     <Typography.Text strong>Remove from Agor (Keep Files)</Typography.Text>
                     <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                       Remove from database only. Repository and worktree directories in{' '}
@@ -465,7 +465,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({
                 </Card>
 
                 <Card styles={{ body: { padding: 16 } }}>
-                  <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                  <Space orientation="vertical" size={8} style={{ width: '100%' }}>
                     <Typography.Text strong>Delete Completely (Remove Files)</Typography.Text>
                     <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                       ⚠️ Remove from database AND delete all filesystem directories (repository +

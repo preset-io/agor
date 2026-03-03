@@ -203,7 +203,7 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({ sessions, client, onSess
 
   return (
     <div style={{ width: '100%', maxHeight: '70vh', overflowY: 'auto' }}>
-      <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+      <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
         {/* Toolbar: search + archive toggle */}
         <div
           style={{

@@ -180,7 +180,7 @@ export const WorktreeFormFields: React.FC<WorktreeFormFieldsProps> = ({
       )}
 
       {showUrlFields && (
-        <Space direction="vertical" style={{ width: '100%' }}>
+        <Space orientation="vertical" style={{ width: '100%' }}>
           <Form.Item
             name={`${fieldPrefix}issue_url`}
             label="Issue URL (optional)"

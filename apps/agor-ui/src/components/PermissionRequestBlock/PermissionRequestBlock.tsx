@@ -117,7 +117,7 @@ export const PermissionRequestBlock: React.FC<PermissionRequestBlockProps> = ({
         },
       }}
     >
-      <Space direction="vertical" size={token.sizeUnit * 1.5} style={{ width: '100%' }}>
+      <Space orientation="vertical" size={token.sizeUnit * 1.5} style={{ width: '100%' }}>
         {/* Header */}
         <Space size={token.sizeUnit}>
           {getIcon()}
@@ -191,14 +191,14 @@ export const PermissionRequestBlock: React.FC<PermissionRequestBlockProps> = ({
 
         {/* Action Buttons - show only when active */}
         {isActive && onApprove && onDeny && (
-          <Space direction="vertical" size={token.sizeUnit} style={{ width: '100%' }}>
+          <Space orientation="vertical" size={token.sizeUnit} style={{ width: '100%' }}>
             {/* Radio group for remember choice */}
             <Radio.Group
               value={remember}
               onChange={(e) => setRemember(e.target.value)}
               style={{ width: '100%' }}
             >
-              <Space direction="vertical" size={token.sizeUnit / 2} style={{ width: '100%' }}>
+              <Space orientation="vertical" size={token.sizeUnit / 2} style={{ width: '100%' }}>
                 <Radio value={false}>Allow once</Radio>
                 <Space size={token.sizeUnit / 2} style={{ width: '100%', alignItems: 'center' }}>
                   <Radio value={true}>Remember for this</Radio>

@@ -197,7 +197,7 @@ export const SessionPanelContent: React.FC<SessionPanelContentProps> = ({
           >
             Queued Messages ({queuedMessages.length})
           </Typography.Text>
-          <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <Space orientation="vertical" size={8} style={{ width: '100%' }}>
             {queuedMessages.map((msg, idx) => (
               <div
                 key={msg.message_id}

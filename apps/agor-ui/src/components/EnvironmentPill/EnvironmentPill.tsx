@@ -175,7 +175,7 @@ export function EnvironmentPill({
       <Space
         size={0}
         style={{ width: '100%', display: 'inline-flex', alignItems: 'center' }}
-        direction="horizontal"
+        orientation="horizontal"
       >
         {/* Left section - clickable to open URL (when running) */}
         {env?.status === 'running' && environmentUrl ? (

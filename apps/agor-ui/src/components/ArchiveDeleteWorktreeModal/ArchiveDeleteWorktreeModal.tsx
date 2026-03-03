@@ -48,7 +48,7 @@ export const ArchiveDeleteWorktreeModal: React.FC<ArchiveDeleteWorktreeModalProp
       cancelText="Cancel"
       width={600}
     >
-      <Space direction="vertical" size="large" style={{ width: '100%' }}>
+      <Space orientation="vertical" size="large" style={{ width: '100%' }}>
         {/* Worktree Info */}
         <div>
           <Text strong>Worktree: </Text>
@@ -77,7 +77,7 @@ export const ArchiveDeleteWorktreeModal: React.FC<ArchiveDeleteWorktreeModalProp
             value={filesystemAction}
             onChange={(e) => setFilesystemAction(e.target.value)}
           >
-            <Space direction="vertical">
+            <Space orientation="vertical">
               <Radio value="preserved">
                 <div>
                   <div>Leave untouched</div>
@@ -112,7 +112,7 @@ export const ArchiveDeleteWorktreeModal: React.FC<ArchiveDeleteWorktreeModalProp
             Metadata & Sessions
           </Text>
           <Radio.Group value={metadataAction} onChange={(e) => setMetadataAction(e.target.value)}>
-            <Space direction="vertical">
+            <Space orientation="vertical">
               <Radio value="archive">
                 <div>
                   <div>Archive (recommended)</div>
@@ -138,7 +138,7 @@ export const ArchiveDeleteWorktreeModal: React.FC<ArchiveDeleteWorktreeModalProp
           <Alert
             message="Warning"
             description={
-              <Space direction="vertical" size="small" style={{ width: '100%' }}>
+              <Space orientation="vertical" size="small" style={{ width: '100%' }}>
                 <Text>
                   • All {sessionCount} session(s), messages, and history will be permanently deleted
                 </Text>

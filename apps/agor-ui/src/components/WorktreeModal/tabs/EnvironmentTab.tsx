@@ -575,7 +575,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
 
   return (
     <div style={{ width: '100%', maxHeight: '70vh', overflowY: 'auto' }}>
-      <Space direction="vertical" size="large" style={{ width: '100%' }}>
+      <Space orientation="vertical" size="large" style={{ width: '100%' }}>
         <Alert
           message={
             <span>
@@ -596,7 +596,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
         {/* ========== ENVIRONMENT CONTROLS (Top) ========== */}
         {hasEnvironmentConfig && (
           <Card size="small">
-            <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+            <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
               {/* Status and Control Buttons - Single Row */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                 {/* Spinner (only when running) */}
@@ -743,7 +743,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
             </Space>
           }
         >
-          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
             {isEditingTemplate ? (
               <>
                 {/* Up Command */}
@@ -882,7 +882,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                 </div>
               </>
             ) : (
-              <Space direction="vertical" size={4} style={{ width: '100%' }}>
+              <Space orientation="vertical" size={4} style={{ width: '100%' }}>
                 <TemplateField label="Up Command" value={upCommand} />
                 <TemplateField label="Down Command" value={downCommand} />
                 <TemplateField label="Nuke Command" value={nukeCommand} />
@@ -956,7 +956,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
           }
           size="small"
         >
-          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
             {/* Built-in Variables (Read-only) */}
             <div>
               <Typography.Text strong style={{ fontSize: 13, display: 'block', marginBottom: 8 }}>
@@ -1105,7 +1105,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
               </Typography.Text>
               {isEditingUrls ? (
                 <>
-                  <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                  <Space orientation="vertical" size={8} style={{ width: '100%' }}>
                     <div>
                       <Typography.Text
                         strong

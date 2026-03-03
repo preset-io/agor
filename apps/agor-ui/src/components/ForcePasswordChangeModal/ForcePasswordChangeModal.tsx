@@ -67,7 +67,7 @@ export function ForcePasswordChangeModal({
       onCancel={onLogout}
       confirmLoading={loading}
       closable={false}
-      maskClosable={false}
+      mask={{ closable: false }}
       keyboard={false}
       width={400}
     >

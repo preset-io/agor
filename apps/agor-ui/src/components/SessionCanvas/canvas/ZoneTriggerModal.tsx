@@ -296,7 +296,7 @@ export const ZoneTriggerModal = ({
       cancelText="Cancel"
       width={700}
     >
-      <Space direction="vertical" size="large" style={{ width: '100%' }}>
+      <Space orientation="vertical" size="large" style={{ width: '100%' }}>
         {/* Primary Choice: Create New or Reuse */}
         <div>
           <Radio.Group
@@ -304,7 +304,7 @@ export const ZoneTriggerModal = ({
             onChange={(e) => setMode(e.target.value)}
             style={{ width: '100%' }}
           >
-            <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+            <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
               <Radio value="create_new">Create a new session</Radio>
               <Radio value="reuse_existing" disabled={worktreeSessions.length === 0}>
                 Reuse a session
@@ -357,7 +357,7 @@ export const ZoneTriggerModal = ({
                 onChange={(e) => setSelectedAction(e.target.value)}
                 style={{ width: '100%' }}
               >
-                <Space direction="vertical" style={{ width: '100%' }}>
+                <Space orientation="vertical" style={{ width: '100%' }}>
                   <Radio value="prompt">Prompt - Send message to selected session</Radio>
                   <Radio value="fork">Fork - Fork selected session and send message</Radio>
                   <Radio value="spawn">Spawn - Spawn child session and send message</Radio>
@@ -409,7 +409,7 @@ export const ZoneTriggerModal = ({
                   </Typography.Text>
                 ),
                 children: (
-                  <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+                  <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
                     {mode === 'reuse_existing' && (
                       <Alert
                         message="Showing current configuration. These settings are for reference."

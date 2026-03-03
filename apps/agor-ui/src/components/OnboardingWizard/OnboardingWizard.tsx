@@ -697,7 +697,7 @@ export function OnboardingWizard({
       </Paragraph>
 
       <Space
-        direction="vertical"
+        orientation="vertical"
         size="middle"
         style={{ width: '100%', maxWidth: 400, margin: '0 auto' }}
       >
@@ -1233,7 +1233,7 @@ export function OnboardingWizard({
     <Modal
       open={open}
       closable={false}
-      maskClosable={false}
+      mask={{ closable: false }}
       keyboard={false}
       footer={footer}
       width={640}

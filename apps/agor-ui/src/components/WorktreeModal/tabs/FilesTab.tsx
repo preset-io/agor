@@ -153,7 +153,7 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ worktree, client }) => {
 
   return (
     <div style={{ width: '100%', maxHeight: '70vh', overflowY: 'auto' }}>
-      <Space direction="vertical" size="large" style={{ width: '100%' }}>
+      <Space orientation="vertical" size="large" style={{ width: '100%' }}>
         {isTruncated && (
           <Alert
             type="warning"

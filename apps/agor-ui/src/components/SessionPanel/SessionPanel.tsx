@@ -560,7 +560,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         />
       )}
       <Space
-        direction="vertical"
+        orientation="vertical"
         style={{ width: '100%', position: 'relative', zIndex: 1 }}
         size={8}
       >
