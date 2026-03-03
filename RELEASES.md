@@ -1,5 +1,27 @@
 # Releases
 
+## 0.14.0 (2026-03-03)
+
+### Features
+- **Permission request timeout** — graceful agent notification when permission requests time out
+- **Assistants rebrand** — rename "Persisted Agents" to "Assistants" with updated concept docs
+- **OpenCode MCP & worktree support** — add MCP server and worktree directory support for OpenCode sessions
+- **Assistant worktree cards** — add background tint to assistant worktree cards
+- **SEO improvements** — add LLM files and richer structured data for docs
+
+### Fixes
+- Replace WebSocket ACK stop protocol with Unix signals in daemon
+- Prevent messages from bypassing queue when session is busy
+- Resolve React and Ant Design console warnings
+- Ensure all @agor/core subpath exports have proper TypeScript declarations
+- Auto-grant permissions and reduce debug logging for OpenCode
+- Use dialect-agnostic boolean for archived column queries
+- URI-encode PostgreSQL credentials and consolidate duplicate Handlebars template
+- Read database config from config.yaml, fix Handlebars import in SessionPanel
+- Handle JSON string todos input in TodoListRenderer
+- Truncate long URLs in issue/PR pills and use conditional icons
+- Prevent Dependabot PRs for agor-live meta-package
+
 ## 0.13.0 (2026-02-28)
 
 ### Features
