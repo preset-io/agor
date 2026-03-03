@@ -35,8 +35,8 @@
   border: 1px solid var(--nx-colors-gray-4);
   border-radius: 12px;
   overflow: hidden;
-  text-decoration: none;
-  color: inherit;
+  text-decoration: none !important;
+  color: var(--nx-colors-gray-12) !important;
   transition:
     transform 0.2s ease,
     border-color 0.2s ease,
@@ -56,7 +56,7 @@
   width: 100%;
   aspect-ratio: 16 / 9;
   overflow: hidden;
-  background: linear-gradient(135deg, rgba(46, 154, 146, 0.15) 0%, rgba(46, 154, 146, 0.05) 100%);
+  background: var(--nx-colors-gray-2);
 }
 
 .image {
