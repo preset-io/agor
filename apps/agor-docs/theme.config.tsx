@@ -205,18 +205,26 @@ const config: DocsThemeConfig = {
               __html: JSON.stringify({
                 '@context': 'https://schema.org',
                 '@type': 'BreadcrumbList',
-                itemListElement: pathname
-                  .split('/')
-                  .filter(Boolean)
-                  .map((segment, index, arr) => ({
+                itemListElement: [
+                  {
                     '@type': 'ListItem',
-                    position: index + 1,
-                    name:
-                      index === arr.length - 1
-                        ? pageTitle
-                        : segment.charAt(0).toUpperCase() + segment.slice(1).replace(/-/g, ' '),
-                    item: `${defaultSiteUrl}/${arr.slice(0, index + 1).join('/')}`,
-                  })),
+                    position: 1,
+                    name: 'Home',
+                    item: defaultSiteUrl,
+                  },
+                  ...pathname
+                    .split('/')
+                    .filter(Boolean)
+                    .map((segment, index, arr) => ({
+                      '@type': 'ListItem',
+                      position: index + 2,
+                      name:
+                        index === arr.length - 1
+                          ? pageTitle
+                          : segment.charAt(0).toUpperCase() + segment.slice(1).replace(/-/g, ' '),
+                      item: `${defaultSiteUrl}/${arr.slice(0, index + 1).join('/')}`,
+                    })),
+                ],
               }),
             }}
           />
