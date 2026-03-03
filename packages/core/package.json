@@ -224,7 +224,7 @@
     "@types/bcryptjs": "^2.4.6",
     "@types/iarna__toml": "^2.0.5",
     "@types/js-yaml": "^4.0.9",
-    "@types/node": "^22.10.2",
+    "@types/node": "^25.3.3",
     "@vitest/coverage-v8": "^4.0.18",
     "drizzle-kit": "^0.31.9",
     "tsup": "^8.5.1",
