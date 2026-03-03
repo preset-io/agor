@@ -25,7 +25,6 @@ export function BlogCard({ post }: { post: BlogPost }) {
       <div className={styles.content}>
         <span className={styles.date}>{formatDate(post.date)}</span>
         <h3 className={styles.cardTitle}>{post.title}</h3>
-        <p className={styles.description}>{post.description}</p>
       </div>
     </Link>
   );

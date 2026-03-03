@@ -13,13 +13,7 @@
   font-size: 3rem;
   font-weight: 800;
   margin-bottom: 0.75rem;
-  background: linear-gradient(90deg, #2e9a92 0%, #7fe8df 50%, #a8f5ed 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  width: fit-content;
-  margin-left: auto;
-  margin-right: auto;
+  color: var(--nx-colors-gray-12);
 }
 
 .blogSubtitle {
@@ -52,7 +46,7 @@
 
 .card:hover {
   transform: translateY(-4px);
-  border-color: #2e9a92;
+  border-color: var(--nx-colors-gray-6);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
 }
 
@@ -91,7 +85,7 @@
 
 .date {
   font-size: 0.8125rem;
-  color: #2e9a92;
+  color: var(--nx-colors-gray-10);
   font-weight: 500;
   margin-bottom: 0.5rem;
 }
@@ -102,17 +96,6 @@
   line-height: 1.4;
   margin: 0 0 0.5rem;
   color: var(--nx-colors-gray-12);
-}
-
-.description {
-  font-size: 0.875rem;
-  line-height: 1.6;
-  color: var(--nx-colors-gray-10);
-  margin: 0;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
 }
 
 /* Responsive */

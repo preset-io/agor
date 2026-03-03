@@ -2,7 +2,6 @@ export default {
   index: {
     title: 'Blog',
     theme: {
-      sidebar: false,
       toc: false,
       pagination: false,
     },
