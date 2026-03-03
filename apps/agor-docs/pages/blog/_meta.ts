@@ -7,13 +7,40 @@ export default {
       pagination: false,
     },
   },
-  'agor-assistants': 'Introducing Agor Assistants',
-  'agor-openclaw': 'Agor-OpenClaw Framework',
-  'agor-cloud': 'Agor Cloud Private Beta',
-  openclaw: 'Agor vs. OpenClaw (ClawdBot)',
-  'agor-platform': 'Agor Platform',
-  'orchestration-layers': 'The Orchestration Layers',
-  'context-engineering': 'Context Engineering',
-  'making-of-agor': 'Making of Agor',
-  announcement: 'Agor Announcement',
+  'agor-assistants': {
+    title: 'Introducing Agor Assistants',
+    display: 'hidden',
+  },
+  'agor-openclaw': {
+    title: 'Agor-OpenClaw Framework',
+    display: 'hidden',
+  },
+  'agor-cloud': {
+    title: 'Agor Cloud Private Beta',
+    display: 'hidden',
+  },
+  openclaw: {
+    title: 'Agor vs. OpenClaw (ClawdBot)',
+    display: 'hidden',
+  },
+  'agor-platform': {
+    title: 'Agor Platform',
+    display: 'hidden',
+  },
+  'orchestration-layers': {
+    title: 'The Orchestration Layers',
+    display: 'hidden',
+  },
+  'context-engineering': {
+    title: 'Context Engineering',
+    display: 'hidden',
+  },
+  'making-of-agor': {
+    title: 'Making of Agor',
+    display: 'hidden',
+  },
+  announcement: {
+    title: 'Agor Announcement',
+    display: 'hidden',
+  },
 };
