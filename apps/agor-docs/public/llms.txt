@@ -1,0 +1,52 @@
+# Agor
+
+> Agor is a multiplayer canvas for orchestrating AI coding agents (Claude Code, Codex, Gemini). It manages git worktrees, tracks AI conversations, visualizes work on spatial boards, and enables real-time collaboration.
+
+Agor is open-source software licensed under BSL 1.1, created by Maxime Beauchemin.
+
+- Website: https://agor.live
+- GitHub: https://github.com/preset-io/agor
+- Discord: https://discord.gg/Qh4TrFQZpd
+
+## Core Documentation
+
+- [Getting Started](https://agor.live/guide/getting-started): Install and set up Agor for AI agent orchestration in under 5 minutes
+- [Concepts](https://agor.live/guide/concepts): Core concepts — Worktrees, Boards, Sessions, and Environments
+- [Architecture](https://agor.live/guide/architecture): System architecture, daemon-based design, data flow, and tech stack
+- [SDK Comparison](https://agor.live/guide/sdk-comparison): Feature matrix for Claude Code, Codex, and Gemini integrations
+
+## Features
+
+- [Assistants](https://agor.live/guide/assistants): Persistent AI companions with memory, skills, orchestration, and scheduled heartbeats
+- [Agor MCP Server](https://agor.live/guide/internal-mcp): Built-in Model Context Protocol server for self-aware agents and deep automation
+- [Message Gateway](https://agor.live/guide/message-gateway): Route messages from Slack, Discord, and other platforms into Agor sessions
+- [Scheduler](https://agor.live/guide/scheduler): Automate recurring work with cron-driven agent sessions attached to worktrees
+- [Environments](https://agor.live/guide/environment-configuration): Configure reusable worktree environment templates with templated commands
+- [Advanced Features](https://agor.live/guide/advanced-features): Notifications, audio alerts, context tracking, and personalized configuration
+- [Spawned Subsessions](https://agor.live/guide/spawned-subsessions): Delegate work to specialized subagents with automatic callback reports
+
+## API Reference
+
+- [API Reference](https://agor.live/api-reference): Interactive REST API documentation with Swagger UI
+- [WebSocket Events](https://agor.live/api-reference/websockets): Real-time Socket.io event reference for sessions, tasks, messages, and presence
+
+## Deployment
+
+- [Multiplayer Mode](https://agor.live/guide/multiplayer-unix-isolation): RBAC and Unix-level isolation for secure shared development environments
+- [Containerized Execution](https://agor.live/guide/containerized-execution): Running Agor executors in Kubernetes, Docker, or containerized environments
+- [Development Guide](https://agor.live/guide/development): Contributing to Agor — development environment setup and codebase structure
+
+## Other
+
+- [Security](https://agor.live/security): Practical guidance for operating Agor safely
+- [FAQ](https://agor.live/faq): Frequently asked questions about session forking, spawning, and multiplayer workflow
+
+## Optional
+
+- [Agor-OpenClaw Framework](https://agor.live/blog/agor-openclaw): OpenClaw patterns running 100% inside Agor
+- [Agor Cloud Private Beta](https://agor.live/blog/agor-cloud): Fully managed Agor with Unix-level isolation and enterprise observability
+- [Agor Platform](https://agor.live/blog/agor-platform): Agor as a full platform — REST API, CLI, and TypeScript client
+- [The Orchestration Layers](https://agor.live/blog/orchestration-layers): How software development evolved from prompts to orchestrating multiple AI agents
+- [Context Engineering](https://agor.live/blog/context-engineering): Maintainable AI context with bite-sized markdown nuggets
+- [Making of Agor](https://agor.live/blog/making-of-agor): Behind the scenes of building Agor
+- [Agor Announcement](https://agor.live/blog/announcement): Original launch announcement

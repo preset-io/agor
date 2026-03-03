@@ -1,9 +1,49 @@
 # robots.txt for agor.live
 User-agent: *
 Allow: /
+Crawl-delay: 1
 
 # Sitemap
 Sitemap: https://agor.live/sitemap.xml
 
-# Crawl-delay to be respectful
-Crawl-delay: 1
+# Block internal/build paths
+Disallow: /_next/
+Disallow: /404
+
+# LLM metadata
+# See https://agor.live/llms.txt for LLM-optimized content
+
+# Search engine crawlers
+User-agent: Googlebot
+Allow: /
+
+User-agent: Bingbot
+Allow: /
+
+# AI/LLM crawlers — explicitly allowed for documentation indexing
+User-agent: GPTBot
+Allow: /
+
+User-agent: ChatGPT-User
+Allow: /
+
+User-agent: Google-Extended
+Allow: /
+
+User-agent: Claude-Web
+Allow: /
+
+User-agent: anthropic-ai
+Allow: /
+
+User-agent: PerplexityBot
+Allow: /
+
+User-agent: Bytespider
+Disallow: /
+
+User-agent: CCBot
+Allow: /
+
+User-agent: cohere-ai
+Allow: /

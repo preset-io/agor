@@ -1,0 +1,104 @@
+# Agor
+
+> Agor is a multiplayer canvas for orchestrating AI coding agents (Claude Code, Codex, Gemini). It manages git worktrees, tracks AI conversations, visualizes work on spatial boards, and enables real-time collaboration. Think Figma, but for AI coding assistants.
+
+Agor is open-source software licensed under BSL 1.1, created by Maxime Beauchemin.
+
+- Website: https://agor.live
+- GitHub: https://github.com/preset-io/agor
+- Discord: https://discord.gg/Qh4TrFQZpd
+- npm: `npm install -g agor-live`
+
+## Quick Start
+
+```bash
+npm install -g agor-live
+agor init
+agor daemon start
+agor open
+```
+
+## Core Concepts
+
+Agor is built around 5 core primitives:
+
+### Worktrees
+A worktree is an isolated git working directory where agentic coding sessions take place. Agor uses git worktrees under the hood. Best practice: 1 worktree = 1 issue = 1 PR = 1 feature. Each worktree contains a tree of sessions — as you work, you can fork and spawn sessions creating genealogy trees.
+
+### Boards
+Boards are spatial canvases for organizing worktrees — like Figma for AI coding work. Instead of linear lists, boards use a 2D layout with real-time multiplayer cursors and presence.
+
+### Sessions
+Sessions are AI conversations that can fork and spawn, creating genealogy trees. Fork creates a sibling session with a copy of the conversation context. Spawn creates a child session with a fresh context window.
+
+### Zones
+Zones are spatial regions on boards that trigger templated prompts (using Handlebars) when you drop a worktree into them. Build kanban-style workflows: analyze → develop → review → deploy.
+
+### Environments
+Environments are runtime instances (dev servers, Docker containers, etc.) for worktrees. Each worktree gets unique ports via templates, preventing conflicts when running multiple worktrees simultaneously.
+
+### Assistants
+Assistants are persistent AI companions with memory (MEMORY.md, SOUL.md), orchestration capabilities, and scheduled heartbeats. They coordinate work across your workspace.
+
+## Key Features
+
+- **Agent Swarm Control**: Run multiple Claude Code, Codex, and Gemini sessions simultaneously
+- **Multiplayer Spatial Canvas**: Figma-like board layout with real-time cursors and facepiles
+- **Session Trees**: Fork and spawn sessions for parallel exploration
+- **Zone Triggers**: Automated workflows via templated prompts
+- **Isolated Environments**: Per-worktree dev servers with auto-managed ports
+- **Mobile-Friendly**: Send prompts and monitor progress from your phone
+- **MCP Server**: Built-in Model Context Protocol server for self-aware agents
+- **Message Gateway**: Route Slack/Discord messages into Agor sessions
+- **Scheduler**: Cron-driven agent sessions for recurring automation
+- **Social Features**: Spatial comments, threaded conversations, live cursors, facepiles
+
+## Tech Stack
+
+- Backend: FeathersJS, Drizzle ORM, LibSQL
+- Frontend: React 18, TypeScript, Ant Design, React Flow
+- CLI: oclif
+- Realtime: WebSocket via Socket.io
+
+## Supported AI Agents
+
+- Claude Code (Anthropic)
+- Codex (OpenAI)
+- Gemini (Google)
+- OpenCode
+
+## API
+
+Agor provides a fully-typed REST API with Swagger documentation, a TypeScript client, and a CLI. All operations available in the UI can be automated via the API.
+
+### WebSocket Events
+Real-time events for sessions, tasks, messages, and multiplayer presence updates via Socket.io.
+
+## Deployment Options
+
+- **Local**: npm install, single command startup
+- **Docker**: Docker Compose with devcontainer support
+- **GitHub Codespaces**: One-click setup
+- **Kubernetes**: Containerized execution with shared storage
+- **Multiplayer Mode**: RBAC + Unix-level isolation for teams
+
+## Documentation
+
+- [Getting Started](https://agor.live/guide/getting-started): Install and set up Agor in under 5 minutes
+- [Concepts](https://agor.live/guide/concepts): Core concepts — Worktrees, Boards, Sessions, Environments
+- [Assistants](https://agor.live/guide/assistants): Persistent AI companions with memory and orchestration
+- [Agor MCP Server](https://agor.live/guide/internal-mcp): Built-in MCP server for self-aware agents
+- [Message Gateway](https://agor.live/guide/message-gateway): Slack/Discord integration
+- [Scheduler](https://agor.live/guide/scheduler): Cron-driven agent automation
+- [Environments](https://agor.live/guide/environment-configuration): Worktree environment templates
+- [Advanced Features](https://agor.live/guide/advanced-features): Notifications, audio alerts, context tracking
+- [Spawned Subsessions](https://agor.live/guide/spawned-subsessions): Multi-agent delegation with callbacks
+- [Architecture](https://agor.live/guide/architecture): System design and data flow
+- [SDK Comparison](https://agor.live/guide/sdk-comparison): Claude Code vs Codex vs Gemini feature matrix
+- [Development Guide](https://agor.live/guide/development): Contributing to Agor
+- [Multiplayer Mode](https://agor.live/guide/multiplayer-unix-isolation): RBAC and Unix isolation
+- [Containerized Execution](https://agor.live/guide/containerized-execution): Kubernetes/Docker deployment
+- [API Reference](https://agor.live/api-reference): REST API documentation
+- [WebSocket Events](https://agor.live/api-reference/websockets): Real-time event reference
+- [Security](https://agor.live/security): Security guidance
+- [FAQ](https://agor.live/faq): Frequently asked questions

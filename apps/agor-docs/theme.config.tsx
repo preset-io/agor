@@ -148,29 +148,79 @@ const config: DocsThemeConfig = {
           type="application/ld+json"
           // biome-ignore lint/security/noDangerouslySetInnerHtml: JSON-LD is static and controlled, not user-provided.
           dangerouslySetInnerHTML={{
-            __html: JSON.stringify({
-              '@context': 'https://schema.org',
-              '@type': 'SoftwareApplication',
-              name: 'agor',
-              description:
-                'Next-gen agent orchestration for AI coding. Multiplayer workspace for Claude Code, Codex, and Gemini.',
-              applicationCategory: 'DeveloperApplication',
-              operatingSystem: 'macOS, Linux, Windows',
-              offers: {
-                '@type': 'Offer',
-                price: '0',
-                priceCurrency: 'USD',
-              },
-              url: siteUrl,
-              codeRepository: 'https://github.com/mistercrunch/agor',
-              author: {
-                '@type': 'Person',
-                name: 'Maxime Beauchemin',
-              },
-              screenshot: ogImage,
-            }),
+            __html: JSON.stringify(
+              frontMatter.date
+                ? {
+                    '@context': 'https://schema.org',
+                    '@type': 'BlogPosting',
+                    headline: pageTitle,
+                    description,
+                    image: ogImage,
+                    url: siteUrl,
+                    datePublished: new Date(frontMatter.date).toISOString(),
+                    author: {
+                      '@type': 'Person',
+                      name: frontMatter.author || 'Maxime Beauchemin',
+                    },
+                    publisher: {
+                      '@type': 'Organization',
+                      name: 'Agor',
+                      logo: {
+                        '@type': 'ImageObject',
+                        url: `${defaultSiteUrl}/logo.png`,
+                      },
+                    },
+                  }
+                : {
+                    '@context': 'https://schema.org',
+                    '@type': 'SoftwareApplication',
+                    name: 'agor',
+                    description:
+                      'Next-gen agent orchestration for AI coding. Multiplayer workspace for Claude Code, Codex, and Gemini.',
+                    applicationCategory: 'DeveloperApplication',
+                    operatingSystem: 'macOS, Linux, Windows',
+                    offers: {
+                      '@type': 'Offer',
+                      price: '0',
+                      priceCurrency: 'USD',
+                    },
+                    url: siteUrl,
+                    codeRepository: 'https://github.com/preset-io/agor',
+                    author: {
+                      '@type': 'Person',
+                      name: 'Maxime Beauchemin',
+                    },
+                    screenshot: ogImage,
+                  }
+            ),
           }}
         />
+
+        {/* BreadcrumbList JSON-LD for guide/blog/api pages */}
+        {pathname !== '/' && (
+          <script
+            type="application/ld+json"
+            // biome-ignore lint/security/noDangerouslySetInnerHtml: JSON-LD is static and controlled, not user-provided.
+            dangerouslySetInnerHTML={{
+              __html: JSON.stringify({
+                '@context': 'https://schema.org',
+                '@type': 'BreadcrumbList',
+                itemListElement: pathname
+                  .split('/')
+                  .filter(Boolean)
+                  .map((segment, index, arr) => ({
+                    '@type': 'ListItem',
+                    position: index + 1,
+                    name:
+                      index === arr.length - 1
+                        ? pageTitle
+                        : segment.charAt(0).toUpperCase() + segment.slice(1).replace(/-/g, ' '),
+                    item: `${defaultSiteUrl}/${arr.slice(0, index + 1).join('/')}`,
+                  })),
+              }),
+            }}
+          />
+        )}
       </>
     );
   },
