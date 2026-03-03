@@ -4227,6 +4227,53 @@ async function main() {
           throw new Error('Cannot send prompt: session is currently stopping');
         }
 
+        // Queue guard: enforce one-task-at-a-time guarantee server-side.
+        // If the session is not idle OR there are already queued messages (FIFO preservation),
+        // auto-queue this prompt instead of executing it immediately.
+        // The queue processor sets _fromQueue to bypass this check when dequeuing.
+        if (!(data as Record<string, unknown>)._fromQueue) {
+          const queueCheckRepo = new MessagesRepository(db);
+          const queuedItems = await queueCheckRepo.findQueued(id as SessionID);
+          const hasQueuedItems = queuedItems.length > 0;
+
+          if (session.status !== SessionStatus.IDLE || hasQueuedItems) {
+            // Auto-queue the message
+            const queuedMessage = await queueCheckRepo.createQueued(id as SessionID, data.prompt, {
+              queued_by_user_id: params.user?.user_id,
+            });
+
+            console.log(
+              `📬 [Prompt] Auto-queued message for session ${id.substring(0, 8)} at position ${queuedMessage.queue_position} ` +
+                `(session status: ${session.status}, existing queue items: ${queuedItems.length})`
+            );
+
+            // Emit event for real-time UI updates
+            app.service('messages').emit('queued', queuedMessage);
+
+            // If session is idle but had queued items, trigger queue processing
+            // to maintain FIFO order (the existing queued items should run first)
+            if (session.status === SessionStatus.IDLE) {
+              setImmediate(async () => {
+                try {
+                  await sessionsService.triggerQueueProcessing(id as SessionID, params);
+                } catch (error) {
+                  console.error(
+                    `❌ [Prompt] Failed to trigger queue processing after auto-queue:`,
+                    error
+                  );
+                }
+              });
+            }
+
+            return {
+              success: true,
+              queued: true,
+              message: queuedMessage,
+              queue_position: queuedMessage.queue_position,
+            };
+          }
+        }
+
         console.log(`   Session agent: ${session.agentic_tool}`);
         console.log(
           `   Session permission_config.mode: ${session.permission_config?.mode || 'not set'}`
@@ -5067,14 +5114,19 @@ async function main() {
     // This creates task, user message, executes agent, etc.
     // IMPORTANT: Use messageParams (reconstructed from queued message metadata)
     // to preserve the original user's authentication context
+    // NOTE: _fromQueue bypasses the queue guard in the prompt endpoint to prevent re-queueing
     const promptService = app.service('/sessions/:id/prompt') as {
-      create: (data: { prompt: string; stream?: boolean }, params: RouteParams) => Promise<unknown>;
+      create: (
+        data: { prompt: string; stream?: boolean; _fromQueue?: boolean },
+        params: RouteParams
+      ) => Promise<unknown>;
     };
 
     await promptService.create(
       {
         prompt,
         stream: true,
+        _fromQueue: true,
       },
       {
         ...messageParams,

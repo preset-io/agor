@@ -1259,23 +1259,44 @@ export function setupMCPRoutes(app: Application, db: Database): void {
               }
             );
 
-            mcpResponse = {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify(
-                    {
-                      success: true,
-                      taskId: promptResponse.taskId,
-                      status: promptResponse.status,
-                      note: 'Prompt added to existing session and execution started.',
-                    },
-                    null,
-                    2
-                  ),
-                },
-              ],
-            };
+            // Handle queued vs immediate execution response
+            if (promptResponse.queued) {
+              mcpResponse = {
+                content: [
+                  {
+                    type: 'text',
+                    text: JSON.stringify(
+                      {
+                        success: true,
+                        queued: true,
+                        queue_position: promptResponse.queue_position,
+                        note: 'Session is busy. Prompt has been queued and will execute automatically when the session becomes idle.',
+                      },
+                      null,
+                      2
+                    ),
+                  },
+                ],
+              };
+            } else {
+              mcpResponse = {
+                content: [
+                  {
+                    type: 'text',
+                    text: JSON.stringify(
+                      {
+                        success: true,
+                        taskId: promptResponse.taskId,
+                        status: promptResponse.status,
+                        note: 'Prompt added to existing session and execution started.',
+                      },
+                      null,
+                      2
+                    ),
+                  },
+                ],
+              };
+            }
           } else if (mode === 'fork') {
             // Mode: fork - create sibling session
             console.log(`🔀 MCP forking session ${args.sessionId.substring(0, 8)}`);
