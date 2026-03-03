@@ -4231,7 +4231,10 @@ async function main() {
         // If the session is not idle OR there are already queued messages (FIFO preservation),
         // auto-queue this prompt instead of executing it immediately.
         // The queue processor sets _fromQueue to bypass this check when dequeuing.
-        if (!(data as Record<string, unknown>)._fromQueue) {
+        // SECURITY: Only honor _fromQueue for internal service calls (no provider).
+        // External clients (REST/WebSocket) set params.provider, so they can't bypass the guard.
+        const isInternalCall = !params.provider;
+        if (!((data as Record<string, unknown>)._fromQueue && isInternalCall)) {
           const queueCheckRepo = new MessagesRepository(db);
           const queuedItems = await queueCheckRepo.findQueued(id as SessionID);
           const hasQueuedItems = queuedItems.length > 0;
