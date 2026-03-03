@@ -11,16 +11,15 @@ function formatDate(dateStr: string): string {
   });
 }
 
+const DEFAULT_IMAGE = '/screenshots/board.png';
+
 export function BlogCard({ post }: { post: BlogPost }) {
+  const imageSrc = post.image || DEFAULT_IMAGE;
   return (
     <Link href={`/blog/${post.slug}`} className={styles.card}>
       <div className={styles.imageContainer}>
-        {post.image ? (
-          // biome-ignore lint/performance/noImgElement: Static asset in docs
-          <img src={post.image} alt={post.title} className={styles.image} />
-        ) : (
-          <span className={styles.placeholderIcon}>📝</span>
-        )}
+        {/* biome-ignore lint/performance/noImgElement: Static asset in docs */}
+        <img src={imageSrc} alt={post.title} className={styles.image} />
       </div>
       <div className={styles.content}>
         <span className={styles.date}>{formatDate(post.date)}</span>
