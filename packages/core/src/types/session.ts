@@ -17,6 +17,7 @@ export const SessionStatus = {
   RUNNING: 'running',
   STOPPING: 'stopping', // Stop requested, waiting for task to stop
   AWAITING_PERMISSION: 'awaiting_permission',
+  TIMED_OUT: 'timed_out', // Permission request timed out, executor exited — user must re-prompt
   COMPLETED: 'completed',
   FAILED: 'failed',
 } as const;

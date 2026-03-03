@@ -525,6 +525,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         return 'success';
       case 'failed':
         return 'error';
+      case 'timed_out':
+        return 'warning';
       default:
         return 'default';
     }

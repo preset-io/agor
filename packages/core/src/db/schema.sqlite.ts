@@ -56,7 +56,15 @@ export const sessions = sqliteTable(
 
     // Materialized for filtering/joins (cross-DB compatible)
     status: text('status', {
-      enum: ['idle', 'running', 'stopping', 'awaiting_permission', 'completed', 'failed'],
+      enum: [
+        'idle',
+        'running',
+        'stopping',
+        'awaiting_permission',
+        'timed_out',
+        'completed',
+        'failed',
+      ],
     }).notNull(),
     agentic_tool: text('agentic_tool', {
       enum: ['claude-code', 'codex', 'gemini', 'opencode'],
@@ -183,6 +191,7 @@ export const tasks = sqliteTable(
         'running',
         'stopping',
         'awaiting_permission',
+        'timed_out',
         'completed',
         'failed',
         'stopped',

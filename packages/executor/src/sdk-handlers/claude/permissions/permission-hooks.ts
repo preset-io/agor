@@ -225,34 +225,59 @@ export function createCanUseToolCallback(
         options.signal
       );
 
-      // Update permission request message with approval/denial/timeout
+      // Determine the resulting permission status
+      const permissionStatus = decision.timedOut
+        ? PermissionStatus.TIMED_OUT
+        : decision.allow
+          ? PermissionStatus.APPROVED
+          : PermissionStatus.DENIED;
+
+      // Update permission request message with outcome
       if (deps.messagesService) {
         const baseContent =
           typeof permissionMessage.content === 'object' && !Array.isArray(permissionMessage.content)
             ? permissionMessage.content
             : {};
 
-        // Determine status: timeout gets distinct TIMED_OUT, otherwise APPROVED/DENIED
-        let resolvedStatus: PermissionStatus;
-        if (decision.allow) {
-          resolvedStatus = PermissionStatus.APPROVED;
-        } else if (decision.reason === 'Timeout') {
-          resolvedStatus = PermissionStatus.TIMED_OUT;
-        } else {
-          resolvedStatus = PermissionStatus.DENIED;
-        }
-
         // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service has patch method but type definition is incomplete
         await (deps.messagesService as any).patch(permissionMessage.message_id, {
           content: {
             ...(baseContent as Record<string, unknown>),
-            status: resolvedStatus,
+            status: permissionStatus,
             scope: decision.remember ? decision.scope : undefined,
             approved_by: decision.decidedBy,
             approved_at: new Date().toISOString(),
           },
         });
-        console.log(`✅ [canUseTool] Permission request updated: ${resolvedStatus}`);
+        console.log(`✅ [canUseTool] Permission request updated: ${permissionStatus}`);
+      }
+
+      // Handle timeout: set task/session to timed_out, deny the tool call
+      // The executor will exit cleanly and the user can re-prompt to retry.
+      if (decision.timedOut) {
+        console.log(
+          `⏰ [canUseTool] Permission timed out for ${toolName}, setting timed_out state...`
+        );
+
+        await deps.tasksService.patch(taskId, {
+          status: TaskStatus.TIMED_OUT,
+          completed_at: new Date().toISOString(),
+        });
+
+        if (deps.sessionsService) {
+          await deps.sessionsService.patch(sessionId, {
+            status: 'timed_out' as const,
+            ready_for_prompt: true,
+          });
+          console.log(
+            `✅ [canUseTool] Session ${sessionId} set to timed_out after permission timeout`
+          );
+        }
+
+        return {
+          behavior: 'deny' as const,
+          message: `Permission request timed out for tool: ${toolName}. Send a new prompt to retry.`,
+        };
       }
 
       // Update task status

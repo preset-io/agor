@@ -212,6 +212,9 @@ export interface AgorExecutionSettings {
   /** Sync web passwords to Unix user passwords (default: true). When enabled, passwords are synced on user creation/update. */
   sync_unix_passwords?: boolean;
 
+  /** Permission request timeout in ms (default: 600000 = 10 minutes). When a permission request is not resolved within this time, the agent is notified and can continue. */
+  permission_timeout_ms?: number;
+
   /**
    * Executor command template for remote/containerized execution.
    *

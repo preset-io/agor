@@ -705,7 +705,12 @@ async function main() {
   // Register core services
   // NOTE: Pass app instance for user preferences access (needed for cross-tool spawning and ready_for_prompt updates)
   const sessionsService = createSessionsService(db, app) as unknown as SessionsServiceImpl;
-  app.use('/sessions', sessionsService);
+  app.use('/sessions', sessionsService, {
+    events: [
+      'permission:request', // Permission request broadcast to UI clients
+      'permission:timeout', // Permission request timed out notification
+    ],
+  });
 
   // Wire up custom session methods for Feathers/WebSocket executor architecture
   sessionsService.setExecuteHandler(
@@ -931,42 +936,45 @@ async function main() {
         // Clean up PID tracking
         executorProcesses.delete(sessionId);
 
-        // Safety net: Update session status back to IDLE when executor completes
+        // Safety net: Update session status back to IDLE when executor exits
         // The primary session status update happens in TasksService.patch() when task status changes
         // This is a fallback in case the task status update didn't trigger session status change
-        if (code === 0) {
-          try {
-            // CRITICAL: Check if THIS task is still the current/latest task before updating
-            // If a new task has started while this executor was exiting, we must NOT
-            // set the session to IDLE - that would break the running task.
-            const currentSession = await app.service('sessions').get(sessionId, params);
-            const latestTaskId = currentSession.tasks?.[currentSession.tasks.length - 1];
+        try {
+          // CRITICAL: Check if THIS task is still the current/latest task before updating
+          // If a new task has started while this executor was exiting, we must NOT
+          // set the session to IDLE - that would break the running task.
+          const currentSession = await app.service('sessions').get(sessionId, params);
+          const latestTaskId = currentSession.tasks?.[currentSession.tasks.length - 1];
 
-            if (latestTaskId && latestTaskId !== taskId) {
-              console.log(
-                `⏭️ [Executor] Task ${taskId.slice(0, 8)} is not the latest (latest: ${latestTaskId.slice(0, 8)}), skipping IDLE update`
-              );
-              // Skip the update - a newer task owns the session state
-            } else if (currentSession.status === SessionStatus.RUNNING) {
-              await app.service('sessions').patch(
-                sessionId,
-                {
-                  status: SessionStatus.IDLE,
-                  ready_for_prompt: true,
-                },
-                params
-              );
-              console.log(
-                `✅ [Executor] Session ${sessionId.slice(0, 8)} status updated to IDLE after executor exit (fallback)`
-              );
-            } else {
-              console.log(
-                `ℹ️  [Executor] Session ${sessionId.slice(0, 8)} already in ${currentSession.status} state, skipping IDLE update`
-              );
-            }
-          } catch (error) {
-            console.error(`❌ [Executor] Failed to update session status to IDLE:`, error);
+          if (latestTaskId && latestTaskId !== taskId) {
+            console.log(
+              `⏭️ [Executor] Task ${taskId.slice(0, 8)} is not the latest (latest: ${latestTaskId.slice(0, 8)}), skipping IDLE update`
+            );
+            // Skip the update - a newer task owns the session state
+          } else if (
+            currentSession.status === SessionStatus.RUNNING ||
+            currentSession.status === 'awaiting_permission' ||
+            currentSession.status === 'timed_out'
+          ) {
+            // Session is still in an active/waiting state but executor is gone — reset to IDLE
+            await app.service('sessions').patch(
+              sessionId,
+              {
+                status: SessionStatus.IDLE,
+                ready_for_prompt: true,
+              },
+              params
+            );
+            console.log(
+              `✅ [Executor] Session ${sessionId.slice(0, 8)} status updated to IDLE after executor exit (was: ${currentSession.status})`
+            );
+          } else {
+            console.log(
+              `ℹ️  [Executor] Session ${sessionId.slice(0, 8)} already in ${currentSession.status} state, skipping IDLE update`
+            );
           }
+        } catch (error) {
+          console.error(`❌ [Executor] Failed to update session status to IDLE:`, error);
         }
 
         // Revoke session token after executor exits
@@ -5163,6 +5171,16 @@ async function main() {
         // Type-safe access to permission content
         const permissionContent = permissionMessage.content as PermissionRequestContent;
 
+        // If already resolved (timed out, approved, or denied), return informative response
+        if (permissionContent?.status && permissionContent.status !== 'pending') {
+          return {
+            success: false,
+            alreadyResolved: true,
+            status: permissionContent.status,
+            message: `Permission request already ${permissionContent.status}`,
+          };
+        }
+
         // Resolve task_id with fallback for backward compatibility:
         // 1. Try content.task_id (new messages)
         // 2. Fall back to message.task_id (legacy messages or if content was missing it)
@@ -6079,9 +6097,14 @@ async function main() {
     }
   }
 
-  // Find all orphaned sessions (RUNNING or STOPPING — both are stuck after daemon restart)
+  // Find all orphaned sessions (RUNNING, STOPPING, AWAITING_PERMISSION, TIMED_OUT — all stuck after daemon restart)
   const orphanedSessions: Session[] = [];
-  for (const status of [SessionStatus.RUNNING, SessionStatus.STOPPING]) {
+  for (const status of [
+    SessionStatus.RUNNING,
+    SessionStatus.STOPPING,
+    SessionStatus.AWAITING_PERMISSION,
+    SessionStatus.TIMED_OUT,
+  ]) {
     const result = (await sessionsService.find({
       query: { status, $limit: 1000 },
     })) as unknown as Paginated<Session>;
@@ -6118,7 +6141,12 @@ async function main() {
     for (const sessionId of sessionIdsWithOrphanedTasks) {
       const session = await sessionsService.get(sessionId as Id);
       // If session is still in an active state after orphaned task cleanup, set to IDLE
-      if (session.status === SessionStatus.RUNNING || session.status === SessionStatus.STOPPING) {
+      if (
+        session.status === SessionStatus.RUNNING ||
+        session.status === SessionStatus.STOPPING ||
+        session.status === SessionStatus.AWAITING_PERMISSION ||
+        session.status === SessionStatus.TIMED_OUT
+      ) {
         await app.service('sessions').patch(
           sessionId as Id,
           {

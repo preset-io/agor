@@ -47,6 +47,9 @@ export const TaskStatusIcon: React.FC<TaskStatusIconProps> = ({ status, size = 1
       return <CloseCircleOutlined style={{ ...iconStyle, color: token.colorError }} />;
     case TaskStatus.STOPPED:
       return <MinusCircleOutlined style={{ ...iconStyle, color: token.colorWarning }} />;
+    case TaskStatus.TIMED_OUT:
+    case 'timed_out': // SessionStatus.TIMED_OUT
+      return <ClockCircleOutlined style={{ ...iconStyle, color: token.colorWarning }} />;
     case 'idle': // SessionStatus.IDLE
       return <ClockCircleOutlined style={{ ...iconStyle, color: token.colorTextDisabled }} />;
     default:

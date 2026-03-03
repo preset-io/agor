@@ -4,6 +4,7 @@
  * Executes prompts using Claude Code SDK with Feathers/WebSocket architecture
  */
 
+import { loadConfig } from '@agor/core/config';
 import type { MessageSource, PermissionMode, SessionID, TaskID } from '@agor/core/types';
 import { globalPermissionManager } from '../../permissions/permission-manager.js';
 import { PermissionService } from '../../permissions/permission-service.js';
@@ -29,12 +30,16 @@ export async function executeClaudeCodeTask(params: {
   // Import base executor helper
   const { executeToolTask } = await import('./base-executor.js');
 
+  // Load config for permission timeout setting
+  const config = await loadConfig();
+  const permissionTimeoutMs = config.execution?.permission_timeout_ms ?? 600_000; // default: 10 minutes
+
   // Create PermissionService that emits via Feathers WebSocket
   const permissionService = new PermissionService(async (event, data) => {
     // Emit permission events directly via Feathers
     // biome-ignore lint/suspicious/noExplicitAny: Feathers service types don't include emit method
     (client.service('sessions') as any).emit(event, data);
-  });
+  }, permissionTimeoutMs);
 
   // Register with global permission manager
   globalPermissionManager.register(sessionId, permissionService);
