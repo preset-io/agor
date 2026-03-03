@@ -176,6 +176,34 @@ const config: DocsThemeConfig = {
     );
   },
 
+  main: ({ children }) => {
+    // biome-ignore lint/correctness/useHookAtTopLevel: Nextra theme config component
+    const { frontMatter } = useConfig();
+    // biome-ignore lint/correctness/useHookAtTopLevel: Nextra theme config component
+    const { asPath } = useRouter();
+    const isBlogPost = asPath.startsWith('/blog/') && frontMatter.image;
+
+    return (
+      <>
+        {isBlogPost && (
+          // biome-ignore lint/performance/noImgElement: Static blog hero image
+          <img
+            src={frontMatter.image}
+            alt=""
+            style={{
+              width: '100%',
+              borderRadius: '8px',
+              marginBottom: '1.5rem',
+              aspectRatio: '16 / 9',
+              objectFit: 'cover',
+            }}
+          />
+        )}
+        {children}
+      </>
+    );
+  },
+
   color: {
     hue: 174, // Teal hue for #2e9a92
     saturation: 55,
