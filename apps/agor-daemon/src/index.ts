@@ -953,8 +953,8 @@ async function main() {
             // Skip the update - a newer task owns the session state
           } else if (
             currentSession.status === SessionStatus.RUNNING ||
-            currentSession.status === 'awaiting_permission' ||
-            currentSession.status === 'timed_out'
+            currentSession.status === SessionStatus.AWAITING_PERMISSION ||
+            currentSession.status === SessionStatus.TIMED_OUT
           ) {
             // Session is still in an active/waiting state but executor is gone — reset to IDLE
             await app.service('sessions').patch(

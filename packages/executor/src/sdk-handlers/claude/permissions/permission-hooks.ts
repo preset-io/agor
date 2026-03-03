@@ -8,7 +8,13 @@
 
 import { generateId } from '@agor/core';
 import type { Message, MessageID, SessionID, TaskID } from '@agor/core/types';
-import { MessageRole, PermissionScope, PermissionStatus, TaskStatus } from '@agor/core/types';
+import {
+  MessageRole,
+  PermissionScope,
+  PermissionStatus,
+  SessionStatus,
+  TaskStatus,
+} from '@agor/core/types';
 import type {
   MCPServerRepository,
   MessagesRepository,
@@ -266,7 +272,7 @@ export function createCanUseToolCallback(
 
         if (deps.sessionsService) {
           await deps.sessionsService.patch(sessionId, {
-            status: 'timed_out' as const,
+            status: SessionStatus.TIMED_OUT,
             ready_for_prompt: true,
           });
           console.log(
