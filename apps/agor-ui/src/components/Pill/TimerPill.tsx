@@ -5,6 +5,7 @@ import type {
 import { SessionStatus, TaskStatus } from '@agor/core/types';
 import {
   CheckCircleOutlined,
+  ClockCircleOutlined,
   CloseCircleOutlined,
   HourglassOutlined,
   PauseCircleOutlined,
@@ -68,6 +69,10 @@ const statusConfig: Record<
   [SessionStatus.IDLE]: {
     icon: <HourglassOutlined />,
     color: PILL_COLORS.session,
+  },
+  [TaskStatus.TIMED_OUT]: {
+    icon: <ClockCircleOutlined />,
+    color: PILL_COLORS.warning,
   },
   [TaskStatus.CREATED]: {
     icon: <HourglassOutlined />,
