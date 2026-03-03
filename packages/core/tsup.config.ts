@@ -6,6 +6,7 @@ export default defineConfig({
     index: 'src/index.ts',
     'types/index': 'src/types/index.ts',
     'db/index': 'src/db/index.ts',
+    'db/session-guard': 'src/db/session-guard.ts', // Defensive programming for deleted sessions
     'git/index': 'src/git/index.ts',
     'api/index': 'src/api/index.ts',
     'claude/index': 'src/claude/index.ts',
