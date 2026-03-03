@@ -9,7 +9,10 @@ export default {
   },
   guide: 'Guide',
   'api-reference': 'API Reference',
-  blog: 'Blog',
+  blog: {
+    title: 'Blog',
+    href: '/blog',
+  },
   security: 'Security',
   faq: 'FAQ',
 };
