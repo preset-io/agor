@@ -263,34 +263,11 @@ This lets you run multiple worktrees simultaneously without port conflicts. Star
 
 **An Assistant is a persistent AI companion that lives in your Agor workspace.**
 
-While a normal worktree is _where_ code gets written, an Assistant is a _who_ — a persistent entity that coordinates the what and where. Assistants are special worktrees backed by a framework repository that give AI agents memory, identity, and orchestration capabilities.
+While a normal worktree is _where_ code gets written, an Assistant is a _who_ — a long-lived entity with memory, identity, skills, and the ability to orchestrate work across your entire workspace. Assistants maintain file-based memory across sessions, run on heartbeat schedules, and coordinate multi-agent workflows through Agor's MCP tools.
 
-### What makes an Assistant different from a regular worktree?
+Inspired by [OpenClaw](https://openclaw.ai/)'s agent loop architecture, Agor Assistants adapt the core patterns — markdown-based memory, identity files, scheduled loops — for team-based developer workflows with full visibility on spatial boards.
 
-| | Regular Worktree | Assistant |
-|---|---|---|
-| **Purpose** | Write code for a specific feature/issue | Coordinate work across your workspace |
-| **Lifetime** | Created and archived per task | Long-lived, persistent across many tasks |
-| **Memory** | Each session starts fresh | Maintains memory files (MEMORY.md, SOUL.md) across sessions |
-| **Orchestration** | Works on its own files | Can create worktrees, spawn sessions, manage workflows |
-| **Identity** | Anonymous work context | Has a name, personality, and accumulated knowledge |
-| **Schedule** | On-demand | Can run on heartbeat schedules, checking on work proactively |
-
-### Key capabilities
-
-- **Memory across sessions** — Assistants maintain file-based memory in their worktree (MEMORY.md, SOUL.md, etc.). Each session picks up where the last left off.
-- **Workspace orchestration** — Through Agor's MCP tools, assistants can create worktrees, spawn sessions, manage boards, and coordinate multi-agent workflows.
-- **Heartbeat scheduling** — Configure your assistant to run on a schedule — checking on in-progress work, updating status, or proactively starting new tasks.
-- **Learning and adaptation** — As your assistant works with you, it accumulates knowledge about your repositories, coding patterns, and preferences in its memory files.
-- **Visual distinction** — Assistants appear with a robot icon on boards and have their own section in Settings, making them easy to identify and manage.
-
-### Getting started with Assistants
-
-**From the onboarding wizard:** Choose "Set up your assistant" when you first log in. Agor will clone the assistant framework repository and create your first assistant.
-
-**From Settings:** Go to Settings > Assistants > Create Assistant. Give it a name, choose a board, and you're ready to go.
-
-**Important distinction:** An Assistant _uses_ an agent (Claude Code, Codex, Gemini) to do its work. "Assistant" = the persistent entity with memory and orchestration. "Agent" = the execution engine that powers the session.
+**Learn more:** See the full [Assistants guide](/guide/assistants) for setup, key concepts (BOOTSTRAP.md, BOARD.md, HEARTBEAT.md, Skills), and real-world examples.
 
 ---
 

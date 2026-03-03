@@ -1,4 +1,5 @@
 export default {
+  'agor-assistants': 'Introducing Agor Assistants',
   'agor-openclaw': 'Agor-OpenClaw Framework',
   'agor-cloud': 'Agor Cloud Private Beta',
   openclaw: 'Agor vs. OpenClaw (ClawdBot)',
