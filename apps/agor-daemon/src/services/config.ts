@@ -127,7 +127,12 @@ export class ConfigService {
    * SECURITY: Only allow updating credentials and opencode sections from UI
    */
   async patch(_id: null, data: Partial<AgorConfig>, _params?: Params): Promise<AgorConfig> {
-    console.log('[Config Service] Patch received:', JSON.stringify(data, null, 2));
+    // Log patch keys without values to avoid leaking secrets
+    const patchSections = Object.keys(data);
+    const credentialKeys = data.credentials ? Object.keys(data.credentials) : [];
+    console.log(
+      `[Config Service] Patch received: sections=[${patchSections}] credential_keys=[${credentialKeys}]`
+    );
     const config = await loadConfig();
 
     // Only allow updating credentials section for security
