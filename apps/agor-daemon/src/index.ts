@@ -21,7 +21,11 @@ import {
 } from '@agor/core/config';
 import type { UnixUserMode } from '@agor/core/unix';
 import { buildCorsConfig } from './setup/cors.js';
-import { initializeAnthropicApiKey } from './setup/credentials.js';
+import {
+  initializeAnthropicApiKey,
+  initializeAnthropicAuthToken,
+  initializeAnthropicBaseUrl,
+} from './setup/credentials.js';
 import { initializeDatabase } from './setup/database.js';
 import { configureChannels, createSocketIOConfig } from './setup/socketio.js';
 // Phase 2: Configuration builders
@@ -572,9 +576,11 @@ async function main() {
   configureDaemonUrl(daemonUrl);
   console.log(`[Executor] Daemon URL configured: ${daemonUrl}`);
 
-  // Initialize Anthropic API key (extracted to setup/credentials.ts)
-  // Side effect: sets process.env.ANTHROPIC_API_KEY if found in config
+  // Initialize Anthropic credentials (extracted to setup/credentials.ts)
+  // Side effect: sets process.env vars from config.yaml so they flow to executor processes
   initializeAnthropicApiKey(config, process.env.ANTHROPIC_API_KEY);
+  initializeAnthropicAuthToken(config, process.env.ANTHROPIC_AUTH_TOKEN);
+  initializeAnthropicBaseUrl(config, process.env.ANTHROPIC_BASE_URL);
 
   // Create Feathers app
   const app = feathersExpress(feathers());
@@ -5883,6 +5889,12 @@ async function main() {
           systemCredentials: {
             ANTHROPIC_API_KEY: !!(
               config.credentials?.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY
+            ),
+            ANTHROPIC_AUTH_TOKEN: !!(
+              config.credentials?.ANTHROPIC_AUTH_TOKEN || process.env.ANTHROPIC_AUTH_TOKEN
+            ),
+            ANTHROPIC_BASE_URL: !!(
+              config.credentials?.ANTHROPIC_BASE_URL || process.env.ANTHROPIC_BASE_URL
             ),
             OPENAI_API_KEY: !!(config.credentials?.OPENAI_API_KEY || process.env.OPENAI_API_KEY),
             GEMINI_API_KEY: !!(config.credentials?.GEMINI_API_KEY || process.env.GEMINI_API_KEY),

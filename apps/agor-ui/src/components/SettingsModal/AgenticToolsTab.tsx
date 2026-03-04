@@ -23,6 +23,8 @@ export const AgenticToolsTab: React.FC<AgenticToolsTabProps> = ({ client }) => {
   });
   const [baseUrl, setBaseUrl] = useState<string>('');
   const [baseUrlInput, setBaseUrlInput] = useState<string>('');
+  const [authTokenSet, setAuthTokenSet] = useState(false);
+  const [authTokenInput, setAuthTokenInput] = useState<string>('');
 
   // Load current config on mount
   useEffect(() => {
@@ -48,6 +50,9 @@ export const AgenticToolsTab: React.FC<AgenticToolsTabProps> = ({ client }) => {
         // Load base URL if set
         setBaseUrl(config?.ANTHROPIC_BASE_URL || '');
         setBaseUrlInput(config?.ANTHROPIC_BASE_URL || '');
+
+        // Load auth token status (masked, so just check if set)
+        setAuthTokenSet(!!config?.ANTHROPIC_AUTH_TOKEN);
       } catch (err) {
         console.error('Failed to load config:', err);
         setError(err instanceof Error ? err.message : 'Failed to load configuration');
@@ -157,6 +162,57 @@ export const AgenticToolsTab: React.FC<AgenticToolsTabProps> = ({ client }) => {
     }
   };
 
+  // Auth token save handler
+  const handleSaveAuthToken = async () => {
+    if (!client) return;
+
+    try {
+      setSaving((prev) => ({ ...prev, ANTHROPIC_AUTH_TOKEN: true }));
+      setError(null);
+
+      const value = authTokenInput.trim();
+      await client.service('config').patch(null, {
+        credentials: {
+          ANTHROPIC_AUTH_TOKEN: value || null,
+        },
+      });
+
+      setAuthTokenSet(!!value);
+      setAuthTokenInput('');
+    } catch (err) {
+      console.error('Failed to save auth token:', err);
+      setError(err instanceof Error ? err.message : 'Failed to save auth token');
+      throw err;
+    } finally {
+      setSaving((prev) => ({ ...prev, ANTHROPIC_AUTH_TOKEN: false }));
+    }
+  };
+
+  // Auth token clear handler
+  const handleClearAuthToken = async () => {
+    if (!client) return;
+
+    try {
+      setSaving((prev) => ({ ...prev, ANTHROPIC_AUTH_TOKEN: true }));
+      setError(null);
+
+      await client.service('config').patch(null, {
+        credentials: {
+          ANTHROPIC_AUTH_TOKEN: null,
+        },
+      });
+
+      setAuthTokenSet(false);
+      setAuthTokenInput('');
+    } catch (err) {
+      console.error('Failed to clear auth token:', err);
+      setError(err instanceof Error ? err.message : 'Failed to clear auth token');
+      throw err;
+    } finally {
+      setSaving((prev) => ({ ...prev, ANTHROPIC_AUTH_TOKEN: false }));
+    }
+  };
+
   if (loading) {
     return (
       <div style={{ textAlign: 'center', padding: token.paddingLG }}>
@@ -259,6 +315,40 @@ export const AgenticToolsTab: React.FC<AgenticToolsTabProps> = ({ client }) => {
             Custom API endpoints
           </Link>
         </Text>
+      </div>
+
+      <div style={{ marginTop: token.marginLG }}>
+        <Text strong style={{ display: 'block', marginBottom: token.marginXS }}>
+          Anthropic Auth Token (Optional)
+        </Text>
+        <Text type="secondary" style={{ display: 'block', marginBottom: token.marginMD }}>
+          Alternative to API key for proxy/enterprise setups. Used for token-based authentication
+          with AWS Bedrock, OAuth proxies, or custom auth flows.
+        </Text>
+
+        {authTokenSet ? (
+          <Button danger onClick={handleClearAuthToken} loading={saving.ANTHROPIC_AUTH_TOKEN}>
+            Clear Token
+          </Button>
+        ) : (
+          <Space.Compact style={{ width: '100%', marginBottom: token.marginXS }}>
+            <Input.Password
+              placeholder="Enter auth token..."
+              value={authTokenInput}
+              onChange={(e) => setAuthTokenInput(e.target.value)}
+              onPressEnter={handleSaveAuthToken}
+              style={{ flex: 1 }}
+            />
+            <Button
+              type="primary"
+              onClick={handleSaveAuthToken}
+              loading={saving.ANTHROPIC_AUTH_TOKEN}
+              disabled={!authTokenInput.trim()}
+            >
+              Save
+            </Button>
+          </Space.Compact>
+        )}
       </div>
     </div>
   );
