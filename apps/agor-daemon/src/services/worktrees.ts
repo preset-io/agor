@@ -9,7 +9,7 @@ import type { ChildProcess } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { ENVIRONMENT, PAGINATION } from '@agor/core/config';
+import { ENVIRONMENT, isAllowedHealthCheckUrl, PAGINATION } from '@agor/core/config';
 import { type Database, WorktreeRepository, type WorktreeWithZoneAndSessions } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type {
@@ -1033,6 +1033,22 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
 
     // Use static health_check_url (initialized from template at worktree creation)
     const healthUrl = worktree.health_check_url;
+
+    // Validate URL to prevent SSRF against cloud metadata or internal services
+    if (!isAllowedHealthCheckUrl(healthUrl)) {
+      console.warn(`⚠️ Blocked health check to disallowed URL: ${healthUrl}`);
+      return await this.updateEnvironment(
+        id,
+        {
+          last_health_check: {
+            timestamp: new Date().toISOString(),
+            status: 'unhealthy',
+            message: 'Health check URL blocked by security policy',
+          },
+        },
+        params
+      );
+    }
 
     // Track previous health status to detect changes
     const previousHealthStatus = worktree.environment_instance?.last_health_check?.status;
