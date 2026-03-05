@@ -265,7 +265,10 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
           NODE_ENV: env.NODE_ENV,
           // HOME: not set - sudo will set it to the target user's home directory
           ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY,
+          ANTHROPIC_AUTH_TOKEN: env.ANTHROPIC_AUTH_TOKEN,
+          ANTHROPIC_BASE_URL: env.ANTHROPIC_BASE_URL,
           OPENAI_API_KEY: env.OPENAI_API_KEY,
+          GEMINI_API_KEY: env.GEMINI_API_KEY,
           GOOGLE_API_KEY: env.GOOGLE_API_KEY,
         }).filter(([_, v]) => v !== undefined)
       )

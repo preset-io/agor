@@ -6,12 +6,12 @@
  * Supports hot-reload via config service updates.
  */
 
-export interface CredentialsConfig {
-  ANTHROPIC_API_KEY?: string;
-  ANTHROPIC_AUTH_TOKEN?: string;
-  ANTHROPIC_BASE_URL?: string;
-  GEMINI_API_KEY?: string;
-}
+import type { AgorCredentials } from '@agor/core/config';
+
+/**
+ * @deprecated Use AgorCredentials from @agor/core/config directly
+ */
+export type CredentialsConfig = AgorCredentials;
 
 export interface InitializedCredentials {
   anthropicApiKey?: string;
