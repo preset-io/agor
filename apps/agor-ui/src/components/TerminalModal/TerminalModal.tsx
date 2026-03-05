@@ -83,6 +83,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
   const terminalDivRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const [isConnected, setIsConnected] = useState(false);
+  const [modalReady, setModalReady] = useState(false);
   const [sessionInfo, setSessionInfo] = useState<{
     zellijSession?: string;
     zellijReused?: boolean;
@@ -93,7 +94,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
   const isAdmin = user?.role === 'admin' || user?.role === 'owner';
 
   useEffect(() => {
-    if (!open || !terminalDivRef.current || !client) return;
+    if (!open || !modalReady || !terminalDivRef.current || !client) return;
 
     // Skip terminal setup for non-admin users
     if (!isAdmin) return;
@@ -304,7 +305,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
       setIsConnected(false);
       setSessionInfo({});
     };
-  }, [open, client, initialCommands, isAdmin, worktreeId, user?.user_id]);
+  }, [open, modalReady, client, initialCommands, isAdmin, worktreeId, user?.user_id]);
 
   const handleClose = () => {
     if (isConnected) {
@@ -329,6 +330,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
       title={`Terminal${sessionInfo.worktreeName ? ` - ${sessionInfo.worktreeName}` : ''}`}
       open={open}
       onCancel={handleClose}
+      afterOpenChange={setModalReady}
       footer={null}
       width="auto"
       styles={{
