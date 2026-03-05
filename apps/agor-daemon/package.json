@@ -25,7 +25,7 @@
     "feathers-swagger": "^3.0.0",
     "handlebars": "^4.7.8",
     "jsonwebtoken": "^9.0.3",
-    "multer": "^2.1.0",
+    "multer": "^2.1.1",
     "socket.io": "^4.8.3",
     "swagger-ui-dist": "^5.32.0"
   },
