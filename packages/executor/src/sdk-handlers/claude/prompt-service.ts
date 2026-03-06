@@ -68,7 +68,8 @@ export class ClaudePromptService {
     private messagesService?: import('./claude-tool').MessagesService, // FeathersJS Messages service for creating permission requests
     private mcpEnabled?: boolean,
     // biome-ignore lint/suspicious/noExplicitAny: Feathers service type
-    private mcpOAuthNotifyService?: any // Service for notifying UI about OAuth requirements
+    private mcpOAuthNotifyService?: any, // Service for notifying UI about OAuth requirements
+    private inputRequestService?: import('../../input-requests/input-request-service').InputRequestService
   ) {
     // No client initialization needed - Agent SDK is stateless
   }
@@ -110,6 +111,7 @@ export class ClaudePromptService {
         sessionMCPRepo: this.sessionMCPRepo,
         mcpServerRepo: this.mcpServerRepo,
         permissionService: this.permissionService,
+        inputRequestService: this.inputRequestService,
         tasksService: this.tasksService,
         mcpEnabled: this.mcpEnabled,
         sessionsService: this.sessionsService,
@@ -265,6 +267,7 @@ export class ClaudePromptService {
         sessionMCPRepo: this.sessionMCPRepo,
         mcpServerRepo: this.mcpServerRepo,
         permissionService: this.permissionService,
+        inputRequestService: this.inputRequestService,
         tasksService: this.tasksService,
         mcpEnabled: this.mcpEnabled,
         sessionsService: this.sessionsService,

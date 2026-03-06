@@ -6,6 +6,8 @@
 
 import { loadConfig } from '@agor/core/config';
 import type { MessageSource, PermissionMode, SessionID, TaskID } from '@agor/core/types';
+import { globalInputRequestManager } from '../../input-requests/input-request-manager.js';
+import { InputRequestService } from '../../input-requests/input-request-service.js';
 import { globalPermissionManager } from '../../permissions/permission-manager.js';
 import { PermissionService } from '../../permissions/permission-service.js';
 import { ClaudeTool } from '../../sdk-handlers/claude/claude-tool.js';
@@ -41,8 +43,15 @@ export async function executeClaudeCodeTask(params: {
     (client.service('sessions') as any).emit(event, data);
   }, permissionTimeoutMs);
 
-  // Register with global permission manager
+  // Create InputRequestService that emits via Feathers WebSocket (5 min timeout)
+  const inputRequestService = new InputRequestService(async (event, data) => {
+    // biome-ignore lint/suspicious/noExplicitAny: Feathers service types don't include emit method
+    (client.service('sessions') as any).emit(event, data);
+  }, 300_000);
+
+  // Register with global managers
   globalPermissionManager.register(sessionId, permissionService);
+  globalInputRequestManager.register(sessionId, inputRequestService);
 
   try {
     // Execute using base helper with Claude-specific factory
@@ -65,11 +74,13 @@ export async function executeClaudeCodeTask(params: {
           repos.repos,
           true, // mcpEnabled
           useNativeAuth, // Flag for Claude CLI OAuth (`claude login`)
-          repos.mcpOAuthNotifyService // Service for notifying UI about OAuth requirements
+          repos.mcpOAuthNotifyService, // Service for notifying UI about OAuth requirements
+          inputRequestService
         ),
     });
   } finally {
-    // Unregister from global permission manager
+    // Unregister from global managers
     globalPermissionManager.unregister(sessionId);
+    globalInputRequestManager.unregister(sessionId);
   }
 }

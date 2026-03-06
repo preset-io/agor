@@ -89,6 +89,28 @@ export const SessionPage: React.FC<SessionPageProps> = ({
     }
   };
 
+  const handleInputResponse = async (
+    _sessionId: string,
+    requestId: string,
+    taskId: string,
+    answers: Record<string, string>,
+    annotations?: Record<string, { markdown?: string; notes?: string }>
+  ) => {
+    if (!client) return;
+
+    try {
+      await client.service(`sessions/${_sessionId}/input-response`).create({
+        requestId,
+        taskId,
+        answers,
+        annotations,
+        respondedBy: currentUser?.user_id || 'anonymous',
+      });
+    } catch (error) {
+      console.error('Failed to send input response:', error);
+    }
+  };
+
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
       <MobileHeader
@@ -115,6 +137,7 @@ export const SessionPage: React.FC<SessionPageProps> = ({
           userById={userById}
           currentUserId={currentUser?.user_id}
           onPermissionDecision={handlePermissionDecision}
+          onInputResponse={handleInputResponse}
           scheduledFromWorktree={session.scheduled_from_worktree}
           scheduledRunAt={session.scheduled_run_at}
           genealogy={session.genealogy}

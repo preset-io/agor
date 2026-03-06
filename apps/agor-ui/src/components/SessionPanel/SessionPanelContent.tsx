@@ -69,6 +69,7 @@ export const SessionPanelContent: React.FC<SessionPanelContentProps> = ({
     onStopEnvironment,
     onViewLogs,
     onPermissionDecision,
+    onInputResponse,
   } = useAppActions();
 
   // Get repo from worktree
@@ -161,6 +162,7 @@ export const SessionPanelContent: React.FC<SessionPanelContentProps> = ({
           setScrollToTop(() => scrollTop);
         }}
         onPermissionDecision={onPermissionDecision}
+        onInputResponse={onInputResponse}
         worktreeName={worktree?.name}
         scheduledFromWorktree={session.scheduled_from_worktree}
         scheduledRunAt={session.scheduled_run_at}

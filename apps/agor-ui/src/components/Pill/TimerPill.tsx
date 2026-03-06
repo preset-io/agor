@@ -9,6 +9,7 @@ import {
   CloseCircleOutlined,
   HourglassOutlined,
   PauseCircleOutlined,
+  QuestionCircleOutlined,
   StopOutlined,
 } from '@ant-design/icons';
 import { Tooltip, theme } from 'antd';
@@ -32,6 +33,7 @@ const ACTIVE_STATUSES: TimerStatus[] = [
   TaskStatus.RUNNING,
   TaskStatus.STOPPING,
   TaskStatus.AWAITING_PERMISSION,
+  TaskStatus.AWAITING_INPUT,
 ];
 
 const statusConfig: Record<
@@ -53,6 +55,10 @@ const statusConfig: Record<
   [TaskStatus.AWAITING_PERMISSION]: {
     icon: <PauseCircleOutlined />,
     color: PILL_COLORS.warning,
+  },
+  [TaskStatus.AWAITING_INPUT]: {
+    icon: <QuestionCircleOutlined />,
+    color: PILL_COLORS.processing,
   },
   [TaskStatus.COMPLETED]: {
     icon: <CheckCircleOutlined />,

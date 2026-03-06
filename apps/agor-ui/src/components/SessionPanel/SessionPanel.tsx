@@ -273,7 +273,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       if (
         candidate.status === TaskStatus.RUNNING ||
         candidate.status === TaskStatus.STOPPING ||
-        candidate.status === TaskStatus.AWAITING_PERMISSION
+        candidate.status === TaskStatus.AWAITING_PERMISSION ||
+        candidate.status === TaskStatus.AWAITING_INPUT
       ) {
         return candidate;
       }

@@ -6,6 +6,7 @@ import {
   LoadingOutlined,
   MinusCircleOutlined,
   PauseCircleOutlined,
+  QuestionCircleOutlined,
 } from '@ant-design/icons';
 import { Spin, theme } from 'antd';
 import type React from 'react';
@@ -42,6 +43,9 @@ export const TaskStatusIcon: React.FC<TaskStatusIconProps> = ({ status, size = 1
     case TaskStatus.AWAITING_PERMISSION:
     case 'awaiting_permission': // SessionStatus.AWAITING_PERMISSION
       return <PauseCircleOutlined style={{ ...iconStyle, color: token.colorWarning }} />;
+    case TaskStatus.AWAITING_INPUT:
+    case 'awaiting_input': // SessionStatus.AWAITING_INPUT
+      return <QuestionCircleOutlined style={{ ...iconStyle, color: token.colorPrimary }} />;
     case TaskStatus.FAILED:
     case 'failed': // SessionStatus.FAILED
       return <CloseCircleOutlined style={{ ...iconStyle, color: token.colorError }} />;

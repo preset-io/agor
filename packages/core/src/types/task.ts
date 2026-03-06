@@ -7,7 +7,8 @@ export const TaskStatus = {
   RUNNING: 'running',
   STOPPING: 'stopping', // Stop requested, waiting for SDK to halt
   AWAITING_PERMISSION: 'awaiting_permission',
-  TIMED_OUT: 'timed_out', // Permission request timed out, executor exited — user must re-prompt
+  AWAITING_INPUT: 'awaiting_input', // Agent asked user a question (AskUserQuestion tool)
+  TIMED_OUT: 'timed_out', // Permission/input request timed out, executor exited — user must re-prompt
   COMPLETED: 'completed',
   FAILED: 'failed',
   STOPPED: 'stopped', // User-requested stop (distinct from failed)

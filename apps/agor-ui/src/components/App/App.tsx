@@ -451,6 +451,31 @@ export const App: React.FC<AppProps> = ({
     [client, user?.user_id]
   );
 
+  const handleInputResponse = useCallback(
+    async (
+      sessionId: string,
+      requestId: string,
+      taskId: string,
+      answers: Record<string, string>,
+      annotations?: Record<string, { markdown?: string; notes?: string }>
+    ) => {
+      if (!client) return;
+
+      try {
+        await client.service(`sessions/${sessionId}/input-response`).create({
+          requestId,
+          taskId,
+          answers,
+          annotations,
+          respondedBy: user?.user_id || 'anonymous',
+        });
+      } catch (error) {
+        console.error('Failed to send input response:', error);
+      }
+    },
+    [client, user?.user_id]
+  );
+
   const selectedSession = selectedSessionId ? sessionById.get(selectedSessionId) || null : null;
   const selectedSessionWorktree = selectedSession
     ? worktreeById.get(selectedSession.worktree_id)
@@ -559,6 +584,7 @@ export const App: React.FC<AppProps> = ({
       onUpdateSession,
       onDeleteSession,
       onPermissionDecision: handlePermissionDecision,
+      onInputResponse: handleInputResponse,
       onStartEnvironment,
       onStopEnvironment,
       onNukeEnvironment,
@@ -574,6 +600,7 @@ export const App: React.FC<AppProps> = ({
       onUpdateSession,
       onDeleteSession,
       handlePermissionDecision,
+      handleInputResponse,
       onStartEnvironment,
       onStopEnvironment,
       onNukeEnvironment,
