@@ -112,105 +112,49 @@ export const AgenticToolsTab: React.FC<AgenticToolsTabProps> = ({ client }) => {
     }
   };
 
-  // Base URL save handler
+  // Generic credential save/clear for non-ApiKeyFields credentials
+  const saveCredential = async (key: string, value: string | null) => {
+    if (!client) return;
+
+    try {
+      setSaving((prev) => ({ ...prev, [key]: true }));
+      setError(null);
+
+      await client.service('config').patch(null, {
+        credentials: { [key]: value },
+      });
+    } catch (err) {
+      console.error(`Failed to ${value ? 'save' : 'clear'} ${key}:`, err);
+      setError(err instanceof Error ? err.message : `Failed to ${value ? 'save' : 'clear'} ${key}`);
+      throw err;
+    } finally {
+      setSaving((prev) => ({ ...prev, [key]: false }));
+    }
+  };
+
   const handleSaveBaseUrl = async () => {
-    if (!client) return;
-
-    try {
-      setSaving((prev) => ({ ...prev, ANTHROPIC_BASE_URL: true }));
-      setError(null);
-
-      const value = baseUrlInput.trim();
-      await client.service('config').patch(null, {
-        credentials: {
-          ANTHROPIC_BASE_URL: value || null,
-        },
-      });
-
-      setBaseUrl(value);
-    } catch (err) {
-      console.error('Failed to save base URL:', err);
-      setError(err instanceof Error ? err.message : 'Failed to save base URL');
-      throw err;
-    } finally {
-      setSaving((prev) => ({ ...prev, ANTHROPIC_BASE_URL: false }));
-    }
+    const value = baseUrlInput.trim();
+    await saveCredential('ANTHROPIC_BASE_URL', value || null);
+    setBaseUrl(value);
   };
 
-  // Base URL clear handler
   const handleClearBaseUrl = async () => {
-    if (!client) return;
-
-    try {
-      setSaving((prev) => ({ ...prev, ANTHROPIC_BASE_URL: true }));
-      setError(null);
-
-      await client.service('config').patch(null, {
-        credentials: {
-          ANTHROPIC_BASE_URL: null,
-        },
-      });
-
-      setBaseUrl('');
-      setBaseUrlInput('');
-    } catch (err) {
-      console.error('Failed to clear base URL:', err);
-      setError(err instanceof Error ? err.message : 'Failed to clear base URL');
-      throw err;
-    } finally {
-      setSaving((prev) => ({ ...prev, ANTHROPIC_BASE_URL: false }));
-    }
+    await saveCredential('ANTHROPIC_BASE_URL', null);
+    setBaseUrl('');
+    setBaseUrlInput('');
   };
 
-  // Auth token save handler
   const handleSaveAuthToken = async () => {
-    if (!client) return;
-
-    try {
-      setSaving((prev) => ({ ...prev, ANTHROPIC_AUTH_TOKEN: true }));
-      setError(null);
-
-      const value = authTokenInput.trim();
-      await client.service('config').patch(null, {
-        credentials: {
-          ANTHROPIC_AUTH_TOKEN: value || null,
-        },
-      });
-
-      setAuthTokenSet(!!value);
-      setAuthTokenInput('');
-    } catch (err) {
-      console.error('Failed to save auth token:', err);
-      setError(err instanceof Error ? err.message : 'Failed to save auth token');
-      throw err;
-    } finally {
-      setSaving((prev) => ({ ...prev, ANTHROPIC_AUTH_TOKEN: false }));
-    }
+    const value = authTokenInput.trim();
+    await saveCredential('ANTHROPIC_AUTH_TOKEN', value || null);
+    setAuthTokenSet(!!value);
+    setAuthTokenInput('');
   };
 
-  // Auth token clear handler
   const handleClearAuthToken = async () => {
-    if (!client) return;
-
-    try {
-      setSaving((prev) => ({ ...prev, ANTHROPIC_AUTH_TOKEN: true }));
-      setError(null);
-
-      await client.service('config').patch(null, {
-        credentials: {
-          ANTHROPIC_AUTH_TOKEN: null,
-        },
-      });
-
-      setAuthTokenSet(false);
-      setAuthTokenInput('');
-    } catch (err) {
-      console.error('Failed to clear auth token:', err);
-      setError(err instanceof Error ? err.message : 'Failed to clear auth token');
-      throw err;
-    } finally {
-      setSaving((prev) => ({ ...prev, ANTHROPIC_AUTH_TOKEN: false }));
-    }
+    await saveCredential('ANTHROPIC_AUTH_TOKEN', null);
+    setAuthTokenSet(false);
+    setAuthTokenInput('');
   };
 
   if (loading) {
