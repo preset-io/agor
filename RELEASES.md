@@ -1,6 +1,6 @@
 # Releases
 
-## 0.15.0 (2026-03-06)
+## 0.14.1 (2026-03-06)
 
 ### Features
 - **Anthropic API passthrough** — add ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN passthrough to sessions for custom API endpoints
