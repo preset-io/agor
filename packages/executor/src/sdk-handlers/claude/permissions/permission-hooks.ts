@@ -75,12 +75,13 @@ export function createCanUseToolCallback(
         const timestamp = new Date().toISOString();
 
         // Extract questions from tool input
-        const questions = (toolInput.questions as Array<{
-          question: string;
-          header: string;
-          options: Array<{ label: string; description: string; markdown?: string }>;
-          multiSelect: boolean;
-        }>) || [];
+        const questions =
+          (toolInput.questions as Array<{
+            question: string;
+            header: string;
+            options: Array<{ label: string; description: string; markdown?: string }>;
+            multiSelect: boolean;
+          }>) || [];
 
         // Get current message index for this session
         const existingMessages = await deps.messagesRepo.findBySessionId(sessionId);
@@ -95,9 +96,10 @@ export function createCanUseToolCallback(
           role: MessageRole.SYSTEM,
           index: nextIndex,
           timestamp,
-          content_preview: questions.length > 0
-            ? `Question: ${questions[0].question.substring(0, 100)}`
-            : 'User input required',
+          content_preview:
+            questions.length > 0
+              ? `Question: ${questions[0].question.substring(0, 100)}`
+              : 'User input required',
           content: {
             request_id: requestId,
             task_id: taskId,
@@ -148,7 +150,7 @@ export function createCanUseToolCallback(
             // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service has patch method but type definition is incomplete
             await (deps.messagesService as any).patch(inputMessage.message_id, {
               content: {
-                ...inputMessage.content as Record<string, unknown>,
+                ...(inputMessage.content as unknown as Record<string, unknown>),
                 status: InputRequestStatus.TIMED_OUT,
               },
             });
@@ -177,7 +179,7 @@ export function createCanUseToolCallback(
           // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service has patch method but type definition is incomplete
           await (deps.messagesService as any).patch(inputMessage.message_id, {
             content: {
-              ...inputMessage.content as Record<string, unknown>,
+              ...(inputMessage.content as unknown as Record<string, unknown>),
               status: InputRequestStatus.ANSWERED,
               answers: response.answers,
               annotations: response.annotations,

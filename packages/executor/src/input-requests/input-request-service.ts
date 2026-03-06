@@ -142,9 +142,7 @@ export class InputRequestService {
       clearTimeout(pending.timeout);
       pending.resolve(response);
       this.pendingRequests.delete(response.requestId);
-      console.log(
-        `❓ [executor] Input resolved: ${response.requestId} by ${response.respondedBy}`
-      );
+      console.log(`❓ [executor] Input resolved: ${response.requestId} by ${response.respondedBy}`);
     } else {
       console.warn(`⚠️  [executor] No pending input request found for ${response.requestId}`);
     }

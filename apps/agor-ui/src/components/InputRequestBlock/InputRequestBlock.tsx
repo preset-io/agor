@@ -40,7 +40,7 @@ export const InputRequestBlock: React.FC<InputRequestBlockProps> = ({
   onSubmit,
 }) => {
   const { token } = theme.useToken();
-  const { questions, status, answers: savedAnswers, answered_by, answered_at } = content;
+  const { questions, status, answers: savedAnswers, answered_at } = content;
 
   // Track answers per question (keyed by question text)
   const [answers, setAnswers] = useState<Record<string, string>>({});
@@ -49,9 +49,7 @@ export const InputRequestBlock: React.FC<InputRequestBlockProps> = ({
   // Track which questions have "Other" selected
   const [otherSelected, setOtherSelected] = useState<Record<string, boolean>>({});
   // Track annotations per question
-  const [annotations, setAnnotations] = useState<
-    Record<string, { markdown?: string; notes?: string }>
-  >({});
+  const [annotations] = useState<Record<string, { markdown?: string; notes?: string }>>({});
 
   const isAnswered = status === InputRequestStatus.ANSWERED;
   const isTimedOut = status === InputRequestStatus.TIMED_OUT;
@@ -126,7 +124,11 @@ export const InputRequestBlock: React.FC<InputRequestBlockProps> = ({
       }
     }
 
-    onSubmit(message.message_id, finalAnswers, Object.keys(annotations).length > 0 ? annotations : undefined);
+    onSubmit(
+      message.message_id,
+      finalAnswers,
+      Object.keys(annotations).length > 0 ? annotations : undefined
+    );
   };
 
   return (
@@ -221,7 +223,11 @@ export const InputRequestBlock: React.FC<InputRequestBlockProps> = ({
                       }}
                       style={{ width: '100%' }}
                     >
-                      <Space direction="vertical" size={token.sizeUnit / 2} style={{ width: '100%' }}>
+                      <Space
+                        direction="vertical"
+                        size={token.sizeUnit / 2}
+                        style={{ width: '100%' }}
+                      >
                         {q.options.map((opt, oIdx) => (
                           <Checkbox
                             key={`opt-${oIdx}-${opt.label}`}
@@ -287,7 +293,11 @@ export const InputRequestBlock: React.FC<InputRequestBlockProps> = ({
                       }}
                       style={{ width: '100%' }}
                     >
-                      <Space direction="vertical" size={token.sizeUnit / 2} style={{ width: '100%' }}>
+                      <Space
+                        direction="vertical"
+                        size={token.sizeUnit / 2}
+                        style={{ width: '100%' }}
+                      >
                         {q.options.map((opt, oIdx) => (
                           <Radio key={`opt-${oIdx}-${opt.label}`} value={opt.label}>
                             <div>

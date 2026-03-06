@@ -268,7 +268,14 @@ export const messages = pgTable(
 
     // Materialized for queries
     type: text('type', {
-      enum: ['user', 'assistant', 'system', 'file-history-snapshot', 'permission_request'],
+      enum: [
+        'user',
+        'assistant',
+        'system',
+        'file-history-snapshot',
+        'permission_request',
+        'input_request',
+      ],
     }).notNull(),
     role: text('role', {
       enum: ['user', 'assistant', 'system'],
