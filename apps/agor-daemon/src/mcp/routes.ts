@@ -2604,6 +2604,11 @@ export function setupMCPRoutes(app: Application, db: Database): void {
               ],
             };
           } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+            const commandOutput =
+              error instanceof Error
+                ? (error as Error & { commandOutput?: string }).commandOutput
+                : undefined;
             mcpResponse = {
               content: [
                 {
@@ -2611,7 +2616,8 @@ export function setupMCPRoutes(app: Application, db: Database): void {
                   text: JSON.stringify(
                     {
                       success: false,
-                      error: error instanceof Error ? error.message : 'Unknown error',
+                      error: errorMessage,
+                      ...(commandOutput ? { output: commandOutput } : {}),
                     },
                     null,
                     2

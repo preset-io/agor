@@ -705,6 +705,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
 
     // Set status to 'starting' and record start timestamp
     // Merge with existing process fields (e.g. pid from a failed stop) rather than replacing
+    // Clear last_error from previous attempts
     await this.updateEnvironment(
       id,
       {
@@ -714,6 +715,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
           started_at: new Date().toISOString(),
         },
         last_health_check: undefined,
+        last_error: undefined,
       },
       params
     );
@@ -736,13 +738,34 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       await mkdir(dirname(logPath), { recursive: true });
 
       // Execute command and wait for it to complete
-      // The command should start services and return (e.g., docker-compose up -d)
+      // Use stdio: 'pipe' to capture output for error reporting
       const childProcess = await spawnEnvironmentCommand({
         command,
         worktree,
         db: this.db,
         commandType: 'start',
+        stdio: 'pipe',
       });
+
+      // Collect stdout/stderr for error reporting (last ~100 lines)
+      const outputChunks: string[] = [];
+      const MAX_OUTPUT_LINES = 100;
+
+      const collectOutput = (stream: NodeJS.ReadableStream | null, prefix?: string) => {
+        if (!stream) return;
+        stream.on('data', (chunk: Buffer) => {
+          const text = chunk.toString();
+          // Also forward to daemon console so logs aren't lost
+          if (prefix) {
+            process.stderr.write(text);
+          } else {
+            process.stdout.write(text);
+          }
+          outputChunks.push(text);
+        });
+      };
+      collectOutput(childProcess.stdout);
+      collectOutput(childProcess.stderr, 'stderr');
 
       await new Promise<void>((resolve, reject) => {
         childProcess.on('exit', (code: number | null) => {
@@ -750,7 +773,19 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
             console.log(`✅ Start command completed successfully for ${worktree.name}`);
             resolve();
           } else {
-            reject(new Error(`Start command exited with code ${code}`));
+            // Combine collected output and truncate to last ~100 lines
+            const fullOutput = outputChunks.join('');
+            const lines = fullOutput.split('\n');
+            const truncated =
+              lines.length > MAX_OUTPUT_LINES
+                ? `... (truncated ${lines.length - MAX_OUTPUT_LINES} lines)\n${lines.slice(-MAX_OUTPUT_LINES).join('\n')}`
+                : fullOutput;
+            const output = truncated.trim();
+            const err = new Error(`Start command exited with code ${code}`) as Error & {
+              commandOutput?: string;
+            };
+            err.commandOutput = output || undefined;
+            reject(err);
           }
         });
 
@@ -775,7 +810,13 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
         params
       );
     } catch (error) {
-      // Update status to 'error'
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      const commandOutput =
+        error instanceof Error
+          ? (error as Error & { commandOutput?: string }).commandOutput
+          : undefined;
+
+      // Store short message in last_health_check, full output in last_error
       await this.updateEnvironment(
         id,
         {
@@ -783,8 +824,9 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
           last_health_check: {
             timestamp: new Date().toISOString(),
             status: 'unhealthy',
-            message: error instanceof Error ? error.message : 'Unknown error',
+            message: errorMessage,
           },
+          last_error: commandOutput || errorMessage,
         },
         params
       );

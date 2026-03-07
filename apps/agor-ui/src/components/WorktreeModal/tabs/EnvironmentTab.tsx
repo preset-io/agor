@@ -149,6 +149,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     worktree.environment_instance?.last_health_check
   );
   const [processInfo, setProcessInfo] = useState(worktree.environment_instance?.process);
+  const [lastError, setLastError] = useState(worktree.environment_instance?.last_error);
   const [logsModalOpen, setLogsModalOpen] = useState(false);
 
   // Track previous worktree reference to detect actual prop changes (not just editing flag changes)
@@ -160,6 +161,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     setEnvStatus(worktree.environment_instance?.status || 'stopped');
     setLastHealthCheck(worktree.environment_instance?.last_health_check);
     setProcessInfo(worktree.environment_instance?.process);
+    setLastError(worktree.environment_instance?.last_error);
 
     // Check if worktree prop actually changed (not just editing flags)
     const worktreeChanged = prevWorktreeRef.current !== worktree;
@@ -192,6 +194,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
         setEnvStatus(updatedWorktree.environment_instance?.status || 'stopped');
         setLastHealthCheck(updatedWorktree.environment_instance?.last_health_check);
         setProcessInfo(updatedWorktree.environment_instance?.process);
+        setLastError(updatedWorktree.environment_instance?.last_error);
       }
     };
 
@@ -679,10 +682,25 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
               </div>
 
               {/* Error State */}
-              {envStatus === 'error' && lastHealthCheck?.message && (
+              {envStatus === 'error' && (lastHealthCheck?.message || lastError) && (
                 <Alert
-                  message="Environment Error"
-                  description={lastHealthCheck.message}
+                  message={lastHealthCheck?.message || 'Environment Error'}
+                  description={
+                    lastError ? (
+                      <pre
+                        style={{
+                          maxHeight: 200,
+                          overflow: 'auto',
+                          margin: 0,
+                          fontSize: 11,
+                          whiteSpace: 'pre-wrap',
+                          wordBreak: 'break-word',
+                        }}
+                      >
+                        {lastError}
+                      </pre>
+                    ) : undefined
+                  }
                   type="error"
                   showIcon
                   style={{ fontSize: 11 }}

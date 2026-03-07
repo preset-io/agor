@@ -494,6 +494,14 @@ export interface WorktreeEnvironmentInstance {
    * Captured from stdout/stderr of environment process.
    */
   logs?: string[];
+
+  /**
+   * Last error output from a failed command (start/stop/nuke)
+   *
+   * Captures the last ~100 lines of stdout/stderr when a command exits non-zero.
+   * Cleared on the next successful start.
+   */
+  last_error?: string;
 }
 
 /**
