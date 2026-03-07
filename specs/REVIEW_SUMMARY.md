@@ -1,139 +1,215 @@
 # Design Review Summary
 
-**Status:** NEEDS REVISION
+**Status:** APPROVED WITH MINOR REVISIONS
 **Review Date:** 2026-03-07
 **Reviewer:** Claude Code
 
 ---
 
-## Quick Verdict
+## Verdict
 
-The Session Message API proposal correctly identifies a real problem (`message_count: 0` bug and lack of programmatic message access), but the proposed solution is **overengineered** for the actual use cases.
+✅ **Approved for implementation** with minor revisions.
 
-**Recommendation:** Simplify design significantly before implementation.
-
----
-
-## Critical Issues (Must Fix)
-
-### 1. Permission Model Too Complex
-**Problem:** Proposed descendant-based access control introduces parallel genealogy system with unclear semantics.
-
-**Solution:** Start with same-session-only access OR use simple user-based permissions (`session.created_by === user.id`).
-
-### 2. Schema Changes Premature
-**Problem:** Adding `created_by_session_id` to sessions/worktrees is high-cost, unclear semantics, circular dependency risk.
-
-**Solution:** Defer schema changes. Use existing `created_by` user column for permissions. If cross-session tracking needed later, use separate junction table.
-
-### 3. message_count Fix Inefficient
-**Problem:** Proposed approach updates session table on every message create/delete (performance cost, race conditions).
-
-**Solution:** Compute on read via `MessagesRepository.countBySessionId()`. No schema changes, no hooks, no race conditions.
-
-### 4. Missing Implementation Details
-**Problem:** No migration scripts, no error handling specs, no testing strategy.
-
-**Solution:** Document error codes, write migration SQL (if any schema changes), define test cases before implementation.
+The revised design uses **worktree-scoped permissions** which cleanly solves the core requirement: Agor Assistants can read results from worktrees they manage.
 
 ---
 
-## Design Improvements (Should Address)
+## Key Design Points
 
-5. Make `sessionId` required (remove confusing default to current session)
-6. Change `includeToolCalls: boolean` to `toolCallDetail: 'none' | 'summary' | 'full'`
-7. Add specific error codes for each failure mode (session not found, permission denied, etc.)
-8. Document queued message behavior (should they appear in results? count toward total?)
-9. Add performance analysis (query plans, indexes needed)
+### Permission Model: Worktree-Scoped
 
----
+Sessions can read messages from:
+1. **Same session** - Self-introspection
+2. **Same worktree** - Heartbeats debug themselves
+3. **Managed worktrees** - Assistant reads sessions in worktrees it created
 
-## Simplified Approach (Recommended)
+**Why worktree-scoped?**
+- ✅ No session-to-session circular dependencies
+- ✅ Worktrees are stable, sessions are ephemeral
+- ✅ All sessions in assistant worktree can access managed worktrees
+- ✅ Clean semantics: "This worktree created that worktree"
 
-### Phase 1: Fix message_count Bug (1 day)
+### Schema Change
+
+```sql
+ALTER TABLE worktrees
+ADD COLUMN created_by_worktree_id TEXT REFERENCES worktrees(worktree_id);
+
+CREATE INDEX idx_worktrees_created_by ON worktrees(created_by_worktree_id);
+```
+
+**Single schema change** - backward compatible (nullable column).
+
+### `message_count` Fix
+
+**Compute on read** - no materialization, no hooks, no race conditions.
 
 ```typescript
-// Add to MessagesRepository
 async countBySessionId(sessionId: SessionID): Promise<number> {
-  const result = await this.db
-    .select({ count: sql<number>`count(*)` })
+  return db.select({ count: sql`count(*)` })
     .from(messages)
     .where(and(
       eq(messages.session_id, sessionId),
-      ne(messages.status, 'queued') // Exclude queued
+      ne(messages.status, 'queued')
     ));
-  return result[0].count;
 }
-
-// Update SessionRepository.enrichWithLastMessage() to use this count
-// Update agor_sessions_get MCP endpoint to return accurate count
 ```
-
-**Impact:** Fixes `message_count: 0` bug immediately, no schema changes.
-
-### Phase 2: Add agor_messages_list (2 days)
-
-```typescript
-// MCP endpoint (same-session-only for now)
-{
-  name: 'agor_messages_list',
-  inputSchema: {
-    sessionId: { type: 'string', required: true },  // REQUIRED, not optional
-    limit: { type: 'number', default: 50 },
-    offset: { type: 'number', default: 0 },
-    role: { enum: ['user', 'assistant', 'system'] },
-    toolCallDetail: { enum: ['none', 'summary', 'full'], default: 'none' }
-  }
-}
-
-// Permission check (simple)
-if (sessionId !== context.sessionId) {
-  // For Phase 2, block cross-session access
-  // OR allow if session.created_by === context.userId (user-based)
-  return 403;
-}
-
-// Use existing MessagesService.find() with query filters
-const result = await app.service('messages').find({
-  query: { session_id: sessionId, $limit: limit, $skip: offset }
-});
-```
-
-**Impact:** Full programmatic message access, leverages existing infrastructure.
-
-### Phase 3: Add agor_sessions_get_result (1 day)
-
-Convenience wrapper around `agor_messages_list` that returns last assistant message.
-
-**Total Effort:** 4 days (vs 6-8 days for original proposal)
 
 ---
 
-## Use Case Validation
+## Implementation Phases
 
-**Primary Use Case:** Agor Assistant reads worker session output
+**Total: 5-6 days**
 
-**Current Workaround:** Callback-based results via `agor_sessions_spawn({ enableCallback: true, includeLastMessage: true })`
+1. **Phase 1 (1 day):** Fix `message_count` - compute on read
+2. **Phase 2 (1 day):** Schema migration - add `created_by_worktree_id`
+3. **Phase 3 (2 days):** Implement `agor_messages_list` endpoint
+4. **Phase 4 (1 day):** Implement `agor_sessions_get_result` endpoint
+5. **Testing (0.5-1 day):** Unit + integration tests
 
-**Question:** Is this workaround sufficient? Or do we truly need arbitrary session reading?
+**Risk:** Low - leverages existing infrastructure
 
-**Recommendation:** Validate with real Agor Assistant before adding cross-session complexity.
+---
+
+## API Endpoints
+
+### `agor_messages_list`
+
+List messages with pagination and filtering.
+
+**Key features:**
+- `sessionId` required (no confusing defaults)
+- `toolCallDetail`: `'none'` | `'summary'` | `'full'` (controls payload size)
+- Includes `sessionStatus` in response
+- Pagination: default 50, max 1000
+
+### `agor_sessions_get_result`
+
+Get last assistant message (convenience wrapper).
+
+**Key features:**
+- Returns accurate `messageCount` from database
+- Returns `null` for `lastMessage` if no assistant messages
+- Includes session status
+
+---
+
+## Minor Revisions Needed
+
+Before implementation begins:
+
+1. **Migration Scripts**
+   - Write SQLite and PostgreSQL migration SQL
+   - Document rollback procedure
+   - Test on copy of production data
+
+2. **Queued Message Behavior**
+   - Should `status: 'queued'` messages appear in results?
+   - Document filtering guidance
+
+3. **Error Examples**
+   - Add example error responses to spec
+   - Document each error scenario with codes
+
+4. **Test Criteria**
+   - Define acceptance criteria for unit tests
+   - Specify integration test success metrics
+
+---
+
+## Use Cases Enabled
+
+### Agor Assistant Workflow
+
+```typescript
+// Assistant creates investigation worktree
+const wt = await agor.worktrees.create({ name: 'investigation' });
+const session = await agor.sessions.create({
+  worktreeId: wt.id,
+  initialPrompt: "Investigate issue, write findings"
+});
+
+// Read result when complete
+const result = await agor.sessions.getResult({ sessionId: session.session_id });
+console.log(result.lastMessage.content);
+```
+
+### Heartbeat Debugging
+
+```typescript
+// Heartbeat checks other sessions in same worktree
+const sessions = await agor.sessions.list({ worktreeId });
+for (const s of sessions.data) {
+  const result = await agor.sessions.getResult({ sessionId: s.session_id });
+  if (result.messageCount === 0) {
+    console.log(`Session ${s.session_id} never executed`);
+  }
+}
+```
+
+---
+
+## Review Highlights
+
+### ✅ Strengths
+
+- **Clean architecture** - Worktree-scoped permissions avoid complexity
+- **Appropriate complexity** - Simple where possible, complex only where needed
+- **Well-scoped phases** - Logical progression, clear milestones
+- **Codebase alignment** - Leverages existing infrastructure effectively
+- **Extensible** - Accommodates future requirements
+
+### ⚠️ Minor Issues
+
+- Missing migration scripts (need SQLite + PostgreSQL)
+- Queued message behavior not fully specified
+- Test acceptance criteria not detailed
+- Error response examples missing
+
+**None are blockers** - can be addressed during implementation.
+
+---
+
+## Performance
+
+**Database queries per request:**
+- Permission check: 2 queries (sessions, worktrees)
+- Message list: 1 query (messages)
+- Message count: 1 query (count)
+
+**Total: 4 queries** - all use existing indexes, acceptable performance.
+
+**Payload size:**
+- Without tool calls: ~25 KB (50 messages)
+- With full tool calls: ~2.5 MB (50 messages with Edit tool)
+- Mitigation: `toolCallDetail: 'summary'` or `'none'`
+
+---
+
+## Security
+
+**Permission model is secure:**
+- ✅ Cannot read other users' sessions
+- ✅ Cannot read sessions in non-managed worktrees
+- ✅ Cannot escalate privileges
+- ✅ Session-scoped tokens limit exposure
+
+**Data exposure:**
+- Tool calls may contain sensitive data (API keys, tokens)
+- Controlled by `toolCallDetail` parameter
+- Acceptable for internal use (same workspace)
 
 ---
 
 ## Next Steps
 
-1. **Product Decision:** Confirm cross-session reading is truly needed (vs just using callbacks)
-2. **Revise Spec:** Simplify based on design review recommendations
-3. **Write Migration Scripts:** If any schema changes remain, write tested SQL
-4. **Prototype Phase 1:** Fix `message_count` bug first (low-risk, high-value)
-5. **Get Second Review:** After revision, review again before implementation
-6. **Implement Incrementally:** Phase 1 → validate → Phase 2 → validate → Phase 3
+1. **Address minor revisions** (migration scripts, docs)
+2. **Review revised spec** with engineering team
+3. **Begin Phase 1** (message_count fix - 1 day, low risk)
+4. **Iterate through phases** with validation at each step
 
 ---
 
-**Full Analysis:** See `DESIGN_REVIEW.md` (12,000+ words, comprehensive review against 8 criteria)
+**Full Analysis:** See `DESIGN_REVIEW.md` for comprehensive review
 
-**Specs Updated:**
-- `agor-session-message-api.md` - status updated to NEEDS REVISION
-- `product-reasoning.md` - status updated, review summary added
+**Implementation Spec:** See `agor-session-message-api.md` for detailed API design

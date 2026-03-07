@@ -1,369 +1,401 @@
 # Spec: Session Message API for Agor MCP
 
-**Author:** Octo
+**Author:** Octo, Claude Code (revision)
 **Date:** 2026-03-07
-**Status:** NEEDS REVISION (Design Review Complete)
-**Reviewer:** Claude Code
-**Review Date:** 2026-03-07
+**Status:** Ready for Implementation
 
 ---
 
 ## Problem Statement
 
-Currently, the Agor MCP provides session and task metadata but no way to read the actual conversation messages within a session. This creates several issues:
+Agor Assistants manage worktrees and sessions but cannot programmatically read what happened in them. This blocks:
 
-### 1. Broken Observability
-- `message_count` field shows `0` even when sessions have messages (platform bug)
-- Cannot programmatically verify if a session actually executed
-- Monitoring tools rely on broken metadata to make routing decisions
-- Meta-analysis cannot see what work was actually done
-
-### 2. Limited Introspection
-- Can only receive results via parent-child callbacks (`agor_sessions_spawn`)
-- Cannot query arbitrary sessions to read their outputs
-- Zone-triggered sessions (`always_new`) have no output visibility
-- Heartbeat-created sessions cannot be inspected after creation
-
-### 3. Workflow Coordination Issues
-- Orchestrator sessions cannot check if worker sessions completed successfully
-- Cannot determine if a session produced deliverables (files, commits, analysis)
-- No way to extract findings from investigation sessions
-- Manual UI inspection required to see session results
-
-### 4. Debugging Blind Spots
-- When sessions fail, cannot read error context from conversation
-- Cannot trace what tools were called or what output was produced
-- Task metadata shows `message_range` but not message content
-- Genealogy tracking shows relationships but not outcomes
+1. **Agor Assistant workflows** - Cannot read results from managed worktrees/sessions
+2. **Heartbeat debugging** - Sessions cannot introspect their own worktree
+3. **Broken metadata** - `message_count` always shows `0` (never updated after creation)
+4. **Manual inspection required** - Must open UI to see session outputs
 
 ---
 
-## Current Workarounds
+## Solution
 
-**Callback-based results (limited scope):**
-```typescript
-// Only works for direct children
-const result = await agor.sessions.spawn({
-  prompt: "Do analysis",
-  enableCallback: true,
-  includeLastMessage: true
-});
-// Get callback when child completes
-```
+Add MCP endpoints to read session messages with worktree-scoped permissions.
 
-**Manual UI inspection:**
-- Open session URL in browser
-- Read conversation manually
-- Copy findings back to orchestrator
-- Not automatable, breaks workflow
+### Permission Model
 
-**File-based communication:**
-- Session writes findings to file
-- Orchestrator reads file
-- Works but requires coordination and pollutes workspace
+**Worktree-scoped access** - Sessions can read messages from:
+
+1. **Same session** (self-introspection)
+2. **Same worktree** (heartbeats debug themselves)
+3. **Managed worktrees** (assistant reads sessions in worktrees it created)
+
+This enables Agor Assistants (running in `preset-io/agor-assistant`) to read sessions in `feature-x` worktrees they manage.
 
 ---
 
-## Proposed Solution
+## API Endpoints
 
-Add MCP endpoints to read session messages and conversation content.
-
-### Endpoint 1: `agor_messages_list`
+### 1. `agor_messages_list`
 
 List messages in a session's conversation thread.
 
-**Parameters:**
+**Input:**
 ```typescript
 {
-  sessionId: string;          // Required: session to read
-  limit?: number;             // Optional: max messages (default: 50)
-  offset?: number;            // Optional: pagination offset
-  includeToolCalls?: boolean; // Optional: include tool use details (default: false)
+  sessionId: string;              // Required: session to read
+  limit?: number;                 // Optional: max messages (default: 50, max: 1000)
+  offset?: number;                // Optional: pagination offset (default: 0)
+  role?: 'user' | 'assistant' | 'system';  // Optional: filter by role
+  toolCallDetail?: 'none' | 'summary' | 'full';  // Optional: tool call details (default: 'none')
 }
 ```
 
-**Returns:**
+**Output:**
 ```typescript
 {
-  total: number;
+  total: number;                  // Total messages in session
   limit: number;
   offset: number;
   sessionId: string;
-  messages: Array<{
+  sessionStatus: 'idle' | 'running' | 'completed' | 'failed';
+  data: Array<{
+    message_id: string;
+    session_id: string;
+    task_id?: string;
+    type: string;
+    role: 'user' | 'assistant' | 'system';
     index: number;
-    role: 'user' | 'assistant';
     timestamp: string;
-    content: string;          // Text content
-    toolCalls?: Array<{       // If includeToolCalls: true
-      toolName: string;
-      input: object;
-      output: string;
+    content_preview: string;
+    content: string | ContentBlock[];
+    tool_uses?: Array<{          // Included based on toolCallDetail
+      id: string;
+      name: string;
+      input?: object;            // 'full' only
+      status?: 'success' | 'error';  // 'summary' or 'full'
     }>;
+    metadata?: {
+      model?: string;
+      tokens?: { input: number; output: number; };
+    };
   }>;
 }
 ```
 
-**Use cases:**
-- Check if session produced expected output
-- Extract findings from investigation sessions
-- Debug failures by reading error context
-- Verify deliverables were created
+**Permission Check:**
+```typescript
+// Allow if:
+// 1. Same session
+// 2. Same worktree
+// 3. Requesting session's worktree created target session's worktree
+```
 
-### Endpoint 2: `agor_sessions_get_result`
+**Use Cases:**
+- Agor Assistant reads worker session output
+- Heartbeat debugs its own worktree sessions
+- Orchestrator extracts findings from investigation sessions
 
-Get the final result/output from a completed session (last assistant message).
+---
 
-**Parameters:**
+### 2. `agor_sessions_get_result`
+
+Get final output from a completed session (last assistant message).
+
+**Input:**
 ```typescript
 {
-  sessionId: string;          // Required: session to read
-  format?: 'text' | 'full';   // Optional: text-only or full message object
+  sessionId: string;              // Required: session to read
+  maxLength?: number;             // Optional: truncate content (default: 10000)
 }
 ```
 
-**Returns:**
+**Output:**
 ```typescript
 {
   sessionId: string;
-  status: 'idle' | 'running' | 'completed' | 'failed';
-  result: string | null;      // Last assistant message, or null if no messages
-  messageCount: number;       // Accurate message count
-  lastMessageTimestamp: string | null;
+  status: 'idle' | 'running' | 'completed' | 'failed' | 'awaiting_permission' | 'timed_out';
+  messageCount: number;           // Accurate count from database
+  lastMessage?: {
+    message_id: string;
+    role: 'assistant';
+    timestamp: string;
+    content: string;
+    metadata?: {
+      model?: string;
+      tokens?: { input: number; output: number; };
+    };
+  };
 }
 ```
 
-**Use cases:**
+**Use Cases:**
 - Quick check: "did this session produce output?"
 - Read investigation findings without pagination
 - Verify zone-triggered sessions completed work
-- Accurate session execution detection
-
-### Endpoint 3: `agor_sessions_send_message`
-
-Send a message to an existing session (append to conversation).
-
-**Parameters:**
-```typescript
-{
-  sessionId: string;          // Required: session to message
-  message: string;            // Required: user message to send
-  waitForResponse?: boolean;  // Optional: wait for assistant reply (default: false)
-  timeout?: number;           // Optional: max wait time in ms (default: 30000)
-}
-```
-
-**Returns:**
-```typescript
-{
-  sessionId: string;
-  messageIndex: number;       // Index of sent message
-  response?: string;          // If waitForResponse: true, the assistant's reply
-  status: 'sent' | 'responded' | 'timeout';
-}
-```
-
-**Use cases:**
-- Ask follow-up questions to completed sessions
-- Query session for status: "What files did you create?"
-- Request clarification without spawning new session
-- Interactive session coordination
 
 ---
 
-## Implementation Considerations
+### 3. `agor_sessions_send_message` (Future)
 
-### Permissions and Access Control
-- Only return messages for sessions user has access to
-- Respect session privacy settings
-- Consider read-only vs read-write permissions
-
-### Performance
-- Paginate message lists for large conversations
-- Cache frequently-accessed session results
-- Consider message content size limits
-
-### Metadata Accuracy
-- Fix `message_count` field to reflect actual messages
-- Ensure `message_range` aligns with actual message indices
-- Update metadata when messages are added
-
-### Tool Call Details
-- `includeToolCalls: true` may return large payloads
-- Consider separate endpoint for tool use details
-- Filter sensitive tool inputs (tokens, credentials)
+Send a message to an existing session. Deferred to Phase 3 pending validation.
 
 ---
 
-## Example Use Cases
+## Implementation
 
-### 1. Heartbeat Verification
+### Phase 1: Fix `message_count` Metadata
 
-**Current (broken):**
+**Problem:** `message_count` initialized to `0` at session creation, never updated.
+
+**Solution:** Compute on read (no schema changes, no hooks).
+
 ```typescript
-const sessions = await agor.sessions.list({ worktreeId });
-if (session.message_count === 0) {
-  // FALSE POSITIVE: All sessions show 0, even if they ran
-  await restartSession();
+// Add to MessagesRepository
+async countBySessionId(sessionId: SessionID): Promise<number> {
+  const result = await this.db
+    .select({ count: sql<number>`count(*)` })
+    .from(messages)
+    .where(and(
+      eq(messages.session_id, sessionId),
+      ne(messages.status, 'queued')  // Exclude queued messages
+    ));
+  return result[0].count;
+}
+
+// Update SessionRepository.enrichWithLastMessage() to use this count
+// Update agor_sessions_get MCP endpoint to return accurate count
+```
+
+**Effort:** 1 day
+**Risk:** Low - no schema changes
+
+---
+
+### Phase 2: Add Worktree Tracking Schema
+
+**Schema Migration:**
+```sql
+-- Track which worktree created which worktree
+ALTER TABLE worktrees
+ADD COLUMN created_by_worktree_id TEXT REFERENCES worktrees(worktree_id);
+
+CREATE INDEX idx_worktrees_created_by ON worktrees(created_by_worktree_id);
+```
+
+**Update MCP Handlers:**
+```typescript
+// In agor_worktrees_create handler
+const worktreeData = {
+  ...existing fields,
+  created_by_worktree_id: requestingSession.worktree_id,  // Track creator
+};
+```
+
+**Permission Helper:**
+```typescript
+async function canReadMessages(requestingSession, targetSession) {
+  // 1. Same session
+  if (requestingSession.session_id === targetSession.session_id) return true;
+
+  // 2. Same worktree
+  if (requestingSession.worktree_id === targetSession.worktree_id) return true;
+
+  // 3. Requesting worktree created target worktree
+  const targetWorktree = await worktrees.get(targetSession.worktree_id);
+  if (targetWorktree.created_by_worktree_id === requestingSession.worktree_id) {
+    return true;
+  }
+
+  return false;
 }
 ```
 
-**With Message API:**
+**Effort:** 1 day
+**Risk:** Low - single schema change, backward compatible (nullable column)
+
+---
+
+### Phase 3: Implement `agor_messages_list`
+
+**MCP Tool Definition:**
 ```typescript
-const sessions = await agor.sessions.list({ worktreeId });
-const result = await agor.sessions.getResult({ sessionId: session.session_id });
-if (result.messageCount === 0) {
-  // ACCURATE: Actually no messages
-  await restartSession();
-} else {
-  console.log("Session completed:", result.result);
+{
+  name: 'agor_messages_list',
+  description: 'List messages in a session conversation thread',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      sessionId: { type: 'string', description: 'Session ID (required)' },
+      limit: { type: 'number', description: 'Max messages (default: 50, max: 1000)' },
+      offset: { type: 'number', description: 'Pagination offset (default: 0)' },
+      role: { enum: ['user', 'assistant', 'system'], description: 'Filter by role' },
+      toolCallDetail: {
+        enum: ['none', 'summary', 'full'],
+        description: 'Tool call detail level (default: none)'
+      },
+    },
+    required: ['sessionId'],
+  },
 }
 ```
 
-### 2. Investigation Session Results
-
-**Current (manual):**
-1. Spawn investigation session
-2. Wait for completion callback
-3. Open session URL in browser
-4. Manually read findings
-5. Copy to orchestrator context
-
-**With Message API:**
+**Handler:**
 ```typescript
-const { session } = await agor.sessions.create({
-  worktreeId,
-  agenticTool: 'claude-code',
-  initialPrompt: "Investigate Spotify sync issue. Write findings to specs/investigation.md"
-});
+if (name === 'agor_messages_list') {
+  const targetSessionId = args.sessionId;
 
-// Wait for completion (polling or webhook)
-await waitForCompletion(session.session_id);
+  // Get sessions
+  const targetSession = await app.service('sessions').get(targetSessionId);
+  const requestingSession = await app.service('sessions').get(context.sessionId);
 
-// Read result programmatically
-const result = await agor.sessions.getResult({ sessionId: session.session_id });
-console.log("Investigation complete:", result.result);
+  // Permission check
+  const canAccess = await canReadMessages(requestingSession, targetSession);
+  if (!canAccess) {
+    return res.status(403).json({
+      jsonrpc: '2.0',
+      id: mcpRequest.id,
+      error: {
+        code: -32001,
+        message: `Permission denied: cannot read messages from session ${targetSessionId}`,
+      },
+    });
+  }
 
-// Move worktree based on findings
-if (result.result.includes("Fix deployed")) {
-  await agor.worktrees.setZone({ worktreeId, zoneId: 'zone-human-review' });
+  // Build query
+  const query: Record<string, unknown> = {
+    session_id: targetSessionId,
+    $limit: Math.min(args.limit ?? 50, 1000),
+    $skip: args.offset ?? 0,
+  };
+  if (args.role) query.role = args.role;
+
+  // Fetch messages
+  const result = await app.service('messages').find({ query });
+
+  // Process tool calls based on detail level
+  if (args.toolCallDetail !== 'full' && Array.isArray(result.data)) {
+    result.data = result.data.map(msg => {
+      if (args.toolCallDetail === 'none') {
+        const { tool_uses, ...rest } = msg;
+        return rest;
+      }
+      if (args.toolCallDetail === 'summary' && msg.tool_uses) {
+        return {
+          ...msg,
+          tool_uses: msg.tool_uses.map(t => ({
+            id: t.id,
+            name: t.name,
+            status: t.status || 'success',
+          })),
+        };
+      }
+      return msg;
+    });
+  }
+
+  // Add session status to response
+  const enriched = {
+    ...result,
+    sessionStatus: targetSession.status,
+  };
+
+  mcpResponse = {
+    content: [{
+      type: 'text',
+      text: JSON.stringify(enriched, null, 2),
+    }],
+  };
 }
 ```
 
-### 3. Zone Trigger Output Verification
+**Effort:** 2 days (includes tests)
+**Risk:** Low - leverages existing MessagesService
 
-**Current (blind):**
-- Zone trigger creates session via `always_new`
-- Session runs but orchestrator cannot see output
-- Must manually check UI to verify work was done
+---
 
-**With Message API:**
+### Phase 4: Implement `agor_sessions_get_result`
+
+Similar to Phase 3 but queries last assistant message only.
+
+**Effort:** 1 day
+**Risk:** Very low - built on Phase 3 infrastructure
+
+---
+
+## Error Handling
+
+**Error Codes:**
+- `-32001` - Permission denied
+- `-32002` - Session not found
+- `-32602` - Invalid parameters (validation errors)
+
+**Specific Errors:**
 ```typescript
-// Worktree enters Code Review zone, session auto-created
-const sessions = await agor.sessions.list({ worktreeId, status: 'completed' });
-const reviewSession = sessions.data[0];
+// Session not found
+{ code: -32002, message: 'Session not found: abc123' }
 
-const messages = await agor.messages.list({
-  sessionId: reviewSession.session_id,
-  limit: 10
-});
-
-// Check if session approved changes or found issues
-if (messages.messages.some(m => m.content.includes("Ready for PR"))) {
-  await agor.worktrees.setZone({ worktreeId, zoneId: 'zone-create-pr' });
-} else {
-  // Session found issues, stay in Code Review
-  console.log("Code review identified issues, not moving forward");
+// Permission denied
+{
+  code: -32001,
+  message: 'Permission denied: cannot read messages from session abc123',
+  details: {
+    reason: 'not_same_worktree',
+    requestingWorktree: 'wt1',
+    targetWorktree: 'wt2'
+  }
 }
+
+// Invalid limit
+{ code: -32602, message: 'Invalid limit: must be between 1 and 1000' }
 ```
 
-### 4. Meta-Analysis with Real Data
+**Input Validation:**
+- `sessionId`: Must match UUIDv7 or short ID pattern
+- `limit`: Must be 1-1000
+- `offset`: Must be non-negative
+- `toolCallDetail`: Must be 'none', 'summary', or 'full'
 
-**Current (metadata only):**
-```typescript
-// Can only see: message_count: 0, status: idle, tasks: [...]
-// Cannot determine if work was actually done
-```
+---
 
-**With Message API:**
-```typescript
-const sessions = await agor.sessions.list({ limit: 100 });
-const executionRate = sessions.data.filter(async s => {
-  const result = await agor.sessions.getResult({ sessionId: s.session_id });
-  return result.messageCount > 0;
-}).length / sessions.total;
+## Testing Strategy
 
-console.log(`Actual execution rate: ${executionRate * 100}%`);
-// Previously showed 0% due to metadata bug, now accurate
-```
+**Unit Tests:**
+- `MessagesRepository.countBySessionId()` - accurate counts, excludes queued
+- Permission helper - all access patterns (same session, same worktree, creator worktree)
+
+**Integration Tests:**
+- `agor_messages_list` - pagination, filtering, permission checks
+- `agor_sessions_get_result` - last message extraction, empty sessions
+- Cross-worktree access - assistant reads managed worktree sessions
+
+**Migration Tests:**
+- Schema migration runs cleanly (SQLite and PostgreSQL)
+- Existing worktrees have NULL `created_by_worktree_id` (backward compatible)
+- New worktrees populate field correctly
+
+---
+
+## Timeline
+
+**Total: 5-6 days**
+
+- Phase 1 (message_count fix): 1 day
+- Phase 2 (schema migration): 1 day
+- Phase 3 (agor_messages_list): 2 days
+- Phase 4 (agor_sessions_get_result): 1 day
+- Testing/docs: 0.5-1 day
 
 ---
 
 ## Success Metrics
 
 **Before:**
-- 0% visibility into session conversation content via MCP
-- Metadata shows `message_count: 0` for all sessions (broken)
-- Orchestrators cannot verify worker session outputs
-- Manual UI inspection required for all session results
+- `message_count` shows `0` for all sessions (broken)
+- 0% programmatic access to session messages via MCP
+- Manual UI inspection required for session results
 
 **After:**
+- Accurate `message_count` in all sessions
 - 100% programmatic access to session messages
-- Accurate `message_count` field in metadata
-- Orchestrators can read and act on worker session results
-- Automated workflow coordination based on session outputs
-- Meta-analysis based on actual work, not broken metadata
-
----
-
-## Open Questions
-
-1. **Should messages be streamed or paginated?**
-   - Large conversations may need streaming API
-   - Pagination sufficient for most use cases
-
-2. **Should tool call details be separate endpoint?**
-   - `includeToolCalls` may return huge payloads
-   - Separate `agor_tool_calls_list` for detailed inspection?
-
-3. **Real-time message updates?**
-   - WebSocket/SSE for live session monitoring?
-   - Or polling with `agor_messages_list`?
-
-4. **Message filtering/search?**
-   - Filter by role (user/assistant)?
-   - Search message content?
-   - Filter by tool calls?
-
-5. **Permissions model?**
-   - Who can read which sessions?
-   - Should forked sessions share read access?
-   - Privacy controls for sensitive sessions?
-
----
-
-## Priority
-
-**HIGH** — This is a critical gap in the MCP API that:
-- Blocks accurate monitoring and meta-analysis
-- Forces manual UI inspection for all session results
-- Prevents effective orchestrator-worker coordination
-- Makes `message_count: 0` bug impossible to work around programmatically
-
----
-
-## Next Steps
-
-1. **Platform team:** Review proposal and API design
-2. **Prototype:** Implement `agor_sessions_get_result` first (simplest, highest value)
-3. **Validate:** Test with heartbeat monitoring and investigation sessions
-4. **Expand:** Add `agor_messages_list` for detailed inspection
-5. **Future:** Consider `agor_sessions_send_message` for interactive coordination
-
----
-
-## Related Issues
-
-- `message_count: 0` metadata bug (all sessions show 0 messages)
-- Callback-only result visibility (limits orchestration patterns)
-- Zone trigger output invisibility (cannot verify work completion)
-- Meta-analysis blind spots (cannot see actual session work)
+- Agor Assistants can read managed worktree outputs
+- Heartbeats can debug their own worktree
