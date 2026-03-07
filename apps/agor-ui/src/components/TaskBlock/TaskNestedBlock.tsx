@@ -89,7 +89,7 @@ export const TaskNestedBlock: React.FC<TaskNestedBlockProps> = ({
 
   const header = (
     <div style={{ width: '100%' }}>
-      <Space direction="vertical" size={token.sizeXS} style={{ width: '100%' }}>
+      <Space orientation="vertical" size={token.sizeXS} style={{ width: '100%' }}>
         {/* Header line */}
         <Space size="small" style={{ width: '100%', justifyContent: 'space-between' }}>
           <Space size="small">

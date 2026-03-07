@@ -50,7 +50,7 @@ export const AssistantTab: React.FC<AssistantTabProps> = ({ worktree, onUpdate, 
 
   return (
     <div style={{ width: '100%', maxHeight: '70vh', overflowY: 'auto' }}>
-      <Space direction="vertical" size="large" style={{ width: '100%' }}>
+      <Space orientation="vertical" size="large" style={{ width: '100%' }}>
         <Space>
           <RobotOutlined style={{ fontSize: 20 }} />
           <Typography.Text strong style={{ fontSize: 16 }}>

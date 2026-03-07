@@ -711,6 +711,11 @@ export const StatusPill: React.FC<StatusPillProps> = ({ status, style }) => {
       color: PILL_COLORS.processing,
       text: 'Running',
     },
+    timed_out: {
+      icon: <ClockCircleOutlined />,
+      color: PILL_COLORS.warning,
+      text: 'Timed Out',
+    },
     idle: {
       icon: <ToolOutlined />,
       color: PILL_COLORS.session,

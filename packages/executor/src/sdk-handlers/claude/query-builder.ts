@@ -104,6 +104,7 @@ export interface QuerySetupDeps {
   sessionMCPRepo?: SessionMCPServerRepository;
   mcpServerRepo?: MCPServerRepository;
   permissionService?: PermissionService;
+  inputRequestService?: import('../../input-requests/input-request-service.js').InputRequestService;
   tasksService?: TasksService;
   sessionsService?: SessionsService;
   messagesService?: MessagesService;
@@ -333,6 +334,7 @@ export async function setupQuery(
   ) {
     queryOptions.canUseTool = createCanUseToolCallback(sessionId, taskId, {
       permissionService: deps.permissionService,
+      inputRequestService: deps.inputRequestService,
       tasksService: deps.tasksService!,
       sessionsRepo: deps.sessionsRepo,
       messagesRepo: deps.messagesRepo!,

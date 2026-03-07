@@ -31,7 +31,7 @@ type Story = StoryObj;
 
 export const AllPills: Story = {
   render: () => (
-    <Space direction="vertical" size="large" style={{ width: '100%' }}>
+    <Space orientation="vertical" size="large" style={{ width: '100%' }}>
       <div>
         <h3>Metadata Pills</h3>
         <Space wrap>
@@ -178,7 +178,7 @@ export const Timer: Story = {
 
 export const Genealogy: Story = {
   render: () => (
-    <Space direction="vertical">
+    <Space orientation="vertical">
       <Space>
         <ForkPill fromSessionId="0199b850-d329-7893-bc1c-197cbf4f4a7f" />
         <ForkPill
@@ -211,7 +211,7 @@ export const Features: Story = {
 
 export const EventStream: Story = {
   render: () => (
-    <Space direction="vertical" size="large">
+    <Space orientation="vertical" size="large">
       <div>
         <h3>EventStreamPill - Basic (no popover)</h3>
         <Space wrap>
@@ -320,7 +320,7 @@ export const EventStream: Story = {
 
 export const SessionMetadata: Story = {
   render: () => (
-    <Space direction="vertical" size="large">
+    <Space orientation="vertical" size="large">
       <div>
         <h3>Running Session (Forked)</h3>
         <SessionMetadataCard

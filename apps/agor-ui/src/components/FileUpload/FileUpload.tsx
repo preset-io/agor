@@ -2,7 +2,7 @@ import { PaperClipOutlined, UploadOutlined } from '@ant-design/icons';
 import { App, Button, Checkbox, Input, Modal, Radio, Space, Typography, Upload } from 'antd';
 import type { RcFile, UploadFile } from 'antd/es/upload/interface';
 import type React from 'react';
-import { useEffect, useState } from 'react';
+import { forwardRef, useEffect, useState } from 'react';
 import { ACCESS_TOKEN_KEY } from '../../utils/tokenRefresh';
 
 const { TextArea } = Input;
@@ -163,7 +163,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
       cancelText="Cancel"
       width={600}
     >
-      <Space direction="vertical" style={{ width: '100%' }} size="large">
+      <Space orientation="vertical" style={{ width: '100%' }} size="large">
         {/* File selector */}
         <Upload
           multiple
@@ -194,9 +194,9 @@ export const FileUpload: React.FC<FileUploadProps> = ({
             onChange={(e) => setDestination(e.target.value)}
             style={{ marginTop: 8, display: 'block' }}
           >
-            <Space direction="vertical">
+            <Space orientation="vertical">
               <Radio value="worktree">
-                <Space direction="vertical" size={0}>
+                <Space orientation="vertical" size={0}>
                   <Text>Worktree (.agor/uploads/)</Text>
                   <Text type="secondary" style={{ fontSize: '12px' }}>
                     Default - Agent-accessible, can be committed
@@ -204,7 +204,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
                 </Space>
               </Radio>
               <Radio value="temp">
-                <Space direction="vertical" size={0}>
+                <Space orientation="vertical" size={0}>
                   <Text>Temp folder</Text>
                   <Text type="secondary" style={{ fontSize: '12px' }}>
                     Ephemeral, auto-cleanup
@@ -212,7 +212,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
                 </Space>
               </Radio>
               <Radio value="global">
-                <Space direction="vertical" size={0}>
+                <Space orientation="vertical" size={0}>
                   <Text>Global (~/.agor/uploads/)</Text>
                   <Text type="secondary" style={{ fontSize: '12px' }}>
                     Shared across sessions
@@ -257,19 +257,18 @@ export interface FileUploadButtonProps {
   size?: 'small' | 'middle' | 'large';
 }
 
-export const FileUploadButton: React.FC<FileUploadButtonProps> = ({
-  onClick,
-  disabled,
-  size = 'middle',
-}) => {
-  return (
-    <Button
-      icon={<PaperClipOutlined />}
-      onClick={onClick}
-      disabled={disabled}
-      size={size}
-      type="text"
-      title="Upload files"
-    />
-  );
-};
+export const FileUploadButton = forwardRef<HTMLButtonElement, FileUploadButtonProps>(
+  ({ onClick, disabled, size = 'middle' }, ref) => {
+    return (
+      <Button
+        ref={ref}
+        icon={<PaperClipOutlined />}
+        onClick={onClick}
+        disabled={disabled}
+        size={size}
+        type="text"
+        title="Upload files"
+      />
+    );
+  }
+);

@@ -82,18 +82,6 @@ export interface SessionsServiceImpl extends Service<Session, Partial<Session>, 
     status: string;
     streaming: boolean;
   }>;
-  setStopHandler(
-    handler: (
-      sessionId: string,
-      data: { taskId: string },
-      params?: FeathersParams
-    ) => Promise<{ success: boolean; message: string }>
-  ): void;
-  stopTask(
-    id: string,
-    data: { taskId: string },
-    params?: FeathersParams
-  ): Promise<{ success: boolean; message: string }>;
   // Event emitter methods (FeathersJS EventEmitter interface - any[] for event args flexibility)
   // biome-ignore lint/suspicious/noExplicitAny: FeathersJS event handlers accept variable arguments
   on(event: string, handler: (...args: any[]) => void): this;

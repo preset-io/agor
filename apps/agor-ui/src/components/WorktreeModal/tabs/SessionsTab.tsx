@@ -27,6 +27,8 @@ const statusColorMap: Record<string, string> = {
   running: 'processing',
   stopping: 'warning',
   awaiting_permission: 'warning',
+  awaiting_input: 'processing',
+  timed_out: 'warning',
   completed: 'success',
   failed: 'error',
 };
@@ -154,6 +156,8 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({ sessions, client, onSess
         { text: 'Completed', value: 'completed' },
         { text: 'Failed', value: 'failed' },
         { text: 'Awaiting Permission', value: 'awaiting_permission' },
+        { text: 'Awaiting Input', value: 'awaiting_input' },
+        { text: 'Timed Out', value: 'timed_out' },
       ],
       onFilter: (value, record) => record.status === value,
     },
@@ -203,7 +207,7 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({ sessions, client, onSess
 
   return (
     <div style={{ width: '100%', maxHeight: '70vh', overflowY: 'auto' }}>
-      <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+      <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
         {/* Toolbar: search + archive toggle */}
         <div
           style={{

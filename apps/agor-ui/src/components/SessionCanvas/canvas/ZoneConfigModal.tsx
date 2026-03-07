@@ -18,7 +18,7 @@ interface ZoneConfigModalProps {
 
 interface ZoneFormValues {
   name: string;
-  triggerBehavior: ZoneTriggerBehavior;
+  triggerBehavior: ZoneTriggerBehavior | undefined;
   triggerTemplate: string;
 }
 
@@ -51,7 +51,7 @@ export const ZoneConfigModal = ({
       } else {
         form.setFieldsValue({
           name: zoneName,
-          triggerBehavior: 'show_picker',
+          triggerBehavior: undefined,
           triggerTemplate: '',
         });
         setTriggerAgent('claude-code');
@@ -66,23 +66,25 @@ export const ZoneConfigModal = ({
       const values = await form.validateFields();
 
       if (zoneData.type === 'zone') {
+        const template = values.triggerTemplate?.trim() || '';
         const hasChanges =
           values.name !== zoneName ||
-          values.triggerTemplate.trim() !== (zoneData.trigger?.template || '') ||
-          values.triggerBehavior !== (zoneData.trigger?.behavior || 'show_picker') ||
+          template !== (zoneData.trigger?.template || '') ||
+          values.triggerBehavior !== (zoneData.trigger?.behavior || undefined) ||
           triggerAgent !== (zoneData.trigger?.agent || 'claude-code');
 
         if (hasChanges) {
           onUpdate(objectId, {
             ...zoneData,
             label: values.name,
-            trigger: values.triggerTemplate.trim()
-              ? {
-                  behavior: values.triggerBehavior,
-                  template: values.triggerTemplate.trim(),
-                  agent: triggerAgent,
-                }
-              : undefined,
+            trigger:
+              template && values.triggerBehavior
+                ? {
+                    behavior: values.triggerBehavior,
+                    template,
+                    agent: triggerAgent,
+                  }
+                : undefined,
           });
         }
       }
@@ -99,7 +101,11 @@ export const ZoneConfigModal = ({
       onCancel={onCancel}
       onOk={handleSave}
       okText="Save"
-      okButtonProps={{ disabled: !triggerTemplate?.trim() }}
+      okButtonProps={{
+        disabled:
+          // Warn: trigger behavior set but no template (incomplete trigger config)
+          !!triggerBehavior && !triggerTemplate?.trim(),
+      }}
       cancelText="Cancel"
       width={600}
     >
@@ -111,6 +117,8 @@ export const ZoneConfigModal = ({
         <Form.Item name="triggerBehavior" label="Trigger Behavior">
           <Select
             style={{ width: '100%' }}
+            allowClear
+            placeholder="None (organizational zone only)"
             options={[
               {
                 value: 'show_picker',
@@ -142,14 +150,18 @@ export const ZoneConfigModal = ({
           label="Trigger Template"
           rules={[
             {
-              required: true,
+              required: !!triggerBehavior,
               whitespace: true,
-              message: 'Please enter a prompt template for the zone trigger',
+              message: 'Please enter a prompt template when a trigger behavior is set',
             },
           ]}
         >
           <Input.TextArea
-            placeholder="Enter the prompt template that will be triggered when a worktree is dropped here..."
+            placeholder={
+              triggerBehavior
+                ? 'Enter the prompt template that will be triggered when a worktree is dropped here...'
+                : 'Optional — add a template to enable zone triggers'
+            }
             rows={6}
           />
         </Form.Item>

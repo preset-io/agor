@@ -11,6 +11,7 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -18,7 +19,7 @@
     "@agor/core": "workspace:*",
     "@homebridge/node-pty-prebuilt-multiarch": "^0.13.1",
     "@iarna/toml": "^2.2.5",
-    "@opencode-ai/sdk": "^1.1.53",
+    "@opencode-ai/sdk": "^1.2.15",
     "zod": "^4.3.6"
   },
   "devDependencies": {

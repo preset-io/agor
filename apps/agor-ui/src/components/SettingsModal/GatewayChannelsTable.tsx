@@ -501,7 +501,7 @@ const ChannelFormFields: React.FC<{
                 />
               ),
               children: (
-                <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+                <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                     Configure which agent and settings to use for sessions created from this
                     channel.
@@ -1001,7 +1001,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             <Alert
               message="Channel Key"
               description={
-                <Space direction="vertical" style={{ width: '100%' }}>
+                <Space orientation="vertical" style={{ width: '100%' }}>
                   <Input.Search
                     value={createdChannelKey}
                     readOnly

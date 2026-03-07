@@ -21,7 +21,11 @@ import {
 } from '@agor/core/config';
 import type { UnixUserMode } from '@agor/core/unix';
 import { buildCorsConfig } from './setup/cors.js';
-import { initializeAnthropicApiKey } from './setup/credentials.js';
+import {
+  initializeAnthropicApiKey,
+  initializeAnthropicAuthToken,
+  initializeAnthropicBaseUrl,
+} from './setup/credentials.js';
 import { initializeDatabase } from './setup/database.js';
 import { configureChannels, createSocketIOConfig } from './setup/socketio.js';
 // Phase 2: Configuration builders
@@ -83,6 +87,7 @@ import type {
   Board,
   HookContext,
   Id,
+  InputRequestContent,
   MCPServer,
   Message,
   MessageSource,
@@ -107,6 +112,59 @@ import {
   getDaemonUrl,
   spawnExecutorFireAndForget,
 } from './utils/spawn-executor.js';
+
+// ============================================================================
+// Executor PID Tracking
+// ============================================================================
+// In-memory map of session → executor process info for signal-based stopping.
+// When the user clicks Stop, we SIGTERM/SIGKILL the process directly instead of
+// relying on WebSocket ACK protocols.
+const executorProcesses = new Map<string, { pid: number; startedAt: Date }>();
+
+/**
+ * Kill an executor process for a session using Unix signals.
+ *
+ * Phase 1: SIGTERM (allows graceful shutdown — executor's SIGTERM handler
+ *          calls abortController.abort() and patches task status)
+ * Phase 2: After 3 seconds, SIGKILL (uncatchable, guaranteed death)
+ *
+ * @returns true if a process was found and signaled
+ */
+function killExecutorProcess(sessionId: string): boolean {
+  const proc = executorProcesses.get(sessionId);
+  if (!proc) return false;
+
+  try {
+    // Check if process is still alive
+    process.kill(proc.pid, 0);
+  } catch {
+    // Process already dead, clean up tracking
+    executorProcesses.delete(sessionId);
+    return false;
+  }
+
+  console.log(
+    `🛑 [Stop] Sending SIGTERM to executor PID ${proc.pid} (session ${sessionId.substring(0, 8)})`
+  );
+  try {
+    process.kill(proc.pid, 'SIGTERM');
+  } catch (err) {
+    console.warn(`⚠️  [Stop] SIGTERM failed for PID ${proc.pid}:`, err);
+  }
+
+  // Phase 2: SIGKILL after 3 seconds if still alive
+  setTimeout(() => {
+    try {
+      process.kill(proc.pid, 0); // Check if still alive
+      console.log(`🛑 [Stop] Process still alive after 3s, sending SIGKILL to PID ${proc.pid}`);
+      process.kill(proc.pid, 'SIGKILL');
+    } catch {
+      // Process already dead — good
+    }
+  }, 3000);
+
+  return true;
+}
 
 // ============================================================================
 // OAuth 2.1 Token Cache (daemon-level, shared between test-oauth and discover)
@@ -519,9 +577,11 @@ async function main() {
   configureDaemonUrl(daemonUrl);
   console.log(`[Executor] Daemon URL configured: ${daemonUrl}`);
 
-  // Initialize Anthropic API key (extracted to setup/credentials.ts)
-  // Side effect: sets process.env.ANTHROPIC_API_KEY if found in config
+  // Initialize Anthropic credentials (extracted to setup/credentials.ts)
+  // Side effect: sets process.env vars from config.yaml so they flow to executor processes
   initializeAnthropicApiKey(config, process.env.ANTHROPIC_API_KEY);
+  initializeAnthropicAuthToken(config, process.env.ANTHROPIC_AUTH_TOKEN);
+  initializeAnthropicBaseUrl(config, process.env.ANTHROPIC_BASE_URL);
 
   // Create Feathers app
   const app = feathersExpress(feathers());
@@ -654,9 +714,8 @@ async function main() {
   const sessionsService = createSessionsService(db, app) as unknown as SessionsServiceImpl;
   app.use('/sessions', sessionsService, {
     events: [
-      'task_stop', // Custom event for stopping tasks via WebSocket
-      'task_stop_ack', // Executor acknowledges receipt of stop signal
-      'task_stopped_complete', // Executor confirms task fully stopped
+      'permission:request', // Permission request broadcast to UI clients
+      'permission:timeout', // Permission request timed out notification
     ],
   });
 
@@ -859,6 +918,12 @@ async function main() {
         stdio: ['pipe', 'pipe', 'pipe'], // Enable stdin for JSON payload
       });
 
+      // Track executor PID for signal-based stopping
+      if (executorProcess.pid) {
+        executorProcesses.set(sessionId, { pid: executorProcess.pid, startedAt: new Date() });
+        console.log(`[Executor ${sessionId.slice(0, 8)}] PID: ${executorProcess.pid}`);
+      }
+
       // Write JSON payload to stdin
       executorProcess.stdin?.write(JSON.stringify(executorPayload));
       executorProcess.stdin?.end();
@@ -875,42 +940,48 @@ async function main() {
       executorProcess.on('exit', async (code) => {
         console.log(`[Executor ${sessionId.slice(0, 8)}] Exited with code ${code}`);
 
-        // Safety net: Update session status back to IDLE when executor completes
+        // Clean up PID tracking
+        executorProcesses.delete(sessionId);
+
+        // Safety net: Update session status back to IDLE when executor exits
         // The primary session status update happens in TasksService.patch() when task status changes
         // This is a fallback in case the task status update didn't trigger session status change
-        if (code === 0) {
-          try {
-            // CRITICAL: Check if THIS task is still the current/latest task before updating
-            // If a new task has started while this executor was exiting, we must NOT
-            // set the session to IDLE - that would break the running task.
-            const currentSession = await app.service('sessions').get(sessionId, params);
-            const latestTaskId = currentSession.tasks?.[currentSession.tasks.length - 1];
+        try {
+          // CRITICAL: Check if THIS task is still the current/latest task before updating
+          // If a new task has started while this executor was exiting, we must NOT
+          // set the session to IDLE - that would break the running task.
+          const currentSession = await app.service('sessions').get(sessionId, params);
+          const latestTaskId = currentSession.tasks?.[currentSession.tasks.length - 1];
 
-            if (latestTaskId && latestTaskId !== taskId) {
-              console.log(
-                `⏭️ [Executor] Task ${taskId.slice(0, 8)} is not the latest (latest: ${latestTaskId.slice(0, 8)}), skipping IDLE update`
-              );
-              // Skip the update - a newer task owns the session state
-            } else if (currentSession.status === SessionStatus.RUNNING) {
-              await app.service('sessions').patch(
-                sessionId,
-                {
-                  status: SessionStatus.IDLE,
-                  ready_for_prompt: true,
-                },
-                params
-              );
-              console.log(
-                `✅ [Executor] Session ${sessionId.slice(0, 8)} status updated to IDLE after executor exit (fallback)`
-              );
-            } else {
-              console.log(
-                `ℹ️  [Executor] Session ${sessionId.slice(0, 8)} already in ${currentSession.status} state, skipping IDLE update`
-              );
-            }
-          } catch (error) {
-            console.error(`❌ [Executor] Failed to update session status to IDLE:`, error);
+          if (latestTaskId && latestTaskId !== taskId) {
+            console.log(
+              `⏭️ [Executor] Task ${taskId.slice(0, 8)} is not the latest (latest: ${latestTaskId.slice(0, 8)}), skipping IDLE update`
+            );
+            // Skip the update - a newer task owns the session state
+          } else if (
+            currentSession.status === SessionStatus.RUNNING ||
+            currentSession.status === SessionStatus.AWAITING_PERMISSION ||
+            currentSession.status === SessionStatus.TIMED_OUT
+          ) {
+            // Session is still in an active/waiting state but executor is gone — reset to IDLE
+            await app.service('sessions').patch(
+              sessionId,
+              {
+                status: SessionStatus.IDLE,
+                ready_for_prompt: true,
+              },
+              params
+            );
+            console.log(
+              `✅ [Executor] Session ${sessionId.slice(0, 8)} status updated to IDLE after executor exit (was: ${currentSession.status})`
+            );
+          } else {
+            console.log(
+              `ℹ️  [Executor] Session ${sessionId.slice(0, 8)} already in ${currentSession.status} state, skipping IDLE update`
+            );
           }
+        } catch (error) {
+          console.error(`❌ [Executor] Failed to update session status to IDLE:`, error);
         }
 
         // Revoke session token after executor exits
@@ -925,23 +996,6 @@ async function main() {
       };
     }
   );
-
-  sessionsService.setStopHandler(async (sessionId, data, _params) => {
-    // Emit task_stop event for Feathers/WebSocket executors
-    app.service('sessions').emit('task_stop', {
-      session_id: sessionId,
-      task_id: data.taskId,
-      timestamp: new Date().toISOString(),
-    });
-
-    // NOTE: Stop is handled by the executor listening to WebSocket task:stop event
-    // No IPC needed - executor subprocess watches for status changes via WebSocket
-
-    return {
-      success: true,
-      message: 'Stop signal sent to executor',
-    };
-  });
 
   app.use('/tasks', createTasksService(db, app));
   app.use('/leaderboard', createLeaderboardService(db));
@@ -971,6 +1025,7 @@ async function main() {
       'thinking:chunk',
       'thinking:end',
       'permission_resolved', // Permission approval/denial notification for executors
+      'input_resolved', // Input request answer notification for executors (AskUserQuestion)
     ],
     docs: {
       description: 'Conversation messages within AI agent sessions',
@@ -4727,6 +4782,10 @@ async function main() {
   );
 
   // Stop execution endpoint
+  //
+  // Simple, reliable stop: kill the executor process with Unix signals.
+  // SIGTERM for grace (executor's handler calls abort + patches task),
+  // SIGKILL after 3s for certainty. No WebSocket ACK protocol, no waiting.
   registerAuthenticatedRoute(
     app,
     '/sessions/:id/stop',
@@ -4735,166 +4794,100 @@ async function main() {
         const id = params.route?.id;
         if (!id) throw new Error('Session ID required');
 
-        // Get session to check status
         const session = await sessionsService.get(id, params);
 
-        // Allow stop requests for RUNNING, AWAITING_PERMISSION, or STOPPING sessions
-        // STOPPING state is allowed to support retries when sessions get stuck
-        if (
-          session.status !== SessionStatus.RUNNING &&
-          session.status !== SessionStatus.AWAITING_PERMISSION &&
-          session.status !== SessionStatus.STOPPING
-        ) {
+        // Allow stop for any active state (RUNNING, AWAITING_PERMISSION, STOPPING)
+        const activeStates: SessionStatus[] = [
+          SessionStatus.RUNNING,
+          SessionStatus.AWAITING_PERMISSION,
+          SessionStatus.STOPPING,
+        ];
+        if (!activeStates.includes(session.status as SessionStatus)) {
           return {
             success: false,
             reason: `Session cannot be stopped (status: ${session.status})`,
           };
         }
 
-        // If already in STOPPING state, this is a retry attempt
-        const isRetry = session.status === SessionStatus.STOPPING;
-        if (isRetry) {
-          console.log(`🔁 [Daemon] Retry stop request for session ${id.substring(0, 8)}`);
-        }
+        // Find the active task (RUNNING, AWAITING_PERMISSION, or STOPPING)
+        const targetTasksArray: Task[] = [];
 
-        // Find the task to stop
-        // For retries, also check STOPPING tasks; otherwise check RUNNING and AWAITING_PERMISSION
-        // Note: Using separate queries to avoid $in operator which fails schema validation
-        let targetTasksArray: Task[] = [];
-
-        // Query for RUNNING tasks
-        const runningResult = await tasksService.find({
-          query: {
-            session_id: id,
-            status: TaskStatus.RUNNING,
-            $limit: 10,
-          },
-        });
-        const runningFindResult = runningResult as Task[] | Paginated<Task>;
-        const runningTasks = isPaginated(runningFindResult)
-          ? runningFindResult.data
-          : runningFindResult;
-
-        // Query for AWAITING_PERMISSION tasks
-        const awaitingResult = await tasksService.find({
-          query: {
-            session_id: id,
-            status: TaskStatus.AWAITING_PERMISSION,
-            $limit: 10,
-          },
-        });
-        const awaitingFindResult = awaitingResult as Task[] | Paginated<Task>;
-        const awaitingTasks = isPaginated(awaitingFindResult)
-          ? awaitingFindResult.data
-          : awaitingFindResult;
-
-        targetTasksArray = [...runningTasks, ...awaitingTasks];
-
-        // If this is a retry, also check for STOPPING tasks, but only as fallback
-        if (isRetry && targetTasksArray.length === 0) {
-          const stoppingResult = await tasksService.find({
-            query: {
-              session_id: id,
-              status: TaskStatus.STOPPING,
-              $limit: 10,
-            },
+        for (const status of [
+          TaskStatus.RUNNING,
+          TaskStatus.AWAITING_PERMISSION,
+          TaskStatus.STOPPING,
+        ]) {
+          const result = await tasksService.find({
+            query: { session_id: id, status, $limit: 10 },
           });
-          const stoppingFindResult = stoppingResult as Task[] | Paginated<Task>;
-          const stoppingTasks = isPaginated(stoppingFindResult)
-            ? stoppingFindResult.data
-            : stoppingFindResult;
-          targetTasksArray = stoppingTasks;
+          const findResult = result as Task[] | Paginated<Task>;
+          const tasks = isPaginated(findResult) ? findResult.data : findResult;
+          targetTasksArray.push(...tasks);
         }
 
         if (targetTasksArray.length === 0) {
-          return {
-            success: false,
-            reason: isRetry ? 'No active or stopping tasks found' : 'No running tasks found',
-          };
+          // No active tasks — just reset session to IDLE (it's stuck)
+          console.warn(
+            `⚠️  [Stop] No active tasks for session ${id.substring(0, 8)}, resetting to IDLE`
+          );
+          await app.service('sessions').patch(
+            id,
+            {
+              status: SessionStatus.IDLE,
+              ready_for_prompt: false,
+            },
+            params
+          );
+          return { success: true, reason: 'No active tasks found, session reset to idle' };
         }
 
-        // Sort tasks by most recent activity (started_at or created_at) to ensure deterministic selection
+        // Pick the most recent task
         targetTasksArray.sort((a, b) => {
           const timeA = new Date(a.started_at || a.created_at).getTime();
           const timeB = new Date(b.started_at || b.created_at).getTime();
-          return timeB - timeA; // Most recent first
+          return timeB - timeA;
         });
-
         const latestTask = targetTasksArray[0];
 
-        // PHASE 1: Atomically update task AND session to STOPPING
-        // Skip task/session transition for retries, but re-assert ready_for_prompt
-        let didTransitionToStopping = false;
-        if (!isRetry) {
-          try {
-            // Update task status to STOPPING
-            await tasksService.patch(latestTask.task_id, {
-              status: TaskStatus.STOPPING,
-            });
-
-            // Update session status to STOPPING
-            await app.service('sessions').patch(
-              id,
-              {
-                status: SessionStatus.STOPPING,
-                ready_for_prompt: false, // Prevent new prompts during stop
-              },
-              params
-            );
-            didTransitionToStopping = true;
-          } catch (error) {
-            return {
-              success: false,
-              reason: `Failed to update status: ${error instanceof Error ? error.message : 'Unknown error'}`,
-            };
-          }
-        } else {
-          // For retries, re-assert ready_for_prompt to ensure consistency
-          try {
-            await app.service('sessions').patch(
-              id,
-              {
-                ready_for_prompt: false,
-              },
-              params
-            );
-          } catch (error) {
-            console.warn(`⚠️  [Daemon] Failed to re-assert ready_for_prompt on retry:`, error);
-          }
-        }
-
-        // PHASE 2: Use bulletproof stop handler with ACK protocol
-        const { handleStopWithAck } = await import('./services/sessions/hooks/handle-stop.js');
-
-        const result = await handleStopWithAck(
-          app,
-          id as SessionID,
-          latestTask.task_id as TaskID,
-          params
+        console.log(
+          `🛑 [Stop] Stopping task ${latestTask.task_id.substring(0, 8)} for session ${id.substring(0, 8)}`
         );
 
-        // PHASE 3: Handle failed stop (revert to RUNNING)
-        // Only revert if WE transitioned to STOPPING (not on retries of already-STOPPING sessions)
-        if (!result.success && didTransitionToStopping) {
-          try {
-            await tasksService.patch(latestTask.task_id, {
-              status: TaskStatus.RUNNING,
-            });
-
-            await app.service('sessions').patch(
-              id,
-              {
-                status: SessionStatus.RUNNING,
-                ready_for_prompt: false,
-              },
-              params
-            );
-          } catch (error) {
-            console.error(`❌ [Daemon] Failed to revert status:`, error);
-          }
+        // Kill the executor process (SIGTERM → 3s → SIGKILL)
+        const processKilled = killExecutorProcess(id);
+        if (!processKilled) {
+          console.warn(
+            `⚠️  [Stop] No tracked process for session ${id.substring(0, 8)} — executor may have already exited`
+          );
         }
 
-        return result;
+        // Immediately update state — don't wait for the process to die.
+        // The executor's SIGTERM handler will also try to patch task → stopped,
+        // but we do it here first for instant UI feedback. The tasks.ts patch hook
+        // guards against double-updates (wasAlreadyTerminal check).
+        try {
+          await tasksService.patch(latestTask.task_id, {
+            status: TaskStatus.STOPPED,
+            completed_at: new Date().toISOString(),
+          });
+        } catch (error) {
+          console.error(`❌ [Stop] Failed to patch task to STOPPED:`, error);
+        }
+
+        try {
+          await app.service('sessions').patch(
+            id,
+            {
+              status: SessionStatus.IDLE,
+              ready_for_prompt: false, // Don't auto-start queued messages after user-initiated stop
+            },
+            params
+          );
+        } catch (error) {
+          console.error(`❌ [Stop] Failed to patch session to IDLE:`, error);
+        }
+
+        return { success: true };
       },
     },
     {
@@ -5186,6 +5179,16 @@ async function main() {
         // Type-safe access to permission content
         const permissionContent = permissionMessage.content as PermissionRequestContent;
 
+        // If already resolved (timed out, approved, or denied), return informative response
+        if (permissionContent?.status && permissionContent.status !== 'pending') {
+          return {
+            success: false,
+            alreadyResolved: true,
+            status: permissionContent.status,
+            message: `Permission request already ${permissionContent.status}`,
+          };
+        }
+
         // Resolve task_id with fallback for backward compatibility:
         // 1. Try content.task_id (new messages)
         // 2. Fall back to message.task_id (legacy messages or if content was missing it)
@@ -5233,6 +5236,95 @@ async function main() {
     },
     {
       create: { role: 'member', action: 'respond to permission requests' },
+    },
+    requireAuth
+  );
+
+  // Input response endpoint (AskUserQuestion answers)
+  registerAuthenticatedRoute(
+    app,
+    '/sessions/:id/input-response',
+    {
+      async create(
+        data: {
+          requestId: string;
+          taskId?: string;
+          answers: Record<string, string>;
+          annotations?: Record<string, { markdown?: string; notes?: string }>;
+          respondedBy: string;
+        },
+        params: RouteParams
+      ) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Session ID required');
+        if (!data.requestId) throw new Error('requestId required');
+        if (!data.answers) throw new Error('answers required');
+
+        // Find the input request message
+        const messagesService = app.service('messages');
+        const messages = await messagesService.find({
+          query: {
+            session_id: id,
+            type: 'input_request',
+          },
+        });
+
+        const messageList = isPaginated(messages) ? messages.data : messages;
+        const inputMessage = messageList.find((msg: Message) => {
+          const content = msg.content as InputRequestContent;
+          return content?.request_id === data.requestId;
+        });
+
+        if (!inputMessage) {
+          throw new Error(`Input request ${data.requestId} not found`);
+        }
+
+        const inputContent = inputMessage.content as InputRequestContent;
+
+        // If already resolved, return informative response
+        if (inputContent?.status && inputContent.status !== 'pending') {
+          return {
+            success: false,
+            alreadyResolved: true,
+            status: inputContent.status,
+            message: `Input request already ${inputContent.status}`,
+          };
+        }
+
+        // Resolve task_id with fallback
+        const resolvedTaskId = inputContent.task_id || inputMessage.task_id;
+
+        if (!resolvedTaskId) {
+          throw new Error('Cannot process input response: task_id is missing.');
+        }
+
+        // Update the message to mark it as answered
+        await messagesService.patch(inputMessage.message_id, {
+          content: {
+            ...inputContent,
+            status: 'answered',
+            answers: data.answers,
+            annotations: data.annotations,
+            answered_by: data.respondedBy,
+            answered_at: new Date().toISOString(),
+          },
+        });
+
+        // Emit input_resolved event for Feathers/WebSocket executor architecture
+        app.service('messages').emit('input_resolved', {
+          requestId: data.requestId,
+          taskId: resolvedTaskId,
+          sessionId: id,
+          answers: data.answers,
+          annotations: data.annotations,
+          respondedBy: data.respondedBy,
+        });
+
+        return { success: true };
+      },
+    },
+    {
+      create: { role: 'member', action: 'respond to input requests' },
     },
     requireAuth
   );
@@ -5910,6 +6002,12 @@ async function main() {
             ANTHROPIC_API_KEY: !!(
               config.credentials?.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY
             ),
+            ANTHROPIC_AUTH_TOKEN: !!(
+              config.credentials?.ANTHROPIC_AUTH_TOKEN || process.env.ANTHROPIC_AUTH_TOKEN
+            ),
+            ANTHROPIC_BASE_URL: !!(
+              config.credentials?.ANTHROPIC_BASE_URL || process.env.ANTHROPIC_BASE_URL
+            ),
             OPENAI_API_KEY: !!(config.credentials?.OPENAI_API_KEY || process.env.OPENAI_API_KEY),
             GEMINI_API_KEY: !!(config.credentials?.GEMINI_API_KEY || process.env.GEMINI_API_KEY),
           },
@@ -6123,26 +6221,31 @@ async function main() {
     }
   }
 
-  // Find all running sessions (should be stopped when daemon restarts)
-  const orphanedSessionsResult = (await sessionsService.find({
-    query: {
-      status: SessionStatus.RUNNING,
-      $limit: 1000,
-    },
-  })) as unknown as Paginated<Session>;
-  const orphanedSessions = orphanedSessionsResult.data;
+  // Find all orphaned sessions (RUNNING, STOPPING, AWAITING_PERMISSION, AWAITING_INPUT, TIMED_OUT — all stuck after daemon restart)
+  const orphanedSessions: Session[] = [];
+  for (const status of [
+    SessionStatus.RUNNING,
+    SessionStatus.STOPPING,
+    SessionStatus.AWAITING_PERMISSION,
+    SessionStatus.AWAITING_INPUT,
+    SessionStatus.TIMED_OUT,
+  ]) {
+    const result = (await sessionsService.find({
+      query: { status, $limit: 1000 },
+    })) as unknown as Paginated<Session>;
+    orphanedSessions.push(...result.data);
+  }
 
   if (orphanedSessions.length > 0) {
-    console.log(`   Found ${orphanedSessions.length} orphaned session(s) with RUNNING status`);
+    console.log(`   Found ${orphanedSessions.length} orphaned session(s)`);
     for (const session of orphanedSessions) {
       // IMPORTANT: Use app.service() instead of sessionsService to go through
       // FeathersJS service layer and trigger app.publish() for WebSocket events
-      // For internal/system operations, pass empty params object
       await app.service('sessions').patch(
         session.session_id,
         {
           status: SessionStatus.IDLE,
-          ready_for_prompt: true, // Set atomically with status
+          ready_for_prompt: true,
         },
         {}
       );
@@ -6152,8 +6255,7 @@ async function main() {
     }
   }
 
-  // Also check for sessions that had orphaned tasks (even if session status wasn't RUNNING)
-  // This handles cases where task was stuck but session status wasn't updated
+  // Also check for sessions that had orphaned tasks (even if session wasn't in RUNNING/STOPPING)
   const sessionIdsWithOrphanedTasks = new Set(
     orphanedTasks.map((t: Task) => t.session_id as string)
   );
@@ -6163,21 +6265,23 @@ async function main() {
     );
     for (const sessionId of sessionIdsWithOrphanedTasks) {
       const session = await sessionsService.get(sessionId as Id);
-      // If session is still marked as RUNNING after orphaned task cleanup, set to IDLE
-      if (session.status === SessionStatus.RUNNING) {
-        // IMPORTANT: Use app.service() instead of sessionsService to go through
-        // FeathersJS service layer and trigger app.publish() for WebSocket events
-        // For internal/system operations, pass empty params object
+      // If session is still in an active state after orphaned task cleanup, set to IDLE
+      if (
+        session.status === SessionStatus.RUNNING ||
+        session.status === SessionStatus.STOPPING ||
+        session.status === SessionStatus.AWAITING_PERMISSION ||
+        session.status === SessionStatus.TIMED_OUT
+      ) {
         await app.service('sessions').patch(
           sessionId as Id,
           {
             status: SessionStatus.IDLE,
-            ready_for_prompt: true, // Set atomically with status
+            ready_for_prompt: true,
           },
           {}
         );
         console.log(
-          `   ✓ Marked session ${sessionId.substring(0, 8)} as idle (had orphaned tasks)`
+          `   ✓ Marked session ${sessionId.substring(0, 8)} as idle (had orphaned tasks, was: ${session.status})`
         );
       }
     }

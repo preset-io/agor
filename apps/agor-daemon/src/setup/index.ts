@@ -16,6 +16,8 @@ export {
   type CredentialsConfig,
   type InitializedCredentials,
   initializeAnthropicApiKey,
+  initializeAnthropicAuthToken,
+  initializeAnthropicBaseUrl,
   initializeCredentials,
   initializeGeminiApiKey,
 } from './credentials.js';

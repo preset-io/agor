@@ -467,7 +467,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
           </Form.Item>
 
           <Form.Item label="Background">
-            <Space direction="vertical" style={{ width: '100%' }}>
+            <Space orientation="vertical" style={{ width: '100%' }}>
               <Checkbox
                 checked={useCustomCSSCreate}
                 onChange={(e) => {
@@ -566,7 +566,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
           </Form.Item>
 
           <Form.Item label="Background">
-            <Space direction="vertical" style={{ width: '100%' }}>
+            <Space orientation="vertical" style={{ width: '100%' }}>
               <Checkbox
                 checked={useCustomCSSEdit}
                 onChange={(e) => {

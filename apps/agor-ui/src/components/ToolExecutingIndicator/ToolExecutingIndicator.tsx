@@ -29,7 +29,7 @@ const ToolExecutingIndicator = ({ toolsExecuting }: ToolExecutingIndicatorProps)
   }
 
   return (
-    <Space direction="vertical" size={4} style={{ width: '100%' }}>
+    <Space orientation="vertical" size={4} style={{ width: '100%' }}>
       {toolsExecuting.map((tool) => (
         <Tag
           key={tool.toolUseId}

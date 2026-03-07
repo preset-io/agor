@@ -315,7 +315,7 @@ export const EventStreamPanel: React.FC<EventStreamPanelProps> = ({
           </Checkbox>
         </Space>
 
-        <Space direction="horizontal" size="small" style={{ width: '100%', marginTop: 12 }} wrap>
+        <Space orientation="horizontal" size="small" style={{ width: '100%', marginTop: 12 }} wrap>
           <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 200 }}>
             <Text type="secondary" style={{ marginBottom: 4, fontSize: 11 }}>
               Event Types:

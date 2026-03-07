@@ -147,7 +147,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
 
   return (
     <div style={{ width: '100%', maxHeight: '70vh', overflowY: 'auto' }}>
-      <Space direction="vertical" size="large" style={{ width: '100%' }}>
+      <Space orientation="vertical" size="large" style={{ width: '100%' }}>
         {/* Basic Information */}
         <Descriptions column={1} bordered size="small">
           <Descriptions.Item label="Name">

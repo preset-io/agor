@@ -25,7 +25,7 @@ export const CodexNetworkAccessToggle: React.FC<CodexNetworkAccessToggleProps> =
   const isEnabled = typeof checked === 'boolean' ? checked : !!value;
 
   return (
-    <Space direction="vertical" style={{ width: '100%' }}>
+    <Space orientation="vertical" style={{ width: '100%' }}>
       <Space>
         <Switch
           checked={isEnabled}

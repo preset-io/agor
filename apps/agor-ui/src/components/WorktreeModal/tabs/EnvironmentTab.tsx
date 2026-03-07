@@ -150,6 +150,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     worktree.environment_instance?.last_health_check
   );
   const [processInfo, setProcessInfo] = useState(worktree.environment_instance?.process);
+  const [lastError, setLastError] = useState(worktree.environment_instance?.last_error);
   const [logsModalOpen, setLogsModalOpen] = useState(false);
   const [isTrusting, setIsTrusting] = useState(false);
 
@@ -162,6 +163,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     setEnvStatus(worktree.environment_instance?.status || 'stopped');
     setLastHealthCheck(worktree.environment_instance?.last_health_check);
     setProcessInfo(worktree.environment_instance?.process);
+    setLastError(worktree.environment_instance?.last_error);
 
     // Check if worktree prop actually changed (not just editing flags)
     const worktreeChanged = prevWorktreeRef.current !== worktree;
@@ -194,6 +196,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
         setEnvStatus(updatedWorktree.environment_instance?.status || 'stopped');
         setLastHealthCheck(updatedWorktree.environment_instance?.last_health_check);
         setProcessInfo(updatedWorktree.environment_instance?.process);
+        setLastError(updatedWorktree.environment_instance?.last_error);
       }
     };
 
@@ -591,7 +594,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
 
   return (
     <div style={{ width: '100%', maxHeight: '70vh', overflowY: 'auto' }}>
-      <Space direction="vertical" size="large" style={{ width: '100%' }}>
+      <Space orientation="vertical" size="large" style={{ width: '100%' }}>
         <Alert
           message={
             <span>
@@ -612,7 +615,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
         {/* ========== ENVIRONMENT CONTROLS (Top) ========== */}
         {hasEnvironmentConfig && (
           <Card size="small">
-            <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+            <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
               {/* Review banner - shown when commands from .agor.yml haven't been reviewed */}
               {!worktree.environment_commands_reviewed && (
                 <Alert
@@ -621,7 +624,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                   icon={<ExclamationCircleOutlined />}
                   message="Environment commands need review"
                   description={
-                    <Space direction="vertical" size="small" style={{ width: '100%' }}>
+                    <Space orientation="vertical" size="small" style={{ width: '100%' }}>
                       <span>
                         These commands were loaded from the repository&apos;s <code>.agor.yml</code>{' '}
                         file. Review them below before enabling environment controls.
@@ -721,10 +724,25 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
               </div>
 
               {/* Error State */}
-              {envStatus === 'error' && lastHealthCheck?.message && (
+              {envStatus === 'error' && (lastHealthCheck?.message || lastError) && (
                 <Alert
-                  message="Environment Error"
-                  description={lastHealthCheck.message}
+                  message={lastHealthCheck?.message || 'Environment Error'}
+                  description={
+                    lastError ? (
+                      <pre
+                        style={{
+                          maxHeight: 200,
+                          overflow: 'auto',
+                          margin: 0,
+                          fontSize: 11,
+                          whiteSpace: 'pre-wrap',
+                          wordBreak: 'break-word',
+                        }}
+                      >
+                        {lastError}
+                      </pre>
+                    ) : undefined
+                  }
                   type="error"
                   showIcon
                   style={{ fontSize: 11 }}
@@ -785,7 +803,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
             </Space>
           }
         >
-          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
             {isEditingTemplate ? (
               <>
                 {/* Up Command */}
@@ -924,7 +942,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                 </div>
               </>
             ) : (
-              <Space direction="vertical" size={4} style={{ width: '100%' }}>
+              <Space orientation="vertical" size={4} style={{ width: '100%' }}>
                 <TemplateField label="Up Command" value={upCommand} />
                 <TemplateField label="Down Command" value={downCommand} />
                 <TemplateField label="Nuke Command" value={nukeCommand} />
@@ -998,7 +1016,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
           }
           size="small"
         >
-          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
             {/* Built-in Variables (Read-only) */}
             <div>
               <Typography.Text strong style={{ fontSize: 13, display: 'block', marginBottom: 8 }}>
@@ -1147,7 +1165,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
               </Typography.Text>
               {isEditingUrls ? (
                 <>
-                  <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                  <Space orientation="vertical" size={8} style={{ width: '100%' }}>
                     <div>
                       <Typography.Text
                         strong

@@ -248,14 +248,16 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
   }
 
   /**
-   * Find orphaned tasks (running, stopping, or awaiting permission)
+   * Find orphaned tasks (running, stopping, awaiting permission, or awaiting input)
    * These are tasks that were interrupted when daemon stopped
    */
   async findOrphaned(): Promise<Task[]> {
     try {
       const rows = await select(this.db)
         .from(tasks)
-        .where(sql`${tasks.status} IN ('running', 'stopping', 'awaiting_permission')`)
+        .where(
+          sql`${tasks.status} IN ('running', 'stopping', 'awaiting_permission', 'awaiting_input')`
+        )
         .all();
 
       return rows.map((row: TaskRow) => this.rowToTask(row));

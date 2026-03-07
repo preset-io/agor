@@ -273,7 +273,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       if (
         candidate.status === TaskStatus.RUNNING ||
         candidate.status === TaskStatus.STOPPING ||
-        candidate.status === TaskStatus.AWAITING_PERMISSION
+        candidate.status === TaskStatus.AWAITING_PERMISSION ||
+        candidate.status === TaskStatus.AWAITING_INPUT
       ) {
         return candidate;
       }
@@ -525,6 +526,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         return 'success';
       case 'failed':
         return 'error';
+      case 'timed_out':
+        return 'warning';
       default:
         return 'default';
     }
@@ -560,7 +563,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         />
       )}
       <Space
-        direction="vertical"
+        orientation="vertical"
         style={{ width: '100%', position: 'relative', zIndex: 1 }}
         size={8}
       >

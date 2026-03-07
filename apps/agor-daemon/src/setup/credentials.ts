@@ -6,13 +6,17 @@
  * Supports hot-reload via config service updates.
  */
 
-export interface CredentialsConfig {
-  ANTHROPIC_API_KEY?: string;
-  GEMINI_API_KEY?: string;
-}
+import type { AgorCredentials } from '@agor/core/config';
+
+/**
+ * @deprecated Use AgorCredentials from @agor/core/config directly
+ */
+export type CredentialsConfig = AgorCredentials;
 
 export interface InitializedCredentials {
   anthropicApiKey?: string;
+  anthropicAuthToken?: string;
+  anthropicBaseUrl?: string;
   geminiApiKey?: string;
 }
 
@@ -49,6 +53,50 @@ export function initializeAnthropicApiKey(
   }
 
   return apiKey;
+}
+
+/**
+ * Initialize Anthropic auth token for proxy/enterprise setups
+ *
+ * Priority: config.yaml > env var
+ * Used by Claude Code SDK for token-based authentication (e.g., AWS Bedrock, OAuth proxies).
+ *
+ * @param config - Application config object with credentials
+ * @param envAuthToken - ANTHROPIC_AUTH_TOKEN from process.env
+ * @returns Resolved auth token or undefined
+ */
+export function initializeAnthropicAuthToken(
+  config: { credentials?: CredentialsConfig },
+  envAuthToken?: string
+): string | undefined {
+  if (config.credentials?.ANTHROPIC_AUTH_TOKEN && !envAuthToken) {
+    process.env.ANTHROPIC_AUTH_TOKEN = config.credentials.ANTHROPIC_AUTH_TOKEN;
+    console.log('✅ Set ANTHROPIC_AUTH_TOKEN from config for Claude Code');
+  }
+
+  return config.credentials?.ANTHROPIC_AUTH_TOKEN || envAuthToken;
+}
+
+/**
+ * Initialize Anthropic base URL for proxy/custom endpoint support
+ *
+ * Priority: config.yaml > env var
+ * Used for LiteLLM proxies, AWS Bedrock, Claude Enterprise, or compatible APIs.
+ *
+ * @param config - Application config object with credentials
+ * @param envBaseUrl - ANTHROPIC_BASE_URL from process.env
+ * @returns Resolved base URL or undefined (uses default https://api.anthropic.com)
+ */
+export function initializeAnthropicBaseUrl(
+  config: { credentials?: CredentialsConfig },
+  envBaseUrl?: string
+): string | undefined {
+  if (config.credentials?.ANTHROPIC_BASE_URL && !envBaseUrl) {
+    process.env.ANTHROPIC_BASE_URL = config.credentials.ANTHROPIC_BASE_URL;
+    console.log('✅ Set ANTHROPIC_BASE_URL from config for Claude Code');
+  }
+
+  return config.credentials?.ANTHROPIC_BASE_URL || envBaseUrl;
 }
 
 /**
@@ -99,6 +147,8 @@ export function initializeCredentials(config: {
 }): InitializedCredentials {
   return {
     anthropicApiKey: initializeAnthropicApiKey(config, process.env.ANTHROPIC_API_KEY),
+    anthropicAuthToken: initializeAnthropicAuthToken(config, process.env.ANTHROPIC_AUTH_TOKEN),
+    anthropicBaseUrl: initializeAnthropicBaseUrl(config, process.env.ANTHROPIC_BASE_URL),
     geminiApiKey: initializeGeminiApiKey(config, process.env.GEMINI_API_KEY),
   };
 }

@@ -4,6 +4,13 @@
  * Handles async permission requests from Claude Agent SDK PreToolUse hooks.
  * Emits events via Feathers WebSocket to daemon for broadcasting to UI clients.
  *
+ * ## Why this is separate from packages/core/src/permissions/permission-service.ts
+ *
+ * The core version is used by the daemon for in-process tool execution (sync emitEvent).
+ * This executor version uses async emitEvent (events go over Feathers WebSocket to daemon).
+ * The two share the same logic but differ in their emitEvent signature (sync vs async),
+ * which makes them incompatible as a single class without adding unnecessary abstraction.
+ *
  * ## Flow in Feathers/WebSocket Architecture:
  *
  * 1. PreToolUse hook fires → PermissionService.emitRequest()
@@ -36,10 +43,14 @@ export interface PermissionDecision {
   remember: boolean;
   scope: PermissionScope;
   decidedBy: string; // userId
+  timedOut?: boolean; // true when the decision was an automatic timeout (not an explicit deny)
 }
 
 // Re-export for convenience
 export { PermissionScope };
+
+/** Default permission timeout: 10 minutes */
+const DEFAULT_PERMISSION_TIMEOUT_MS = 600_000;
 
 /**
  * Executor version of PermissionService
@@ -57,8 +68,12 @@ export class PermissionService {
 
   /**
    * @param emitEvent - Function to emit events via IPC to daemon
+   * @param timeoutMs - Permission request timeout in ms (default: 10 minutes)
    */
-  constructor(private emitEvent: (event: string, data: unknown) => Promise<void>) {}
+  constructor(
+    private emitEvent: (event: string, data: unknown) => Promise<void>,
+    private timeoutMs: number = DEFAULT_PERMISSION_TIMEOUT_MS
+  ) {}
 
   /**
    * Emit a permission request event to daemon (which broadcasts via WebSocket)
@@ -101,23 +116,34 @@ export class PermissionService {
         });
       });
 
-      // Timeout after 60 seconds
-      const timeout = setTimeout(() => {
+      // Timeout (configurable, default 10 minutes)
+      const timeout = setTimeout(async () => {
         this.pendingRequests.delete(requestId);
-        console.warn(`⚠️  [executor] Permission request timeout: ${requestId}`);
+        console.warn(`⏰ [executor] Permission request timed out: ${requestId}`);
+
+        // Broadcast timeout to UI via daemon
+        try {
+          await this.emitEvent('permission:timeout', { requestId, sessionId, taskId });
+        } catch (err) {
+          console.error(`⚠️  [executor] Failed to emit permission:timeout event:`, err);
+        }
+
         resolve({
           requestId,
           taskId,
           allow: false,
-          reason: 'Timeout',
+          reason: 'Timed out',
           remember: false,
           scope: PermissionScope.ONCE,
           decidedBy: 'system',
+          timedOut: true,
         });
-      }, 60000);
+      }, this.timeoutMs);
 
       this.pendingRequests.set(requestId, { sessionId, resolve, timeout });
-      console.log(`🛡️  [executor] Waiting for permission decision: ${requestId}`);
+      console.log(
+        `🛡️  [executor] Waiting for permission decision: ${requestId} (timeout: ${Math.round(this.timeoutMs / 1000)}s)`
+      );
     });
   }
 

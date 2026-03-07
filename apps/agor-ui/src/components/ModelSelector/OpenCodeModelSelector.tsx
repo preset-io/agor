@@ -150,7 +150,7 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
   }
 
   return (
-    <Space direction="vertical" style={{ width: '100%' }}>
+    <Space orientation="vertical" style={{ width: '100%' }}>
       {/* Provider Dropdown */}
       <div>
         <Text strong style={{ display: 'block', marginBottom: 8 }}>

@@ -28,6 +28,7 @@ function maskCredentials(config: AgorConfig): AgorConfig {
     ...config,
     credentials: {
       ANTHROPIC_API_KEY: maskApiKey(config.credentials.ANTHROPIC_API_KEY),
+      ANTHROPIC_AUTH_TOKEN: maskApiKey(config.credentials.ANTHROPIC_AUTH_TOKEN),
       ANTHROPIC_BASE_URL: config.credentials.ANTHROPIC_BASE_URL,
       OPENAI_API_KEY: maskApiKey(config.credentials.OPENAI_API_KEY),
       GEMINI_API_KEY: maskApiKey(config.credentials.GEMINI_API_KEY),
@@ -126,7 +127,12 @@ export class ConfigService {
    * SECURITY: Only allow updating credentials and opencode sections from UI
    */
   async patch(_id: null, data: Partial<AgorConfig>, _params?: Params): Promise<AgorConfig> {
-    console.log('[Config Service] Patch received:', JSON.stringify(data, null, 2));
+    // Log patch keys without values to avoid leaking secrets
+    const patchSections = Object.keys(data);
+    const credentialKeys = data.credentials ? Object.keys(data.credentials) : [];
+    console.log(
+      `[Config Service] Patch received: sections=[${patchSections}] credential_keys=[${credentialKeys}]`
+    );
     const config = await loadConfig();
 
     // Only allow updating credentials section for security

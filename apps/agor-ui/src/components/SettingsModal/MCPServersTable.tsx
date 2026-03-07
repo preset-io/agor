@@ -726,7 +726,7 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           {/* Test Connection - only for HTTP/SSE transport */}
           {transport !== 'stdio' && (
             <div style={{ borderTop: '1px solid #303030', marginTop: 16, paddingTop: 16 }}>
-              <Space direction="vertical" style={{ width: '100%' }}>
+              <Space orientation="vertical" style={{ width: '100%' }}>
                 <Button
                   type="default"
                   icon={<ApiOutlined />}
@@ -882,7 +882,7 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           </Button>,
         ]}
       >
-        <Space direction="vertical" style={{ width: '100%' }}>
+        <Space orientation="vertical" style={{ width: '100%' }}>
           <Typography.Paragraph>
             After signing in to the OAuth provider, you will be redirected to a page that may show
             an error (like "This site can't be reached"). This is expected.

@@ -27,7 +27,7 @@ export const AgentSelectionCard: React.FC<AgentSelectionCardProps> = ({
         body: { padding: 12 },
       }}
     >
-      <Space direction="vertical" style={{ width: '100%' }} size={4}>
+      <Space orientation="vertical" style={{ width: '100%' }} size={4}>
         <Space style={{ width: '100%', justifyContent: 'space-between' }} size={8}>
           <Space size={8}>
             <ToolIcon tool={agent.id} size={24} />

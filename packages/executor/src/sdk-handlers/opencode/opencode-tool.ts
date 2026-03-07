@@ -170,42 +170,53 @@ export class OpenCodeTool implements ITool {
   }
 
   /**
-   * Inject MCP servers into OpenCode for the given session if not already injected.
-   * Uses a hash to avoid re-injection when nothing has changed.
+   * Inject MCP servers into OpenCode for the given session.
+   *
+   * Strategy: Use a session-specific MCP name (`agor_<shortId>`) to avoid conflicts with
+   * stale entries that may be cached in OpenCode's memory from previous sessions.
+   * The handler clears the `mcp` section in opencode.json to prevent stale entries from
+   * being loaded at server startup, and we inject fresh entries via mcp.add() each time.
+   *
+   * For user-defined MCP servers: uses a hash to avoid redundant re-injection.
    */
   private async ensureMcpServers(
     sessionId: string,
     client: ReturnType<typeof createOpencodeClient>,
-    mcpToken?: string
+    mcpToken?: string,
+    worktreePath?: string
   ): Promise<void> {
-    // Build a config hash to detect changes
-    const configHash = `${mcpToken ?? ''}:${sessionId}`;
-    if (this.injectedMcpHash.get(sessionId) === configHash) {
-      // Already injected with same config
-      return;
-    }
-
-    // Inject the Agor MCP server if we have a token
     if (mcpToken) {
+      // Use session-specific MCP name to avoid conflicts with stale entries
+      const shortId = sessionId.substring(0, 8);
+      const mcpName = `agor_${shortId}`;
+
       try {
         const daemonUrl = await getDaemonUrl();
+        const mcpUrl = `${daemonUrl}/mcp?sessionToken=${encodeURIComponent(mcpToken)}`;
+
         await client.mcp.add({
           body: {
-            name: 'agor',
+            name: mcpName,
             config: {
               type: 'remote' as const,
-              url: `${daemonUrl}/mcp?sessionToken=${encodeURIComponent(mcpToken)}`,
+              url: mcpUrl,
               enabled: true,
             },
           },
+          query: worktreePath ? { directory: worktreePath } : undefined,
         });
-        console.log('[OpenCodeTool] Injected Agor MCP server');
+        console.log(`[OpenCodeTool] Injected Agor MCP as "${mcpName}" for session ${shortId}`);
       } catch (error) {
-        console.warn('[OpenCodeTool] Failed to inject Agor MCP server:', error);
+        console.warn(`[OpenCodeTool] Failed to inject Agor MCP server "${mcpName}":`, error);
       }
     }
 
-    // Inject user-defined MCP servers if repos are available
+    // Inject user-defined MCP servers (use hash to avoid redundant re-injection)
+    const configHash = `${mcpToken ?? ''}:${sessionId}`;
+    if (this.injectedMcpHash.get(sessionId) === configHash) {
+      return;
+    }
+
     if (this.sessionMCPRepo && this.mcpServerRepo) {
       try {
         const servers = await getMcpServersForSession(sessionId as SessionID, {
@@ -214,7 +225,6 @@ export class OpenCodeTool implements ITool {
         });
 
         for (const { server } of servers) {
-          // Sanitize server name: lowercase, replace non-alphanumeric with underscore
           const sanitizedName = server.name.toLowerCase().replace(/[^a-z0-9]+/g, '_');
 
           try {
@@ -257,7 +267,6 @@ export class OpenCodeTool implements ITool {
       }
     }
 
-    // Store the hash to avoid re-injection
     this.injectedMcpHash.set(sessionId, configHash);
   }
 
@@ -376,8 +385,8 @@ export class OpenCodeTool implements ITool {
       const worktreePath = context.worktreePath;
       const client = this.getClientForDirectory(worktreePath);
 
-      // Inject MCP servers if not already done
-      await this.ensureMcpServers(sessionId, client, context.mcpToken);
+      // Inject MCP servers (uses session-specific name to avoid stale entry conflicts)
+      await this.ensureMcpServers(sessionId, client, context.mcpToken, worktreePath);
 
       // Prepare prompt options
       const promptOptions: {
@@ -454,14 +463,45 @@ export class OpenCodeTool implements ITool {
         console.log('[OpenCodeTool] Listening for events...');
 
         for await (const event of eventStream.stream) {
-          // Log EVERY event for debugging
-          console.log('[OpenCodeTool] ========== RAW EVENT ==========');
-          console.log('[OpenCodeTool] Event type:', event.type);
-          console.log('[OpenCodeTool] Event data:', JSON.stringify(event, null, 2));
-          console.log('[OpenCodeTool] ================================');
+          // Log event type (skip noisy heartbeats)
+          const eventType = event.type as string;
+          if (eventType !== 'server.heartbeat') {
+            console.log('[OpenCodeTool] Event:', eventType);
+          }
 
           // Check if this event is for our session
           if ('properties' in event) {
+            // Handle permission.asked / permission.updated events BEFORE processing messages.
+            // When OpenCode needs permission (e.g., external_directory access), it emits this
+            // event and waits for a response. Without auto-granting, the session hangs forever.
+            if (
+              (eventType === 'permission.asked' || eventType === 'permission.updated') &&
+              'id' in event.properties &&
+              'sessionID' in event.properties &&
+              event.properties.sessionID === context.opencodeSessionId
+            ) {
+              const permId = event.properties.id as string;
+              const permType = (
+                'type' in event.properties ? event.properties.type : 'unknown'
+              ) as string;
+              console.log(
+                `[OpenCodeTool] Auto-granting permission: id=${permId}, type=${permType}`
+              );
+              try {
+                await client.postSessionIdPermissionsPermissionId({
+                  path: {
+                    id: context.opencodeSessionId,
+                    permissionID: permId,
+                  },
+                  body: { response: 'always' },
+                });
+                console.log(`[OpenCodeTool] Permission auto-granted (always): id=${permId}`);
+              } catch (permErr) {
+                console.error('[OpenCodeTool] Failed to auto-grant permission:', permErr);
+              }
+              continue;
+            }
+
             // First, identify the assistant message when it's created
             if (
               event.type === 'message.updated' &&

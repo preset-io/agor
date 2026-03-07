@@ -2006,103 +2006,120 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             >
               {/* Zoom controls */}
               <Tooltip title="Zoom In" placement="right" mouseEnterDelay={0.3}>
-                <ControlButton
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    reactFlowInstanceRef.current?.zoomIn();
-                  }}
-                >
-                  <PlusOutlined style={{ fontSize: '16px' }} />
-                </ControlButton>
+                <span>
+                  <ControlButton
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      reactFlowInstanceRef.current?.zoomIn();
+                    }}
+                  >
+                    <PlusOutlined style={{ fontSize: '16px' }} />
+                  </ControlButton>
+                </span>
               </Tooltip>
               <Tooltip title="Zoom Out" placement="right" mouseEnterDelay={0.3}>
-                <ControlButton
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    reactFlowInstanceRef.current?.zoomOut();
-                  }}
-                >
-                  <MinusOutlined style={{ fontSize: '16px' }} />
-                </ControlButton>
+                <span>
+                  <ControlButton
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      reactFlowInstanceRef.current?.zoomOut();
+                    }}
+                  >
+                    <MinusOutlined style={{ fontSize: '16px' }} />
+                  </ControlButton>
+                </span>
               </Tooltip>
               <Tooltip title="Fit View" placement="right" mouseEnterDelay={0.3}>
-                <ControlButton
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    reactFlowInstanceRef.current?.fitView();
-                  }}
-                >
-                  <ZoomInOutlined style={{ fontSize: '16px' }} />
-                </ControlButton>
+                <span>
+                  <ControlButton
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      reactFlowInstanceRef.current?.fitView();
+                    }}
+                  >
+                    <ZoomInOutlined style={{ fontSize: '16px' }} />
+                  </ControlButton>
+                </span>
               </Tooltip>
               {/* Custom toolbox buttons */}
               <Tooltip title="Select" placement="right" mouseEnterDelay={0.3}>
-                <ControlButton
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setActiveTool('select');
-                  }}
-                  style={{
-                    borderLeft: activeTool === 'select' ? '3px solid #1677ff' : 'none',
-                  }}
-                >
-                  <SelectOutlined style={{ fontSize: '16px' }} />
-                </ControlButton>
+                <span>
+                  <ControlButton
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setActiveTool('select');
+                    }}
+                    style={{
+                      borderLeft: activeTool === 'select' ? '3px solid #1677ff' : 'none',
+                    }}
+                  >
+                    <SelectOutlined style={{ fontSize: '16px' }} />
+                  </ControlButton>
+                </span>
               </Tooltip>
               <Tooltip title="Add Zone" placement="right" mouseEnterDelay={0.3}>
-                <ControlButton
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setActiveTool('zone');
-                  }}
-                  style={{
-                    borderLeft: activeTool === 'zone' ? '3px solid #1677ff' : 'none',
-                  }}
-                >
-                  <BorderOutlined style={{ fontSize: '16px' }} />
-                </ControlButton>
+                <span>
+                  <ControlButton
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setActiveTool('zone');
+                    }}
+                    style={{
+                      borderLeft: activeTool === 'zone' ? '3px solid #1677ff' : 'none',
+                    }}
+                  >
+                    <BorderOutlined style={{ fontSize: '16px' }} />
+                  </ControlButton>
+                </span>
               </Tooltip>
               <Tooltip title="Add Comment" placement="right" mouseEnterDelay={0.3}>
-                <ControlButton
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setActiveTool('comment');
-                  }}
-                  style={{
-                    borderLeft: activeTool === 'comment' ? '3px solid #1677ff' : 'none',
-                  }}
-                >
-                  <CommentOutlined style={{ fontSize: '16px' }} />
-                </ControlButton>
+                <span>
+                  <ControlButton
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setActiveTool('comment');
+                    }}
+                    style={{
+                      borderLeft: activeTool === 'comment' ? '3px solid #1677ff' : 'none',
+                    }}
+                  >
+                    <CommentOutlined style={{ fontSize: '16px' }} />
+                  </ControlButton>
+                </span>
               </Tooltip>
               <Tooltip title="Add Markdown Note" placement="right" mouseEnterDelay={0.3}>
-                <ControlButton
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setActiveTool('markdown');
-                  }}
-                  style={{
-                    borderLeft: activeTool === 'markdown' ? '3px solid #1677ff' : 'none',
-                  }}
-                >
-                  <FileMarkdownOutlined style={{ fontSize: '16px' }} />
-                </ControlButton>
+                <span>
+                  <ControlButton
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setActiveTool('markdown');
+                    }}
+                    style={{
+                      borderLeft: activeTool === 'markdown' ? '3px solid #1677ff' : 'none',
+                    }}
+                  >
+                    <FileMarkdownOutlined style={{ fontSize: '16px' }} />
+                  </ControlButton>
+                </span>
               </Tooltip>
               <Tooltip title="Eraser - Click to toggle" placement="right" mouseEnterDelay={0.3}>
-                <ControlButton
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setActiveTool(activeTool === 'eraser' ? 'select' : 'eraser');
-                  }}
-                  style={{
-                    borderLeft: activeTool === 'eraser' ? `3px solid ${token.colorError}` : 'none',
-                    color: activeTool === 'eraser' ? token.colorError : 'inherit',
-                    backgroundColor:
-                      activeTool === 'eraser' ? `${token.colorError}15` : 'transparent',
-                  }}
-                >
-                  <DeleteOutlined style={{ fontSize: '16px' }} />
-                </ControlButton>
+                <span>
+                  <ControlButton
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setActiveTool(activeTool === 'eraser' ? 'select' : 'eraser');
+                    }}
+                    style={{
+                      borderLeft:
+                        activeTool === 'eraser' ? `3px solid ${token.colorError}` : 'none',
+                      color: activeTool === 'eraser' ? token.colorError : 'inherit',
+                      backgroundColor:
+                        activeTool === 'eraser' ? `${token.colorError}15` : 'transparent',
+                    }}
+                  >
+                    <DeleteOutlined style={{ fontSize: '16px' }} />
+                  </ControlButton>
+                </span>
               </Tooltip>
             </Controls>
             <MiniMap

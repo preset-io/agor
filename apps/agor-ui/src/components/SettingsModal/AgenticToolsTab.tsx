@@ -23,6 +23,8 @@ export const AgenticToolsTab: React.FC<AgenticToolsTabProps> = ({ client }) => {
   });
   const [baseUrl, setBaseUrl] = useState<string>('');
   const [baseUrlInput, setBaseUrlInput] = useState<string>('');
+  const [authTokenSet, setAuthTokenSet] = useState(false);
+  const [authTokenInput, setAuthTokenInput] = useState<string>('');
 
   // Load current config on mount
   useEffect(() => {
@@ -48,6 +50,9 @@ export const AgenticToolsTab: React.FC<AgenticToolsTabProps> = ({ client }) => {
         // Load base URL if set
         setBaseUrl(config?.ANTHROPIC_BASE_URL || '');
         setBaseUrlInput(config?.ANTHROPIC_BASE_URL || '');
+
+        // Load auth token status (masked, so just check if set)
+        setAuthTokenSet(!!config?.ANTHROPIC_AUTH_TOKEN);
       } catch (err) {
         console.error('Failed to load config:', err);
         setError(err instanceof Error ? err.message : 'Failed to load configuration');
@@ -107,54 +112,49 @@ export const AgenticToolsTab: React.FC<AgenticToolsTabProps> = ({ client }) => {
     }
   };
 
-  // Base URL save handler
-  const handleSaveBaseUrl = async () => {
+  // Generic credential save/clear for non-ApiKeyFields credentials
+  const saveCredential = async (key: string, value: string | null) => {
     if (!client) return;
 
     try {
-      setSaving((prev) => ({ ...prev, ANTHROPIC_BASE_URL: true }));
+      setSaving((prev) => ({ ...prev, [key]: true }));
       setError(null);
 
-      const value = baseUrlInput.trim();
       await client.service('config').patch(null, {
-        credentials: {
-          ANTHROPIC_BASE_URL: value || null,
-        },
+        credentials: { [key]: value },
       });
-
-      setBaseUrl(value);
     } catch (err) {
-      console.error('Failed to save base URL:', err);
-      setError(err instanceof Error ? err.message : 'Failed to save base URL');
+      console.error(`Failed to ${value ? 'save' : 'clear'} ${key}:`, err);
+      setError(err instanceof Error ? err.message : `Failed to ${value ? 'save' : 'clear'} ${key}`);
       throw err;
     } finally {
-      setSaving((prev) => ({ ...prev, ANTHROPIC_BASE_URL: false }));
+      setSaving((prev) => ({ ...prev, [key]: false }));
     }
   };
 
-  // Base URL clear handler
+  const handleSaveBaseUrl = async () => {
+    const value = baseUrlInput.trim();
+    await saveCredential('ANTHROPIC_BASE_URL', value || null);
+    setBaseUrl(value);
+  };
+
   const handleClearBaseUrl = async () => {
-    if (!client) return;
+    await saveCredential('ANTHROPIC_BASE_URL', null);
+    setBaseUrl('');
+    setBaseUrlInput('');
+  };
 
-    try {
-      setSaving((prev) => ({ ...prev, ANTHROPIC_BASE_URL: true }));
-      setError(null);
+  const handleSaveAuthToken = async () => {
+    const value = authTokenInput.trim();
+    await saveCredential('ANTHROPIC_AUTH_TOKEN', value || null);
+    setAuthTokenSet(!!value);
+    setAuthTokenInput('');
+  };
 
-      await client.service('config').patch(null, {
-        credentials: {
-          ANTHROPIC_BASE_URL: null,
-        },
-      });
-
-      setBaseUrl('');
-      setBaseUrlInput('');
-    } catch (err) {
-      console.error('Failed to clear base URL:', err);
-      setError(err instanceof Error ? err.message : 'Failed to clear base URL');
-      throw err;
-    } finally {
-      setSaving((prev) => ({ ...prev, ANTHROPIC_BASE_URL: false }));
-    }
+  const handleClearAuthToken = async () => {
+    await saveCredential('ANTHROPIC_AUTH_TOKEN', null);
+    setAuthTokenSet(false);
+    setAuthTokenInput('');
   };
 
   if (loading) {
@@ -259,6 +259,40 @@ export const AgenticToolsTab: React.FC<AgenticToolsTabProps> = ({ client }) => {
             Custom API endpoints
           </Link>
         </Text>
+      </div>
+
+      <div style={{ marginTop: token.marginLG }}>
+        <Text strong style={{ display: 'block', marginBottom: token.marginXS }}>
+          Anthropic Auth Token (Optional)
+        </Text>
+        <Text type="secondary" style={{ display: 'block', marginBottom: token.marginMD }}>
+          Alternative to API key for proxy/enterprise setups. Used for token-based authentication
+          with AWS Bedrock, OAuth proxies, or custom auth flows.
+        </Text>
+
+        {authTokenSet ? (
+          <Button danger onClick={handleClearAuthToken} loading={saving.ANTHROPIC_AUTH_TOKEN}>
+            Clear Token
+          </Button>
+        ) : (
+          <Space.Compact style={{ width: '100%', marginBottom: token.marginXS }}>
+            <Input.Password
+              placeholder="Enter auth token..."
+              value={authTokenInput}
+              onChange={(e) => setAuthTokenInput(e.target.value)}
+              onPressEnter={handleSaveAuthToken}
+              style={{ flex: 1 }}
+            />
+            <Button
+              type="primary"
+              onClick={handleSaveAuthToken}
+              loading={saving.ANTHROPIC_AUTH_TOKEN}
+              disabled={!authTokenInput.trim()}
+            >
+              Save
+            </Button>
+          </Space.Compact>
+        )}
       </div>
     </div>
   );

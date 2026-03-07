@@ -146,10 +146,10 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
 
   return (
     <div style={{ padding: '24px' }}>
-      <Space direction="vertical" size="large" style={{ width: '100%' }}>
+      <Space orientation="vertical" size="large" style={{ width: '100%' }}>
         {/* Enable/Disable Schedule */}
         <Card size="small">
-          <Space direction="vertical" size="small" style={{ width: '100%' }}>
+          <Space orientation="vertical" size="small" style={{ width: '100%' }}>
             <Space>
               <Switch
                 checked={scheduleEnabled}
@@ -172,7 +172,7 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
 
         {/* Cron Expression */}
         <Card size="small" title="Schedule Frequency">
-          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
             <div>
               <Text type="secondary" style={{ fontSize: '12px' }}>
                 Configure when to create new sessions
@@ -220,7 +220,7 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
 
         {/* Agent Selection */}
         <Card size="small" title="Agent Selection">
-          <Space direction="vertical" size="small" style={{ width: '100%' }}>
+          <Space orientation="vertical" size="small" style={{ width: '100%' }}>
             <Text type="secondary" style={{ fontSize: '12px' }}>
               Choose which coding agent will run the scheduled sessions
             </Text>
@@ -256,7 +256,7 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
 
         {/* Prompt Template */}
         <Card size="small" title="Prompt Template">
-          <Space direction="vertical" size="small" style={{ width: '100%' }}>
+          <Space orientation="vertical" size="small" style={{ width: '100%' }}>
             <Text type="secondary" style={{ fontSize: '12px' }}>
               Use Handlebars syntax for dynamic values. Available variables: worktree, board
             </Text>
@@ -276,7 +276,7 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
 
         {/* Retention Policy */}
         <Card size="small" title="Retention Policy">
-          <Space direction="vertical" size="small" style={{ width: '100%' }}>
+          <Space orientation="vertical" size="small" style={{ width: '100%' }}>
             <Text type="secondary" style={{ fontSize: '12px' }}>
               Number of scheduled sessions to keep (0 = keep all)
             </Text>

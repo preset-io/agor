@@ -86,7 +86,7 @@ export function LoginPage({ onLogin, loading = false, error }: LoginPageProps) {
         variant="borderless"
       >
         {/* Header */}
-        <Space direction="vertical" size="large" style={{ width: '100%', marginBottom: 24 }}>
+        <Space orientation="vertical" size="large" style={{ width: '100%', marginBottom: 24 }}>
           <div style={{ textAlign: 'center' }}>
             <img
               src={`${import.meta.env.BASE_URL}favicon.png`}
@@ -117,7 +117,7 @@ export function LoginPage({ onLogin, loading = false, error }: LoginPageProps) {
             type="error"
             message="Login Failed"
             description={
-              <Space direction="vertical" size="small" style={{ width: '100%' }}>
+              <Space orientation="vertical" size="small" style={{ width: '100%' }}>
                 <div>{error}</div>
                 <div
                   style={{
@@ -176,7 +176,7 @@ export function LoginPage({ onLogin, loading = false, error }: LoginPageProps) {
 
         {/* Footer */}
         <div style={{ textAlign: 'center', marginTop: 24 }}>
-          <Space direction="vertical" size={4}>
+          <Space orientation="vertical" size={4}>
             <Text type="secondary" style={{ fontSize: 12 }}>
               New user? <code>agor user create-admin</code>
             </Text>

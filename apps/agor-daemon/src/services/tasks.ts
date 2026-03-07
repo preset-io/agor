@@ -230,29 +230,31 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
             return result;
           }
 
-          // For STOPPED tasks: The stop handler (handle-stop.ts) controls session state.
-          // It sets ready_for_prompt=false to prevent auto-queue-processing after user-initiated stop.
-          // We should NOT override that here to avoid race conditions.
+          // For STOPPED tasks: The stop endpoint directly patches session → IDLE with
+          // ready_for_prompt=false. Skip the session update here to avoid racing with it.
           //
           // For COMPLETED/FAILED tasks: Normal completion - set ready_for_prompt=true
           // to allow auto-queue-processing of any pending messages.
           const isUserInitiatedStop = data.status === TaskStatus.STOPPED;
 
-          // ATOMICALLY update session status to IDLE
-          // Only set ready_for_prompt for non-stop completions to avoid racing with stop handler
-          await this.app.service('sessions').patch(
-            task.session_id,
-            {
-              status: 'idle',
-              // Don't set ready_for_prompt for STOPPED - stop handler controls this
-              ...(isUserInitiatedStop ? {} : { ready_for_prompt: true }),
-            },
-            params
-          );
+          if (isUserInitiatedStop) {
+            console.log(
+              `⏭️ [TasksService] Skipping session IDLE update for STOPPED task ${task.task_id.substring(0, 8)} — stop endpoint handles session state`
+            );
+          } else {
+            await this.app.service('sessions').patch(
+              task.session_id,
+              {
+                status: 'idle',
+                ready_for_prompt: true,
+              },
+              params
+            );
 
-          console.log(
-            `✅ [TasksService] Session ${task.session_id.substring(0, 8)} status updated to IDLE (task ${task.task_id.substring(0, 8)} ${data.status})${isUserInitiatedStop ? ' [stop handler controls ready_for_prompt]' : ''}`
-          );
+            console.log(
+              `✅ [TasksService] Session ${task.session_id.substring(0, 8)} status updated to IDLE (task ${task.task_id.substring(0, 8)} ${data.status})`
+            );
+          }
 
           // Session already fetched above, reuse it for parent callback check
           if (session.genealogy?.parent_session_id) {

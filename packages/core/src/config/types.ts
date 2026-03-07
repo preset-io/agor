@@ -212,6 +212,9 @@ export interface AgorExecutionSettings {
   /** Sync web passwords to Unix user passwords (default: true). When enabled, passwords are synced on user creation/update. */
   sync_unix_passwords?: boolean;
 
+  /** Permission request timeout in ms (default: 600000 = 10 minutes). When a permission request is not resolved within this time, the agent is notified and can continue. */
+  permission_timeout_ms?: number;
+
   /**
    * Executor command template for remote/containerized execution.
    *
@@ -293,6 +296,7 @@ export interface AgorPathSettings {
  */
 export enum CredentialKey {
   ANTHROPIC_API_KEY = 'ANTHROPIC_API_KEY',
+  ANTHROPIC_AUTH_TOKEN = 'ANTHROPIC_AUTH_TOKEN',
   ANTHROPIC_BASE_URL = 'ANTHROPIC_BASE_URL',
   OPENAI_API_KEY = 'OPENAI_API_KEY',
   GEMINI_API_KEY = 'GEMINI_API_KEY',
@@ -304,6 +308,10 @@ export enum CredentialKey {
 export interface AgorCredentials {
   /** Anthropic API key for Claude Code */
   ANTHROPIC_API_KEY?: string;
+
+  /** Anthropic auth token for proxy/enterprise setups (alternative to API key)
+   * Used by Claude Code SDK for token-based authentication (e.g., AWS Bedrock, OAuth proxies) */
+  ANTHROPIC_AUTH_TOKEN?: string;
 
   /** Custom Anthropic API base URL (default: https://api.anthropic.com)
    * Useful for proxies, Claude Enterprise deployments, or third-party compatible APIs */

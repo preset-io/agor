@@ -5,9 +5,11 @@ import type {
 import { SessionStatus, TaskStatus } from '@agor/core/types';
 import {
   CheckCircleOutlined,
+  ClockCircleOutlined,
   CloseCircleOutlined,
   HourglassOutlined,
   PauseCircleOutlined,
+  QuestionCircleOutlined,
   StopOutlined,
 } from '@ant-design/icons';
 import { Tooltip, theme } from 'antd';
@@ -31,6 +33,7 @@ const ACTIVE_STATUSES: TimerStatus[] = [
   TaskStatus.RUNNING,
   TaskStatus.STOPPING,
   TaskStatus.AWAITING_PERMISSION,
+  TaskStatus.AWAITING_INPUT,
 ];
 
 const statusConfig: Record<
@@ -53,6 +56,10 @@ const statusConfig: Record<
     icon: <PauseCircleOutlined />,
     color: PILL_COLORS.warning,
   },
+  [TaskStatus.AWAITING_INPUT]: {
+    icon: <QuestionCircleOutlined />,
+    color: PILL_COLORS.processing,
+  },
   [TaskStatus.COMPLETED]: {
     icon: <CheckCircleOutlined />,
     color: PILL_COLORS.success,
@@ -68,6 +75,10 @@ const statusConfig: Record<
   [SessionStatus.IDLE]: {
     icon: <HourglassOutlined />,
     color: PILL_COLORS.session,
+  },
+  [TaskStatus.TIMED_OUT]: {
+    icon: <ClockCircleOutlined />,
+    color: PILL_COLORS.warning,
   },
   [TaskStatus.CREATED]: {
     icon: <HourglassOutlined />,

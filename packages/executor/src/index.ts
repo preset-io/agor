@@ -15,6 +15,7 @@ import type {
   SessionID,
   TaskID,
 } from '@agor/core/types';
+import { globalInputRequestManager } from './input-requests/input-request-manager.js';
 import { globalPermissionManager } from './permissions/permission-manager.js';
 import { type AgorClient, createFeathersClient } from './services/feathers-client.js';
 
@@ -89,45 +90,13 @@ export class AgorExecutor {
 
   /**
    * Setup event listeners for WebSocket events
+   *
+   * Stop signaling is handled via Unix signals (SIGTERM/SIGKILL) from the daemon,
+   * not WebSocket events. The SIGTERM handler in setupShutdownHandlers() calls
+   * abortController.abort() for graceful shutdown.
    */
   private setupEventListeners(): void {
     if (!this.client) return;
-
-    // Listen for task_stop events
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers types don't support custom events
-    (this.client.service('sessions') as any).on(
-      'task_stop',
-      async (data: {
-        session_id: string;
-        task_id: string;
-        sequence: number;
-        timestamp: string;
-      }) => {
-        console.log('[executor] Received task_stop event:', data);
-
-        // Only stop if this signal is for our task (task IDs are globally unique UUIDs)
-        if (data.task_id === this.config.taskId) {
-          // IMMEDIATELY send acknowledgment (before stopping)
-          try {
-            // biome-ignore lint/suspicious/noExplicitAny: Feathers types don't support custom events
-            (this.client!.service('sessions') as any).emit('task_stop_ack', {
-              session_id: data.session_id,
-              task_id: data.task_id,
-              sequence: data.sequence,
-              received_at: new Date().toISOString(),
-              status: 'stopping',
-            });
-            console.log(`✅ [executor] Sent stop ACK (seq ${data.sequence})`);
-          } catch (error) {
-            console.error('❌ [executor] Failed to send stop ACK:', error);
-          }
-
-          // Now initiate the stop
-          console.log('[executor] Stop signal received, aborting execution');
-          this.abortController.abort();
-        }
-      }
-    );
 
     // Listen for permission_resolved events
     // biome-ignore lint/suspicious/noExplicitAny: Feathers types don't support custom events
@@ -154,6 +123,33 @@ export class AgorExecutor {
             remember: data.remember,
             scope: data.scope as PermissionScope,
             decidedBy: data.decidedBy,
+          });
+        }
+      }
+    );
+
+    // Listen for input_resolved events (AskUserQuestion responses)
+    // biome-ignore lint/suspicious/noExplicitAny: Feathers types don't support custom events
+    (this.client.service('messages') as any).on(
+      'input_resolved',
+      (data: {
+        requestId: string;
+        taskId: string;
+        sessionId: string;
+        answers: Record<string, string>;
+        annotations?: Record<string, { markdown?: string; notes?: string }>;
+        respondedBy: string;
+      }) => {
+        console.log('[executor] Received input_resolved event:', data);
+
+        if (data.taskId === this.config.taskId) {
+          // Forward to global input request manager
+          globalInputRequestManager.resolveInput({
+            requestId: data.requestId,
+            taskId: data.taskId as TaskID,
+            answers: data.answers,
+            annotations: data.annotations,
+            respondedBy: data.respondedBy,
           });
         }
       }

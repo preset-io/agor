@@ -37,7 +37,8 @@ export type MessageType =
   | 'assistant'
   | 'system'
   | 'file-history-snapshot'
-  | 'permission_request';
+  | 'permission_request'
+  | 'input_request';
 
 /**
  * Content block (for multi-modal messages)
@@ -101,6 +102,50 @@ export interface PermissionRequestContent {
 }
 
 /**
+ * Input request status
+ * Used when type === 'input_request' (AskUserQuestion tool)
+ */
+export enum InputRequestStatus {
+  PENDING = 'pending',
+  ANSWERED = 'answered',
+  TIMED_OUT = 'timed_out',
+}
+
+/**
+ * Input request question option
+ */
+export interface InputRequestOption {
+  label: string;
+  description: string;
+  markdown?: string;
+}
+
+/**
+ * Input request question
+ */
+export interface InputRequestQuestion {
+  question: string;
+  header: string;
+  options: InputRequestOption[];
+  multiSelect: boolean;
+}
+
+/**
+ * Input request content
+ * Used when type === 'input_request' (AskUserQuestion tool)
+ */
+export interface InputRequestContent {
+  request_id: string;
+  task_id?: TaskID;
+  questions: InputRequestQuestion[];
+  status: InputRequestStatus;
+  answers?: Record<string, string>;
+  annotations?: Record<string, { markdown?: string; notes?: string }>;
+  answered_by?: string;
+  answered_at?: string;
+}
+
+/**
  * Message
  *
  * Represents a single turn in the conversation.
@@ -131,7 +176,7 @@ export interface Message {
   content_preview: string;
 
   /** Full message content (type depends on message type) */
-  content: string | ContentBlock[] | PermissionRequestContent;
+  content: string | ContentBlock[] | PermissionRequestContent | InputRequestContent;
 
   /** Tool uses in this message (for assistant messages) */
   tool_uses?: ToolUse[];
