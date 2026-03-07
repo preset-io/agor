@@ -1,4 +1,4 @@
-# Configuration Hierarchy for Automated Workflows
+# Zone Trigger Model Configuration
 
 **Status**: Design
 **Date**: 2026-03-07
@@ -7,7 +7,7 @@
 
 ## Purpose
 
-Enable Agor Assistants to create multi-stage workflows where different stages (zones) use different models and configurations, while preserving user control for manual session creation.
+Enable zone-specific model configuration for automated workflows, allowing different workflow stages to use appropriate models.
 
 ### User Story
 
@@ -15,8 +15,8 @@ Enable Agor Assistants to create multi-stage workflows where different stages (z
 
 **Current Problem**:
 - No way to specify zone-specific model configuration for automated workflows
-- Worktrees created by assistants have no default configuration for child sessions
-- All sessions inherit from user defaults, making automated workflows use suboptimal models
+- All zone-triggered sessions inherit from user defaults or most recent session
+- Cannot optimize model selection for different workflow stages
 
 ### Example Workflow
 
@@ -36,70 +36,28 @@ Assistant creates worktree → Heartbeat moves through zones:
 
 ## Solution Overview
 
-Add two complementary configuration layers:
+Add optional `modelConfig` field to zone triggers, enabling programmatic model selection for automated workflows.
 
-1. **Zone Trigger Config**: Model configuration per zone (for automated zone-triggered sessions)
-2. **Worktree Defaults**: Default configuration per worktree (for user-created sessions)
-
-Both features work together to support:
-- **Automated workflows** (assistant-driven, zone-specific)
-- **User sessions** (manual, worktree-scoped defaults)
+**Scope**: Model configuration only. Permission modes, MCP servers, and other session settings are excluded.
 
 ---
 
 ## Configuration Hierarchy
 
-### For Automated Sessions (Zone-Triggered)
-
-When a zone trigger creates a session (e.g., heartbeat, `triggerTemplate=true`):
+When a zone trigger creates a session:
 
 ```
-1. Zone trigger modelConfig      ← Zone-specific (Research = Opus)
-2. Worktree default_agentic_config  ← Worktree-level fallback
-3. User default_agentic_config      ← User-level fallback
-4. SDK default                      ← Final fallback
+1. Zone trigger modelConfig           ← Zone-specific (Research = Opus)
+2. Most recent session in worktree    ← Inherit from last session
+3. User default_agentic_config        ← User-level fallback
+4. SDK default                        ← Final fallback
 ```
 
-### For Manual Sessions (User-Created)
-
-When a user manually creates a session:
-
-```
-1. Worktree default_agentic_config  ← Worktree-level default
-2. Most recent session (model only) ← Inherit from last session
-3. User default_agentic_config      ← User-level fallback
-4. SDK default                      ← Final fallback
-```
-
-### By Configuration Field
-
-Different fields have different inheritance priorities:
-
-**Permission Mode** (security control):
-```
-1. Worktree default (if set)
-2. User default
-3. SDK default
-```
-
-**Model Config** (workflow optimization):
-```
-AUTOMATED: Zone trigger → Worktree → User → SDK
-MANUAL:    Worktree → Recent session → User → SDK
-```
-
-**MCP Servers** (context):
-```
-1. Worktree default (if set)
-2. User default
-3. Empty array
-```
+**Key Decision**: Zone trigger config takes precedence over recent session inheritance, enabling workflow-specific optimization.
 
 ---
 
-## Feature 1: Zone Trigger Model Config
-
-**Purpose**: Enable zone-specific model selection for automated workflows.
+## Implementation Details
 
 ### Schema Changes
 
@@ -116,7 +74,7 @@ export interface ZoneTrigger {
 }
 ```
 
-**Key Decision**: Only model config, NOT permission modes (security boundary).
+**Key Decision**: Reuse existing `DefaultModelConfig` type from `packages/core/src/types/user.ts`.
 
 ### MCP Tool Changes
 
@@ -150,8 +108,8 @@ trigger: {
 ```typescript
 // When zone trigger creates session
 const modelConfig =
-  zoneTriggerConfig?.modelConfig ||              // Zone-specific
-  worktree?.default_agentic_config?.[tool]?.modelConfig ||  // Worktree default
+  zoneTriggerConfig?.modelConfig ||                         // Zone-specific
+  mostRecentSession?.model_config ||                        // Recent session
   user?.default_agentic_config?.[tool]?.modelConfig;        // User default
 ```
 
@@ -161,10 +119,9 @@ const modelConfig =
 // Pre-populate modal with zone config
 const configValues = {
   modelConfig:
-    trigger?.modelConfig ||                      // Zone trigger (NEW)
-    worktree?.default_agentic_config?.[agent]?.modelConfig ||
-    mostRecentSession?.model_config ||
-    agentDefaults?.modelConfig,
+    trigger?.modelConfig ||              // Zone trigger (NEW)
+    mostRecentSession?.model_config ||   // Recent session
+    agentDefaults?.modelConfig,          // User defaults
 };
 ```
 
@@ -214,125 +171,6 @@ agor_boards_update({
 
 ---
 
-## Feature 2: Worktree Default Config
-
-**Purpose**: Enable worktrees (especially assistant-created ones) to set default configurations for child sessions.
-
-### Schema Changes
-
-**File**: `packages/core/src/types/worktree.ts`
-
-```typescript
-export interface Worktree {
-  // ... existing fields ...
-
-  /**
-   * Default agent configuration for sessions created in this worktree
-   *
-   * Applies to user-created sessions (not zone-triggered sessions).
-   * Useful for assistant-created worktrees that need specific configs.
-   */
-  default_agentic_config?: DefaultAgenticConfig;
-}
-```
-
-**Storage**: In `worktree.data` JSON blob (no migration needed).
-
-### MCP Tool Changes
-
-**File**: `apps/agor-daemon/src/mcp/routes.ts`
-
-**Add to `agor_worktrees_create`**:
-
-```typescript
-defaultAgenticConfig: {
-  type: 'object',
-  description: 'Default agent config for sessions in this worktree',
-  properties: {
-    'claude-code': {
-      type: 'object',
-      properties: {
-        permissionMode: { type: 'string' },
-        modelConfig: { type: 'object' },
-        mcpServerIds: { type: 'array', items: { type: 'string' } }
-      }
-    },
-    // ... other agents
-  }
-}
-```
-
-**Add to `agor_worktrees_update`**:
-
-```typescript
-defaultAgenticConfig: {
-  type: ['object', 'null'],
-  description: 'Update default config. Pass null to clear.'
-}
-```
-
-### Implementation
-
-**Session Creation** (`apps/agor-daemon/src/mcp/routes.ts:1456-1466`):
-
-```typescript
-// Current:
-const userToolDefaults = user?.default_agentic_config?.[agenticTool];
-const requestedMode =
-  userToolDefaults?.permissionMode || getDefaultPermissionMode(agenticTool);
-
-// Updated:
-const worktreeToolDefaults = worktree?.default_agentic_config?.[agenticTool];
-const userToolDefaults = user?.default_agentic_config?.[agenticTool];
-const requestedMode =
-  worktreeToolDefaults?.permissionMode ||  // Worktree default (NEW)
-  userToolDefaults?.permissionMode ||      // User default
-  getDefaultPermissionMode(agenticTool);   // SDK default
-
-// Apply to model config and MCP servers too
-const modelConfig =
-  worktreeToolDefaults?.modelConfig ||
-  userToolDefaults?.modelConfig;
-
-const mcpServerIds =
-  worktreeToolDefaults?.mcpServerIds ||
-  userToolDefaults?.mcpServerIds ||
-  [];
-```
-
-### Example Usage
-
-```typescript
-// Assistant creates automation worktree with bypass permissions
-agor_worktrees_create({
-  repoId: 'repo-123',
-  worktreeName: 'automation-pipeline',
-  boardId: 'board-456',
-  defaultAgenticConfig: {
-    'claude-code': {
-      permissionMode: 'bypassPermissions',  // Automated workflow
-      mcpServerIds: ['agor', 'github']      // Required tools
-    }
-  }
-})
-
-// Update existing worktree config
-agor_worktrees_update({
-  worktreeId: 'wt-789',
-  defaultAgenticConfig: {
-    'claude-code': {
-      permissionMode: 'acceptEdits',        // More restrictive
-      modelConfig: {
-        mode: 'alias',
-        model: 'claude-sonnet-4-5-latest'   // Default to Sonnet
-      }
-    }
-  }
-})
-```
-
----
-
 ## UI Design
 
 ### Zone Configuration
@@ -343,36 +181,18 @@ agor_worktrees_update({
 - Template (existing)
 - Behavior (existing)
 - Agent (existing)
-- **Model Config** (new):
-  - Model selection dropdown
-  - Thinking mode toggle
-  - Manual thinking tokens slider
+- **Model Config** (new): Reuse existing `ModelSelector` component from session creation
 
 **Visual Indicator**: Zone cards show model badge when configured (e.g., "Opus", "Sonnet").
 
-### Worktree Configuration
-
-**Location**: Worktree settings panel (click worktree card → Settings tab)
-
-**Section**: "Default Agent Configuration"
-
-**Fields**:
-- Per-agent configuration:
-  - Permission mode dropdown
-  - Model configuration
-  - MCP servers multiselect
-
-**Visual Indicator**: Session cards show badge "Using worktree defaults" when applicable.
-
 ### Session Creation
 
-**Location**: ZoneTriggerModal and NewSessionModal
+**Location**: `ZoneTriggerModal` component
 
-**Behavior**: Pre-populate fields from hierarchy, show source in tooltip:
-- "From zone trigger" (highest priority for automated)
-- "From worktree defaults" (high priority)
-- "From recent session" (medium priority for manual)
-- "From user defaults" (low priority)
+**Changes**:
+- Pre-populate model config from zone trigger (if set)
+- Show source indicator: "Using zone config" or "Using user defaults"
+- Reuse existing `AgenticToolConfigForm` component (no new UI needed)
 
 ---
 
@@ -386,20 +206,6 @@ agor_worktrees_update({
 
 **User Feedback**: Show error in session card: "Model 'opus-99' not available, using default".
 
-### Invalid Permission Modes
-
-**Validation**: At MCP tool layer before persisting.
-
-**Valid Values**: `default`, `acceptEdits`, `autoEdit`, `bypassPermissions`.
-
-**Error**: Return 400 with message: "Invalid permissionMode. Must be one of: ...".
-
-### Missing MCP Servers
-
-**Behavior**: Skip missing servers, log warning.
-
-**User Feedback**: Session note: "MCP server 'xyz' not found, skipped".
-
 ### Malformed Config
 
 **Validation**: JSON schema validation at MCP tool layer.
@@ -408,95 +214,36 @@ agor_worktrees_update({
 
 ---
 
-## Security Model
-
-### Worktree Permission Defaults
-
-**Concern**: Worktree owners can set `bypassPermissions`, affecting all user sessions.
-
-**Mitigations**:
-
-1. **Worktree RBAC**: Only worktree owners can set `default_agentic_config` (enforce via ownership check).
-
-2. **User Override**: Users can always override when manually creating sessions (modal shows inherited config, allows editing).
-
-3. **UI Transparency**: Session cards show "Using worktree defaults" badge with tooltip explaining source.
-
-4. **Audit Trail**: Log config inheritance decisions in session metadata.
-
-5. **Intentional Design**: Worktree defaults are for **assistant-created automation**, not user coercion.
-
-### Zone Trigger Configs
-
-**Scope**: Model config only, NOT permission modes (enforced at schema level).
-
-**Rationale**: Zones represent workflow stages (context-appropriate), not security boundaries.
-
----
-
 ## Implementation Checklist
 
 ### Types & Schema
 - [ ] Add `modelConfig` to `ZoneTrigger` (reuse `DefaultModelConfig`)
-- [ ] Add `default_agentic_config` to `Worktree` type
 - [ ] Export types from `@agor/core/types`
 
 ### Backend
 - [ ] Update `agor_boards_update` MCP tool schema
-- [ ] Update `agor_worktrees_create` MCP tool schema
-- [ ] Update `agor_worktrees_update` MCP tool schema
-- [ ] Implement hierarchy in session creation logic
-- [ ] Add ownership check for worktree config updates
+- [ ] Implement hierarchy in session creation logic (zone trigger → recent session → user defaults)
 - [ ] Add JSON schema validation for MCP tool params
 
 ### UI
-- [ ] Update `ZoneTriggerModal` to show/edit zone model config
+- [ ] Update `ZoneTriggerModal` to pre-populate from zone config (reuse existing `ModelSelector`)
 - [ ] Add zone model badge to zone cards
-- [ ] Add worktree settings panel for `default_agentic_config`
-- [ ] Add "Using worktree defaults" badge to session cards
-- [ ] Update `NewSessionModal` to show config source in tooltips
+- [ ] Show config source indicator ("Using zone config" vs "Using user defaults")
 
 ### Testing
 - [ ] Zone trigger with model config → session uses zone model
-- [ ] Worktree default → user session inherits worktree config
-- [ ] Zone trigger overrides worktree default (correct hierarchy)
+- [ ] Zone trigger without config → falls back to recent session/user defaults
 - [ ] User override in modal works (user control preserved)
 - [ ] Invalid model name → fallback to next in hierarchy
-- [ ] Non-owner cannot set worktree defaults (ownership check)
 - [ ] All agents (claude-code, codex, gemini, opencode)
 
 ### Documentation
 - [ ] Update `context/concepts/board-objects.md` with zone model config
-- [ ] Update `context/concepts/worktrees.md` with default config
-- [ ] Add user guide: "Setting up automated workflows"
 - [ ] Add MCP tool examples in API docs
 
 ---
 
-## Rollout Plan
-
-### Phase 1: Zone Model Config (Lower Risk)
-
-**Why First**: Simpler, no security implications, clear use case.
-
-**Steps**:
-1. Ship types and backend changes
-2. Ship UI for zone configuration
-3. Test with real Assistant workflows
-4. Gather feedback
-
-### Phase 2: Worktree Defaults (Higher Risk)
-
-**Why Second**: Includes permission modes (security boundary), needs validation.
-
-**Steps**:
-1. Ship with strict ownership checks
-2. Add UI transparency features (badges, tooltips)
-3. Beta test with assistant developers
-4. Monitor for confusion or misuse
-5. Add user opt-out if needed
-
-### Success Metrics
+## Success Metrics
 
 1. **Adoption**: % of assistant worktrees using zone configs (target: >50%)
 2. **Correctness**: Sessions use expected models based on zone (target: >95%)
@@ -510,7 +257,6 @@ agor_worktrees_update({
 1. **Should zone triggers apply to session reuse?** → No, only new sessions.
 2. **Should fork/spawn inherit zone config?** → No, inherit from parent session.
 3. **Should we validate model names at config time?** → No, validate at runtime (models change).
-4. **Should users have global opt-out?** → Not for MVP, add if needed.
 
 ---
 
@@ -518,20 +264,14 @@ agor_worktrees_update({
 
 **Types**:
 - `packages/core/src/types/board.ts` - ZoneTrigger interface
-- `packages/core/src/types/worktree.ts` - Worktree interface
-- `packages/core/src/types/user.ts` - DefaultAgenticConfig type
+- `packages/core/src/types/user.ts` - DefaultModelConfig type
 
 **Backend**:
 - `apps/agor-daemon/src/mcp/routes.ts` - MCP tools and session creation
-- `apps/agor-daemon/src/services/sessions.ts` - Session service (fork/spawn)
-- `packages/core/src/db/repositories/worktrees.ts` - Worktree repository
 
 **UI**:
-- `apps/agor-ui/src/components/SessionCanvas/canvas/ZoneTriggerModal.tsx`
-- `apps/agor-ui/src/components/NewSessionModal/NewSessionModal.tsx`
-- `apps/agor-ui/src/components/WorktreeCard.tsx`
+- `apps/agor-ui/src/components/SessionCanvas/canvas/ZoneTriggerModal.tsx` - Session creation from zones
+- `apps/agor-ui/src/components/ModelSelector.tsx` - Reusable model config component
 
 **Context Docs**:
-- `context/concepts/board-objects.md`
-- `context/concepts/worktrees.md`
-- `context/concepts/permissions.md`
+- `context/concepts/board-objects.md` - Zone trigger documentation
