@@ -409,6 +409,9 @@ export const worktrees = pgTable(
     app_url: text('app_url'), // Application URL (initialized from repo's app_url_template)
     logs_command: text('logs_command'), // Logs command (initialized from repo's logs_command template)
 
+    // Trust gate: commands from .agor.yml start untrusted until user reviews them
+    environment_commands_reviewed: t.bool('environment_commands_reviewed').notNull().default(false),
+
     // Board relationship (nullable - worktrees can exist without boards)
     board_id: varchar('board_id', { length: 36 }).references(() => boards.board_id, {
       onDelete: 'set null', // If board is deleted, worktree remains but loses board association

@@ -54,6 +54,9 @@ export interface Worktree {
   /** Logs command - initialized from repo template, then user-editable (e.g., "docker logs agor-daemon") */
   logs_command?: string;
 
+  /** Whether environment commands have been reviewed by the user (commands from .agor.yml start untrusted) */
+  environment_commands_reviewed: boolean;
+
   /** Timestamps */
   created_at: string;
   updated_at: string;

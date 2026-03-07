@@ -506,6 +506,8 @@ export async function handleGitWorktreeAdd(
         filesystem_status: 'ready',
         ...(unixGroup ? { unix_group: unixGroup } : {}),
         ...(renderedTemplates || {}),
+        // Commands from .agor.yml start untrusted until user reviews them
+        ...(renderedTemplates ? { environment_commands_reviewed: false } : {}),
       });
       console.log(`[git.worktree.add] Worktree marked as ready`);
     }

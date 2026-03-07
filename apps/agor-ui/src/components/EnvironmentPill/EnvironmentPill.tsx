@@ -3,6 +3,7 @@ import {
   CheckCircleOutlined,
   CloseCircleOutlined,
   EditOutlined,
+  ExclamationCircleOutlined,
   FileTextOutlined,
   FireOutlined,
   GlobalOutlined,
@@ -57,6 +58,28 @@ export function EnvironmentPill({
           <Space size={4}>
             <GlobalOutlined style={{ fontSize: 12 }} />
             <span style={{ fontFamily: token.fontFamilyCode }}>env</span>
+            <EditOutlined style={{ fontSize: 12 }} />
+          </Space>
+        </Tag>
+      </Tooltip>
+    );
+  }
+
+  // Case 1b: Config exists but commands haven't been reviewed - show warning pill
+  if (!worktree.environment_commands_reviewed) {
+    return (
+      <Tooltip title="Environment commands need review before starting">
+        <Tag
+          color="orange"
+          style={{ cursor: 'pointer', userSelect: 'none' }}
+          onClick={(e) => {
+            e.stopPropagation();
+            onEdit?.();
+          }}
+        >
+          <Space size={4}>
+            <ExclamationCircleOutlined style={{ fontSize: 12 }} />
+            <span style={{ fontFamily: token.fontFamilyCode }}>review env</span>
             <EditOutlined style={{ fontSize: 12 }} />
           </Space>
         </Tag>

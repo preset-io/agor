@@ -16,6 +16,7 @@ import {
   CopyOutlined,
   DownloadOutlined,
   EditOutlined,
+  ExclamationCircleOutlined,
   FileTextOutlined,
   FireOutlined,
   LoadingOutlined,
@@ -150,6 +151,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   );
   const [processInfo, setProcessInfo] = useState(worktree.environment_instance?.process);
   const [logsModalOpen, setLogsModalOpen] = useState(false);
+  const [isTrusting, setIsTrusting] = useState(false);
 
   // Track previous worktree reference to detect actual prop changes (not just editing flag changes)
   const prevWorktreeRef = useRef(worktree);
@@ -270,6 +272,20 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
         }
       },
     });
+  };
+
+  const handleTrustEnvironment = async () => {
+    if (!client) return;
+    setIsTrusting(true);
+    try {
+      await client.service(`worktrees/${worktree.worktree_id}/trust-environment`).create({});
+      showSuccess('Environment commands reviewed and enabled');
+      onUpdateWorktree?.(worktree.worktree_id, { environment_commands_reviewed: true });
+    } catch (error) {
+      showError(error instanceof Error ? error.message : 'Failed to enable environment');
+    } finally {
+      setIsTrusting(false);
+    }
   };
 
   // Regenerate static environment config from repo templates
@@ -597,6 +613,32 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
         {hasEnvironmentConfig && (
           <Card size="small">
             <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+              {/* Review banner - shown when commands from .agor.yml haven't been reviewed */}
+              {!worktree.environment_commands_reviewed && (
+                <Alert
+                  type="warning"
+                  showIcon
+                  icon={<ExclamationCircleOutlined />}
+                  message="Environment commands need review"
+                  description={
+                    <Space direction="vertical" size="small" style={{ width: '100%' }}>
+                      <span>
+                        These commands were loaded from the repository&apos;s <code>.agor.yml</code>{' '}
+                        file. Review them below before enabling environment controls.
+                      </span>
+                      <Button
+                        type="primary"
+                        size="small"
+                        onClick={handleTrustEnvironment}
+                        loading={isTrusting}
+                      >
+                        I&apos;ve reviewed these commands — enable environment
+                      </Button>
+                    </Space>
+                  }
+                />
+              )}
+
               {/* Status and Control Buttons - Single Row */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                 {/* Spinner (only when running) */}

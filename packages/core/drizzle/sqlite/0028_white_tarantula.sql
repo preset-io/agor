@@ -1,0 +1,1 @@
+ALTER TABLE `worktrees` ADD `environment_commands_reviewed` integer DEFAULT false NOT NULL;

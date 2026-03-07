@@ -5550,6 +5550,27 @@ async function main() {
     requireAuth
   );
 
+  // POST /worktrees/:id/trust-environment - Mark environment commands as reviewed
+  registerAuthenticatedRoute(
+    app,
+    '/worktrees/:id/trust-environment',
+    {
+      async create(_data: unknown, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Worktree ID required');
+        return worktreesService.patch(
+          id as import('@agor/core/types').WorktreeID,
+          { environment_commands_reviewed: true } as Partial<import('@agor/core/types').Worktree>,
+          params
+        );
+      },
+    },
+    {
+      create: { role: 'admin', action: 'trust worktree environment commands' },
+    },
+    requireAuth
+  );
+
   // GET /worktrees/:id/health - Check environment health
   registerAuthenticatedRoute(
     app,

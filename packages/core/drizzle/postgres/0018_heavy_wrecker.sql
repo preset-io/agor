@@ -1,0 +1,1 @@
+ALTER TABLE "worktrees" ADD COLUMN "environment_commands_reviewed" boolean DEFAULT false NOT NULL;

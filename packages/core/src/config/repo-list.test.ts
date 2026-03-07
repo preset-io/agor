@@ -70,6 +70,7 @@ describe('getRepoReferenceOptions', () => {
         schedule_enabled: false,
         archived: false,
         needs_attention: false,
+        environment_commands_reviewed: false,
       },
     ];
 
@@ -128,6 +129,7 @@ describe('getRepoReferenceOptions', () => {
         schedule_enabled: false,
         archived: false,
         needs_attention: false,
+        environment_commands_reviewed: false,
       },
       {
         worktree_id: 'wt_01933e4c5678a8f39d2e1c4b5a6f7c35' as UUID,
@@ -146,6 +148,7 @@ describe('getRepoReferenceOptions', () => {
         schedule_enabled: false,
         archived: false,
         needs_attention: false,
+        environment_commands_reviewed: false,
       },
       {
         worktree_id: 'wt_01934c2e9012a8f39d2e1c4b5a6f7c35' as UUID,
@@ -164,6 +167,7 @@ describe('getRepoReferenceOptions', () => {
         schedule_enabled: false,
         archived: false,
         needs_attention: false,
+        environment_commands_reviewed: false,
       },
     ];
 
@@ -219,6 +223,7 @@ describe('getRepoReferenceOptions', () => {
         schedule_enabled: false,
         archived: false,
         needs_attention: false,
+        environment_commands_reviewed: false,
       },
       {
         worktree_id: 'wt_orphaned1234a8f39d2e1c4b5a6f7c35' as UUID,
@@ -237,6 +242,7 @@ describe('getRepoReferenceOptions', () => {
         schedule_enabled: false,
         archived: false,
         needs_attention: false,
+        environment_commands_reviewed: false,
       },
     ];
 
@@ -311,6 +317,7 @@ describe('getRepoReferenceOptions', () => {
         schedule_enabled: false,
         archived: false,
         needs_attention: false,
+        environment_commands_reviewed: false,
       },
     ];
 
@@ -352,6 +359,7 @@ describe('getRepoReferenceOptions', () => {
         schedule_enabled: false,
         archived: false,
         needs_attention: false,
+        environment_commands_reviewed: false,
       },
     ];
 
@@ -460,6 +468,7 @@ describe('getGroupedRepoReferenceOptions', () => {
         schedule_enabled: false,
         archived: false,
         needs_attention: false,
+        environment_commands_reviewed: false,
       },
       {
         worktree_id: 'wt_01933e4c5678a8f39d2e1c4b5a6f7c35' as UUID,
@@ -478,6 +487,7 @@ describe('getGroupedRepoReferenceOptions', () => {
         schedule_enabled: false,
         archived: false,
         needs_attention: false,
+        environment_commands_reviewed: false,
       },
     ];
 
@@ -533,6 +543,7 @@ describe('getGroupedRepoReferenceOptions', () => {
         schedule_enabled: false,
         archived: false,
         needs_attention: false,
+        environment_commands_reviewed: false,
       },
       {
         worktree_id: 'wt_superset_main' as UUID,
@@ -551,6 +562,7 @@ describe('getGroupedRepoReferenceOptions', () => {
         schedule_enabled: false,
         archived: false,
         needs_attention: false,
+        environment_commands_reviewed: false,
       },
     ];
 
@@ -594,6 +606,7 @@ describe('getGroupedRepoReferenceOptions', () => {
         schedule_enabled: false,
         archived: false,
         needs_attention: false,
+        environment_commands_reviewed: false,
       },
       {
         worktree_id: 'wt_orphan' as UUID,
@@ -612,6 +625,7 @@ describe('getGroupedRepoReferenceOptions', () => {
         schedule_enabled: false,
         archived: false,
         needs_attention: false,
+        environment_commands_reviewed: false,
       },
     ];
 
@@ -686,6 +700,7 @@ describe('getGroupedRepoReferenceOptions', () => {
         schedule_enabled: false,
         archived: false,
         needs_attention: false,
+        environment_commands_reviewed: false,
       },
     ];
 
@@ -727,6 +742,7 @@ describe('getGroupedRepoReferenceOptions', () => {
         schedule_enabled: false,
         archived: false,
         needs_attention: false,
+        environment_commands_reviewed: false,
       },
     ];
 

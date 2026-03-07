@@ -171,6 +171,21 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       data.schedule_next_run_at = undefined;
     }
 
+    // Auto-trust when user manually edits environment commands (they're explicitly writing them)
+    const envCommandFields = [
+      'start_command',
+      'stop_command',
+      'nuke_command',
+      'health_check_url',
+      'logs_command',
+    ] as const;
+    if (
+      data.environment_commands_reviewed === undefined &&
+      envCommandFields.some((f) => (data as Record<string, unknown>)[f] !== undefined)
+    ) {
+      data.environment_commands_reviewed = true;
+    }
+
     // Call parent patch
     const updatedWorktree = (await super.patch(id, data, params)) as Worktree;
 
@@ -698,6 +713,13 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       throw new Error('No start command configured for this worktree');
     }
 
+    // Block execution if commands haven't been reviewed
+    if (!worktree.environment_commands_reviewed) {
+      throw new Error(
+        'Environment commands must be reviewed before starting. Open the worktree settings to review.'
+      );
+    }
+
     // Check if already running
     if (worktree.environment_instance?.status === 'running') {
       throw new Error('Environment is already running');
@@ -922,6 +944,13 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     // Require nuke_command to be configured
     if (!worktree.nuke_command) {
       throw new Error('No nuke_command configured for this worktree');
+    }
+
+    // Block execution if commands haven't been reviewed
+    if (!worktree.environment_commands_reviewed) {
+      throw new Error(
+        'Environment commands must be reviewed before running nuke. Open the worktree settings to review.'
+      );
     }
 
     // Set status to 'stopping' (reuse stopping state for nuke)
