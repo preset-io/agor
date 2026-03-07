@@ -105,3 +105,35 @@ export function normalizeOptionalHttpUrl(value: unknown, fieldName = 'value'): s
     throw new Error(`${fieldName} must be a valid http(s) URL`);
   }
 }
+
+/**
+ * Validates that a health check URL targets an allowed destination.
+ *
+ * Blocks:
+ * - Non-HTTP(S) protocols (file://, gopher://, etc.) — via normalizeOptionalHttpUrl
+ * - Cloud metadata endpoints (169.254.x.x link-local range, metadata.google.internal)
+ * - IPv6 link-local addresses (fe80::) and AWS IPv6 metadata (fd00:ec2::254)
+ *
+ * Allows localhost/127.0.0.1 since health checks legitimately target local services.
+ */
+export function isAllowedHealthCheckUrl(urlString: string): boolean {
+  // Reuse existing protocol validation (http/https only, rejects non-string/empty/non-http)
+  let normalized: string | undefined;
+  try {
+    normalized = normalizeOptionalHttpUrl(urlString, 'health_check_url');
+  } catch {
+    return false;
+  }
+  if (!normalized) return false;
+
+  const url = new URL(normalized);
+  const hostname = url.hostname;
+
+  // Block cloud metadata endpoints
+  if (hostname.startsWith('169.254.')) return false; // AWS/Azure link-local metadata
+  if (hostname.startsWith('[fe80:')) return false; // IPv6 link-local
+  if (hostname === 'metadata.google.internal') return false; // GCP metadata
+  if (hostname === '[fd00:ec2::254]') return false; // AWS IPv6 metadata
+
+  return true;
+}

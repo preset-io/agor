@@ -9,7 +9,7 @@ import type { ChildProcess } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { ENVIRONMENT, isAllowedHealthCheckUrl, PAGINATION } from '@agor/core/config';
+import { ENVIRONMENT, PAGINATION } from '@agor/core/config';
 import { type Database, WorktreeRepository, type WorktreeWithZoneAndSessions } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type {
@@ -24,6 +24,7 @@ import type {
 } from '@agor/core/types';
 import { spawnEnvironmentCommand } from '@agor/core/unix';
 import { getNextRunTime, validateCron } from '@agor/core/utils/cron';
+import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
 import { DrizzleService } from '../adapters/drizzle';
 import { resolveGitImpersonationForWorktree } from '../utils/git-impersonation.js';
 import { getDaemonUrl, spawnExecutor } from '../utils/spawn-executor.js';

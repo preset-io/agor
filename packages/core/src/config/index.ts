@@ -15,4 +15,3 @@ export * from './key-resolver';
 export * from './repo-list';
 export * from './repo-reference';
 export * from './types';
-export * from './url-validation';
