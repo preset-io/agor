@@ -2,7 +2,7 @@
 
 **Author:** Octo, Claude Code (revision)
 **Date:** 2026-03-07
-**Status:** Ready for Implementation
+**Status:** Needs Revision - Critical Issues Identified
 
 ---
 
@@ -30,6 +30,34 @@ Add MCP endpoints to read session messages with worktree-scoped permissions.
 3. **Managed worktrees** (assistant reads sessions in worktrees it created)
 
 This enables Agor Assistants (running in `preset-io/agor-assistant`) to read sessions in `feature-x` worktrees they manage.
+
+### Integration with Existing RBAC
+
+**IMPORTANT:** This permission model operates **independently** of the existing worktree RBAC system (`worktree_rbac` feature flag, `others_can`, `worktree_owners`).
+
+**Rationale:**
+- This is agent-to-agent coordination, not user access control
+- Sessions in assistant worktree need to read managed worktree outputs regardless of user permissions
+- Worktree RBAC controls user actions (viewing boards, prompting sessions)
+- Message reading controls agent data access (reading session results)
+
+**Design Decision:** Worktree-scoped message permissions **do not** check:
+- `others_can` permission levels
+- `worktree_owners` table
+- User-level RBAC settings
+
+**Example:**
+```typescript
+// Worktree A (assistant) creates Worktree B (investigation)
+// Worktree B has: others_can: 'none', worktree_owners: [Alice]
+// Bob's session in Worktree A tries to read Worktree B messages
+
+// RBAC check: DENY (Bob not owner, others_can: 'none')
+// Message access check: ALLOW (Worktree A created Worktree B)
+// Result: Message reading succeeds (independent permission layer)
+```
+
+**Future Consideration:** If user-level message access control is needed, add separate permission checking layer that respects both models.
 
 ---
 
@@ -89,6 +117,14 @@ List messages in a session's conversation thread.
 // 2. Same worktree
 // 3. Requesting session's worktree created target session's worktree
 ```
+
+**Queued Messages:**
+Queued messages (`status: 'queued'`) are **excluded** by default:
+- Not included in results (only processed messages returned)
+- Not counted toward `total` or pagination
+- Rationale: Queued messages haven't been processed yet, agents want completed conversation
+
+To include queued messages, add future parameter `includeQueued: true` (deferred to Phase 5).
 
 **Use Cases:**
 - Agor Assistant reads worker session output
@@ -174,6 +210,20 @@ async countBySessionId(sessionId: SessionID): Promise<number> {
 ### Phase 2: Add Worktree Tracking Schema
 
 **Schema Migration:**
+
+**SQLite:**
+```sql
+-- Track which worktree created which worktree
+ALTER TABLE worktrees ADD COLUMN created_by_worktree_id TEXT;
+
+-- Note: SQLite doesn't support ADD CONSTRAINT in ALTER TABLE
+-- Foreign key will be validated at application layer
+-- Null values allowed (backward compatible)
+
+CREATE INDEX idx_worktrees_created_by ON worktrees(created_by_worktree_id);
+```
+
+**PostgreSQL:**
 ```sql
 -- Track which worktree created which worktree
 ALTER TABLE worktrees
@@ -181,6 +231,17 @@ ADD COLUMN created_by_worktree_id TEXT REFERENCES worktrees(worktree_id);
 
 CREATE INDEX idx_worktrees_created_by ON worktrees(created_by_worktree_id);
 ```
+
+**Rollback (both databases):**
+```sql
+DROP INDEX IF EXISTS idx_worktrees_created_by;
+ALTER TABLE worktrees DROP COLUMN created_by_worktree_id;
+```
+
+**Migration Notes:**
+- Existing worktrees will have `NULL` for `created_by_worktree_id`
+- NULL values are backward compatible (no worktrees fail to load)
+- New worktrees created after migration will populate this field
 
 **Update MCP Handlers:**
 ```typescript
@@ -194,20 +255,38 @@ const worktreeData = {
 **Permission Helper:**
 ```typescript
 async function canReadMessages(requestingSession, targetSession) {
-  // 1. Same session
+  // 1. Same session (self-introspection)
   if (requestingSession.session_id === targetSession.session_id) return true;
 
-  // 2. Same worktree
+  // 2. Same worktree (heartbeats debug themselves)
   if (requestingSession.worktree_id === targetSession.worktree_id) return true;
 
-  // 3. Requesting worktree created target worktree
+  // 3. Requesting worktree created target worktree (assistants read managed worktrees)
   const targetWorktree = await worktrees.get(targetSession.worktree_id);
-  if (targetWorktree.created_by_worktree_id === requestingSession.worktree_id) {
+
+  // NULL check: If created_by_worktree_id is NULL, this check fails
+  // Rationale: NULL means "created before tracking" → deny by default
+  if (targetWorktree.created_by_worktree_id &&
+      targetWorktree.created_by_worktree_id === requestingSession.worktree_id) {
     return true;
   }
 
   return false;
 }
+```
+
+**Implementation Note:** Getting requesting session's worktree:
+```typescript
+// In MCP handler, context only provides sessionId and userId
+const context = await validateSessionToken(app, sessionToken);
+// context = { sessionId: string, userId: string }
+
+// Must query sessions service to get worktree_id
+const requestingSession = await app.service('sessions').get(context.sessionId);
+// requestingSession.worktree_id available
+
+// Performance: Adds 1 extra DB query (indexed, fast)
+// Alternative: Expand token context to include worktree_id (requires token format change)
 ```
 
 **Effort:** 1 day
@@ -264,6 +343,7 @@ if (name === 'agor_messages_list') {
   // Build query
   const query: Record<string, unknown> = {
     session_id: targetSessionId,
+    status: { $ne: 'queued' },  // Exclude queued messages
     $limit: Math.min(args.limit ?? 50, 1000),
     $skip: args.offset ?? 0,
   };
@@ -354,6 +434,23 @@ Similar to Phase 3 but queries last assistant message only.
 - `limit`: Must be 1-1000
 - `offset`: Must be non-negative
 - `toolCallDetail`: Must be 'none', 'summary', or 'full'
+
+**Edge Cases:**
+
+1. **Target session's worktree deleted:**
+   - Return 403: "Permission denied: target worktree no longer exists"
+
+2. **Requesting session's worktree deleted:**
+   - Return 500: "Internal error: session worktree invalid" (data corruption)
+
+3. **NULL `created_by_worktree_id`:**
+   - Permission check fails (NULL !== any ID)
+   - Result: 403 Permission denied (expected for old worktrees)
+
+4. **Circular worktree creation (prevention):**
+   - Validate in `agor_worktrees_create` handler
+   - If worktree exists and has `created_by_worktree_id`, reject update
+   - Prevents: A creates B, later B "creates" A
 
 ---
 
