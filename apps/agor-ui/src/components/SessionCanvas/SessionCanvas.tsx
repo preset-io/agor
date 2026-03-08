@@ -559,7 +559,8 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           width: 500,
           height: 200, // Approximate height, will be measured by React Flow
           // Set parentId for visual nesting but allow dragging outside zone
-          parentId: zoneId,
+          // Only set if zone actually exists — stale zone_id references cause React Flow errors
+          parentId: zoneObj ? zoneId : undefined,
           extent: undefined, // No movement restriction - can drag anywhere
           data: {
             worktree,

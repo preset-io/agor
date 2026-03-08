@@ -190,6 +190,13 @@ export class BoardObjectsService {
   }
 
   /**
+   * Clear zone_id on all board objects referencing a deleted zone.
+   */
+  async clearZoneReferences(boardId: BoardID, zoneId: string): Promise<number> {
+    return this.boardObjectRepo.clearZoneReferences(boardId, zoneId);
+  }
+
+  /**
    * Custom method: Find by worktree ID
    */
   async findByWorktreeId(

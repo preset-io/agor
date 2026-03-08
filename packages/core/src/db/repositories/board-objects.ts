@@ -268,6 +268,43 @@ export class BoardObjectRepository {
   }
 
   /**
+   * Clear zone_id on all board objects referencing a deleted zone.
+   * Called when a zone is deleted to prevent stale parent references.
+   */
+  async clearZoneReferences(boardId: BoardID, zoneId: string): Promise<number> {
+    try {
+      const rows = await select(this.db)
+        .from(boardObjects)
+        .where(eq(boardObjects.board_id, boardId))
+        .all();
+
+      let cleared = 0;
+      for (const row of rows) {
+        const data = typeof row.data === 'string' ? JSON.parse(row.data) : row.data;
+        if (data.zone_id === zoneId) {
+          await update(this.db, boardObjects)
+            .set({
+              data: {
+                position: data.position,
+                zone_id: undefined,
+              },
+            })
+            .where(eq(boardObjects.object_id, row.object_id))
+            .run();
+          cleared++;
+        }
+      }
+
+      return cleared;
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to clear zone references: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
    * Remove all board objects for a worktree
    */
   async removeByWorktreeId(worktreeId: WorktreeID): Promise<void> {

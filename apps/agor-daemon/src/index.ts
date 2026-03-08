@@ -3667,6 +3667,15 @@ async function main() {
 
           if (_action === 'deleteZone' && objectId) {
             if (!context.id) throw new Error('Board ID required');
+            // Clear zone_id on board objects before deleting the zone
+            // This prevents stale parentId references in React Flow
+            const boardObjectsService = app.service(
+              'board-objects'
+            ) as unknown as import('./services/board-objects').BoardObjectsService;
+            await boardObjectsService.clearZoneReferences(
+              context.id as import('@agor/core/types').BoardID,
+              objectId as string
+            );
             const result = await boardsService.deleteZone(
               context.id as string,
               objectId as string,
