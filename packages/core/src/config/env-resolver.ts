@@ -6,30 +6,100 @@ import { users } from '../db/schema';
 import type { UserID } from '../types';
 
 /**
- * Environment variables used internally by Agor daemon that should NOT be passed
- * to user processes (worktree environments, terminals, etc.)
+ * SECURITY: Allowlisted environment variable names that are safe to pass
+ * to user/agent processes. Any variable NOT in this list (or matching a
+ * prefix below) will be stripped.
  *
- * These variables control Agor daemon behavior and would interfere with
- * user applications if inherited (e.g., NODE_ENV='production' breaks dev servers).
+ * This is an allowlist (not a blocklist) so that new sensitive variables
+ * added to the daemon environment don't accidentally leak to sessions.
+ */
+export const ALLOWED_ENV_VARS = new Set([
+  // Shell essentials
+  'PATH',
+  'HOME',
+  'USER',
+  'LOGNAME',
+  'SHELL',
+  'HOSTNAME',
+
+  // Temp directories
+  'TMPDIR',
+  'TMP',
+  'TEMP',
+
+  // Locale
+  'LANG',
+  'LANGUAGE',
+
+  // Terminal
+  'TERM',
+  'COLORTERM',
+  'TERM_PROGRAM',
+  'TERM_PROGRAM_VERSION',
+
+  // Editor
+  'EDITOR',
+  'VISUAL',
+
+  // Display (for GUI tools)
+  'DISPLAY',
+  'WAYLAND_DISPLAY',
+
+  // SSH (for git operations)
+  'SSH_AUTH_SOCK',
+  'SSH_AGENT_PID',
+
+  // GPG (for git signing)
+  'GPG_AGENT_INFO',
+  'GPG_TTY',
+
+  // Node.js (safe subset — NOT NODE_OPTIONS which could inject code)
+  'NODE_PATH',
+  'NODE_EXTRA_CA_CERTS',
+
+  // Git identity
+  'GIT_AUTHOR_NAME',
+  'GIT_AUTHOR_EMAIL',
+  'GIT_COMMITTER_NAME',
+  'GIT_COMMITTER_EMAIL',
+  'GIT_SSH_COMMAND',
+
+  // Anthropic / AI SDK
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_BASE_URL',
+  'ANTHROPIC_AUTH_TOKEN',
+  'OPENAI_API_KEY',
+  'GEMINI_API_KEY',
+  'GOOGLE_API_KEY',
+
+  // Agor session context (safe for executor/sessions)
+  'DAEMON_URL',
+]);
+
+/**
+ * Environment variable prefixes that are safe to pass through.
+ * Any variable starting with one of these prefixes is allowed.
+ */
+export const ALLOWED_ENV_PREFIXES = [
+  'LC_', // Locale settings (LC_ALL, LC_CTYPE, etc.)
+  'XDG_', // Freedesktop directories (XDG_DATA_HOME, XDG_CONFIG_HOME, etc.)
+];
+
+/**
+ * @deprecated Use ALLOWED_ENV_VARS instead. Kept for backward compatibility
+ * with any code that references this set. Will be removed in a future version.
  */
 export const AGOR_INTERNAL_ENV_VARS = new Set([
-  // Node.js environment control
-  'NODE_ENV', // Agor daemon runs in production, but user apps should control this
-
-  // Agor-specific variables
-  'AGOR_USE_EXECUTOR', // Controls executor process spawning
-  'AGOR_MASTER_SECRET', // Encryption key (also in blocklist, defense in depth)
-
-  // Agor daemon ports
-  'PORT', // Daemon port (user apps should use their own ports)
-  'UI_PORT', // UI port (internal to Agor)
-  'VITE_DAEMON_URL', // UI-to-daemon connection
-  'VITE_DAEMON_PORT', // UI-to-daemon port
-
-  // Deployment detection (used for security checks)
-  'CODESPACES', // GitHub Codespaces detection
-  'RAILWAY_ENVIRONMENT', // Railway deployment detection
-  'RENDER', // Render deployment detection
+  'NODE_ENV',
+  'AGOR_USE_EXECUTOR',
+  'AGOR_MASTER_SECRET',
+  'PORT',
+  'UI_PORT',
+  'VITE_DAEMON_URL',
+  'VITE_DAEMON_PORT',
+  'CODESPACES',
+  'RAILWAY_ENVIRONMENT',
+  'RENDER',
 ]);
 
 /**
@@ -91,10 +161,11 @@ export async function resolveUserEnvironment(
 }
 
 /**
- * Synchronous version - returns system env only
+ * Synchronous version - returns allowlisted system env only.
+ * SECURITY: Does not return full process.env.
  */
 export function resolveSystemEnvironment(): Record<string, string> {
-  return { ...process.env } as Record<string, string>;
+  return buildAllowlistedEnv();
 }
 
 /**
@@ -104,15 +175,43 @@ export function resolveSystemEnvironment(): Record<string, string> {
 export const AGOR_USER_ENV_KEYS_VAR = 'AGOR_USER_ENV_KEYS';
 
 /**
+ * Check if an environment variable name is allowed to be passed to child processes.
+ */
+function isAllowedEnvVar(key: string): boolean {
+  if (ALLOWED_ENV_VARS.has(key)) return true;
+  for (const prefix of ALLOWED_ENV_PREFIXES) {
+    if (key.startsWith(prefix)) return true;
+  }
+  return false;
+}
+
+/**
+ * Build a minimal environment from process.env using the allowlist.
+ * Only copies variables that are explicitly allowed.
+ */
+function buildAllowlistedEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined && isAllowedEnvVar(key)) {
+      env[key] = value;
+    }
+  }
+  return env;
+}
+
+/**
  * Create a clean environment for user processes (worktrees, terminals, etc.)
  *
+ * SECURITY: Uses an allowlist approach — starts with an empty environment and
+ * only copies variables that are explicitly safe. This prevents leaking internal
+ * secrets (DATABASE_URL, AGOR_MASTER_SECRET, etc.) to agent sessions.
+ *
  * This function:
- * 1. Starts with system environment (process.env)
- * 2. Filters out Agor-internal variables (NODE_ENV, AGOR_*, etc.)
- * 3. Optionally filters out user-identity vars (HOME/USER/LOGNAME/SHELL) for impersonation
- * 4. Resolves and merges user-specific encrypted environment variables
- * 5. Optionally merges additional environment variables
- * 6. Sets AGOR_USER_ENV_KEYS with comma-separated list of user-defined var keys
+ * 1. Starts with a minimal allowlisted subset of process.env
+ * 2. Optionally strips user-identity vars (HOME/USER/LOGNAME/SHELL) for impersonation
+ * 3. Resolves and merges user-specific encrypted environment variables from database
+ * 4. Optionally merges additional environment variables
+ * 5. Sets AGOR_USER_ENV_KEYS with comma-separated list of user-defined var keys
  *
  * @param userId - User ID to resolve environment for (optional)
  * @param db - Database instance (required if userId provided)
@@ -147,16 +246,10 @@ export async function createUserProcessEnvironment(
   additionalEnv?: Record<string, string>,
   forImpersonation = false
 ): Promise<Record<string, string>> {
-  // Start with system environment
-  const env: Record<string, string> = { ...process.env } as Record<string, string>;
+  // SECURITY: Start with allowlisted env vars only — never inherit full process.env
+  const env = buildAllowlistedEnv();
 
-  // Filter out Agor-internal variables
-  for (const internalVar of AGOR_INTERNAL_ENV_VARS) {
-    delete env[internalVar];
-  }
-
-  // For impersonation, also strip user-identity vars so sudo -u can set them
-  // These are in AGOR_INTERNAL_ENV_VARS but we only want to filter them conditionally
+  // For impersonation, strip user-identity vars so sudo -u can set them
   const USER_IDENTITY_VARS = ['HOME', 'USER', 'LOGNAME', 'SHELL'];
   if (forImpersonation) {
     for (const identityVar of USER_IDENTITY_VARS) {
