@@ -3114,8 +3114,10 @@ export function setupMCPRoutes(app: Application, db: Database): void {
 
           const includeToolCalls = args?.includeToolCalls === true;
           const contentMode = args?.contentMode === 'full' ? 'full' : 'preview';
-          const limit = typeof args?.limit === 'number' ? Math.min(args.limit, 100) : 20;
-          const offset = typeof args?.offset === 'number' ? args.offset : 0;
+          const rawLimit = typeof args?.limit === 'number' ? args.limit : 20;
+          const limit = Math.min(Math.max(0, Math.floor(rawLimit)) || 20, 100);
+          const rawOffset = typeof args?.offset === 'number' ? args.offset : 0;
+          const offset = Math.max(0, Math.floor(rawOffset)) || 0;
           // Default: asc when browsing a session, desc when searching
           const order =
             args?.order === 'asc' || args?.order === 'desc'
@@ -3140,7 +3142,7 @@ export function setupMCPRoutes(app: Application, db: Database): void {
 
           // Search: parse "term1 term2 | term3 term4" into (t1 AND t2) OR (t3 AND t4)
           if (search) {
-            const orGroups = search.split(' | ').map((group) => {
+            const orGroups = search.split(/\s*\|\s*/).map((group) => {
               const terms = group.trim().split(/\s+/).filter(Boolean);
               return terms.map(
                 (term) =>
@@ -3154,8 +3156,10 @@ export function setupMCPRoutes(app: Application, db: Database): void {
             if (searchCondition) conditions.push(searchCondition);
           }
 
-          // Query
-          const orderBy = order === 'desc' ? desc(messagesTable.index) : asc(messagesTable.index);
+          // Query — use timestamp for cross-session search (index is session-local),
+          // index for single-session browsing (preserves conversation order)
+          const orderCol = sessionId ? messagesTable.index : messagesTable.timestamp;
+          const orderBy = order === 'desc' ? desc(orderCol) : asc(orderCol);
           const allRows = await select(db)
             .from(messagesTable)
             .where(conditions.length > 0 ? and(...conditions) : undefined)
