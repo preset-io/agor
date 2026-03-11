@@ -53,6 +53,18 @@ export const ALLOWED_ENV_VARS = new Set([
   'GPG_AGENT_INFO',
   'GPG_TTY',
 
+  // Proxy / TLS (needed for corporate environments)
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'NO_PROXY',
+  'ALL_PROXY',
+  'http_proxy',
+  'https_proxy',
+  'no_proxy',
+  'all_proxy',
+  'SSL_CERT_FILE',
+  'SSL_CERT_DIR',
+
   // Node.js (safe subset — NOT NODE_OPTIONS which could inject code)
   'NODE_PATH',
   'NODE_EXTRA_CA_CERTS',
