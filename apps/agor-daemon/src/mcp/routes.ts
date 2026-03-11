@@ -6,9 +6,19 @@
  */
 
 import { extractSlugFromUrl, isValidGitUrl, isValidSlug } from '@agor/core/config';
-import type { Database } from '@agor/core/db';
+import {
+  and,
+  asc,
+  type Database,
+  desc,
+  eq,
+  messages as messagesTable,
+  or,
+  select,
+  sql,
+} from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { AgenticToolName, Board, MCPServer } from '@agor/core/types';
+import type { AgenticToolName, Board, ContentBlock, MCPServer } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
 import { normalizeOptionalHttpUrl } from '@agor/core/utils/url';
 import type { Request, Response } from 'express';
@@ -763,6 +773,61 @@ export function setupMCPRoutes(app: Application, db: Database): void {
                   },
                 },
                 required: ['taskId'],
+              },
+            },
+
+            // Message tools
+            {
+              name: 'agor_messages_list',
+              description:
+                'Page through session conversation messages or search across sessions by keyword. When sessionId is provided, returns messages chronologically (like reading a transcript). When search is provided without sessionId, finds messages across all sessions. Tool calls are filtered out by default for cleaner output.',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  sessionId: {
+                    type: 'string',
+                    description: 'Session ID to scope messages to (optional when using search)',
+                  },
+                  taskId: {
+                    type: 'string',
+                    description: 'Task ID to scope messages to (optional)',
+                  },
+                  search: {
+                    type: 'string',
+                    description:
+                      'Keyword search across message content. Space-separated terms are AND\'d, pipe (|) for OR. Example: "OAuth middleware" requires both; "OAuth | JWT" matches either.',
+                  },
+                  limit: {
+                    type: 'number',
+                    description: 'Maximum number of messages to return (default: 20)',
+                  },
+                  offset: {
+                    type: 'number',
+                    description: 'Skip first N messages (default: 0)',
+                  },
+                  order: {
+                    type: 'string',
+                    enum: ['asc', 'desc'],
+                    description:
+                      'Sort order by message index. Default: "asc" when browsing a session, "desc" when searching.',
+                  },
+                  role: {
+                    type: 'string',
+                    enum: ['user', 'assistant'],
+                    description: 'Filter by message role',
+                  },
+                  includeToolCalls: {
+                    type: 'boolean',
+                    description:
+                      'Include tool call messages and tool_use content blocks (default: false). When false, strips tool noise for cleaner output.',
+                  },
+                  contentMode: {
+                    type: 'string',
+                    enum: ['preview', 'full'],
+                    description:
+                      'Content detail level. "preview" returns first 200 chars (default). "full" returns complete text content.',
+                  },
+                },
               },
             },
 
@@ -3026,6 +3091,172 @@ export function setupMCPRoutes(app: Application, db: Database): void {
               {
                 type: 'text',
                 text: JSON.stringify(task, null, 2),
+              },
+            ],
+          };
+
+          // Message tools
+        } else if (name === 'agor_messages_list') {
+          const sessionId = coerceString(args?.sessionId);
+          const taskId = coerceString(args?.taskId);
+          const search = coerceString(args?.search);
+
+          if (!sessionId && !taskId && !search) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message: 'Invalid params: at least one of sessionId, taskId, or search is required',
+              },
+            });
+          }
+
+          const includeToolCalls = args?.includeToolCalls === true;
+          const contentMode = args?.contentMode === 'full' ? 'full' : 'preview';
+          const limit = typeof args?.limit === 'number' ? Math.min(args.limit, 100) : 20;
+          const offset = typeof args?.offset === 'number' ? args.offset : 0;
+          // Default: asc when browsing a session, desc when searching
+          const order =
+            args?.order === 'asc' || args?.order === 'desc'
+              ? args.order
+              : search && !sessionId
+                ? 'desc'
+                : 'asc';
+          const role = args?.role === 'user' || args?.role === 'assistant' ? args.role : undefined;
+
+          // Build WHERE conditions
+          const conditions = [];
+          if (sessionId) conditions.push(eq(messagesTable.session_id, sessionId));
+          if (taskId) conditions.push(eq(messagesTable.task_id, taskId));
+          if (role) conditions.push(eq(messagesTable.role, role));
+
+          // Filter out non-conversation message types when not including tool calls
+          if (!includeToolCalls) {
+            conditions.push(
+              sql`${messagesTable.type} NOT IN ('file-history-snapshot', 'permission_request', 'input_request')`
+            );
+          }
+
+          // Search: parse "term1 term2 | term3 term4" into (t1 AND t2) OR (t3 AND t4)
+          if (search) {
+            const orGroups = search.split(' | ').map((group) => {
+              const terms = group.trim().split(/\s+/).filter(Boolean);
+              return terms.map(
+                (term) =>
+                  sql`LOWER(CAST(${messagesTable.data} AS TEXT)) LIKE ${`%${term.toLowerCase()}%`}`
+              );
+            });
+            const searchCondition =
+              orGroups.length === 1
+                ? and(...orGroups[0])
+                : or(...orGroups.map((andTerms) => and(...andTerms)));
+            if (searchCondition) conditions.push(searchCondition);
+          }
+
+          // Query
+          const orderBy = order === 'desc' ? desc(messagesTable.index) : asc(messagesTable.index);
+          const allRows = await select(db)
+            .from(messagesTable)
+            .where(conditions.length > 0 ? and(...conditions) : undefined)
+            .orderBy(orderBy)
+            .all();
+
+          // Post-process: filter tool calls, extract text
+          type ProcessedMessage = {
+            message_id: string;
+            session_id: string;
+            index: number;
+            role: string;
+            timestamp: string;
+            task_id?: string;
+            text: string;
+            tool_call_count?: number;
+          };
+
+          const processed: ProcessedMessage[] = [];
+
+          for (const row of allRows) {
+            const data = row.data as {
+              content?: unknown;
+              tool_uses?: unknown[];
+              metadata?: unknown;
+            };
+            const content = data?.content;
+
+            // Skip tool_result user messages when filtering tool calls
+            if (!includeToolCalls && row.role === 'user' && Array.isArray(content)) {
+              const hasNonToolResult = (content as ContentBlock[]).some(
+                (block) => block.type !== 'tool_result'
+              );
+              if (!hasNonToolResult) continue;
+            }
+
+            let text: string;
+            let toolCallCount = 0;
+
+            if (contentMode === 'preview') {
+              text = row.content_preview || '';
+            } else {
+              // Full content extraction
+              if (typeof content === 'string') {
+                text = content;
+              } else if (Array.isArray(content)) {
+                const blocks = content as ContentBlock[];
+                const textBlocks: string[] = [];
+
+                for (const block of blocks) {
+                  if (block.type === 'text' && typeof block.text === 'string') {
+                    textBlocks.push(block.text);
+                  } else if (block.type === 'tool_use') {
+                    toolCallCount++;
+                  }
+                }
+
+                text = textBlocks.join('\n\n');
+              } else {
+                // PermissionRequestContent, InputRequestContent, etc.
+                text = row.content_preview || '';
+              }
+            }
+
+            // Count tool_use blocks even in preview mode (for the count hint)
+            if (contentMode === 'preview' && Array.isArray(content)) {
+              for (const block of content as ContentBlock[]) {
+                if (block.type === 'tool_use') toolCallCount++;
+              }
+            }
+
+            // Drop assistant messages with no text when filtering tool calls
+            if (!includeToolCalls && row.role === 'assistant' && !text.trim()) {
+              continue;
+            }
+
+            const msg: ProcessedMessage = {
+              message_id: row.message_id,
+              session_id: row.session_id,
+              index: row.index,
+              role: row.role,
+              timestamp:
+                row.timestamp instanceof Date ? row.timestamp.toISOString() : String(row.timestamp),
+              text,
+            };
+
+            if (row.task_id) msg.task_id = row.task_id;
+            if (toolCallCount > 0) msg.tool_call_count = toolCallCount;
+
+            processed.push(msg);
+          }
+
+          // Paginate on processed results
+          const total = processed.length;
+          const paged = processed.slice(offset, offset + limit);
+
+          mcpResponse = {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({ messages: paged, total, offset, limit }, null, 2),
               },
             ],
           };
