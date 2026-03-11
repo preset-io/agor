@@ -11,6 +11,7 @@ import { App, Button, Divider, Space, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { useAppActions } from '../../contexts/AppActionsContext';
 import { useAppData } from '../../contexts/AppDataContext';
+import { copyToClipboard } from '../../utils/clipboard';
 import { ConversationView } from '../ConversationView';
 import { EnvironmentPill } from '../EnvironmentPill';
 import { ForkSpawnModal } from '../ForkSpawnModal';
@@ -225,9 +226,9 @@ export const SessionPanelContent: React.FC<SessionPanelContentProps> = ({
                     type="text"
                     size="small"
                     icon={<CopyOutlined />}
-                    onClick={() => {
+                    onClick={async () => {
                       const textToCopy = typeof msg.content === 'string' ? msg.content : '';
-                      navigator.clipboard.writeText(textToCopy);
+                      await copyToClipboard(textToCopy);
                       message.success('Message copied to clipboard');
                     }}
                   />

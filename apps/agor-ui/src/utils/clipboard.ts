@@ -29,18 +29,21 @@ export async function copyToClipboard(
     errorMessage = 'Failed to copy to clipboard',
   } = options || {};
 
-  try {
-    // Try modern Clipboard API first (requires HTTPS)
-    if (navigator.clipboard?.writeText) {
+  // Try modern Clipboard API first (requires HTTPS / secure context)
+  if (navigator.clipboard?.writeText) {
+    try {
       await navigator.clipboard.writeText(text);
       if (showSuccess) {
-        // Note: For new code, use the themed message utility instead
         console.log(successMessage);
       }
       return true;
+    } catch {
+      // Clipboard API exists but failed (e.g. non-secure context) — fall through to execCommand
     }
+  }
 
-    // Fallback to execCommand for HTTP/dev mode
+  // Fallback to execCommand for HTTP/dev mode
+  try {
     const textArea = document.createElement('textarea');
     textArea.value = text;
     textArea.style.position = 'fixed';
@@ -58,16 +61,15 @@ export async function copyToClipboard(
         console.log(successMessage);
       }
       return true;
-    } else {
-      throw new Error('execCommand copy failed');
     }
   } catch (error) {
     console.error('Failed to copy to clipboard:', error);
-    if (showError) {
-      console.error(errorMessage);
-    }
-    return false;
   }
+
+  if (showError) {
+    console.error(errorMessage);
+  }
+  return false;
 }
 
 /**

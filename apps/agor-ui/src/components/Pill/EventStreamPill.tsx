@@ -8,6 +8,7 @@
 import type { AntdIconProps } from '@ant-design/icons/lib/components/AntdIcon';
 import { message, Popover } from 'antd';
 import type React from 'react';
+import { copyToClipboard } from '../../utils/clipboard';
 import { Tag } from '../Tag';
 
 export interface EventStreamPillProps {
@@ -35,15 +36,13 @@ const toShortId = (id: string): string => {
 /**
  * Copy text to clipboard with notification
  */
-const copyToClipboard = (text: string, label: string) => {
-  navigator.clipboard.writeText(text).then(
-    () => {
-      message.success(`${label} copied: ${text}`);
-    },
-    () => {
-      message.error('Failed to copy to clipboard');
-    }
-  );
+const copyToClipboardWithNotification = async (text: string, label: string) => {
+  const success = await copyToClipboard(text);
+  if (success) {
+    message.success(`${label} copied: ${text}`);
+  } else {
+    message.error('Failed to copy to clipboard');
+  }
 };
 
 export const EventStreamPill = ({
@@ -56,7 +55,9 @@ export const EventStreamPill = ({
 }: EventStreamPillProps): React.JSX.Element => {
   // If metadata card provided, don't copy on click - just show popover
   // Otherwise, copy to clipboard on click
-  const handleClick = metadataCard ? undefined : () => copyToClipboard(id, copyLabel);
+  const handleClick = metadataCard
+    ? undefined
+    : () => copyToClipboardWithNotification(id, copyLabel);
 
   const pill = (
     <Tag

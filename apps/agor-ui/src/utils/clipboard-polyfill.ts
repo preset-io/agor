@@ -38,6 +38,11 @@ function execCommandCopy(text: string): Promise<void> {
 /**
  * Install clipboard polyfill if navigator.clipboard is unavailable
  * Call this early in your app initialization (e.g., main.tsx)
+ *
+ * Note: Even with this polyfill, navigator.clipboard.writeText may exist
+ * but fail at runtime in non-secure contexts. The main copyToClipboard()
+ * utility in clipboard.ts handles this by falling back to execCommand
+ * when the Clipboard API throws.
  */
 export function installClipboardPolyfill(): void {
   if (!navigator.clipboard || !navigator.clipboard.writeText) {

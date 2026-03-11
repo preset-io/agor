@@ -97,13 +97,18 @@ function extractTextContent(content: React.ReactNode): string {
  * Copy text to clipboard without showing additional messages
  */
 async function copyToClipboardSilent(text: string): Promise<void> {
-  try {
-    if (navigator.clipboard?.writeText) {
+  // Try modern Clipboard API first (requires HTTPS / secure context)
+  if (navigator.clipboard?.writeText) {
+    try {
       await navigator.clipboard.writeText(text);
       return;
+    } catch {
+      // Clipboard API exists but failed — fall through to execCommand
     }
+  }
 
-    // Fallback for non-HTTPS environments
+  // Fallback for non-HTTPS environments
+  try {
     const textArea = document.createElement('textarea');
     textArea.value = text;
     textArea.style.position = 'fixed';

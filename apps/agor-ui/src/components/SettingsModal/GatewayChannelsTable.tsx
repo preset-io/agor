@@ -42,6 +42,7 @@ import {
   theme,
 } from 'antd';
 import { useEffect, useState } from 'react';
+import { copyToClipboard } from '@/utils/clipboard';
 import { mapToArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
 import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
@@ -738,10 +739,10 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   };
 
   const handleCopyKey = async (key: string) => {
-    try {
-      await navigator.clipboard.writeText(key);
+    const success = await copyToClipboard(key);
+    if (success) {
       showSuccess('Channel key copied to clipboard');
-    } catch {
+    } else {
       showError('Failed to copy to clipboard');
     }
   };

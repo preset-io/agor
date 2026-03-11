@@ -12,6 +12,7 @@
 import { CopyOutlined } from '@ant-design/icons';
 import { Button, Modal, message } from 'antd';
 import type React from 'react';
+import { copyToClipboard } from '../../utils/clipboard';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 
 export interface MarkdownModalProps {
@@ -49,13 +50,13 @@ export const MarkdownModal: React.FC<MarkdownModalProps> = ({
 }) => {
   const _breadcrumbItems = parseBreadcrumb(filePath);
 
-  const handleCopyPath = () => {
-    navigator.clipboard.writeText(filePath);
+  const handleCopyPath = async () => {
+    await copyToClipboard(filePath);
     message.success('Path copied to clipboard!');
   };
 
-  const handleCopyContent = () => {
-    navigator.clipboard.writeText(content);
+  const handleCopyContent = async () => {
+    await copyToClipboard(content);
     message.success('Content copied to clipboard!');
   };
 

@@ -2,6 +2,7 @@ import type { FileDetail } from '@agor/core/types';
 import { CopyOutlined } from '@ant-design/icons';
 import { Button, Modal, message } from 'antd';
 import { ThemedSyntaxHighlighter } from '@/components/ThemedSyntaxHighlighter';
+import { copyToClipboard } from '@/utils/clipboard';
 
 export interface CodePreviewModalProps {
   file: FileDetail | null;
@@ -49,13 +50,13 @@ export const CodePreviewModal = ({ file, open, onClose, loading }: CodePreviewMo
 
   const language = getLanguageFromPath(file.path);
 
-  const handleCopyContent = () => {
-    navigator.clipboard.writeText(file.content);
+  const handleCopyContent = async () => {
+    await copyToClipboard(file.content);
     message.success('Content copied to clipboard!');
   };
 
-  const handleCopyPath = () => {
-    navigator.clipboard.writeText(file.path);
+  const handleCopyPath = async () => {
+    await copyToClipboard(file.path);
     message.success('Path copied to clipboard!');
   };
 
