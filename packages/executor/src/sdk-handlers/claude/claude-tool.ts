@@ -229,6 +229,9 @@ export class ClaudeTool implements ITool {
     modelUsage?: unknown;
     rawSdkResponse?: import('@agor/core/sdk').SDKResultMessage;
     wasStopped?: boolean;
+    hadError?: boolean;
+    /** Error details from SDK when hadError is true (e.g., errors array from error_during_execution) */
+    errorDetails?: string[];
   }> {
     if (!this.promptService || !this.messagesRepo) {
       throw new Error('ClaudeTool not initialized with repositories for live execution');
@@ -292,6 +295,8 @@ export class ClaudeTool implements ITool {
     let modelUsage: unknown | undefined;
     let rawSdkResponse: import('@agor/core/sdk').SDKResultMessage | undefined;
     let wasStopped = false;
+    let hadError = false;
+    let errorDetails: string[] | undefined;
 
     // Map our permission mode to Claude SDK's permission mode
     const mappedPermissionMode = permissionMode
@@ -449,6 +454,44 @@ export class ClaudeTool implements ITool {
       // Capture raw SDK response for token accounting
       if (event.type === 'result') {
         rawSdkResponse = event.raw_sdk_message;
+        // Detect error results from SDK (e.g., error_during_execution)
+        if (rawSdkResponse && 'subtype' in rawSdkResponse) {
+          const sdkResult = rawSdkResponse as {
+            subtype?: string;
+            errors?: string[];
+            is_error?: boolean;
+          };
+          if (sdkResult.subtype && sdkResult.subtype !== 'success') {
+            hadError = true;
+            errorDetails = sdkResult.errors;
+            console.error(
+              `[claude-code] SDK result indicates error: subtype=${sdkResult.subtype}, errors=${JSON.stringify(sdkResult.errors)}`
+            );
+
+            // Create a system message with the error details so it's visible in the conversation UI
+            if (this.messagesService && sdkResult.errors?.length) {
+              const errorText = sdkResult.errors.join('\n');
+              const errorMessageId = generateId() as MessageID;
+              await withFeathersSessionGuard(sessionId, this.sessionsRepo, async () => {
+                await createSystemMessage(
+                  sessionId,
+                  errorMessageId,
+                  [
+                    {
+                      type: 'text',
+                      text: `Agent SDK error (${sdkResult.subtype}): ${errorText}`,
+                    },
+                  ],
+                  taskId,
+                  nextIndex++,
+                  resolvedModel,
+                  this.messagesService!
+                );
+                return true;
+              });
+            }
+          }
+        }
       }
 
       // Capture metadata from result events (SDK may not type this properly)
@@ -610,6 +653,8 @@ export class ClaudeTool implements ITool {
       modelUsage,
       rawSdkResponse,
       wasStopped,
+      hadError,
+      errorDetails,
     };
   }
 
@@ -673,6 +718,9 @@ export class ClaudeTool implements ITool {
     modelUsage?: unknown;
     rawSdkResponse?: import('@agor/core/sdk').SDKResultMessage;
     wasStopped?: boolean;
+    hadError?: boolean;
+    /** Error details from SDK when hadError is true (e.g., errors array from error_during_execution) */
+    errorDetails?: string[];
   }> {
     if (!this.promptService || !this.messagesRepo) {
       throw new Error('ClaudeTool not initialized with repositories for live execution');
@@ -707,6 +755,8 @@ export class ClaudeTool implements ITool {
     let modelUsage: unknown | undefined;
     let rawSdkResponse: import('@agor/core/sdk').SDKResultMessage | undefined;
     let wasStopped = false;
+    let hadError = false;
+    let errorDetails: string[] | undefined;
 
     // Map our permission mode to Claude SDK's permission mode
     const mappedPermissionMode = permissionMode
@@ -740,6 +790,44 @@ export class ClaudeTool implements ITool {
       // Capture raw SDK response for token accounting
       if (event.type === 'result') {
         rawSdkResponse = event.raw_sdk_message;
+        // Detect error results from SDK (e.g., error_during_execution)
+        if (rawSdkResponse && 'subtype' in rawSdkResponse) {
+          const sdkResult = rawSdkResponse as {
+            subtype?: string;
+            errors?: string[];
+            is_error?: boolean;
+          };
+          if (sdkResult.subtype && sdkResult.subtype !== 'success') {
+            hadError = true;
+            errorDetails = sdkResult.errors;
+            console.error(
+              `[claude-code] SDK result indicates error: subtype=${sdkResult.subtype}, errors=${JSON.stringify(sdkResult.errors)}`
+            );
+
+            // Create a system message with the error details so it's visible in the conversation UI
+            if (this.messagesService && sdkResult.errors?.length) {
+              const errorText = sdkResult.errors.join('\n');
+              const errorMessageId = generateId() as MessageID;
+              await withFeathersSessionGuard(sessionId, this.sessionsRepo, async () => {
+                await createSystemMessage(
+                  sessionId,
+                  errorMessageId,
+                  [
+                    {
+                      type: 'text',
+                      text: `Agent SDK error (${sdkResult.subtype}): ${errorText}`,
+                    },
+                  ],
+                  taskId,
+                  nextIndex++,
+                  resolvedModel,
+                  this.messagesService!
+                );
+                return true;
+              });
+            }
+          }
+        }
       }
 
       // Capture metadata from result events (SDK may not type this properly)
@@ -827,6 +915,8 @@ export class ClaudeTool implements ITool {
       modelUsage,
       rawSdkResponse,
       wasStopped,
+      hadError,
+      errorDetails,
     };
   }
 

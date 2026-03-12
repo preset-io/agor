@@ -43,6 +43,10 @@ export interface BaseTool {
       cache_creation_tokens?: number;
     };
     wasStopped?: boolean;
+    /** Whether the SDK returned an error result (e.g., error_during_execution) */
+    hadError?: boolean;
+    /** Error details from SDK when hadError is true */
+    errorDetails?: string[];
     /** Raw SDK response for token accounting - stored and normalized */
     rawSdkResponse?: unknown;
   }>;
@@ -365,9 +369,20 @@ export async function executeToolTask(params: {
     // Capture git SHA at task end
     const shaAtEnd = await captureGitStateAtTaskEnd(client, sessionId);
 
+    // Determine task status based on SDK result
+    // - wasStopped: user explicitly stopped the task
+    // - hadError: SDK returned an error subtype (e.g., error_during_execution)
+    const taskStatus = result.wasStopped ? 'stopped' : result.hadError ? 'failed' : 'completed';
+
+    if (result.hadError) {
+      console.error(
+        `[${toolName}] SDK returned error result for session ${sessionId.substring(0, 8)}, marking task as failed${result.errorDetails?.length ? `: ${result.errorDetails.join('; ')}` : ''}`
+      );
+    }
+
     // Build patch data
     const patchData: Partial<Task> = {
-      status: result.wasStopped ? 'stopped' : 'completed',
+      status: taskStatus,
       completed_at: new Date().toISOString(),
     };
 
