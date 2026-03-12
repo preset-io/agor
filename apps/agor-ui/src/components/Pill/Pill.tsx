@@ -506,12 +506,9 @@ export const GitStatePill: React.FC<GitStatePillProps> = ({
   // Only show branch if it differs from worktree name
   const shouldShowBranch = branch && branch !== worktreeName;
 
-  const handleClick = (e: React.MouseEvent) => {
+  const handleClick = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    copyToClipboard(cleanSha, {
-      showSuccess: true,
-      successMessage: 'Git SHA copied to clipboard',
-    });
+    await copyToClipboard(cleanSha);
   };
 
   return (
@@ -549,18 +546,12 @@ const SessionIdPopoverContent: React.FC<{
   const { token } = theme.useToken();
 
   const handleCopyAgor = () => {
-    copyToClipboard(sessionId, {
-      showSuccess: true,
-      successMessage: 'Agor session ID copied to clipboard',
-    });
+    copyToClipboard(sessionId);
   };
 
   const handleCopySdk = () => {
     if (sdkSessionId) {
-      copyToClipboard(sdkSessionId, {
-        showSuccess: true,
-        successMessage: `${agenticTool || 'SDK'} session ID copied to clipboard`,
-      });
+      copyToClipboard(sdkSessionId);
     }
   };
 

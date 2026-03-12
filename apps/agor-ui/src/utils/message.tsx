@@ -25,6 +25,7 @@ import { CopyOutlined } from '@ant-design/icons';
 import { App, Space, theme } from 'antd';
 import type { ArgsProps, ConfigOptions, MessageInstance } from 'antd/es/message/interface';
 import React from 'react';
+import { copyToClipboard } from './clipboard';
 
 /**
  * Message content wrapper with copy-to-clipboard functionality
@@ -94,38 +95,6 @@ function extractTextContent(content: React.ReactNode): string {
 }
 
 /**
- * Copy text to clipboard without showing additional messages
- */
-async function copyToClipboardSilent(text: string): Promise<void> {
-  // Try modern Clipboard API first (requires HTTPS / secure context)
-  if (navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(text);
-      return;
-    } catch {
-      // Clipboard API exists but failed — fall through to execCommand
-    }
-  }
-
-  // Fallback for non-HTTPS environments
-  try {
-    const textArea = document.createElement('textarea');
-    textArea.value = text;
-    textArea.style.position = 'fixed';
-    textArea.style.left = '-999999px';
-    textArea.style.top = '-999999px';
-    document.body.appendChild(textArea);
-    textArea.focus();
-    textArea.select();
-
-    document.execCommand('copy');
-    document.body.removeChild(textArea);
-  } catch (error) {
-    console.error('Failed to copy to clipboard:', error);
-  }
-}
-
-/**
  * Message options (subset of ArgsProps with commonly used options)
  */
 export interface ThemedMessageOptions {
@@ -149,7 +118,7 @@ export function useThemedMessage() {
     return (
       <MessageContent
         onCopy={() => {
-          copyToClipboardSilent(textContent);
+          copyToClipboard(textContent);
         }}
       >
         {content}

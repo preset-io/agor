@@ -38,18 +38,12 @@ export const SessionMetadataCard: React.FC<SessionMetadataCardProps> = ({
   const { token } = theme.useToken();
 
   const handleCopyAgor = () => {
-    copyToClipboard(session.session_id, {
-      showSuccess: true,
-      successMessage: 'Agor session ID copied to clipboard',
-    });
+    copyToClipboard(session.session_id);
   };
 
   const handleCopySdk = () => {
     if (session.sdk_session_id) {
-      copyToClipboard(session.sdk_session_id, {
-        showSuccess: true,
-        successMessage: `${session.agentic_tool || 'SDK'} session ID copied to clipboard`,
-      });
+      copyToClipboard(session.sdk_session_id);
     }
   };
 

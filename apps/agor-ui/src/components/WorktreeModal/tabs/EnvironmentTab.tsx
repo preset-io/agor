@@ -81,7 +81,7 @@ const TemplateField: React.FC<{ label: string; value: string }> = ({ label, valu
           opacity: value ? 1 : 0.5,
           lineHeight: 1.4,
         }}
-        onClick={() => value && handleCopy(value, true)}
+        onClick={() => value && handleCopy(value)}
         title={value ? 'Click to copy' : undefined}
       >
         {value || 'Not configured'}
@@ -91,7 +91,7 @@ const TemplateField: React.FC<{ label: string; value: string }> = ({ label, valu
           type="text"
           size="small"
           icon={copied ? <CheckOutlined /> : <CopyOutlined />}
-          onClick={() => handleCopy(value, true)}
+          onClick={() => handleCopy(value)}
           style={{ flexShrink: 0 }}
         />
       )}
