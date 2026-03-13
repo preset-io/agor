@@ -261,6 +261,24 @@ export interface AgorExecutionSettings {
    * ```
    */
   executor_command_template?: string;
+
+  /**
+   * Required user environment variables.
+   * When set, prompts are blocked if any listed var is missing from the user's resolved environment.
+   * Users are directed to Settings → Environment Variables to configure them.
+   * Default: [] (no enforcement)
+   *
+   * @example Require git identity for proper commit attribution
+   * ```yaml
+   * execution:
+   *   required_user_env_vars:
+   *     - GIT_AUTHOR_NAME
+   *     - GIT_AUTHOR_EMAIL
+   *     - GIT_COMMITTER_NAME
+   *     - GIT_COMMITTER_EMAIL
+   * ```
+   */
+  required_user_env_vars?: string[];
 }
 
 /**

@@ -863,6 +863,34 @@ async function main() {
         !!executorUnixUser
       );
 
+      // Validate required user environment variables (if configured)
+      const requiredUserEnvVars = config.execution?.required_user_env_vars;
+      if (requiredUserEnvVars && requiredUserEnvVars.length > 0) {
+        const missingVars = requiredUserEnvVars.filter((v) => !executorEnv[v]);
+        if (missingVars.length > 0) {
+          const missingList = missingVars.map((v) => `\`${v}\``).join(', ');
+          await messagesService.create({
+            session_id: sessionId,
+            task_id: data.taskId,
+            type: 'system',
+            role: 'system',
+            content: [
+              `**Missing required environment variables:** ${missingList}`,
+              '',
+              'Your administrator requires these variables to be set before running prompts.',
+              '',
+              `**To fix:** Click your user avatar (top-right) → **Settings** → **Environment Variables**, then add values for: ${missingList}`,
+              '',
+              'This is a one-time setup — once configured, this message will not appear again.',
+            ].join('\n'),
+            content_preview: `Missing required env vars: ${missingVars.join(', ')}`,
+            index: -1,
+            timestamp: new Date().toISOString(),
+          } as Partial<import('@agor/core/types').Message>);
+          throw new Error(`Missing required environment variables: ${missingVars.join(', ')}`);
+        }
+      }
+
       // Add DAEMON_URL to environment so executor can connect back
       executorEnv.DAEMON_URL = daemonUrl;
 
