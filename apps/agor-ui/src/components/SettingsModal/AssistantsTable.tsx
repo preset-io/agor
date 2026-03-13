@@ -25,7 +25,7 @@ import {
   Typography,
   theme,
 } from 'antd';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
 import { ArchiveDeleteWorktreeModal } from '../ArchiveDeleteWorktreeModal';
 import type { WorktreeUpdate } from '../WorktreeModal/tabs/GeneralTab';
@@ -106,18 +106,18 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
     [repos]
   );
 
-  // Auto-register framework repo if not found
-  const [autoRegistered, setAutoRegistered] = useState(false);
+  // Auto-register framework repo if not found (useRef prevents double-fire in Strict Mode)
+  const autoRegisterRequested = useRef(false);
   useEffect(() => {
-    if (!frameworkRepo && !autoRegistered && onCreateRepo) {
-      setAutoRegistered(true);
+    if (!frameworkRepo && !autoRegisterRequested.current && onCreateRepo) {
+      autoRegisterRequested.current = true;
       onCreateRepo({
         url: FRAMEWORK_REPO_URL,
         slug: FRAMEWORK_REPO_SLUG,
         default_branch: 'main',
       });
     }
-  }, [frameworkRepo, autoRegistered, onCreateRepo]);
+  }, [frameworkRepo, onCreateRepo]);
 
   // Track whether user has selected a custom (non-framework) repo
   const [customRepoSelected, setCustomRepoSelected] = useState(false);
@@ -136,10 +136,9 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
   const validateForm = useCallback(() => {
     const values = form.getFieldsValue();
     const hasDisplayName = !!values.displayName?.trim();
-    // Repo defaults to framework repo (or is being auto-registered), so always valid unless advanced override clears it
-    const hasRepo = frameworkRepo || autoRegistered ? true : !!values.repoId;
+    const hasRepo = Boolean(values.repoId || frameworkRepo?.repo_id);
     setIsFormValid(hasDisplayName && hasRepo);
-  }, [form, frameworkRepo, autoRegistered]);
+  }, [form, frameworkRepo]);
 
   // Auto-generate worktree name from display name
   const handleDisplayNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -161,7 +160,17 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
 
       // Resolve repo — default to framework repo
       const repoId = values.repoId || frameworkRepo?.repo_id;
-      if (!repoId) return;
+      if (!repoId) {
+        form.setFields([
+          {
+            name: 'repoId',
+            errors: [
+              'Framework repository is still being registered. Please wait a moment and try again.',
+            ],
+          },
+        ]);
+        return;
+      }
 
       const repo = repoById.get(repoId);
       const worktreeName = values.name || `private-${slugify(values.displayName)}`;
@@ -389,7 +398,7 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
             type="primary"
             icon={<PlusOutlined />}
             onClick={() => setCreateModalOpen(true)}
-            disabled={!frameworkRepo && repos.length === 0 && !onCreateRepo}
+            disabled={!frameworkRepo && repos.length === 0 && !autoRegisterRequested.current}
           >
             Create Assistant
           </Button>
