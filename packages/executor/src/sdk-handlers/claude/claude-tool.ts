@@ -669,9 +669,22 @@ export class ClaudeTool implements ITool {
 
     if (this.sessionsRepo) {
       try {
-        console.log(
-          `📝 About to update session with: ${JSON.stringify({ sdk_session_id: agentSessionId })}`
-        );
+        // Guard: only set sdk_session_id if not already set (immutable after first capture)
+        const existingSession = await this.sessionsRepo.findById(sessionId);
+        if (existingSession?.sdk_session_id) {
+          if (existingSession.sdk_session_id === agentSessionId) {
+            console.log(
+              `💾 Agent SDK session_id unchanged (already ${agentSessionId.substring(0, 8)})`
+            );
+          } else {
+            console.warn(
+              `⚠️  Agent SDK returned new session_id ${agentSessionId.substring(0, 8)} but session already has ${existingSession.sdk_session_id.substring(0, 8)} — keeping original (sdk_session_id is immutable)`
+            );
+          }
+          return;
+        }
+
+        console.log(`📝 Setting sdk_session_id for first time: ${agentSessionId.substring(0, 8)}`);
         const updated = await this.sessionsRepo.update(sessionId, {
           sdk_session_id: agentSessionId,
         });

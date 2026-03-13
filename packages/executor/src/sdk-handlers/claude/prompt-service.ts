@@ -177,13 +177,17 @@ export class ClaudePromptService {
 
         // Handle each event from processor
         for (const event of events) {
-          // Handle session ID capture
+          // Handle session ID capture (only set if not already set — sdk_session_id is immutable)
           if (event.type === 'session_id_captured') {
-            if (this.sessionsRepo) {
+            if (this.sessionsRepo && !existingSdkSessionId) {
               await this.sessionsRepo.update(sessionId, {
                 sdk_session_id: event.agentSessionId,
               });
               console.log(`💾 Stored Agent SDK session_id in database`);
+            } else if (existingSdkSessionId && existingSdkSessionId !== event.agentSessionId) {
+              console.warn(
+                `⚠️  SDK returned new session_id ${event.agentSessionId.substring(0, 8)} but session already has ${existingSdkSessionId.substring(0, 8)} — keeping original`
+              );
             }
             continue; // Don't yield this event upstream
           }

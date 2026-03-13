@@ -424,6 +424,16 @@ export class CodexTool implements ITool {
     console.log(`🔑 Captured Codex thread ID for Agor session ${sessionId}: ${threadId}`);
 
     if (this.sessionsRepo) {
+      // Guard: only set sdk_session_id if not already set (immutable after first capture)
+      const existingSession = await this.sessionsRepo.findById(sessionId);
+      if (existingSession?.sdk_session_id) {
+        if (existingSession.sdk_session_id !== threadId) {
+          console.warn(
+            `⚠️  Codex returned new thread_id ${threadId.substring(0, 8)} but session already has ${existingSession.sdk_session_id.substring(0, 8)} — keeping original`
+          );
+        }
+        return;
+      }
       await this.sessionsRepo.update(sessionId, { sdk_session_id: threadId });
       console.log(`💾 Stored Codex thread ID in Agor session`);
     }
