@@ -28,6 +28,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
 import { ArchiveDeleteWorktreeModal } from '../ArchiveDeleteWorktreeModal';
+import { FormEmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
 import type { WorktreeUpdate } from '../WorktreeModal/tabs/GeneralTab';
 import { renderEnvCell } from './WorktreeEnvColumn';
 
@@ -187,6 +188,7 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
       const sourceBranch = values.sourceBranch || repo?.default_branch || 'main';
 
       // Resolve board — create new or use existing
+      const assistantEmoji = values.emoji || undefined;
       let boardId: string | undefined;
       if (values.boardChoice === CREATE_NEW_BOARD) {
         // Create a new board named after the assistant
@@ -194,7 +196,7 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
           try {
             const newBoard = (await client.service('boards').create({
               name: values.displayName.trim(),
-              icon: '\u{1F916}',
+              icon: assistantEmoji || '\u{1F916}',
             })) as Board;
             boardId = newBoard.board_id;
           } catch (err) {
@@ -220,6 +222,7 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
         const assistantConfig: AssistantConfig = {
           kind: 'assistant',
           displayName: values.displayName.trim(),
+          emoji: assistantEmoji,
           frameworkRepo: repo?.slug,
           createdViaOnboarding: false,
         };
@@ -272,7 +275,11 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
         const config = getAssistantConfig(record);
         return (
           <Space>
-            <RobotOutlined style={{ color: token.colorInfo }} />
+            {config?.emoji ? (
+              <span style={{ fontSize: 18 }}>{config.emoji}</span>
+            ) : (
+              <RobotOutlined style={{ color: token.colorInfo }} />
+            )}
             <div>
               <Typography.Text strong>{config?.displayName ?? record.name}</Typography.Text>
               <br />
@@ -477,6 +484,10 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
               autoFocus
               onChange={handleDisplayNameChange}
             />
+          </Form.Item>
+
+          <Form.Item name="emoji" label="Icon">
+            <FormEmojiPickerInput form={form} fieldName="emoji" defaultEmoji="🤖" />
           </Form.Item>
 
           <Form.Item name="boardChoice" label="Board">

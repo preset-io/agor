@@ -679,6 +679,8 @@ const WorktreeCardComponent = ({
             >
               {isCreating || hasRunningSession ? (
                 <Spin size="large" />
+              ) : isAgent && assistantConfig?.emoji ? (
+                <span style={{ fontSize: 32 }}>{assistantConfig.emoji}</span>
               ) : isAgent ? (
                 <RobotOutlined
                   style={{

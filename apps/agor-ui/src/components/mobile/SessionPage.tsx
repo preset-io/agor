@@ -1,6 +1,6 @@
 import type { AgorClient } from '@agor/core/api';
 import type { PermissionMode, Repo, Session, SessionID, User, Worktree } from '@agor/core/types';
-import { PermissionScope } from '@agor/core/types';
+import { PermissionScope, getAssistantConfig, isAssistant } from '@agor/core/types';
 import { Alert, Spin } from 'antd';
 import { useParams } from 'react-router-dom';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
@@ -142,6 +142,9 @@ export const SessionPage: React.FC<SessionPageProps> = ({
           scheduledRunAt={session.scheduled_run_at}
           genealogy={session.genealogy}
           emptyStateMessage="Tap the menu icon to browse boards and sessions"
+          assistantEmoji={
+            worktree && isAssistant(worktree) ? getAssistantConfig(worktree)?.emoji : undefined
+          }
         />
       </div>
       <MobilePromptInput

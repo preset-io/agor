@@ -85,7 +85,12 @@ export const WorktreeModal: React.FC<WorktreeModalProps> = ({
             key: 'assistant',
             label: 'Assistant',
             children: (
-              <AssistantTab worktree={worktree} onUpdate={onUpdateWorktree} onClose={onClose} />
+              <AssistantTab
+                worktree={worktree}
+                onUpdate={onUpdateWorktree}
+                onClose={onClose}
+                client={client}
+              />
             ),
           },
         ]

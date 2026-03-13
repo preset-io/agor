@@ -1,5 +1,6 @@
 import type { AgorClient } from '@agor/core/api';
 import type { Message, Session, SpawnConfig, Worktree } from '@agor/core/types';
+import { getAssistantConfig, isAssistant } from '@agor/core/types';
 import {
   ApiOutlined,
   CopyOutlined,
@@ -169,6 +170,9 @@ export const SessionPanelContent: React.FC<SessionPanelContentProps> = ({
         scheduledRunAt={session.scheduled_run_at}
         isActive={isOpen}
         genealogy={session.genealogy}
+        assistantEmoji={
+          worktree && isAssistant(worktree) ? getAssistantConfig(worktree)?.emoji : undefined
+        }
       />
 
       {/* Queued Messages Drawer - Above Footer */}

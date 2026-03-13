@@ -1,9 +1,11 @@
+import type { AgorClient } from '@agor/core/api';
 import type { AssistantConfig, Worktree } from '@agor/core/types';
 import { getAssistantConfig } from '@agor/core/types';
 import { RobotOutlined } from '@ant-design/icons';
 import { Button, Descriptions, Form, Input, Space, Typography } from 'antd';
 import { useEffect, useState } from 'react';
 import { useThemedMessage } from '../../../utils/message';
+import { EmojiPickerInput } from '../../EmojiPickerInput/EmojiPickerInput';
 import { Tag } from '../../Tag';
 import type { WorktreeUpdate } from './GeneralTab';
 
@@ -11,48 +13,74 @@ interface AssistantTabProps {
   worktree: Worktree;
   onUpdate?: (worktreeId: string, updates: WorktreeUpdate) => void;
   onClose?: () => void;
+  client?: AgorClient | null;
 }
 
-export const AssistantTab: React.FC<AssistantTabProps> = ({ worktree, onUpdate, onClose }) => {
+export const AssistantTab: React.FC<AssistantTabProps> = ({
+  worktree,
+  onUpdate,
+  onClose,
+  client,
+}) => {
   const config = getAssistantConfig(worktree);
   const { showSuccess } = useThemedMessage();
 
   const [displayName, setDisplayName] = useState(config?.displayName || '');
+  const [emoji, setEmoji] = useState(config?.emoji || '');
   const [isInitialized, setIsInitialized] = useState(false);
 
   useEffect(() => {
     if (!isInitialized) {
       setDisplayName(config?.displayName || '');
+      setEmoji(config?.emoji || '');
       setIsInitialized(true);
     }
-  }, [isInitialized, config?.displayName]);
+  }, [isInitialized, config?.displayName, config?.emoji]);
 
   if (!config) return null;
 
-  const hasChanges = displayName.trim() !== config.displayName;
+  const hasChanges = displayName.trim() !== config.displayName || emoji !== (config.emoji || '');
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const updatedConfig: AssistantConfig = {
       ...config,
       kind: 'assistant',
       displayName: displayName.trim(),
+      emoji: emoji || undefined,
     };
     onUpdate?.(worktree.worktree_id, {
       custom_context: { assistant: updatedConfig },
     });
+
+    // Also update the associated board icon if emoji changed
+    if (emoji !== (config.emoji || '') && client && worktree.board_id) {
+      try {
+        await client.service('boards').patch(worktree.board_id, {
+          icon: emoji || '🤖',
+        });
+      } catch (err) {
+        console.error('Failed to update board icon:', err);
+      }
+    }
+
     showSuccess('Assistant updated');
     onClose?.();
   };
 
   const handleCancel = () => {
     setDisplayName(config.displayName);
+    setEmoji(config.emoji || '');
   };
 
   return (
     <div style={{ width: '100%', maxHeight: '70vh', overflowY: 'auto' }}>
       <Space orientation="vertical" size="large" style={{ width: '100%' }}>
         <Space>
-          <RobotOutlined style={{ fontSize: 20 }} />
+          {config.emoji ? (
+            <span style={{ fontSize: 20 }}>{config.emoji}</span>
+          ) : (
+            <RobotOutlined style={{ fontSize: 20 }} />
+          )}
           <Typography.Text strong style={{ fontSize: 16 }}>
             Assistant Configuration
           </Typography.Text>
@@ -65,6 +93,13 @@ export const AssistantTab: React.FC<AssistantTabProps> = ({ worktree, onUpdate, 
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
               placeholder="Assistant display name"
+            />
+          </Form.Item>
+          <Form.Item label="Icon" labelCol={{ span: 6 }} wrapperCol={{ span: 18 }}>
+            <EmojiPickerInput
+              value={emoji}
+              onChange={(val) => setEmoji(val)}
+              defaultEmoji="🤖"
             />
           </Form.Item>
         </Form>

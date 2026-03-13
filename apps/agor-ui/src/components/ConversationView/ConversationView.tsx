@@ -134,6 +134,11 @@ export interface ConversationViewProps {
     spawn_point_task_id?: string;
     spawn_point_message_index?: number;
   };
+
+  /**
+   * Emoji override for assistant avatar in message bubbles
+   */
+  assistantEmoji?: string;
 }
 
 export const ConversationView = React.memo<ConversationViewProps>(
@@ -153,6 +158,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
     emptyStateMessage = 'No messages yet. Send a prompt to start the conversation.',
     isActive = true,
     genealogy,
+    assistantEmoji,
   }) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const { token } = theme.useToken();
@@ -439,6 +445,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
             scheduledFromWorktree={scheduledFromWorktree}
             scheduledRunAt={scheduledRunAt}
             streamingMessages={streamingMessagesByTask.get(task.task_id)}
+            assistantEmoji={assistantEmoji}
           />
         ))}
       </div>

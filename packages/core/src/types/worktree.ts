@@ -600,6 +600,8 @@ export interface AssistantConfig {
   kind: 'assistant';
   /** Human-friendly display name (e.g., "My Assistant") */
   displayName: string;
+  /** Emoji icon for this assistant (e.g., "🧑‍💻") */
+  emoji?: string;
   /** Template repo slug this assistant was created from */
   frameworkRepo?: string;
   /** Framework version at creation time, for upgrade detection */

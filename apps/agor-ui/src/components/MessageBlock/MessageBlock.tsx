@@ -74,6 +74,7 @@ interface MessageBlockProps {
   isFirstPendingInput?: boolean; // For sequencing input requests
   isLatestMessage?: boolean; // Whether this is the most recent message (don't collapse by default)
   allMessages?: Message[]; // All messages for aggregation (e.g., finding matching compaction events)
+  assistantEmoji?: string; // Emoji override for assistant avatar (replaces tool icon)
   onPermissionDecision?: (
     sessionId: string,
     requestId: string,
@@ -143,6 +144,7 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
   allMessages = [],
   onPermissionDecision,
   onInputResponse,
+  assistantEmoji,
 }) => {
   const { token } = theme.useToken();
 
@@ -408,6 +410,8 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
               alt="Agor"
               style={{ width: 32, height: 32, borderRadius: '50%' }}
             />
+          ) : assistantEmoji ? (
+            <AgorAvatar>{assistantEmoji}</AgorAvatar>
           ) : agentic_tool ? (
             <ToolIcon tool={agentic_tool} size={32} />
           ) : (
@@ -506,6 +510,8 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
               alt="Agor"
               style={{ width: 32, height: 32, borderRadius: '50%' }}
             />
+          ) : assistantEmoji ? (
+            <AgorAvatar>{assistantEmoji}</AgorAvatar>
           ) : agentic_tool ? (
             <ToolIcon tool={agentic_tool} size={32} />
           ) : (
