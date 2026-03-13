@@ -74,7 +74,9 @@ export async function buildSessionContext(
       created_at: session.created_at,
     };
 
-    // Fetch session owner info (immutable, safe for cached system prompt)
+    // Fetch session owner info for display in system prompt.
+    // Note: session.created_by is immutable, but name/email are mutable profile fields.
+    // A profile rename causes a cache miss on the next turn — acceptable since it's rare.
     if (session.created_by && repos.users) {
       try {
         const owner = await repos.users.findById(session.created_by);
@@ -84,8 +86,11 @@ export async function buildSessionContext(
             email: owner.email,
           };
         }
-      } catch {
-        // Non-critical: owner info is nice-to-have
+      } catch (err) {
+        console.warn(
+          `[SessionContext] Failed to fetch owner for session ${sessionId.substring(0, 8)}:`,
+          err
+        );
       }
     }
 
