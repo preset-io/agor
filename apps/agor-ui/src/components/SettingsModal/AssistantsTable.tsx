@@ -107,18 +107,8 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
     [repos]
   );
 
-  // Auto-register framework repo if not found (useRef prevents double-fire in Strict Mode)
-  const autoRegisterRequested = useRef(false);
-  useEffect(() => {
-    if (!frameworkRepo && !autoRegisterRequested.current && onCreateRepo) {
-      autoRegisterRequested.current = true;
-      onCreateRepo({
-        url: FRAMEWORK_REPO_URL,
-        slug: FRAMEWORK_REPO_SLUG,
-        default_branch: 'main',
-      });
-    }
-  }, [frameworkRepo, onCreateRepo]);
+  // Framework repo is registered during onboarding or when the user explicitly creates an assistant.
+  // We no longer auto-register on mount to avoid "already exists" errors on page load.
 
   // Track whether user has selected a custom (non-framework) repo
   const [customRepoSelected, setCustomRepoSelected] = useState(false);
@@ -417,7 +407,7 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
             type="primary"
             icon={<PlusOutlined />}
             onClick={() => setCreateModalOpen(true)}
-            disabled={!frameworkRepo && repos.length === 0 && !autoRegisterRequested.current}
+            disabled={!frameworkRepo && repos.length === 0}
           >
             Create Assistant
           </Button>

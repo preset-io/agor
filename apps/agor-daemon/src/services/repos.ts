@@ -139,10 +139,10 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       throw new Error('Slug is required to clone a repository');
     }
 
-    // Check if repo with this slug already exists in database
+    // If repo with this slug already exists, return silently (idempotent)
     const existing = await this.repoRepo.findBySlug(slug);
     if (existing) {
-      throw new Error(`Repository '${slug}' already exists in database`);
+      return { status: 'pending', slug };
     }
 
     // Resolve user environment for git credentials
