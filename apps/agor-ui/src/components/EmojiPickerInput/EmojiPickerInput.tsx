@@ -7,18 +7,16 @@ interface EmojiPickerInputProps {
   value?: string;
   onChange?: (value: string) => void;
   defaultEmoji?: string;
-  placeholder?: string;
 }
 
 /**
- * Reusable emoji picker input component for forms
- * Displays selected emoji with a button to open picker
+ * Reusable emoji picker input — compact style with emoji preview + picker button.
+ * Use directly with value/onChange, or use FormEmojiPickerInput for Ant Design forms.
  */
 export const EmojiPickerInput: React.FC<EmojiPickerInputProps> = ({
   value,
   onChange,
   defaultEmoji = '📋',
-  placeholder,
 }) => {
   const [pickerOpen, setPickerOpen] = useState(false);
 
@@ -28,69 +26,17 @@ export const EmojiPickerInput: React.FC<EmojiPickerInputProps> = ({
   };
 
   return (
-    <Input.Group compact style={{ display: 'flex', alignItems: 'stretch' }}>
-      <Input
-        prefix={<span style={{ fontSize: 20 }}>{value || defaultEmoji}</span>}
-        readOnly
-        placeholder={placeholder}
-        style={{ cursor: 'default', width: 80, flex: '0 0 80px' }}
-      />
-      <Popover
-        content={
-          <EmojiPicker
-            onEmojiClick={handleEmojiClick}
-            theme={Theme.DARK}
-            width={350}
-            height={400}
-          />
-        }
-        trigger="click"
-        open={pickerOpen}
-        onOpenChange={setPickerOpen}
-        placement="right"
-      >
-        <Button icon={<SmileOutlined />} style={{ flex: '0 0 auto' }} />
-      </Popover>
-    </Input.Group>
-  );
-};
-
-/**
- * Form.Item wrapper that integrates with Ant Design forms
- * Use this with Form.Item and it will handle value/onChange automatically
- */
-export const FormEmojiPickerInput: React.FC<{
-  form: ReturnType<typeof Form.useForm>[0];
-  fieldName: string;
-  defaultEmoji?: string;
-}> = ({ form, fieldName, defaultEmoji }) => {
-  const [pickerOpen, setPickerOpen] = useState(false);
-
-  const handleEmojiClick = (emojiData: EmojiClickData) => {
-    form.setFieldValue(fieldName, emojiData.emoji);
-    setPickerOpen(false);
-  };
-
-  return (
     <div style={{ display: 'flex', gap: 0 }}>
-      <Form.Item noStyle shouldUpdate>
-        {() => (
-          <Input
-            prefix={
-              <span style={{ fontSize: 14 }}>
-                {form.getFieldValue(fieldName) || defaultEmoji || '📋'}
-              </span>
-            }
-            readOnly
-            style={{
-              cursor: 'default',
-              width: 40,
-              borderTopRightRadius: 0,
-              borderBottomRightRadius: 0,
-            }}
-          />
-        )}
-      </Form.Item>
+      <Input
+        prefix={<span style={{ fontSize: 14 }}>{value || defaultEmoji}</span>}
+        readOnly
+        style={{
+          cursor: 'default',
+          width: 40,
+          borderTopRightRadius: 0,
+          borderBottomRightRadius: 0,
+        }}
+      />
       <Popover
         content={
           <EmojiPicker
@@ -115,5 +61,27 @@ export const FormEmojiPickerInput: React.FC<{
         />
       </Popover>
     </div>
+  );
+};
+
+/**
+ * Form.Item wrapper that integrates with Ant Design forms.
+ * Thin wrapper around EmojiPickerInput that reads/writes via form.setFieldValue.
+ */
+export const FormEmojiPickerInput: React.FC<{
+  form: ReturnType<typeof Form.useForm>[0];
+  fieldName: string;
+  defaultEmoji?: string;
+}> = ({ form, fieldName, defaultEmoji }) => {
+  return (
+    <Form.Item noStyle shouldUpdate>
+      {() => (
+        <EmojiPickerInput
+          value={form.getFieldValue(fieldName)}
+          onChange={(emoji) => form.setFieldValue(fieldName, emoji)}
+          defaultEmoji={defaultEmoji}
+        />
+      )}
+    </Form.Item>
   );
 };
