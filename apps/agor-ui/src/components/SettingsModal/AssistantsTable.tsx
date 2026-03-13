@@ -129,6 +129,13 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
   const [creating, setCreating] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
 
+  // Pre-select framework repo in form when it becomes available
+  useEffect(() => {
+    if (frameworkRepo && !form.getFieldValue('repoId')) {
+      form.setFieldValue('repoId', frameworkRepo.repo_id);
+    }
+  }, [frameworkRepo, form]);
+
   // Archive/delete modal
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
   const [selectedWorktree, setSelectedWorktree] = useState<Worktree | null>(null);
@@ -140,15 +147,18 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
     setIsFormValid(hasDisplayName && hasRepo);
   }, [form, frameworkRepo]);
 
+  // Track last auto-generated worktree name (useRef avoids Ant Design form timing issues)
+  const lastAutoName = useRef('');
+
   // Auto-generate worktree name from display name
   const handleDisplayNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const displayName = e.target.value;
     const currentName = form.getFieldValue('name');
-    const prevDisplayName = form.getFieldValue('displayName');
     const autoName = `private-${slugify(displayName)}`;
-    const prevAutoName = prevDisplayName ? `private-${slugify(prevDisplayName)}` : '';
-    if (!currentName || currentName === prevAutoName) {
+    // Only auto-update if user hasn't manually edited the name
+    if (!currentName || currentName === lastAutoName.current) {
       form.setFieldValue('name', autoName);
+      lastAutoName.current = autoName;
     }
     validateForm();
   };
@@ -221,6 +231,7 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
       setCreateModalOpen(false);
       form.resetFields();
       setCustomRepoSelected(false);
+      lastAutoName.current = '';
     } catch (error) {
       console.error('Assistant creation failed:', error);
     } finally {
@@ -233,6 +244,7 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
     form.resetFields();
     setIsFormValid(false);
     setCustomRepoSelected(false);
+    lastAutoName.current = '';
   };
 
   // Filter to only assistant worktrees
