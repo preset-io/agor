@@ -40,6 +40,7 @@ const DAEMON_VERSION = await loadDaemonVersion(import.meta.url);
 import {
   and,
   eq,
+  generateId,
   getDatabaseUrl,
   MCPServerRepository,
   MessagesRepository,
@@ -869,24 +870,27 @@ async function main() {
         const missingVars = requiredUserEnvVars.filter((v) => !executorEnv[v]);
         if (missingVars.length > 0) {
           const missingList = missingVars.map((v) => `\`${v}\``).join(', ');
-          await messagesService.create({
-            session_id: sessionId,
-            task_id: data.taskId,
+          const errorContent = [
+            `**Missing required environment variables:** ${missingList}`,
+            '',
+            'Your administrator requires these variables to be set before running prompts.',
+            '',
+            `**To fix:** Click your user avatar (top-right) → **Settings** → **Environment Variables**, then add values for: ${missingList}`,
+            '',
+            'This is a one-time setup — once configured, this message will not appear again.',
+          ].join('\n');
+          const systemMessage: Partial<Message> = {
+            message_id: generateId() as Message['message_id'],
+            session_id: sessionId as Message['session_id'],
+            task_id: data.taskId as Message['task_id'],
             type: 'system',
-            role: 'system',
-            content: [
-              `**Missing required environment variables:** ${missingList}`,
-              '',
-              'Your administrator requires these variables to be set before running prompts.',
-              '',
-              `**To fix:** Click your user avatar (top-right) → **Settings** → **Environment Variables**, then add values for: ${missingList}`,
-              '',
-              'This is a one-time setup — once configured, this message will not appear again.',
-            ].join('\n'),
+            role: 'system' as Message['role'],
+            content: errorContent,
             content_preview: `Missing required env vars: ${missingVars.join(', ')}`,
-            index: -1,
+            index: session.message_count,
             timestamp: new Date().toISOString(),
-          } as Partial<import('@agor/core/types').Message>);
+          };
+          await messagesService.create(systemMessage);
           throw new Error(`Missing required environment variables: ${missingVars.join(', ')}`);
         }
       }
