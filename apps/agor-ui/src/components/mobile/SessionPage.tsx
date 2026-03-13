@@ -1,6 +1,6 @@
 import type { AgorClient } from '@agor/core/api';
 import type { PermissionMode, Repo, Session, SessionID, User, Worktree } from '@agor/core/types';
-import { PermissionScope, getAssistantConfig, isAssistant } from '@agor/core/types';
+import { getAssistantConfig, isAssistant, PermissionScope } from '@agor/core/types';
 import { Alert, Spin } from 'antd';
 import { useParams } from 'react-router-dom';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';

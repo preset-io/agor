@@ -96,11 +96,7 @@ export const AssistantTab: React.FC<AssistantTabProps> = ({
             />
           </Form.Item>
           <Form.Item label="Icon" labelCol={{ span: 6 }} wrapperCol={{ span: 18 }}>
-            <EmojiPickerInput
-              value={emoji}
-              onChange={(val) => setEmoji(val)}
-              defaultEmoji="🤖"
-            />
+            <EmojiPickerInput value={emoji} onChange={(val) => setEmoji(val)} defaultEmoji="🤖" />
           </Form.Item>
         </Form>
 
