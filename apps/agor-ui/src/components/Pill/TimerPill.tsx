@@ -12,9 +12,10 @@ import {
   QuestionCircleOutlined,
   StopOutlined,
 } from '@ant-design/icons';
-import { Tooltip, theme } from 'antd';
+import { Popover, theme } from 'antd';
 import type React from 'react';
 import { useEffect, useMemo, useState } from 'react';
+import { formatAbsoluteTime } from '../../utils/time';
 import { Tag } from '../Tag';
 import { PILL_COLORS } from './Pill';
 
@@ -25,7 +26,6 @@ interface TimerPillProps {
   startedAt?: string | number | Date;
   endedAt?: string | number | Date;
   durationMs?: number | null;
-  tooltip?: string;
   style?: React.CSSProperties;
 }
 
@@ -130,7 +130,6 @@ export const TimerPill: React.FC<TimerPillProps> = ({
   startedAt,
   endedAt,
   durationMs,
-  tooltip,
   style,
 }) => {
   const { token } = theme.useToken();
@@ -197,11 +196,54 @@ export const TimerPill: React.FC<TimerPillProps> = ({
 
   const config = statusConfig[status] || statusConfig.pending;
   const label = config.label ?? formatDuration(elapsedMs);
+  const isActive = ACTIVE_STATUSES.includes(status);
+
+  const popoverContent = useMemo(() => {
+    const labelStyle: React.CSSProperties = {
+      color: token.colorTextSecondary,
+      minWidth: 60,
+    };
+    const valueStyle: React.CSSProperties = {
+      fontFamily: token.fontFamilyCode,
+      color: token.colorText,
+    };
+    const rowStyle: React.CSSProperties = {
+      display: 'flex',
+      gap: 8,
+      alignItems: 'baseline',
+    };
+
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12 }}>
+        {startMs && (
+          <div style={rowStyle}>
+            <span style={labelStyle}>Started</span>
+            <span style={valueStyle}>{formatAbsoluteTime(new Date(startMs))}</span>
+          </div>
+        )}
+        <div style={rowStyle}>
+          <span style={labelStyle}>Ended</span>
+          <span style={valueStyle}>
+            {isActive ? 'In progress...' : endMs ? formatAbsoluteTime(new Date(endMs)) : '\u2014'}
+          </span>
+        </div>
+        <div style={rowStyle}>
+          <span style={labelStyle}>Duration</span>
+          <span style={valueStyle}>{formatDuration(elapsedMs)}</span>
+        </div>
+      </div>
+    );
+  }, [startMs, endMs, isActive, elapsedMs, token]);
+
   const tag = (
     <Tag icon={config.icon} color={config.color} style={style}>
       <span style={{ fontFamily: token.fontFamilyCode, lineHeight: 1 }}>{label}</span>
     </Tag>
   );
 
-  return tooltip ? <Tooltip title={tooltip}>{tag}</Tooltip> : tag;
+  return (
+    <Popover content={popoverContent} placement="bottom">
+      {tag}
+    </Popover>
+  );
 };

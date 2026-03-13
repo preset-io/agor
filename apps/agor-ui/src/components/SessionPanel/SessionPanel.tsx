@@ -609,11 +609,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                   footerTimerTask.message_range?.end_timestamp || footerTimerTask.completed_at
                 }
                 durationMs={footerTimerTask.duration_ms}
-                tooltip={
-                  footerTimerTask.status === TaskStatus.RUNNING
-                    ? 'Active task runtime'
-                    : 'Last task duration'
-                }
               />
             )}
             <SessionIdPill

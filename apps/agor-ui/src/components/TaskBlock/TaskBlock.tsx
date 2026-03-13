@@ -449,7 +449,6 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                   : undefined)
               }
               durationMs={task.duration_ms}
-              tooltip="Task runtime"
             />
             {scheduledFromWorktree && scheduledRunAt && (
               <ScheduledRunPill scheduledRunAt={scheduledRunAt} />
