@@ -658,7 +658,9 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                     <Bubble
                       placement="start"
                       avatar={
-                        agentic_tool ? (
+                        assistantEmoji ? (
+                          <AgorAvatar>{assistantEmoji}</AgorAvatar>
+                        ) : agentic_tool ? (
                           <ToolIcon tool={agentic_tool} size={32} />
                         ) : (
                           <AgorAvatar
