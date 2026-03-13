@@ -11,7 +11,7 @@
 
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import type { Repo, Session, SessionID, UUID, Worktree, WorktreeID } from '../types';
+import type { Repo, Session, SessionID, User, UUID, Worktree, WorktreeID } from '../types';
 import { renderTemplate } from './handlebars-helpers';
 
 /**
@@ -28,6 +28,10 @@ interface WorktreeRepositoryLike {
 
 interface RepoRepositoryLike {
   findById(id: UUID): Promise<Repo | null>;
+}
+
+interface UserRepositoryLike {
+  findById(id: string): Promise<User | null>;
 }
 
 /**
@@ -54,6 +58,7 @@ export async function buildSessionContext(
     sessions: SessionRepositoryLike;
     worktrees?: WorktreeRepositoryLike;
     repos?: RepoRepositoryLike;
+    users?: UserRepositoryLike;
   }
 ): Promise<Record<string, unknown>> {
   const context: Record<string, unknown> = {};
@@ -68,6 +73,21 @@ export async function buildSessionContext(
       permission_config: session.permission_config || {},
       created_at: session.created_at,
     };
+
+    // Fetch session owner info (immutable, safe for cached system prompt)
+    if (session.created_by && repos.users) {
+      try {
+        const owner = await repos.users.findById(session.created_by);
+        if (owner) {
+          context.owner = {
+            name: owner.name || owner.email,
+            email: owner.email,
+          };
+        }
+      } catch {
+        // Non-critical: owner info is nice-to-have
+      }
+    }
 
     // Fetch worktree data if session has one
     if (session.worktree_id && repos.worktrees) {
@@ -115,6 +135,7 @@ export async function renderAgorSystemPrompt(
     sessions: SessionRepositoryLike;
     worktrees?: WorktreeRepositoryLike;
     repos?: RepoRepositoryLike;
+    users?: UserRepositoryLike;
   }
 ): Promise<string> {
   const template = await loadAgorSystemPromptTemplate();

@@ -24,6 +24,7 @@ import type {
   RepoRepository,
   SessionMCPServerRepository,
   SessionRepository,
+  UsersRepository,
   WorktreeRepository,
 } from '../../db/feathers-repositories.js';
 import type { TokenUsage } from '../../types/token-usage.js';
@@ -129,7 +130,8 @@ export class CodexPromptService {
     private worktreesRepo?: WorktreeRepository,
     private reposRepo?: RepoRepository,
     apiKey?: string,
-    private mcpServerRepo?: MCPServerRepository
+    private mcpServerRepo?: MCPServerRepository,
+    private usersRepo?: UsersRepository
   ) {
     // Store API key from base-executor (already resolved with proper precedence)
     this.apiKey = apiKey || '';
@@ -192,6 +194,7 @@ export class CodexPromptService {
       sessions: this.sessionsRepo,
       worktrees: this.worktreesRepo,
       repos: this.reposRepo,
+      users: this.usersRepo,
     });
 
     // Create per-session CODEX_HOME (no race conditions!)

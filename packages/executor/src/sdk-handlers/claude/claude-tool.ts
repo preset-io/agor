@@ -120,7 +120,8 @@ export class ClaudeTool implements ITool {
     _useNativeAuth?: boolean, // Claude supports `claude login` OAuth, but no special handling needed in tool
     // biome-ignore lint/suspicious/noExplicitAny: Feathers service type
     mcpOAuthNotifyService?: any, // Service for notifying UI about OAuth requirements
-    inputRequestService?: import('../../input-requests/input-request-service').InputRequestService
+    inputRequestService?: import('../../input-requests/input-request-service').InputRequestService,
+    usersRepo?: import('../../db/feathers-repositories').UsersRepository
   ) {
     if (messagesRepo && sessionsRepo) {
       this.promptService = new ClaudePromptService(
@@ -137,7 +138,8 @@ export class ClaudeTool implements ITool {
         messagesService,
         mcpEnabled,
         mcpOAuthNotifyService,
-        inputRequestService
+        inputRequestService,
+        usersRepo
       );
     }
   }

@@ -11,6 +11,7 @@ import type {
   MessagesRepository,
   SessionMCPServerRepository,
   SessionRepository,
+  UsersRepository,
   WorktreeRepository,
 } from '../../db/feathers-repositories.js';
 import type { PermissionService } from '../../permissions/permission-service.js';
@@ -69,7 +70,8 @@ export class ClaudePromptService {
     private mcpEnabled?: boolean,
     // biome-ignore lint/suspicious/noExplicitAny: Feathers service type
     private mcpOAuthNotifyService?: any, // Service for notifying UI about OAuth requirements
-    private inputRequestService?: import('../../input-requests/input-request-service').InputRequestService
+    private inputRequestService?: import('../../input-requests/input-request-service').InputRequestService,
+    private usersRepo?: UsersRepository
   ) {
     // No client initialization needed - Agent SDK is stateless
   }
@@ -117,6 +119,7 @@ export class ClaudePromptService {
         sessionsService: this.sessionsService,
         messagesService: this.messagesService,
         worktreesRepo: this.worktreesRepo,
+        usersRepo: this.usersRepo,
         permissionLocks: this.permissionLocks,
       },
       {
@@ -277,6 +280,7 @@ export class ClaudePromptService {
         sessionsService: this.sessionsService,
         messagesService: this.messagesService,
         worktreesRepo: this.worktreesRepo,
+        usersRepo: this.usersRepo,
         permissionLocks: this.permissionLocks,
       },
       {

@@ -22,6 +22,7 @@ import type {
   RepoRepository,
   SessionMCPServerRepository,
   SessionRepository,
+  UsersRepository,
   WorktreeRepository,
 } from '../../db/feathers-repositories.js';
 import type { PermissionService } from '../../permissions/permission-service.js';
@@ -109,6 +110,7 @@ export interface QuerySetupDeps {
   sessionsService?: SessionsService;
   messagesService?: MessagesService;
   worktreesRepo?: WorktreeRepository;
+  usersRepo?: UsersRepository;
   permissionLocks: Map<SessionID, Promise<void>>;
   mcpEnabled?: boolean;
 }
@@ -250,6 +252,7 @@ export async function setupQuery(
     sessions: deps.sessionsRepo,
     worktrees: deps.worktreesRepo,
     repos: deps.reposRepo,
+    users: deps.usersRepo,
   });
 
   const queryOptions: Record<string, unknown> = {

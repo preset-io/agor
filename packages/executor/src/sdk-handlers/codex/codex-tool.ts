@@ -15,6 +15,7 @@ import type {
   RepoRepository,
   SessionMCPServerRepository,
   SessionRepository,
+  UsersRepository,
   WorktreeRepository,
 } from '../../db/feathers-repositories.js';
 import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response.js';
@@ -64,7 +65,8 @@ export class CodexTool implements ITool {
     messagesService?: MessagesService,
     tasksService?: TasksService,
     _useNativeAuth?: boolean, // Codex doesn't have OAuth fallback, but accept for interface consistency
-    mcpServerRepo?: MCPServerRepository
+    mcpServerRepo?: MCPServerRepository,
+    usersRepo?: UsersRepository
   ) {
     this.messagesRepo = messagesRepo;
     this.sessionsRepo = sessionsRepo;
@@ -79,7 +81,8 @@ export class CodexTool implements ITool {
         worktreesRepo,
         reposRepo,
         apiKey,
-        mcpServerRepo
+        mcpServerRepo,
+        usersRepo
       );
     }
   }

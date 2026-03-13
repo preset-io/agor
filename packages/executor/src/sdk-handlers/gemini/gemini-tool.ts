@@ -18,6 +18,7 @@ import type {
   RepoRepository,
   SessionMCPServerRepository,
   SessionRepository,
+  UsersRepository,
   WorktreeRepository,
 } from '../../db/feathers-repositories.js';
 import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response.js';
@@ -63,7 +64,8 @@ export class GeminiTool implements ITool {
     mcpServerRepo?: MCPServerRepository,
     sessionMCPRepo?: SessionMCPServerRepository,
     mcpEnabled?: boolean,
-    useNativeAuth?: boolean // Flag to use OAuth when no API key
+    useNativeAuth?: boolean, // Flag to use OAuth when no API key
+    usersRepo?: UsersRepository
   ) {
     if (messagesRepo && sessionsRepo) {
       this.promptService = new GeminiPromptService(
@@ -75,7 +77,8 @@ export class GeminiTool implements ITool {
         mcpServerRepo,
         sessionMCPRepo,
         mcpEnabled,
-        useNativeAuth
+        useNativeAuth,
+        usersRepo
       );
     }
   }

@@ -4467,6 +4467,24 @@ async function main() {
         // This ensures WebSocket events flush immediately, not batched with request
         const useStreaming = data.stream !== false; // Default to true
 
+        // Build prompt for executor, adding prompter context when prompter differs from session owner.
+        // This helps agents know WHO is talking to them in multi-user sessions.
+        // Only the prompt sent to the executor is prefixed — the stored task/message keeps the original.
+        let promptForExecutor = data.prompt;
+        const prompterUserId = params.user?.user_id;
+        if (prompterUserId && prompterUserId !== session.created_by) {
+          try {
+            const prompterUserRepo = new UsersRepository(db);
+            const prompterUser = await prompterUserRepo.findById(prompterUserId);
+            if (prompterUser) {
+              const prompterName = prompterUser.name || prompterUser.email;
+              promptForExecutor = `[Prompted by: ${prompterName} (${prompterUser.email})]\n\n${data.prompt}`;
+            }
+          } catch {
+            // Non-critical: fall back to unprefixed prompt
+          }
+        }
+
         // FEATHERS/WEBSOCKET MODE: Route through new executor architecture
         // Call the executeTask handler which spawns the executor process
         setImmediate(async () => {
@@ -4479,7 +4497,7 @@ async function main() {
               id,
               {
                 taskId: task.task_id,
-                prompt: data.prompt,
+                prompt: promptForExecutor,
                 permissionMode: data.permissionMode,
                 stream: useStreaming,
                 messageSource,

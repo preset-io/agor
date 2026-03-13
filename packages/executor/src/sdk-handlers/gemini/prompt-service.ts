@@ -28,6 +28,7 @@ import type {
   RepoRepository,
   SessionMCPServerRepository,
   SessionRepository,
+  UsersRepository,
   WorktreeRepository,
 } from '../../db/feathers-repositories.js';
 import type { TokenUsage } from '../../types/token-usage.js';
@@ -98,7 +99,8 @@ export class GeminiPromptService {
     private mcpServerRepo?: MCPServerRepository,
     private sessionMCPRepo?: SessionMCPServerRepository,
     private mcpEnabled?: boolean,
-    useNativeAuth?: boolean // Flag from base-executor indicating OAuth should be used
+    useNativeAuth?: boolean, // Flag from base-executor indicating OAuth should be used
+    private usersRepo?: UsersRepository
   ) {
     this.apiKey = apiKey;
     this.useNativeAuth = useNativeAuth ?? false; // Default to false if not provided
@@ -636,6 +638,7 @@ export class GeminiPromptService {
       sessions: this.sessionsRepo,
       worktrees: this.worktreesRepo,
       repos: this.reposRepo,
+      users: this.usersRepo,
     });
 
     // Write to temp file (unique per session, no races!)
