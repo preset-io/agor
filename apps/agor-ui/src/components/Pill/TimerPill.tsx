@@ -190,12 +190,6 @@ export const TimerPill: React.FC<TimerPillProps> = ({
     return () => window.clearInterval(interval);
   }, [startMs, status]);
 
-  if (!startMs && fixedDuration === null) {
-    return null;
-  }
-
-  const config = statusConfig[status] || statusConfig.pending;
-  const label = config.label ?? formatDuration(elapsedMs);
   const isActive = ACTIVE_STATUSES.includes(status);
 
   const popoverContent = useMemo(() => {
@@ -234,6 +228,13 @@ export const TimerPill: React.FC<TimerPillProps> = ({
       </div>
     );
   }, [startMs, endMs, isActive, elapsedMs, token]);
+
+  if (!startMs && fixedDuration === null) {
+    return null;
+  }
+
+  const config = statusConfig[status] || statusConfig.pending;
+  const label = config.label ?? formatDuration(elapsedMs);
 
   const tag = (
     <Tag icon={config.icon} color={config.color} style={style}>
