@@ -1,5 +1,23 @@
 # Releases
 
+## 0.14.2 (2026-03-13)
+
+### Features
+- **Messages MCP tool** — add `agor_messages_list` for browsing and searching session transcripts
+- **AskUserQuestion support** — full-stack implementation of interactive agent questions
+
+### Fixes
+- Prevent `sdk_session_id` from being overwritten after first capture
+- Detect SDK `error_during_execution` and mark task as failed
+- Copy-to-clipboard falls back to `execCommand` when Clipboard API throws
+- **Security**: prevent daemon env vars from leaking to agent sessions
+- Clean up stale zone references when deleting zones
+- Capture and surface actual error output when environment start fails
+- Make zone prompt template and trigger behavior optional
+
+### Chores
+- Remove Jenkinsfile and package-lock.json
+
 ## 0.14.1 (2026-03-06)
 
 ### Features
