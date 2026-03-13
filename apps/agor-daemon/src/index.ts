@@ -3472,6 +3472,67 @@ async function main() {
           return context;
         },
         // TODO: OpenCode session creation moved to executor - implement via IPC if needed
+
+        // Unix Integration: When a non-owner creates a session in a worktree with
+        // others_fs_access != 'none', ensure they're added to the worktree and repo
+        // unix groups. Without this, non-owners can't access the .git/ directory
+        // (which uses 2770 = no others access) even if the worktree directory itself
+        // allows "others" access via ACLs.
+        ...(worktreeRbacEnabled
+          ? [
+              async (context: HookContext) => {
+                const session = context.result as Session;
+
+                // Only for sessions with a worktree and unix_username
+                if (!session.worktree_id || !session.unix_username) {
+                  return context;
+                }
+
+                // Check if user is NOT an owner (owners are already handled by sync)
+                const isOwner = context.params?.isWorktreeOwner;
+                if (isOwner) {
+                  return context;
+                }
+
+                // Load worktree to check others_fs_access
+                try {
+                  const worktree = await worktreeRepository.findById(session.worktree_id);
+                  if (!worktree || !worktree.others_fs_access || worktree.others_fs_access === 'none') {
+                    return context;
+                  }
+
+                  // Fire-and-forget: trigger unix.sync-worktree to add session user to groups
+                  if (jwtSecret) {
+                    console.log(
+                      `[Unix Integration] Non-owner session created in worktree ${session.worktree_id.substring(0, 8)} ` +
+                        `by ${session.unix_username} (others_fs_access: ${worktree.others_fs_access}), syncing group membership`
+                    );
+                    const serviceToken = createServiceToken(jwtSecret);
+                    spawnExecutorFireAndForget(
+                      {
+                        command: 'unix.sync-worktree',
+                        sessionToken: serviceToken,
+                        daemonUrl: getDaemonUrl(),
+                        params: {
+                          worktreeId: session.worktree_id,
+                          daemonUser: config.daemon?.unix_user,
+                        },
+                      },
+                      { logPrefix: '[Executor/session.create.unix-group]' }
+                    );
+                  }
+                } catch (error) {
+                  // Don't fail session creation if unix sync fails
+                  console.error(
+                    `[Unix Integration] Failed to trigger group sync for session ${session.session_id.substring(0, 8)}:`,
+                    error
+                  );
+                }
+
+                return context;
+              },
+            ]
+          : []),
       ],
       patch: [
         async (context) => {

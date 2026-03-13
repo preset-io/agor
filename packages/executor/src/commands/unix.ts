@@ -348,12 +348,15 @@ export async function handleUnixSyncWorktree(
 
     // Fetch and add all owners to worktree group
     let ownersAdded = 0;
+    // Collect owner unix_usernames to avoid re-adding them as session users
+    const ownerUsernames = new Set<string>();
     try {
       const ownersResult = await client.service(`worktrees/${worktreeId}/owners`).find({});
       const owners = Array.isArray(ownersResult) ? ownersResult : ownersResult.data || [];
 
       for (const owner of owners as Array<{ unix_username?: string }>) {
         if (owner.unix_username) {
+          ownerUsernames.add(owner.unix_username);
           const inGroup = await checkCommand(
             UnixGroupCommands.isUserInGroup(owner.unix_username, groupName)
           );
@@ -368,7 +371,52 @@ export async function handleUnixSyncWorktree(
       console.log(`[unix.sync-worktree] Could not fetch owners, skipping user sync`);
     }
 
-    // Also sync repo group (ensure owners have .git/ access)
+    // When others_fs_access is 'read' or 'write', non-owner users who have sessions
+    // in this worktree also need group membership for .git/ access.
+    // The worktree directory itself uses ACL "others" bits, but the .git/ directory
+    // (repo group) always uses 2770 (no others access), so group membership is required.
+    let sessionUsersAdded = 0;
+    if (othersAccess !== 'none') {
+      try {
+        const sessionsResult = await client.service('sessions').find({
+          query: {
+            worktree_id: worktreeId,
+            $select: ['unix_username'],
+            $limit: 500,
+          },
+        });
+        const sessions = Array.isArray(sessionsResult)
+          ? sessionsResult
+          : sessionsResult.data || [];
+
+        // Collect unique non-owner unix_usernames from sessions
+        const sessionUsernames = new Set<string>();
+        for (const session of sessions as Array<{ unix_username?: string | null }>) {
+          if (session.unix_username && !ownerUsernames.has(session.unix_username)) {
+            sessionUsernames.add(session.unix_username);
+          }
+        }
+
+        for (const username of sessionUsernames) {
+          const inGroup = await checkCommand(
+            UnixGroupCommands.isUserInGroup(username, groupName)
+          );
+          if (!inGroup) {
+            await runCommand(UnixGroupCommands.addUserToGroup(username, groupName));
+            sessionUsersAdded++;
+            console.log(
+              `[unix.sync-worktree] Added session user ${username} to worktree group (others_fs_access: ${othersAccess})`
+            );
+          }
+        }
+      } catch (_error) {
+        console.log(
+          `[unix.sync-worktree] Could not fetch sessions for non-owner group sync`
+        );
+      }
+    }
+
+    // Also sync repo group (ensure owners and authorized session users have .git/ access)
     if (worktree.repo_id) {
       try {
         const repo = await client.service('repos').get(worktree.repo_id);
@@ -413,6 +461,49 @@ export async function handleUnixSyncWorktree(
             console.log(`[unix.sync-worktree] Could not fetch owners for repo group sync`);
           }
 
+          // Add non-owner session users to repo group when others_fs_access allows
+          // This is critical: the .git/ directory uses 2770 (no others access),
+          // so non-owners MUST be in the repo group to run git operations
+          if (othersAccess !== 'none') {
+            try {
+              const sessionsResult = await client.service('sessions').find({
+                query: {
+                  worktree_id: worktreeId,
+                  $select: ['unix_username'],
+                  $limit: 500,
+                },
+              });
+              const sessions = Array.isArray(sessionsResult)
+                ? sessionsResult
+                : sessionsResult.data || [];
+
+              const sessionUsernames = new Set<string>();
+              for (const session of sessions as Array<{ unix_username?: string | null }>) {
+                if (session.unix_username && !ownerUsernames.has(session.unix_username)) {
+                  sessionUsernames.add(session.unix_username);
+                }
+              }
+
+              for (const username of sessionUsernames) {
+                const inRepoGroup = await checkCommand(
+                  UnixGroupCommands.isUserInGroup(username, repo.unix_group)
+                );
+                if (!inRepoGroup) {
+                  await runCommand(
+                    UnixGroupCommands.addUserToGroup(username, repo.unix_group)
+                  );
+                  console.log(
+                    `[unix.sync-worktree] Added session user ${username} to repo group ${repo.unix_group} (others_fs_access: ${othersAccess})`
+                  );
+                }
+              }
+            } catch (_error) {
+              console.log(
+                `[unix.sync-worktree] Could not fetch sessions for repo group sync`
+              );
+            }
+          }
+
           // Fix .git/worktrees/<name>/ permissions
           const worktreeName = worktree.path.split('/').pop();
           if (worktreeName && repo.local_path) {
@@ -444,6 +535,7 @@ export async function handleUnixSyncWorktree(
         worktreeId,
         groupName,
         ownersAdded,
+        sessionUsersAdded,
       },
     };
   } catch (error) {
