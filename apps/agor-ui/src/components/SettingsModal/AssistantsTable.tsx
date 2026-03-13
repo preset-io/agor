@@ -33,7 +33,6 @@ import type { WorktreeUpdate } from '../WorktreeModal/tabs/GeneralTab';
 import { renderEnvCell } from './WorktreeEnvColumn';
 
 const FRAMEWORK_REPO_SLUG = 'preset-io/agor-assistant';
-const FRAMEWORK_REPO_URL = 'https://github.com/preset-io/agor-assistant.git';
 
 /** Special sentinel for "create new board" option */
 const CREATE_NEW_BOARD = '__create_new__';
