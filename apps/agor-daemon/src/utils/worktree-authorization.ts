@@ -103,6 +103,11 @@ export function loadWorktree(worktreeRepo: WorktreeRepository, worktreeIdField =
       return context;
     }
 
+    // Service accounts (executor) bypass RBAC
+    if (context.params.user?._isServiceAccount) {
+      return context;
+    }
+
     // Extract worktree_id from data or query
     let worktreeId: string | undefined;
 
@@ -174,6 +179,12 @@ export function ensureWorktreePermission(
       throw new NotAuthenticated('Authentication required');
     }
 
+    // Service accounts (executor) bypass RBAC — they perform privileged
+    // internal operations (unix.sync-worktree, git.worktree.add, etc.)
+    if (context.params.user._isServiceAccount) {
+      return context;
+    }
+
     // Worktree and ownership should have been cached by loadWorktree hook
     const worktree = context.params.worktree;
     const isOwner = context.params.isWorktreeOwner ?? false;
@@ -211,6 +222,11 @@ export function scopeWorktreeQuery(worktreeRepo: WorktreeRepository) {
   return async (context: HookContext) => {
     // Skip for internal calls
     if (!context.params.provider) {
+      return context;
+    }
+
+    // Service accounts (executor) bypass RBAC
+    if (context.params.user?._isServiceAccount) {
       return context;
     }
 
@@ -280,6 +296,11 @@ export function scopeSessionQuery(sessionRepo: SessionRepository) {
       return context;
     }
 
+    // Service accounts (executor) bypass RBAC
+    if (context.params.user?._isServiceAccount) {
+      return context;
+    }
+
     // Only apply to find() method
     if (context.method !== 'find') {
       return context;
@@ -344,6 +365,11 @@ export function filterWorktreesByPermission(worktreeRepo: WorktreeRepository) {
   return async (context: HookContext) => {
     // Skip for internal calls
     if (!context.params.provider) {
+      return context;
+    }
+
+    // Service accounts (executor) bypass RBAC
+    if (context.params.user?._isServiceAccount) {
       return context;
     }
 
@@ -632,6 +658,11 @@ export function loadWorktreeFromSession(worktreeRepo: WorktreeRepository) {
   return async (context: HookContext) => {
     // Skip for internal calls
     if (!context.params.provider) {
+      return context;
+    }
+
+    // Service accounts (executor) bypass RBAC
+    if (context.params.user?._isServiceAccount) {
       return context;
     }
 

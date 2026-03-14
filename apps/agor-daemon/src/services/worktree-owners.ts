@@ -48,6 +48,12 @@ function requireViewPermission(worktreeRepo: WorktreeRepository) {
       return context;
     }
 
+    // Service accounts (executor) bypass RBAC
+    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
+    if ((context.params as any).user?._isServiceAccount) {
+      return context;
+    }
+
     // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
     const params = context.params as any;
     const userId = params.user?.user_id;
@@ -88,6 +94,12 @@ function requireWorktreeOwner(worktreeRepo: WorktreeRepository) {
   return async (context: HookContext) => {
     // Skip for internal calls
     if (!context.params.provider) {
+      return context;
+    }
+
+    // Service accounts (executor) bypass RBAC
+    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
+    if ((context.params as any).user?._isServiceAccount) {
       return context;
     }
 
