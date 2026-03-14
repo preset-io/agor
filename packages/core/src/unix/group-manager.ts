@@ -217,11 +217,13 @@ export const UnixGroupCommands = {
 
     return [
       // Set primary group ownership (visible in ls -la)
+      // IMPORTANT: chgrp invalidates the kernel's ACL permission cache for files
+      // owned by other users, breaking subsequent non-root access even when ACLs
+      // are correct. All commands after chgrp must use sudo for reliable access.
       `sudo -n chgrp -R ${groupName} "${path}"`,
-      // Set setgid bit on directories only (new files inherit group ownership)
-      // Note: find runs without sudo (just traversing), chmod inside -exec uses sudo
-      `find "${path}" -type d -exec sudo -n chmod g+s {} +`,
-      // ACL: owner gets full access
+      // ACL: set permissions BEFORE setgid traversal
+      // Order matters: ACLs must be set first so the filesystem is accessible
+      // for any subsequent operations, even though we use sudo throughout.
       `sudo -n setfacl -R -m u::rwX "${path}"`,
       // ACL: group gets full access (rwX = rw for files, rwx for dirs)
       `sudo -n setfacl -R -m g:${groupName}:rwX "${path}"`,
@@ -232,6 +234,9 @@ export const UnixGroupCommands = {
       // DEFAULT ACLs for new files/dirs (inherit these permissions)
       // IMPORTANT: Include m::rwX to ensure mask allows group access on new files
       `sudo -n setfacl -R -d -m u::rwX,g:${groupName}:rwX,${othersAcl},m::rwX "${path}"`,
+      // Set setgid bit on directories only (new files inherit group ownership)
+      // Uses sudo for find traversal since chgrp can invalidate ACL cache
+      `sudo -n find "${path}" -type d -exec chmod g+s {} +`,
     ];
   },
 } as const;

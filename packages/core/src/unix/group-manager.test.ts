@@ -213,12 +213,12 @@ describe('group-manager', () => {
         const cmds = UnixGroupCommands.setDirectoryGroup('/data/project', 'developers', '2775');
         expect(cmds).toEqual([
           'sudo -n chgrp -R developers "/data/project"',
-          'find "/data/project" -type d -exec sudo -n chmod g+s {} +',
           'sudo -n setfacl -R -m u::rwX "/data/project"',
           'sudo -n setfacl -R -m g:developers:rwX "/data/project"',
           'sudo -n setfacl -R -m o::rX "/data/project"',
           'sudo -n setfacl -R -m m::rwX "/data/project"',
           'sudo -n setfacl -R -d -m u::rwX,g:developers:rwX,o::rX,m::rwX "/data/project"',
+          'sudo -n find "/data/project" -type d -exec chmod g+s {} +',
         ]);
       });
 
@@ -226,12 +226,12 @@ describe('group-manager', () => {
         const cmds = UnixGroupCommands.setDirectoryGroup('/data/secret', 'admins', '2770');
         expect(cmds).toEqual([
           'sudo -n chgrp -R admins "/data/secret"',
-          'find "/data/secret" -type d -exec sudo -n chmod g+s {} +',
           'sudo -n setfacl -R -m u::rwX "/data/secret"',
           'sudo -n setfacl -R -m g:admins:rwX "/data/secret"',
           'sudo -n setfacl -R -m o::--- "/data/secret"',
           'sudo -n setfacl -R -m m::rwX "/data/secret"',
           'sudo -n setfacl -R -d -m u::rwX,g:admins:rwX,o::---,m::rwX "/data/secret"',
+          'sudo -n find "/data/secret" -type d -exec chmod g+s {} +',
         ]);
       });
 
@@ -239,12 +239,12 @@ describe('group-manager', () => {
         const cmds = UnixGroupCommands.setDirectoryGroup('/data/public', 'everyone', '2777');
         expect(cmds).toEqual([
           'sudo -n chgrp -R everyone "/data/public"',
-          'find "/data/public" -type d -exec sudo -n chmod g+s {} +',
           'sudo -n setfacl -R -m u::rwX "/data/public"',
           'sudo -n setfacl -R -m g:everyone:rwX "/data/public"',
           'sudo -n setfacl -R -m o::rwX "/data/public"',
           'sudo -n setfacl -R -m m::rwX "/data/public"',
           'sudo -n setfacl -R -d -m u::rwX,g:everyone:rwX,o::rwX,m::rwX "/data/public"',
+          'sudo -n find "/data/public" -type d -exec chmod g+s {} +',
         ]);
       });
     });
