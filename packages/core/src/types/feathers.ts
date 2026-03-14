@@ -49,6 +49,8 @@ export interface AuthenticatedUser {
   email: string;
   /** User role (for authorization) - always defined, defaults to 'member' */
   role: string;
+  /** True for service accounts (executor) — bypasses RBAC checks */
+  _isServiceAccount?: boolean;
 }
 
 /**

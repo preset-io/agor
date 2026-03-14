@@ -385,9 +385,7 @@ export async function handleUnixSyncWorktree(
             $limit: 500,
           },
         });
-        const sessions = Array.isArray(sessionsResult)
-          ? sessionsResult
-          : sessionsResult.data || [];
+        const sessions = Array.isArray(sessionsResult) ? sessionsResult : sessionsResult.data || [];
 
         // Collect unique non-owner unix_usernames from sessions
         const sessionUsernames = new Set<string>();
@@ -398,9 +396,7 @@ export async function handleUnixSyncWorktree(
         }
 
         for (const username of sessionUsernames) {
-          const inGroup = await checkCommand(
-            UnixGroupCommands.isUserInGroup(username, groupName)
-          );
+          const inGroup = await checkCommand(UnixGroupCommands.isUserInGroup(username, groupName));
           if (!inGroup) {
             await runCommand(UnixGroupCommands.addUserToGroup(username, groupName));
             sessionUsersAdded++;
@@ -410,9 +406,7 @@ export async function handleUnixSyncWorktree(
           }
         }
       } catch (_error) {
-        console.log(
-          `[unix.sync-worktree] Could not fetch sessions for non-owner group sync`
-        );
+        console.log(`[unix.sync-worktree] Could not fetch sessions for non-owner group sync`);
       }
     }
 
@@ -489,18 +483,14 @@ export async function handleUnixSyncWorktree(
                   UnixGroupCommands.isUserInGroup(username, repo.unix_group)
                 );
                 if (!inRepoGroup) {
-                  await runCommand(
-                    UnixGroupCommands.addUserToGroup(username, repo.unix_group)
-                  );
+                  await runCommand(UnixGroupCommands.addUserToGroup(username, repo.unix_group));
                   console.log(
                     `[unix.sync-worktree] Added session user ${username} to repo group ${repo.unix_group} (others_fs_access: ${othersAccess})`
                   );
                 }
               }
             } catch (_error) {
-              console.log(
-                `[unix.sync-worktree] Could not fetch sessions for repo group sync`
-              );
+              console.log(`[unix.sync-worktree] Could not fetch sessions for repo group sync`);
             }
           }
 

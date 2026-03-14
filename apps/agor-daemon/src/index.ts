@@ -3497,7 +3497,11 @@ async function main() {
                 // Load worktree to check others_fs_access
                 try {
                   const worktree = await worktreeRepository.findById(session.worktree_id);
-                  if (!worktree || !worktree.others_fs_access || worktree.others_fs_access === 'none') {
+                  if (
+                    !worktree ||
+                    !worktree.others_fs_access ||
+                    worktree.others_fs_access === 'none'
+                  ) {
                     return context;
                   }
 
