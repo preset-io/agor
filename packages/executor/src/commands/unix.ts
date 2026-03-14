@@ -371,12 +371,15 @@ export async function handleUnixSyncWorktree(
       console.log(`[unix.sync-worktree] Could not fetch owners, skipping user sync`);
     }
 
-    // When others_fs_access is 'read' or 'write', non-owner users who have sessions
-    // in this worktree also need group membership for .git/ access.
-    // The worktree directory itself uses ACL "others" bits, but the .git/ directory
-    // (repo group) always uses 2770 (no others access), so group membership is required.
+    // When others_fs_access is 'write', non-owner session users need worktree group
+    // membership for full read-write access. For 'read' mode, they rely on ACL "others"
+    // bits (o::rX) on the worktree directory — adding them to the worktree group would
+    // escalate to write access since the group always has rwx.
+    //
+    // For both 'read' and 'write', non-owners still need repo group membership (added
+    // below) for .git/ access, which always uses 2770 (no others access).
     let sessionUsersAdded = 0;
-    if (othersAccess !== 'none') {
+    if (othersAccess === 'write') {
       try {
         const sessionsResult = await client.service('sessions').find({
           query: {
