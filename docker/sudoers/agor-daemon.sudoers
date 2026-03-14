@@ -117,10 +117,12 @@ agor ALL=(ALL) NOPASSWD: /usr/bin/tee /home/*/.agor/*
 agor ALL=(ALL) NOPASSWD: /usr/bin/tee /var/agor/*
 
 # ============================================================================
-# QUERY COMMANDS - Read-Only Operations
+# QUERY AND TRAVERSAL COMMANDS
 # ============================================================================
-# These are safe, read-only commands used to check system state.
-# No security risk from these.
+# id, getent, readlink, test: read-only state checks, no security risk.
+# find: used with -exec chmod g+s for setgid propagation. Note that
+# find with -exec can run arbitrary commands as root — command construction
+# is controlled in our codebase (group-manager.ts), not from user input.
 
 agor ALL=(ALL) NOPASSWD: /usr/bin/id *
 agor ALL=(ALL) NOPASSWD: /usr/bin/getent *
