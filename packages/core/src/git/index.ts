@@ -72,6 +72,9 @@ function createGit(baseDir?: string, env?: Record<string, string>) {
     baseDir,
     binary: gitBinary,
     config,
+    unsafe: {
+      allowUnsafeSshCommand: true,
+    },
     spawnOptions: env
       ? ({
           env: { ...process.env, ...env } as NodeJS.ProcessEnv,
