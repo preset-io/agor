@@ -515,18 +515,12 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         const insertData = this.sessionToInsert(merged);
 
         // STEP 3: Write merged session (within same transaction)
-        // IMPORTANT: All materialized top-level columns must be included here.
-        // Missing columns (like archived) won't be persisted, causing data to revert on reload.
+        // Pass all columns via insertData (matches worktree repo pattern).
+        // Previously used an explicit column allowlist that silently dropped
+        // columns like archived/archived_reason, causing data to revert on reload.
         // biome-ignore lint/suspicious/noExplicitAny: Transaction context requires type assertion for database wrapper functions
         await update(tx as any, sessions)
-          .set({
-            status: insertData.status,
-            updated_at: new Date(),
-            ready_for_prompt: insertData.ready_for_prompt,
-            archived: insertData.archived,
-            archived_reason: insertData.archived_reason,
-            data: insertData.data,
-          })
+          .set(insertData)
           .where(eq(sessions.session_id, fullId))
           .run();
 
