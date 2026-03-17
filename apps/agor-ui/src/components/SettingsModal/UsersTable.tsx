@@ -15,7 +15,7 @@ import {
   Typography,
 } from 'antd';
 import { useState } from 'react';
-import { mapToArray } from '@/utils/mapHelpers';
+import { mapToSortedArray } from '@/utils/mapHelpers';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { UserSettingsModal } from './UserSettingsModal';
 
@@ -156,7 +156,9 @@ export const UsersTable: React.FC<UsersTableProps> = ({
       </div>
 
       <Table
-        dataSource={mapToArray(userById)}
+        dataSource={mapToSortedArray(userById, (a, b) =>
+          a.email.localeCompare(b.email, undefined, { sensitivity: 'base' })
+        )}
         columns={columns}
         rowKey="user_id"
         pagination={false}

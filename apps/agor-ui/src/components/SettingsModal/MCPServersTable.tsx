@@ -27,7 +27,7 @@ import {
   Typography,
 } from 'antd';
 import { useEffect, useState } from 'react';
-import { mapToArray } from '@/utils/mapHelpers';
+import { mapToSortedArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
 import { extractOAuthConfig, extractOAuthConfigForTesting } from './mcp-oauth-utils';
 
@@ -1493,7 +1493,9 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       </div>
 
       <Table
-        dataSource={mapToArray(mcpServerById)}
+        dataSource={mapToSortedArray(mcpServerById, (a, b) =>
+          a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+        )}
         columns={columns}
         rowKey="mcp_server_id"
         pagination={{ pageSize: 10, showSizeChanger: true }}

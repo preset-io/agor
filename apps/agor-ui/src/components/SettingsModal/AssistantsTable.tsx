@@ -244,7 +244,11 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
     const term = searchTerm.trim().toLowerCase();
     const assistantWorktrees = Array.from(worktreeById.values())
       .filter((w) => !w.archived && isAssistant(w))
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      .sort((a, b) => {
+        const nameA = getAssistantConfig(a)?.displayName ?? a.name;
+        const nameB = getAssistantConfig(b)?.displayName ?? b.name;
+        return nameA.localeCompare(nameB, undefined, { sensitivity: 'base' });
+      });
 
     if (!term) return assistantWorktrees;
 

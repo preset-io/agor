@@ -43,7 +43,7 @@ import {
 } from 'antd';
 import { useEffect, useState } from 'react';
 import { copyToClipboard } from '@/utils/clipboard';
-import { mapToArray } from '@/utils/mapHelpers';
+import { mapToSortedArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
 import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
 import { AgentSelectionGrid } from '../AgentSelectionGrid';
@@ -840,7 +840,9 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     },
   ];
 
-  const channels = mapToArray(gatewayChannelById);
+  const channels = mapToSortedArray(gatewayChannelById, (a, b) =>
+    a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+  );
 
   return (
     <div>
