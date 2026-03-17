@@ -216,7 +216,7 @@
     "js-yaml": "^4.1.1",
     "open": "^11.0.0",
     "postgres": "^3.4.8",
-    "simple-git": "^3.32.3",
+    "simple-git": "^3.33.0",
     "socket.io-client": "^4.8.3",
     "uuid": "^13.0.0"
   },
