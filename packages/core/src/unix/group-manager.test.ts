@@ -208,6 +208,16 @@ describe('group-manager', () => {
       });
     });
 
+    describe('setUserAcl', () => {
+      it('returns recursive ACL commands for a specific user', () => {
+        const cmds = UnixGroupCommands.setUserAcl('/data/worktree', 'agorpg');
+        expect(cmds).toEqual([
+          'sudo -n setfacl -R -m u:agorpg:rwX "/data/worktree"',
+          'sudo -n setfacl -R -d -m u:agorpg:rwX "/data/worktree"',
+        ]);
+      });
+    });
+
     describe('setDirectoryGroup', () => {
       it('returns ACL-based commands for others read (2775)', () => {
         const cmds = UnixGroupCommands.setDirectoryGroup('/data/project', 'developers', '2775');

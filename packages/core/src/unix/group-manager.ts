@@ -239,6 +239,26 @@ export const UnixGroupCommands = {
       `sudo -n find "${path}" -type d -exec chmod g+s {} +`,
     ];
   },
+
+  /**
+   * Set explicit user ACL on a directory (recursive with defaults)
+   *
+   * Grants a specific user rwX access to all existing files/dirs and sets
+   * default ACLs so new files inherit the same access. This is used to
+   * ensure the daemon user can always access worktree files, even when
+   * the daemon process has stale supplementary groups (groups added after
+   * process startup are not picked up by the running process).
+   *
+   * @param path - Directory path
+   * @param username - Unix username to grant access to
+   * @returns Array of command strings with sudo to execute sequentially
+   */
+  setUserAcl: (path: string, username: string): string[] => [
+    // Set ACL on all existing files and directories
+    `sudo -n setfacl -R -m u:${username}:rwX "${path}"`,
+    // Set default ACL so new files/dirs inherit the same access
+    `sudo -n setfacl -R -d -m u:${username}:rwX "${path}"`,
+  ],
 } as const;
 
 /**

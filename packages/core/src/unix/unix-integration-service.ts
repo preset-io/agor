@@ -426,6 +426,15 @@ export class UnixIntegrationService {
     await this.executor.execAll(
       UnixGroupCommands.setDirectoryGroup(worktreePath, worktree.unix_group, permissionMode)
     );
+
+    // Set explicit user ACL for the daemon user so it can access worktree files
+    // even when its supplementary groups are stale (groups added after process
+    // startup are not picked up by the running process)
+    if (this.config.daemonUser) {
+      await this.executor.execAll(
+        UnixGroupCommands.setUserAcl(worktreePath, this.config.daemonUser)
+      );
+    }
   }
 
   /**
@@ -569,6 +578,12 @@ export class UnixIntegrationService {
     await this.executor.execAll(
       UnixGroupCommands.setDirectoryGroup(gitPath, repo.unix_group, REPO_GIT_PERMISSION_MODE)
     );
+
+    // Set explicit user ACL for the daemon user on .git directory
+    // (same stale supplementary groups fix as worktree directories)
+    if (this.config.daemonUser) {
+      await this.executor.execAll(UnixGroupCommands.setUserAcl(gitPath, this.config.daemonUser));
+    }
   }
 
   /**
@@ -614,6 +629,13 @@ export class UnixIntegrationService {
     await this.executor.execAll(
       UnixGroupCommands.setDirectoryGroup(worktreeGitDir, repo.unix_group, REPO_GIT_PERMISSION_MODE)
     );
+
+    // Set explicit user ACL for the daemon user on .git/worktrees/<name>
+    if (this.config.daemonUser) {
+      await this.executor.execAll(
+        UnixGroupCommands.setUserAcl(worktreeGitDir, this.config.daemonUser)
+      );
+    }
   }
 
   /**
