@@ -887,15 +887,17 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         });
 
         // Merge: zones (back) + worktrees (middle) + markdown + cursors/comments (front)
-        return [
+        // Sanitize to prevent "Parent node not found" crash when a worktree/zone is
+        // removed but comment nodes still reference it as parentId.
+        return sanitizeOrphanedParents([
           ...existingZones,
           ...updatedWorktrees,
           ...existingMarkdown,
           ...existingCursors,
           ...existingComments,
-        ];
+        ]);
       });
-    }, [initialNodes, setNodes]);
+    }, [initialNodes, setNodes, sanitizeOrphanedParents]);
 
     // Memoized MiniMap nodeColor callback to prevent MiniMap canvas repaints on every render
     const miniMapNodeColor = useCallback(
@@ -938,13 +940,29 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       };
     }, []);
 
+    // Helper: Sanitize orphaned parentId references to prevent React Flow "Parent node not found" errors.
+    // This can happen when a worktree or zone is removed but child nodes (e.g., comments) still reference it.
+    const sanitizeOrphanedParents = useCallback((nodes: Node[]): Node[] => {
+      const nodeIds = new Set(nodes.map((n) => n.id));
+      return nodes.map((node) => {
+        if (node.parentId && !nodeIds.has(node.parentId)) {
+          // Parent node no longer exists — clear parentId to prevent crash.
+          // Position is already relative to the missing parent, but React Flow
+          // will treat it as absolute once parentId is cleared. This may cause
+          // a slight position jump, but that's preferable to crashing.
+          return { ...node, parentId: undefined };
+        }
+        return node;
+      });
+    }, []);
+
     // Helper: Apply consistent z-ordering to nodes
     // Z-order: zones < worktrees < markdown < comments < cursors (cursors always on top)
     const applyZOrder = useCallback(
       (zones: Node[], markdown: Node[], worktrees: Node[], comments: Node[], cursors: Node[]) => {
-        return [...zones, ...worktrees, ...markdown, ...comments, ...cursors];
+        return sanitizeOrphanedParents([...zones, ...worktrees, ...markdown, ...comments, ...cursors]);
       },
-      []
+      [sanitizeOrphanedParents]
     );
 
     // Sync ZONE and MARKDOWN nodes separately
