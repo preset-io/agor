@@ -518,13 +518,20 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         // Pass all columns via insertData (matches worktree repo pattern).
         // Previously used an explicit column allowlist that silently dropped
         // columns like archived/archived_reason, causing data to revert on reload.
+        // Always refresh updated_at to current time on every update — sessionToInsert()
+        // preserves the old timestamp from the merged session, but updates must advance it.
+        // Without this, the staleness check in query-builder.ts (hoursSinceUpdate > 24)
+        // would erroneously clear sdk_session_id and disconnect agents from their history.
+        insertData.updated_at = new Date();
+
         // biome-ignore lint/suspicious/noExplicitAny: Transaction context requires type assertion for database wrapper functions
         await update(tx as any, sessions)
           .set(insertData)
           .where(eq(sessions.session_id, fullId))
           .run();
 
-        // Return merged session (no need to re-fetch, we have it in memory)
+        // Return merged session with refreshed timestamp
+        merged.last_updated = insertData.updated_at.toISOString();
         return merged;
       });
 
