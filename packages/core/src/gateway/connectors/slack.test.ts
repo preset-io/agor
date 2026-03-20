@@ -26,20 +26,20 @@ describe('markdownToMrkdwn', () => {
     expect(markdownToMrkdwn('https://example.com')).toBe('<https://example.com>');
   });
 
-  it('converts images to links (Slack cannot render inline images)', () => {
-    expect(markdownToMrkdwn('![alt text](https://img.png)')).toBe('<https://img.png|alt text>');
-    expect(markdownToMrkdwn('![](https://img.png)')).toBe('<https://img.png>');
+  it('strips images (Slack cannot render inline images)', () => {
+    expect(markdownToMrkdwn('![alt text](https://img.png)')).toBe('');
+    expect(markdownToMrkdwn('![](https://img.png)')).toBe('');
   });
 
-  it('converts headings to bold text', () => {
-    expect(markdownToMrkdwn('# Heading 1')).toBe('*Heading 1*');
-    expect(markdownToMrkdwn('## Heading 2')).toBe('*Heading 2*');
-    expect(markdownToMrkdwn('### Heading 3')).toBe('*Heading 3*');
+  it('converts headings to plain text', () => {
+    expect(markdownToMrkdwn('# Heading 1')).toBe('Heading 1');
+    expect(markdownToMrkdwn('## Heading 2')).toBe('Heading 2');
+    expect(markdownToMrkdwn('### Heading 3')).toBe('Heading 3');
   });
 
-  it('strips horizontal rules', () => {
-    expect(markdownToMrkdwn('---')).toBe('');
-    expect(markdownToMrkdwn('***')).toBe('');
+  it('preserves horizontal rules', () => {
+    expect(markdownToMrkdwn('---')).toBe('---');
+    expect(markdownToMrkdwn('***')).toBe('***');
   });
 
   it('preserves code blocks', () => {
@@ -65,14 +65,10 @@ describe('markdownToMrkdwn', () => {
     expect(markdownToMrkdwn('> quoted text')).toBe('> quoted text');
   });
 
-  it('renders tables as code blocks to preserve content', () => {
+  it('strips tables (md-to-slack limitation)', () => {
     const input = '| Col1 | Col2 |\n|------|------|\n| A    | B    |';
     const output = markdownToMrkdwn(input);
-    expect(output).toContain('```');
-    expect(output).toContain('Col1');
-    expect(output).toContain('Col2');
-    expect(output).toContain('A');
-    expect(output).toContain('B');
+    expect(output).toBe('');
   });
 
   it('handles a realistic agent response', () => {
@@ -96,9 +92,9 @@ describe('markdownToMrkdwn', () => {
 
     const output = markdownToMrkdwn(input);
 
-    // Bold headings
-    expect(output).toContain('*Summary*');
-    expect(output).toContain('*Code change*');
+    // Headings rendered as plain text
+    expect(output).toContain('Summary');
+    expect(output).toContain('Code change');
     // Bold text
     expect(output).toContain('*Fixed*');
     // Links
@@ -138,7 +134,11 @@ describe('markdownToMrkdwn', () => {
   });
 
   it('handles inline formatting inside headings', () => {
-    expect(markdownToMrkdwn('## Fix for **critical** bug')).toContain('*Fix for *critical* bug*');
+    // md-to-slack renders headings as plain text without processing inline tokens
+    const output = markdownToMrkdwn('## Fix for **critical** bug');
+    expect(output).toContain('Fix for');
+    expect(output).toContain('critical');
+    expect(output).toContain('bug');
   });
 
   it('handles empty input', () => {

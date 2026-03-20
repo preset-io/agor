@@ -23,7 +23,7 @@
 
 import { SocketModeClient } from '@slack/socket-mode';
 import { WebClient } from '@slack/web-api';
-import { Marked, type MarkedExtension, type Token, type Tokens } from 'marked';
+import { markdownToSlack } from 'md-to-slack';
 
 import type { ChannelType } from '../../types/gateway';
 import type { GatewayConnector, InboundMessage } from '../connector';
@@ -91,176 +91,16 @@ function hasActiveMention(text: string, mentionPattern: RegExp): boolean {
 }
 
 /**
- * Slack mrkdwn renderer for `marked`.
- *
- * Converts GitHub-flavored markdown AST nodes to Slack mrkdwn format.
- * Based on https://github.com/nicoespeon/md-to-slack (MIT).
- *
- * Key conversions:
- * - **bold** → *bold*          - ~~strike~~ → ~strike~
- * - [text](url) → <url|text>  - # Heading  → bold text
- * - Code blocks & inline code pass through (Slack supports them)
- * - Tables & images stripped (unsupported in mrkdwn)
- *
- * TODO: When Agor upgrades to Node 22+, replace this custom renderer
- * with the `md-to-slack` package (https://www.npmjs.com/package/md-to-slack)
- * which does the same thing but is maintained upstream.
- */
-const slackRenderer = {
-  // Block-level
-
-  space(token: Tokens.Space) {
-    return token.raw;
-  },
-
-  code(token: Tokens.Code) {
-    return `\`\`\`${token.lang ?? ''}\n${token.text}\n\`\`\``;
-  },
-
-  blockquote(token: Tokens.Blockquote) {
-    return token.tokens.map((t: Token) => ('> ' + this.parser.parse([t])).trim()).join('\n');
-  },
-
-  html(token: Tokens.HTML | Tokens.Tag) {
-    return token.text
-      .replace(/<br\s*\/{0,1}>/g, '\n')
-      .replace(/<\/{0,1}del>/g, '~')
-      .replace(/<\/{0,1}s>/g, '~')
-      .replace(/<\/{0,1}strike>/g, '~');
-  },
-
-  heading(token: Tokens.Heading) {
-    return `*${this.parser.parseInline(token.tokens)}*\n\n`;
-  },
-
-  hr() {
-    return '';
-  },
-
-  list(token: Tokens.List) {
-    const parseItemContent = (itemTokens: Token[]) => {
-      const hasBlockContent = itemTokens.some(
-        (t) => t.type === 'list' || t.type === 'code' || t.type === 'blockquote'
-      );
-      if (hasBlockContent) {
-        return this.parser.parse(itemTokens);
-      }
-      return itemTokens
-        .map((t) => {
-          if (t.type === 'text' && 'tokens' in t && t.tokens) {
-            return this.parser.parseInline(t.tokens as Token[]);
-          } else if (t.type === 'space') {
-            return t.raw;
-          }
-          return this.parser.parse([t]);
-        })
-        .join('');
-    };
-
-    const items = token.ordered
-      ? token.items.map((item, i) => `${Number(token.start) + i}. ${parseItemContent(item.tokens)}`)
-      : token.items.map((item) => {
-          const marker = item.task ? (item.checked ? '☒' : '☐') : '-';
-          return `${marker} ${parseItemContent(item.tokens)}`;
-        });
-
-    const firstItem = token.items[0].raw;
-    const indentation = firstItem.match(/^(\s+)/)?.[0];
-    if (!indentation) {
-      return items.join('\n');
-    }
-
-    const newLine = token.ordered ? `\n${indentation} ` : `\n${indentation}`;
-    return newLine + items.join(newLine);
-  },
-
-  listitem() {
-    return '';
-  },
-
-  checkbox() {
-    return '';
-  },
-
-  paragraph(token: Tokens.Paragraph) {
-    return this.parser.parseInline(token.tokens);
-  },
-
-  table(token: Tokens.Table) {
-    // Slack doesn't support tables — render as a monospace code block
-    // to preserve alignment and avoid losing content.
-    const headerRow = token.header.map((cell) => cell.text).join(' | ');
-    const separator = token.header
-      .map((cell) => '-'.repeat(Math.max(cell.text.length, 3)))
-      .join(' | ');
-    const bodyRows = token.rows.map((row) => row.map((cell) => cell.text).join(' | '));
-    return `\`\`\`\n${headerRow}\n${separator}\n${bodyRows.join('\n')}\n\`\`\``;
-  },
-  tablerow() {
-    return '';
-  },
-  tablecell() {
-    return '';
-  },
-
-  // Inline-level
-
-  strong(token: Tokens.Strong) {
-    return `*${this.parser.parseInline(token.tokens)}*`;
-  },
-
-  em(token: Tokens.Em) {
-    return `_${this.parser.parseInline(token.tokens)}_`;
-  },
-
-  codespan(token: Tokens.Codespan) {
-    return token.raw;
-  },
-
-  br() {
-    return '';
-  },
-
-  del(token: Tokens.Del) {
-    return `~${this.parser.parseInline(token.tokens)}~`;
-  },
-
-  link(token: Tokens.Link) {
-    const text = this.parser.parseInline(token.tokens);
-    const url = cleanUrl(token.href);
-    return url === text || url === `mailto:${text}` || !text ? `<${url}>` : `<${url}|${text}>`;
-  },
-
-  image(token: Tokens.Image) {
-    // Slack doesn't render images inline — fall back to a link
-    const url = cleanUrl(token.href);
-    const text = token.text;
-    return text ? `<${url}|${text}>` : `<${url}>`;
-  },
-
-  text(token: Tokens.Text | Tokens.Escape) {
-    return token.text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
-  },
-} satisfies MarkedExtension['renderer'];
-
-function cleanUrl(href: string) {
-  try {
-    return encodeURI(href).replace(/%25/g, '%');
-  } catch {
-    return href;
-  }
-}
-
-/** Pre-configured marked instance for Slack mrkdwn output. */
-const slackMarked = new Marked({ renderer: slackRenderer, gfm: true, async: false });
-
-/**
  * Convert GitHub-flavored markdown to Slack mrkdwn format.
  *
- * Uses `marked` for proper AST-based parsing — no fragile regex.
+ * Delegates to `md-to-slack` which uses `marked` with a custom Slack
+ * renderer. Handles bold, italic, strikethrough, links, headings,
+ * code blocks, lists, blockquotes, and Slack character escaping.
+ *
+ * @see https://github.com/nicoespeon/md-to-slack
  */
 export function markdownToMrkdwn(markdown: string): string {
-  return (slackMarked.parse(markdown) as string).trimEnd();
+  return markdownToSlack(markdown);
 }
 
 export class SlackConnector implements GatewayConnector {
