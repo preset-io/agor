@@ -29,7 +29,7 @@ export function useRecentBoards(
   );
 
   const recentBoards = useMemo(() => {
-    const boardMap = new Map(boards.map((b) => [b.board_id, b]));
+    const boardMap = new Map<string, Board>(boards.map((b) => [b.board_id, b]));
     return recentIds
       .filter((id) => id !== currentBoardId && boardMap.has(id))
       .map((id) => boardMap.get(id)!)
