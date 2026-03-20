@@ -101,6 +101,10 @@ function hasActiveMention(text: string, mentionPattern: RegExp): boolean {
  * - [text](url) → <url|text>  - # Heading  → bold text
  * - Code blocks & inline code pass through (Slack supports them)
  * - Tables & images stripped (unsupported in mrkdwn)
+ *
+ * TODO: When Agor upgrades to Node 22+, replace this custom renderer
+ * with the `md-to-slack` package (https://www.npmjs.com/package/md-to-slack)
+ * which does the same thing but is maintained upstream.
  */
 const slackRenderer = {
   // Block-level
