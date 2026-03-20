@@ -6,15 +6,7 @@
  */
 
 import type { AgorClient } from '@agor/core/api';
-import type {
-  AgenticToolName,
-  CodexApprovalPolicy,
-  CodexSandboxMode,
-  MCPServer,
-  PermissionMode,
-  Session,
-  User,
-} from '@agor/core/types';
+import type { AgenticToolName, MCPServer, Session, SpawnConfig, User } from '@agor/core/types';
 import { getDefaultPermissionMode } from '@agor/core/types';
 import { DownOutlined } from '@ant-design/icons';
 import { Checkbox, Collapse, Form, Modal, Radio, Typography } from 'antd';
@@ -23,24 +15,8 @@ import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
 import { AgentSelectionGrid } from '../AgentSelectionGrid/AgentSelectionGrid';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
-import type { ModelConfig } from '../ModelSelector';
 
 export type ForkSpawnAction = 'fork' | 'spawn';
-
-export interface SpawnConfig {
-  prompt: string;
-  agent?: AgenticToolName;
-  permissionMode?: PermissionMode;
-  modelConfig?: ModelConfig;
-  codexSandboxMode?: CodexSandboxMode;
-  codexApprovalPolicy?: CodexApprovalPolicy;
-  codexNetworkAccess?: boolean;
-  mcpServerIds?: string[];
-  enableCallback?: boolean;
-  includeLastMessage?: boolean;
-  includeOriginalPrompt?: boolean;
-  extraInstructions?: string;
-}
 
 export interface ForkSpawnModalProps {
   open: boolean;
@@ -97,7 +73,7 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
     form.setFieldsValue({
       agent: agentTool,
       permissionMode: userDefaults?.permissionMode || getDefaultPermissionMode(agentTool),
-      modelConfig: userDefaults?.modelConfig as ModelConfig | undefined,
+      modelConfig: userDefaults?.modelConfig,
       codexSandboxMode: userDefaults?.codexSandboxMode,
       codexApprovalPolicy: userDefaults?.codexApprovalPolicy,
       codexNetworkAccess: userDefaults?.codexNetworkAccess,
