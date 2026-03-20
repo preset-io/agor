@@ -214,6 +214,7 @@
     "cronstrue": "^3.13.0",
     "drizzle-orm": "^0.45.1",
     "js-yaml": "^4.1.1",
+    "marked": "^17.0.5",
     "open": "^11.0.0",
     "postgres": "^3.4.8",
     "simple-git": "^3.33.0",
