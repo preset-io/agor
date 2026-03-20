@@ -37,6 +37,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Check agor-live deps
+        run: pnpm check:agor-live-deps
+
       - name: Typecheck
         run: pnpm typecheck
 
