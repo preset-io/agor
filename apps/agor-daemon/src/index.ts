@@ -1585,15 +1585,24 @@ async function main() {
   // ============================================================================
 
   // Helper to generate a simple HTML page for OAuth callback results
+  function escapeHtml(str: string): string {
+    return str
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
   function oauthResultPage(success: boolean, message: string): string {
     const color = success ? '#52c41a' : '#ff4d4f';
     const icon = success ? '&#10003;' : '&#10007;';
+    const safeMessage = escapeHtml(message);
     return `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Agor OAuth</title>
 <style>body{font-family:system-ui,sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#1a1a1a;color:#fff}
 .card{text-align:center;padding:2rem;border-radius:8px;background:#2a2a2a;max-width:400px}
 .icon{font-size:3rem;color:${color}}</style></head>
-<body><div class="card"><div class="icon">${icon}</div><p>${message}</p></div></body></html>`;
+<body><div class="card"><div class="icon">${icon}</div><p>${safeMessage}</p></div></body></html>`;
   }
 
   // Store pending OAuth flow contexts (keyed by state)
@@ -1613,6 +1622,7 @@ async function main() {
       mcpServerId?: string;
       userId?: string; // User ID for per-user OAuth tokens
       oauthMode?: 'per_user' | 'shared'; // OAuth mode from MCP server config
+      socketId?: string; // Socket ID of the initiating client
       createdAt: number;
     }
   >();
@@ -1676,23 +1686,26 @@ async function main() {
         const { startMCPOAuthFlow } = await import('@agor/core/tools/mcp/oauth-mcp-transport');
 
         // Start the flow - use daemon's public URL as redirect URI
-        const redirectUri = `${daemonUrl}/mcp-servers/oauth-callback`;
+        const redirectUri = new URL('/mcp-servers/oauth-callback', daemonUrl).toString();
         const context = await startMCPOAuthFlow(wwwAuthenticate, data.client_id, redirectUri);
 
-        // Store the context for later completion (including user ID and OAuth mode)
+        // Capture initiating socket ID for scoped notifications
+        const connection = params?.connection as { id?: string } | undefined;
+        const socketId = connection?.id;
+
+        // Store the context for later completion (including user ID, OAuth mode, and socket ID)
         pendingOAuthFlows.set(context.state, {
           context,
           mcpServerId: data.mcp_server_id,
           userId,
           oauthMode,
+          socketId,
           createdAt: Date.now(),
         });
 
         console.log('[OAuth Start] Flow started, state:', context.state, 'oauthMode:', oauthMode);
 
         // Emit WebSocket event to open browser on client
-        const connection = params?.connection as { id?: string } | undefined;
-        const socketId = connection?.id;
         if (socketId && app.io) {
           console.log('[OAuth Start] Emitting oauth:open_browser to socket:', socketId);
           app.io.to(socketId).emit('oauth:open_browser', { authUrl: context.authorizationUrl });
@@ -1891,9 +1904,13 @@ async function main() {
           }
         }
 
-        // Notify the UI that OAuth completed successfully
+        // Notify the initiating client that OAuth completed successfully
         if (app.io) {
-          app.io.emit('oauth:completed', { state, success: true });
+          if (pendingFlow.socketId) {
+            app.io.to(pendingFlow.socketId).emit('oauth:completed', { state, success: true });
+          } else {
+            app.io.emit('oauth:completed', { state, success: true });
+          }
         }
 
         console.log('[OAuth Callback] Flow completed successfully');

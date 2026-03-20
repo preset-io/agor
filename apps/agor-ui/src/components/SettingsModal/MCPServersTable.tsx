@@ -26,7 +26,7 @@ import {
   Tooltip,
   Typography,
 } from 'antd';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
 import { extractOAuthConfig, extractOAuthConfigForTesting } from './mcp-oauth-utils';
@@ -91,6 +91,7 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
   const [_oauthState, setOauthState] = useState<string | null>(null);
   const [completingOAuth, setCompletingOAuth] = useState(false);
   const [disconnectingOAuth, setDisconnectingOAuth] = useState(false);
+  const oauthCompletedCleanupRef = useRef<(() => void) | null>(null);
 
   // Track effective server ID (may differ from prop after onSaveFirst creates a new server)
   const [effectiveServerId, setEffectiveServerId] = useState<string | undefined>(serverId);
@@ -167,9 +168,16 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
             setOauthBrowserFlowAvailable(false);
             setOauthState(null);
             setOauthCallbackUrl('');
-            client.io.off('oauth:completed', handleOAuthCompleted);
+            cleanup();
           }
         };
+        const cleanup = () => {
+          client.io.off('oauth:completed', handleOAuthCompleted);
+          oauthCompletedCleanupRef.current = null;
+        };
+        // Store cleanup so it can be called on modal cancel
+        oauthCompletedCleanupRef.current?.();
+        oauthCompletedCleanupRef.current = cleanup;
         client.io.on('oauth:completed', handleOAuthCompleted);
       } else {
         showError(data.error || 'Failed to start OAuth flow');
@@ -872,6 +880,7 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           setOauthCallbackModalVisible(false);
           setOauthState(null);
           setOauthCallbackUrl('');
+          oauthCompletedCleanupRef.current?.();
         }}
         footer={[
           <Button
@@ -880,6 +889,7 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
               setOauthCallbackModalVisible(false);
               setOauthState(null);
               setOauthCallbackUrl('');
+              oauthCompletedCleanupRef.current?.();
             }}
           >
             Cancel
