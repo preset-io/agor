@@ -986,9 +986,10 @@ async function main() {
         // Clean up PID tracking
         executorProcesses.delete(sessionId);
 
-        // Safety net: Update session status back to IDLE when executor exits
-        // The primary session status update happens in TasksService.patch() when task status changes
-        // This is a fallback in case the task status update didn't trigger session status change
+        // Safety net: When executor exits, check if the task is still running.
+        // If so, mark it as FAILED via TasksService.patch() — this triggers the standard
+        // completion flow (session → IDLE, parent callbacks, queue processing).
+        // Only fall back to manual session IDLE update if the task patch fails.
         try {
           // CRITICAL: Check if THIS task is still the current/latest task before updating
           // If a new task has started while this executor was exiting, we must NOT
@@ -998,7 +999,7 @@ async function main() {
 
           if (latestTaskId && latestTaskId !== taskId) {
             console.log(
-              `⏭️ [Executor] Task ${taskId.slice(0, 8)} is not the latest (latest: ${latestTaskId.slice(0, 8)}), skipping IDLE update`
+              `⏭️ [Executor] Task ${taskId.slice(0, 8)} is not the latest (latest: ${latestTaskId.slice(0, 8)}), skipping safety net`
             );
             // Skip the update - a newer task owns the session state
           } else if (
@@ -1006,25 +1007,53 @@ async function main() {
             currentSession.status === SessionStatus.AWAITING_PERMISSION ||
             currentSession.status === SessionStatus.TIMED_OUT
           ) {
-            // Session is still in an active/waiting state but executor is gone — reset to IDLE
-            await app.service('sessions').patch(
-              sessionId,
-              {
-                status: SessionStatus.IDLE,
-                ready_for_prompt: true,
-              },
-              params
-            );
-            console.log(
-              `✅ [Executor] Session ${sessionId.slice(0, 8)} status updated to IDLE after executor exit (was: ${currentSession.status})`
-            );
+            // Session is still in an active/waiting state but executor is gone.
+            // Mark the task as FAILED — TasksService.patch() handles:
+            // - Setting session to IDLE + ready_for_prompt
+            // - Queuing parent callbacks (for subsessions)
+            // - Triggering queue processing
+            try {
+              const currentTask = await app.service('tasks').get(taskId, params);
+              const isTaskStillActive =
+                currentTask.status === TaskStatus.RUNNING ||
+                currentTask.status === 'awaiting_permission' ||
+                currentTask.status === 'timed_out';
+
+              if (isTaskStillActive) {
+                await app.service('tasks').patch(taskId, { status: TaskStatus.FAILED }, params);
+                console.log(
+                  `✅ [Executor] Task ${taskId.slice(0, 8)} marked as FAILED after executor exit (code: ${code})`
+                );
+              } else {
+                console.log(
+                  `ℹ️  [Executor] Task ${taskId.slice(0, 8)} already in ${currentTask.status} state, skipping`
+                );
+              }
+            } catch (taskError) {
+              // Task patch failed — fall back to direct session IDLE update
+              console.error(
+                `⚠️  [Executor] Failed to mark task ${taskId.slice(0, 8)} as FAILED, falling back to session IDLE update:`,
+                taskError
+              );
+              await app.service('sessions').patch(
+                sessionId,
+                {
+                  status: SessionStatus.IDLE,
+                  ready_for_prompt: true,
+                },
+                params
+              );
+              console.log(
+                `✅ [Executor] Session ${sessionId.slice(0, 8)} status updated to IDLE after executor exit (was: ${currentSession.status})`
+              );
+            }
           } else {
             console.log(
               `ℹ️  [Executor] Session ${sessionId.slice(0, 8)} already in ${currentSession.status} state, skipping IDLE update`
             );
           }
         } catch (error) {
-          console.error(`❌ [Executor] Failed to update session status to IDLE:`, error);
+          console.error(`❌ [Executor] Failed to handle executor exit:`, error);
         }
 
         // Revoke session token after executor exits
