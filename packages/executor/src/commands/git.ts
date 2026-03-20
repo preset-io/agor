@@ -442,7 +442,12 @@ export async function handleGitWorktreeAdd(
 
         // Also fix permissions on the repo's .git/worktrees/<name>/ directory
         if (payload.params.repoUnixGroup) {
-          await fixWorktreeGitDirPermissions(repoPath, worktreeName, payload.params.repoUnixGroup);
+          await fixWorktreeGitDirPermissions(
+            repoPath,
+            worktreeName,
+            payload.params.repoUnixGroup,
+            payload.params.daemonUser
+          );
         }
       } catch (error) {
         // Log but don't fail the entire operation

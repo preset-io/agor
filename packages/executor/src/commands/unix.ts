@@ -164,6 +164,10 @@ export async function handleUnixSyncRepo(
       REPO_GIT_PERMISSION_MODE
     );
     await runCommands(permCommands);
+    // Set explicit user ACL for daemon to bypass stale supplementary groups
+    if (payload.params.daemonUser) {
+      await runCommands(UnixGroupCommands.setUserAcl(gitPath, payload.params.daemonUser));
+    }
     console.log(`[unix.sync-repo] Set .git/ permissions`);
 
     // Add daemon user if provided
@@ -327,6 +331,10 @@ export async function handleUnixSyncWorktree(
       permissionMode
     );
     await runCommands(permCommands);
+    // Set explicit user ACL for daemon to bypass stale supplementary groups
+    if (payload.params.daemonUser) {
+      await runCommands(UnixGroupCommands.setUserAcl(worktree.path, payload.params.daemonUser));
+    }
     console.log(`[unix.sync-worktree] Set worktree permissions (mode: ${permissionMode})`);
 
     // Add daemon user if provided
@@ -508,6 +516,12 @@ export async function handleUnixSyncWorktree(
                 REPO_GIT_PERMISSION_MODE
               );
               await runCommands(fixCommands);
+              // Set explicit user ACL for daemon to bypass stale supplementary groups
+              if (payload.params.daemonUser) {
+                await runCommands(
+                  UnixGroupCommands.setUserAcl(worktreeGitDir, payload.params.daemonUser)
+                );
+              }
               console.log(`[unix.sync-worktree] Fixed .git/worktrees/${worktreeName}/ permissions`);
             } catch {
               // Directory might not exist yet
@@ -760,6 +774,10 @@ export async function initializeRepoGroup(
     REPO_GIT_PERMISSION_MODE
   );
   await runCommands(permCommands);
+  // Set explicit user ACL for daemon to bypass stale supplementary groups
+  if (daemonUser) {
+    await runCommands(UnixGroupCommands.setUserAcl(repoPath, daemonUser));
+  }
   console.log(`[unix] Set repo directory permissions with group ${groupName}`);
 
   // Add daemon user to group if provided
@@ -820,6 +838,10 @@ export async function initializeWorktreeGroup(
   const permissionMode = getWorktreePermissionMode(othersAccess);
   const permCommands = UnixGroupCommands.setDirectoryGroup(worktreePath, groupName, permissionMode);
   await runCommands(permCommands);
+  // Set explicit user ACL for daemon to bypass stale supplementary groups
+  if (daemonUser) {
+    await runCommands(UnixGroupCommands.setUserAcl(worktreePath, daemonUser));
+  }
 
   // Add daemon user to worktree group if provided
   if (daemonUser) {
@@ -868,7 +890,8 @@ export async function initializeWorktreeGroup(
 export async function fixWorktreeGitDirPermissions(
   repoPath: string,
   worktreeName: string,
-  repoGroupName: string
+  repoGroupName: string,
+  daemonUser?: string
 ): Promise<void> {
   const worktreeGitDir = `${repoPath}/.git/worktrees/${worktreeName}`;
 
@@ -880,6 +903,10 @@ export async function fixWorktreeGitDirPermissions(
     REPO_GIT_PERMISSION_MODE
   );
   await runCommands(permCommands);
+  // Set explicit user ACL for daemon to bypass stale supplementary groups
+  if (daemonUser) {
+    await runCommands(UnixGroupCommands.setUserAcl(worktreeGitDir, daemonUser));
+  }
 }
 
 /**
