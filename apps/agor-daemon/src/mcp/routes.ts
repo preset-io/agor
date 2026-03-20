@@ -743,6 +743,43 @@ export function setupMCPRoutes(app: Application, db: Database): void {
               },
             },
 
+            {
+              name: 'agor_boards_create',
+              description:
+                'Create a new board. Returns the created board object with its ID and URL.',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  name: {
+                    type: 'string',
+                    description: 'Board name (required)',
+                  },
+                  slug: {
+                    type: 'string',
+                    description:
+                      'URL-friendly slug (optional, auto-derived from name if not provided)',
+                  },
+                  description: {
+                    type: 'string',
+                    description: 'Board description (optional)',
+                  },
+                  icon: {
+                    type: 'string',
+                    description: 'Board icon/emoji (optional, e.g. "📋")',
+                  },
+                  color: {
+                    type: 'string',
+                    description: 'Board color in hex format (optional)',
+                  },
+                  backgroundColor: {
+                    type: 'string',
+                    description: 'Board background color in hex format (optional)',
+                  },
+                },
+                required: ['name'],
+              },
+            },
+
             // Task tools
             {
               name: 'agor_tasks_list',
@@ -3054,6 +3091,42 @@ export function setupMCPRoutes(app: Application, db: Database): void {
                   null,
                   2
                 ),
+              },
+            ],
+          };
+        } else if (name === 'agor_boards_create') {
+          const boardName = coerceString(args?.name);
+          if (!boardName) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message: 'Invalid params: name is required',
+              },
+            });
+          }
+
+          const boardData: Record<string, unknown> = {
+            name: boardName,
+            created_by: context.userId,
+          };
+
+          if (args.slug !== undefined) boardData.slug = coerceString(args.slug);
+          if (args.description !== undefined)
+            boardData.description = coerceString(args.description);
+          if (args.icon !== undefined) boardData.icon = coerceString(args.icon);
+          if (args.color !== undefined) boardData.color = coerceString(args.color);
+          if (args.backgroundColor !== undefined)
+            boardData.background_color = coerceString(args.backgroundColor);
+
+          const board = await app.service('boards').create(boardData, baseServiceParams);
+
+          mcpResponse = {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(board, null, 2),
               },
             ],
           };
