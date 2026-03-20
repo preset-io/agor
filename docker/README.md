@@ -15,7 +15,7 @@ docker/
 
 Both Dockerfiles use multi-stage builds with a shared base stage:
 
-- **Base stage**: System deps, Node 20, pnpm, AI CLIs, user setup (~500MB)
+- **Base stage**: System deps, Node 22, pnpm, AI CLIs, user setup (~500MB)
 - **Dev stage**: Copies monorepo source, installs dev dependencies (~1.5GB)
 - **Prod stage**: Installs `agor-live` from npm globally (~600MB)
 
@@ -319,7 +319,7 @@ docker compose -f docker-compose.prod.yml exec agor-prod bash
 
 Expected image sizes:
 
-- `agor-base`: ~500MB (Node 20 + system deps + AI CLIs)
+- `agor-base`: ~500MB (Node 22 + system deps + AI CLIs)
 - `agor-dev`: ~1.5GB (base + monorepo dependencies)
 - `agor-prod`: ~600MB (base + npm agor-live package)
 

@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/devcontainers/typescript-node:20
+FROM mcr.microsoft.com/devcontainers/typescript-node:22
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \

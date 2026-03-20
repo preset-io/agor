@@ -43,10 +43,10 @@ else
     echo "✓ Zellij already installed"
 fi
 
-# Install Node.js 20.x (LTS) from NodeSource
-echo "📦 Installing Node.js 20.x..."
-if ! command -v node &> /dev/null || [[ $(node -v | cut -d'v' -f2 | cut -d'.' -f1) -lt 20 ]]; then
-    curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo -n bash -
+# Install Node.js 22.x (LTS) from NodeSource
+echo "📦 Installing Node.js 22.x..."
+if ! command -v node &> /dev/null || [[ $(node -v | cut -d'v' -f2 | cut -d'.' -f1) -lt 22 ]]; then
+    curl -fsSL https://rpm.nodesource.com/setup_22.x | sudo -n bash -
     sudo -n $PKG_MGR install -y nodejs
 else
     echo "✓ Node.js $(node -v) already installed"

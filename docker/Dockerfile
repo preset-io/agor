@@ -10,7 +10,7 @@
 # ============================================================================
 # Stage 1: Shared Base (dev and prod both use this)
 # ============================================================================
-FROM node:20-slim AS base
+FROM node:22-slim AS base
 
 # Install system dependencies (including git for repo cloning)
 RUN apt-get update && apt-get install -y \

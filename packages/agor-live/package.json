@@ -22,7 +22,7 @@
     "@agor/core/*": "./dist/core/*"
   },
   "engines": {
-    "node": ">=20.0.0 <21.0.0"
+    "node": ">=22.12.0"
   },
   "keywords": [
     "ai",
