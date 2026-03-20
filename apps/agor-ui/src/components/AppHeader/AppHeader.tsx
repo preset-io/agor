@@ -23,7 +23,6 @@ import {
   theme,
 } from 'antd';
 import { useState } from 'react';
-import { useRecentBoards } from '../../hooks/useRecentBoards';
 import { BoardSwitcher } from '../BoardSwitcher';
 import { BrandLogo } from '../BrandLogo';
 import { ConnectionStatus } from '../ConnectionStatus';
@@ -62,6 +61,8 @@ export interface AppHeaderProps {
     boardId?: BoardID,
     cursorPosition?: { x: number; y: number }
   ) => void; // Navigate to user's board
+  /** Recently visited boards (excluding current) for quick-access pills */
+  recentBoards?: Board[];
   /** Instance label for deployment identification (displayed as a Tag) */
   instanceLabel?: string;
   /** Instance description (markdown) shown in popover around the instance label */
@@ -69,13 +70,10 @@ export interface AppHeaderProps {
 }
 
 const RecentBoardPills: React.FC<{
-  boards: Board[];
-  currentBoardId: string;
+  recentBoards: Board[];
   onBoardChange: (boardId: string) => void;
   token: ReturnType<typeof theme.useToken>['token'];
-}> = ({ boards, currentBoardId, onBoardChange, token }) => {
-  const { recentBoards } = useRecentBoards(boards, currentBoardId);
-
+}> = ({ recentBoards, onBoardChange, token }) => {
   if (recentBoards.length === 0) return null;
 
   return (
@@ -85,6 +83,7 @@ const RecentBoardPills: React.FC<{
           <Button
             type="text"
             size="small"
+            aria-label={`Switch to board ${board.name}`}
             onClick={() => onBoardChange(board.board_id)}
             style={{
               width: 30,
@@ -133,6 +132,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   worktreeById = new Map(),
   boardById,
   onUserClick,
+  recentBoards = [],
   instanceLabel,
   instanceDescription,
 }) => {
@@ -245,8 +245,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
               />
             </div>
             <RecentBoardPills
-              boards={boards}
-              currentBoardId={currentBoardId}
+              recentBoards={recentBoards}
               onBoardChange={onBoardChange || (() => {})}
               token={token}
             />

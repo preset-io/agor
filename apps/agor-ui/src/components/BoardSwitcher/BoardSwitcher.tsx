@@ -134,7 +134,19 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
         style: { cursor: 'default', opacity: 1 },
       },
       { type: 'divider' as const },
-      ...boardItems,
+      ...(boardItems.length > 0
+        ? boardItems
+        : [
+            {
+              key: '__empty__',
+              label: (
+                <Text type="secondary" style={{ fontStyle: 'italic' }}>
+                  No boards found
+                </Text>
+              ),
+              disabled: true,
+            },
+          ]),
     ];
   }, [
     boards,

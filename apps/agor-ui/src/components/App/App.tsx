@@ -285,8 +285,8 @@ export const App: React.FC<AppProps> = ({
     return initialBoardId || firstBoard?.board_id || '';
   });
 
-  // Track recent boards
-  const { trackBoardVisit } = useRecentBoards(mapToArray(boardById), currentBoardId);
+  // Track recent boards (single instance — passed down to AppHeader as props)
+  const { recentBoards, trackBoardVisit } = useRecentBoards(mapToArray(boardById), currentBoardId);
 
   // Persist current board to localStorage when it changes
   useEffect(() => {
@@ -661,6 +661,7 @@ export const App: React.FC<AppProps> = ({
               }
             }}
             instanceLabel={instanceLabel}
+            recentBoards={recentBoards}
             instanceDescription={instanceDescription}
           />
           <Content style={{ position: 'relative', overflow: 'hidden', display: 'flex' }}>
