@@ -129,17 +129,17 @@ export class LeaderboardService {
     }
 
     if (startDate) {
-      // Use Date object for Postgres compatibility (timestamp with time zone)
-      // For SQLite (stored as integer ms), Drizzle will auto-convert Date to ms
-      const startDateObj = new Date(startDate);
-      conditions.push(sql`${tasks.created_at} >= ${startDateObj}`);
+      // Convert to ISO string for Postgres compatibility (Date objects get serialized
+      // via toString() which produces a format Postgres can't parse)
+      const startDateISO = new Date(startDate).toISOString();
+      conditions.push(sql`${tasks.created_at} >= ${startDateISO}`);
     }
 
     if (endDate) {
-      // Use Date object for Postgres compatibility (timestamp with time zone)
-      // For SQLite (stored as integer ms), Drizzle will auto-convert Date to ms
-      const endDateObj = new Date(endDate);
-      conditions.push(sql`${tasks.created_at} <= ${endDateObj}`);
+      // Convert to ISO string for Postgres compatibility (Date objects get serialized
+      // via toString() which produces a format Postgres can't parse)
+      const endDateISO = new Date(endDate).toISOString();
+      conditions.push(sql`${tasks.created_at} <= ${endDateISO}`);
     }
 
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
