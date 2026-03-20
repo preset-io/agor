@@ -157,7 +157,20 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
         setOauthState(data.state);
         setOauthCallbackUrl('');
         setOauthCallbackModalVisible(true);
-        showInfo('Browser opened. Complete authentication, then paste the callback URL.');
+        showInfo('Browser opened. Complete authentication in the new tab.');
+
+        // Listen for automatic completion via the daemon's callback endpoint
+        const handleOAuthCompleted = (event: { state: string; success: boolean }) => {
+          if (event.state === data.state && event.success) {
+            showSuccess('OAuth authentication successful!');
+            setOauthCallbackModalVisible(false);
+            setOauthBrowserFlowAvailable(false);
+            setOauthState(null);
+            setOauthCallbackUrl('');
+            client.io.off('oauth:completed', handleOAuthCompleted);
+          }
+        };
+        client.io.on('oauth:completed', handleOAuthCompleted);
       } else {
         showError(data.error || 'Failed to start OAuth flow');
       }

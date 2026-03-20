@@ -1584,6 +1584,18 @@ async function main() {
   // callback server can't receive the OAuth redirect.
   // ============================================================================
 
+  // Helper to generate a simple HTML page for OAuth callback results
+  function oauthResultPage(success: boolean, message: string): string {
+    const color = success ? '#52c41a' : '#ff4d4f';
+    const icon = success ? '&#10003;' : '&#10007;';
+    return `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Agor OAuth</title>
+<style>body{font-family:system-ui,sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#1a1a1a;color:#fff}
+.card{text-align:center;padding:2rem;border-radius:8px;background:#2a2a2a;max-width:400px}
+.icon{font-size:3rem;color:${color}}</style></head>
+<body><div class="card"><div class="icon">${icon}</div><p>${message}</p></div></body></html>`;
+  }
+
   // Store pending OAuth flow contexts (keyed by state)
   const pendingOAuthFlows = new Map<
     string,
@@ -1663,8 +1675,9 @@ async function main() {
         // Import the two-phase OAuth flow functions
         const { startMCPOAuthFlow } = await import('@agor/core/tools/mcp/oauth-mcp-transport');
 
-        // Start the flow - this returns auth URL and context
-        const context = await startMCPOAuthFlow(wwwAuthenticate, data.client_id);
+        // Start the flow - use daemon's public URL as redirect URI
+        const redirectUri = `${daemonUrl}/mcp-servers/oauth-callback`;
+        const context = await startMCPOAuthFlow(wwwAuthenticate, data.client_id, redirectUri);
 
         // Store the context for later completion (including user ID and OAuth mode)
         pendingOAuthFlows.set(context.state, {
@@ -1798,6 +1811,106 @@ async function main() {
   app.service('mcp-servers/oauth-complete').hooks({
     before: { create: [requireAuth] },
   });
+
+  // GET endpoint to receive OAuth callback redirects from the authorization server
+  // The browser is redirected here after the user completes OAuth authorization
+  app.use('/mcp-servers/oauth-callback', (async (
+    req: express.Request,
+    res: express.Response,
+    next: express.NextFunction
+  ) => {
+    if (req.method !== 'GET') {
+      next();
+      return;
+    }
+    {
+      try {
+        const code = req.query.code as string | undefined;
+        const state = req.query.state as string | undefined;
+        const error = req.query.error as string | undefined;
+
+        if (error) {
+          const errorDescription = (req.query.error_description as string) || error;
+          console.error('[OAuth Callback] Authorization error:', errorDescription);
+          res.status(400).send(oauthResultPage(false, `Authorization failed: ${errorDescription}`));
+          return;
+        }
+
+        if (!code || !state) {
+          res.status(400).send(oauthResultPage(false, 'Missing code or state parameter'));
+          return;
+        }
+
+        console.log('[OAuth Callback] Received callback, state:', state);
+
+        // Find the pending flow
+        const pendingFlow = pendingOAuthFlows.get(state);
+        if (!pendingFlow) {
+          res
+            .status(400)
+            .send(
+              oauthResultPage(
+                false,
+                'OAuth flow expired or not found. Please start the flow again.'
+              )
+            );
+          return;
+        }
+
+        // Complete the flow
+        const { completeMCPOAuthFlow } = await import('@agor/core/tools/mcp/oauth-mcp-transport');
+        const token = await completeMCPOAuthFlow(pendingFlow.context, code, state);
+
+        // Remove from pending flows
+        pendingOAuthFlows.delete(state);
+
+        // Cache the token at daemon level
+        cacheOAuth21Token(pendingFlow.context.metadataUrl, token, 3600);
+
+        // Save to database based on OAuth mode
+        if (pendingFlow.mcpServerId) {
+          const oauthMode = pendingFlow.oauthMode || 'per_user';
+
+          if (oauthMode === 'per_user' && pendingFlow.userId) {
+            const userTokenRepo = new UserMCPOAuthTokenRepository(db);
+            await userTokenRepo.saveToken(
+              pendingFlow.userId as import('@agor/core/types').UserID,
+              pendingFlow.mcpServerId as import('@agor/core/types').MCPServerID,
+              token,
+              3600
+            );
+            console.log(
+              `[OAuth Callback] Per-user token saved for user ${pendingFlow.userId}, server ${pendingFlow.mcpServerId}`
+            );
+          } else {
+            const mcpServerRepo = new MCPServerRepository(db);
+            await saveOAuth21TokenToDB(mcpServerRepo, pendingFlow.mcpServerId, token, 3600);
+            console.log(
+              `[OAuth Callback] Shared token saved for server ${pendingFlow.mcpServerId}`
+            );
+          }
+        }
+
+        // Notify the UI that OAuth completed successfully
+        if (app.io) {
+          app.io.emit('oauth:completed', { state, success: true });
+        }
+
+        console.log('[OAuth Callback] Flow completed successfully');
+        res.send(oauthResultPage(true, 'OAuth authentication successful! You can close this tab.'));
+      } catch (err) {
+        console.error('[OAuth Callback] Error:', err);
+        res
+          .status(500)
+          .send(
+            oauthResultPage(
+              false,
+              `Authentication failed: ${err instanceof Error ? err.message : String(err)}`
+            )
+          );
+      }
+    }
+  }) as never);
 
   // Notify UI that OAuth authentication is needed for MCP servers
   // Called by executor when MCP servers require authentication
