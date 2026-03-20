@@ -404,22 +404,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     draftsRef.current.delete(session.session_id);
   };
 
-  const handleSubsession = () => {
-    if (!inputValue.trim()) {
-      setSpawnModalOpen(true);
-      return;
-    }
-
-    const metaPrompt = compiledSpawnSubsessionTemplate({
-      userPrompt: inputValue,
-    });
-
-    if (!session) return;
-    onSendPrompt?.(session.session_id, metaPrompt, permissionMode);
-    setInputValue('');
-    draftsRef.current.delete(session.session_id);
-  };
-
   const handleSpawnModalConfirm = async (config: string | Partial<SpawnConfig>) => {
     if (!session) return;
 
@@ -687,13 +671,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                   loading={isStopping && !stopRequestInFlight}
                 />
               </Tooltip>
-              <Tooltip title="Advanced Spawn Options">
-                <Button
-                  icon={<SettingOutlined />}
-                  onClick={() => setSpawnModalOpen(true)}
-                  disabled={connectionDisabled || isRunning}
-                />
-              </Tooltip>
               <Tooltip title={isRunning ? 'Session is running...' : 'Fork Session'}>
                 <Button
                   icon={<ForkOutlined />}
@@ -704,7 +681,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
               <Tooltip title={isRunning ? 'Session is running...' : 'Spawn Subsession'}>
                 <Button
                   icon={<BranchesOutlined />}
-                  onClick={handleSubsession}
+                  onClick={() => setSpawnModalOpen(true)}
                   disabled={connectionDisabled || isRunning}
                 />
               </Tooltip>
