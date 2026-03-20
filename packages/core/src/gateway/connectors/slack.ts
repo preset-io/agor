@@ -126,7 +126,7 @@ const slackRenderer = {
   },
 
   heading(token: Tokens.Heading) {
-    return `*${token.text}*\n\n`;
+    return `*${this.parser.parseInline(token.tokens)}*\n\n`;
   },
 
   hr() {

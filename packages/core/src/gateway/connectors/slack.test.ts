@@ -122,4 +122,36 @@ describe('markdownToMrkdwn', () => {
     // If someone sends *already bold* it should pass through
     expect(markdownToMrkdwn('*already bold*')).toBe('_already bold_');
   });
+
+  it('separates multiple paragraphs', () => {
+    const output = markdownToMrkdwn('First paragraph.\n\nSecond paragraph.');
+    expect(output).toContain('First paragraph.');
+    expect(output).toContain('Second paragraph.');
+    // Should not run together
+    expect(output).not.toBe('First paragraph.Second paragraph.');
+  });
+
+  it('handles inline formatting inside headings', () => {
+    expect(markdownToMrkdwn('## Fix for **critical** bug')).toContain('*Fix for *critical* bug*');
+  });
+
+  it('handles empty input', () => {
+    expect(markdownToMrkdwn('')).toBe('');
+  });
+
+  it('does not escape special chars inside code blocks', () => {
+    const input = '```\nif (a < b && c > d) {}\n```';
+    const output = markdownToMrkdwn(input);
+    expect(output).toContain('a < b && c > d');
+    expect(output).not.toContain('&lt;');
+    expect(output).not.toContain('&amp;');
+  });
+
+  it('handles nested lists', () => {
+    const input = '- item 1\n  - subitem\n- item 2';
+    const output = markdownToMrkdwn(input);
+    expect(output).toContain('item 1');
+    expect(output).toContain('subitem');
+    expect(output).toContain('item 2');
+  });
 });
