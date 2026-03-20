@@ -129,17 +129,19 @@ export class LeaderboardService {
     }
 
     if (startDate) {
-      // Convert to ISO string for Postgres compatibility (Date objects get serialized
-      // via toString() which produces a format Postgres can't parse)
-      const startDateISO = new Date(startDate).toISOString();
-      conditions.push(sql`${tasks.created_at} >= ${startDateISO}`);
+      const parsed = new Date(startDate);
+      if (Number.isNaN(parsed.getTime())) {
+        throw new Error(`Invalid startDate: "${startDate}". Expected ISO 8601 format.`);
+      }
+      conditions.push(sql`${tasks.created_at} >= ${parsed.toISOString()}`);
     }
 
     if (endDate) {
-      // Convert to ISO string for Postgres compatibility (Date objects get serialized
-      // via toString() which produces a format Postgres can't parse)
-      const endDateISO = new Date(endDate).toISOString();
-      conditions.push(sql`${tasks.created_at} <= ${endDateISO}`);
+      const parsed = new Date(endDate);
+      if (Number.isNaN(parsed.getTime())) {
+        throw new Error(`Invalid endDate: "${endDate}". Expected ISO 8601 format.`);
+      }
+      conditions.push(sql`${tasks.created_at} <= ${parsed.toISOString()}`);
     }
 
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;

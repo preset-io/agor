@@ -1005,6 +1005,8 @@ async function main() {
           } else if (
             currentSession.status === SessionStatus.RUNNING ||
             currentSession.status === SessionStatus.AWAITING_PERMISSION ||
+            currentSession.status === SessionStatus.AWAITING_INPUT ||
+            currentSession.status === SessionStatus.STOPPING ||
             currentSession.status === SessionStatus.TIMED_OUT
           ) {
             // Session is still in an active/waiting state but executor is gone.
@@ -1017,6 +1019,8 @@ async function main() {
               const isTaskStillActive =
                 currentTask.status === TaskStatus.RUNNING ||
                 currentTask.status === 'awaiting_permission' ||
+                currentTask.status === 'awaiting_input' ||
+                currentTask.status === 'stopping' ||
                 currentTask.status === 'timed_out';
 
               if (isTaskStillActive) {
@@ -1025,9 +1029,13 @@ async function main() {
                   `✅ [Executor] Task ${taskId.slice(0, 8)} marked as FAILED after executor exit (code: ${code})`
                 );
               } else {
+                // Task already terminal but session still active — repair session state
                 console.log(
-                  `ℹ️  [Executor] Task ${taskId.slice(0, 8)} already in ${currentTask.status} state, skipping`
+                  `⚠️  [Executor] Task ${taskId.slice(0, 8)} already ${currentTask.status}, but session still ${currentSession.status} — repairing session state`
                 );
+                await app
+                  .service('sessions')
+                  .patch(sessionId, { status: SessionStatus.IDLE, ready_for_prompt: true }, params);
               }
             } catch (taskError) {
               // Task patch failed — fall back to direct session IDLE update
