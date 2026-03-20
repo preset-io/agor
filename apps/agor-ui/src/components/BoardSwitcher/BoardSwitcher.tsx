@@ -1,7 +1,7 @@
 import type { Board, Worktree } from '@agor/core/types';
 import { DownOutlined, SearchOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import { Badge, Button, Dropdown, Input, Space, Typography, theme } from 'antd';
+import { Badge, Button, Divider, Dropdown, Input, Space, Typography, theme } from 'antd';
 import type React from 'react';
 import { useCallback, useMemo, useState } from 'react';
 
@@ -60,7 +60,7 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
     [onBoardChange]
   );
 
-  // Build menu items
+  // Build menu items (board list only — filter input rendered separately via dropdownRender)
   const menuItems: MenuProps['items'] = useMemo(() => {
     // Sort boards alphabetically by name
     const sortedBoards = [...boards].sort((a, b) =>
@@ -72,7 +72,21 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
       ? sortedBoards.filter((board) => board.name.toLowerCase().includes(filterText.toLowerCase()))
       : sortedBoards;
 
-    const boardItems: NonNullable<MenuProps['items']> = filteredBoards.map((board) => {
+    if (showFilter && filteredBoards.length === 0) {
+      return [
+        {
+          key: '__empty__',
+          label: (
+            <Text type="secondary" style={{ fontStyle: 'italic' }}>
+              No boards found
+            </Text>
+          ),
+          disabled: true,
+        },
+      ];
+    }
+
+    return filteredBoards.map((board) => {
       const worktreeCount = worktreeCountByBoard.get(board.board_id) || 0;
       const isActive = board.board_id === currentBoardId;
 
@@ -104,50 +118,6 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
         onClick: () => handleBoardClick(board.board_id),
       };
     });
-
-    if (!showFilter) {
-      return boardItems;
-    }
-
-    // Prepend the search input as a non-clickable menu item
-    return [
-      {
-        key: '__filter__',
-        label: (
-          <div
-            style={{ padding: '4px 0' }}
-            onClick={(e) => e.stopPropagation()}
-            onKeyDown={(e) => e.stopPropagation()}
-          >
-            <Input
-              placeholder="Filter boards..."
-              prefix={<SearchOutlined style={{ color: token.colorTextQuaternary }} />}
-              value={filterText}
-              onChange={(e) => setFilterText(e.target.value)}
-              size="small"
-              allowClear
-              autoFocus
-            />
-          </div>
-        ),
-        disabled: true,
-        style: { cursor: 'default', opacity: 1 },
-      },
-      { type: 'divider' as const },
-      ...(boardItems.length > 0
-        ? boardItems
-        : [
-            {
-              key: '__empty__',
-              label: (
-                <Text type="secondary" style={{ fontStyle: 'italic' }}>
-                  No boards found
-                </Text>
-              ),
-              disabled: true,
-            },
-          ]),
-    ];
   }, [
     boards,
     currentBoardId,
@@ -160,10 +130,7 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
 
   return (
     <Dropdown
-      menu={{
-        items: menuItems,
-        style: showFilter ? { maxHeight: 400, overflowY: 'auto' } : undefined,
-      }}
+      menu={{ items: menuItems }}
       trigger={['click']}
       placement="bottomLeft"
       open={dropdownOpen}
@@ -173,6 +140,34 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
           setFilterText('');
         }
       }}
+      dropdownRender={(menu) =>
+        showFilter ? (
+          <div
+            style={{
+              backgroundColor: token.colorBgElevated,
+              borderRadius: token.borderRadiusLG,
+              boxShadow: token.boxShadowSecondary,
+            }}
+          >
+            <div style={{ padding: '8px 12px' }}>
+              <Input
+                placeholder="Filter boards..."
+                prefix={<SearchOutlined style={{ color: token.colorTextQuaternary }} />}
+                value={filterText}
+                onChange={(e) => setFilterText(e.target.value)}
+                size="small"
+                allowClear
+                autoFocus
+                aria-label="Filter boards"
+              />
+            </div>
+            <Divider style={{ margin: 0 }} />
+            <div style={{ maxHeight: 'calc(100vh - 200px)', overflowY: 'auto' }}>{menu}</div>
+          </div>
+        ) : (
+          menu
+        )
+      }
     >
       <Button
         type="text"
