@@ -15,6 +15,7 @@ patchConsole();
 
 import {
   createUserProcessEnvironment,
+  getBaseUrl,
   isUnixImpersonationEnabled,
   loadConfig,
   type UnknownJson,
@@ -1722,8 +1723,10 @@ async function main() {
         // Import the two-phase OAuth flow functions
         const { startMCPOAuthFlow } = await import('@agor/core/tools/mcp/oauth-mcp-transport');
 
-        // Start the flow - use daemon's public URL as redirect URI
-        const redirectUri = new URL('/mcp-servers/oauth-callback', daemonUrl).toString();
+        // Start the flow - use browser-facing base URL for the OAuth redirect URI
+        // getBaseUrl() resolves: AGOR_BASE_URL env → daemon.base_url config → localhost fallback
+        const baseUrl = await getBaseUrl();
+        const redirectUri = new URL('/mcp-servers/oauth-callback', baseUrl).toString();
         const context = await startMCPOAuthFlow(wwwAuthenticate, data.client_id, redirectUri);
 
         // Capture initiating socket ID for scoped notifications
