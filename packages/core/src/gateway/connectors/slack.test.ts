@@ -26,8 +26,9 @@ describe('markdownToMrkdwn', () => {
     expect(markdownToMrkdwn('https://example.com')).toBe('<https://example.com>');
   });
 
-  it('strips images (unsupported in mrkdwn)', () => {
-    expect(markdownToMrkdwn('![alt text](https://img.png)')).toBe('');
+  it('converts images to links (Slack cannot render inline images)', () => {
+    expect(markdownToMrkdwn('![alt text](https://img.png)')).toBe('<https://img.png|alt text>');
+    expect(markdownToMrkdwn('![](https://img.png)')).toBe('<https://img.png>');
   });
 
   it('converts headings to bold text', () => {
@@ -64,9 +65,14 @@ describe('markdownToMrkdwn', () => {
     expect(markdownToMrkdwn('> quoted text')).toBe('> quoted text');
   });
 
-  it('strips tables (unsupported in mrkdwn)', () => {
+  it('renders tables as code blocks to preserve content', () => {
     const input = '| Col1 | Col2 |\n|------|------|\n| A    | B    |';
-    expect(markdownToMrkdwn(input)).toBe('');
+    const output = markdownToMrkdwn(input);
+    expect(output).toContain('```');
+    expect(output).toContain('Col1');
+    expect(output).toContain('Col2');
+    expect(output).toContain('A');
+    expect(output).toContain('B');
   });
 
   it('handles a realistic agent response', () => {

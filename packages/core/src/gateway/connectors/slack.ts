@@ -186,8 +186,15 @@ const slackRenderer = {
     return this.parser.parseInline(token.tokens);
   },
 
-  table() {
-    return '';
+  table(token: Tokens.Table) {
+    // Slack doesn't support tables — render as a monospace code block
+    // to preserve alignment and avoid losing content.
+    const headerRow = token.header.map((cell) => cell.text).join(' | ');
+    const separator = token.header
+      .map((cell) => '-'.repeat(Math.max(cell.text.length, 3)))
+      .join(' | ');
+    const bodyRows = token.rows.map((row) => row.map((cell) => cell.text).join(' | '));
+    return `\`\`\`\n${headerRow}\n${separator}\n${bodyRows.join('\n')}\n\`\`\``;
   },
   tablerow() {
     return '';
@@ -224,8 +231,11 @@ const slackRenderer = {
     return url === text || url === `mailto:${text}` || !text ? `<${url}>` : `<${url}|${text}>`;
   },
 
-  image() {
-    return '';
+  image(token: Tokens.Image) {
+    // Slack doesn't render images inline — fall back to a link
+    const url = cleanUrl(token.href);
+    const text = token.text;
+    return text ? `<${url}|${text}>` : `<${url}>`;
   },
 
   text(token: Tokens.Text | Tokens.Escape) {
