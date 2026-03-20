@@ -32,6 +32,7 @@ import { useEventStream } from '../../hooks/useEventStream';
 import { useFaviconStatus } from '../../hooks/useFaviconStatus';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { usePresence } from '../../hooks/usePresence';
+import { useRecentBoards } from '../../hooks/useRecentBoards';
 import { useSettingsRoute } from '../../hooks/useSettingsRoute';
 import { useUrlState } from '../../hooks/useUrlState';
 import type { AgenticToolOption } from '../../types';
@@ -284,12 +285,16 @@ export const App: React.FC<AppProps> = ({
     return initialBoardId || firstBoard?.board_id || '';
   });
 
+  // Track recent boards
+  const { trackBoardVisit } = useRecentBoards(mapToArray(boardById), currentBoardId);
+
   // Persist current board to localStorage when it changes
   useEffect(() => {
     if (currentBoardId) {
       localStorage.setItem('agor:currentBoardId', currentBoardId);
+      trackBoardVisit(currentBoardId);
     }
-  }, [currentBoardId]);
+  }, [currentBoardId, trackBoardVisit]);
 
   // Initialize audio on first user interaction (for browser autoplay policy)
   useEffect(() => {

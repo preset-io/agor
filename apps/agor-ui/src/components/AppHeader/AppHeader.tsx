@@ -23,6 +23,7 @@ import {
   theme,
 } from 'antd';
 import { useState } from 'react';
+import { useRecentBoards } from '../../hooks/useRecentBoards';
 import { BoardSwitcher } from '../BoardSwitcher';
 import { BrandLogo } from '../BrandLogo';
 import { ConnectionStatus } from '../ConnectionStatus';
@@ -66,6 +67,46 @@ export interface AppHeaderProps {
   /** Instance description (markdown) shown in popover around the instance label */
   instanceDescription?: string;
 }
+
+const RecentBoardPills: React.FC<{
+  boards: Board[];
+  currentBoardId: string;
+  onBoardChange: (boardId: string) => void;
+  token: ReturnType<typeof theme.useToken>['token'];
+}> = ({ boards, currentBoardId, onBoardChange, token }) => {
+  const { recentBoards } = useRecentBoards(boards, currentBoardId);
+
+  if (recentBoards.length === 0) return null;
+
+  return (
+    <Space size={4}>
+      {recentBoards.map((board) => (
+        <Tooltip key={board.board_id} title={board.name} placement="bottom">
+          <Button
+            type="text"
+            size="small"
+            onClick={() => onBoardChange(board.board_id)}
+            style={{
+              width: 30,
+              height: 30,
+              minWidth: 30,
+              padding: 0,
+              borderRadius: '50%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 16,
+              border: `1px solid ${token.colorBorderSecondary}`,
+              background: token.colorBgElevated,
+            }}
+          >
+            {board.icon || '📋'}
+          </Button>
+        </Tooltip>
+      ))}
+    </Space>
+  );
+};
 
 export const AppHeader: React.FC<AppHeaderProps> = ({
   user,
@@ -194,14 +235,22 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           ))}
         <Divider orientation="vertical" style={{ height: 32, margin: '0 8px' }} />
         {currentBoardId && boards.length > 0 && (
-          <div style={{ minWidth: 200 }}>
-            <BoardSwitcher
+          <>
+            <div style={{ minWidth: 200 }}>
+              <BoardSwitcher
+                boards={boards}
+                currentBoardId={currentBoardId}
+                onBoardChange={onBoardChange || (() => {})}
+                worktreeById={worktreeById}
+              />
+            </div>
+            <RecentBoardPills
               boards={boards}
               currentBoardId={currentBoardId}
               onBoardChange={onBoardChange || (() => {})}
-              worktreeById={worktreeById}
+              token={token}
             />
-          </div>
+          </>
         )}
         {currentBoardName && (
           <Tooltip title="Toggle session drawer" placement="bottom">

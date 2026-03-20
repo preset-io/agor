@@ -1,12 +1,14 @@
 import type { Board, Worktree } from '@agor/core/types';
-import { DownOutlined } from '@ant-design/icons';
+import { DownOutlined, SearchOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import { Badge, Button, Dropdown, Space, Typography, theme } from 'antd';
+import { Badge, Button, Dropdown, Input, Space, Typography, theme } from 'antd';
 import type React from 'react';
-import { useMemo } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 
 const { Text } = Typography;
 const { useToken } = theme;
+
+const FILTER_THRESHOLD = 8;
 
 interface BoardSwitcherProps {
   boards: Board[];
@@ -22,6 +24,8 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
   worktreeById,
 }) => {
   const { token } = useToken();
+  const [filterText, setFilterText] = useState('');
+  const [dropdownOpen, setDropdownOpen] = useState(false);
 
   // Get current board
   const currentBoard = boards.find((b) => b.board_id === currentBoardId);
@@ -45,6 +49,17 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
     return counts;
   }, [boards, worktreeById]);
 
+  const showFilter = boards.length >= FILTER_THRESHOLD;
+
+  const handleBoardClick = useCallback(
+    (boardId: string) => {
+      onBoardChange(boardId);
+      setDropdownOpen(false);
+      setFilterText('');
+    },
+    [onBoardChange]
+  );
+
   // Build menu items
   const menuItems: MenuProps['items'] = useMemo(() => {
     // Sort boards alphabetically by name
@@ -52,7 +67,12 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
       a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
     );
 
-    return sortedBoards.map((board) => {
+    // Apply text filter
+    const filteredBoards = filterText
+      ? sortedBoards.filter((board) => board.name.toLowerCase().includes(filterText.toLowerCase()))
+      : sortedBoards;
+
+    const boardItems: NonNullable<MenuProps['items']> = filteredBoards.map((board) => {
       const worktreeCount = worktreeCountByBoard.get(board.board_id) || 0;
       const isActive = board.board_id === currentBoardId;
 
@@ -81,13 +101,67 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
             />
           </div>
         ),
-        onClick: () => onBoardChange(board.board_id),
+        onClick: () => handleBoardClick(board.board_id),
       };
     });
-  }, [boards, currentBoardId, worktreeCountByBoard, onBoardChange, token]);
+
+    if (!showFilter) {
+      return boardItems;
+    }
+
+    // Prepend the search input as a non-clickable menu item
+    return [
+      {
+        key: '__filter__',
+        label: (
+          <div
+            style={{ padding: '4px 0' }}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
+          >
+            <Input
+              placeholder="Filter boards..."
+              prefix={<SearchOutlined style={{ color: token.colorTextQuaternary }} />}
+              value={filterText}
+              onChange={(e) => setFilterText(e.target.value)}
+              size="small"
+              allowClear
+              autoFocus
+            />
+          </div>
+        ),
+        disabled: true,
+        style: { cursor: 'default', opacity: 1 },
+      },
+      { type: 'divider' as const },
+      ...boardItems,
+    ];
+  }, [
+    boards,
+    currentBoardId,
+    worktreeCountByBoard,
+    handleBoardClick,
+    token,
+    filterText,
+    showFilter,
+  ]);
 
   return (
-    <Dropdown menu={{ items: menuItems }} trigger={['click']} placement="bottomLeft">
+    <Dropdown
+      menu={{
+        items: menuItems,
+        style: showFilter ? { maxHeight: 400, overflowY: 'auto' } : undefined,
+      }}
+      trigger={['click']}
+      placement="bottomLeft"
+      open={dropdownOpen}
+      onOpenChange={(open) => {
+        setDropdownOpen(open);
+        if (!open) {
+          setFilterText('');
+        }
+      }}
+    >
       <Button
         type="text"
         style={{

@@ -5,6 +5,7 @@ export * from './useAuthConfig';
 export * from './useBoardActions';
 export * from './useLocalStorage';
 export * from './useMessages';
+export * from './useRecentBoards';
 export * from './useSessionActions';
 export * from './useSettingsRoute';
 export * from './useStreamingMessages';
