@@ -74,39 +74,37 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
     session?.agentic_tool || 'claude-code'
   );
 
-  // Reset form when modal opens
+  // Reset form and preset when modal opens
   useEffect(() => {
     if (open && session) {
+      setConfigPreset('parent');
       const agentTool = session.agentic_tool || 'claude-code';
-      const userDefaults = currentUser?.default_agentic_config?.[agentTool];
-
-      const initialValues =
-        configPreset === 'parent'
-          ? {
-              prompt: initialPrompt,
-              // No agent/config overrides — backend inherits from parent
-              enableCallback: session.callback_config?.enabled,
-              includeLastMessage: session.callback_config?.include_last_message,
-              includeOriginalPrompt: session.callback_config?.include_original_prompt,
-            }
-          : {
-              prompt: initialPrompt,
-              agent: agentTool,
-              permissionMode: userDefaults?.permissionMode || getDefaultPermissionMode(agentTool),
-              modelConfig: userDefaults?.modelConfig as ModelConfig | undefined,
-              codexSandboxMode: userDefaults?.codexSandboxMode,
-              codexApprovalPolicy: userDefaults?.codexApprovalPolicy,
-              codexNetworkAccess: userDefaults?.codexNetworkAccess,
-              mcpServerIds: userDefaults?.mcpServerIds || [],
-              enableCallback: undefined,
-              includeLastMessage: undefined,
-              includeOriginalPrompt: undefined,
-            };
-
-      form.setFieldsValue(initialValues);
+      form.setFieldsValue({
+        prompt: initialPrompt,
+        enableCallback: session.callback_config?.enabled,
+        includeLastMessage: session.callback_config?.include_last_message,
+        includeOriginalPrompt: session.callback_config?.include_original_prompt,
+      });
       setSelectedAgent(agentTool);
     }
-  }, [open, session, configPreset, form, initialPrompt, currentUser]);
+  }, [open, session, form, initialPrompt]);
+
+  // When switching to "Custom config", load user defaults for non-prompt fields
+  useEffect(() => {
+    if (!open || !session || configPreset !== 'custom') return;
+    const agentTool = session.agentic_tool || 'claude-code';
+    const userDefaults = currentUser?.default_agentic_config?.[agentTool];
+    form.setFieldsValue({
+      agent: agentTool,
+      permissionMode: userDefaults?.permissionMode || getDefaultPermissionMode(agentTool),
+      modelConfig: userDefaults?.modelConfig as ModelConfig | undefined,
+      codexSandboxMode: userDefaults?.codexSandboxMode,
+      codexApprovalPolicy: userDefaults?.codexApprovalPolicy,
+      codexNetworkAccess: userDefaults?.codexNetworkAccess,
+      mcpServerIds: userDefaults?.mcpServerIds || [],
+    });
+    setSelectedAgent(agentTool);
+  }, [open, session, configPreset, form, currentUser]);
 
   const handleOk = async () => {
     try {
