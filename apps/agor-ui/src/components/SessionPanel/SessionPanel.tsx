@@ -572,6 +572,16 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             setDroppedFiles(files);
             setUploadModalOpen(true);
           }}
+          slashCommands={
+            (session?.custom_context as Record<string, unknown> | undefined)?.slash_commands as
+              | string[]
+              | undefined
+          }
+          skills={
+            (session?.custom_context as Record<string, unknown> | undefined)?.skills as
+              | string[]
+              | undefined
+          }
         />
         <div
           style={{

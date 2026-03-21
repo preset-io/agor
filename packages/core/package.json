@@ -189,7 +189,7 @@
     "db:migrate:mcp": "tsx src/db/scripts/migrate-add-mcp-tables.ts"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.63",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.81",
     "@feathersjs/authentication": "^5.0.41",
     "@feathersjs/authentication-client": "^5.0.41",
     "@feathersjs/authentication-local": "^5.0.41",

@@ -42,7 +42,18 @@ interface EmojiResult {
   type: 'emoji';
 }
 
-type AutocompleteResult = FileResult | UserResult | EmojiResult | { heading: string };
+interface SlashCommandResult {
+  command: string;
+  source: 'built-in' | 'project' | 'personal';
+  type: 'slash_command';
+}
+
+type AutocompleteResult =
+  | FileResult
+  | UserResult
+  | EmojiResult
+  | SlashCommandResult
+  | { heading: string };
 
 interface AutocompleteTextareaProps {
   value: string;
@@ -57,6 +68,10 @@ interface AutocompleteTextareaProps {
     maxRows?: number;
   };
   onFilesDrop?: (files: File[]) => void;
+  /** Available slash commands from the SDK (stored on session.custom_context) */
+  slashCommands?: string[];
+  /** Available skills from the SDK (stored on session.custom_context) */
+  skills?: string[];
 }
 
 // Minimum characters required after : before showing emoji picker (like Slack)
@@ -120,7 +135,7 @@ const getCharBefore = (text: string, position: number): string => {
 const getTriggerQuery = (
   text: string,
   position: number,
-  trigger: '@' | ':'
+  trigger: '@' | ':' | '/'
 ): { query: string; triggerIndex: number } | null => {
   const textBeforeCursor = text.substring(0, position);
   const lastTriggerIndex = textBeforeCursor.lastIndexOf(trigger);
@@ -136,7 +151,12 @@ const getTriggerQuery = (
   const isAfterWhitespace = charBeforeTrigger === ' ' || charBeforeTrigger === '\n';
   const isAfterEmoji = isEmoji(charBeforeTrigger);
 
-  if (trigger === '@') {
+  if (trigger === '/') {
+    // Slash commands must be at position 0 (start of prompt)
+    if (lastTriggerIndex !== 0) {
+      return null;
+    }
+  } else if (trigger === '@') {
     if (!isAtStart && !isAfterWhitespace) {
       return null;
     }
@@ -230,6 +250,8 @@ export const AutocompleteTextarea = React.forwardRef<
       userById,
       autoSize,
       onFilesDrop,
+      slashCommands = [],
+      skills = [],
     },
     ref
   ) => {
@@ -242,12 +264,13 @@ export const AutocompleteTextarea = React.forwardRef<
 
     // Autocomplete state
     const [showPopover, setShowPopover] = useState(false);
-    const [triggerType, setTriggerType] = useState<'@' | ':' | null>(null);
+    const [triggerType, setTriggerType] = useState<'@' | ':' | '/' | null>(null);
     const [triggerIndex, setTriggerIndex] = useState(-1);
     const [query, setQuery] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [fileResults, setFileResults] = useState<FileResult[]>([]);
     const [emojiResults, setEmojiResults] = useState<EmojiResult[]>([]);
+    const [slashCommandResults, setSlashCommandResults] = useState<SlashCommandResult[]>([]);
     const [highlightedIndex, setHighlightedIndex] = useState(-1);
 
     // Scroll synchronization state
@@ -377,10 +400,16 @@ export const AutocompleteTextarea = React.forwardRef<
           options.push({ heading: 'EMOJIS' });
           options.push(...emojiResults);
         }
+      } else if (triggerType === '/') {
+        // / trigger: show slash commands
+        if (slashCommandResults.length > 0) {
+          options.push({ heading: 'COMMANDS' });
+          options.push(...slashCommandResults);
+        }
       }
 
       return options;
-    }, [triggerType, fileResults, emojiResults, query, filterUsers]);
+    }, [triggerType, fileResults, emojiResults, slashCommandResults, query, filterUsers]);
 
     /**
      * Auto-highlight first selectable item when options change
@@ -424,7 +453,44 @@ export const AutocompleteTextarea = React.forwardRef<
 
         const cursorPos = e.target.selectionStart || 0;
 
-        // Check for @ trigger first
+        // Check for / trigger first (slash commands, only at position 0)
+        const slashTrigger = getTriggerQuery(newValue, cursorPos, '/');
+        if (slashTrigger) {
+          setTriggerType('/');
+          setQuery(slashTrigger.query);
+          setTriggerIndex(slashTrigger.triggerIndex);
+          setFileResults([]);
+          setEmojiResults([]);
+          setIsLoading(false);
+
+          // Filter available commands by query
+          const q = slashTrigger.query.toLowerCase();
+          const commandResults: SlashCommandResult[] = [
+            ...slashCommands
+              .filter((cmd) => cmd.toLowerCase().includes(q))
+              .map(
+                (cmd): SlashCommandResult => ({
+                  command: cmd,
+                  source: 'built-in',
+                  type: 'slash_command',
+                })
+              ),
+            ...skills
+              .filter((skill) => skill.toLowerCase().includes(q))
+              .map(
+                (skill): SlashCommandResult => ({
+                  command: skill,
+                  source: 'project',
+                  type: 'slash_command',
+                })
+              ),
+          ];
+          setSlashCommandResults(commandResults);
+          setShowPopover(true);
+          return;
+        }
+
+        // Check for @ trigger
         const atTrigger = getTriggerQuery(newValue, cursorPos, '@');
         if (atTrigger) {
           setTriggerType('@');
@@ -472,16 +538,17 @@ export const AutocompleteTextarea = React.forwardRef<
         setTriggerType(null);
         setFileResults([]);
         setEmojiResults([]);
+        setSlashCommandResults([]);
         setHighlightedIndex(-1);
       },
-      [onChange, searchFiles, searchEmojis]
+      [onChange, searchFiles, searchEmojis, slashCommands, skills]
     );
 
     /**
      * Handle item selection
      */
     const handleSelect = useCallback(
-      (item: FileResult | UserResult | EmojiResult) => {
+      (item: FileResult | UserResult | EmojiResult | SlashCommandResult) => {
         if (triggerIndex === -1) return;
 
         const cursorPos = textareaRef.current.current?.selectionStart || 0;
@@ -491,7 +558,10 @@ export const AutocompleteTextarea = React.forwardRef<
         let insertText = '';
         let addTrailingSpace = true;
 
-        if ('emoji' in item) {
+        if ('command' in item) {
+          // Slash command selection - replace with /command
+          insertText = `/${item.command}`;
+        } else if ('emoji' in item) {
           // Emoji selection - just insert the emoji character
           insertText = item.emoji;
           addTrailingSpace = false; // Don't add space after emoji to match Slack behavior
@@ -514,6 +584,7 @@ export const AutocompleteTextarea = React.forwardRef<
         setTriggerType(null);
         setFileResults([]);
         setEmojiResults([]);
+        setSlashCommandResults([]);
         setHighlightedIndex(-1);
 
         // Move cursor after inserted value
@@ -578,7 +649,7 @@ export const AutocompleteTextarea = React.forwardRef<
               if (highlightedIndex >= 0) {
                 const item = autocompleteOptions[highlightedIndex];
                 if (!('heading' in item)) {
-                  handleSelect(item as FileResult | UserResult);
+                  handleSelect(item as FileResult | UserResult | SlashCommandResult);
                 }
               } else if (autocompleteOptions.length > 0) {
                 // If nothing highlighted, highlight first non-heading item
@@ -600,7 +671,7 @@ export const AutocompleteTextarea = React.forwardRef<
               if (highlightedIndex >= 0) {
                 const item = autocompleteOptions[highlightedIndex];
                 if (!('heading' in item)) {
-                  handleSelect(item as FileResult | UserResult | EmojiResult);
+                  handleSelect(item as FileResult | UserResult | EmojiResult | SlashCommandResult);
                 }
               } else {
                 // Nothing highlighted - select first non-heading item (like Slack)
@@ -737,8 +808,13 @@ export const AutocompleteTextarea = React.forwardRef<
             let label = '';
             let itemKey = '';
             let isFolder = false;
+            let isCommand = false;
 
-            if ('emoji' in item) {
+            if ('command' in item) {
+              label = `/${item.command}`;
+              itemKey = `cmd-${item.command}`;
+              isCommand = true;
+            } else if ('emoji' in item) {
               label = `${item.emoji} :${item.shortcode}:`;
               itemKey = `emoji-${item.shortcode}`;
             } else if ('path' in item) {
@@ -755,7 +831,9 @@ export const AutocompleteTextarea = React.forwardRef<
             return (
               <div
                 key={itemKey}
-                onClick={() => handleSelect(item)}
+                onClick={() =>
+                  handleSelect(item as FileResult | UserResult | EmojiResult | SlashCommandResult)
+                }
                 style={{
                   padding: `${token.paddingXS}px ${token.paddingSM}px`,
                   cursor: 'pointer',
@@ -777,6 +855,19 @@ export const AutocompleteTextarea = React.forwardRef<
                   e.currentTarget.style.backgroundColor = 'transparent';
                 }}
               >
+                {/* Show command icon for slash commands */}
+                {isCommand && (
+                  <span
+                    style={{
+                      fontFamily: 'monospace',
+                      fontSize: token.fontSizeSM,
+                      opacity: 0.6,
+                      fontWeight: 600,
+                    }}
+                  >
+                    /
+                  </span>
+                )}
                 {/* Show emoji larger if it's an emoji result */}
                 {'emoji' in item && (
                   <span style={{ fontSize: 20, lineHeight: 1 }}>{item.emoji}</span>
@@ -784,8 +875,26 @@ export const AutocompleteTextarea = React.forwardRef<
                 {/* Show folder icon for folders */}
                 {isFolder && <span style={{ opacity: 0.6 }}>📁</span>}
                 <Text ellipsis style={{ flex: 1 }}>
-                  {'emoji' in item ? `:${item.shortcode}:` : label}
+                  {'emoji' in item
+                    ? `:${item.shortcode}:`
+                    : isCommand
+                      ? 'command' in item
+                        ? item.command
+                        : ''
+                      : label}
                 </Text>
+                {/* Show source badge for slash commands */}
+                {isCommand && 'source' in item && (
+                  <Text
+                    style={{
+                      fontSize: token.fontSizeSM - 1,
+                      color: token.colorTextDescription,
+                      flexShrink: 0,
+                    }}
+                  >
+                    {item.source}
+                  </Text>
+                )}
               </div>
             );
           })}

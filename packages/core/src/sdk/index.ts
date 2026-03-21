@@ -20,12 +20,14 @@ export type {
   PermissionMode,
   SDKAssistantMessage,
   SDKCompactBoundaryMessage,
+  SDKLocalCommandOutputMessage,
   SDKMessage,
   SDKPartialAssistantMessage,
   SDKResultMessage,
   SDKSystemMessage,
   SDKUserMessage,
   SDKUserMessageReplay,
+  SlashCommand,
 } from '@anthropic-ai/claude-agent-sdk';
 // Claude Agent SDK - namespace export
 export * as Claude from '@anthropic-ai/claude-agent-sdk';

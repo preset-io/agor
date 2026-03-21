@@ -139,8 +139,8 @@ importers:
         version: 5.32.0
     devDependencies:
       '@anthropic-ai/claude-agent-sdk':
-        specifier: ^0.2.63
-        version: 0.2.63(zod@4.3.6)
+        specifier: ^0.2.81
+        version: 0.2.81(zod@4.3.6)
       '@types/compression':
         specifier: ^1.8.1
         version: 1.8.1
@@ -369,8 +369,8 @@ importers:
   packages/agor-live:
     dependencies:
       '@anthropic-ai/claude-agent-sdk':
-        specifier: ^0.2.63
-        version: 0.2.63(zod@4.3.6)
+        specifier: ^0.2.81
+        version: 0.2.81(zod@4.3.6)
       '@feathersjs/authentication':
         specifier: ^5.0.41
         version: 5.0.41(typescript@5.9.3)
@@ -528,8 +528,8 @@ importers:
   packages/core:
     dependencies:
       '@anthropic-ai/claude-agent-sdk':
-        specifier: ^0.2.63
-        version: 0.2.63(zod@4.3.6)
+        specifier: ^0.2.81
+        version: 0.2.81(zod@4.3.6)
       '@feathersjs/authentication':
         specifier: ^5.0.41
         version: 5.0.41(typescript@5.9.3)
@@ -773,8 +773,8 @@ packages:
   '@antfu/utils@9.3.0':
     resolution: {integrity: sha512-9hFT4RauhcUzqOE4f1+frMKLZrgNog5b06I7VmZQV1BkvwvqrbC8EBZf3L1eEL2AKb6rNKjER0sEvJiSP1FXEA==}
 
-  '@anthropic-ai/claude-agent-sdk@0.2.63':
-    resolution: {integrity: sha512-ZNiaQb/v6xkbrGt3dtq5J0DGY+AaOhoehUyposa3msvlAlkTHWNGR+NhbCcTE0ML1U91xhPqMAAwZIUqrlkKyQ==}
+  '@anthropic-ai/claude-agent-sdk@0.2.81':
+    resolution: {integrity: sha512-CBeebgibBEN/DWOQGZN67vhuTG55RbI1hlsFSSoZ4uA/Io3lw04eHTE2ISCmdbqyJaefYTt6GKZei1nP0TQMNw==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
       zod: ^4.3.6
@@ -8906,7 +8906,7 @@ snapshots:
 
   '@antfu/utils@9.3.0': {}
 
-  '@anthropic-ai/claude-agent-sdk@0.2.63(zod@4.3.6)':
+  '@anthropic-ai/claude-agent-sdk@0.2.81(zod@4.3.6)':
     dependencies:
       zod: 4.3.6
     optionalDependencies:
