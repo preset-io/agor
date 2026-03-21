@@ -463,28 +463,23 @@ export const AutocompleteTextarea = React.forwardRef<
           setEmojiResults([]);
           setIsLoading(false);
 
-          // Filter available commands by query
+          // Filter available commands by query, deduplicating between slashCommands and skills
           const q = slashTrigger.query.toLowerCase();
-          const commandResults: SlashCommandResult[] = [
-            ...slashCommands
-              .filter((cmd) => cmd.toLowerCase().includes(q))
-              .map(
-                (cmd): SlashCommandResult => ({
-                  command: cmd,
-                  source: 'built-in',
-                  type: 'slash_command',
-                })
-              ),
-            ...skills
-              .filter((skill) => skill.toLowerCase().includes(q))
-              .map(
-                (skill): SlashCommandResult => ({
-                  command: skill,
-                  source: 'project',
-                  type: 'slash_command',
-                })
-              ),
-          ];
+          const seen = new Set<string>();
+          const commandResults: SlashCommandResult[] = [];
+
+          for (const cmd of slashCommands) {
+            if (cmd.toLowerCase().includes(q) && !seen.has(cmd)) {
+              seen.add(cmd);
+              commandResults.push({ command: cmd, source: 'built-in', type: 'slash_command' });
+            }
+          }
+          for (const skill of skills) {
+            if (skill.toLowerCase().includes(q) && !seen.has(skill)) {
+              seen.add(skill);
+              commandResults.push({ command: skill, source: 'project', type: 'slash_command' });
+            }
+          }
           setSlashCommandResults(commandResults);
           setShowPopover(true);
           return;
@@ -497,6 +492,7 @@ export const AutocompleteTextarea = React.forwardRef<
           setQuery(atTrigger.query);
           setTriggerIndex(atTrigger.triggerIndex);
           setEmojiResults([]);
+          setSlashCommandResults([]);
 
           // Debounced search for files
           if (debounceTimerRef.current) {
@@ -517,6 +513,7 @@ export const AutocompleteTextarea = React.forwardRef<
           setQuery(colonTrigger.query);
           setTriggerIndex(colonTrigger.triggerIndex);
           setFileResults([]);
+          setSlashCommandResults([]);
           setIsLoading(false); // Reset loading state when switching to emoji trigger
 
           // Instant emoji search (no debounce needed)
