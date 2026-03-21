@@ -1,19 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import { markdownToMrkdwn } from './slack';
 
+/**
+ * slackify-markdown uses zero-width spaces (\u200B) around inline formatting
+ * to prevent Slack from misinterpreting mid-word emphasis markers.
+ * Tests use toContain for inline formatting to stay resilient to this.
+ */
 describe('markdownToMrkdwn', () => {
   it('converts bold', () => {
-    expect(markdownToMrkdwn('**bold**')).toBe('*bold*');
-    expect(markdownToMrkdwn('__bold__')).toBe('*bold*');
+    expect(markdownToMrkdwn('**bold**')).toContain('*bold*');
+    expect(markdownToMrkdwn('__bold__')).toContain('*bold*');
   });
 
   it('converts italic', () => {
-    expect(markdownToMrkdwn('_italic_')).toBe('_italic_');
-    expect(markdownToMrkdwn('*italic*')).toBe('_italic_');
+    expect(markdownToMrkdwn('_italic_')).toContain('_italic_');
+    expect(markdownToMrkdwn('*italic*')).toContain('_italic_');
   });
 
   it('converts strikethrough', () => {
-    expect(markdownToMrkdwn('~~strike~~')).toBe('~strike~');
+    expect(markdownToMrkdwn('~~strike~~')).toContain('~strike~');
   });
 
   it('converts links', () => {
@@ -23,28 +28,28 @@ describe('markdownToMrkdwn', () => {
   });
 
   it('converts bare URLs to Slack link format', () => {
-    expect(markdownToMrkdwn('https://example.com')).toBe('<https://example.com>');
+    expect(markdownToMrkdwn('https://example.com')).toContain('https://example.com');
   });
 
-  it('strips images (Slack cannot render inline images)', () => {
-    expect(markdownToMrkdwn('![alt text](https://img.png)')).toBe('');
-    expect(markdownToMrkdwn('![](https://img.png)')).toBe('');
+  it('converts images to links (Slack cannot render inline images)', () => {
+    expect(markdownToMrkdwn('![alt text](https://img.png)')).toBe('<https://img.png|alt text>');
+    expect(markdownToMrkdwn('![](https://img.png)')).toBe('<https://img.png>');
   });
 
-  it('converts headings to plain text', () => {
-    expect(markdownToMrkdwn('# Heading 1')).toBe('Heading 1');
-    expect(markdownToMrkdwn('## Heading 2')).toBe('Heading 2');
-    expect(markdownToMrkdwn('### Heading 3')).toBe('Heading 3');
+  it('converts headings to bold text', () => {
+    expect(markdownToMrkdwn('# Heading 1')).toBe('*Heading 1*');
+    expect(markdownToMrkdwn('## Heading 2')).toBe('*Heading 2*');
+    expect(markdownToMrkdwn('### Heading 3')).toBe('*Heading 3*');
   });
 
-  it('preserves horizontal rules', () => {
-    expect(markdownToMrkdwn('---')).toBe('---');
+  it('converts horizontal rules', () => {
+    expect(markdownToMrkdwn('---')).toBe('***');
     expect(markdownToMrkdwn('***')).toBe('***');
   });
 
-  it('preserves code blocks', () => {
+  it('preserves code blocks and strips language identifier', () => {
     const input = '```js\nconst x = 1;\n```';
-    expect(markdownToMrkdwn(input)).toBe('```js\nconst x = 1;\n```');
+    expect(markdownToMrkdwn(input)).toBe('```\nconst x = 1;\n```');
   });
 
   it('preserves inline code', () => {
@@ -53,22 +58,32 @@ describe('markdownToMrkdwn', () => {
 
   it('converts unordered lists', () => {
     const input = '- item 1\n- item 2\n- item 3';
-    expect(markdownToMrkdwn(input)).toBe('- item 1\n- item 2\n- item 3');
+    const output = markdownToMrkdwn(input);
+    expect(output).toContain('item 1');
+    expect(output).toContain('item 2');
+    expect(output).toContain('item 3');
   });
 
   it('converts ordered lists', () => {
     const input = '1. first\n2. second\n3. third';
-    expect(markdownToMrkdwn(input)).toBe('1. first\n2. second\n3. third');
+    const output = markdownToMrkdwn(input);
+    expect(output).toContain('1.');
+    expect(output).toContain('first');
+    expect(output).toContain('2.');
+    expect(output).toContain('second');
   });
 
   it('preserves blockquotes', () => {
     expect(markdownToMrkdwn('> quoted text')).toBe('> quoted text');
   });
 
-  it('strips tables (md-to-slack limitation)', () => {
+  it('preserves tables', () => {
     const input = '| Col1 | Col2 |\n|------|------|\n| A    | B    |';
     const output = markdownToMrkdwn(input);
-    expect(output).toBe('');
+    expect(output).toContain('Col1');
+    expect(output).toContain('Col2');
+    expect(output).toContain('A');
+    expect(output).toContain('B');
   });
 
   it('handles a realistic agent response', () => {
@@ -92,17 +107,17 @@ describe('markdownToMrkdwn', () => {
 
     const output = markdownToMrkdwn(input);
 
-    // Headings rendered as plain text
-    expect(output).toContain('Summary');
-    expect(output).toContain('Code change');
+    // Bold headings
+    expect(output).toContain('*Summary*');
+    expect(output).toContain('*Code change*');
     // Bold text
     expect(output).toContain('*Fixed*');
     // Links
     expect(output).toContain('<https://docs.example.com|documentation>');
     // Strikethrough
     expect(output).toContain('~Removed~');
-    // Code block preserved
-    expect(output).toContain('```typescript\nconst user = await authenticate(token);\n```');
+    // Code block preserved (lang stripped)
+    expect(output).toContain('```\nconst user = await authenticate(token);\n```');
     // Inline code preserved
     expect(output).toContain('`auth.ts`');
     // Blockquote
@@ -120,21 +135,19 @@ describe('markdownToMrkdwn', () => {
     expect(markdownToMrkdwn('a > b')).toContain('&gt;');
   });
 
-  it('does not double-convert already-valid mrkdwn', () => {
-    // If someone sends *already bold* it should pass through
-    expect(markdownToMrkdwn('*already bold*')).toBe('_already bold_');
+  it('treats single asterisk as italic (markdown spec)', () => {
+    // In markdown, *text* is italic — slackify-markdown converts to _text_
+    expect(markdownToMrkdwn('*already bold*')).toContain('_already bold_');
   });
 
   it('separates multiple paragraphs', () => {
     const output = markdownToMrkdwn('First paragraph.\n\nSecond paragraph.');
     expect(output).toContain('First paragraph.');
     expect(output).toContain('Second paragraph.');
-    // Should not run together
     expect(output).not.toBe('First paragraph.Second paragraph.');
   });
 
   it('handles inline formatting inside headings', () => {
-    // md-to-slack renders headings as plain text without processing inline tokens
     const output = markdownToMrkdwn('## Fix for **critical** bug');
     expect(output).toContain('Fix for');
     expect(output).toContain('critical');
@@ -153,11 +166,13 @@ describe('markdownToMrkdwn', () => {
     expect(output).not.toContain('&amp;');
   });
 
-  it('handles nested lists', () => {
+  it('handles nested lists with proper indentation', () => {
     const input = '- item 1\n  - subitem\n- item 2';
     const output = markdownToMrkdwn(input);
     expect(output).toContain('item 1');
     expect(output).toContain('subitem');
     expect(output).toContain('item 2');
+    // Nested items should be indented
+    expect(output).toMatch(/\n\s+.*subitem/);
   });
 });

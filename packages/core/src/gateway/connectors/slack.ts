@@ -23,7 +23,7 @@
 
 import { SocketModeClient } from '@slack/socket-mode';
 import { WebClient } from '@slack/web-api';
-import { markdownToSlack } from 'md-to-slack';
+import { slackifyMarkdown } from 'slackify-markdown';
 
 import type { ChannelType } from '../../types/gateway';
 import type { GatewayConnector, InboundMessage } from '../connector';
@@ -93,14 +93,15 @@ function hasActiveMention(text: string, mentionPattern: RegExp): boolean {
 /**
  * Convert GitHub-flavored markdown to Slack mrkdwn format.
  *
- * Delegates to `md-to-slack` which uses `marked` with a custom Slack
- * renderer. Handles bold, italic, strikethrough, links, headings,
- * code blocks, lists, blockquotes, and Slack character escaping.
+ * Delegates to `slackify-markdown` which uses `unified`/`remark` with
+ * custom Slack handlers. Handles bold, italic, strikethrough, links,
+ * headings (→ bold), images (→ links), code blocks (strips lang),
+ * lists, blockquotes, tables, and Slack character escaping.
  *
- * @see https://github.com/nicoespeon/md-to-slack
+ * @see https://github.com/jsarafajr/slackify-markdown
  */
 export function markdownToMrkdwn(markdown: string): string {
-  return markdownToSlack(markdown);
+  return slackifyMarkdown(markdown).trim();
 }
 
 export class SlackConnector implements GatewayConnector {
