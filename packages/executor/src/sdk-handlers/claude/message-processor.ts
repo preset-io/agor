@@ -14,7 +14,6 @@
 import type {
   SDKAssistantMessage,
   SDKCompactBoundaryMessage,
-  SDKLocalCommandOutputMessage,
   SDKMessage,
   SDKPartialAssistantMessage,
   SDKResultMessage,
@@ -271,9 +270,7 @@ export class SDKMessageProcessor {
       case 'result':
         return this.handleResult(msg as SDKResultMessage);
       case 'system':
-        return this.handleSystem(
-          msg as SDKSystemMessage | SDKCompactBoundaryMessage | SDKLocalCommandOutputMessage
-        );
+        return this.handleSystem(msg as SDKSystemMessage | SDKCompactBoundaryMessage);
       default:
         return this.handleUnknown(msg);
     }
@@ -615,9 +612,7 @@ export class SDKMessageProcessor {
   /**
    * Handle system messages
    */
-  private handleSystem(
-    msg: SDKSystemMessage | SDKCompactBoundaryMessage | SDKLocalCommandOutputMessage
-  ): ProcessedEvent[] {
+  private handleSystem(msg: SDKSystemMessage | SDKCompactBoundaryMessage): ProcessedEvent[] {
     if ('subtype' in msg && msg.subtype === 'compact_boundary') {
       console.log(`📦 SDK compact_boundary (compaction finished)`);
       console.log(`📊 Full compact_boundary message:`, JSON.stringify(msg, null, 2));
@@ -637,31 +632,6 @@ export class SDKMessageProcessor {
                 pre_tokens: metadata.pre_tokens,
               }
             : undefined,
-        },
-      ];
-    }
-
-    // Handle local slash command output (e.g. /usage, /cost, /help)
-    // These are CLI-level commands whose output is returned to SDK clients
-    if ('subtype' in msg && msg.subtype === 'local_command_output') {
-      const localMsg = msg as SDKLocalCommandOutputMessage;
-      console.log(`📋 SDK local command output (${localMsg.content.length} chars)`);
-
-      // Emit as assistant-style message (matching SDK's "displayed as assistant-style text" behavior)
-      return [
-        {
-          type: 'complete',
-          role: MessageRole.ASSISTANT,
-          content: [
-            {
-              type: 'text',
-              text: localMsg.content,
-            },
-          ],
-          toolUses: undefined,
-          parent_tool_use_id: null,
-          agentSessionId: this.state.capturedAgentSessionId,
-          resolvedModel: this.state.resolvedModel,
         },
       ];
     }
@@ -700,6 +670,8 @@ export class SDKMessageProcessor {
         skills: initMsg.skills?.length,
       });
 
+      const events: ProcessedEvent[] = [];
+
       // Capture model from init message
       if (initMsg.model) {
         this.state.resolvedModel = initMsg.model;
@@ -714,17 +686,15 @@ export class SDKMessageProcessor {
         );
 
         // Emit event so claude-tool can persist to session for UI autocomplete
-        return [
-          {
-            type: 'slash_commands_discovered',
-            slashCommands: this.state.slashCommands,
-            skills: this.state.skills,
-            agentSessionId: this.state.capturedAgentSessionId,
-          },
-        ];
+        events.push({
+          type: 'slash_commands_discovered',
+          slashCommands: this.state.slashCommands,
+          skills: this.state.skills,
+          agentSessionId: this.state.capturedAgentSessionId,
+        });
       }
 
-      return [];
+      return events;
     }
 
     console.debug(`ℹ️  SDK system message:`, msg);
