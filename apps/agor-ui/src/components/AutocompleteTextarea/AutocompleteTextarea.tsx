@@ -480,6 +480,7 @@ export const AutocompleteTextarea = React.forwardRef<
               commandResults.push({ command: skill, source: 'project', type: 'slash_command' });
             }
           }
+          commandResults.sort((a, b) => a.command.localeCompare(b.command));
           setSlashCommandResults(commandResults);
           setShowPopover(true);
           return;
