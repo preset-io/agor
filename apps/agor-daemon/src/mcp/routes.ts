@@ -141,6 +141,16 @@ export function setupMCPRoutes(app: Application, db: Database): void {
                     type: 'string',
                     description: 'Filter sessions by worktree ID',
                   },
+                  includeArchived: {
+                    type: 'boolean',
+                    description:
+                      'Include archived sessions in results (default: false). By default, archived sessions are excluded.',
+                  },
+                  archived: {
+                    type: 'boolean',
+                    description:
+                      'Filter to show ONLY archived sessions. When true, returns only archived sessions. Overrides includeArchived.',
+                  },
                 },
               },
             },
@@ -294,7 +304,7 @@ export function setupMCPRoutes(app: Application, db: Database): void {
             {
               name: 'agor_sessions_update',
               description:
-                'Update session metadata (title, description, status). Useful for agents to self-document their work.',
+                'Update session metadata (title, description, status, archived). Useful for agents to self-document their work.',
               inputSchema: {
                 type: 'object',
                 properties: {
@@ -314,6 +324,51 @@ export function setupMCPRoutes(app: Application, db: Database): void {
                     type: 'string',
                     enum: ['idle', 'running', 'completed', 'failed'],
                     description: 'New session status (optional)',
+                  },
+                  archived: {
+                    type: 'boolean',
+                    description:
+                      'Set archive state. true to archive, false to unarchive (optional)',
+                  },
+                },
+                required: ['sessionId'],
+              },
+            },
+            {
+              name: 'agor_sessions_archive',
+              description:
+                'Archive a session (soft delete). Archived sessions are hidden from listings by default but can be restored. Use includeChildren to also archive all child sessions (forks and subsessions).',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  sessionId: {
+                    type: 'string',
+                    description: 'Session ID to archive (UUIDv7 or short ID)',
+                  },
+                  includeChildren: {
+                    type: 'boolean',
+                    description:
+                      'Also archive all child sessions (forks and subsessions). Default: false.',
+                  },
+                },
+                required: ['sessionId'],
+              },
+            },
+            {
+              name: 'agor_sessions_unarchive',
+              description:
+                'Restore a previously archived session. Use includeChildren to also unarchive all child sessions.',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  sessionId: {
+                    type: 'string',
+                    description: 'Session ID to unarchive (UUIDv7 or short ID)',
+                  },
+                  includeChildren: {
+                    type: 'boolean',
+                    description:
+                      'Also unarchive all child sessions (forks and subsessions). Default: false.',
                   },
                 },
                 required: ['sessionId'],
@@ -1203,6 +1258,16 @@ export function setupMCPRoutes(app: Application, db: Database): void {
           if (args?.boardId) query.board_id = args.boardId;
           if (args?.worktreeId) query.worktree_id = args.worktreeId;
 
+          // Archive filtering: exclude archived by default
+          if (args?.archived === true) {
+            // Show ONLY archived sessions
+            query.archived = true;
+          } else if (!args?.includeArchived) {
+            // Default: exclude archived sessions
+            query.archived = false;
+          }
+          // If includeArchived is true and archived is not set, don't filter by archived
+
           const sessions = await app.service('sessions').find({ query });
           mcpResponse = {
             content: [
@@ -1690,14 +1755,14 @@ export function setupMCPRoutes(app: Application, db: Database): void {
           }
 
           // Validate at least one field is provided
-          if (!args.title && !args.description && !args.status) {
+          if (!args.title && !args.description && !args.status && args.archived === undefined) {
             return res.status(400).json({
               jsonrpc: '2.0',
               id: mcpRequest.id,
               error: {
                 code: -32602,
                 message:
-                  'Invalid params: at least one field (title, description, status) must be provided',
+                  'Invalid params: at least one field (title, description, status, archived) must be provided',
               },
             });
           }
@@ -1709,6 +1774,10 @@ export function setupMCPRoutes(app: Application, db: Database): void {
           if (args.title !== undefined) updates.title = args.title;
           if (args.description !== undefined) updates.description = args.description;
           if (args.status !== undefined) updates.status = args.status;
+          if (args.archived !== undefined) {
+            updates.archived = args.archived;
+            updates.archived_reason = args.archived ? 'manual' : undefined;
+          }
 
           // Update session
           const session = await app
@@ -1724,6 +1793,150 @@ export function setupMCPRoutes(app: Application, db: Database): void {
                   {
                     session,
                     note: 'Session updated successfully.',
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        } else if (name === 'agor_sessions_archive') {
+          // Archive a session (soft delete)
+          if (!args?.sessionId) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message: 'Invalid params: sessionId is required',
+              },
+            });
+          }
+
+          console.log(
+            `📦 MCP archiving session ${args.sessionId.substring(0, 8)}${args.includeChildren ? ' (with children)' : ''}`
+          );
+
+          const sessionsService = app.service('sessions') as unknown as SessionsServiceImpl;
+          let archivedCount = 0;
+
+          // Archive the target session (idempotent - succeeds even if already archived)
+          await app
+            .service('sessions')
+            .patch(
+              args.sessionId,
+              { archived: true, archived_reason: 'manual' },
+              baseServiceParams
+            );
+          archivedCount++;
+
+          // Optionally archive children
+          if (args.includeChildren) {
+            // Recursively collect all descendant session IDs
+            const collectDescendantIds = async (parentId: string): Promise<string[]> => {
+              const gen = await sessionsService.getGenealogy(parentId, baseServiceParams);
+              const ids: string[] = [];
+              for (const child of gen.children) {
+                ids.push(child.session_id);
+                const nested = await collectDescendantIds(child.session_id);
+                ids.push(...nested);
+              }
+              return ids;
+            };
+
+            const descendantIds = await collectDescendantIds(args.sessionId);
+            for (const childId of descendantIds) {
+              await app
+                .service('sessions')
+                .patch(childId, { archived: true, archived_reason: 'manual' }, baseServiceParams);
+              archivedCount++;
+            }
+          }
+
+          console.log(`✅ Archived ${archivedCount} session(s)`);
+
+          mcpResponse = {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(
+                  {
+                    success: true,
+                    archivedCount,
+                    message: `Archived ${archivedCount} session(s).`,
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        } else if (name === 'agor_sessions_unarchive') {
+          // Unarchive (restore) a session
+          if (!args?.sessionId) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message: 'Invalid params: sessionId is required',
+              },
+            });
+          }
+
+          console.log(
+            `📦 MCP unarchiving session ${args.sessionId.substring(0, 8)}${args.includeChildren ? ' (with children)' : ''}`
+          );
+
+          const unarchivedSessionsService = app.service(
+            'sessions'
+          ) as unknown as SessionsServiceImpl;
+          let unarchivedCount = 0;
+
+          // Unarchive the target session (idempotent)
+          await app
+            .service('sessions')
+            .patch(
+              args.sessionId,
+              { archived: false, archived_reason: undefined },
+              baseServiceParams
+            );
+          unarchivedCount++;
+
+          // Optionally unarchive children
+          if (args.includeChildren) {
+            // Recursively collect all descendant session IDs
+            const collectDescendantIds = async (parentId: string): Promise<string[]> => {
+              const gen = await unarchivedSessionsService.getGenealogy(parentId, baseServiceParams);
+              const ids: string[] = [];
+              for (const child of gen.children) {
+                ids.push(child.session_id);
+                const nested = await collectDescendantIds(child.session_id);
+                ids.push(...nested);
+              }
+              return ids;
+            };
+
+            const descendantIds = await collectDescendantIds(args.sessionId);
+            for (const childId of descendantIds) {
+              await app
+                .service('sessions')
+                .patch(childId, { archived: false, archived_reason: undefined }, baseServiceParams);
+              unarchivedCount++;
+            }
+          }
+
+          console.log(`✅ Unarchived ${unarchivedCount} session(s)`);
+
+          mcpResponse = {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(
+                  {
+                    success: true,
+                    unarchivedCount,
+                    message: `Unarchived ${unarchivedCount} session(s).`,
                   },
                   null,
                   2

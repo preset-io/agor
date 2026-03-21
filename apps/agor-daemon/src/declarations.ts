@@ -50,7 +50,14 @@ export interface SessionsServiceImpl extends Service<Session, Partial<Session>, 
     data: Partial<import('@agor/core/types').SpawnConfig>,
     params?: FeathersParams
   ): Promise<Session>;
-  getGenealogy(id: string, params?: FeathersParams): Promise<unknown>; // GenealogyTree type would go here
+  getGenealogy(
+    id: string,
+    params?: FeathersParams
+  ): Promise<{
+    session: import('@agor/core/types').Session;
+    ancestors: import('@agor/core/types').Session[];
+    children: import('@agor/core/types').Session[];
+  }>;
   // Callback queue processing
   setQueueProcessor(
     processor: (
