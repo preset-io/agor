@@ -85,14 +85,9 @@ export class ClaudePromptService {
 
 To configure your Anthropic API key:
 
-**Option 1: User Settings (Recommended)**
-Configure your API key in Agor's user settings. This applies to all your sessions.
-
-**Option 2: Environment Variables**
-Set \`ANTHROPIC_API_KEY\` in your worktree environment configuration.
-
-**Option 3: System Environment**
-For self-hosted Agor instances, set the environment variable at the system level.
+1. **System Settings → Agentic Tools → Claude Code**
+2. **User Settings → Claude Code**
+3. **For Claude Max Pro plan (OAuth):** You must start a \`claude\` CLI session while logged in as the Agor user
 
 If you continue to see authentication errors, please contact your Agor administrator.`;
     }
