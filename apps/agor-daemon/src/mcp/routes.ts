@@ -484,6 +484,16 @@ export function setupMCPRoutes(app: Application, db: Database): void {
                     type: 'number',
                     description: 'Maximum number of results (default: 50)',
                   },
+                  includeArchived: {
+                    type: 'boolean',
+                    description:
+                      'Include archived worktrees in results (default: false). By default, archived worktrees are excluded.',
+                  },
+                  archived: {
+                    type: 'boolean',
+                    description:
+                      'Filter to show ONLY archived worktrees. When true, returns only archived worktrees. Overrides includeArchived.',
+                  },
                 },
               },
             },
@@ -613,6 +623,68 @@ export function setupMCPRoutes(app: Application, db: Database): void {
                   },
                 },
                 required: ['worktreeId', 'zoneId'],
+              },
+            },
+
+            {
+              name: 'agor_worktrees_archive',
+              description:
+                'Archive a worktree (soft delete). Stops the environment if running, optionally cleans or deletes the filesystem, archives the worktree metadata and all its sessions, and removes it from the board. Use agor_worktrees_unarchive to restore.',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  worktreeId: {
+                    type: 'string',
+                    description: 'Worktree ID to archive (UUIDv7 or short ID)',
+                  },
+                  filesystemAction: {
+                    type: 'string',
+                    enum: ['preserved', 'cleaned', 'deleted'],
+                    description:
+                      'What to do with the worktree files on disk. "preserved" leaves files untouched, "cleaned" runs git clean -fdx (removes node_modules, builds, untracked files), "deleted" removes the entire worktree directory. Default: "cleaned".',
+                  },
+                },
+                required: ['worktreeId'],
+              },
+            },
+            {
+              name: 'agor_worktrees_unarchive',
+              description:
+                'Restore a previously archived worktree. Optionally place it back on a board. Also unarchives all sessions that were archived as part of the worktree archival.',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  worktreeId: {
+                    type: 'string',
+                    description: 'Worktree ID to unarchive (UUIDv7 or short ID)',
+                  },
+                  boardId: {
+                    type: 'string',
+                    description: 'Board ID to restore the worktree onto (optional)',
+                  },
+                },
+                required: ['worktreeId'],
+              },
+            },
+            {
+              name: 'agor_worktrees_delete',
+              description:
+                'Permanently delete a worktree and all its sessions, messages, and tasks. This action cannot be undone. Stops the environment if running and optionally removes files from disk.',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  worktreeId: {
+                    type: 'string',
+                    description: 'Worktree ID to delete (UUIDv7 or short ID)',
+                  },
+                  filesystemAction: {
+                    type: 'string',
+                    enum: ['preserved', 'deleted'],
+                    description:
+                      'What to do with the worktree files on disk. "preserved" leaves files untouched, "deleted" removes the entire worktree directory. Default: "deleted".',
+                  },
+                },
+                required: ['worktreeId'],
               },
             },
 
@@ -2109,6 +2181,13 @@ export function setupMCPRoutes(app: Application, db: Database): void {
           if (args?.repoId) query.repo_id = args.repoId;
           if (args?.limit) query.$limit = args.limit;
 
+          // Archive filtering: exclude archived by default
+          if (args?.archived === true) {
+            query.archived = true;
+          } else if (!args?.includeArchived) {
+            query.archived = false;
+          }
+
           const worktrees = await app.service('worktrees').find({ query });
           mcpResponse = {
             content: [
@@ -2880,6 +2959,120 @@ export function setupMCPRoutes(app: Application, db: Database): void {
               },
             });
           }
+        } else if (name === 'agor_worktrees_archive') {
+          // Archive a worktree (soft delete)
+          const worktreeId = coerceString(args?.worktreeId);
+          if (!worktreeId) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: { code: -32602, message: 'Invalid params: worktreeId is required' },
+            });
+          }
+
+          const filesystemAction =
+            (args?.filesystemAction as 'preserved' | 'cleaned' | 'deleted') || 'cleaned';
+          console.log(
+            `📦 MCP archiving worktree ${worktreeId.substring(0, 8)} (filesystem: ${filesystemAction})`
+          );
+
+          const worktreesService = app.service(
+            'worktrees'
+          ) as unknown as import('../declarations').WorktreesServiceImpl;
+          const result = await worktreesService.archiveOrDelete(
+            worktreeId as import('@agor/core/types').WorktreeID,
+            { metadataAction: 'archive', filesystemAction },
+            baseServiceParams
+          );
+
+          mcpResponse = {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(
+                  { success: true, worktree: result, message: 'Worktree archived successfully.' },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        } else if (name === 'agor_worktrees_unarchive') {
+          // Unarchive (restore) a worktree
+          const worktreeId = coerceString(args?.worktreeId);
+          if (!worktreeId) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: { code: -32602, message: 'Invalid params: worktreeId is required' },
+            });
+          }
+
+          const boardId = coerceString(args?.boardId);
+          console.log(`📦 MCP unarchiving worktree ${worktreeId.substring(0, 8)}`);
+
+          const worktreesService = app.service(
+            'worktrees'
+          ) as unknown as import('../declarations').WorktreesServiceImpl;
+          const result = await worktreesService.unarchive(
+            worktreeId as import('@agor/core/types').WorktreeID,
+            boardId ? { boardId: boardId as import('@agor/core/types').BoardID } : undefined,
+            baseServiceParams
+          );
+
+          mcpResponse = {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(
+                  { success: true, worktree: result, message: 'Worktree unarchived successfully.' },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        } else if (name === 'agor_worktrees_delete') {
+          // Permanently delete a worktree
+          const worktreeId = coerceString(args?.worktreeId);
+          if (!worktreeId) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: { code: -32602, message: 'Invalid params: worktreeId is required' },
+            });
+          }
+
+          const filesystemAction = (args?.filesystemAction as 'preserved' | 'deleted') || 'deleted';
+          console.log(
+            `🗑️  MCP deleting worktree ${worktreeId.substring(0, 8)} (filesystem: ${filesystemAction})`
+          );
+
+          const worktreesService = app.service(
+            'worktrees'
+          ) as unknown as import('../declarations').WorktreesServiceImpl;
+          await worktreesService.archiveOrDelete(
+            worktreeId as import('@agor/core/types').WorktreeID,
+            { metadataAction: 'delete', filesystemAction },
+            baseServiceParams
+          );
+
+          mcpResponse = {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(
+                  {
+                    success: true,
+                    worktree_id: worktreeId,
+                    message: 'Worktree permanently deleted.',
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
 
           // Environment tools
         } else if (name === 'agor_environment_start') {
