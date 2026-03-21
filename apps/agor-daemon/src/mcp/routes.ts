@@ -337,7 +337,7 @@ export function setupMCPRoutes(app: Application, db: Database): void {
             {
               name: 'agor_sessions_archive',
               description:
-                'Archive a session (soft delete). Archived sessions are hidden from listings by default but can be restored. Use includeChildren to also archive all child sessions (forks and subsessions).',
+                'Archive a session (soft delete). Archived sessions are hidden from listings by default but can be restored. By default, all child sessions (forks and subsessions) are also archived. Set includeChildren to false to archive only the target session.',
               inputSchema: {
                 type: 'object',
                 properties: {
@@ -348,7 +348,7 @@ export function setupMCPRoutes(app: Application, db: Database): void {
                   includeChildren: {
                     type: 'boolean',
                     description:
-                      'Also archive all child sessions (forks and subsessions). Default: false.',
+                      'Also archive all child sessions (forks and subsessions). Default: true.',
                   },
                 },
                 required: ['sessionId'],
@@ -357,7 +357,7 @@ export function setupMCPRoutes(app: Application, db: Database): void {
             {
               name: 'agor_sessions_unarchive',
               description:
-                'Restore a previously archived session. Use includeChildren to also unarchive all child sessions.',
+                'Restore a previously archived session. By default, all child sessions are also unarchived. Set includeChildren to false to unarchive only the target session.',
               inputSchema: {
                 type: 'object',
                 properties: {
@@ -368,7 +368,7 @@ export function setupMCPRoutes(app: Application, db: Database): void {
                   includeChildren: {
                     type: 'boolean',
                     description:
-                      'Also unarchive all child sessions (forks and subsessions). Default: false.',
+                      'Also unarchive all child sessions (forks and subsessions). Default: true.',
                   },
                 },
                 required: ['sessionId'],
@@ -1886,9 +1886,10 @@ export function setupMCPRoutes(app: Application, db: Database): void {
           }
 
           console.log(
-            `📦 MCP archiving session ${args.sessionId.substring(0, 8)}${args.includeChildren ? ' (with children)' : ''}`
+            `📦 MCP archiving session ${args.sessionId.substring(0, 8)}${args.includeChildren !== false ? ' (with children)' : ''}`
           );
 
+          const includeChildren = args.includeChildren !== false;
           const sessionsService = app.service('sessions') as unknown as SessionsServiceImpl;
           let archivedCount = 0;
 
@@ -1902,8 +1903,8 @@ export function setupMCPRoutes(app: Application, db: Database): void {
             );
           archivedCount++;
 
-          // Optionally archive children
-          if (args.includeChildren) {
+          // Archive children by default
+          if (includeChildren) {
             // Recursively collect all descendant session IDs
             const collectDescendantIds = async (parentId: string): Promise<string[]> => {
               const gen = await sessionsService.getGenealogy(parentId, baseServiceParams);
@@ -1957,9 +1958,10 @@ export function setupMCPRoutes(app: Application, db: Database): void {
           }
 
           console.log(
-            `📦 MCP unarchiving session ${args.sessionId.substring(0, 8)}${args.includeChildren ? ' (with children)' : ''}`
+            `📦 MCP unarchiving session ${args.sessionId.substring(0, 8)}${args.includeChildren !== false ? ' (with children)' : ''}`
           );
 
+          const includeChildren = args.includeChildren !== false;
           const unarchivedSessionsService = app.service(
             'sessions'
           ) as unknown as SessionsServiceImpl;
@@ -1975,8 +1977,8 @@ export function setupMCPRoutes(app: Application, db: Database): void {
             );
           unarchivedCount++;
 
-          // Optionally unarchive children
-          if (args.includeChildren) {
+          // Unarchive children by default
+          if (includeChildren) {
             // Recursively collect all descendant session IDs
             const collectDescendantIds = async (parentId: string): Promise<string[]> => {
               const gen = await unarchivedSessionsService.getGenealogy(parentId, baseServiceParams);
