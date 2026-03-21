@@ -469,18 +469,22 @@ export const AutocompleteTextarea = React.forwardRef<
           const commandResults: SlashCommandResult[] = [];
 
           for (const cmd of slashCommands) {
-            if (cmd.toLowerCase().includes(q) && !seen.has(cmd)) {
-              seen.add(cmd);
+            const normalizedCmd = cmd.toLowerCase();
+            if (normalizedCmd.includes(q) && !seen.has(normalizedCmd)) {
+              seen.add(normalizedCmd);
               commandResults.push({ command: cmd, source: 'built-in', type: 'slash_command' });
             }
           }
           for (const skill of skills) {
-            if (skill.toLowerCase().includes(q) && !seen.has(skill)) {
-              seen.add(skill);
+            const normalizedSkill = skill.toLowerCase();
+            if (normalizedSkill.includes(q) && !seen.has(normalizedSkill)) {
+              seen.add(normalizedSkill);
               commandResults.push({ command: skill, source: 'project', type: 'slash_command' });
             }
           }
-          commandResults.sort((a, b) => a.command.localeCompare(b.command));
+          commandResults.sort((a, b) =>
+            a.command.toLowerCase().localeCompare(b.command.toLowerCase())
+          );
           setSlashCommandResults(commandResults);
           setShowPopover(true);
           return;

@@ -335,20 +335,16 @@ export class ClaudeTool implements ITool {
       if (event.type === 'slash_commands_discovered') {
         if (this.sessionsRepo) {
           try {
-            const session = await this.sessionsRepo.findById(sessionId);
-            if (session) {
-              const existingContext = session.custom_context || {};
-              await this.sessionsRepo.update(sessionId, {
-                custom_context: {
-                  ...existingContext,
-                  slash_commands: event.slashCommands,
-                  skills: event.skills,
-                },
-              });
-              console.log(
-                `📋 Stored ${event.slashCommands.length} slash commands and ${event.skills.length} skills on session`
-              );
-            }
+            // Repository does deep merge in transaction - just pass the keys we want to update
+            await this.sessionsRepo.update(sessionId, {
+              custom_context: {
+                slash_commands: event.slashCommands,
+                skills: event.skills,
+              },
+            });
+            console.log(
+              `📋 Stored ${event.slashCommands.length} slash commands and ${event.skills.length} skills on session`
+            );
           } catch (error) {
             console.warn('Failed to persist slash commands to session:', error);
           }
