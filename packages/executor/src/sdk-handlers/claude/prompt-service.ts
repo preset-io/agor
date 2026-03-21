@@ -81,7 +81,9 @@ export class ClaudePromptService {
    */
   private buildCLICommandHelpMessage(command: string): string {
     if (command === 'login') {
-      return `\`/login\` is a CLI-only command that doesn't work in Agor.
+      return `**[Agor system message]**
+
+\`/login\` is a CLI-only command that doesn't work in Agor.
 
 To configure your Anthropic API key:
 
@@ -92,7 +94,9 @@ To configure your Anthropic API key:
 If you continue to see authentication errors, please contact your Agor administrator.`;
     }
 
-    return `\`/${command}\` command is not supported by the Claude Agent SDK.
+    return `**[Agor system message]**
+
+\`/${command}\` command is not supported by the Claude Agent SDK.
 
 This is a CLI-only command that only works in the standalone Claude Code terminal application, not through Agor's API integration.`;
   }
