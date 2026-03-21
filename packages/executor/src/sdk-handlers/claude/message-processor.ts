@@ -158,6 +158,7 @@ interface ProcessorState {
   existingSdkSessionId?: string;
   capturedAgentSessionId?: string;
   messageCount: number;
+  assistantMessageCount: number;
   lastActivityTime: number;
   lastAssistantMessageTime: number;
   resolvedModel?: string;
@@ -194,6 +195,7 @@ export class SDKMessageProcessor {
       existingSdkSessionId: options.existingSdkSessionId,
       capturedAgentSessionId: undefined,
       messageCount: 0,
+      assistantMessageCount: 0,
       lastActivityTime: Date.now(),
       lastAssistantMessageTime: Date.now(),
       enableTokenStreaming: options.enableTokenStreaming ?? true,
@@ -302,6 +304,7 @@ export class SDKMessageProcessor {
    */
   private handleAssistant(msg: SDKAssistantMessage): ProcessedEvent[] {
     this.state.lastAssistantMessageTime = Date.now();
+    this.state.assistantMessageCount++;
 
     const contentBlocks = this.processContentBlocks(msg.message?.content);
     const toolUses = this.extractToolUses(contentBlocks);
@@ -559,7 +562,42 @@ export class SDKMessageProcessor {
       console.log(`   Model usage (with contextWindow):`, JSON.stringify(msg.modelUsage, null, 2));
     }
 
-    return [
+    const events: ProcessedEvent[] = [];
+
+    // The SDK puts final output text in result.result for both normal prompts and local commands.
+    // For local commands (e.g. /usage, /cost), this is the ONLY output (no assistant messages).
+    // For normal prompts, assistant messages are already streamed separately.
+    // We emit result text as a system message when no assistant messages were produced.
+    if (
+      msg.subtype === 'success' &&
+      'result' in msg &&
+      msg.result &&
+      typeof msg.result === 'string' &&
+      msg.result.trim().length > 0
+    ) {
+      const hasAssistantMessages = this.state.assistantMessageCount > 0;
+      console.log(
+        `📋 SDK result text (${msg.result.length} chars, hasAssistantMessages=${hasAssistantMessages})`
+      );
+      if (!hasAssistantMessages) {
+        events.push({
+          type: 'complete',
+          role: MessageRole.ASSISTANT,
+          content: [
+            {
+              type: 'text',
+              text: msg.result,
+            },
+          ],
+          toolUses: undefined,
+          parent_tool_use_id: null,
+          agentSessionId: this.state.capturedAgentSessionId,
+          resolvedModel: this.state.resolvedModel,
+        });
+      }
+    }
+
+    events.push(
       {
         type: 'result',
         raw_sdk_message: msg, // Pass the entire SDK message unchanged
@@ -568,8 +606,10 @@ export class SDKMessageProcessor {
       {
         type: 'end',
         reason: 'result',
-      },
-    ];
+      }
+    );
+
+    return events;
   }
 
   /**
