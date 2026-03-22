@@ -35,12 +35,14 @@ export function useFaviconStatus(
 
     // Find worktrees on current board
     const worktreesOnBoard = new Set(
-      boardObjects.filter((obj) => obj.board_id === currentBoardId).map((obj) => obj.worktree_id)
+      boardObjects
+        .filter((obj) => obj.board_id === currentBoardId && obj.worktree_id)
+        .map((obj) => obj.worktree_id!)
     );
 
     // Find sessions for those worktrees using O(1) Map lookups
     const sessionsOnBoard = Array.from(worktreesOnBoard)
-      .flatMap((worktreeId) => sessionsByWorktree.get(worktreeId) || [])
+      .flatMap((worktreeId) => sessionsByWorktree.get(worktreeId!) || [])
       .filter((s) => !s.archived);
 
     // Determine status: check for running and ready independently

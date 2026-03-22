@@ -91,7 +91,7 @@ export const useBoardObjects = ({
       // Find worktrees that are pinned to this zone (via board_objects.zone_id)
       const affectedWorktreeIds: string[] = [];
       for (const boardObj of mapToArray(boardObjectById)) {
-        if (boardObj.zone_id === objectId) {
+        if (boardObj.zone_id === objectId && boardObj.worktree_id) {
           affectedWorktreeIds.push(boardObj.worktree_id);
         }
       }
@@ -182,7 +182,9 @@ export const useBoardObjects = ({
           for (const boardObj of mapToArray(boardObjectById)) {
             if (boardObj.zone_id === objectId) {
               // Count sessions in this worktree using O(1) Map lookup
-              const worktreeSessions = sessionsByWorktree.get(boardObj.worktree_id) || [];
+              const worktreeSessions = boardObj.worktree_id
+                ? sessionsByWorktree.get(boardObj.worktree_id) || []
+                : [];
               sessionCount += worktreeSessions.length;
             }
           }

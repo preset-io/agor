@@ -512,8 +512,8 @@ export const App: React.FC<AppProps> = ({
   // Filter worktrees by current board (via board_objects)
   // Optimized: use Map lookups instead of array.filter
   const boardWorktrees = mapToArray(boardObjectById)
-    .filter((bo: BoardEntityObject) => bo.board_id === currentBoard?.board_id)
-    .map((bo: BoardEntityObject) => worktreeById.get(bo.worktree_id))
+    .filter((bo: BoardEntityObject) => bo.board_id === currentBoard?.board_id && bo.worktree_id)
+    .map((bo: BoardEntityObject) => worktreeById.get(bo.worktree_id!))
     .filter((wt): wt is Worktree => wt !== undefined);
 
   // Track global presence for navbar facepile (across all boards)
