@@ -4,6 +4,7 @@ export type { PermissionDecision, PermissionRequest } from '../permissions';
 export * from './agentic-tool';
 export * from './board';
 export * from './board-comment';
+export * from './card';
 export * from './context';
 export * from './feathers';
 export * from './file';

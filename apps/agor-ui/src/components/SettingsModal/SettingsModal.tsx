@@ -2,6 +2,8 @@ import type { AgorClient } from '@agor/core/api';
 import type {
   Board,
   BoardEntityObject,
+  CardType,
+  CardWithType,
   CreateMCPServerInput,
   CreateUserInput,
   GatewayChannel,
@@ -18,6 +20,7 @@ import {
   AppstoreOutlined,
   BranchesOutlined,
   CloseOutlined,
+  CreditCardOutlined,
   FolderOutlined,
   InfoCircleOutlined,
   MessageOutlined,
@@ -34,6 +37,7 @@ import { AboutTab } from './AboutTab';
 import { AgenticToolsSection } from './AgenticToolsSection';
 import { AssistantsTable } from './AssistantsTable';
 import { BoardsTable } from './BoardsTable';
+import { CardsTable } from './CardsTable';
 import { GatewayChannelsTable } from './GatewayChannelsTable';
 import { MCPServersTable } from './MCPServersTable';
 import { ReposTable } from './ReposTable';
@@ -55,6 +59,8 @@ export interface SettingsModalProps {
   sessionsByWorktree: Map<string, Session[]>; // O(1) worktree filtering
   userById: Map<string, User>;
   mcpServerById: Map<string, MCPServer>;
+  cardById?: Map<string, CardWithType>;
+  cardTypeById?: Map<string, CardType>;
   activeTab?: string; // Control which tab is shown when modal opens
   onTabChange?: (tabKey: string) => void;
   onCreateBoard?: (board: Partial<Board>) => void;
@@ -111,6 +117,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   sessionsByWorktree,
   userById,
   mcpServerById,
+  cardById = new Map(),
+  cardTypeById = new Map(),
   activeTab = 'boards',
   onTabChange,
   onCreateBoard,
@@ -198,6 +206,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           key: 'assistants',
           label: 'Assistants',
           icon: <RobotOutlined />,
+        },
+        {
+          key: 'cards',
+          label: 'Cards',
+          icon: <CreditCardOutlined />,
         },
       ],
     },
@@ -304,6 +317,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             onCreateRepo={onCreateRepo}
             onStartEnvironment={onStartEnvironment}
             onStopEnvironment={onStopEnvironment}
+          />
+        );
+      case 'cards':
+        return (
+          <CardsTable
+            client={client}
+            cardById={cardById}
+            cardTypeById={cardTypeById}
+            boardById={boardById}
           />
         );
       case 'mcp':

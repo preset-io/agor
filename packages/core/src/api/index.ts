@@ -8,6 +8,8 @@ import type {
   AuthenticationResult,
   Board,
   BoardExportBlob,
+  CardType,
+  CardWithType,
   ContextFileDetail,
   ContextFileListItem,
   MCPServer,
@@ -47,6 +49,8 @@ export interface ServiceTypes {
   'repos/local': Repo;
   worktrees: Worktree;
   users: User;
+  cards: CardWithType;
+  'card-types': CardType; // CardType CRUD
   'mcp-servers': MCPServer;
   context: ContextFileListItem | ContextFileDetail; // GET /context returns list, GET /context/:path returns detail
 }
@@ -294,6 +298,8 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   service(path: 'tasks/bulk'): TasksService;
 
   // Standard services (CRUD only)
+  service(path: 'cards'): AgorService<CardWithType>;
+  service(path: 'card-types'): AgorService<CardType>;
   service(path: 'users'): AgorService<User>;
   service(path: 'mcp-servers'): AgorService<MCPServer>;
   service(path: 'context'): AgorService<ContextFileListItem | ContextFileDetail>;

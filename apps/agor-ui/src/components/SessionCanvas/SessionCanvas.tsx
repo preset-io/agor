@@ -7,6 +7,7 @@ import type {
   BoardEntityObject,
   BoardID,
   BoardObject,
+  CardWithType,
   MCPServer,
   Repo,
   Session,
@@ -60,6 +61,9 @@ import { usePresence } from '../../hooks/usePresence';
 import type { AgenticToolOption } from '../../types';
 import { isDarkTheme } from '../../utils/theme';
 import { AutocompleteTextarea } from '../AutocompleteTextarea/AutocompleteTextarea';
+import CardModal from '../CardModal';
+import type { CardNodeData } from '../CardNode';
+import CardNode from '../CardNode';
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
 import SessionCard from '../SessionCard';
 import WorktreeCard from '../WorktreeCard';
@@ -91,6 +95,7 @@ interface SessionCanvasProps {
   worktreeById: Map<string, Worktree>;
   boardObjectById: Map<string, BoardEntityObject>; // Map-based board object storage
   commentById: Map<string, BoardComment>; // Map-based comment storage
+  cardById: Map<string, CardWithType>; // Map-based card storage for this board
   currentUserId?: string;
   selectedSessionId?: string | null;
   availableAgents?: AgenticToolOption[];
@@ -198,6 +203,15 @@ interface WorktreeNodeData {
   client: AgorClient | null;
 }
 
+// Custom node component that renders CardNode (memoized)
+const CardNodeWrapper = React.memo(({ data }: { data: CardNodeData }) => {
+  return (
+    <div className="card-node">
+      <CardNode data={data} />
+    </div>
+  );
+});
+
 // Custom node component that renders WorktreeCard (memoized to prevent re-renders on unrelated node changes)
 const WorktreeNode = React.memo(({ data }: { data: WorktreeNodeData }) => {
   return (
@@ -235,6 +249,7 @@ const WorktreeNode = React.memo(({ data }: { data: WorktreeNodeData }) => {
 const nodeTypes = {
   sessionNode: SessionNode,
   worktreeNode: WorktreeNode,
+  cardNode: CardNodeWrapper,
   zone: ZoneNode,
   cursor: CursorNode,
   comment: CommentNode,
@@ -253,6 +268,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       worktreeById,
       boardObjectById,
       commentById,
+      cardById,
       userById,
       currentUserId,
       selectedSessionId,
@@ -312,12 +328,29 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       if (!board) return new Map<string, BoardEntityObject>();
       const map = new Map<string, BoardEntityObject>();
       for (const boardObject of boardObjectById.values()) {
-        if (boardObject.board_id === board.board_id) {
+        if (boardObject.board_id === board.board_id && boardObject.worktree_id) {
           map.set(boardObject.worktree_id, boardObject);
         }
       }
       return map;
     }, [board?.board_id, boardObjectsKey]);
+
+    // Index by card_id for O(1) lookups
+    // biome-ignore lint/correctness/useExhaustiveDependencies: Using JSON key for deep equality of board objects
+    const boardObjectByCard = useMemo(() => {
+      if (!board) return new Map<string, BoardEntityObject>();
+      const map = new Map<string, BoardEntityObject>();
+      for (const boardObject of boardObjectById.values()) {
+        if (boardObject.board_id === board.board_id && boardObject.card_id) {
+          map.set(boardObject.card_id, boardObject);
+        }
+      }
+      return map;
+    }, [board?.board_id, boardObjectsKey]);
+
+    // Card modal state
+    const [selectedCard, setSelectedCard] = useState<CardWithType | null>(null);
+    const [cardModalOpen, setCardModalOpen] = useState(false);
 
     // Note: worktreeById is now passed as prop from parent (no longer computed locally)
     // This enables efficient O(1) lookups and stable references across re-renders
@@ -618,6 +651,89 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       client,
     ]);
 
+    // Handler to open card modal
+    const handleCardClick = useCallback(
+      (cardId: string) => {
+        const card = cardById.get(cardId);
+        if (card) {
+          setSelectedCard(card);
+          setCardModalOpen(true);
+        }
+      },
+      [cardById]
+    );
+
+    // Handler to unpin a card from its zone
+    const handleUnpinCard = useCallback(
+      async (cardId: string) => {
+        if (!board || !client) return;
+        const boardObject = boardObjectByCard.get(cardId);
+        if (!boardObject || !boardObject.zone_id) return;
+
+        const zone = board.objects?.[boardObject.zone_id];
+        if (!zone) return;
+
+        const absoluteX = boardObject.position.x + zone.x;
+        const absoluteY = boardObject.position.y + zone.y;
+
+        localPositionsRef.current[`card-${cardId}`] = { x: absoluteX, y: absoluteY };
+
+        setNodes((currentNodes) =>
+          currentNodes.map((node) => {
+            if (node.id === `card-${cardId}`) {
+              return { ...node, position: { x: absoluteX, y: absoluteY }, parentId: undefined };
+            }
+            return node;
+          })
+        );
+
+        await client.service('board-objects').patch(boardObject.object_id, {
+          position: { x: absoluteX, y: absoluteY },
+          zone_id: null,
+        });
+      },
+      [board, client, boardObjectByCard, setNodes]
+    );
+
+    // Build card nodes from board_objects that have card_id set
+    const cardNodes: Node[] = useMemo(() => {
+      const nodes: Node[] = [];
+
+      for (const [cardId, boardObject] of boardObjectByCard.entries()) {
+        const card = cardById.get(cardId);
+        if (!card || card.archived) continue;
+
+        const position = { x: boardObject.position.x, y: boardObject.position.y };
+        const zoneId = boardObject.zone_id;
+        const zoneName = zoneId ? zoneLabels[zoneId] || 'Unknown Zone' : undefined;
+        const zoneObj = zoneId && board?.objects?.[zoneId] ? board.objects[zoneId] : undefined;
+        const zoneColor =
+          zoneObj && zoneObj.type === 'zone' ? zoneObj.borderColor || zoneObj.color : undefined;
+
+        nodes.push({
+          id: `card-${cardId}`,
+          type: 'cardNode',
+          position,
+          draggable: true,
+          zIndex: 500, // Same level as worktrees
+          width: 380,
+          height: 120,
+          parentId: zoneObj ? zoneId : undefined,
+          extent: undefined,
+          data: {
+            card,
+            isPinned: !!zoneId,
+            zoneName,
+            zoneColor,
+            onClick: handleCardClick,
+            onUnpin: handleUnpinCard,
+          } satisfies CardNodeData,
+        });
+      }
+
+      return nodes;
+    }, [board, boardObjectByCard, cardById, zoneLabels, handleCardClick, handleUnpinCard]);
+
     // No edges needed for worktree-centric boards
     // (Session genealogy is visualized within WorktreeCard, not as canvas edges)
     const initialEdges: Edge[] = useMemo(() => [], []);
@@ -837,30 +953,17 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       });
     }, []);
 
-    // Sync SESSION nodes only (don't trigger on zone changes)
-    useEffect(() => {
-      if (isDraggingRef.current) return;
-
-      setNodes((currentNodes) => {
-        // Separate existing nodes by type
-        const existingZones = currentNodes.filter((n) => n.type === 'zone');
-        const existingMarkdown = currentNodes.filter((n) => n.type === 'markdown');
-        const existingCursors = currentNodes.filter((n) => n.type === 'cursor');
-        const existingComments = currentNodes.filter((n) => n.type === 'comment');
-
-        // Update worktree nodes with preserved state
-        const updatedWorktrees = initialNodes.map((newNode) => {
+    // Helper: Apply local position overrides to a set of incoming nodes (worktrees or cards)
+    const applyLocalPositions = useCallback(
+      (incomingNodes: Node[], currentNodes: Node[], zoneNodes: Node[]) => {
+        return incomingNodes.map((newNode) => {
           const existingNode = currentNodes.find((n) => n.id === newNode.id);
           const localPosition = localPositionsRef.current[newNode.id];
 
-          // If we have a local position (user is dragging or just dragged), use it
           if (localPosition) {
-            // Get the incoming position in ABSOLUTE coordinates for comparison
-            // If node has parentId, position is relative to parent - must convert to absolute
             let incomingAbsolutePosition = newNode.position;
             if (newNode.parentId) {
-              // Parent could be a zone or another worktree
-              const parentNode = [...initialNodes, ...existingZones].find(
+              const parentNode = [...incomingNodes, ...zoneNodes].find(
                 (n) => n.id === newNode.parentId
               );
               if (parentNode) {
@@ -871,23 +974,18 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               }
             }
 
-            // Check if WebSocket confirmed our drag (absolute positions are now close)
             const positionConfirmed =
               Math.abs(localPosition.x - incomingAbsolutePosition.x) <= 1 &&
               Math.abs(localPosition.y - incomingAbsolutePosition.y) <= 1;
 
             if (positionConfirmed) {
-              // WebSocket confirmed our position, clear the local override
               delete localPositionsRef.current[newNode.id];
               return { ...newNode, selected: existingNode?.selected };
             }
 
-            // Still waiting for confirmation or another client moved it
-            // If node now has parentId, convert local absolute position to relative
             let positionToUse = localPosition;
             if (newNode.parentId) {
-              // Parent could be a zone or another worktree
-              const parentNode = [...initialNodes, ...existingZones].find(
+              const parentNode = [...incomingNodes, ...zoneNodes].find(
                 (n) => n.id === newNode.parentId
               );
               if (parentNode) {
@@ -898,22 +996,35 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             return { ...newNode, position: positionToUse, selected: existingNode?.selected };
           }
 
-          // No local override, use incoming position
           return { ...newNode, selected: existingNode?.selected };
         });
+      },
+      []
+    );
 
-        // Merge: zones (back) + worktrees (middle) + markdown + cursors/comments (front)
-        // Sanitize to prevent "Parent node not found" crash when a worktree/zone is
-        // removed but comment nodes still reference it as parentId.
+    // Sync WORKTREE and CARD nodes (don't trigger on zone changes)
+    useEffect(() => {
+      if (isDraggingRef.current) return;
+
+      setNodes((currentNodes) => {
+        const existingZones = currentNodes.filter((n) => n.type === 'zone');
+        const existingMarkdown = currentNodes.filter((n) => n.type === 'markdown');
+        const existingCursors = currentNodes.filter((n) => n.type === 'cursor');
+        const existingComments = currentNodes.filter((n) => n.type === 'comment');
+
+        const updatedWorktrees = applyLocalPositions(initialNodes, currentNodes, existingZones);
+        const updatedCards = applyLocalPositions(cardNodes, currentNodes, existingZones);
+
         return sanitizeOrphanedParents([
           ...existingZones,
           ...updatedWorktrees,
+          ...updatedCards,
           ...existingMarkdown,
           ...existingCursors,
           ...existingComments,
         ]);
       });
-    }, [initialNodes, setNodes, sanitizeOrphanedParents]);
+    }, [initialNodes, cardNodes, setNodes, sanitizeOrphanedParents, applyLocalPositions]);
 
     // Memoized MiniMap nodeColor callback to prevent MiniMap canvas repaints on every render
     const miniMapNodeColor = useCallback(
@@ -922,6 +1033,10 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         if (node.type === 'comment') return token.colorText;
         if (node.type === 'markdown') return `${token.colorText}B3`;
         if (node.type === 'zone') return `${token.colorText}66`;
+        if (node.type === 'cardNode') {
+          const cardData = node.data as CardNodeData;
+          return cardData.card?.effective_color || token.colorPrimaryBorder;
+        }
         const session = node.data.session as Session;
         if (!session) return token.colorPrimaryBorder;
         switch (session.status) {
@@ -951,18 +1066,27 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         zones: nodes.filter((n) => n.type === 'zone'),
         markdown: nodes.filter((n) => n.type === 'markdown'),
         worktrees: nodes.filter((n) => n.type === 'worktreeNode'),
+        cards: nodes.filter((n) => n.type === 'cardNode'),
         comments: nodes.filter((n) => n.type === 'comment'),
         cursors: nodes.filter((n) => n.type === 'cursor'),
       };
     }, []);
 
     // Helper: Apply consistent z-ordering to nodes
-    // Z-order: zones < worktrees < markdown < comments < cursors (cursors always on top)
+    // Z-order: zones < worktrees/cards < markdown < comments < cursors (cursors always on top)
     const applyZOrder = useCallback(
-      (zones: Node[], markdown: Node[], worktrees: Node[], comments: Node[], cursors: Node[]) => {
+      (
+        zones: Node[],
+        markdown: Node[],
+        worktrees: Node[],
+        cards: Node[],
+        comments: Node[],
+        cursors: Node[]
+      ) => {
         return sanitizeOrphanedParents([
           ...zones,
           ...worktrees,
+          ...cards,
           ...markdown,
           ...comments,
           ...cursors,
@@ -978,7 +1102,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       const boardObjectNodes = getBoardObjectNodes();
 
       setNodes((currentNodes) => {
-        const { worktrees, comments, cursors } = partitionNodesByType(currentNodes);
+        const { worktrees, cards, comments, cursors } = partitionNodesByType(currentNodes);
 
         // Separate zones and markdown from boardObjectNodes
         const zones = boardObjectNodes
@@ -995,7 +1119,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             return { ...newMarkdown, selected: existingMarkdown?.selected };
           });
 
-        return applyZOrder(zones, markdown, worktrees, comments, cursors);
+        return applyZOrder(zones, markdown, worktrees, cards, comments, cursors);
       });
     }, [getBoardObjectNodes, setNodes, applyZOrder, partitionNodesByType]);
 
@@ -1018,7 +1142,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       if (isDraggingRef.current) return;
 
       setNodes((currentNodes) => {
-        const { zones, markdown, worktrees, cursors } = partitionNodesByType(currentNodes);
+        const { zones, markdown, worktrees, cards, cursors } = partitionNodesByType(currentNodes);
 
         // Apply local position overrides to comment nodes (to prevent flicker during drag)
         const commentsWithLocalPositions = commentNodes.map((newNode) => {
@@ -1065,7 +1189,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           return newNode;
         });
 
-        return applyZOrder(zones, markdown, worktrees, commentsWithLocalPositions, cursors);
+        return applyZOrder(zones, markdown, worktrees, cards, commentsWithLocalPositions, cursors);
       });
     }, [commentNodes, setNodes, applyZOrder, partitionNodesByType]);
 
@@ -1291,6 +1415,54 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                   parentType,
                   newReactFlowParentId, // Track new parentId for immediate React Flow update
                 });
+              } else if (draggedNode?.type === 'cardNode') {
+                // Card node moved - extract card_id from node id
+                const cardId = nodeId.replace('card-', '');
+                const absolutePosition = position;
+
+                // Check zone collision (same logic as worktrees)
+                const nodeWidth = draggedNode.width || 380;
+                const nodeHeight = draggedNode.height || 120;
+                const center = {
+                  x: absolutePosition.x + nodeWidth / 2,
+                  y: absolutePosition.y + nodeHeight / 2,
+                };
+
+                const zoneCollision = findZoneAtPosition(center, board.objects);
+                const droppedZoneId = zoneCollision?.zoneId;
+
+                let zonePosition = zoneCollision
+                  ? { x: zoneCollision.zoneData.x, y: zoneCollision.zoneData.y }
+                  : null;
+
+                if (droppedZoneId) {
+                  const zoneNode = currentNodes.find((n) => n.id === droppedZoneId);
+                  if (zoneNode) {
+                    zonePosition = { x: zoneNode.position.x, y: zoneNode.position.y };
+                  }
+                }
+
+                const newParent: ParentInfo | null =
+                  droppedZoneId && zonePosition
+                    ? { id: droppedZoneId, position: zonePosition }
+                    : null;
+
+                const positionToStore = calculateStoragePosition(absolutePosition, newParent);
+
+                // Find existing board_object for this card
+                const existingBoardObject = boardObjectByCard.get(cardId);
+                if (existingBoardObject) {
+                  const updateData: { position: { x: number; y: number }; zone_id?: string } = {
+                    position: positionToStore,
+                  };
+                  if (droppedZoneId !== undefined) {
+                    updateData.zone_id = droppedZoneId;
+                  }
+                  await client
+                    .service('board-objects')
+                    .patch(existingBoardObject.object_id, updateData);
+                }
+                // Cards don't fire zone triggers (V1: cards are inert in zones)
               } else if (draggedNode?.type === 'worktreeNode') {
                 // Use the absolute position we stored at drag time
                 // Don't recalculate from draggedNode because WebSocket might have already
@@ -1573,7 +1745,16 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           }
         }, 500);
       },
-      [board, client, batchUpdateObjectPositions, nodes, boardObjectByWorktree, worktrees, setNodes]
+      [
+        board,
+        client,
+        batchUpdateObjectPositions,
+        nodes,
+        boardObjectByWorktree,
+        boardObjectByCard,
+        worktrees,
+        setNodes,
+      ]
     );
 
     // Cleanup debounce timers on unmount
@@ -2568,6 +2749,33 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             }}
           />
         )}
+
+        {/* Card Detail Modal */}
+        <CardModal
+          open={cardModalOpen}
+          card={selectedCard}
+          board={board}
+          zoneName={
+            selectedCard
+              ? (() => {
+                  const bo = boardObjectByCard.get(selectedCard.card_id);
+                  return bo?.zone_id ? zoneLabels[bo.zone_id] || undefined : undefined;
+                })()
+              : undefined
+          }
+          client={client}
+          onClose={() => {
+            setCardModalOpen(false);
+            setSelectedCard(null);
+          }}
+          onCardUpdated={(updatedCard) => {
+            setSelectedCard(updatedCard);
+          }}
+          onCardDeleted={() => {
+            setCardModalOpen(false);
+            setSelectedCard(null);
+          }}
+        />
       </div>
     );
   }

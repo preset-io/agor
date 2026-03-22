@@ -135,6 +135,8 @@ function AppContent() {
     boardById,
     boardObjectById,
     commentById,
+    cardById,
+    cardTypeById,
     repoById,
     worktreeById,
     userById,
@@ -1320,6 +1322,8 @@ function AppContent() {
                 boardById={boardById}
                 boardObjectById={boardObjectById}
                 commentById={commentById}
+                cardById={cardById}
+                cardTypeById={cardTypeById}
                 repoById={repoById}
                 worktreeById={worktreeById}
                 userById={userById}
@@ -1395,6 +1399,8 @@ function AppContent() {
                 boardById={boardById}
                 boardObjectById={boardObjectById}
                 commentById={commentById}
+                cardById={cardById}
+                cardTypeById={cardTypeById}
                 repoById={repoById}
                 worktreeById={worktreeById}
                 userById={userById}
@@ -1470,6 +1476,8 @@ function AppContent() {
                 boardById={boardById}
                 boardObjectById={boardObjectById}
                 commentById={commentById}
+                cardById={cardById}
+                cardTypeById={cardTypeById}
                 repoById={repoById}
                 worktreeById={worktreeById}
                 userById={userById}

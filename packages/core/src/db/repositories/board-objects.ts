@@ -5,7 +5,13 @@
  * Phase 1: Hybrid support for both session cards and worktree cards.
  */
 
-import type { BoardEntityObject, BoardID, WorktreeID } from '@agor/core/types';
+import type {
+  BoardEntityObject,
+  BoardEntityType,
+  BoardID,
+  CardID,
+  WorktreeID,
+} from '@agor/core/types';
 import { eq } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
@@ -93,29 +99,75 @@ export class BoardObjectRepository {
   }
 
   /**
-   * Create a board object (add worktree to board)
+   * Find board object by card ID
+   */
+  async findByCardId(cardId: CardID): Promise<BoardEntityObject | null> {
+    try {
+      const row = await select(this.db)
+        .from(boardObjects)
+        .where(eq(boardObjects.card_id, cardId))
+        .one();
+
+      return row ? this.rowToEntity(row) : null;
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to find board object by card: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Remove all board objects for a card
+   */
+  async removeByCardId(cardId: CardID): Promise<void> {
+    try {
+      await deleteFrom(this.db, boardObjects).where(eq(boardObjects.card_id, cardId)).run();
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to remove board objects by card: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Create a board object (add worktree or card to board)
    */
   async create(data: {
     board_id: BoardID;
-    worktree_id: WorktreeID;
+    worktree_id?: WorktreeID;
+    card_id?: CardID;
     position: { x: number; y: number };
     zone_id?: string;
   }): Promise<BoardEntityObject> {
     try {
-      // Check if worktree already on a board
-      const existing = await select(this.db)
-        .from(boardObjects)
-        .where(eq(boardObjects.worktree_id, data.worktree_id))
-        .one();
+      // Validate: exactly one of worktree_id or card_id must be provided
+      if (!data.worktree_id && !data.card_id) {
+        throw new RepositoryError('Either worktree_id or card_id is required');
+      }
+      if (data.worktree_id && data.card_id) {
+        throw new RepositoryError('Cannot set both worktree_id and card_id');
+      }
 
-      if (existing) {
-        throw new RepositoryError(`Worktree already on a board (object_id: ${existing.object_id})`);
+      // Check for duplicates
+      if (data.worktree_id) {
+        const existing = await select(this.db)
+          .from(boardObjects)
+          .where(eq(boardObjects.worktree_id, data.worktree_id))
+          .one();
+        if (existing) {
+          throw new RepositoryError(
+            `Worktree already on a board (object_id: ${existing.object_id})`
+          );
+        }
       }
 
       const newObject: BoardObjectInsert = {
         object_id: generateId(),
         board_id: data.board_id,
-        worktree_id: data.worktree_id,
+        worktree_id: data.worktree_id ?? null,
+        card_id: data.card_id ?? null,
         created_at: new Date(),
         data: {
           position: data.position,
@@ -324,10 +376,14 @@ export class BoardObjectRepository {
   private rowToEntity(row: BoardObjectRow): BoardEntityObject {
     const data = typeof row.data === 'string' ? JSON.parse(row.data) : row.data;
 
+    const entityType: BoardEntityType = row.card_id ? 'card' : 'worktree';
+
     return {
       object_id: row.object_id,
       board_id: row.board_id as BoardID,
-      worktree_id: row.worktree_id as WorktreeID,
+      worktree_id: (row.worktree_id as WorktreeID) ?? undefined,
+      card_id: (row.card_id as CardID) ?? undefined,
+      entity_type: entityType,
       position: data.position,
       zone_id: data.zone_id,
       created_at: new Date(row.created_at).toISOString(),

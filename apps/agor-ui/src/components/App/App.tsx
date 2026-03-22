@@ -4,6 +4,8 @@ import type {
   BoardComment,
   BoardEntityObject,
   BoardID,
+  CardType,
+  CardWithType,
   CreateUserInput,
   GatewayChannel,
   MCPServer,
@@ -68,6 +70,8 @@ export interface AppProps {
   boardById: Map<string, Board>; // Map-based board storage
   boardObjectById: Map<string, BoardEntityObject>; // Map-based board object storage
   commentById: Map<string, BoardComment>; // Map-based comment storage
+  cardById: Map<string, CardWithType>; // Map-based card storage
+  cardTypeById: Map<string, CardType>; // Map-based card type storage
   repoById: Map<string, Repo>; // Map-based repo storage
   worktreeById: Map<string, Worktree>; // Efficient worktree lookups
   userById: Map<string, User>; // Map-based user storage
@@ -153,6 +157,8 @@ export const App: React.FC<AppProps> = ({
   boardById,
   boardObjectById,
   commentById,
+  cardById,
+  cardTypeById,
   repoById,
   worktreeById,
   userById,
@@ -767,6 +773,7 @@ export const App: React.FC<AppProps> = ({
                         worktreeById={worktreeById}
                         boardObjectById={boardObjectById}
                         commentById={commentById}
+                        cardById={cardById}
                         currentUserId={user?.user_id}
                         selectedSessionId={selectedSessionId}
                         availableAgents={availableAgents}
@@ -911,6 +918,8 @@ export const App: React.FC<AppProps> = ({
             sessionsByWorktree={sessionsByWorktree}
             userById={userById}
             mcpServerById={mcpServerById}
+            cardById={cardById}
+            cardTypeById={cardTypeById}
             activeTab={effectiveSettingsTab}
             onTabChange={(newTab) => {
               setSettingsSection(newTab as Parameters<typeof setSettingsSection>[0]);

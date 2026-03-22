@@ -11,6 +11,8 @@ import type {
   Board,
   BoardComment,
   BoardEntityObject,
+  CardType,
+  CardWithType,
   GatewayChannel,
   MCPServer,
   Repo,
@@ -26,6 +28,8 @@ interface UseAgorDataResult {
   boardById: Map<string, Board>; // O(1) lookups by board_id - efficient, stable references
   boardObjectById: Map<string, BoardEntityObject>; // O(1) lookups by object_id - efficient, stable references
   commentById: Map<string, BoardComment>; // O(1) lookups by comment_id - efficient, stable references
+  cardById: Map<string, CardWithType>; // O(1) lookups by card_id - efficient, stable references
+  cardTypeById: Map<string, CardType>; // O(1) lookups by card_type_id - efficient, stable references
   repoById: Map<string, Repo>; // O(1) lookups by repo_id - efficient, stable references
   worktreeById: Map<string, Worktree>; // Primary storage - efficient lookups, stable references
   userById: Map<string, User>; // O(1) lookups by user_id - efficient, stable references
@@ -56,6 +60,8 @@ export function useAgorData(
   const [boardById, setBoardById] = useState<Map<string, Board>>(new Map());
   const [boardObjectById, setBoardObjectById] = useState<Map<string, BoardEntityObject>>(new Map());
   const [commentById, setCommentById] = useState<Map<string, BoardComment>>(new Map());
+  const [cardById, setCardById] = useState<Map<string, CardWithType>>(new Map());
+  const [cardTypeById, setCardTypeById] = useState<Map<string, CardType>>(new Map());
   const [repoById, setRepoById] = useState<Map<string, Repo>>(new Map());
   const [worktreeById, setWorktreeById] = useState<Map<string, Worktree>>(new Map());
   const [userById, setUserById] = useState<Map<string, User>>(new Map());
@@ -88,6 +94,8 @@ export function useAgorData(
         boardsResult,
         boardObjectsResult,
         commentsResult,
+        cardsResult,
+        cardTypesResult,
         reposResult,
         worktreesResult,
         usersResult,
@@ -101,6 +109,8 @@ export function useAgorData(
         client.service('boards').find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
         client.service('board-objects').find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
         client.service('board-comments').find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+        client.service('cards').find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+        client.service('card-types').find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
         client.service('repos').find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
         client.service('worktrees').find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
         client.service('users').find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
@@ -116,6 +126,8 @@ export function useAgorData(
         ? boardObjectsResult
         : boardObjectsResult.data;
       const commentsList = Array.isArray(commentsResult) ? commentsResult : commentsResult.data;
+      const cardsList = Array.isArray(cardsResult) ? cardsResult : cardsResult.data;
+      const cardTypesList = Array.isArray(cardTypesResult) ? cardTypesResult : cardTypesResult.data;
       const reposList = Array.isArray(reposResult) ? reposResult : reposResult.data;
       const worktreesList = Array.isArray(worktreesResult) ? worktreesResult : worktreesResult.data;
       const usersList = Array.isArray(usersResult) ? usersResult : usersResult.data;
@@ -168,6 +180,20 @@ export function useAgorData(
         commentsMap.set(comment.comment_id, comment);
       }
       setCommentById(commentsMap);
+
+      // Build card Map for efficient lookups
+      const cardsMap = new Map<string, CardWithType>();
+      for (const card of cardsList) {
+        cardsMap.set(card.card_id, card);
+      }
+      setCardById(cardsMap);
+
+      // Build card type Map for efficient lookups
+      const cardTypesMap = new Map<string, CardType>();
+      for (const cardType of cardTypesList) {
+        cardTypesMap.set(cardType.card_type_id, cardType);
+      }
+      setCardTypeById(cardTypesMap);
 
       // Build repo Map for efficient lookups
       const reposMap = new Map<string, Repo>();
@@ -584,6 +610,70 @@ export function useAgorData(
     gatewayChannelsService.on('updated', handleGatewayChannelPatched);
     gatewayChannelsService.on('removed', handleGatewayChannelRemoved);
 
+    // Subscribe to card events
+    const cardsService = client.service('cards');
+    const handleCardCreated = (card: CardWithType) => {
+      setCardById((prev) => {
+        const next = new Map(prev);
+        next.set(card.card_id, card);
+        return next;
+      });
+    };
+    const handleCardPatched = (card: CardWithType) => {
+      setCardById((prev) => {
+        const existing = prev.get(card.card_id);
+        if (existing === card) return prev;
+        const next = new Map(prev);
+        next.set(card.card_id, card);
+        return next;
+      });
+    };
+    const handleCardRemoved = (card: CardWithType) => {
+      setCardById((prev) => {
+        if (!prev.has(card.card_id)) return prev;
+        const next = new Map(prev);
+        next.delete(card.card_id);
+        return next;
+      });
+    };
+
+    cardsService.on('created', handleCardCreated);
+    cardsService.on('patched', handleCardPatched);
+    cardsService.on('updated', handleCardPatched);
+    cardsService.on('removed', handleCardRemoved);
+
+    // Subscribe to card type events
+    const cardTypesService = client.service('card-types');
+    const handleCardTypeCreated = (cardType: CardType) => {
+      setCardTypeById((prev) => {
+        const next = new Map(prev);
+        next.set(cardType.card_type_id, cardType);
+        return next;
+      });
+    };
+    const handleCardTypePatched = (cardType: CardType) => {
+      setCardTypeById((prev) => {
+        const existing = prev.get(cardType.card_type_id);
+        if (existing === cardType) return prev;
+        const next = new Map(prev);
+        next.set(cardType.card_type_id, cardType);
+        return next;
+      });
+    };
+    const handleCardTypeRemoved = (cardType: CardType) => {
+      setCardTypeById((prev) => {
+        if (!prev.has(cardType.card_type_id)) return prev;
+        const next = new Map(prev);
+        next.delete(cardType.card_type_id);
+        return next;
+      });
+    };
+
+    cardTypesService.on('created', handleCardTypeCreated);
+    cardTypesService.on('patched', handleCardTypePatched);
+    cardTypesService.on('updated', handleCardTypePatched);
+    cardTypesService.on('removed', handleCardTypeRemoved);
+
     // Subscribe to session-MCP server relationship events
     const sessionMcpService = client.service('session-mcp-servers');
     const handleSessionMcpCreated = (relationship: {
@@ -707,6 +797,16 @@ export function useAgorData(
       gatewayChannelsService.removeListener('patched', handleGatewayChannelPatched);
       gatewayChannelsService.removeListener('updated', handleGatewayChannelPatched);
       gatewayChannelsService.removeListener('removed', handleGatewayChannelRemoved);
+
+      cardsService.removeListener('created', handleCardCreated);
+      cardsService.removeListener('patched', handleCardPatched);
+      cardsService.removeListener('updated', handleCardPatched);
+      cardsService.removeListener('removed', handleCardRemoved);
+
+      cardTypesService.removeListener('created', handleCardTypeCreated);
+      cardTypesService.removeListener('patched', handleCardTypePatched);
+      cardTypesService.removeListener('updated', handleCardTypePatched);
+      cardTypesService.removeListener('removed', handleCardTypeRemoved);
     };
   }, [client, enabled, fetchData, hasInitiallyFetched]);
 
@@ -716,6 +816,8 @@ export function useAgorData(
     boardById,
     boardObjectById,
     commentById,
+    cardById,
+    cardTypeById,
     repoById,
     worktreeById,
     userById,

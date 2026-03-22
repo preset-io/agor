@@ -774,10 +774,71 @@ export const mcpServers = pgTable(
 );
 
 /**
- * Board Objects table - Positioned worktrees on boards
+ * Card Types table - Global card type definitions
  *
- * Tracks which worktrees are positioned on which boards.
- * Sessions are accessed through the worktree card (session tree).
+ * CardTypes are org-level templates that define a category of cards
+ * with default emoji, color, and optional JSON Schema for data validation.
+ */
+export const cardTypes = pgTable(
+  'card_types',
+  {
+    card_type_id: varchar('card_type_id', { length: 36 }).primaryKey(),
+    name: text('name').notNull(),
+    emoji: text('emoji'),
+    color: text('color'),
+    json_schema: text('json_schema'), // JSON string of JSON Schema
+    created_by: varchar('created_by', { length: 36 }),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+  },
+  (table) => ({
+    nameIdx: index('card_types_name_idx').on(table.name),
+  })
+);
+
+/**
+ * Cards table - Generic entities on boards
+ *
+ * Cards are visual work items managed by agents via MCP tools.
+ * They live on boards alongside worktrees and can be placed in zones.
+ */
+export const cards = pgTable(
+  'cards',
+  {
+    card_id: varchar('card_id', { length: 36 }).primaryKey(),
+    board_id: varchar('board_id', { length: 36 })
+      .notNull()
+      .references(() => boards.board_id, { onDelete: 'cascade' }),
+    card_type_id: varchar('card_type_id', { length: 36 }).references(() => cardTypes.card_type_id, {
+      onDelete: 'set null',
+    }),
+    title: text('title').notNull(),
+    url: text('url'),
+    description: text('description'),
+    note: text('note'),
+    data: text('data'), // JSON blob validated against CardType.json_schema if present
+    color_override: text('color_override'),
+    emoji_override: text('emoji_override'),
+    created_by: varchar('created_by', { length: 36 }),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+    archived: t.bool('archived').notNull().default(false),
+    archived_at: t.timestamp('archived_at'),
+  },
+  (table) => ({
+    boardIdx: index('cards_board_idx').on(table.board_id),
+    cardTypeIdx: index('cards_card_type_idx').on(table.card_type_id),
+    titleIdx: index('cards_title_idx').on(table.title),
+    archivedIdx: index('cards_archived_idx').on(table.archived),
+    createdIdx: index('cards_created_idx').on(table.created_at),
+  })
+);
+
+/**
+ * Board Objects table - Positioned entities (worktrees and cards) on boards
+ *
+ * Polymorphic placement: exactly one of worktree_id or card_id must be set.
+ * Enforced in application layer.
  */
 export const boardObjects = pgTable(
   'board_objects',
@@ -789,12 +850,13 @@ export const boardObjects = pgTable(
       .references(() => boards.board_id, { onDelete: 'cascade' }),
     created_at: t.timestamp('created_at').notNull(),
 
-    // Worktree reference
-    worktree_id: varchar('worktree_id', { length: 36 })
-      .notNull()
-      .references(() => worktrees.worktree_id, {
-        onDelete: 'cascade',
-      }),
+    // Polymorphic entity reference (exactly one must be set)
+    worktree_id: varchar('worktree_id', { length: 36 }).references(() => worktrees.worktree_id, {
+      onDelete: 'cascade',
+    }),
+    card_id: varchar('card_id', { length: 36 }).references(() => cards.card_id, {
+      onDelete: 'cascade',
+    }),
 
     // Position data (JSON)
     data: t
@@ -808,6 +870,7 @@ export const boardObjects = pgTable(
   (table) => ({
     boardIdx: index('board_objects_board_idx').on(table.board_id),
     worktreeIdx: index('board_objects_worktree_idx').on(table.worktree_id),
+    cardIdx: index('board_objects_card_idx').on(table.card_id),
   })
 );
 
@@ -1077,6 +1140,10 @@ export type SessionMCPServerRow = typeof sessionMcpServers.$inferSelect;
 export type SessionMCPServerInsert = typeof sessionMcpServers.$inferInsert;
 export type UserMCPOAuthTokenRow = typeof userMcpOauthTokens.$inferSelect;
 export type UserMCPOAuthTokenInsert = typeof userMcpOauthTokens.$inferInsert;
+export type CardTypeRow = typeof cardTypes.$inferSelect;
+export type CardTypeInsert = typeof cardTypes.$inferInsert;
+export type CardRow = typeof cards.$inferSelect;
+export type CardInsert = typeof cards.$inferInsert;
 export type BoardObjectRow = typeof boardObjects.$inferSelect;
 export type BoardObjectInsert = typeof boardObjects.$inferInsert;
 export type BoardCommentRow = typeof boardComments.$inferSelect;

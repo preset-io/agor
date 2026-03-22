@@ -18,7 +18,14 @@ import {
   sql,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { AgenticToolName, Board, ContentBlock, MCPServer } from '@agor/core/types';
+import type {
+  AgenticToolName,
+  Board,
+  Card,
+  ContentBlock,
+  MCPServer,
+  ZoneBoardObject,
+} from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
 import { normalizeOptionalHttpUrl } from '@agor/core/utils/url';
 import type { Request, Response } from 'express';
@@ -1156,6 +1163,330 @@ export function setupMCPRoutes(app: Application, db: Database): void {
                   },
                 },
                 required: ['email', 'password'],
+              },
+            },
+
+            // Card tools
+            {
+              name: 'agor_cards_create',
+              description:
+                'Create a new card on a board. Creates both the card entity and its board placement in one operation. If zoneId is provided, the card is placed directly in that zone with automatic positioning.',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  boardId: {
+                    type: 'string',
+                    description: 'Board ID to create the card on (required)',
+                  },
+                  title: { type: 'string', description: 'Card title (required)' },
+                  cardTypeId: {
+                    type: 'string',
+                    description: 'Card type ID for visual defaults and data validation (optional)',
+                  },
+                  zoneId: {
+                    type: 'string',
+                    description: 'Zone ID to place the card in (optional)',
+                  },
+                  url: {
+                    type: 'string',
+                    description: 'External URL - makes title clickable (optional)',
+                  },
+                  description: {
+                    type: 'string',
+                    description: 'Stable context about the entity, markdown supported (optional)',
+                  },
+                  note: {
+                    type: 'string',
+                    description: "Agent's live commentary, always shown on card (optional)",
+                  },
+                  data: {
+                    type: 'object',
+                    additionalProperties: true,
+                    description: 'JSON data blob for structured workflow state (optional)',
+                  },
+                  colorOverride: {
+                    type: 'string',
+                    description: 'Hex color override (null = inherit from CardType)',
+                  },
+                  emojiOverride: {
+                    type: 'string',
+                    description: 'Emoji override (null = inherit from CardType)',
+                  },
+                },
+                required: ['boardId', 'title'],
+              },
+            },
+            {
+              name: 'agor_cards_get',
+              description:
+                'Get detailed information about a specific card, including resolved CardType info (emoji/color inherited if no override).',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  cardId: { type: 'string', description: 'Card ID (UUIDv7 or short ID)' },
+                },
+                required: ['cardId'],
+              },
+            },
+            {
+              name: 'agor_cards_list',
+              description:
+                'List cards with optional filtering by board, card type, zone, search query, or archive status.',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  boardId: { type: 'string', description: 'Filter by board ID' },
+                  cardTypeId: { type: 'string', description: 'Filter by card type ID' },
+                  zoneId: { type: 'string', description: 'Filter by zone ID (requires boardId)' },
+                  search: { type: 'string', description: 'Search cards by title' },
+                  archived: {
+                    type: 'boolean',
+                    description: 'Filter by archive status (default: false)',
+                  },
+                  limit: { type: 'number', description: 'Maximum number of results (default: 50)' },
+                  offset: { type: 'number', description: 'Number of results to skip (default: 0)' },
+                },
+              },
+            },
+            {
+              name: 'agor_cards_update',
+              description:
+                'Update card fields. All fields are optional and nullable (pass null to clear). Only provided fields are updated.',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  cardId: { type: 'string', description: 'Card ID (required)' },
+                  title: { type: 'string', description: 'New title' },
+                  url: { type: ['string', 'null'], description: 'External URL (null to clear)' },
+                  description: {
+                    type: ['string', 'null'],
+                    description: 'Description markdown (null to clear)',
+                  },
+                  note: {
+                    type: ['string', 'null'],
+                    description: "Agent's live commentary (null to clear)",
+                  },
+                  data: {
+                    type: ['object', 'null'],
+                    additionalProperties: true,
+                    description: 'JSON data blob (null to clear)',
+                  },
+                  colorOverride: {
+                    type: ['string', 'null'],
+                    description: 'Color override (null to inherit)',
+                  },
+                  emojiOverride: {
+                    type: ['string', 'null'],
+                    description: 'Emoji override (null to inherit)',
+                  },
+                },
+                required: ['cardId'],
+              },
+            },
+            {
+              name: 'agor_cards_delete',
+              description: 'Permanently delete a card and its board placement.',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  cardId: { type: 'string', description: 'Card ID to delete' },
+                },
+                required: ['cardId'],
+              },
+            },
+            {
+              name: 'agor_cards_archive',
+              description: 'Archive a card (soft remove from board visually, retain data).',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  cardId: { type: 'string', description: 'Card ID to archive' },
+                },
+                required: ['cardId'],
+              },
+            },
+            {
+              name: 'agor_cards_unarchive',
+              description: 'Unarchive a previously archived card.',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  cardId: { type: 'string', description: 'Card ID to unarchive' },
+                },
+                required: ['cardId'],
+              },
+            },
+            {
+              name: 'agor_cards_move',
+              description:
+                'Move a card to a different zone (or unpin from zone). Updates board_objects placement.',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  cardId: { type: 'string', description: 'Card ID to move' },
+                  zoneId: {
+                    type: ['string', 'null'],
+                    description: 'Zone ID to move to (null to unpin from zone)',
+                  },
+                },
+                required: ['cardId'],
+              },
+            },
+            {
+              name: 'agor_cards_bulk_create',
+              description:
+                'Create multiple cards on a board in one operation. Each card gets its own board placement.',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  boardId: { type: 'string', description: 'Board ID to create cards on' },
+                  cards: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        title: { type: 'string' },
+                        cardTypeId: { type: 'string' },
+                        zoneId: { type: 'string' },
+                        url: { type: 'string' },
+                        description: { type: 'string' },
+                        note: { type: 'string' },
+                        data: { type: 'object', additionalProperties: true },
+                        colorOverride: { type: 'string' },
+                        emojiOverride: { type: 'string' },
+                      },
+                      required: ['title'],
+                    },
+                    description: 'Array of cards to create',
+                  },
+                },
+                required: ['boardId', 'cards'],
+              },
+            },
+            {
+              name: 'agor_cards_bulk_update',
+              description: 'Update multiple cards in one operation.',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  updates: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        cardId: { type: 'string' },
+                        title: { type: 'string' },
+                        url: { type: ['string', 'null'] },
+                        description: { type: ['string', 'null'] },
+                        note: { type: ['string', 'null'] },
+                        data: { type: ['object', 'null'], additionalProperties: true },
+                        colorOverride: { type: ['string', 'null'] },
+                        emojiOverride: { type: ['string', 'null'] },
+                      },
+                      required: ['cardId'],
+                    },
+                    description: 'Array of card updates',
+                  },
+                },
+                required: ['updates'],
+              },
+            },
+            {
+              name: 'agor_cards_bulk_move',
+              description: 'Move multiple cards to zones in one operation.',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  moves: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        cardId: { type: 'string' },
+                        zoneId: { type: ['string', 'null'] },
+                      },
+                      required: ['cardId'],
+                    },
+                    description: 'Array of card moves',
+                  },
+                },
+                required: ['moves'],
+              },
+            },
+
+            // CardType tools
+            {
+              name: 'agor_card_types_create',
+              description:
+                'Create a new card type (global, usable on any board). Card types define default emoji, color, and optional JSON Schema for data validation.',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  name: {
+                    type: 'string',
+                    description: 'Card type name (e.g., "Ticket", "Lead", "Patient")',
+                  },
+                  emoji: { type: 'string', description: 'Default emoji (single character)' },
+                  color: { type: 'string', description: 'Default hex color' },
+                  jsonSchema: {
+                    type: 'object',
+                    additionalProperties: true,
+                    description: 'Optional JSON Schema for card.data validation',
+                  },
+                },
+                required: ['name'],
+              },
+            },
+            {
+              name: 'agor_card_types_get',
+              description: 'Get detailed information about a specific card type.',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  cardTypeId: { type: 'string', description: 'Card type ID (UUIDv7 or short ID)' },
+                },
+                required: ['cardTypeId'],
+              },
+            },
+            {
+              name: 'agor_card_types_list',
+              description: 'List all card types (global). Returns all card type definitions.',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  limit: { type: 'number', description: 'Maximum number of results (default: 50)' },
+                },
+              },
+            },
+            {
+              name: 'agor_card_types_update',
+              description: 'Update a card type. Only provided fields are updated.',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  cardTypeId: { type: 'string', description: 'Card type ID (required)' },
+                  name: { type: 'string', description: 'New name' },
+                  emoji: { type: ['string', 'null'], description: 'Emoji (null to clear)' },
+                  color: { type: ['string', 'null'], description: 'Hex color (null to clear)' },
+                  jsonSchema: {
+                    type: ['object', 'null'],
+                    additionalProperties: true,
+                    description: 'JSON Schema (null to clear)',
+                  },
+                },
+                required: ['cardTypeId'],
+              },
+            },
+            {
+              name: 'agor_card_types_delete',
+              description:
+                'Delete a card type. Cards using this type will have card_type_id set to NULL.',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  cardTypeId: { type: 'string', description: 'Card type ID to delete' },
+                },
+                required: ['cardTypeId'],
               },
             },
 
@@ -3907,6 +4238,488 @@ export function setupMCPRoutes(app: Application, db: Database): void {
                 text: JSON.stringify(newUser, null, 2),
               },
             ],
+          };
+          // ====================================================================
+          // Card Tools
+          // ====================================================================
+        } else if (name === 'agor_cards_create') {
+          const boardId = coerceString(args?.boardId);
+          const title = coerceString(args?.title);
+
+          if (!boardId || !title) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: { code: -32602, message: 'Invalid params: boardId and title are required' },
+            });
+          }
+
+          // Get board to validate and optionally resolve zone
+          const board = await app.service('boards').get(boardId, baseServiceParams);
+          let zoneData: ZoneBoardObject | undefined;
+          const zoneId = coerceString(args?.zoneId);
+          if (zoneId) {
+            const zone = board.objects?.[zoneId];
+            if (!zone || zone.type !== 'zone') {
+              return res.status(404).json({
+                jsonrpc: '2.0',
+                id: mcpRequest.id,
+                error: { code: -32602, message: `Zone ${zoneId} not found on board ${boardId}` },
+              });
+            }
+            zoneData = zone;
+          }
+
+          const cardsService = app.service(
+            'cards'
+          ) as unknown as import('../services/cards').CardsService;
+          const { card, boardObject } = await cardsService.createWithPlacement({
+            board_id: board.board_id,
+            title,
+            card_type_id: coerceString(args?.cardTypeId) as never,
+            url: coerceString(args?.url),
+            description: coerceString(args?.description),
+            note: coerceString(args?.note),
+            data:
+              args?.data && typeof args.data === 'object'
+                ? (args.data as Record<string, unknown>)
+                : undefined,
+            color_override: coerceString(args?.colorOverride),
+            emoji_override: coerceString(args?.emojiOverride),
+            zoneId,
+            zoneData,
+          } as never);
+
+          mcpResponse = {
+            content: [{ type: 'text', text: JSON.stringify({ card, boardObject }, null, 2) }],
+          };
+        } else if (name === 'agor_cards_get') {
+          const cardId = coerceString(args?.cardId);
+          if (!cardId) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: { code: -32602, message: 'Invalid params: cardId is required' },
+            });
+          }
+
+          const cardsService = app.service(
+            'cards'
+          ) as unknown as import('../services/cards').CardsService;
+          const cardWithType = await cardsService.getWithType(cardId);
+          if (!cardWithType) {
+            return res.status(404).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: { code: -32602, message: `Card ${cardId} not found` },
+            });
+          }
+
+          mcpResponse = {
+            content: [{ type: 'text', text: JSON.stringify(cardWithType, null, 2) }],
+          };
+        } else if (name === 'agor_cards_list') {
+          const cardsService = app.service(
+            'cards'
+          ) as unknown as import('../services/cards').CardsService;
+          const boardId = coerceString(args?.boardId);
+          const cardTypeId = coerceString(args?.cardTypeId);
+          const zoneId = coerceString(args?.zoneId);
+          const search = coerceString(args?.search);
+          const archived = args?.archived === true;
+          const limit = typeof args?.limit === 'number' ? args.limit : 50;
+          const offset = typeof args?.offset === 'number' ? args.offset : 0;
+
+          let cardsList: Card[];
+          if (zoneId && boardId) {
+            cardsList = await cardsService.findByZoneId(boardId as never, zoneId);
+          } else if (search) {
+            cardsList = await cardsService.searchCards(search, {
+              boardId: boardId as never,
+              archived,
+              limit,
+              offset,
+            });
+          } else if (cardTypeId) {
+            cardsList = await cardsService.findByCardTypeId(cardTypeId as never, { limit, offset });
+          } else if (boardId) {
+            cardsList = await cardsService.findByBoardId(boardId as never, {
+              archived,
+              limit,
+              offset,
+            });
+          } else {
+            const result = await cardsService.find({
+              query: { $limit: limit, $skip: offset },
+            } as never);
+            cardsList = 'data' in result ? result.data : result;
+          }
+
+          mcpResponse = {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(
+                  { total: Array.isArray(cardsList) ? cardsList.length : 0, data: cardsList },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        } else if (name === 'agor_cards_update') {
+          const cardId = coerceString(args?.cardId);
+          if (!cardId) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: { code: -32602, message: 'Invalid params: cardId is required' },
+            });
+          }
+
+          const updateData: Record<string, unknown> = {};
+          if (args?.title !== undefined) updateData.title = args.title;
+          if (args?.url !== undefined) updateData.url = args.url;
+          if (args?.description !== undefined) updateData.description = args.description;
+          if (args?.note !== undefined) updateData.note = args.note;
+          if (args?.data !== undefined) updateData.data = args.data;
+          if (args?.colorOverride !== undefined) updateData.color_override = args.colorOverride;
+          if (args?.emojiOverride !== undefined) updateData.emoji_override = args.emojiOverride;
+
+          const updatedCard = await app
+            .service('cards')
+            .patch(cardId, updateData, baseServiceParams);
+
+          mcpResponse = {
+            content: [{ type: 'text', text: JSON.stringify(updatedCard, null, 2) }],
+          };
+        } else if (name === 'agor_cards_delete') {
+          const cardId = coerceString(args?.cardId);
+          if (!cardId) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: { code: -32602, message: 'Invalid params: cardId is required' },
+            });
+          }
+
+          await app.service('cards').remove(cardId, baseServiceParams);
+
+          mcpResponse = {
+            content: [{ type: 'text', text: JSON.stringify({ success: true, cardId }) }],
+          };
+        } else if (name === 'agor_cards_archive') {
+          const cardId = coerceString(args?.cardId);
+          if (!cardId) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: { code: -32602, message: 'Invalid params: cardId is required' },
+            });
+          }
+
+          const cardsService = app.service(
+            'cards'
+          ) as unknown as import('../services/cards').CardsService;
+          const archivedCard = await cardsService.archive(cardId);
+
+          mcpResponse = {
+            content: [{ type: 'text', text: JSON.stringify(archivedCard, null, 2) }],
+          };
+        } else if (name === 'agor_cards_unarchive') {
+          const cardId = coerceString(args?.cardId);
+          if (!cardId) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: { code: -32602, message: 'Invalid params: cardId is required' },
+            });
+          }
+
+          const cardsService = app.service(
+            'cards'
+          ) as unknown as import('../services/cards').CardsService;
+          const unarchivedCard = await cardsService.unarchive(cardId);
+
+          mcpResponse = {
+            content: [{ type: 'text', text: JSON.stringify(unarchivedCard, null, 2) }],
+          };
+        } else if (name === 'agor_cards_move') {
+          const cardId = coerceString(args?.cardId);
+          if (!cardId) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: { code: -32602, message: 'Invalid params: cardId is required' },
+            });
+          }
+
+          const zoneId = args?.zoneId === null ? null : (coerceString(args?.zoneId) ?? null);
+
+          // Get card to find its board
+          const card = await app.service('cards').get(cardId, baseServiceParams);
+
+          // Resolve zone data if moving to a zone
+          let zoneData: ZoneBoardObject | undefined;
+          if (zoneId) {
+            const board = await app.service('boards').get(card.board_id, baseServiceParams);
+            const zone = board.objects?.[zoneId];
+            if (!zone || zone.type !== 'zone') {
+              return res.status(404).json({
+                jsonrpc: '2.0',
+                id: mcpRequest.id,
+                error: {
+                  code: -32602,
+                  message: `Zone ${zoneId} not found on board ${card.board_id}`,
+                },
+              });
+            }
+            zoneData = zone;
+          }
+
+          const cardsService = app.service(
+            'cards'
+          ) as unknown as import('../services/cards').CardsService;
+          const boardObject = await cardsService.moveToZone(cardId as never, zoneId, zoneData);
+
+          mcpResponse = {
+            content: [{ type: 'text', text: JSON.stringify(boardObject, null, 2) }],
+          };
+        } else if (name === 'agor_cards_bulk_create') {
+          const boardId = coerceString(args?.boardId);
+          const cardsArr = args?.cards;
+
+          if (!boardId || !Array.isArray(cardsArr) || cardsArr.length === 0) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message: 'Invalid params: boardId and non-empty cards array are required',
+              },
+            });
+          }
+
+          const board = await app.service('boards').get(boardId, baseServiceParams);
+          const cardsService = app.service(
+            'cards'
+          ) as unknown as import('../services/cards').CardsService;
+
+          const results = [];
+          for (const c of cardsArr) {
+            let zoneData: ZoneBoardObject | undefined;
+            const zoneId = coerceString(c.zoneId);
+            if (zoneId) {
+              const zone = board.objects?.[zoneId];
+              if (zone?.type === 'zone') zoneData = zone;
+            }
+
+            const { card } = await cardsService.createWithPlacement(
+              {
+                board_id: board.board_id,
+                title: c.title,
+                card_type_id: coerceString(c.cardTypeId) as never,
+                url: coerceString(c.url),
+                description: coerceString(c.description),
+                note: coerceString(c.note),
+                data: c.data && typeof c.data === 'object' ? c.data : undefined,
+                color_override: coerceString(c.colorOverride),
+                emoji_override: coerceString(c.emojiOverride),
+                zoneId,
+                zoneData,
+              },
+              { user: { user_id: context.userId } } as never
+            );
+            results.push(card);
+          }
+
+          mcpResponse = {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({ created: results.length, cards: results }, null, 2),
+              },
+            ],
+          };
+        } else if (name === 'agor_cards_bulk_update') {
+          const updates = args?.updates;
+          if (!Array.isArray(updates) || updates.length === 0) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message: 'Invalid params: non-empty updates array is required',
+              },
+            });
+          }
+
+          const results = [];
+          for (const u of updates) {
+            const cardId = coerceString(u.cardId);
+            if (!cardId) continue;
+
+            const updateData: Record<string, unknown> = {};
+            if (u.title !== undefined) updateData.title = u.title;
+            if (u.url !== undefined) updateData.url = u.url;
+            if (u.description !== undefined) updateData.description = u.description;
+            if (u.note !== undefined) updateData.note = u.note;
+            if (u.data !== undefined) updateData.data = u.data;
+            if (u.colorOverride !== undefined) updateData.color_override = u.colorOverride;
+            if (u.emojiOverride !== undefined) updateData.emoji_override = u.emojiOverride;
+
+            const updated = await app.service('cards').patch(cardId, updateData, baseServiceParams);
+            results.push(updated);
+          }
+
+          mcpResponse = {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({ updated: results.length, cards: results }, null, 2),
+              },
+            ],
+          };
+        } else if (name === 'agor_cards_bulk_move') {
+          const moves = args?.moves;
+          if (!Array.isArray(moves) || moves.length === 0) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: { code: -32602, message: 'Invalid params: non-empty moves array is required' },
+            });
+          }
+
+          const cardsService = app.service(
+            'cards'
+          ) as unknown as import('../services/cards').CardsService;
+          const results = [];
+
+          for (const m of moves) {
+            const cardId = coerceString(m.cardId);
+            if (!cardId) continue;
+
+            const zoneId = m.zoneId === null ? null : (coerceString(m.zoneId) ?? null);
+
+            let zoneData: ZoneBoardObject | undefined;
+            if (zoneId) {
+              const card = await app.service('cards').get(cardId, baseServiceParams);
+              const board = await app.service('boards').get(card.board_id, baseServiceParams);
+              const zone = board.objects?.[zoneId];
+              if (zone?.type === 'zone') zoneData = zone;
+            }
+
+            const boardObject = await cardsService.moveToZone(cardId as never, zoneId, zoneData);
+            results.push({ cardId, boardObject });
+          }
+
+          mcpResponse = {
+            content: [
+              { type: 'text', text: JSON.stringify({ moved: results.length, results }, null, 2) },
+            ],
+          };
+
+          // ====================================================================
+          // CardType Tools
+          // ====================================================================
+        } else if (name === 'agor_card_types_create') {
+          const typeName = coerceString(args?.name);
+          if (!typeName) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: { code: -32602, message: 'Invalid params: name is required' },
+            });
+          }
+
+          const cardType = await app.service('card-types').create(
+            {
+              name: typeName,
+              emoji: coerceString(args?.emoji),
+              color: coerceString(args?.color),
+              json_schema:
+                args?.jsonSchema && typeof args.jsonSchema === 'object'
+                  ? args.jsonSchema
+                  : undefined,
+              created_by: context.userId,
+            },
+            baseServiceParams
+          );
+
+          mcpResponse = {
+            content: [{ type: 'text', text: JSON.stringify(cardType, null, 2) }],
+          };
+        } else if (name === 'agor_card_types_get') {
+          const cardTypeId = coerceString(args?.cardTypeId);
+          if (!cardTypeId) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: { code: -32602, message: 'Invalid params: cardTypeId is required' },
+            });
+          }
+
+          const cardType = await app.service('card-types').get(cardTypeId, baseServiceParams);
+
+          mcpResponse = {
+            content: [{ type: 'text', text: JSON.stringify(cardType, null, 2) }],
+          };
+        } else if (name === 'agor_card_types_list') {
+          const limit = typeof args?.limit === 'number' ? args.limit : 50;
+          const result = await app
+            .service('card-types')
+            .find({ query: { $limit: limit } } as never);
+          const data = 'data' in result ? result.data : result;
+
+          mcpResponse = {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(
+                  { total: Array.isArray(data) ? data.length : 0, data },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        } else if (name === 'agor_card_types_update') {
+          const cardTypeId = coerceString(args?.cardTypeId);
+          if (!cardTypeId) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: { code: -32602, message: 'Invalid params: cardTypeId is required' },
+            });
+          }
+
+          const updateData: Record<string, unknown> = {};
+          if (args?.name !== undefined) updateData.name = args.name;
+          if (args?.emoji !== undefined) updateData.emoji = args.emoji;
+          if (args?.color !== undefined) updateData.color = args.color;
+          if (args?.jsonSchema !== undefined) updateData.json_schema = args.jsonSchema;
+
+          const updated = await app
+            .service('card-types')
+            .patch(cardTypeId, updateData, baseServiceParams);
+
+          mcpResponse = {
+            content: [{ type: 'text', text: JSON.stringify(updated, null, 2) }],
+          };
+        } else if (name === 'agor_card_types_delete') {
+          const cardTypeId = coerceString(args?.cardTypeId);
+          if (!cardTypeId) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: { code: -32602, message: 'Invalid params: cardTypeId is required' },
+            });
+          }
+
+          await app.service('card-types').remove(cardTypeId, baseServiceParams);
+
+          mcpResponse = {
+            content: [{ type: 'text', text: JSON.stringify({ success: true, cardTypeId }) }],
           };
         } else if (name === 'agor_analytics_leaderboard') {
           // Get usage analytics leaderboard

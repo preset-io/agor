@@ -1,4 +1,5 @@
 import type { AgenticToolName } from './agentic-tool';
+import type { CardID } from './card';
 import type { BoardID, WorktreeID } from './id';
 
 /**
@@ -7,10 +8,15 @@ import type { BoardID, WorktreeID } from './id';
 export type BoardObjectType = 'text' | 'zone' | 'markdown';
 
 /**
- * Positioned worktree card on a board
+ * Entity type discriminator for board objects
+ */
+export type BoardEntityType = 'worktree' | 'card';
+
+/**
+ * Positioned entity on a board (worktree or card)
  *
- * Boards display worktrees as primary units. Sessions are accessed
- * through the worktree card's session tree.
+ * Polymorphic placement: exactly one of worktree_id or card_id is set.
+ * The entity_type field indicates which one.
  */
 export interface BoardEntityObject {
   /** Unique object identifier */
@@ -19,13 +25,19 @@ export interface BoardEntityObject {
   /** Board this entity belongs to */
   board_id: BoardID;
 
-  /** Worktree reference */
-  worktree_id: WorktreeID;
+  /** Worktree reference (set when entity_type === 'worktree') */
+  worktree_id?: WorktreeID;
+
+  /** Card reference (set when entity_type === 'card') */
+  card_id?: CardID;
+
+  /** Computed entity type discriminator */
+  entity_type: BoardEntityType;
 
   /** Position on canvas */
   position: { x: number; y: number };
 
-  /** Zone this worktree is pinned to (optional) */
+  /** Zone this entity is pinned to (optional) */
   zone_id?: string;
 
   /** When this entity was added to the board */

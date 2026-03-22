@@ -7,6 +7,7 @@ export default {
     type: 'separator',
     title: 'Features',
   },
+  cards: 'Cards (Beta)',
   'internal-mcp': 'Agor MCP Server',
   'message-gateway': 'Message Gateway (Beta)',
   scheduler: 'Scheduler',

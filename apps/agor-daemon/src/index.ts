@@ -385,6 +385,8 @@ import { gatewayRouteHook } from './hooks/gateway-route';
 import { createBoardCommentsService } from './services/board-comments';
 import { createBoardObjectsService } from './services/board-objects';
 import { createBoardsService } from './services/boards';
+import { createCardTypesService } from './services/card-types';
+import { createCardsService } from './services/cards';
 import { createConfigService } from './services/config';
 import { createContextService } from './services/context';
 import { createFileService } from './services/file';
@@ -1150,6 +1152,12 @@ async function main() {
   // Register board-objects service (positioned entities on boards)
   app.use('/board-objects', createBoardObjectsService(db));
 
+  // Register card-types service (global card type definitions)
+  app.use('/card-types', createCardTypesService(db));
+
+  // Register cards service (generic entities on boards)
+  app.use('/cards', createCardsService(db));
+
   // Register board-comments service (human-to-human conversations)
   app.use('/board-comments', createBoardCommentsService(db));
 
@@ -1881,96 +1889,89 @@ async function main() {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Referrer-Policy', 'no-referrer');
-    {
-      try {
-        const code = req.query.code as string | undefined;
-        const state = req.query.state as string | undefined;
-        const error = req.query.error as string | undefined;
+    try {
+      const code = req.query.code as string | undefined;
+      const state = req.query.state as string | undefined;
+      const error = req.query.error as string | undefined;
 
-        if (error) {
-          const errorDescription = (req.query.error_description as string) || error;
-          console.error('[OAuth Callback] Authorization error:', errorDescription);
-          res.status(400).send(oauthResultPage(false, `Authorization failed: ${errorDescription}`));
-          return;
-        }
-
-        if (!code || !state) {
-          res.status(400).send(oauthResultPage(false, 'Missing code or state parameter'));
-          return;
-        }
-
-        console.log('[OAuth Callback] Received callback, state:', state);
-
-        // Find the pending flow
-        const pendingFlow = pendingOAuthFlows.get(state);
-        if (!pendingFlow) {
-          res
-            .status(400)
-            .send(
-              oauthResultPage(
-                false,
-                'OAuth flow expired or not found. Please start the flow again.'
-              )
-            );
-          return;
-        }
-
-        // Complete the flow
-        const { completeMCPOAuthFlow } = await import('@agor/core/tools/mcp/oauth-mcp-transport');
-        const token = await completeMCPOAuthFlow(pendingFlow.context, code, state);
-
-        // Remove from pending flows
-        pendingOAuthFlows.delete(state);
-
-        // Cache the token at daemon level
-        cacheOAuth21Token(pendingFlow.context.metadataUrl, token, 3600);
-
-        // Save to database based on OAuth mode
-        if (pendingFlow.mcpServerId) {
-          const oauthMode = pendingFlow.oauthMode || 'per_user';
-
-          if (oauthMode === 'per_user' && pendingFlow.userId) {
-            const userTokenRepo = new UserMCPOAuthTokenRepository(db);
-            await userTokenRepo.saveToken(
-              pendingFlow.userId as import('@agor/core/types').UserID,
-              pendingFlow.mcpServerId as import('@agor/core/types').MCPServerID,
-              token,
-              3600
-            );
-            console.log(
-              `[OAuth Callback] Per-user token saved for user ${pendingFlow.userId}, server ${pendingFlow.mcpServerId}`
-            );
-          } else {
-            const mcpServerRepo = new MCPServerRepository(db);
-            await saveOAuth21TokenToDB(mcpServerRepo, pendingFlow.mcpServerId, token, 3600);
-            console.log(
-              `[OAuth Callback] Shared token saved for server ${pendingFlow.mcpServerId}`
-            );
-          }
-        }
-
-        // Notify the initiating client that OAuth completed successfully
-        if (app.io) {
-          if (pendingFlow.socketId) {
-            app.io.to(pendingFlow.socketId).emit('oauth:completed', { state, success: true });
-          } else {
-            app.io.emit('oauth:completed', { state, success: true });
-          }
-        }
-
-        console.log('[OAuth Callback] Flow completed successfully');
-        res.send(oauthResultPage(true, 'OAuth authentication successful! You can close this tab.'));
-      } catch (err) {
-        console.error('[OAuth Callback] Error:', err);
-        res
-          .status(500)
-          .send(
-            oauthResultPage(
-              false,
-              `Authentication failed: ${err instanceof Error ? err.message : String(err)}`
-            )
-          );
+      if (error) {
+        const errorDescription = (req.query.error_description as string) || error;
+        console.error('[OAuth Callback] Authorization error:', errorDescription);
+        res.status(400).send(oauthResultPage(false, `Authorization failed: ${errorDescription}`));
+        return;
       }
+
+      if (!code || !state) {
+        res.status(400).send(oauthResultPage(false, 'Missing code or state parameter'));
+        return;
+      }
+
+      console.log('[OAuth Callback] Received callback, state:', state);
+
+      // Find the pending flow
+      const pendingFlow = pendingOAuthFlows.get(state);
+      if (!pendingFlow) {
+        res
+          .status(400)
+          .send(
+            oauthResultPage(false, 'OAuth flow expired or not found. Please start the flow again.')
+          );
+        return;
+      }
+
+      // Complete the flow
+      const { completeMCPOAuthFlow } = await import('@agor/core/tools/mcp/oauth-mcp-transport');
+      const token = await completeMCPOAuthFlow(pendingFlow.context, code, state);
+
+      // Remove from pending flows
+      pendingOAuthFlows.delete(state);
+
+      // Cache the token at daemon level
+      cacheOAuth21Token(pendingFlow.context.metadataUrl, token, 3600);
+
+      // Save to database based on OAuth mode
+      if (pendingFlow.mcpServerId) {
+        const oauthMode = pendingFlow.oauthMode || 'per_user';
+
+        if (oauthMode === 'per_user' && pendingFlow.userId) {
+          const userTokenRepo = new UserMCPOAuthTokenRepository(db);
+          await userTokenRepo.saveToken(
+            pendingFlow.userId as import('@agor/core/types').UserID,
+            pendingFlow.mcpServerId as import('@agor/core/types').MCPServerID,
+            token,
+            3600
+          );
+          console.log(
+            `[OAuth Callback] Per-user token saved for user ${pendingFlow.userId}, server ${pendingFlow.mcpServerId}`
+          );
+        } else {
+          const mcpServerRepo = new MCPServerRepository(db);
+          await saveOAuth21TokenToDB(mcpServerRepo, pendingFlow.mcpServerId, token, 3600);
+          console.log(`[OAuth Callback] Shared token saved for server ${pendingFlow.mcpServerId}`);
+        }
+      }
+
+      // Notify the initiating client that OAuth completed successfully
+      if (app.io) {
+        if (pendingFlow.socketId) {
+          app.io.to(pendingFlow.socketId).emit('oauth:completed', { state, success: true });
+        } else {
+          app.io.emit('oauth:completed', { state, success: true });
+        }
+      }
+
+      console.log('[OAuth Callback] Flow completed successfully');
+      res.send(oauthResultPage(true, 'OAuth authentication successful! You can close this tab.'));
+    } catch (err) {
+      console.error('[OAuth Callback] Error:', err);
+      res
+        .status(500)
+        .send(
+          oauthResultPage(
+            false,
+            `Authentication failed: ${err instanceof Error ? err.message : String(err)}`
+          )
+        );
     }
   }) as never);
 
