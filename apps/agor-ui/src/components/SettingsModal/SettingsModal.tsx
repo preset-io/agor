@@ -209,7 +209,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         },
         {
           key: 'cards',
-          label: 'Cards',
+          label: (
+            <span>
+              Cards{' '}
+              <span
+                style={{
+                  fontSize: 10,
+                  fontWeight: 600,
+                  padding: '0 4px',
+                  borderRadius: 3,
+                  background: token.colorWarningBg,
+                  color: token.colorWarningText,
+                  border: `1px solid ${token.colorWarningBorder}`,
+                  marginLeft: 4,
+                }}
+              >
+                Beta
+              </span>
+            </span>
+          ),
           icon: <CreditCardOutlined />,
         },
       ],
