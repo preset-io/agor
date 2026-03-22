@@ -213,11 +213,7 @@ const CardModalComponent = ({
           </Tag>
         )}
         {zoneName && (
-          <Tag
-            icon={<PushpinFilled />}
-            color={zoneColor}
-            style={zoneColor ? { borderColor: zoneColor, color: zoneColor } : undefined}
-          >
+          <Tag icon={<PushpinFilled style={zoneColor ? { color: zoneColor } : undefined} />}>
             {zoneName}
           </Tag>
         )}

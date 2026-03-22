@@ -14,7 +14,6 @@ import {
   Popconfirm,
   Space,
   Table,
-  Tag,
   Typography,
   theme,
 } from 'antd';
@@ -194,15 +193,10 @@ export const CardsTable: React.FC<CardsTableProps> = ({
         const info = cardZoneInfo.get(record.card_id);
         if (!info) return <Typography.Text type="secondary">—</Typography.Text>;
         return (
-          <Tag
-            icon={<PushpinFilled />}
-            color={info.zoneColor}
-            style={
-              info.zoneColor ? { borderColor: info.zoneColor, color: info.zoneColor } : undefined
-            }
-          >
-            {info.zoneName}
-          </Tag>
+          <Space size={4}>
+            {info.zoneColor && <PushpinFilled style={{ color: info.zoneColor, fontSize: 12 }} />}
+            <Typography.Text style={{ fontSize: 13 }}>{info.zoneName}</Typography.Text>
+          </Space>
         );
       },
     },
