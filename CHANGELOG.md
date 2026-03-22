@@ -1,4 +1,37 @@
-# Releases
+# Changelog
+
+## 0.14.3 (2026-03-22)
+
+### Features
+- **Agent SDK slash commands** — slash command support with autocomplete for Claude Agent SDK sessions
+- **Session archive/unarchive MCP tools** — archive and unarchive sessions via MCP
+- **Board picker search** — search filter and recent boards quick-access in board picker
+- **User context for agents** — pass user context to agents for multi-user sessions
+- **Required env vars config** — block prompts when required user environment variables are missing
+- **Assistant emoji picker** — add emoji picker for assistant configuration
+- **Node.js 22 LTS** — upgrade runtime from Node.js 20 to 22
+
+### Fixes
+- Replace md-to-slack with slackify-markdown for better Slack message rendering
+- Handle stale git branches during worktree creation and cleanup on deletion
+- Use public daemon URL for MCP OAuth callback
+- Add explicit user ACL for daemon to prevent stale group issues
+- Scope OAuth auth_required WebSocket event to requesting user only
+- Use ISO strings for leaderboard date params
+- Refresh updated_at on session updates to prevent stale SDK disconnects
+- Sync agor-live simple-git dependency version
+- Prevent board crash from orphaned parentId after worktree archive/delete
+- Persist archived/archived_reason columns in session updates
+- Enable allowUnsafeSshCommand in simple-git for Docker compatibility
+- Sort Settings modal tables alphabetically
+- Fix worktree unix group access for owners and non-owners
+- Prevent 'repo already exists' error toast on page load
+- Simplify spawn subsession UI modal
+
+### Chores
+- Rename RELEASES.md to CHANGELOG.md
+- Update biome schema to 2.4.4 and fix all biome warnings
+- Tighten lint script to catch warnings (not just errors)
 
 ## 0.14.2 (2026-03-13)
 
