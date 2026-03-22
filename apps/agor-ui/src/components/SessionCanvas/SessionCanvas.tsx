@@ -1077,7 +1077,6 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     // Fit view ONCE when entering a board (not on every node change)
     // This ensures nodes are visible when navigating between boards or on initial load,
     // but doesn't disrupt the user's zoom level when comments/cursors/zones change
-    // biome-ignore lint/correctness/useExhaustiveDependencies: nodes.length is used to gate execution (wait for nodes to load), not to trigger re-runs
     useEffect(() => {
       // Wait for ReactFlow to be ready and nodes to be loaded
       if (!isReactFlowReady || !reactFlowInstanceRef.current || nodes.length === 0) return;

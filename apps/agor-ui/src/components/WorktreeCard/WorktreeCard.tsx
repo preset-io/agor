@@ -628,8 +628,8 @@ const WorktreeCardComponent = ({
     const truncated = worktree.notes.slice(0, NOTES_MAX_LENGTH);
     const lastSpace = truncated.lastIndexOf(' ');
     return lastSpace > NOTES_MAX_LENGTH * 0.8
-      ? truncated.slice(0, lastSpace) + '...'
-      : truncated + '...';
+      ? `${truncated.slice(0, lastSpace)}...`
+      : `${truncated}...`;
   }, [worktree.notes, notesNeedTruncation, notesExpanded]);
 
   return (

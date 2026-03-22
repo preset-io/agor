@@ -235,9 +235,7 @@ const config: DocsThemeConfig = {
   },
 
   main: ({ children }) => {
-    // biome-ignore lint/correctness/useHookAtTopLevel: Nextra theme config component
     const { frontMatter } = useConfig();
-    // biome-ignore lint/correctness/useHookAtTopLevel: Nextra theme config component
     const { asPath } = useRouter();
     const isBlogPost = asPath.startsWith('/blog/') && frontMatter.image;
 

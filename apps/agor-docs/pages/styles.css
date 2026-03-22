@@ -68,7 +68,6 @@
   z-index: 1;
 }
 
-/* biome-ignore lint/style/noDescendingSpecificity: Dark mode override requires higher specificity first */
 main {
   background-color: #ffffff;
   position: relative;

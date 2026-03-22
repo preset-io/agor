@@ -43,7 +43,6 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
   const [hasSetDefault, setHasSetDefault] = useState(false);
 
   // Fetch providers/models from daemon endpoint
-  // biome-ignore lint/correctness/useExhaustiveDependencies: Only fetch once on mount
   useEffect(() => {
     const fetchProviders = async () => {
       try {

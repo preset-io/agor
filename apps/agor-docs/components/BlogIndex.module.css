@@ -35,7 +35,9 @@
   border: 1px solid var(--nx-colors-gray-4);
   border-radius: 12px;
   overflow: hidden;
+  /* biome-ignore lint/complexity/noImportantStyles: override Nextra default link styles */
   text-decoration: none !important;
+  /* biome-ignore lint/complexity/noImportantStyles: override Nextra default link styles */
   color: var(--nx-colors-gray-12) !important;
   transition:
     transform 0.2s ease,
