@@ -17,6 +17,7 @@ import {
   EditOutlined,
   InboxOutlined,
   LinkOutlined,
+  PushpinFilled,
   SaveOutlined,
 } from '@ant-design/icons';
 import { Button, Collapse, Input, Modal, message, Space, Tag, Typography, theme } from 'antd';
@@ -30,6 +31,7 @@ interface CardModalProps {
   card: CardWithType | null;
   board?: Board | null;
   zoneName?: string;
+  zoneColor?: string;
   client: AgorClient | null;
   onClose: () => void;
   onCardUpdated?: (card: CardWithType) => void;
@@ -41,6 +43,7 @@ const CardModalComponent = ({
   card,
   board,
   zoneName,
+  zoneColor,
   client,
   onClose,
   onCardUpdated,
@@ -209,7 +212,15 @@ const CardModalComponent = ({
             {board.name}
           </Tag>
         )}
-        {zoneName && <Tag color="blue">{zoneName}</Tag>}
+        {zoneName && (
+          <Tag
+            icon={<PushpinFilled />}
+            color={zoneColor}
+            style={zoneColor ? { borderColor: zoneColor, color: zoneColor } : undefined}
+          >
+            {zoneName}
+          </Tag>
+        )}
       </div>
 
       {/* Note section */}

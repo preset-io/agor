@@ -2763,6 +2763,18 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                 })()
               : undefined
           }
+          zoneColor={
+            selectedCard
+              ? (() => {
+                  const bo = boardObjectByCard.get(selectedCard.card_id);
+                  if (!bo?.zone_id) return undefined;
+                  const zoneObj = board?.objects?.[bo.zone_id];
+                  return zoneObj && zoneObj.type === 'zone'
+                    ? zoneObj.borderColor || zoneObj.color
+                    : undefined;
+                })()
+              : undefined
+          }
           client={client}
           onClose={() => {
             setCardModalOpen(false);

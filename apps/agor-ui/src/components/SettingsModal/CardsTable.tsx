@@ -1,6 +1,6 @@
 import type { AgorClient } from '@agor/core/api';
-import type { Board, CardType, CardWithType } from '@agor/core/types';
-import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
+import type { Board, BoardEntityObject, CardType, CardWithType } from '@agor/core/types';
+import { DeleteOutlined, EditOutlined, PlusOutlined, PushpinFilled } from '@ant-design/icons';
 import {
   Button,
   ColorPicker,
@@ -14,6 +14,7 @@ import {
   Popconfirm,
   Space,
   Table,
+  Tag,
   Typography,
   theme,
 } from 'antd';
@@ -31,6 +32,7 @@ interface CardsTableProps {
   cardById: Map<string, CardWithType>;
   cardTypeById: Map<string, CardType>;
   boardById: Map<string, Board>;
+  boardObjects?: BoardEntityObject[];
 }
 
 export const CardsTable: React.FC<CardsTableProps> = ({
@@ -38,6 +40,7 @@ export const CardsTable: React.FC<CardsTableProps> = ({
   cardById,
   cardTypeById,
   boardById,
+  boardObjects,
 }) => {
   const { token } = theme.useToken();
   const { showSuccess, showError } = useThemedMessage();
@@ -55,6 +58,24 @@ export const CardsTable: React.FC<CardsTableProps> = ({
     () => mapToArray(cardTypeById).sort((a, b) => a.name.localeCompare(b.name)),
     [cardTypeById]
   );
+
+  // Build card_id → zone info lookup from board_objects
+  const cardZoneInfo = useMemo(() => {
+    const map = new Map<string, { zoneName: string; zoneColor?: string }>();
+    if (!boardObjects) return map;
+    for (const bo of boardObjects) {
+      if (!bo.card_id || !bo.zone_id) continue;
+      const board = boardById.get(bo.board_id);
+      const zoneObj = board?.objects?.[bo.zone_id];
+      if (zoneObj && zoneObj.type === 'zone') {
+        map.set(bo.card_id, {
+          zoneName: zoneObj.label || 'Unknown Zone',
+          zoneColor: zoneObj.borderColor || zoneObj.color,
+        });
+      }
+    }
+    return map;
+  }, [boardObjects, boardById]);
 
   const selectedType = selectedTypeId ? (cardTypeById.get(selectedTypeId) ?? null) : null;
 
@@ -155,13 +176,33 @@ export const CardsTable: React.FC<CardsTableProps> = ({
       title: 'Board',
       dataIndex: 'board_id',
       key: 'board',
-      width: 200,
+      width: 180,
       render: (boardId: string) => {
         const board = boardById.get(boardId);
         return (
           <Typography.Text type="secondary">
             {board ? `${board.icon ? `${board.icon} ` : ''}${board.name}` : '—'}
           </Typography.Text>
+        );
+      },
+    },
+    {
+      title: 'Zone',
+      key: 'zone',
+      width: 180,
+      render: (_: unknown, record: CardWithType) => {
+        const info = cardZoneInfo.get(record.card_id);
+        if (!info) return <Typography.Text type="secondary">—</Typography.Text>;
+        return (
+          <Tag
+            icon={<PushpinFilled />}
+            color={info.zoneColor}
+            style={
+              info.zoneColor ? { borderColor: info.zoneColor, color: info.zoneColor } : undefined
+            }
+          >
+            {info.zoneName}
+          </Tag>
         );
       },
     },

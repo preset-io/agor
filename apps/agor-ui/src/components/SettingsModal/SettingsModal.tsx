@@ -326,6 +326,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             cardById={cardById}
             cardTypeById={cardTypeById}
             boardById={boardById}
+            boardObjects={boardObjects}
           />
         );
       case 'mcp':
