@@ -99,15 +99,20 @@ export async function createExecutorClient(
   client.io.io.on('reconnect', async (attemptNumber: number) => {
     console.log(`[executor] Socket reconnected (attempt ${attemptNumber}), re-authenticating...`);
     try {
-      await client.authenticate({
-        strategy: 'jwt',
-        accessToken: sessionToken,
-      });
+      // Try reAuthenticate first — uses stored credentials from MemoryStorage
+      await client.reAuthenticate(true);
       console.log('[executor] Re-authenticated successfully after reconnect');
-    } catch (error) {
-      console.error('[executor] Re-authentication failed after reconnect:', error);
-      // Don't throw — the executor will get auth errors on next API call,
-      // which will be handled by the normal error flow
+    } catch {
+      // Fallback: authenticate with raw JWT if storage-based re-auth fails
+      try {
+        await client.authenticate({
+          strategy: 'jwt',
+          accessToken: sessionToken,
+        });
+        console.log('[executor] Re-authenticated with JWT fallback after reconnect');
+      } catch (error) {
+        console.error('[executor] Re-authentication failed after reconnect:', error);
+      }
     }
   });
 
