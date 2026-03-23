@@ -6530,7 +6530,7 @@ async function main() {
 
   // Setup MCP routes (if enabled)
   if (config.daemon?.mcpEnabled !== false) {
-    const { setupMCPRoutes } = await import('./mcp/routes.js');
+    const { setupMCPRoutes } = await import('./mcp/server.js');
     setupMCPRoutes(app, db);
     console.log('✅ MCP server enabled at POST /mcp');
   } else {
