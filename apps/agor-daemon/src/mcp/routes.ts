@@ -4293,6 +4293,10 @@ export function setupMCPRoutes(app: Application, db: Database): void {
             { user: { user_id: context.userId } } as never
           );
 
+          // Emit WebSocket events (createWithPlacement bypasses FeathersJS service layer)
+          app.service('cards').emit('created', card);
+          app.service('board-objects').emit('created', boardObject);
+
           mcpResponse = {
             content: [{ type: 'text', text: JSON.stringify({ card, boardObject }, null, 2) }],
           };
@@ -4425,6 +4429,7 @@ export function setupMCPRoutes(app: Application, db: Database): void {
             'cards'
           ) as unknown as import('../services/cards').CardsService;
           const archivedCard = await cardsService.archive(cardId);
+          app.service('cards').emit('patched', archivedCard);
 
           mcpResponse = {
             content: [{ type: 'text', text: JSON.stringify(archivedCard, null, 2) }],
@@ -4443,6 +4448,7 @@ export function setupMCPRoutes(app: Application, db: Database): void {
             'cards'
           ) as unknown as import('../services/cards').CardsService;
           const unarchivedCard = await cardsService.unarchive(cardId);
+          app.service('cards').emit('patched', unarchivedCard);
 
           mcpResponse = {
             content: [{ type: 'text', text: JSON.stringify(unarchivedCard, null, 2) }],
@@ -4484,6 +4490,7 @@ export function setupMCPRoutes(app: Application, db: Database): void {
             'cards'
           ) as unknown as import('../services/cards').CardsService;
           const boardObject = await cardsService.moveToZone(cardId as never, zoneId, zoneData);
+          app.service('board-objects').emit('patched', boardObject);
 
           mcpResponse = {
             content: [{ type: 'text', text: JSON.stringify(boardObject, null, 2) }],
@@ -4517,7 +4524,7 @@ export function setupMCPRoutes(app: Application, db: Database): void {
               if (zone?.type === 'zone') zoneData = zone;
             }
 
-            const { card } = await cardsService.createWithPlacement(
+            const { card, boardObject } = await cardsService.createWithPlacement(
               {
                 board_id: board.board_id,
                 title: c.title,
@@ -4534,6 +4541,9 @@ export function setupMCPRoutes(app: Application, db: Database): void {
               { user: { user_id: context.userId } } as never
             );
             results.push(card);
+            // Emit WebSocket events for each created card + board object
+            app.service('cards').emit('created', card);
+            app.service('board-objects').emit('created', boardObject);
           }
 
           mcpResponse = {
@@ -4613,6 +4623,7 @@ export function setupMCPRoutes(app: Application, db: Database): void {
             }
 
             const boardObject = await cardsService.moveToZone(cardId as never, zoneId, zoneData);
+            app.service('board-objects').emit('patched', boardObject);
             results.push({ cardId, boardObject });
           }
 
