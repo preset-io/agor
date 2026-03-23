@@ -18,6 +18,19 @@ import {
   RepositoryError,
 } from './base';
 
+const ALLOWED_URL_PROTOCOLS = ['http:', 'https:', 'mailto:'];
+
+function sanitizeUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    if (!ALLOWED_URL_PROTOCOLS.includes(parsed.protocol)) return null;
+  } catch {
+    return null;
+  }
+  return url;
+}
+
 export class CardRepository implements BaseRepository<Card, Partial<Card>> {
   constructor(private db: Database) {}
 
@@ -69,7 +82,7 @@ export class CardRepository implements BaseRepository<Card, Partial<Card>> {
         board_id: data.board_id ?? '',
         card_type_id: data.card_type_id ?? null,
         title: data.title ?? 'Untitled Card',
-        url: data.url ?? null,
+        url: sanitizeUrl(data.url),
         description: data.description ?? null,
         note: data.note ?? null,
         data: data.data ? JSON.stringify(data.data) : null,
@@ -296,7 +309,7 @@ export class CardRepository implements BaseRepository<Card, Partial<Card>> {
 
       if (updates.title !== undefined) setData.title = updates.title;
       if (updates.card_type_id !== undefined) setData.card_type_id = updates.card_type_id ?? null;
-      if (updates.url !== undefined) setData.url = updates.url ?? null;
+      if (updates.url !== undefined) setData.url = sanitizeUrl(updates.url);
       if (updates.description !== undefined) setData.description = updates.description ?? null;
       if (updates.note !== undefined) setData.note = updates.note ?? null;
       if (updates.data !== undefined) {

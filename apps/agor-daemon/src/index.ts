@@ -2863,6 +2863,24 @@ async function main() {
     },
   });
 
+  app.service('card-types').hooks({
+    before: {
+      all: [...getReadAuthHooks()],
+      create: [requireMinimumRole('member', 'create card types')],
+      patch: [requireMinimumRole('member', 'update card types')],
+      remove: [requireMinimumRole('member', 'delete card types')],
+    },
+  });
+
+  app.service('cards').hooks({
+    before: {
+      all: [...getReadAuthHooks()],
+      create: [requireMinimumRole('member', 'create cards')],
+      patch: [requireMinimumRole('member', 'update cards')],
+      remove: [requireMinimumRole('member', 'delete cards')],
+    },
+  });
+
   app.service('board-comments').hooks({
     before: {
       all: [

@@ -24,6 +24,15 @@ import { Button, Collapse, Input, Modal, message, Space, Tag, Typography, theme 
 import React, { useCallback, useEffect, useState } from 'react';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 
+function isSafeUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return ['http:', 'https:', 'mailto:'].includes(parsed.protocol);
+  } catch {
+    return false;
+  }
+}
+
 const { TextArea } = Input;
 
 interface CardModalProps {
@@ -75,8 +84,8 @@ const CardModalComponent = ({
     setSaving(true);
     try {
       const updated = await client.service('cards').patch(card.card_id, {
-        note: noteValue || undefined,
-        description: descValue || undefined,
+        note: noteValue,
+        description: descValue,
       });
       onCardUpdated?.(updated as CardWithType);
       setEditingNote(false);
@@ -178,7 +187,7 @@ const CardModalComponent = ({
         <Typography.Title level={5} style={{ margin: 0, flex: 1 }}>
           {card.title}
         </Typography.Title>
-        {card.url && (
+        {card.url && isSafeUrl(card.url) && (
           <a
             href={card.url}
             target="_blank"

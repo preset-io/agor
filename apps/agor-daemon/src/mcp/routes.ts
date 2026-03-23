@@ -4273,22 +4273,25 @@ export function setupMCPRoutes(app: Application, db: Database): void {
           const cardsService = app.service(
             'cards'
           ) as unknown as import('../services/cards').CardsService;
-          const { card, boardObject } = await cardsService.createWithPlacement({
-            board_id: board.board_id,
-            title,
-            card_type_id: coerceString(args?.cardTypeId) as never,
-            url: coerceString(args?.url),
-            description: coerceString(args?.description),
-            note: coerceString(args?.note),
-            data:
-              args?.data && typeof args.data === 'object'
-                ? (args.data as Record<string, unknown>)
-                : undefined,
-            color_override: coerceString(args?.colorOverride),
-            emoji_override: coerceString(args?.emojiOverride),
-            zoneId,
-            zoneData,
-          } as never);
+          const { card, boardObject } = await cardsService.createWithPlacement(
+            {
+              board_id: board.board_id,
+              title,
+              card_type_id: coerceString(args?.cardTypeId) as never,
+              url: coerceString(args?.url),
+              description: coerceString(args?.description),
+              note: coerceString(args?.note),
+              data:
+                args?.data && typeof args.data === 'object'
+                  ? (args.data as Record<string, unknown>)
+                  : undefined,
+              color_override: coerceString(args?.colorOverride),
+              emoji_override: coerceString(args?.emojiOverride),
+              zoneId,
+              zoneData,
+            } as never,
+            { user: { user_id: context.userId } } as never
+          );
 
           mcpResponse = {
             content: [{ type: 'text', text: JSON.stringify({ card, boardObject }, null, 2) }],

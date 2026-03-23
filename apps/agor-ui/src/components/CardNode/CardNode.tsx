@@ -13,6 +13,16 @@
 import type { CardWithType } from '@agor/core/types';
 import { DragOutlined, LinkOutlined, PushpinFilled } from '@ant-design/icons';
 import { Button, Tooltip, Typography, theme } from 'antd';
+
+function isSafeUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return ['http:', 'https:', 'mailto:'].includes(parsed.protocol);
+  } catch {
+    return false;
+  }
+}
+
 import React, { useMemo, useState } from 'react';
 import { ensureColorVisible } from '../../utils/theme';
 
@@ -100,7 +110,7 @@ const CardNodeComponent = ({ data }: { data: CardNodeData }) => {
         >
           {card.title}
         </Typography.Text>
-        {card.url && (
+        {card.url && isSafeUrl(card.url) && (
           <a
             href={card.url}
             target="_blank"
