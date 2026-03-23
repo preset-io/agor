@@ -192,8 +192,12 @@ export class BoardObjectsService {
   /**
    * Clear zone_id on all board objects referencing a deleted zone.
    */
-  async clearZoneReferences(boardId: BoardID, zoneId: string): Promise<number> {
-    return this.boardObjectRepo.clearZoneReferences(boardId, zoneId);
+  async clearZoneReferences(
+    boardId: BoardID,
+    zoneId: string,
+    zonePosition?: { x: number; y: number }
+  ): Promise<number> {
+    return this.boardObjectRepo.clearZoneReferences(boardId, zoneId, zonePosition);
   }
 
   /**

@@ -2841,8 +2841,11 @@ async function main() {
                     if (hasAccess) {
                       authorizedBoardObjects.push(boardObject);
                     }
+                  } else if (boardObject.card_id) {
+                    // Card board objects: cards inherit board-level access (no per-card RBAC)
+                    authorizedBoardObjects.push(boardObject);
                   } else {
-                    // No worktree reference - allow access (e.g., zones, other board objects)
+                    // No worktree or card reference - allow access (e.g., zones, other board objects)
                     authorizedBoardObjects.push(boardObject);
                   }
                 }
@@ -3988,14 +3991,23 @@ async function main() {
 
           if (_action === 'deleteZone' && objectId) {
             if (!context.id) throw new Error('Board ID required');
+            // Look up zone position for coordinate translation
+            const board = await boardsService.get(context.id as string);
+            const zoneObj = board?.objects?.[objectId as string];
+            const zonePosition =
+              zoneObj && 'x' in zoneObj && 'y' in zoneObj
+                ? { x: zoneObj.x, y: zoneObj.y }
+                : undefined;
+
             // Clear zone_id on board objects before deleting the zone
-            // This prevents stale parentId references in React Flow
+            // Converts relative positions to absolute so entities don't jump
             const boardObjectsService = app.service(
               'board-objects'
             ) as unknown as import('./services/board-objects').BoardObjectsService;
             await boardObjectsService.clearZoneReferences(
               context.id as import('@agor/core/types').BoardID,
-              objectId as string
+              objectId as string,
+              zonePosition
             );
             const result = await boardsService.deleteZone(
               context.id as string,

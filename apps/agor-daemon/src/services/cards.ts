@@ -47,6 +47,15 @@ export class CardsService extends DrizzleService<Card, Partial<Card>, CardParams
   }
 
   /**
+   * Override default REST create to prevent orphan cards without board placement.
+   * Use createWithPlacement() instead.
+   */
+  // biome-ignore lint/suspicious/noExplicitAny: Override base class signature
+  override async create(_data: any, _params?: any): Promise<any> {
+    throw new Error('Use createWithPlacement() to create cards with board placement');
+  }
+
+  /**
    * Create a card AND its board_objects placement in one operation.
    *
    * If zoneId is provided, the card is placed in that zone with jitter positioning.
@@ -91,13 +100,20 @@ export class CardsService extends DrizzleService<Card, Partial<Card>, CardParams
       };
     }
 
-    // Create board object placement
-    const boardObject = await this.boardObjectRepo.create({
-      board_id: card.board_id as BoardID,
-      card_id: card.card_id as CardID,
-      position,
-      zone_id: zoneId,
-    });
+    // Create board object placement — compensate on failure to avoid orphan cards
+    let boardObject: BoardEntityObject;
+    try {
+      boardObject = await this.boardObjectRepo.create({
+        board_id: card.board_id as BoardID,
+        card_id: card.card_id as CardID,
+        position,
+        zone_id: zoneId,
+      });
+    } catch (error) {
+      // Clean up the card to prevent orphan
+      await this.cardRepo.delete(card.card_id).catch(() => {});
+      throw error;
+    }
 
     return { card, boardObject };
   }

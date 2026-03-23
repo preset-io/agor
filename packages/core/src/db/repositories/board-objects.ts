@@ -323,7 +323,11 @@ export class BoardObjectRepository {
    * Clear zone_id on all board objects referencing a deleted zone.
    * Called when a zone is deleted to prevent stale parent references.
    */
-  async clearZoneReferences(boardId: BoardID, zoneId: string): Promise<number> {
+  async clearZoneReferences(
+    boardId: BoardID,
+    zoneId: string,
+    zonePosition?: { x: number; y: number }
+  ): Promise<number> {
     try {
       const rows = await select(this.db)
         .from(boardObjects)
@@ -334,10 +338,16 @@ export class BoardObjectRepository {
       for (const row of rows) {
         const data = typeof row.data === 'string' ? JSON.parse(row.data) : row.data;
         if (data.zone_id === zoneId) {
+          // Convert relative position to absolute by adding zone origin
+          const relPos = data.position ?? { x: 0, y: 0 };
+          const absolutePosition = zonePosition
+            ? { x: relPos.x + zonePosition.x, y: relPos.y + zonePosition.y }
+            : relPos;
+
           await update(this.db, boardObjects)
             .set({
               data: {
-                position: data.position,
+                position: absolutePosition,
                 zone_id: undefined,
               },
             })

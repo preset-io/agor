@@ -6,7 +6,7 @@ import type { AgorClient } from '@agor/core/api';
 import type { Board, BoardEntityObject, BoardObject, Session, Worktree } from '@agor/core/types';
 import { useCallback, useMemo, useRef } from 'react';
 import type { Node } from 'reactflow';
-import { findInMap, mapToArray } from '@/utils/mapHelpers';
+import { mapToArray } from '@/utils/mapHelpers';
 
 interface UseBoardObjectsProps {
   board: Board | null;
@@ -88,28 +88,24 @@ export const useBoardObjects = ({
       // Mark as deleted to prevent re-appearance during WebSocket updates
       deletedObjectsRef.current.add(objectId);
 
-      // Find worktrees that are pinned to this zone (via board_objects.zone_id)
-      const affectedWorktreeIds: string[] = [];
+      // Find worktrees and cards pinned to this zone (via board_objects.zone_id)
+      const affectedObjectIds: string[] = [];
       for (const boardObj of mapToArray(boardObjectById)) {
-        if (boardObj.zone_id === objectId && boardObj.worktree_id) {
-          affectedWorktreeIds.push(boardObj.worktree_id);
+        if (boardObj.zone_id === objectId && (boardObj.worktree_id || boardObj.card_id)) {
+          affectedObjectIds.push(boardObj.object_id);
         }
       }
 
-      // Optimistic removal of zone (just the zone node, worktrees remain but unpinned)
+      // Optimistic removal of zone (just the zone node, entities remain but unpinned)
       setNodes((nodes) => nodes.filter((n) => n.id !== objectId));
 
       try {
-        // IMPORTANT: Unpin worktrees FIRST before deleting the zone
-        // This prevents a race condition where worktrees have parentId pointing to a deleted zone
-        for (const worktreeId of affectedWorktreeIds) {
-          // boardObjectById is keyed by object_id, not worktree_id, so we need to find by worktree_id
-          const boardObj = findInMap(boardObjectById, (obj) => obj.worktree_id === worktreeId);
-          if (boardObj) {
-            await client.service('board-objects').patch(boardObj.object_id, {
-              zone_id: null,
-            });
-          }
+        // IMPORTANT: Unpin entities FIRST before deleting the zone
+        // This prevents a race condition where entities have parentId pointing to a deleted zone
+        for (const objId of affectedObjectIds) {
+          await client.service('board-objects').patch(objId, {
+            zone_id: null,
+          });
         }
 
         // Now delete the zone after all worktrees are unpinned
