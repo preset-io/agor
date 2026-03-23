@@ -48,7 +48,7 @@ export async function createExecutorClient(
   // Create client with custom storage (don't auto-connect, we'll connect manually)
   const client = createClient(daemonUrl, false, {
     verbose: true, // Log connection status for debugging
-    reconnectionAttempts: 2, // Fail fast if daemon is down
+    reconnectionAttempts: 5, // Allow more retries for transient network hiccups during long-running tasks
   });
 
   // Re-configure authentication with memory storage
@@ -88,6 +88,26 @@ export async function createExecutorClient(
   });
 
   console.log('[executor] Authenticated with session token (JWT)');
+
+  // Re-authenticate automatically on socket reconnect
+  // When socket.io reconnects after a transport error, the new socket is unauthenticated.
+  // Without this, all subsequent API calls fail with "NotAuthenticated" and the executor crashes.
+  // This is critical for long-running SDK turns (Codex, Gemini) where transient network hiccups
+  // can cause socket disconnects mid-execution.
+  client.io.on('reconnect', async (attemptNumber: number) => {
+    console.log(`[executor] Socket reconnected (attempt ${attemptNumber}), re-authenticating...`);
+    try {
+      await client.authenticate({
+        strategy: 'jwt',
+        accessToken: sessionToken,
+      });
+      console.log('[executor] Re-authenticated successfully after reconnect');
+    } catch (error) {
+      console.error('[executor] Re-authentication failed after reconnect:', error);
+      // Don't throw — the executor will get auth errors on next API call,
+      // which will be handled by the normal error flow
+    }
+  });
 
   return client;
 }
