@@ -9,6 +9,7 @@ import { extractSlugFromUrl, isValidGitUrl, isValidSlug } from '@agor/core/confi
 import {
   and,
   asc,
+  BoardObjectRepository,
   type Database,
   desc,
   eq,
@@ -1330,6 +1331,20 @@ export function setupMCPRoutes(app: Application, db: Database): void {
                   },
                 },
                 required: ['cardId'],
+              },
+            },
+            {
+              name: 'agor_cards_set_position',
+              description:
+                'Set the x,y position of a card on the board. Coordinates are relative to the zone if the card is pinned, or absolute board coordinates if unpinned.',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  cardId: { type: 'string', description: 'Card ID to reposition' },
+                  x: { type: 'number', description: 'X coordinate' },
+                  y: { type: 'number', description: 'Y coordinate' },
+                },
+                required: ['cardId', 'x', 'y'],
               },
             },
             {
@@ -4494,6 +4509,43 @@ export function setupMCPRoutes(app: Application, db: Database): void {
 
           mcpResponse = {
             content: [{ type: 'text', text: JSON.stringify(boardObject, null, 2) }],
+          };
+        } else if (name === 'agor_cards_set_position') {
+          const cardId = coerceString(args?.cardId);
+          const x = typeof args?.x === 'number' ? args.x : undefined;
+          const y = typeof args?.y === 'number' ? args.y : undefined;
+          if (!cardId || x === undefined || y === undefined) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: {
+                code: -32602,
+                message: 'Invalid params: cardId, x, and y are required',
+              },
+            });
+          }
+
+          // Find the board object for this card, then update its position
+          const boardObjectRepo = new BoardObjectRepository(db);
+          const boardObj = await boardObjectRepo.findByCardId(cardId as never);
+          if (!boardObj) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              id: mcpRequest.id,
+              error: { code: -32602, message: `Card ${cardId} has no board placement` },
+            });
+          }
+
+          const boardObjectsService = app.service(
+            'board-objects'
+          ) as unknown as import('../services/board-objects').BoardObjectsService;
+          const updatedBoardObject = await boardObjectsService.updatePosition(boardObj.object_id, {
+            x,
+            y,
+          });
+
+          mcpResponse = {
+            content: [{ type: 'text', text: JSON.stringify(updatedBoardObject, null, 2) }],
           };
         } else if (name === 'agor_cards_bulk_create') {
           const boardId = coerceString(args?.boardId);
