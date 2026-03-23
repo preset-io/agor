@@ -3,6 +3,10 @@
  *
  * Creates an McpServer using @modelcontextprotocol/sdk and mounts it
  * at POST /mcp with JWT session-token auth.
+ *
+ * When tool search is enabled (mcpToolSearch config flag), only essential
+ * tools appear in tools/list. Agents discover others via agor_search_tools.
+ * All tools remain registered and callable regardless.
  */
 
 import type { Database } from '@agor/core/db';
@@ -11,9 +15,11 @@ import type { SessionID, UserID } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { Request, Response } from 'express';
 import type { AuthenticatedParams, AuthenticatedUser } from '../declarations.js';
 import { validateSessionToken } from './tokens.js';
+import { type ToolEntry, ToolRegistry } from './tool-registry.js';
 import { registerAnalyticsTools } from './tools/analytics.js';
 import { registerBoardTools } from './tools/boards.js';
 import { registerCardTypeTools } from './tools/card-types.js';
@@ -22,6 +28,7 @@ import { registerEnvironmentTools } from './tools/environment.js';
 import { registerMcpServerTools } from './tools/mcp-servers.js';
 import { registerMessageTools } from './tools/messages.js';
 import { registerRepoTools } from './tools/repos.js';
+import { registerSearchTools } from './tools/search.js';
 import { registerSessionTools } from './tools/sessions.js';
 import { registerTaskTools } from './tools/tasks.js';
 import { registerUserTools } from './tools/users.js';
@@ -59,13 +66,41 @@ export function textResult(data: unknown) {
 
 /**
  * Create an McpServer with all tools registered for the given context.
+ *
+ * When toolSearchEnabled is true, intercepts tool registrations to build
+ * a searchable registry, then overrides tools/list to return only essential
+ * tools. All tools remain callable via tools/call.
  */
-function createMcpServer(ctx: McpContext): McpServer {
+function createMcpServer(ctx: McpContext, toolSearchEnabled: boolean): McpServer {
   const server = new McpServer(
     { name: 'agor', version: '0.14.3' },
     { capabilities: { tools: { listChanged: true }, logging: {} } }
   );
 
+  const registry = new ToolRegistry();
+
+  // When tool search is enabled, intercept registerTool to capture metadata
+  if (toolSearchEnabled) {
+    const originalRegisterTool = server.registerTool.bind(server) as (
+      ...args: unknown[]
+    ) => ReturnType<typeof server.registerTool>;
+    // biome-ignore lint/suspicious/noExplicitAny: intercepting overloaded method
+    (server as any).registerTool = (name: string, config: Record<string, unknown>, cb: unknown) => {
+      // Capture metadata in registry
+      registry.register({
+        name,
+        description: (config.description as string) ?? '',
+        inputSchema: config.inputSchema
+          ? JSON.parse(JSON.stringify(config.inputSchema))
+          : { type: 'object' },
+        annotations: config.annotations as ToolEntry['annotations'],
+      });
+      // Call original
+      return originalRegisterTool(name, config, cb);
+    };
+  }
+
+  // Register all domain tools
   registerSessionTools(server, ctx);
   registerRepoTools(server, ctx);
   registerWorktreeTools(server, ctx);
@@ -79,13 +114,32 @@ function createMcpServer(ctx: McpContext): McpServer {
   registerAnalyticsTools(server, ctx);
   registerMcpServerTools(server, ctx);
 
+  // Register the search tool (always, but only useful when filtering is on)
+  if (toolSearchEnabled) {
+    registerSearchTools(server, registry);
+
+    // Override tools/list to return only essential tools.
+    // All tools remain registered and callable via tools/call.
+    server.server.setRequestHandler(ListToolsRequestSchema, async () => ({
+      tools: registry.getAlwaysVisible().map((entry) => ({
+        name: entry.name,
+        description: entry.description,
+        inputSchema: entry.inputSchema,
+        annotations: entry.annotations,
+      })),
+    }));
+  }
+
   return server;
 }
 
 /**
  * Setup MCP routes on FeathersJS app using the official SDK.
+ *
+ * @param toolSearchEnabled - When true, tools/list returns only essential tools
+ *   and agents discover others via agor_search_tools. Default: false.
  */
-export function setupMCPRoutes(app: Application, db: Database): void {
+export function setupMCPRoutes(app: Application, db: Database, toolSearchEnabled = false): void {
   const handler = async (req: Request, res: Response) => {
     try {
       console.log(`🔌 Incoming MCP request: ${req.method} /mcp`);
@@ -151,14 +205,17 @@ export function setupMCPRoutes(app: Application, db: Database): void {
       };
 
       // Create a per-request McpServer with all tools registered
-      const mcpServer = createMcpServer({
-        app,
-        db,
-        userId: context.userId,
-        sessionId: context.sessionId,
-        authenticatedUser,
-        baseServiceParams,
-      });
+      const mcpServer = createMcpServer(
+        {
+          app,
+          db,
+          userId: context.userId,
+          sessionId: context.sessionId,
+          authenticatedUser,
+          baseServiceParams,
+        },
+        toolSearchEnabled
+      );
 
       // Create stateless transport (one per request, no session tracking)
       const transport = new StreamableHTTPServerTransport({

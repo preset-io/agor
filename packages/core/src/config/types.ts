@@ -93,6 +93,10 @@ export interface AgorDaemonSettings {
   /** Enable built-in MCP server (default: true) */
   mcpEnabled?: boolean;
 
+  /** Enable tool search mode: tools/list returns only essential tools,
+   *  agents discover others via agor_search_tools (default: false) */
+  mcpToolSearch?: boolean;
+
   /** Unix user the daemon runs as. Used to ensure daemon has access to all Unix groups.
    * Required when Unix isolation is enabled (worktree_rbac or unix_user_mode).
    * In dev mode without isolation, falls back to current process user. */
