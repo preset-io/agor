@@ -94,7 +94,9 @@ export async function createExecutorClient(
   // Without this, all subsequent API calls fail with "NotAuthenticated" and the executor crashes.
   // This is critical for long-running SDK turns (Codex, Gemini) where transient network hiccups
   // can cause socket disconnects mid-execution.
-  client.io.on('reconnect', async (attemptNumber: number) => {
+  // NOTE: 'reconnect' is a Manager event, not a Socket event.
+  // client.io is the Socket; client.io.io is the Manager.
+  client.io.io.on('reconnect', async (attemptNumber: number) => {
     console.log(`[executor] Socket reconnected (attempt ${attemptNumber}), re-authenticating...`);
     try {
       await client.authenticate({

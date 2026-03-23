@@ -503,14 +503,15 @@ export function createClient(
   // Add connection monitoring if verbose mode enabled
   if (options?.verbose) {
     let attemptCount = 0;
+    const maxAttempts = options?.reconnectionAttempts ?? (isBrowser ? Infinity : 2);
 
     socket.on('connect_error', (error: Error) => {
       attemptCount++;
       if (attemptCount === 1) {
         console.error(`✗ Daemon not running at ${url}`);
-        console.error(`  Retrying connection (${attemptCount}/2)...`);
+        console.error(`  Retrying connection (${attemptCount}/${maxAttempts})...`);
       } else {
-        console.error(`  Retry ${attemptCount}/2 failed`);
+        console.error(`  Retry ${attemptCount}/${maxAttempts} failed`);
       }
     });
 
