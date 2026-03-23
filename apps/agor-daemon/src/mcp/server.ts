@@ -139,7 +139,7 @@ function createMcpServer(ctx: McpContext, toolSearchEnabled: boolean): McpServer
  * @param toolSearchEnabled - When true, tools/list returns only essential tools
  *   and agents discover others via agor_search_tools. Default: false.
  */
-export function setupMCPRoutes(app: Application, db: Database, toolSearchEnabled = false): void {
+export function setupMCPRoutes(app: Application, db: Database, toolSearchEnabled = true): void {
   const handler = async (req: Request, res: Response) => {
     try {
       console.log(`🔌 Incoming MCP request: ${req.method} /mcp`);

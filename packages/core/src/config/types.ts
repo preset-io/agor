@@ -94,7 +94,7 @@ export interface AgorDaemonSettings {
   mcpEnabled?: boolean;
 
   /** Enable tool search mode: tools/list returns only essential tools,
-   *  agents discover others via agor_search_tools (default: false) */
+   *  agents discover others via agor_search_tools (default: true) */
   mcpToolSearch?: boolean;
 
   /** Unix user the daemon runs as. Used to ensure daemon has access to all Unix groups.
