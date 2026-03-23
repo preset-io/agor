@@ -78,7 +78,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_get_current',
     {
       description:
-        'Get information about the current session (the one making this MCP call). Useful for introspection.',
+        'Get information about the current session (the one making this MCP call). Returns session details plus denormalized worktree, repo, and board context — useful for introspection and getting IDs needed by other tools.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({}),
     },
@@ -89,7 +89,62 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         _last_message_truncation_length: 500,
         // biome-ignore lint/suspicious/noExplicitAny: custom service params with underscored options
       } as any);
-      return textResult(session);
+
+      // Denormalize worktree, repo, and board context
+      let worktree: Record<string, unknown> | null = null;
+      let repo: Record<string, unknown> | null = null;
+      let board: Record<string, unknown> | null = null;
+
+      if (session.worktree_id) {
+        try {
+          const wt = await ctx.app
+            .service('worktrees')
+            .get(session.worktree_id, ctx.baseServiceParams);
+          worktree = {
+            worktree_id: wt.worktree_id,
+            name: wt.name,
+            ref: wt.ref,
+            path: wt.path,
+            board_id: wt.board_id,
+            repo_id: wt.repo_id,
+          };
+
+          if (wt.repo_id) {
+            try {
+              const r = await ctx.app.service('repos').get(wt.repo_id, ctx.baseServiceParams);
+              repo = {
+                repo_id: r.repo_id,
+                name: r.name,
+                slug: r.slug,
+              };
+            } catch {
+              // repo may have been deleted
+            }
+          }
+
+          if (wt.board_id) {
+            try {
+              const b = await ctx.app.service('boards').get(wt.board_id, ctx.baseServiceParams);
+              board = {
+                board_id: b.board_id,
+                name: b.name,
+                slug: b.slug,
+              };
+            } catch {
+              // board may have been deleted
+            }
+          }
+        } catch {
+          // worktree may have been deleted
+        }
+      }
+
+      return textResult({
+        session,
+        worktree,
+        repo,
+        board,
+      });
     }
   );
 
@@ -98,7 +153,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_spawn',
     {
       description:
-        'Spawn a child session (subsession) for delegating work to another agent. Creates a new session, executes the prompt, and tracks genealogy. Session configuration is inherited from parent (same agent) or user defaults (different agent).',
+        'Spawn a child session (subsession) for delegating work to another agent. Inherits the current worktree and tracks parent-child genealogy. Use for subtasks like "run tests", "review this code", or "fix linting errors". Configuration is inherited from parent (same agent) or user defaults (different agent).',
       inputSchema: z.object({
         prompt: z.string().describe('The prompt/task for the subsession agent to execute'),
         title: z
@@ -285,7 +340,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_create',
     {
       description:
-        'Create a new session in an existing worktree. Useful for starting fresh work in the same codebase without forking or spawning. Session configuration (permissions, model, MCP servers) is automatically inherited from user defaults.',
+        'Create a new session in an existing worktree. Use for starting fresh work on a new task in the same codebase (e.g., new feature branch, separate investigation). Unlike spawn, this creates an independent session with no parent-child relationship. Configuration is inherited from user defaults.',
       inputSchema: z.object({
         worktreeId: z.string().describe('Worktree ID where the session will run (required)'),
         agenticTool: z

@@ -7,6 +7,10 @@
  * When tool search is enabled (mcpToolSearch config flag), only essential
  * tools appear in tools/list. Agents discover others via agor_search_tools.
  * All tools remain registered and callable regardless.
+ *
+ * DETERMINISM: The tools/list response and registry are built once on first
+ * request and cached as module-level singletons. This ensures byte-identical
+ * JSON across requests, which is critical for client-side KV prefix caching.
  */
 
 import type { Database } from '@agor/core/db';
@@ -17,9 +21,10 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { Request, Response } from 'express';
+import { toJSONSchema } from 'zod/v4-mini';
 import type { AuthenticatedParams, AuthenticatedUser } from '../declarations.js';
 import { validateSessionToken } from './tokens.js';
-import { type ToolEntry, ToolRegistry } from './tool-registry.js';
+import { ToolRegistry } from './tool-registry.js';
 import { registerAnalyticsTools } from './tools/analytics.js';
 import { registerBoardTools } from './tools/boards.js';
 import { registerCardTypeTools } from './tools/card-types.js';
@@ -64,43 +69,186 @@ export function textResult(data: unknown) {
   };
 }
 
+/** Server instructions shown to agents when tool search is enabled. */
+const SERVER_INSTRUCTIONS = `Agor is a multiplayer canvas for orchestrating AI coding agents. It manages git worktrees, tracks AI conversations, visualizes work on spatial boards, and enables real-time collaboration.
+
+This server uses progressive tool discovery. Only 2 tools are listed directly — use them to discover and call all available tools:
+
+- agor_search_tools: Browse/search tools by keyword, domain, or annotation. Call with no args for a domains overview.
+- agor_execute_tool: Call any discovered tool by name with arguments.
+
+Domains:
+- sessions: Agent conversations with genealogy (fork/spawn), task tracking, and message history
+- repos: Repository registration and management
+- worktrees: Git worktrees with isolated branches, board placement, and zone pinning
+- environment: Start/stop/health/logs for worktree dev environments
+- boards: Spatial canvases with zones for organizing worktrees and cards
+- cards: Kanban-style cards and card type definitions on boards
+- users: User accounts, profiles, preferences, and administration
+- analytics: Usage and cost tracking leaderboard
+- mcp-servers: External MCP server configuration and OAuth management
+
+Common workflows:
+
+Create a worktree and start a session:
+1. agor_repos_list → get repoId
+2. agor_boards_list → get boardId
+3. agor_worktrees_create(repoId, boardId, worktreeName) → get worktreeId
+4. agor_sessions_create(worktreeId, agenticTool, initialPrompt)
+
+Delegate a subtask to a child agent:
+1. agor_sessions_spawn(prompt) — inherits current worktree, tracks parent-child genealogy
+
+Continue or fork an existing session:
+1. agor_sessions_prompt(sessionId, prompt, mode:"continue"|"fork"|"subsession")
+
+Discover tools: search (list detail) → search (full detail for schemas) → execute`;
+
+/**
+ * Module-level cached registry and tools/list response.
+ *
+ * Built once on first request, reused for all subsequent requests.
+ * The registry content is independent of user/session — only tool handlers
+ * differ per request. This ensures deterministic, byte-identical tools/list
+ * responses critical for client-side KV prefix caching.
+ */
+let cachedRegistry: ToolRegistry | null = null;
+let cachedToolsList: { tools: Array<Record<string, unknown>> } | null = null;
+
+/**
+ * Build the tool registry by registering tools against a temporary server.
+ * Captures metadata (name, description, JSON Schema, annotations, domain)
+ * without creating real handlers. Called once, cached forever.
+ */
+function buildRegistry(): ToolRegistry {
+  const registry = new ToolRegistry();
+
+  // Create a throwaway server just to run the registration code.
+  // We intercept registerTool to capture metadata only.
+  const tempServer = new McpServer({ name: 'agor-registry-builder', version: '0.0.0' });
+  const originalRegisterTool = tempServer.registerTool.bind(tempServer) as (
+    ...args: unknown[]
+  ) => ReturnType<typeof tempServer.registerTool>;
+
+  // biome-ignore lint/suspicious/noExplicitAny: intercepting overloaded method
+  (tempServer as any).registerTool = (
+    name: string,
+    config: Record<string, unknown>,
+    cb: unknown
+  ) => {
+    // Convert Zod schema to JSON Schema using Zod v4's built-in converter
+    let jsonSchema: Record<string, unknown> = { type: 'object' };
+    if (config.inputSchema) {
+      try {
+        jsonSchema = toJSONSchema(
+          config.inputSchema as Parameters<typeof toJSONSchema>[0]
+        ) as Record<string, unknown>;
+      } catch {
+        // Fallback: empty object schema if conversion fails
+        jsonSchema = { type: 'object' };
+      }
+    }
+
+    registry.register({
+      name,
+      description: (config.description as string) ?? '',
+      inputSchema: jsonSchema,
+      annotations:
+        config.annotations as import('@modelcontextprotocol/sdk/types.js').ToolAnnotations,
+    });
+
+    // Still register with the temp server so Zod schemas are valid
+    return originalRegisterTool(name, config, cb);
+  };
+
+  // Register all domain tools with domain tracking.
+  // Handlers receive a dummy context — they won't be called.
+  const dummyCtx = {} as McpContext;
+
+  registry.setCurrentDomain('sessions');
+  registerSessionTools(tempServer, dummyCtx);
+
+  registry.setCurrentDomain('repos');
+  registerRepoTools(tempServer, dummyCtx);
+
+  registry.setCurrentDomain('worktrees');
+  registerWorktreeTools(tempServer, dummyCtx);
+
+  registry.setCurrentDomain('environment');
+  registerEnvironmentTools(tempServer, dummyCtx);
+
+  registry.setCurrentDomain('boards');
+  registerBoardTools(tempServer, dummyCtx);
+
+  registry.setCurrentDomain('cards');
+  registerCardTools(tempServer, dummyCtx);
+  registerCardTypeTools(tempServer, dummyCtx);
+
+  registry.setCurrentDomain('sessions');
+  registerTaskTools(tempServer, dummyCtx);
+  registerMessageTools(tempServer, dummyCtx);
+
+  registry.setCurrentDomain('users');
+  registerUserTools(tempServer, dummyCtx);
+
+  registry.setCurrentDomain('analytics');
+  registerAnalyticsTools(tempServer, dummyCtx);
+
+  registry.setCurrentDomain('mcp-servers');
+  registerMcpServerTools(tempServer, dummyCtx);
+
+  // Search/execute tools registered separately on the real server
+  // but we capture their metadata here too
+  registry.setCurrentDomain('discovery');
+  registerSearchTools(tempServer, registry);
+
+  return registry;
+}
+
+/**
+ * Get or build the cached registry and tools/list response.
+ */
+function getRegistry(): {
+  registry: ToolRegistry;
+  toolsList: { tools: Array<Record<string, unknown>> };
+} {
+  if (!cachedRegistry) {
+    cachedRegistry = buildRegistry();
+    // Pre-compute the tools/list response — frozen, deterministic
+    cachedToolsList = {
+      tools: cachedRegistry.getAlwaysVisible().map((entry) => ({
+        name: entry.name,
+        description: entry.description,
+        inputSchema: entry.inputSchema,
+        annotations: entry.annotations,
+      })),
+    };
+  }
+  return { registry: cachedRegistry, toolsList: cachedToolsList! };
+}
+
 /**
  * Create an McpServer with all tools registered for the given context.
  *
- * When toolSearchEnabled is true, intercepts tool registrations to build
- * a searchable registry, then overrides tools/list to return only essential
- * tools. All tools remain callable via tools/call.
+ * Tool handlers close over `ctx` for per-request user/session scope.
+ * The registry and tools/list response are shared across all requests.
  */
 function createMcpServer(ctx: McpContext, toolSearchEnabled: boolean): McpServer {
   const server = new McpServer(
-    { name: 'agor', version: '0.14.3' },
-    { capabilities: { tools: { listChanged: true }, logging: {} } }
+    {
+      name: 'agor',
+      version: '0.14.3',
+      ...(toolSearchEnabled && {
+        description: 'Multiplayer canvas for orchestrating AI coding agents',
+      }),
+    },
+    {
+      capabilities: { tools: { listChanged: true }, logging: {} },
+      ...(toolSearchEnabled && { instructions: SERVER_INSTRUCTIONS }),
+    }
   );
 
-  const registry = new ToolRegistry();
-
-  // When tool search is enabled, intercept registerTool to capture metadata
-  if (toolSearchEnabled) {
-    const originalRegisterTool = server.registerTool.bind(server) as (
-      ...args: unknown[]
-    ) => ReturnType<typeof server.registerTool>;
-    // biome-ignore lint/suspicious/noExplicitAny: intercepting overloaded method
-    (server as any).registerTool = (name: string, config: Record<string, unknown>, cb: unknown) => {
-      // Capture metadata in registry
-      registry.register({
-        name,
-        description: (config.description as string) ?? '',
-        inputSchema: config.inputSchema
-          ? JSON.parse(JSON.stringify(config.inputSchema))
-          : { type: 'object' },
-        annotations: config.annotations as ToolEntry['annotations'],
-      });
-      // Call original
-      return originalRegisterTool(name, config, cb);
-    };
-  }
-
-  // Register all domain tools
+  // Register all domain tools — handlers close over ctx for this request
   registerSessionTools(server, ctx);
   registerRepoTools(server, ctx);
   registerWorktreeTools(server, ctx);
@@ -114,20 +262,15 @@ function createMcpServer(ctx: McpContext, toolSearchEnabled: boolean): McpServer
   registerAnalyticsTools(server, ctx);
   registerMcpServerTools(server, ctx);
 
-  // Register the search tool (always, but only useful when filtering is on)
   if (toolSearchEnabled) {
+    const { registry, toolsList } = getRegistry();
+
+    // Register search/execute tools with the shared cached registry
     registerSearchTools(server, registry);
 
-    // Override tools/list to return only essential tools.
+    // Override tools/list with the pre-computed, deterministic response.
     // All tools remain registered and callable via tools/call.
-    server.server.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: registry.getAlwaysVisible().map((entry) => ({
-        name: entry.name,
-        description: entry.description,
-        inputSchema: entry.inputSchema,
-        annotations: entry.annotations,
-      })),
-    }));
+    server.server.setRequestHandler(ListToolsRequestSchema, async () => toolsList);
   }
 
   return server;
@@ -137,9 +280,15 @@ function createMcpServer(ctx: McpContext, toolSearchEnabled: boolean): McpServer
  * Setup MCP routes on FeathersJS app using the official SDK.
  *
  * @param toolSearchEnabled - When true, tools/list returns only essential tools
- *   and agents discover others via agor_search_tools. Default: false.
+ *   and agents discover others via agor_search_tools. Default: true.
  */
 export function setupMCPRoutes(app: Application, db: Database, toolSearchEnabled = true): void {
+  // Eagerly build the registry at startup so first request isn't slower
+  if (toolSearchEnabled) {
+    getRegistry();
+    console.log(`✅ MCP tool registry built (${cachedRegistry!.size} tools cached)`);
+  }
+
   const handler = async (req: Request, res: Response) => {
     try {
       console.log(`🔌 Incoming MCP request: ${req.method} /mcp`);
