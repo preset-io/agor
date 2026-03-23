@@ -16,13 +16,7 @@ export interface ToolEntry {
 }
 
 /** Tools always visible in `tools/list` even when search mode is enabled. */
-const ALWAYS_VISIBLE = new Set([
-  'agor_search_tools',
-  'agor_sessions_get_current',
-  'agor_sessions_spawn',
-  'agor_sessions_prompt',
-  'agor_worktrees_update',
-]);
+const ALWAYS_VISIBLE = new Set(['agor_search_tools', 'agor_execute_tool']);
 
 export class ToolRegistry {
   private tools: Map<string, ToolEntry> = new Map();
