@@ -1816,15 +1816,20 @@ async function main() {
         // Get OAuth config from MCP server if server ID is provided
         let oauthMode: 'per_user' | 'shared' | undefined;
         let authorizationUrlOverride: string | undefined;
+        let tokenUrlOverride: string | undefined;
         if (data.mcp_server_id) {
           const mcpServerRepo = new MCPServerRepository(db);
           const server = await mcpServerRepo.findById(data.mcp_server_id);
           if (server?.auth?.type === 'oauth') {
             oauthMode = server.auth.oauth_mode || 'per_user';
             authorizationUrlOverride = server.auth.oauth_authorization_url;
+            tokenUrlOverride = server.auth.oauth_token_url;
             console.log('[OAuth Start] OAuth mode from server config:', oauthMode);
             if (authorizationUrlOverride) {
               console.log('[OAuth Start] Authorization URL override:', authorizationUrlOverride);
+            }
+            if (tokenUrlOverride) {
+              console.log('[OAuth Start] Token URL override:', tokenUrlOverride);
             }
           }
         }
@@ -1853,6 +1858,7 @@ async function main() {
         const redirectUri = new URL('/mcp-servers/oauth-callback', baseUrl).toString();
         const context = await startMCPOAuthFlow(wwwAuthenticate, data.client_id, redirectUri, {
           authorizationUrlOverride,
+          tokenUrlOverride,
         });
 
         // Capture initiating socket ID for scoped notifications

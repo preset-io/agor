@@ -342,6 +342,11 @@ async function exchangeCodeForToken(
     !!json.access_token
   );
 
+  // Some providers (e.g. Slack) return HTTP 200 with {"ok": false, "error": "..."} on failure
+  if (json.ok === false && json.error) {
+    throw new Error(`Token exchange failed: ${json.error}`);
+  }
+
   // Standard OAuth 2.0 response has access_token at top level.
   // Some providers (e.g. Slack) nest user tokens under authed_user.access_token.
   const accessToken = json.access_token || json.authed_user?.access_token;
@@ -693,13 +698,14 @@ export interface OAuthFlowContext {
  * @param redirectUri - Custom redirect URI (optional, defaults to a placeholder)
  * @param options - Additional options
  * @param options.authorizationUrlOverride - Override the auto-discovered authorization endpoint URL
+ * @param options.tokenUrlOverride - Override the auto-discovered token endpoint URL
  * @returns Authorization URL and flow context
  */
 export async function startMCPOAuthFlow(
   wwwAuthenticateHeader: string,
   clientId?: string,
   redirectUri?: string,
-  options?: { authorizationUrlOverride?: string }
+  options?: { authorizationUrlOverride?: string; tokenUrlOverride?: string }
 ): Promise<OAuthFlowContext> {
   console.log('[MCP OAuth] Starting two-phase OAuth 2.1 flow');
 
@@ -780,6 +786,13 @@ export async function startMCPOAuthFlow(
   // Generate state for CSRF protection
   const state = crypto.randomUUID();
 
+  // Resolve token endpoint (use override if provided)
+  const tokenEndpoint = options?.tokenUrlOverride || authServerMetadata.token_endpoint;
+  console.log('[MCP OAuth] Using token endpoint:', tokenEndpoint);
+  if (options?.tokenUrlOverride) {
+    console.log('[MCP OAuth] (overridden from:', authServerMetadata.token_endpoint, ')');
+  }
+
   // Step 7: Build authorization URL (use override if provided)
   const authorizationEndpoint =
     options?.authorizationUrlOverride || authServerMetadata.authorization_endpoint;
@@ -801,7 +814,7 @@ export async function startMCPOAuthFlow(
 
   return {
     metadataUrl,
-    tokenEndpoint: authServerMetadata.token_endpoint,
+    tokenEndpoint,
     redirectUri: actualRedirectUri,
     pkceVerifier: pkce.verifier,
     clientId: actualClientId,
