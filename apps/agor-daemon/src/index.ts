@@ -1884,15 +1884,15 @@ async function main() {
 
   // GET endpoint to receive OAuth callback redirects from the authorization server
   // The browser is redirected here after the user completes OAuth authorization
-  app.use('/mcp-servers/oauth-callback', (async (
+  // IMPORTANT: Use app.get() instead of app.use() so this is a plain Express route,
+  // not a FeathersJS service. FeathersJS would apply auth hooks to app.use() services,
+  // but this endpoint must be unauthenticated (browser redirect from OAuth provider).
+  // biome-ignore lint/suspicious/noExplicitAny: FeathersJS overloads app.get(); cast to Express to use route handler
+  (app as any as express.Application).get('/mcp-servers/oauth-callback', (async (
     req: express.Request,
     res: express.Response,
-    next: express.NextFunction
+    _next: express.NextFunction
   ) => {
-    if (req.method !== 'GET') {
-      next();
-      return;
-    }
     // Security headers for the static HTML response
     res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'");
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -1982,7 +1982,7 @@ async function main() {
           )
         );
     }
-  }) as never);
+  }) as express.RequestHandler);
 
   // Notify UI that OAuth authentication is needed for MCP servers
   // Called by executor when MCP servers require authentication
