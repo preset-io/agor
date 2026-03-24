@@ -672,6 +672,22 @@ async function main() {
     }
   }
 
+  // OAuth callback handler - registered BEFORE rest() and compression so it
+  // short-circuits before FeathersJS's service router can intercept the request.
+  // The actual handler is set later once db/pendingOAuthFlows are available.
+  let oauthCallbackHandler: ((req: express.Request, res: express.Response) => void) | null = null;
+  app.use('/mcp-servers/oauth-callback', ((
+    req: express.Request,
+    res: express.Response,
+    next: express.NextFunction
+  ) => {
+    if (req.method === 'GET' && oauthCallbackHandler) {
+      oauthCallbackHandler(req, res);
+    } else {
+      next();
+    }
+  }) as never);
+
   // Compress dynamic API responses (runs AFTER static file serving)
   // Static files are already pre-compressed and served by expressStaticGzip
   // This only compresses API JSON responses on-the-fly
@@ -1194,16 +1210,8 @@ async function main() {
   // Register repos service (accesses worktrees via app.service('worktrees'))
   app.use('/repos', createReposService(db, app));
 
-  // GET endpoint to receive OAuth callback redirects from the authorization server.
-  // MUST be registered BEFORE the /mcp-servers FeathersJS service below, otherwise
-  // FeathersJS interprets GET /mcp-servers/oauth-callback as mcp-servers.get('oauth-callback')
-  // and applies auth hooks, returning 401 to the unauthenticated browser redirect.
-  // biome-ignore lint/suspicious/noExplicitAny: FeathersJS overloads app.get(); cast to Express to use route handler
-  (app as any as express.Application).get('/mcp-servers/oauth-callback', (async (
-    req: express.Request,
-    res: express.Response,
-    _next: express.NextFunction
-  ) => {
+  // Set the OAuth callback handler (middleware was registered early, before rest())
+  oauthCallbackHandler = async (req: express.Request, res: express.Response) => {
     // Security headers for the static HTML response
     res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'");
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -1293,7 +1301,7 @@ async function main() {
           )
         );
     }
-  }) as express.RequestHandler);
+  };
 
   app.use('/mcp-servers', createMCPServersService(db));
 
