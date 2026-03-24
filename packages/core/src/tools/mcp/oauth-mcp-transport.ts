@@ -705,7 +705,7 @@ export async function startMCPOAuthFlow(
   wwwAuthenticateHeader: string,
   clientId?: string,
   redirectUri?: string,
-  options?: { authorizationUrlOverride?: string; tokenUrlOverride?: string }
+  options?: { authorizationUrlOverride?: string; tokenUrlOverride?: string; clientSecret?: string }
 ): Promise<OAuthFlowContext> {
   console.log('[MCP OAuth] Starting two-phase OAuth 2.1 flow');
 
@@ -747,7 +747,7 @@ export async function startMCPOAuthFlow(
 
   // Step 6: Get or register client_id
   let actualClientId = clientId;
-  let clientSecret: string | undefined;
+  let clientSecret: string | undefined = options?.clientSecret;
 
   if (!actualClientId) {
     // Check if server supports Dynamic Client Registration (RFC 7591)
