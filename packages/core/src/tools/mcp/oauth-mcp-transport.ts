@@ -310,20 +310,26 @@ async function exchangeCodeForToken(
     grant_type: 'authorization_code',
     code,
     redirect_uri: redirectUri,
-    client_id: clientId,
     code_verifier: codeVerifier,
   };
 
-  // Add client_secret if provided (confidential client)
+  // Build headers — use HTTP Basic auth when client_secret is available (RFC 6749 §2.3.1),
+  // fall back to body params for public clients or providers that don't support Basic auth.
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/x-www-form-urlencoded',
+  };
+
   if (clientSecret) {
-    body.client_secret = clientSecret;
+    // Slack and other providers recommend HTTP Basic auth for credentials
+    headers.Authorization = `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`;
+  } else {
+    // Public client — send client_id in body
+    body.client_id = clientId;
   }
 
   const response = await fetch(tokenEndpoint, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
+    headers,
     body: new URLSearchParams(body).toString(),
     signal: AbortSignal.timeout(15_000),
   });
@@ -344,7 +350,10 @@ async function exchangeCodeForToken(
 
   // Some providers (e.g. Slack) return HTTP 200 with {"ok": false, "error": "..."} on failure
   if (json.ok === false && json.error) {
-    throw new Error(`Token exchange failed: ${json.error}`);
+    console.error('[MCP OAuth] Token exchange error response:', JSON.stringify(json));
+    throw new Error(
+      `Token exchange failed: ${json.error}${json.error_description ? ` - ${json.error_description}` : ''}`
+    );
   }
 
   // Standard OAuth 2.0 response has access_token at top level.
