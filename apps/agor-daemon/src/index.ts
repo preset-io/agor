@@ -1234,10 +1234,16 @@ async function main() {
         return;
       }
 
-      console.log('[OAuth Callback] Received callback, state:', state);
+      console.log('[OAuth Callback] Received callback, state:', state, 'code length:', code.length);
 
       // Find the pending flow
       const pendingFlow = pendingOAuthFlows.get(state);
+      console.log(
+        '[OAuth Callback] Pending flows count:',
+        pendingOAuthFlows.size,
+        'found:',
+        !!pendingFlow
+      );
       if (!pendingFlow) {
         res
           .status(400)

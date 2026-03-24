@@ -327,6 +327,12 @@ async function exchangeCodeForToken(
     body.client_id = clientId;
   }
 
+  console.log('[MCP OAuth] Token exchange request:', {
+    endpoint: tokenEndpoint,
+    hasBasicAuth: !!headers.Authorization,
+    bodyKeys: Object.keys(body),
+  });
+
   const response = await fetch(tokenEndpoint, {
     method: 'POST',
     headers,
@@ -334,8 +340,11 @@ async function exchangeCodeForToken(
     signal: AbortSignal.timeout(15_000),
   });
 
+  console.log('[MCP OAuth] Token exchange response status:', response.status);
+
   if (!response.ok) {
     const errorText = await response.text();
+    console.error('[MCP OAuth] Token exchange HTTP error:', response.status, errorText);
     throw new Error(`Token exchange failed (${response.status}): ${errorText}`);
   }
 
@@ -850,6 +859,10 @@ export async function completeMCPOAuthFlow(
   state: string
 ): Promise<string> {
   console.log('[MCP OAuth] Completing OAuth flow with authorization code');
+  console.log('[MCP OAuth] Token endpoint:', context.tokenEndpoint);
+  console.log('[MCP OAuth] Redirect URI:', context.redirectUri);
+  console.log('[MCP OAuth] Client ID:', context.clientId);
+  console.log('[MCP OAuth] Has client secret:', !!context.clientSecret);
 
   // Verify state to prevent CSRF
   if (state !== context.state) {
