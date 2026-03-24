@@ -333,7 +333,31 @@ async function exchangeCodeForToken(
     throw new Error(`Token exchange failed (${response.status}): ${errorText}`);
   }
 
-  return (await response.json()) as OAuthTokenResponse;
+  // biome-ignore lint/suspicious/noExplicitAny: OAuth providers return varied response shapes
+  const json = (await response.json()) as any;
+  console.log(
+    '[MCP OAuth] Token response keys:',
+    Object.keys(json),
+    'has access_token:',
+    !!json.access_token
+  );
+
+  // Standard OAuth 2.0 response has access_token at top level.
+  // Some providers (e.g. Slack) nest user tokens under authed_user.access_token.
+  const accessToken = json.access_token || json.authed_user?.access_token;
+  if (!accessToken) {
+    throw new Error(
+      `Token exchange succeeded but no access_token found in response. Keys: ${Object.keys(json).join(', ')}`
+    );
+  }
+
+  return {
+    access_token: accessToken,
+    token_type: json.token_type || json.authed_user?.token_type || 'bearer',
+    expires_in: json.expires_in,
+    refresh_token: json.refresh_token,
+    scope: json.scope || json.authed_user?.scope,
+  } as OAuthTokenResponse;
 }
 
 /**
