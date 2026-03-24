@@ -42,6 +42,7 @@ export interface MCPAuth {
   api_token?: string;
   api_secret?: string;
   // OAuth 2.0 config
+  oauth_authorization_url?: string; // Override auto-discovered authorization endpoint
   oauth_token_url?: string;
   oauth_client_id?: string;
   oauth_client_secret?: string;

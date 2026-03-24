@@ -171,13 +171,15 @@ async function registerDynamicClient(
 async function fetchAuthorizationServerMetadata(
   authServerUrl: string
 ): Promise<AuthorizationServerMetadata> {
-  // Try OIDC discovery first
-  let metadataUrl = `${authServerUrl}/.well-known/openid-configuration`;
+  // Try OAuth 2.0 discovery first (RFC 8414), then fall back to OIDC discovery.
+  // This order matters: OIDC endpoints (e.g. Slack's /openid/connect/authorize) don't
+  // support regular API scopes — only the OAuth 2.0 endpoint does.
+  let metadataUrl = `${authServerUrl}/.well-known/oauth-authorization-server`;
   let response = await fetch(metadataUrl, { signal: AbortSignal.timeout(15_000) });
 
-  // Fall back to OAuth 2.0 discovery
+  // Fall back to OIDC discovery
   if (!response.ok) {
-    metadataUrl = `${authServerUrl}/.well-known/oauth-authorization-server`;
+    metadataUrl = `${authServerUrl}/.well-known/openid-configuration`;
     response = await fetch(metadataUrl, { signal: AbortSignal.timeout(15_000) });
   }
 
@@ -665,12 +667,15 @@ export interface OAuthFlowContext {
  * @param wwwAuthenticateHeader - The WWW-Authenticate header from 401 response
  * @param clientId - OAuth client ID (optional, will use DCR if not provided)
  * @param redirectUri - Custom redirect URI (optional, defaults to a placeholder)
+ * @param options - Additional options
+ * @param options.authorizationUrlOverride - Override the auto-discovered authorization endpoint URL
  * @returns Authorization URL and flow context
  */
 export async function startMCPOAuthFlow(
   wwwAuthenticateHeader: string,
   clientId?: string,
-  redirectUri?: string
+  redirectUri?: string,
+  options?: { authorizationUrlOverride?: string }
 ): Promise<OAuthFlowContext> {
   console.log('[MCP OAuth] Starting two-phase OAuth 2.1 flow');
 
@@ -751,8 +756,11 @@ export async function startMCPOAuthFlow(
   // Generate state for CSRF protection
   const state = crypto.randomUUID();
 
-  // Step 7: Build authorization URL
-  const authUrl = new URL(authServerMetadata.authorization_endpoint);
+  // Step 7: Build authorization URL (use override if provided)
+  const authorizationEndpoint =
+    options?.authorizationUrlOverride || authServerMetadata.authorization_endpoint;
+  console.log('[MCP OAuth] Using authorization endpoint:', authorizationEndpoint);
+  const authUrl = new URL(authorizationEndpoint);
   authUrl.searchParams.set('response_type', 'code');
   authUrl.searchParams.set('client_id', actualClientId);
   authUrl.searchParams.set('redirect_uri', actualRedirectUri);

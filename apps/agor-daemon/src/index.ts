@@ -1455,10 +1455,12 @@ async function main() {
               registration_endpoint?: string;
             } | null = null;
 
-            // Try OIDC discovery first, then OAuth 2.0 discovery
+            // Try OAuth 2.0 discovery first (RFC 8414), then OIDC discovery.
+            // This order matters: OIDC endpoints (e.g. Slack's /openid/connect/authorize)
+            // don't support regular API scopes — only the OAuth 2.0 endpoint does.
             for (const wellKnownPath of [
-              '/.well-known/openid-configuration',
               '/.well-known/oauth-authorization-server',
+              '/.well-known/openid-configuration',
             ]) {
               try {
                 const authMetaResponse = await fetch(`${authServerUrl}${wellKnownPath}`);
@@ -1702,14 +1704,19 @@ async function main() {
         const userId = params?.user?.user_id;
         console.log('[OAuth Start] User ID:', userId);
 
-        // Get OAuth mode from MCP server config if server ID is provided
+        // Get OAuth config from MCP server if server ID is provided
         let oauthMode: 'per_user' | 'shared' | undefined;
+        let authorizationUrlOverride: string | undefined;
         if (data.mcp_server_id) {
           const mcpServerRepo = new MCPServerRepository(db);
           const server = await mcpServerRepo.findById(data.mcp_server_id);
           if (server?.auth?.type === 'oauth') {
             oauthMode = server.auth.oauth_mode || 'per_user';
+            authorizationUrlOverride = server.auth.oauth_authorization_url;
             console.log('[OAuth Start] OAuth mode from server config:', oauthMode);
+            if (authorizationUrlOverride) {
+              console.log('[OAuth Start] Authorization URL override:', authorizationUrlOverride);
+            }
           }
         }
 
@@ -1735,7 +1742,9 @@ async function main() {
         // getBaseUrl() resolves: AGOR_BASE_URL env → daemon.base_url config → localhost fallback
         const baseUrl = await getBaseUrl();
         const redirectUri = new URL('/mcp-servers/oauth-callback', baseUrl).toString();
-        const context = await startMCPOAuthFlow(wwwAuthenticate, data.client_id, redirectUri);
+        const context = await startMCPOAuthFlow(wwwAuthenticate, data.client_id, redirectUri, {
+          authorizationUrlOverride,
+        });
 
         // Capture initiating socket ID for scoped notifications
         const connection = params?.connection as { id?: string } | undefined;
