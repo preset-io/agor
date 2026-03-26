@@ -677,12 +677,35 @@ export async function getGitState(repoPath: string): Promise<string> {
   try {
     // Check if it's a git repo first
     if (!(await isGitRepo(repoPath))) {
+      console.warn(`[getGitState] Not a git repo: ${repoPath}`);
       return 'unknown';
     }
 
-    // Get current SHA
+    // Get current SHA via git log
     const sha = await getCurrentSha(repoPath);
     if (!sha) {
+      // git log returned no commits — could be orphan branch or empty repo
+      // Fall back to git rev-parse HEAD which works even when log doesn't
+      try {
+        const git = createGit(repoPath);
+        const headSha = await git.revparse(['HEAD']);
+        if (headSha) {
+          const clean = await isClean(repoPath);
+          const trimmed = headSha.trim();
+          console.log(
+            `[getGitState] git.log() returned no SHA but rev-parse HEAD succeeded: ${trimmed.substring(0, 8)} (${repoPath})`
+          );
+          return clean ? trimmed : `${trimmed}-dirty`;
+        }
+      } catch (revParseError) {
+        console.warn(
+          `[getGitState] Both git.log() and rev-parse HEAD failed for ${repoPath}:`,
+          revParseError
+        );
+      }
+      console.warn(
+        `[getGitState] Could not determine SHA for ${repoPath} (git log returned empty)`
+      );
       return 'unknown';
     }
 
@@ -691,7 +714,7 @@ export async function getGitState(repoPath: string): Promise<string> {
 
     return clean ? sha : `${sha}-dirty`;
   } catch (error) {
-    console.warn(`Failed to get git state for ${repoPath}:`, error);
+    console.warn(`[getGitState] Failed for ${repoPath}:`, error);
     return 'unknown';
   }
 }

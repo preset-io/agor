@@ -202,9 +202,10 @@ export function createExecutionContext(
 }
 
 /**
- * Capture git state at task end
+ * Capture git state at task end and update session's current_sha
  *
  * Fetches the worktree path from the session and captures the current git state.
+ * Also updates the session's git_state.current_sha to keep it in sync.
  * Returns the SHA (with "-dirty" suffix if working directory has uncommitted changes)
  * or undefined if it cannot be determined.
  */
@@ -232,6 +233,18 @@ async function captureGitStateAtTaskEnd(
     console.log(
       `[Git SHA Capture] Captured git state at task end: ${sha.substring(0, 8)}${sha.endsWith('-dirty') ? ' (dirty)' : ''}`
     );
+
+    // Update session's current_sha to keep it in sync as tasks complete
+    if (sha && sha !== 'unknown') {
+      try {
+        await client.service('sessions').patch(sessionId, {
+          git_state: { ...session.git_state, current_sha: sha },
+        });
+      } catch (sessionPatchError) {
+        console.warn('[Git SHA Capture] Failed to update session current_sha:', sessionPatchError);
+      }
+    }
+
     return sha;
   } catch (error) {
     console.warn('[Git SHA Capture] Failed to capture git SHA at task end:', error);

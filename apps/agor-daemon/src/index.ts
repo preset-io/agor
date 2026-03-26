@@ -3637,7 +3637,7 @@ async function main() {
             (context.data as Record<string, unknown>).created_by = userId;
           }
 
-          // Populate repo field from worktree_id
+          // Populate repo field and auto-populate git_state from worktree_id
           if (!Array.isArray(context.data) && context.data?.worktree_id) {
             try {
               const worktree = await context.app.service('worktrees').get(context.data.worktree_id);
@@ -3652,6 +3652,33 @@ async function main() {
                     managed_worktree: true,
                   };
                   console.log(`✅ Populated repo.cwd from worktree: ${worktree.path}`);
+                }
+
+                // Auto-populate git_state if not provided (UI and gateway don't set it)
+                // IMPORTANT: Must use sudo -u to get fresh Unix group memberships
+                // because the daemon process has stale groups from startup.
+                // Without fresh groups, git can't read ACL-protected repo files.
+                const existingGitState = (context.data as Record<string, unknown>).git_state as
+                  | { base_sha?: string }
+                  | undefined;
+                if (!existingGitState?.base_sha && worktree.path) {
+                  try {
+                    const { captureGitStateViaShell } = await import(
+                      './utils/git-shell-capture.js'
+                    );
+                    const daemonUser = config.daemon?.unix_user;
+                    const gitState = await captureGitStateViaShell(worktree.path, daemonUser);
+                    (context.data as Record<string, unknown>).git_state = {
+                      ref: gitState.ref || worktree.name || 'unknown',
+                      base_sha: gitState.sha,
+                      current_sha: gitState.sha,
+                    };
+                    console.log(
+                      `✅ Auto-populated git_state from worktree: ref=${gitState.ref}, sha=${gitState.sha.substring(0, 8)}`
+                    );
+                  } catch (gitError) {
+                    console.warn('Failed to auto-populate git_state from worktree:', gitError);
+                  }
                 }
               }
             } catch (error) {
@@ -4713,17 +4740,33 @@ async function main() {
         const startTimestamp = new Date().toISOString();
 
         // Get current git state from session's working directory
-        const { getGitState, getCurrentBranch } = await import('@agor/core/git');
+        // IMPORTANT: Must use sudo -u to get fresh Unix group memberships
+        // because the daemon process has stale groups from startup.
+        // Without fresh groups, git can't read ACL-protected repo files.
+        const { captureGitStateViaShell } = await import('./utils/git-shell-capture.js');
         let gitStateAtStart = 'unknown';
         let refAtStart = 'unknown'; // Default to 'unknown' if we can't get branch
         if (session.worktree_id) {
           try {
             const worktreesService = app.service('worktrees');
             const worktree = await worktreesService.get(session.worktree_id, params);
-            gitStateAtStart = await getGitState(worktree.path);
-            refAtStart = await getCurrentBranch(worktree.path);
+            console.log(
+              `[Git State] Capturing git state at task start for worktree ${worktree.path}`
+            );
+            const daemonUser = config.daemon?.unix_user;
+            const gitState = await captureGitStateViaShell(worktree.path, daemonUser);
+            gitStateAtStart = gitState.sha;
+            refAtStart = gitState.ref;
+            if (gitStateAtStart === 'unknown') {
+              console.warn(
+                `[Git State] captureGitStateViaShell returned 'unknown' for worktree ${worktree.path} (ref: ${refAtStart})`
+              );
+            }
           } catch (error) {
-            console.warn(`Failed to get git state for worktree ${session.worktree_id}:`, error);
+            console.warn(
+              `[Git State] Failed to get git state for worktree ${session.worktree_id}:`,
+              error
+            );
           }
         }
 
