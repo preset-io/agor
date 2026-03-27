@@ -8,28 +8,45 @@
  * Solution: Use `sudo -u <daemonUser>` to run git commands, which calls
  * initgroups() and gets fresh group memberships from /etc/group.
  *
- * Falls back to in-process simple-git when no daemon user is configured
- * (e.g., simple mode without Unix isolation).
+ * Falls back to direct shell execution (without sudo) when no daemon user
+ * is configured (e.g., simple mode without Unix isolation).
  *
  * @see git-impersonation.ts for the same pattern used in git clone/worktree operations
  */
 
-import { runAsUser } from '@agor/core/unix';
+import { runAsUser, validateResolvedUnixUser } from '@agor/core/unix';
+
+/**
+ * Resolve and validate the daemon user for sudo -u impersonation.
+ *
+ * Uses getDaemonUser() from config and validates via validateResolvedUnixUser()
+ * to prevent unvalidated strings from reaching shell commands.
+ *
+ * @returns Validated daemon username, or undefined if not configured
+ */
+async function resolveValidatedDaemonUser(): Promise<string | undefined> {
+  const { getDaemonUser } = await import('@agor/core/config');
+  const daemonUser = getDaemonUser();
+  if (daemonUser) {
+    validateResolvedUnixUser('simple', daemonUser);
+  }
+  return daemonUser;
+}
 
 /**
  * Capture git SHA and branch ref via shell commands
  *
- * Uses sudo -u to get fresh Unix group memberships when daemonUser is set.
- * Falls back to direct shell execution otherwise.
+ * Resolves the daemon user from config, validates it, then uses sudo -u
+ * to get fresh Unix group memberships. Falls back to direct shell execution
+ * when no daemon user is configured.
  *
  * @param worktreePath - Path to the git worktree
- * @param daemonUser - Unix user to impersonate (for fresh groups), or undefined for direct execution
  * @returns Object with sha (includes -dirty suffix) and ref (branch name)
  */
 export async function captureGitStateViaShell(
-  worktreePath: string,
-  daemonUser?: string
+  worktreePath: string
 ): Promise<{ sha: string; ref: string }> {
+  const daemonUser = await resolveValidatedDaemonUser();
   const runOpts = { asUser: daemonUser, timeout: 10000 };
 
   let sha = 'unknown';

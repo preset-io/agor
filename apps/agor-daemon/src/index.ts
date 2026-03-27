@@ -3666,8 +3666,7 @@ async function main() {
                     const { captureGitStateViaShell } = await import(
                       './utils/git-shell-capture.js'
                     );
-                    const daemonUser = config.daemon?.unix_user;
-                    const gitState = await captureGitStateViaShell(worktree.path, daemonUser);
+                    const gitState = await captureGitStateViaShell(worktree.path);
                     (context.data as Record<string, unknown>).git_state = {
                       ref: gitState.ref || worktree.name || 'unknown',
                       base_sha: gitState.sha,
@@ -4753,8 +4752,7 @@ async function main() {
             console.log(
               `[Git State] Capturing git state at task start for worktree ${worktree.path}`
             );
-            const daemonUser = config.daemon?.unix_user;
-            const gitState = await captureGitStateViaShell(worktree.path, daemonUser);
+            const gitState = await captureGitStateViaShell(worktree.path);
             gitStateAtStart = gitState.sha;
             refAtStart = gitState.ref;
             if (gitStateAtStart === 'unknown') {
