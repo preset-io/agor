@@ -145,6 +145,8 @@ function apiKeyNameForAgent(agent: AgenticToolName): string {
       return 'OPENAI_API_KEY';
     case 'gemini':
       return 'GEMINI_API_KEY';
+    case 'copilot':
+      return 'COPILOT_GITHUB_TOKEN';
     case 'opencode':
       return 'ANTHROPIC_API_KEY';
     default:
@@ -160,6 +162,8 @@ function apiKeyPlaceholder(agent: AgenticToolName): string {
       return 'sk-...';
     case 'gemini':
       return 'AIza...';
+    case 'copilot':
+      return 'ghp_...';
     default:
       return 'sk-ant-...';
   }
@@ -170,12 +174,14 @@ const AGENT_LABELS: Record<AgenticToolName, string> = {
   codex: 'Codex (OpenAI)',
   gemini: 'Gemini',
   opencode: 'OpenCode',
+  copilot: 'GitHub Copilot',
 };
 
 const AGENT_KEY_CONSOLES: Record<AgenticToolName, { label: string; url: string } | null> = {
   'claude-code': { label: 'console.anthropic.com', url: 'https://console.anthropic.com/' },
   codex: { label: 'platform.openai.com', url: 'https://platform.openai.com/api-keys' },
   gemini: { label: 'aistudio.google.com', url: 'https://aistudio.google.com/apikey' },
+  copilot: { label: 'github.com/features/copilot', url: 'https://github.com/features/copilot' },
   opencode: null,
 };
 
@@ -247,6 +253,12 @@ export function OnboardingWizard({
     systemCredentials?.GEMINI_API_KEY
   );
 
+  const hasCopilotToken = !!(
+    user?.api_keys?.COPILOT_GITHUB_TOKEN ||
+    user?.env_vars?.COPILOT_GITHUB_TOKEN ||
+    (systemCredentials as Record<string, unknown>)?.COPILOT_GITHUB_TOKEN
+  );
+
   const hasKeyForAgent = (agent: AgenticToolName): boolean => {
     switch (agent) {
       case 'claude-code':
@@ -255,6 +267,8 @@ export function OnboardingWizard({
         return hasOpenAIKey;
       case 'gemini':
         return hasGeminiKey;
+      case 'copilot':
+        return hasCopilotToken;
       case 'opencode':
         return hasAnthropicKey || hasOpenAIKey || hasGeminiKey;
       default:
@@ -958,6 +972,7 @@ export function OnboardingWizard({
               { value: 'claude-code', label: 'Claude Code (Recommended)' },
               { value: 'codex', label: 'Codex (OpenAI)' },
               { value: 'gemini', label: 'Gemini' },
+              { value: 'copilot', label: 'GitHub Copilot' },
               { value: 'opencode', label: 'OpenCode' },
             ]}
             style={{ width: '100%' }}

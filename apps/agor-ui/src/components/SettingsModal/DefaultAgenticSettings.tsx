@@ -33,12 +33,14 @@ export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
   const [codexForm] = Form.useForm();
   const [geminiForm] = Form.useForm();
   const [opencodeForm] = Form.useForm();
+  const [copilotForm] = Form.useForm();
 
   const [saving, setSaving] = useState<Record<AgenticToolName, boolean>>({
     'claude-code': false,
     codex: false,
     gemini: false,
     opencode: false,
+    copilot: false,
   });
   const [activeTab, setActiveTab] = useState<AgenticToolName>('claude-code');
 
@@ -74,6 +76,8 @@ export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
         return geminiForm;
       case 'opencode':
         return opencodeForm;
+      case 'copilot':
+        return copilotForm;
     }
   };
 
@@ -151,6 +155,12 @@ export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
       label: 'OpenCode',
       tool: 'opencode',
       form: opencodeForm,
+    },
+    {
+      key: 'copilot',
+      label: 'GitHub Copilot',
+      tool: 'copilot',
+      form: copilotForm,
     },
   ];
 

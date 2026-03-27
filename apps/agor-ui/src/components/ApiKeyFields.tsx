@@ -9,6 +9,7 @@ export interface ApiKeyStatus {
   ANTHROPIC_API_KEY: boolean;
   OPENAI_API_KEY: boolean;
   GEMINI_API_KEY: boolean;
+  COPILOT_GITHUB_TOKEN: boolean;
 }
 
 export interface ApiKeyFieldsProps {
@@ -53,6 +54,13 @@ const KEY_CONFIGS: KeyFieldConfig[] = [
     description: '',
     placeholder: 'AIza...',
     docUrl: 'https://aistudio.google.com/app/apikey',
+  },
+  {
+    field: 'COPILOT_GITHUB_TOKEN',
+    label: 'GitHub Token',
+    description: '(Copilot)',
+    placeholder: 'ghp_...',
+    docUrl: 'https://github.com/settings/tokens',
   },
 ];
 

@@ -90,6 +90,7 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
     ANTHROPIC_API_KEY: false,
     OPENAI_API_KEY: false,
     GEMINI_API_KEY: false,
+    COPILOT_GITHUB_TOKEN: false,
   });
 
   // OpenCode state
@@ -122,6 +123,7 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
           ANTHROPIC_API_KEY: !!config?.ANTHROPIC_API_KEY,
           OPENAI_API_KEY: !!config?.OPENAI_API_KEY,
           GEMINI_API_KEY: !!config?.GEMINI_API_KEY,
+          COPILOT_GITHUB_TOKEN: !!(config as Record<string, unknown>)?.COPILOT_GITHUB_TOKEN,
         });
       } catch (err) {
         console.error('Failed to load API keys:', err);
@@ -385,6 +387,21 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
             children: (
               <ApiKeyTabContent
                 keyField="GEMINI_API_KEY"
+                keyStatus={keyStatus}
+                keysError={keysError}
+                savingKeys={savingKeys}
+                onSave={handleSaveKey}
+                onClear={handleClearKey}
+                onClearError={() => setKeysError(null)}
+              />
+            ),
+          },
+          {
+            key: 'copilot',
+            label: 'GitHub Copilot',
+            children: (
+              <ApiKeyTabContent
+                keyField="COPILOT_GITHUB_TOKEN"
                 keyStatus={keyStatus}
                 keysError={keysError}
                 savingKeys={savingKeys}

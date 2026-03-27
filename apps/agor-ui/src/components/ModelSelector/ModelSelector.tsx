@@ -19,8 +19,8 @@ export interface ModelConfig {
 export interface ModelSelectorProps {
   value?: ModelConfig;
   onChange?: (config: ModelConfig) => void;
-  agent?: 'claude-code' | 'codex' | 'gemini' | 'opencode'; // Kept as 'agent' for backwards compat in prop name
-  agentic_tool?: 'claude-code' | 'codex' | 'gemini' | 'opencode';
+  agent?: 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'copilot'; // Kept as 'agent' for backwards compat in prop name
+  agentic_tool?: 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'copilot';
 }
 
 // Codex model options (derived from @agor/core metadata)
@@ -56,6 +56,9 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   const effectiveTool = agentic_tool || agent || 'claude-code';
 
   // Calculate model list (needed for initial mode calculation)
+  // Copilot models are discovered dynamically via listModels() — use a placeholder
+  const COPILOT_MODEL_OPTIONS = [{ id: 'default', label: 'Default', description: 'Use Copilot default model' }];
+
   const modelList =
     effectiveTool === 'codex'
       ? CODEX_MODEL_OPTIONS
@@ -63,7 +66,9 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         ? GEMINI_MODEL_OPTIONS
         : effectiveTool === 'opencode'
           ? [] // OpenCode doesn't use this list
-          : AVAILABLE_CLAUDE_MODEL_ALIASES;
+          : effectiveTool === 'copilot'
+            ? COPILOT_MODEL_OPTIONS
+            : AVAILABLE_CLAUDE_MODEL_ALIASES;
 
   // Determine initial mode based on whether the value is in the aliases list
   // If no value provided, default to 'alias' mode (recommended)
@@ -109,6 +114,8 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         defaultModel = 'gpt-5.3-codex';
       } else if (effectiveTool === 'gemini') {
         defaultModel = 'gemini-2.5-flash';
+      } else if (effectiveTool === 'copilot') {
+        defaultModel = 'default';
       } else {
         // claude-code (opencode is handled earlier in the component)
         defaultModel = 'claude-sonnet-4-5-20250929';
@@ -175,7 +182,9 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                     ? 'e.g., gpt-5.3-codex'
                     : effectiveTool === 'gemini'
                       ? 'e.g., gemini-2.5-pro'
-                      : 'e.g., claude-opus-4-20250514' // claude-code (opencode handled earlier)
+                      : effectiveTool === 'copilot'
+                        ? 'e.g., gpt-4o or claude-3.5-sonnet'
+                        : 'e.g., claude-opus-4-20250514' // claude-code (opencode handled earlier)
                 }
                 style={{ width: '100%', minWidth: 400 }}
               />
@@ -187,7 +196,9 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                       ? 'https://platform.openai.com/docs/models'
                       : effectiveTool === 'gemini'
                         ? 'https://ai.google.dev/gemini-api/docs/models'
-                        : 'https://platform.claude.com/docs/en/about-claude/models' // claude-code (opencode handled earlier)
+                        : effectiveTool === 'copilot'
+                          ? 'https://github.com/features/copilot'
+                          : 'https://platform.claude.com/docs/en/about-claude/models' // claude-code (opencode handled earlier)
                   }
                   target="_blank"
                   rel="noopener noreferrer"

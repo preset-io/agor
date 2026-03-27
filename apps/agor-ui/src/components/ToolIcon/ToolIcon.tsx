@@ -26,6 +26,7 @@ const toolLogos: Record<string, string> = {
   codex: codexLogo,
   gemini: geminiLogo,
   opencode: opencodeLogo,
+  // copilot: no logo asset yet, uses fallback emoji
 };
 
 export const ToolIcon: React.FC<ToolIconProps> = ({ tool, size = 32, className = '' }) => {
@@ -38,6 +39,7 @@ export const ToolIcon: React.FC<ToolIconProps> = ({ tool, size = 32, className =
     codex: '💻',
     gemini: '💎',
     opencode: '🌐',
+    copilot: '✈️',
   };
 
   if (!logoSrc) {

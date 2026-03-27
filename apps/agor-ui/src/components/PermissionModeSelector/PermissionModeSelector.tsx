@@ -11,7 +11,7 @@ import { Radio, Select, Space, Typography } from 'antd';
 export interface PermissionModeSelectorProps {
   value?: PermissionMode;
   onChange?: (value: PermissionMode) => void;
-  agentic_tool?: 'claude-code' | 'codex' | 'gemini' | 'opencode';
+  agentic_tool?: 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'copilot';
   /** If true, renders as a compact Select dropdown instead of Radio buttons */
   compact?: boolean;
   /** Size for compact mode */
@@ -133,6 +133,37 @@ const GEMINI_MODES: {
   },
 ];
 
+// Copilot permission modes (GitHub Copilot SDK - same semantics as Claude Code)
+const COPILOT_MODES: {
+  mode: PermissionMode;
+  label: string;
+  description: string;
+  icon: React.ReactNode;
+  color: string;
+}[] = [
+  {
+    mode: 'default',
+    label: 'default',
+    description: 'Proxy all permission requests to Agor UI for approval',
+    icon: <LockOutlined />,
+    color: '#f5222d', // Red
+  },
+  {
+    mode: 'acceptEdits',
+    label: 'acceptEdits',
+    description: 'Auto-approve read/write operations, ask for shell/MCP (recommended)',
+    icon: <EditOutlined />,
+    color: '#52c41a', // Green
+  },
+  {
+    mode: 'bypassPermissions',
+    label: 'bypassPermissions',
+    description: 'Auto-approve all operations without prompting',
+    icon: <UnlockOutlined />,
+    color: '#faad14', // Orange/yellow
+  },
+];
+
 // OpenCode permission modes (uses Gemini-like modes since OpenCode auto-approves)
 const OPENCODE_MODES: {
   mode: PermissionMode;
@@ -226,11 +257,17 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
         ? GEMINI_MODES
         : agentic_tool === 'opencode'
           ? OPENCODE_MODES
-          : CLAUDE_CODE_MODES;
+          : agentic_tool === 'copilot'
+            ? COPILOT_MODES
+            : CLAUDE_CODE_MODES;
 
   // Get default value based on agentic tool type (native SDK modes)
   const defaultValue =
-    agentic_tool === 'codex' ? 'auto' : agentic_tool === 'gemini' ? 'autoEdit' : 'acceptEdits'; // Claude Code default
+    agentic_tool === 'codex'
+      ? 'auto'
+      : agentic_tool === 'gemini'
+        ? 'autoEdit'
+        : 'acceptEdits'; // Claude Code / Copilot default
   const effectiveValue = value || defaultValue;
 
   // Compact mode: render as Select dropdown(s)
