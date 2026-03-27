@@ -347,9 +347,7 @@ export class CopilotTool implements ITool {
    * @private
    */
   private async captureSessionId(sessionId: SessionID, sdkSessionId: string): Promise<void> {
-    console.log(
-      `🔑 Captured Copilot session ID for Agor session ${sessionId}: ${sdkSessionId}`
-    );
+    console.log(`🔑 Captured Copilot session ID for Agor session ${sessionId}: ${sdkSessionId}`);
 
     if (this.sessionsRepo) {
       const existingSession = await this.sessionsRepo.findById(sessionId);

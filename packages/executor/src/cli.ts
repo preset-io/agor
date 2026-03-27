@@ -235,7 +235,9 @@ function printUsage(): void {
   console.error('  --session-id <id>        Session ID to execute prompt for');
   console.error('  --task-id <id>           Task ID created by daemon');
   console.error('  --prompt <text>          User prompt to execute');
-  console.error('  --tool <name>            SDK tool (claude-code, gemini, codex, opencode, copilot)');
+  console.error(
+    '  --tool <name>            SDK tool (claude-code, gemini, codex, opencode, copilot)'
+  );
   console.error('  --permission-mode <mode> Permission mode (ask, auto, allow-all)');
   console.error('  --daemon-url <url>       Daemon WebSocket URL (default: http://localhost:3030)');
   console.error('');

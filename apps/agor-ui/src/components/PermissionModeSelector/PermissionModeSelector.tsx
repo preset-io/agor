@@ -263,11 +263,7 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
 
   // Get default value based on agentic tool type (native SDK modes)
   const defaultValue =
-    agentic_tool === 'codex'
-      ? 'auto'
-      : agentic_tool === 'gemini'
-        ? 'autoEdit'
-        : 'acceptEdits'; // Claude Code / Copilot default
+    agentic_tool === 'codex' ? 'auto' : agentic_tool === 'gemini' ? 'autoEdit' : 'acceptEdits'; // Claude Code / Copilot default
   const effectiveValue = value || defaultValue;
 
   // Compact mode: render as Select dropdown(s)

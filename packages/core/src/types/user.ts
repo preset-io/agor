@@ -142,6 +142,7 @@ export interface User extends BaseUserFields {
     ANTHROPIC_API_KEY?: boolean; // true = key is set, false/undefined = not set
     OPENAI_API_KEY?: boolean;
     GEMINI_API_KEY?: boolean;
+    COPILOT_GITHUB_TOKEN?: boolean;
   };
   // Environment variable status (boolean only, never exposes actual values)
   env_vars?: Record<string, boolean>; // { "GITHUB_TOKEN": true, "NPM_TOKEN": false }
@@ -177,6 +178,7 @@ export interface UpdateUserInput extends Partial<BaseUserFields> {
     ANTHROPIC_API_KEY?: string | null; // string = set key, null = clear key
     OPENAI_API_KEY?: string | null;
     GEMINI_API_KEY?: string | null;
+    COPILOT_GITHUB_TOKEN?: string | null;
   };
   // Environment variables for update (accepts plaintext, encrypted before storage)
   env_vars?: Record<string, string | null>; // { "GITHUB_TOKEN": "ghp_...", "NPM_TOKEN": null }

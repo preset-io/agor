@@ -393,7 +393,10 @@ export class UsersRepository implements BaseRepository<User, Partial<User>> {
    * @param userId - User ID
    * @param service - Service name ('anthropic', 'openai', 'gemini')
    */
-  async deleteApiKey(userId: string, service: 'anthropic' | 'openai' | 'gemini' | 'copilot'): Promise<void> {
+  async deleteApiKey(
+    userId: string,
+    service: 'anthropic' | 'openai' | 'gemini' | 'copilot'
+  ): Promise<void> {
     const fullId = await this.resolveId(userId);
     const row = await this.getRawRow(fullId);
 

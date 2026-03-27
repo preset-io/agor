@@ -25,13 +25,22 @@ import type { StreamingCallbacks } from '../base/index.js';
  * The full CopilotSession type comes from the SDK.
  */
 export interface CopilotSessionEvents {
-  on(event: 'assistant.message_delta', handler: (e: { data: { deltaContent: string } }) => void): void;
-  on(event: 'assistant.reasoning_delta', handler: (e: { data: { deltaContent: string } }) => void): void;
+  on(
+    event: 'assistant.message_delta',
+    handler: (e: { data: { deltaContent: string } }) => void
+  ): void;
+  on(
+    event: 'assistant.reasoning_delta',
+    handler: (e: { data: { deltaContent: string } }) => void
+  ): void;
   on(event: 'assistant.turn_start', handler: (e: unknown) => void): void;
   on(event: 'assistant.turn_end', handler: (e: unknown) => void): void;
   on(event: 'assistant.usage', handler: (e: { data: CopilotUsageData }) => void): void;
   on(event: 'tool.execution_start', handler: (e: { data: CopilotToolStartData }) => void): void;
-  on(event: 'tool.execution_complete', handler: (e: { data: CopilotToolCompleteData }) => void): void;
+  on(
+    event: 'tool.execution_complete',
+    handler: (e: { data: CopilotToolCompleteData }) => void
+  ): void;
   on(event: 'session.idle', handler: () => void): void;
   on(event: 'session.error', handler: (e: { error: Error }) => void): void;
   on(event: 'subagent.started', handler: (e: { data: CopilotSubagentData }) => void): void;
@@ -216,7 +225,7 @@ export function mapCopilotEvents(
     const data = event.data;
     usage.input_tokens = data.input_tokens ?? usage.input_tokens;
     usage.output_tokens = data.output_tokens ?? usage.output_tokens;
-    usage.total_tokens = data.total_tokens ?? (usage.input_tokens + usage.output_tokens);
+    usage.total_tokens = data.total_tokens ?? usage.input_tokens + usage.output_tokens;
     if (data.model) {
       usage.model = data.model;
     }

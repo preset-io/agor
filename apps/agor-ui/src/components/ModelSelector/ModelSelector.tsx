@@ -57,7 +57,9 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
 
   // Calculate model list (needed for initial mode calculation)
   // Copilot models are discovered dynamically via listModels() — use a placeholder
-  const COPILOT_MODEL_OPTIONS = [{ id: 'default', label: 'Default', description: 'Use Copilot default model' }];
+  const COPILOT_MODEL_OPTIONS = [
+    { id: 'default', label: 'Default', description: 'Use Copilot default model' },
+  ];
 
   const modelList =
     effectiveTool === 'codex'

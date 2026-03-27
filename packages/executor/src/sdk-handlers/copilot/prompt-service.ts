@@ -11,12 +11,9 @@
  * - Events stream back through the session's event emitter
  */
 
-import * as fs from 'node:fs/promises';
-import * as os from 'node:os';
-import * as path from 'node:path';
-import { CopilotClient } from '@github/copilot-sdk';
-import type { CopilotSession } from '@github/copilot-sdk';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
+import type { CopilotSession } from '@github/copilot-sdk';
+import { CopilotClient } from '@github/copilot-sdk';
 import { getDaemonUrl } from '../../config.js';
 import type {
   MCPServerRepository,
@@ -32,10 +29,7 @@ import type { PermissionMode, SessionID, TaskID } from '../../types.js';
 import { getMcpServersForSession } from '../base/mcp-scoping.js';
 import type { CopilotSessionEvents } from './event-mapper.js';
 import { DEFAULT_COPILOT_MODEL } from './models.js';
-import {
-  type CopilotPermissionHandler,
-  createPermissionHandler,
-} from './permission-mapper.js';
+import { createPermissionHandler } from './permission-mapper.js';
 
 /**
  * Streaming event types for Copilot execution
@@ -246,7 +240,11 @@ export class CopilotPromptService {
     // Create CopilotClient (spawns CLI process)
     this.client = new CopilotClient({
       useStdio: true,
-      githubToken: this.apiKey || process.env.COPILOT_GITHUB_TOKEN || process.env.GH_TOKEN || process.env.GITHUB_TOKEN,
+      githubToken:
+        this.apiKey ||
+        process.env.COPILOT_GITHUB_TOKEN ||
+        process.env.GH_TOKEN ||
+        process.env.GITHUB_TOKEN,
       env: {
         HOME: process.env.HOME || '',
       },
@@ -267,10 +265,10 @@ export class CopilotPromptService {
       // Create or resume session
       let copilotSession: CopilotSession;
       const sessionConfig = {
-        cwd: worktree.path,
+        workingDirectory: worktree.path,
         streaming: true,
         onPermissionRequest: permissionHandler,
-        mcpServers,
+        mcpServers: mcpServers as Record<string, import('@github/copilot-sdk').MCPServerConfig>,
         systemMessage: { mode: 'append' as const, content: systemMessage },
       };
 
@@ -339,7 +337,7 @@ export class CopilotPromptService {
 
       sessionEvents.on('tool.execution_complete', (event) => {
         const data = event.data;
-        const toolName = data.mcpServerName
+        const _toolName = data.mcpServerName
           ? `${data.mcpServerName}.${data.mcpToolName || data.toolName}`
           : data.toolName;
 
@@ -363,7 +361,7 @@ export class CopilotPromptService {
       // Use sendAndWait for blocking execution with timeout
       const timeoutMs = 10 * 60 * 1000; // 10 minutes
       try {
-        await copilotSession.sendAndWait({ content: prompt }, timeoutMs);
+        await copilotSession.sendAndWait({ prompt }, timeoutMs);
       } catch (error) {
         // Check for abort
         if (
