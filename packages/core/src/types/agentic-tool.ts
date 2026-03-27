@@ -10,11 +10,12 @@ import type { AgenticToolID } from './id';
  * - codex: OpenAI's Codex CLI
  * - gemini: Google's Gemini Code Assist
  * - opencode: Open-source terminal-based AI assistant with 75+ LLM providers
+ * - copilot: GitHub Copilot's agentic runtime via @github/copilot-sdk
  *
  * Not to be confused with "execution tools" (Bash, Write, Read, etc.)
  * which are the primitives that agentic tools use to perform work.
  */
-export type AgenticToolName = 'claude-code' | 'codex' | 'gemini' | 'opencode';
+export type AgenticToolName = 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'copilot';
 
 /**
  * Agentic tool metadata for UI display
@@ -116,3 +117,13 @@ export type CodexApprovalPolicy = 'untrusted' | 'on-request' | 'on-failure' | 'n
  * - Inclusion of malware or vulnerable dependencies
  */
 export type CodexNetworkAccess = boolean;
+
+/**
+ * Copilot permission modes (via @github/copilot-sdk)
+ *
+ * Maps to onPermissionRequest callback behavior:
+ * - default: Proxy all permission requests to Agor UI for user approval
+ * - acceptEdits: Auto-approve read/write operations, ask for shell/MCP
+ * - bypassPermissions: Auto-approve everything (equivalent to approveAll helper)
+ */
+export type CopilotPermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions';

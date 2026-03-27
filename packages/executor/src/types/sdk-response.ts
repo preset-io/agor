@@ -79,6 +79,19 @@ export type CodexSdkResponse = TurnCompletedEvent;
 export type GeminiSdkResponse = ServerGeminiFinishedEvent;
 
 // ============================================================================
+// Copilot SDK Response (from GitHub Copilot SDK)
+// ============================================================================
+
+/**
+ * Copilot SDK Response - Accumulated data from Copilot session events
+ *
+ * Unlike other SDKs that return a single response object, Copilot streams
+ * events and we accumulate the relevant data (usage, model, sessionId)
+ * into this structure for normalization and storage.
+ */
+export type CopilotSdkResponse = import('../sdk-handlers/copilot/normalizer.js').CopilotSdkResponse;
+
+// ============================================================================
 // OpenCode SDK Response
 // ============================================================================
 
@@ -100,6 +113,7 @@ export type RawSdkResponse =
   | ClaudeCodeSdkResponse
   | CodexSdkResponse
   | GeminiSdkResponse
+  | CopilotSdkResponse
   | OpenCodeSdkResponse;
 
 // ============================================================================

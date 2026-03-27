@@ -12,11 +12,13 @@
 import type { NormalizedSdkData } from './base/normalizer.interface.js';
 import { ClaudeCodeNormalizer } from './claude/normalizer.js';
 import { CodexNormalizer } from './codex/normalizer.js';
+import { CopilotNormalizer } from './copilot/normalizer.js';
 import { GeminiNormalizer } from './gemini/normalizer.js';
 
 // Singleton instances (normalizers are stateless, so one instance is fine)
 const claudeNormalizer = new ClaudeCodeNormalizer();
 const codexNormalizer = new CodexNormalizer();
+const copilotNormalizer = new CopilotNormalizer();
 const geminiNormalizer = new GeminiNormalizer();
 
 /**
@@ -49,6 +51,11 @@ export function normalizeRawSdkResponse(
       case 'gemini':
         return geminiNormalizer.normalize(
           rawSdkResponse as Parameters<typeof geminiNormalizer.normalize>[0]
+        );
+
+      case 'copilot':
+        return copilotNormalizer.normalize(
+          rawSdkResponse as Parameters<typeof copilotNormalizer.normalize>[0]
         );
 
       case 'opencode':
