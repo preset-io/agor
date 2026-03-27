@@ -712,6 +712,36 @@ export default class Init extends Command {
       this.log(`${chalk.green('   ✓')} Gemini API key saved`);
     }
 
+    // GitHub Copilot Token
+    const { setupCopilot } = await inquirer.prompt([
+      {
+        type: 'confirm',
+        name: 'setupCopilot',
+        message: 'Set up GitHub token for Copilot agent?',
+        default: false,
+      },
+    ]);
+
+    if (setupCopilot) {
+      const { copilotToken } = await inquirer.prompt([
+        {
+          type: 'password',
+          name: 'copilotToken',
+          message: 'GitHub token (for Copilot):',
+          mask: '*',
+          validate: (input: string) => {
+            if (!input || input.length < 10) {
+              return 'Please enter a valid GitHub token';
+            }
+            return true;
+          },
+        },
+      ]);
+
+      await setConfigValue('credentials.COPILOT_GITHUB_TOKEN', copilotToken);
+      this.log(`${chalk.green('   ✓')} Copilot GitHub token saved`);
+    }
+
     this.log('');
     this.log(
       chalk.gray('Note: API keys are stored in ~/.agor/config.yaml (keep this file secure!)')

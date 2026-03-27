@@ -92,6 +92,8 @@ export function getDefaultPermissionMode(agenticTool: AgenticToolName): Permissi
       return 'auto'; // Native Codex SDK mode
     case 'opencode':
       return 'autoEdit'; // OpenCode auto-approves, similar to Gemini
+    case 'copilot':
+      return 'acceptEdits'; // Copilot uses same semantics as Claude Code
     default:
       return 'acceptEdits'; // Claude Code native mode
   }

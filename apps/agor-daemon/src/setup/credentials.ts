@@ -18,6 +18,7 @@ export interface InitializedCredentials {
   anthropicAuthToken?: string;
   anthropicBaseUrl?: string;
   geminiApiKey?: string;
+  copilotGithubToken?: string;
 }
 
 /**
@@ -135,6 +136,41 @@ export function initializeGeminiApiKey(
 }
 
 /**
+ * Initialize GitHub token for Copilot agent
+ *
+ * Priority: config.yaml > COPILOT_GITHUB_TOKEN > GH_TOKEN > GITHUB_TOKEN
+ * Used by the Copilot SDK for GitHub authentication.
+ *
+ * @param config - Application config object with credentials
+ * @param envCopilotToken - COPILOT_GITHUB_TOKEN from process.env
+ * @param envGhToken - GH_TOKEN from process.env
+ * @param envGithubToken - GITHUB_TOKEN from process.env
+ * @returns Resolved GitHub token or undefined
+ */
+export function initializeCopilotGithubToken(
+  config: { credentials?: CredentialsConfig },
+  envCopilotToken?: string,
+  envGhToken?: string,
+  envGithubToken?: string
+): string | undefined {
+  if (config.credentials?.COPILOT_GITHUB_TOKEN && !envCopilotToken) {
+    process.env.COPILOT_GITHUB_TOKEN = config.credentials.COPILOT_GITHUB_TOKEN;
+    console.log('✅ Set COPILOT_GITHUB_TOKEN from config for Copilot');
+  }
+
+  const token =
+    config.credentials?.COPILOT_GITHUB_TOKEN || envCopilotToken || envGhToken || envGithubToken;
+
+  if (!token) {
+    console.log('ℹ️  No COPILOT_GITHUB_TOKEN found - Copilot agent will not be available');
+    console.log('   To use Copilot: agor config set credentials.COPILOT_GITHUB_TOKEN <token>');
+    console.log('   Or set COPILOT_GITHUB_TOKEN, GH_TOKEN, or GITHUB_TOKEN env var');
+  }
+
+  return token;
+}
+
+/**
  * Initialize all AI service credentials
  *
  * Convenience function to initialize all supported API keys at once.
@@ -150,5 +186,11 @@ export function initializeCredentials(config: {
     anthropicAuthToken: initializeAnthropicAuthToken(config, process.env.ANTHROPIC_AUTH_TOKEN),
     anthropicBaseUrl: initializeAnthropicBaseUrl(config, process.env.ANTHROPIC_BASE_URL),
     geminiApiKey: initializeGeminiApiKey(config, process.env.GEMINI_API_KEY),
+    copilotGithubToken: initializeCopilotGithubToken(
+      config,
+      process.env.COPILOT_GITHUB_TOKEN,
+      process.env.GH_TOKEN,
+      process.env.GITHUB_TOKEN
+    ),
   };
 }

@@ -73,7 +73,7 @@ export const sessions = pgTable(
       ],
     }).notNull(),
     agentic_tool: text('agentic_tool', {
-      enum: ['claude-code', 'codex', 'gemini', 'opencode'],
+      enum: ['claude-code', 'codex', 'gemini', 'opencode', 'copilot'],
     }).notNull(),
     board_id: varchar('board_id', { length: 36 }), // NULL = no board
 
@@ -512,7 +512,7 @@ export const worktrees = pgTable(
         schedule?: {
           timezone: string; // IANA timezone (default: 'UTC')
           prompt_template: string; // Handlebars template
-          agentic_tool: 'claude-code' | 'codex' | 'gemini' | 'opencode';
+          agentic_tool: 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'copilot';
           retention: number; // How many sessions to keep (0 = keep forever)
           permission_mode?: string; // Permission mode for spawned sessions
           model_config?: {
@@ -614,6 +614,7 @@ export const users = pgTable(
           ANTHROPIC_API_KEY?: string; // Encrypted with AES-256-GCM
           OPENAI_API_KEY?: string; // Encrypted with AES-256-GCM
           GEMINI_API_KEY?: string; // Encrypted with AES-256-GCM
+          COPILOT_GITHUB_TOKEN?: string; // Encrypted with AES-256-GCM
         };
         // Encrypted environment variables (stored as hex-encoded encrypted strings)
         env_vars?: Record<string, string>; // { "GITHUB_TOKEN": "enc:...", "NPM_TOKEN": "enc:..." }
@@ -659,6 +660,16 @@ export const users = pgTable(
             };
             permissionMode?: string;
             serverUrl?: string;
+          };
+          copilot?: {
+            modelConfig?: {
+              mode?: 'alias' | 'exact';
+              model?: string;
+              thinkingMode?: 'auto' | 'manual' | 'off';
+              manualThinkingTokens?: number;
+            };
+            permissionMode?: string;
+            mcpServerIds?: string[];
           };
         };
       }>()

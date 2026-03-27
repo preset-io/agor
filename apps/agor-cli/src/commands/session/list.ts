@@ -45,7 +45,7 @@ export default class SessionList extends BaseCommand {
     agent: Flags.string({
       char: 'a',
       description: 'Filter by agent',
-      options: ['claude-code', 'codex', 'gemini'],
+      options: ['claude-code', 'codex', 'gemini', 'opencode', 'copilot'],
     }),
     board: Flags.string({
       char: 'b',

@@ -51,6 +51,7 @@ export interface DefaultAgenticConfig {
   codex?: DefaultAgenticToolConfig;
   gemini?: DefaultAgenticToolConfig;
   opencode?: DefaultAgenticToolConfig;
+  copilot?: DefaultAgenticToolConfig;
 }
 
 /**

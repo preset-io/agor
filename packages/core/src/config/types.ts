@@ -322,6 +322,7 @@ export enum CredentialKey {
   ANTHROPIC_BASE_URL = 'ANTHROPIC_BASE_URL',
   OPENAI_API_KEY = 'OPENAI_API_KEY',
   GEMINI_API_KEY = 'GEMINI_API_KEY',
+  COPILOT_GITHUB_TOKEN = 'COPILOT_GITHUB_TOKEN',
 }
 
 /**
@@ -344,6 +345,9 @@ export interface AgorCredentials {
 
   /** Google Gemini API key */
   GEMINI_API_KEY?: string;
+
+  /** GitHub token for Copilot */
+  COPILOT_GITHUB_TOKEN?: string;
 }
 
 /**

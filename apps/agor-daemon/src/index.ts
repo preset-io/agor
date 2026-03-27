@@ -954,7 +954,7 @@ async function main() {
           sessionId,
           taskId,
           prompt: data.prompt,
-          tool: session.agentic_tool as 'claude-code' | 'gemini' | 'codex' | 'opencode',
+          tool: session.agentic_tool as 'claude-code' | 'gemini' | 'codex' | 'opencode' | 'copilot',
           permissionMode: permissionModeForPayload as 'ask' | 'auto' | 'allow-all' | undefined,
           cwd,
           messageSource: data.messageSource,
