@@ -420,20 +420,25 @@ export class CodexTool implements ITool {
   }
 
   /**
-   * Capture and store Codex thread ID for conversation continuity
+   * Capture and store Codex thread ID for conversation continuity.
+   * Throws if the Codex CLI returned a different thread than the one we asked to resume,
+   * which means the original thread file was lost (e.g. container rebuild wiped /tmp).
    * @private
    */
   private async captureThreadId(sessionId: SessionID, threadId: string): Promise<void> {
     console.log(`🔑 Captured Codex thread ID for Agor session ${sessionId}: ${threadId}`);
 
     if (this.sessionsRepo) {
-      // Guard: only set sdk_session_id if not already set (immutable after first capture)
       const existingSession = await this.sessionsRepo.findById(sessionId);
       if (existingSession?.sdk_session_id) {
         if (existingSession.sdk_session_id !== threadId) {
-          console.warn(
-            `⚠️  Codex returned new thread_id ${threadId.substring(0, 8)} but session already has ${existingSession.sdk_session_id.substring(0, 8)} — keeping original`
-          );
+          const msg =
+            `Codex thread lost: asked to resume ${existingSession.sdk_session_id.substring(0, 8)} ` +
+            `but Codex started a new thread ${threadId.substring(0, 8)}. ` +
+            `The previous conversation history is no longer available (the thread file was likely deleted when the environment was rebuilt). ` +
+            `Please start a new session to continue.`;
+          console.error(`❌ ${msg}`);
+          throw new Error(msg);
         }
         return;
       }
