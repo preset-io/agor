@@ -24,12 +24,14 @@ import type {
   UsersRepository,
   WorktreeRepository,
 } from '../../db/feathers-repositories.js';
+import type { PermissionService } from '../../permissions/permission-service.js';
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID } from '../../types.js';
 import { getMcpServersForSession } from '../base/mcp-scoping.js';
+import type { MessagesService, SessionsService, TasksService } from '../claude/claude-tool.js';
 import type { CopilotSessionEvents } from './event-mapper.js';
 import { DEFAULT_COPILOT_MODEL } from './models.js';
-import { createPermissionHandler } from './permission-mapper.js';
+import { createPermissionHandler, type PermissionDeps } from './permission-mapper.js';
 
 /**
  * Streaming event types for Copilot execution
@@ -103,17 +105,34 @@ export class CopilotPromptService {
   private stopRequested = new Map<SessionID, boolean>();
   private apiKey: string | undefined;
 
+  // Permission deps for interactive permission UI
+  private permissionService?: PermissionService;
+  private messagesRepo: MessagesRepository;
+  private messagesService?: MessagesService;
+  private tasksService?: TasksService;
+  private sessionsService?: SessionsService;
+  private permissionLocks = new Map<SessionID, Promise<void>>();
+
   constructor(
-    _messagesRepo: MessagesRepository,
+    messagesRepo: MessagesRepository,
     private sessionsRepo: SessionRepository,
     private sessionMCPServerRepo?: SessionMCPServerRepository,
     private worktreesRepo?: WorktreeRepository,
     private reposRepo?: RepoRepository,
     apiKey?: string,
     private mcpServerRepo?: MCPServerRepository,
-    private usersRepo?: UsersRepository
+    private usersRepo?: UsersRepository,
+    permissionService?: PermissionService,
+    messagesService?: MessagesService,
+    tasksService?: TasksService,
+    sessionsService?: SessionsService
   ) {
     this.apiKey = apiKey;
+    this.messagesRepo = messagesRepo;
+    this.permissionService = permissionService;
+    this.messagesService = messagesService;
+    this.tasksService = tasksService;
+    this.sessionsService = sessionsService;
   }
 
   /**
@@ -210,7 +229,7 @@ export class CopilotPromptService {
   async *promptSessionStreaming(
     sessionId: SessionID,
     prompt: string,
-    _taskId?: TaskID,
+    taskId?: TaskID,
     permissionMode?: PermissionMode,
     abortController?: AbortController
   ): AsyncGenerator<CopilotStreamEvent> {
@@ -253,8 +272,28 @@ export class CopilotPromptService {
       await this.client.start();
       console.log(`✅ [Copilot] Client started`);
 
-      // Build session configuration
-      const permissionHandler = createPermissionHandler(permissionMode);
+      // Build session configuration with interactive permission support
+      const permissionDeps: PermissionDeps | undefined =
+        this.permissionService && this.tasksService && taskId
+          ? {
+              permissionService: this.permissionService,
+              tasksService: this.tasksService,
+              sessionsRepo: this.sessionsRepo,
+              messagesRepo: this.messagesRepo,
+              messagesService: this.messagesService,
+              sessionsService: this.sessionsService,
+              permissionLocks: this.permissionLocks,
+              mcpServerRepo: this.mcpServerRepo,
+              sessionMCPRepo: this.sessionMCPServerRepo,
+            }
+          : undefined;
+
+      const permissionHandler = createPermissionHandler(
+        sessionId,
+        taskId || ('' as TaskID),
+        permissionMode,
+        permissionDeps
+      );
       const mcpServers = await this.buildMcpServers(sessionId, session.mcp_token);
       const systemMessage = await this.buildSystemMessage(sessionId);
 
