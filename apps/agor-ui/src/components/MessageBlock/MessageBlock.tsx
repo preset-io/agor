@@ -197,6 +197,7 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
           message={message}
           content={content}
           isActive={canInteract}
+          agenticTool={agentic_tool}
           onApprove={
             canInteract && onPermissionDecision && sessionId && taskId
               ? (messageId, scope) => {

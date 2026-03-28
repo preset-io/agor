@@ -28,8 +28,17 @@ interface PermissionRequestBlockProps {
   content: PermissionRequestContent;
   isActive: boolean; // true if awaiting decision and can interact
   isWaiting?: boolean; // true if pending but waiting for previous permission
+  agenticTool?: string; // Agent type for scope-aware UI
   onApprove?: (messageId: string, scope: PermissionScope) => void;
   onDeny?: (messageId: string) => void;
+}
+
+/**
+ * Whether the agent supports persistent permission scopes (saved to disk).
+ * Claude Code persists to .claude/settings.json; other agents only support session-level.
+ */
+function supportsPersistentScopes(agenticTool?: string): boolean {
+  return agenticTool === 'claude-code' || !agenticTool;
 }
 
 export const PermissionRequestBlock: React.FC<PermissionRequestBlockProps> = ({
@@ -37,6 +46,7 @@ export const PermissionRequestBlock: React.FC<PermissionRequestBlockProps> = ({
   content,
   isActive,
   isWaiting = false,
+  agenticTool,
   onApprove,
   onDeny,
 }) => {
@@ -212,21 +222,25 @@ export const PermissionRequestBlock: React.FC<PermissionRequestBlockProps> = ({
             >
               <Space orientation="vertical" size={token.sizeUnit / 2} style={{ width: '100%' }}>
                 <Radio value={false}>Allow once</Radio>
-                <Space size={token.sizeUnit / 2} style={{ width: '100%', alignItems: 'center' }}>
-                  <Radio value={true}>Remember for this</Radio>
-                  <Select
-                    value={rememberScope}
-                    onChange={setRememberScope}
-                    disabled={!remember}
-                    style={{ width: 200 }}
-                    size="small"
-                    options={[
-                      { value: PermissionScope.PROJECT, label: 'Project (.claude/)' },
-                      { value: PermissionScope.USER, label: 'User (~/.claude/)' },
-                      { value: PermissionScope.LOCAL, label: 'Local (gitignored)' },
-                    ]}
-                  />
-                </Space>
+                {supportsPersistentScopes(agenticTool) ? (
+                  <Space size={token.sizeUnit / 2} style={{ width: '100%', alignItems: 'center' }}>
+                    <Radio value={true}>Remember for this</Radio>
+                    <Select
+                      value={rememberScope}
+                      onChange={setRememberScope}
+                      disabled={!remember}
+                      style={{ width: 200 }}
+                      size="small"
+                      options={[
+                        { value: PermissionScope.PROJECT, label: 'Project (.claude/)' },
+                        { value: PermissionScope.USER, label: 'User (~/.claude/)' },
+                        { value: PermissionScope.LOCAL, label: 'Local (gitignored)' },
+                      ]}
+                    />
+                  </Space>
+                ) : (
+                  <Radio value={true}>Allow for this session</Radio>
+                )}
               </Space>
             </Radio.Group>
 
