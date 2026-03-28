@@ -16,7 +16,7 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 | **Session import/export**   | ✅ Yes              | ❌ No                     | ❌ No               | ❌ No                     | Only Claude Code stores sessions as JSONL transcripts                                   |
 | **Session forkable**        | ✅ Yes (via replay) | ✅ Yes (via replay)       | ✅ Yes (via replay) | ✅ Yes (via replay)       | Agor emulates forking by replaying messages to new session                              |
 | **MCP integration**         | ✅ Native           | ✅ Native                  | ✅ Native           | ✅ Native                 | All agents support MCP with Agor's built-in self-access server                          |
-| **Permission requests**     | ✅ Rich             | ⚠️ Basic                  | ⚠️ Basic            | ✅ Callback-based         | Claude has granular tool permissions; Copilot uses `onPermissionRequest` callback        |
+| **Permission requests**     | ✅ Rich             | ⚠️ Basic                  | ⚠️ Basic            | ✅ Interactive             | Claude & Copilot have interactive permission UI; Copilot lacks SDK-level persistence     |
 | **Project instructions**    | ✅ CLAUDE.md        | ✅ AGENTS.md               | ⚠️ Manual           | ⚠️ Manual                 | Claude auto-loads CLAUDE.md, Codex auto-loads AGENTS.md; Gemini/Copilot need injection  |
 | **Tool execution**          | ✅ Rich widgets     | ⚠️ Basic                  | ⚠️ Basic            | ✅ Rich events            | Claude and Copilot expose detailed tool metadata for visualization                      |
 | **Session continuity**      | ✅ SDK-managed      | ✅ History-based          | ✅ History-based    | ✅ SDK-managed            | Claude and Copilot use SDK session IDs; others replay message history                   |
@@ -199,7 +199,7 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 - Function calling requires explicit approval
 - Less detailed context than Claude
 
-**Copilot:** ✅ **Callback-based permission system**
+**Copilot:** ✅ **Interactive permission system**
 
 - `onPermissionRequest` callback receives typed `PermissionRequest` with `kind`:
   - `shell` — bash/terminal commands
@@ -208,11 +208,12 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
   - `mcp` — MCP tool calls
   - `url` — URL access
   - `custom-tool` — custom tool invocations
-- Permission modes: `'default'`, `'acceptEdits'`, `'bypassPermissions'`
-- Returns: `'approved'`, `'denied-interactively-by-user'`, or `'denied-by-rules'`
-- In Agor's headless executor, all modes auto-approve (no interactive UI during execution)
+- Permission modes: `'default'` (prompt for all), `'acceptEdits'` (auto-approve read/write), `'bypassPermissions'` (auto-approve all)
+- Agor shows interactive permission UI with approve/deny buttons
+- **No SDK-level persistence** — the Copilot SDK (v0.2.0) does not expose a mechanism to save permission rules (unlike Claude's `updatedPermissions`). Approvals are per-request only. The Copilot CLI itself supports persistent rules via `~/.copilot/config.json` and `--allow-tool` flags, but these are not accessible through the SDK's `onPermissionRequest` callback
+- MCP tools from attached servers (including Agor's built-in server) are auto-approved
 
-**Agor Implementation:** Permission modals adapt based on available SDK metadata. Claude shows richest UX. Copilot's typed permission kinds enable future granular control.
+**Agor Implementation:** Permission modals adapt based on agent type. Claude shows persistent scope options (Project/User/Local); Copilot shows approve/deny only. Both provide full interactive tool approval with parameter previews.
 
 ---
 
@@ -540,36 +541,55 @@ Current Task:
 
 ### Permission Scopes
 
-**What it is:** Granular control over tool approvals with three scope levels.
+**What it is:** Granular control over tool approvals with persistent scope levels.
 
-**Agor Implementation:**
+**Claude Code:** ✅ **Full persistent scopes**
 
 - **Once** - Approve this single tool execution
-- **Session** - Approve all future uses of this tool in the current session
-- **Repo/Project** - Approve all future uses of this tool in the current repository
+- **Project** - Save rule to `.claude/settings.json` (committed to repo)
+- **User** - Save rule to `~/.claude/settings.json` (global)
+- **Local** - Save rule to `.claude/.local/settings.json` (gitignored)
+- Uses SDK's `updatedPermissions` mechanism to persist rules back to Claude
 
-**UI Display:**
+**Copilot:** ⚠️ **Approve once only (beta)**
+
+- The Copilot SDK (v0.2.0) does not expose a `updatedPermissions`-equivalent mechanism
+- The Copilot CLI natively supports persistent rules (`~/.copilot/config.json`, `--allow-tool` flags, and `!` to allow-all-similar in interactive mode), but these are not accessible through the SDK callback
+- Agor shows a simple Approve/Deny UI without scope options
+- Future: When the SDK adds permission persistence support, Agor will wire it up
+
+**Codex / Gemini:** ⚠️ **Basic modes only**
+
+- Permission modes control auto-approval behavior, but no granular per-tool persistence
+
+**UI Display (Claude Code):**
 
 ```
 ┌─────────────────────────────────────────────────┐
 │ Claude wants to run: npm install               │
 │                                                 │
-│ Scope:                                          │
-│  ○ Once                                         │
-│  ● Session  ← Selected                          │
-│  ○ Repo                                         │
+│ ○ Allow once                                    │
+│ ● Remember for this [Project ▼]                 │
 │                                                 │
 │ [Approve] [Deny]                                │
 └─────────────────────────────────────────────────┘
 ```
 
-**Database Storage:** `permission_requests` table tracks scope decisions. Repo-level permissions stored in `repo_settings`.
+**UI Display (Copilot):**
 
-**Permission Modes:**
+```
+┌─────────────────────────────────────────────────┐
+│ Copilot wants to run: npm install              │
+│                                                 │
+│ [Approve] [Deny]                                │
+└─────────────────────────────────────────────────┘
+```
 
-- `'ask'` - Prompt for every tool use (default)
-- `'auto'` - Auto-approve with scope rules applied
-- `'allow-all'` - Never prompt (dangerous, use with caution)
+**Permission Modes (all agents):**
+
+- `'ask'` / `'default'` - Prompt for every tool use (default)
+- `'auto'` / `'acceptEdits'` - Auto-approve safe operations, prompt for shell/mcp/url
+- `'allow-all'` / `'bypassPermissions'` - Never prompt (use with caution)
 
 ---
 
@@ -736,7 +756,7 @@ Agent integration priorities:
 - **Copilot project instructions** - Track `.github/copilot-instructions.md` convention as it evolves
 - **Better stop controls** - More graceful cancellation for all agents
 - **Richer tool metadata** - If Codex/Gemini expose more tool details
-- **Copilot permission UX** - Leverage typed permission kinds for granular approval UI
+- **Copilot permission persistence** - The Copilot SDK (v0.2.0) doesn't expose a way to persist permission rules. When the SDK adds an `updatedPermissions`-equivalent, Agor will support persistent scopes (session, project, user) matching Claude Code's UX
 
 ---
 
