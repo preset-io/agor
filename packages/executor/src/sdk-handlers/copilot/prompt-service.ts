@@ -274,7 +274,21 @@ export class CopilotPromptService {
 
       if (session.sdk_session_id) {
         console.log(`🔄 [Copilot] Resuming session: ${session.sdk_session_id}`);
-        copilotSession = await this.client.resumeSession(session.sdk_session_id, sessionConfig);
+        try {
+          copilotSession = await this.client.resumeSession(session.sdk_session_id, sessionConfig);
+        } catch (resumeError) {
+          console.log(
+            `⚠️  [Copilot] Resume failed (${resumeError instanceof Error ? resumeError.message : resumeError}), creating new session`
+          );
+          copilotSession = await this.client.createSession(sessionConfig);
+
+          // Update stored SDK session ID
+          const sdkSessionId = (copilotSession as { sessionId?: string }).sessionId;
+          if (sdkSessionId) {
+            console.log(`🔑 Captured new Copilot session ID: ${sdkSessionId}`);
+            await this.sessionsRepo.update(sessionId, { sdk_session_id: sdkSessionId });
+          }
+        }
       } else {
         console.log(`🆕 [Copilot] Creating new session`);
         copilotSession = await this.client.createSession(sessionConfig);
