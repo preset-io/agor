@@ -134,23 +134,26 @@ export const SessionPanelContent: React.FC<SessionPanelContentProps> = ({
                         needsAuth && client
                           ? async () => {
                               try {
-                                const handleOpenBrowser = ({ authUrl }: { authUrl: string }) => {
-                                  window.open(authUrl, '_blank', 'noopener,noreferrer');
-                                  client.io.off('oauth:open_browser', handleOpenBrowser);
-                                };
-                                client.io.on('oauth:open_browser', handleOpenBrowser);
-
                                 const data = (await client
                                   .service('mcp-servers/oauth-start')
                                   .create({
                                     mcp_url: server?.url,
                                     mcp_server_id: server?.mcp_server_id,
                                     client_id: server?.auth?.oauth_client_id,
-                                  })) as { success: boolean; error?: string };
+                                  })) as {
+                                  success: boolean;
+                                  error?: string;
+                                  authorizationUrl?: string;
+                                };
 
-                                if (!data.success) {
+                                if (data.success && data.authorizationUrl) {
+                                  window.open(
+                                    data.authorizationUrl,
+                                    '_blank',
+                                    'noopener,noreferrer'
+                                  );
+                                } else if (!data.success) {
                                   message.error(data.error || 'Failed to start OAuth flow');
-                                  client.io.off('oauth:open_browser', handleOpenBrowser);
                                 }
                               } catch (err) {
                                 message.error(

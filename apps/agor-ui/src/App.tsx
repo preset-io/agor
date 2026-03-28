@@ -185,6 +185,7 @@ function AppContent() {
   const [oauthCallbackUrl, setOauthCallbackUrl] = useState('');
   const [oauthFlowStarted, setOauthFlowStarted] = useState(false);
   const [oauthCooldownUntil, setOauthCooldownUntil] = useState<number>(0);
+  const [oauthAuthUrl, setOauthAuthUrl] = useState<string | null>(null);
 
   // Listen for OAuth authentication required events from MCP tools
   useEffect(() => {
@@ -227,14 +228,7 @@ function AppContent() {
 
     const startOAuthFlow = async () => {
       setOauthFlowStarted(true);
-
-      // Set up listener for oauth:open_browser event (one-shot: removes itself after firing)
-      const handleOpenBrowser = ({ authUrl }: { authUrl: string }) => {
-        console.log('[OAuth] Opening browser for auth:', authUrl);
-        window.open(authUrl, '_blank', 'noopener,noreferrer');
-        client.io.off('oauth:open_browser', handleOpenBrowser);
-      };
-      client.io.on('oauth:open_browser', handleOpenBrowser);
+      setOauthAuthUrl(null);
 
       try {
         const mcpServer = mcpServerById.get(pendingOAuthServer.serverId);
@@ -252,13 +246,23 @@ function AppContent() {
         if (!data.success) {
           showError(data.error || 'Failed to start OAuth flow');
           setPendingOAuthServer(null);
-          client.io.off('oauth:open_browser', handleOpenBrowser);
+          return;
         }
-        // If success, the modal will show for callback URL input
+
+        // Use authorizationUrl from the response directly (avoids WebSocket race)
+        if (data.authorizationUrl) {
+          const authUrl = data.authorizationUrl;
+          setOauthAuthUrl(authUrl);
+
+          // Try to open browser — may be blocked if not triggered by user gesture
+          const popup = window.open(authUrl, '_blank', 'noopener,noreferrer');
+          if (!popup) {
+            console.log('[OAuth] Popup blocked — user can click the link in the modal');
+          }
+        }
       } catch (error) {
         showError(`OAuth error: ${error instanceof Error ? error.message : String(error)}`);
         setPendingOAuthServer(null);
-        client.io.off('oauth:open_browser', handleOpenBrowser);
       }
     };
 
@@ -301,6 +305,7 @@ function AppContent() {
 
         setPendingOAuthServer(null);
         setOauthCallbackUrl('');
+        setOauthAuthUrl(null);
         // Set 10 second cooldown to prevent immediate re-triggers
         setOauthCooldownUntil(Date.now() + 10000);
       } else {
@@ -1232,15 +1237,23 @@ function AppContent() {
         onCancel={() => {
           setPendingOAuthServer(null);
           setOauthCallbackUrl('');
+          setOauthAuthUrl(null);
         }}
         okText="Complete Authentication"
         cancelText="Cancel"
       >
+        {oauthAuthUrl ? (
+          <p>
+            <a href={oauthAuthUrl} target="_blank" rel="noopener noreferrer">
+              Click here to open the authentication page
+            </a>{' '}
+            if it didn't open automatically.
+          </p>
+        ) : (
+          <p>Starting OAuth authentication...</p>
+        )}
         <p>
-          A browser window has been opened for OAuth authentication. After you complete the login,
-          you will be redirected to a callback URL.
-        </p>
-        <p>
+          After you complete the login, you will be redirected to a callback URL.{' '}
           <strong>Please copy and paste the entire callback URL here:</strong>
         </p>
         <Input.TextArea
