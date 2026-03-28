@@ -1,6 +1,6 @@
 ---
 title: SDK Feature Comparison
-description: Compare AI coding agent capabilities in agor. Feature matrix for Claude Code, Codex, and Gemini integrations including streaming, tool approval, and SDK differences.
+description: Compare AI coding agent capabilities in agor. Feature matrix for Claude Code, Codex, Gemini, and GitHub Copilot integrations including streaming, tool approval, and SDK differences.
 ---
 
 # SDK Feature Comparison
@@ -9,19 +9,19 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 
 ## Feature Matrix
 
-| Feature                     | Claude Code         | Codex                     | Gemini              | Notes                                                                                   |
-| --------------------------- | ------------------- | ------------------------- | ------------------- | --------------------------------------------------------------------------------------- |
-| **Streaming responses**     | ✅ Text + tools     | ⚠️ Tools only             | ✅ Text + tools     | Claude & Gemini stream text token-by-token; Codex streams tool events only (text arrives all at once) |
-| **Stop mid-execution**      | ✅ Yes              | ⚠️ Limited                | ⚠️ Limited          | Claude has `interrupt()`, others may lose partial work                                  |
-| **Session import/export**   | ✅ Yes              | ❌ No                     | ❌ No               | Only Claude Code stores sessions as JSONL transcripts                                   |
-| **Session forkable**        | ✅ Yes (via replay) | ✅ Yes (via replay)       | ✅ Yes (via replay) | Agor emulates forking by replaying messages to new session                              |
-| **MCP integration**         | ✅ Native           | ✅ Native                  | ✅ Native           | All agents support MCP with Agor's built-in self-access server                          |
-| **Permission requests**     | ✅ Rich             | ⚠️ Basic                  | ⚠️ Basic            | Claude has granular tool permissions, others use simpler modes                          |
-| **Project instructions**    | ✅ CLAUDE.md        | ✅ AGENTS.md               | ⚠️ Manual           | Claude auto-loads CLAUDE.md, Codex auto-loads AGENTS.md, Gemini needs manual injection  |
-| **Tool execution**          | ✅ Rich widgets     | ⚠️ Basic                  | ⚠️ Basic            | Claude exposes detailed tool metadata for rich visualization                            |
-| **Session continuity**      | ✅ SDK-managed      | ✅ History-based          | ✅ History-based    | Claude uses `session_id`, others replay message history                                 |
-| **Token usage tracking**    | ✅ Full             | ✅ Full                   | ❌ No               | Claude & Codex now surface SDK usage metadata (input/output/cache) for pills + cost     |
-| **Context window tracking** | 🟡 Estimated        | 🟡 Estimated              | ❌ No               | Agor derives cumulative conversation usage; Codex uses the same formula via SDK metrics |
+| Feature                     | Claude Code         | Codex                     | Gemini              | Copilot                   | Notes                                                                                   |
+| --------------------------- | ------------------- | ------------------------- | ------------------- | ------------------------- | --------------------------------------------------------------------------------------- |
+| **Streaming responses**     | ✅ Text + tools     | ⚠️ Tools only             | ✅ Text + tools     | ✅ Text + tools           | Claude, Gemini & Copilot stream text token-by-token; Codex streams tool events only     |
+| **Stop mid-execution**      | ✅ Yes              | ⚠️ Limited                | ⚠️ Limited          | ⚠️ Limited                | Claude has `interrupt()`, others may lose partial work                                  |
+| **Session import/export**   | ✅ Yes              | ❌ No                     | ❌ No               | ❌ No                     | Only Claude Code stores sessions as JSONL transcripts                                   |
+| **Session forkable**        | ✅ Yes (via replay) | ✅ Yes (via replay)       | ✅ Yes (via replay) | ✅ Yes (via replay)       | Agor emulates forking by replaying messages to new session                              |
+| **MCP integration**         | ✅ Native           | ✅ Native                  | ✅ Native           | ✅ Native                 | All agents support MCP with Agor's built-in self-access server                          |
+| **Permission requests**     | ✅ Rich             | ⚠️ Basic                  | ⚠️ Basic            | ✅ Callback-based         | Claude has granular tool permissions; Copilot uses `onPermissionRequest` callback        |
+| **Project instructions**    | ✅ CLAUDE.md        | ✅ AGENTS.md               | ⚠️ Manual           | ⚠️ Manual                 | Claude auto-loads CLAUDE.md, Codex auto-loads AGENTS.md; Gemini/Copilot need injection  |
+| **Tool execution**          | ✅ Rich widgets     | ⚠️ Basic                  | ⚠️ Basic            | ✅ Rich events            | Claude and Copilot expose detailed tool metadata for visualization                      |
+| **Session continuity**      | ✅ SDK-managed      | ✅ History-based          | ✅ History-based    | ✅ SDK-managed            | Claude and Copilot use SDK session IDs; others replay message history                   |
+| **Token usage tracking**    | ✅ Full             | ✅ Full                   | ❌ No               | ⚠️ Via events             | Claude & Codex surface SDK usage metadata; Copilot emits usage via turn events          |
+| **Context window tracking** | 🟡 Estimated        | 🟡 Estimated              | ❌ No               | 🟡 Estimated              | Agor derives cumulative conversation usage from SDK metrics                             |
 
 **Legend:**
 
@@ -60,7 +60,15 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 - Tool call request/response events stream in real-time
 - 13 distinct event types for rich progress feedback
 
-**Agor Implementation:** StreamingCallbacks interface provides unified streaming for all agents. Claude and Gemini get the full typewriter experience; Codex text appears instantly once the model finishes generating.
+**Copilot:** ✅ **Full text + tool streaming**
+
+- Token-level text streaming via `assistant.message_delta` events with `deltaContent`
+- True real-time typewriter effect
+- Tool execution events stream via `tool.execution_start` / `tool.execution_complete`
+- 40+ distinct event types for detailed progress feedback
+- Uses event emitter pattern on CopilotSession + `sendAndWait()` blocking call
+
+**Agor Implementation:** StreamingCallbacks interface provides unified streaming for all agents. Claude, Gemini, and Copilot get the full typewriter experience; Codex text appears instantly once the model finishes generating.
 
 ---
 
@@ -85,6 +93,12 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 - May lose partial tool execution results
 - Similar to Codex limitations
 
+**Copilot:** ⚠️ **Limited**
+
+- Can cancel via session abort
+- May lose partial work from in-progress tool executions
+- Similar to Codex/Gemini limitations
+
 ---
 
 ### 3. Session Import/Export
@@ -107,6 +121,12 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 - Has checkpoint system but format undocumented
 - Agor stores sessions in own database
 - Cannot import external Gemini sessions
+
+**Copilot:** ❌ **Not supported**
+
+- No native session export format
+- Agor stores sessions in own database
+- Cannot import external Copilot sessions
 
 ---
 
@@ -146,7 +166,14 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 - Supports advanced options (tool filtering, transport selection) shared with Claude
 - Agor provides the same session-level MCP selection UI for Gemini sessions
 
-**See [Architecture Guide: Agor as an MCP Server](/guide/architecture#agor-as-an-mcp-server) for details on using MCP with Claude Code, Codex, and Gemini.**
+**Copilot:** ✅ **Native support**
+
+- MCP servers configured via SDK's `mcpServers` option
+- Supports streamable HTTP transport with session token authentication
+- Agor's built-in MCP server auto-configured with session token via query parameter
+- Session-level MCP selection via Agor UI, same as other agents
+
+**See [Architecture Guide: Agor as an MCP Server](/guide/architecture#agor-as-an-mcp-server) for details on using MCP with all agents.**
 
 ---
 
@@ -172,7 +199,20 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 - Function calling requires explicit approval
 - Less detailed context than Claude
 
-**Agor Implementation:** Permission modals adapt based on available SDK metadata. Claude shows richest UX.
+**Copilot:** ✅ **Callback-based permission system**
+
+- `onPermissionRequest` callback receives typed `PermissionRequest` with `kind`:
+  - `shell` — bash/terminal commands
+  - `write` — file write operations
+  - `read` — file read operations
+  - `mcp` — MCP tool calls
+  - `url` — URL access
+  - `custom-tool` — custom tool invocations
+- Permission modes: `'default'`, `'acceptEdits'`, `'bypassPermissions'`
+- Returns: `'approved'`, `'denied-interactively-by-user'`, or `'denied-by-rules'`
+- In Agor's headless executor, all modes auto-approve (no interactive UI during execution)
+
+**Agor Implementation:** Permission modals adapt based on available SDK metadata. Claude shows richest UX. Copilot's typed permission kinds enable future granular control.
 
 ---
 
@@ -197,7 +237,13 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 - Agor can inject instructions via system prompt
 - Requires explicit configuration
 
-**Recommendation:** Use Claude Code or Codex for projects with rich context requirements. For Gemini, manage instructions in Agor session config.
+**Copilot:** ⚠️ **Manual injection**
+
+- No standard instruction file convention
+- Agor injects context via the system prompt and initial message
+- Respects `.github/copilot-instructions.md` if present in repository
+
+**Recommendation:** Use Claude Code or Codex for projects with rich context requirements. For Gemini and Copilot, manage instructions in Agor session config.
 
 ---
 
@@ -222,6 +268,13 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 - Similar to Codex in structure
 - Agor normalizes to common format
 
+**Copilot:** ✅ **Rich event-based tool tracking**
+
+- 40+ event types provide detailed tool lifecycle information
+- `tool.execution_start` / `tool.execution_complete` events with tool name and arguments
+- File edit events, bash command events, and search events are all distinct
+- Agor normalizes Copilot events to the common message format
+
 **Agor's Tool Widgets:**
 
 - **Todo lists** - Rendered from Claude's TodoWrite tool
@@ -229,7 +282,7 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 - **Bash output** - Terminal-style output rendering
 - **Permission requests** - Interactive approval modals
 
-Works best with Claude Code due to richer tool metadata.
+Works best with Claude Code due to richer tool metadata. Copilot's event types provide a solid foundation for future rich visualization.
 
 ---
 
@@ -254,7 +307,14 @@ Works best with Claude Code due to richer tool metadata.
 - Similar to Codex pattern
 - Works reliably but requires explicit history management
 
-**Performance Consideration:** Claude's session_id approach scales better for very long conversations (no need to resend full history). Codex/Gemini history-based approach works fine for typical sessions.
+**Copilot:** ✅ **SDK-managed conversation**
+
+- SDK assigns session ID for multi-turn conversations
+- Agor captures and stores `sdk_session_id` from CopilotSession
+- Seamless continuity via `resumeSession()` with fallback to `createSession()`
+- No message replay needed
+
+**Performance Consideration:** Claude and Copilot's session ID approach scales better for very long conversations (no need to resend full history). Codex/Gemini history-based approach works fine for typical sessions.
 
 ---
 
@@ -282,6 +342,13 @@ Works best with Claude Code due to richer tool metadata.
 - Gemini API provides usage data but not yet extracted
 - Future: Will track input/output token counts
 
+**Copilot:** ⚠️ **Via turn events**
+
+- Usage data available through `turn.completed` events
+- Token counts can be extracted from SDK event metadata
+- Not yet fully wired into Agor's token tracking pipeline
+- Future: Will populate TaskHeader pills and cost estimates
+
 **Why it matters:**
 
 - **Cost tracking** - Monitor API spending per session/project
@@ -289,7 +356,7 @@ Works best with Claude Code due to richer tool metadata.
 - **Context management** - Track how close you are to context limits
 - **Analytics** - Compare efficiency across different tasks
 
-**Agor Implementation:** Token data stored in `messages` table, aggregated for session-level analytics. Claude and Codex sessions display token/context pills today; Gemini support is next.
+**Agor Implementation:** Token data stored in `messages` table, aggregated for session-level analytics. Claude and Codex sessions display token/context pills today; Gemini and Copilot support is next.
 
 ---
 
@@ -313,6 +380,12 @@ Works best with Claude Code due to richer tool metadata.
 **Gemini:** ❌ **Not implemented**
 
 - No context tracking available yet
+
+**Copilot:** 🟡 **Estimated**
+
+- Uses same cumulative conversation token formula as Claude/Codex
+- Model context limits vary by selected model (GPT-4o, Claude, etc. via Copilot)
+- Same limitations as other agents (system overhead not included)
 
 **The Challenge:**
 
@@ -374,7 +447,7 @@ Without official Anthropic documentation on the exact formula, we can't be 100% 
 
 ## Advanced Claude Code SDK Features
 
-Claude Code's Agent SDK exposes several advanced features that Agor fully supports. These are **Claude-exclusive** and not available in Codex or Gemini integrations.
+Claude Code's Agent SDK exposes several advanced features that Agor fully supports. These are **Claude-exclusive** and not available in Codex, Gemini, or Copilot integrations.
 
 ### Task Tool & Nested Operations
 
@@ -576,10 +649,39 @@ When expanded:
 
 **MCP Integration (all agents):**
 
-- First-class MCP server support across Claude Code, Codex, and Gemini
+- First-class MCP server support across Claude Code, Codex, Gemini, and Copilot
 - Session-level MCP server selection via Agor UI
 - Agor's built-in MCP server for self-awareness (sessions, worktrees, boards)
 - Supports both STDIO and HTTP transports
+
+---
+
+## Copilot-Specific Notes
+
+### Authentication
+
+GitHub Copilot requires specific authentication:
+
+- **Fine-grained Personal Access Token (PAT)** with the **"Copilot Requests"** account permission
+- Classic PATs (`ghp_...`) are **not supported** by the Copilot API
+- OAuth tokens from `gh auth login` also work
+- Token is configured per-session in Agor's session settings
+
+### SDK Status
+
+The `@github/copilot-sdk` is currently in **Technical Preview** (v0.2.0). This means:
+
+- API surface may change between versions
+- Some features may be incomplete or experimental
+- Agor's integration will track SDK updates as they release
+
+### Model Selection
+
+Copilot supports multiple underlying models selectable via the SDK:
+
+- GPT-4o, GPT-4.1, Claude models, and others available through GitHub Copilot
+- Model selection configured in Agor session settings
+- Available models depend on your GitHub Copilot subscription tier
 
 ---
 
@@ -610,6 +712,14 @@ When expanded:
 - Real-time text streaming is important (Gemini has full token-level streaming)
 - You need MCP integration with Google's SDK (full support via Agor UI)
 
+### Use Copilot when:
+
+- You already have a GitHub Copilot subscription
+- You want access to multiple model providers through a single API (GPT-4o, Claude, etc.)
+- Real-time text streaming is important (full token-level streaming)
+- You need MCP integration with GitHub's SDK
+- You prefer GitHub's ecosystem and tooling
+
 ---
 
 ## Future Improvements
@@ -621,10 +731,12 @@ As agent SDKs evolve, Agor will gain new capabilities.
 Agent integration priorities:
 
 - **Codex text streaming** - The Codex SDK (`@openai/codex-sdk`) does not support token-level text streaming as of v0.99.0. When OpenAI adds `item.updated` support for `agent_message` items (or a new text delta event), Agor's code is already prepared to handle it
-- **Token tracking for Gemini** - Extract usage data from Google APIs (Codex shipped Jan 2025)
+- **Token tracking for Gemini & Copilot** - Extract usage data from Google and GitHub APIs
 - **Gemini project files** - If Google adds instruction file support
+- **Copilot project instructions** - Track `.github/copilot-instructions.md` convention as it evolves
 - **Better stop controls** - More graceful cancellation for all agents
 - **Richer tool metadata** - If Codex/Gemini expose more tool details
+- **Copilot permission UX** - Leverage typed permission kinds for granular approval UI
 
 ---
 
