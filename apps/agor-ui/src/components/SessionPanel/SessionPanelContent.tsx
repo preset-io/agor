@@ -5,6 +5,7 @@ import {
   ApiOutlined,
   CopyOutlined,
   DeleteOutlined,
+  LoginOutlined,
   VerticalAlignBottomOutlined,
   VerticalAlignTopOutlined,
 } from '@ant-design/icons';
@@ -117,11 +118,54 @@ export const SessionPanelContent: React.FC<SessionPanelContentProps> = ({
             {sessionMcpServerIds
               .map((serverId) => mcpServerById.get(serverId))
               .filter(Boolean)
-              .map((server) => (
-                <Tag key={server?.mcp_server_id} color="purple" icon={<ApiOutlined />}>
-                  {server?.display_name || server?.name}
-                </Tag>
-              ))}
+              .map((server) => {
+                const needsAuth =
+                  server?.auth?.type === 'oauth' && !server?.auth?.oauth_access_token;
+                return (
+                  <Tooltip
+                    key={server?.mcp_server_id}
+                    title={needsAuth ? 'Click to authenticate' : undefined}
+                  >
+                    <Tag
+                      color={needsAuth ? 'orange' : 'purple'}
+                      icon={needsAuth ? <LoginOutlined /> : <ApiOutlined />}
+                      style={needsAuth ? { cursor: 'pointer' } : undefined}
+                      onClick={
+                        needsAuth && client
+                          ? async () => {
+                              try {
+                                const handleOpenBrowser = ({ authUrl }: { authUrl: string }) => {
+                                  window.open(authUrl, '_blank', 'noopener,noreferrer');
+                                  client.io.off('oauth:open_browser', handleOpenBrowser);
+                                };
+                                client.io.on('oauth:open_browser', handleOpenBrowser);
+
+                                const data = (await client
+                                  .service('mcp-servers/oauth-start')
+                                  .create({
+                                    mcp_url: server?.url,
+                                    mcp_server_id: server?.mcp_server_id,
+                                    client_id: server?.auth?.oauth_client_id,
+                                  })) as { success: boolean; error?: string };
+
+                                if (!data.success) {
+                                  message.error(data.error || 'Failed to start OAuth flow');
+                                  client.io.off('oauth:open_browser', handleOpenBrowser);
+                                }
+                              } catch (err) {
+                                message.error(
+                                  `OAuth error: ${err instanceof Error ? err.message : String(err)}`
+                                );
+                              }
+                            }
+                          : undefined
+                      }
+                    >
+                      {server?.display_name || server?.name}
+                    </Tag>
+                  </Tooltip>
+                );
+              })}
           </Space>
         )}
         {/* Spacer if no pills */}

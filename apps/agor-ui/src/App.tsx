@@ -228,10 +228,11 @@ function AppContent() {
     const startOAuthFlow = async () => {
       setOauthFlowStarted(true);
 
-      // Set up listener for oauth:open_browser event
+      // Set up listener for oauth:open_browser event (one-shot: removes itself after firing)
       const handleOpenBrowser = ({ authUrl }: { authUrl: string }) => {
         console.log('[OAuth] Opening browser for auth:', authUrl);
         window.open(authUrl, '_blank', 'noopener,noreferrer');
+        client.io.off('oauth:open_browser', handleOpenBrowser);
       };
       client.io.on('oauth:open_browser', handleOpenBrowser);
 
@@ -251,12 +252,12 @@ function AppContent() {
         if (!data.success) {
           showError(data.error || 'Failed to start OAuth flow');
           setPendingOAuthServer(null);
+          client.io.off('oauth:open_browser', handleOpenBrowser);
         }
         // If success, the modal will show for callback URL input
       } catch (error) {
         showError(`OAuth error: ${error instanceof Error ? error.message : String(error)}`);
         setPendingOAuthServer(null);
-      } finally {
         client.io.off('oauth:open_browser', handleOpenBrowser);
       }
     };
