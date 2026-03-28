@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.15.0 (2026-03-28)
+
+### Features
+- **GitHub Copilot SDK integration (beta)** — launch and manage Copilot agent sessions with token-level streaming, permission mapping, and MCP support (#811)
+- **Generic Cards & CardTypes system** — create custom card types with configurable fields and display them on boards (#812)
+- **MCP SDK migration** — migrate internal MCP server to official `@modelcontextprotocol/sdk` (#816)
+- **Inner tool names for MCP proxy calls** — show the actual tool names used inside MCP proxy calls (#835)
+
+### Fixes
+- Show MCP OAuth status on session pill and fix browser open race (#836)
+- Use sudo -u for daemon git state capture to get fresh Unix groups (#827)
+- Pass oauth_client_secret from MCP server config to token exchange (#825)
+- Handle non-standard OAuth token response formats (e.g. Slack) (#823, #824)
+- Register OAuth callback as Express route to avoid FeathersJS auth layer (#820, #821, #822)
+- Use OAuth 2.0 discovery before OIDC for MCP server authorization (#819)
+- Improve Codex SDK error handling and crash resilience (#810)
+- Regenerate agor-live lockfile for cross-platform Copilot SDK support
+
+### Docs
+- Add hero image to Cards guide page (#818)
+- Reorder guide sidebar to put foundational features first (#817)
+
 ## 0.14.3 (2026-03-22)
 
 ### Features
