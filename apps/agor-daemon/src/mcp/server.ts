@@ -293,8 +293,14 @@ export function setupMCPRoutes(app: Application, db: Database, toolSearchEnabled
     try {
       console.log(`🔌 Incoming MCP request: ${req.method} /mcp`);
 
-      // Extract session token from query params
-      const sessionToken = req.query.sessionToken as string | undefined;
+      // Extract session token from query params or Authorization header
+      let sessionToken = req.query.sessionToken as string | undefined;
+      if (!sessionToken) {
+        const authHeader = req.headers.authorization;
+        if (authHeader?.startsWith('Bearer ')) {
+          sessionToken = authHeader.slice(7);
+        }
+      }
 
       if (!sessionToken) {
         console.warn('⚠️  MCP request missing sessionToken');
@@ -303,7 +309,8 @@ export function setupMCPRoutes(app: Application, db: Database, toolSearchEnabled
           id: (req.body as { id?: unknown })?.id,
           error: {
             code: -32001,
-            message: 'Authentication required: session token must be provided in query params',
+            message:
+              'Authentication required: session token must be provided in query params or Authorization header',
           },
         });
       }
