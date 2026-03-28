@@ -173,8 +173,7 @@ export class CopilotPromptService {
       const daemonUrl = await getDaemonUrl();
       copilotMcpServers.agor = {
         type: 'http',
-        url: `${daemonUrl}/mcp`,
-        headers: { Authorization: `Bearer ${mcpToken}` },
+        url: `${daemonUrl}/mcp?sessionToken=${mcpToken}`,
         tools: ['*'],
       };
       console.log(`   📝 [Copilot MCP] Configured Agor MCP server (HTTP)`);
