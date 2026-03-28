@@ -227,8 +227,14 @@ export class SlackConnector implements GatewayConnector {
 
     // 2. Check cache (populated from message events or prior API calls)
     const now = Date.now();
+
+    // Evict expired entries to prevent unbounded growth
+    for (const [key, entry] of this.channelTypeCache) {
+      if (entry.expiresAt <= now) this.channelTypeCache.delete(key);
+    }
+
     const cached = this.channelTypeCache.get(channelId);
-    if (cached && cached.expiresAt > now) {
+    if (cached) {
       return cached.type;
     }
 
@@ -263,25 +269,28 @@ export class SlackConnector implements GatewayConnector {
       // Fall through to prefix inference
     }
 
-    // 4. Last resort: prefix inference (unreliable but better than nothing)
+    // 4. Last resort: prefix inference for unambiguous prefixes only.
+    // IMPORTANT: C-prefix is NOT used — private channels can have C-prefix,
+    // and misclassifying them as public would recreate the original bug (#826).
+    // G → group and D → DM are reliable inferences.
     const prefix = channelId.charAt(0);
     let inferredType: string | undefined;
-    if (prefix === 'C') {
-      inferredType = 'channel';
-    } else if (prefix === 'G') {
+    if (prefix === 'G') {
       inferredType = 'group';
     } else if (prefix === 'D') {
       inferredType = 'im';
     }
     if (inferredType) {
-      console.warn(
-        `[slack] Using unreliable prefix inference for channel ${channelId} → ${inferredType}`
-      );
-      // Short TTL for prefix-inferred types — they may be wrong
+      console.warn(`[slack] Using prefix inference for channel ${channelId} → ${inferredType}`);
+      // Short TTL for prefix-inferred types
       this.channelTypeCache.set(channelId, {
         type: inferredType,
         expiresAt: now + SlackConnector.CHANNEL_CACHE_ERROR_TTL_MS,
       });
+    } else {
+      console.warn(
+        `[slack] Cannot determine channel type for ${channelId} (API failed, prefix ambiguous)`
+      );
     }
     return inferredType;
   }
