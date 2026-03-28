@@ -1,6 +1,6 @@
 ---
 title: SDK Feature Comparison
-description: Compare AI coding agent capabilities in agor. Feature matrix for Claude Code, Codex, Gemini, and GitHub Copilot integrations including streaming, tool approval, and SDK differences.
+description: Compare AI coding agent capabilities in agor. Feature matrix for Claude Code, Codex, Gemini, GitHub Copilot, and OpenCode integrations including streaming, tool approval, and SDK differences.
 ---
 
 # SDK Feature Comparison
@@ -9,19 +9,19 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 
 ## Feature Matrix
 
-| Feature                     | Claude Code         | Codex                     | Gemini              | Copilot                   | Notes                                                                                   |
-| --------------------------- | ------------------- | ------------------------- | ------------------- | ------------------------- | --------------------------------------------------------------------------------------- |
-| **Streaming responses**     | ✅ Text + tools     | ⚠️ Tools only             | ✅ Text + tools     | ✅ Text + tools           | Claude, Gemini & Copilot stream text token-by-token; Codex streams tool events only     |
-| **Stop mid-execution**      | ✅ Yes              | ⚠️ Limited                | ⚠️ Limited          | ⚠️ Limited                | Claude has `interrupt()`, others may lose partial work                                  |
-| **Session import/export**   | ✅ Yes              | ❌ No                     | ❌ No               | ❌ No                     | Only Claude Code stores sessions as JSONL transcripts                                   |
-| **Session forkable**        | ✅ Yes (via replay) | ✅ Yes (via replay)       | ✅ Yes (via replay) | ✅ Yes (via replay)       | Agor emulates forking by replaying messages to new session                              |
-| **MCP integration**         | ✅ Native           | ✅ Native                  | ✅ Native           | ✅ Native                 | All agents support MCP with Agor's built-in self-access server                          |
-| **Permission requests**     | ✅ Rich             | ⚠️ Basic                  | ⚠️ Basic            | ✅ Interactive             | Claude & Copilot have interactive permission UI; Copilot lacks SDK-level persistence     |
-| **Project instructions**    | ✅ CLAUDE.md        | ✅ AGENTS.md               | ⚠️ Manual           | ⚠️ Manual                 | Claude auto-loads CLAUDE.md, Codex auto-loads AGENTS.md; Gemini/Copilot need injection  |
-| **Tool execution**          | ✅ Rich widgets     | ⚠️ Basic                  | ⚠️ Basic            | ✅ Rich events            | Claude and Copilot expose detailed tool metadata for visualization                      |
-| **Session continuity**      | ✅ SDK-managed      | ✅ History-based          | ✅ History-based    | ✅ SDK-managed            | Claude and Copilot use SDK session IDs; others replay message history                   |
-| **Token usage tracking**    | ✅ Full             | ✅ Full                   | ❌ No               | ⚠️ Via events             | Claude & Codex surface SDK usage metadata; Copilot emits usage via turn events          |
-| **Context window tracking** | 🟡 Estimated        | 🟡 Estimated              | ❌ No               | 🟡 Estimated              | Agor derives cumulative conversation usage from SDK metrics                             |
+| Feature                     | Claude Code         | Codex                     | Gemini              | Copilot                   | OpenCode                  | Notes                                                                                       |
+| --------------------------- | ------------------- | ------------------------- | ------------------- | ------------------------- | ------------------------- | ------------------------------------------------------------------------------------------- |
+| **Streaming responses**     | ✅ Text + tools     | ⚠️ Tools only             | ✅ Text + tools     | ✅ Text + tools           | ✅ Text + tools           | Claude, Gemini, Copilot & OpenCode stream text token-by-token; Codex streams tool events only |
+| **Stop mid-execution**      | ✅ Yes              | ⚠️ Limited                | ⚠️ Limited          | ⚠️ Limited                | ⚠️ Limited                | Claude has `interrupt()`, others may lose partial work                                      |
+| **Session import/export**   | ✅ Yes              | ❌ No                     | ❌ No               | ❌ No                     | ❌ No                     | Only Claude Code stores sessions as JSONL transcripts                                       |
+| **Session forkable**        | ✅ Yes (via replay) | ✅ Yes (via replay)       | ✅ Yes (via replay) | ✅ Yes (via replay)       | ❌ Not yet                | Agor emulates forking by replaying messages to new session                                  |
+| **MCP integration**         | ✅ Native           | ✅ Native                  | ✅ Native           | ✅ Native                 | ✅ Native                 | All agents support MCP with Agor's built-in self-access server                              |
+| **Permission requests**     | ✅ Rich             | ⚠️ Basic                  | ⚠️ Basic            | ✅ Interactive             | ⚠️ Auto-granted          | OpenCode permissions auto-granted by Agor to prevent session hangs                          |
+| **Project instructions**    | ✅ CLAUDE.md        | ✅ AGENTS.md               | ⚠️ Manual           | ⚠️ Manual                 | ✅ opencode.json          | OpenCode reads project config from `opencode.json`; Claude auto-loads CLAUDE.md             |
+| **Tool execution**          | ✅ Rich widgets     | ⚠️ Basic                  | ⚠️ Basic            | ✅ Rich events            | ✅ Rich events            | OpenCode streams tool parts with state tracking (pending/running/completed)                  |
+| **Session continuity**      | ✅ SDK-managed      | ✅ History-based          | ✅ History-based    | ✅ SDK-managed            | ✅ SDK-managed            | OpenCode, Claude, and Copilot use SDK session IDs; others replay message history            |
+| **Token usage tracking**    | ✅ Full             | ✅ Full                   | ❌ No               | ⚠️ Via events             | ✅ Via step-finish        | OpenCode provides token counts and cost via `step-finish` message parts                     |
+| **Context window tracking** | 🟡 Estimated        | 🟡 Estimated              | ❌ No               | 🟡 Estimated              | 🟡 Estimated              | Agor derives cumulative conversation usage from SDK metrics                                 |
 
 **Legend:**
 
@@ -68,7 +68,14 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 - 40+ distinct event types for detailed progress feedback
 - Uses event emitter pattern on CopilotSession + `sendAndWait()` blocking call
 
-**Agor Implementation:** StreamingCallbacks interface provides unified streaming for all agents. Claude, Gemini, and Copilot get the full typewriter experience; Codex text appears instantly once the model finishes generating.
+**OpenCode:** ✅ **Full text + tool streaming**
+
+- Token-level text streaming via SSE event subscription (`message.part.updated` events)
+- True real-time typewriter effect with reasoning block support
+- Tool execution events stream with state transitions (pending → running → completed)
+- Supports 75+ LLM providers (OpenAI, Anthropic, Google, and self-hosted models)
+
+**Agor Implementation:** StreamingCallbacks interface provides unified streaming for all agents. Claude, Gemini, Copilot, and OpenCode get the full typewriter experience; Codex text appears instantly once the model finishes generating.
 
 ---
 
@@ -99,6 +106,12 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 - May lose partial work from in-progress tool executions
 - Similar to Codex/Gemini limitations
 
+**OpenCode:** ⚠️ **Limited**
+
+- Can abort via session abort API
+- May lose partial work from in-progress tool executions
+- Event stream disconnection triggers cleanup
+
 ---
 
 ### 3. Session Import/Export
@@ -127,6 +140,12 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 - No native session export format
 - Agor stores sessions in own database
 - Cannot import external Copilot sessions
+
+**OpenCode:** ❌ **Not supported**
+
+- No native session export format
+- Agor stores sessions in own database via `sdk_session_id` mapping
+- Cannot import external OpenCode sessions
 
 ---
 
@@ -173,6 +192,14 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 - Agor's built-in MCP server auto-configured with session token via query parameter
 - Session-level MCP selection via Agor UI, same as other agents
 
+**OpenCode:** ✅ **Native support**
+
+- MCP servers added dynamically via REST API (`mcp.add()`)
+- Supports both local (STDIO) and remote (Streamable HTTP) transports
+- Agor injects its built-in MCP server with session token authentication
+- User-defined MCP servers injected per-session from Agor UI
+- OpenCode tries Streamable HTTP first, then falls back to SSE for remote servers
+
 **See [Architecture Guide: Agor as an MCP Server](/guide/architecture#agor-as-an-mcp-server) for details on using MCP with all agents.**
 
 ---
@@ -213,7 +240,14 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 - **No SDK-level persistence** — the Copilot SDK (v0.2.0) does not expose a mechanism to save permission rules (unlike Claude's `updatedPermissions`). Approvals are per-request only. The Copilot CLI itself supports persistent rules via `~/.copilot/config.json` and `--allow-tool` flags, but these are not accessible through the SDK's `onPermissionRequest` callback
 - MCP tools from attached servers (including Agor's built-in server) are auto-approved
 
-**Agor Implementation:** Permission modals adapt based on agent type. Claude shows persistent scope options (Project/User/Local); Copilot shows approve/deny only. Both provide full interactive tool approval with parameter previews.
+**OpenCode:** ⚠️ **Auto-granted by Agor**
+
+- OpenCode emits `permission.asked` events when tool execution requires approval
+- Agor auto-grants all permissions (responds with `'always'`) to prevent session hangs
+- Permissions include `external_directory` access when working outside the default project
+- No interactive UI — designed for autonomous agent operation
+
+**Agor Implementation:** Permission modals adapt based on agent type. Claude shows persistent scope options (Project/User/Local); Copilot shows approve/deny only. OpenCode permissions are auto-granted for seamless autonomous execution.
 
 ---
 
@@ -244,7 +278,14 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 - Agor injects context via the system prompt and initial message
 - Respects `.github/copilot-instructions.md` if present in repository
 
-**Recommendation:** Use Claude Code or Codex for projects with rich context requirements. For Gemini and Copilot, manage instructions in Agor session config.
+**OpenCode:** ✅ **opencode.json auto-loading**
+
+- Reads project configuration from `opencode.json` in the working directory
+- Supports custom instructions, model defaults, and provider configuration
+- Directory-scoped operations ensure the correct project config is loaded
+- Agor passes the worktree path to scope OpenCode to the correct project
+
+**Recommendation:** Use Claude Code or Codex for projects with rich context requirements. OpenCode is ideal for teams using multiple LLM providers. For Gemini and Copilot, manage instructions in Agor session config.
 
 ---
 
@@ -283,7 +324,14 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 - **Bash output** - Terminal-style output rendering
 - **Permission requests** - Interactive approval modals
 
-Works best with Claude Code due to richer tool metadata. Copilot's event types provide a solid foundation for future rich visualization.
+**OpenCode:** ✅ **Rich event-based tool tracking**
+
+- Tool parts include `tool` name, `callID`, and `state` with input/output
+- State transitions: pending → running → completed with output
+- Agor normalizes OpenCode tool parts to common `tool_use` / `tool_result` content blocks
+- File edit events and bash commands are all tracked as tool parts
+
+Works best with Claude Code due to richer tool metadata. OpenCode and Copilot's event types provide a solid foundation for rich visualization.
 
 ---
 
@@ -315,7 +363,14 @@ Works best with Claude Code due to richer tool metadata. Copilot's event types p
 - Seamless continuity via `resumeSession()` with fallback to `createSession()`
 - No message replay needed
 
-**Performance Consideration:** Claude and Copilot's session ID approach scales better for very long conversations (no need to resend full history). Codex/Gemini history-based approach works fine for typical sessions.
+**OpenCode:** ✅ **SDK-managed conversation**
+
+- SDK assigns session ID on creation
+- Agor captures and stores `sdk_session_id` from OpenCode session
+- Seamless continuity via session resume with the stored ID
+- No message replay needed — OpenCode server maintains conversation state
+
+**Performance Consideration:** Claude, Copilot, and OpenCode's session ID approach scales better for very long conversations (no need to resend full history). Codex/Gemini history-based approach works fine for typical sessions.
 
 ---
 
@@ -357,7 +412,14 @@ Works best with Claude Code due to richer tool metadata. Copilot's event types p
 - **Context management** - Track how close you are to context limits
 - **Analytics** - Compare efficiency across different tasks
 
-**Agor Implementation:** Token data stored in `messages` table, aggregated for session-level analytics. Claude and Codex sessions display token/context pills today; Gemini and Copilot support is next.
+**OpenCode:** ✅ **Via step-finish parts**
+
+- `step-finish` message parts include `cost`, `tokens.input`, `tokens.output`, `tokens.reasoning`
+- Cache metrics: `tokens.cache.read` and `tokens.cache.write`
+- Agor stores these in message metadata under `opencode` key
+- Supports cost tracking across all 75+ providers
+
+**Agor Implementation:** Token data stored in `messages` table, aggregated for session-level analytics. Claude, Codex, and OpenCode sessions display token/context pills today; Gemini and Copilot support is next.
 
 ---
 
@@ -740,6 +802,54 @@ Copilot supports multiple underlying models selectable via the SDK:
 - You need MCP integration with GitHub's SDK
 - You prefer GitHub's ecosystem and tooling
 
+### Use OpenCode when:
+
+- You need support for **75+ LLM providers** (OpenAI, Anthropic, Google, Mistral, self-hosted, etc.)
+- You want to **self-host** or use your own API keys directly
+- You're running **GitHub Copilot Pro+** through OpenCode for near-unlimited usage
+- You prefer an open-source terminal-based agent
+- You need flexibility to switch between providers without changing tools
+- Cost optimization is important — bring your own keys, no middleman
+
+---
+
+## OpenCode-Specific Notes
+
+### Architecture
+
+OpenCode uses a **client-server model** unlike other agents:
+
+- **Server:** `opencode serve` runs as a standalone process (user-managed, not started by Agor)
+- **SDK:** `@opencode-ai/sdk` provides a REST client that communicates with the server
+- **Directory Scoping:** Agor passes the worktree path via the `x-opencode-directory` header and `directory` query parameter to scope all operations
+
+### Provider Configuration
+
+OpenCode supports 75+ providers configured via `opencode auth login` or environment variables:
+
+- **OpenAI** (GPT-4o, GPT-5, etc.)
+- **Anthropic** (Claude Sonnet, Opus, Haiku)
+- **Google** (Gemini models)
+- **GitHub Copilot** (via Pro+ subscription — near-unlimited usage)
+- **Self-hosted** (Ollama, vLLM, etc.)
+- **Many more** — any OpenAI-compatible endpoint
+
+### MCP Integration
+
+OpenCode supports MCP servers via its REST API:
+
+- **Local (STDIO):** Agor injects `command` + `args` configurations
+- **Remote (Streamable HTTP):** Agor injects its built-in MCP server URL with session token
+- OpenCode tries Streamable HTTP first, then falls back to SSE for remote connections
+- MCP servers are added per-session and scoped to the worktree directory
+
+### Limitations
+
+- **Session forking** not yet supported (OpenCode doesn't provide fork/replay API)
+- **Session import/export** not available
+- **Permissions** are auto-granted by Agor (no interactive approval UI)
+- **Server must be running** — `opencode serve` must be started separately before using in Agor
+
 ---
 
 ## Future Improvements
@@ -757,6 +867,8 @@ Agent integration priorities:
 - **Better stop controls** - More graceful cancellation for all agents
 - **Richer tool metadata** - If Codex/Gemini expose more tool details
 - **Copilot permission persistence** - The Copilot SDK (v0.2.0) doesn't expose a way to persist permission rules. When the SDK adds an `updatedPermissions`-equivalent, Agor will support persistent scopes (session, project, user) matching Claude Code's UX
+- **OpenCode session forking** - When OpenCode adds fork/replay API support
+- **OpenCode interactive permissions** - Surface permission requests to Agor UI instead of auto-granting
 
 ---
 

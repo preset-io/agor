@@ -284,8 +284,9 @@ describe('OpenCodeTool', () => {
       await (tool as any).ensureMcpServers('session-1', client, 'test-token');
 
       // Should have called client.mcp.add with Agor MCP config
+      // MCP name format: agor_${sessionId.substring(0, 8)}
       expect(mockMcpAddCalls.length).toBeGreaterThanOrEqual(1);
-      const agorCall = mockMcpAddCalls.find((c) => c.name === 'agor');
+      const agorCall = mockMcpAddCalls.find((c) => c.name === 'agor_session-');
       expect(agorCall).toBeDefined();
       expect(agorCall!.config).toEqual({
         type: 'remote',
@@ -307,11 +308,11 @@ describe('OpenCodeTool', () => {
       await (tool as any).ensureMcpServers('session-1', client, undefined);
 
       // Should NOT have injected Agor MCP
-      const agorCall = mockMcpAddCalls.find((c) => c.name === 'agor');
+      const agorCall = mockMcpAddCalls.find((c) => c.name.startsWith('agor_'));
       expect(agorCall).toBeUndefined();
     });
 
-    it('should skip re-injection when config hash unchanged', async () => {
+    it('should skip re-injection of user-defined MCP servers when config hash unchanged', async () => {
       const tool = new OpenCodeTool(
         { enabled: true, serverUrl: 'http://localhost:4096' },
         mockMessagesService,
@@ -321,13 +322,15 @@ describe('OpenCodeTool', () => {
 
       const client = (tool as any).getClientForDirectory(undefined);
 
-      // First call
+      // First call - injects Agor MCP
       await (tool as any).ensureMcpServers('session-1', client, 'token-1');
       const callsAfterFirst = mockMcpAddCalls.length;
 
-      // Second call with same config - should skip
+      // Second call with same config - Agor MCP is re-injected each time (by design),
+      // but user-defined MCP servers should be skipped (hash-based caching)
       await (tool as any).ensureMcpServers('session-1', client, 'token-1');
-      expect(mockMcpAddCalls.length).toBe(callsAfterFirst); // No new calls
+      // Only 1 new call for re-injected Agor MCP, no user-defined servers re-added
+      expect(mockMcpAddCalls.length).toBe(callsAfterFirst + 1);
     });
 
     it('should re-inject when config hash changes', async () => {
@@ -500,7 +503,7 @@ describe('OpenCodeTool', () => {
 
       await (tool as any).ensureMcpServers('session-encode', client, tokenWithSpecialChars);
 
-      const agorCall = mockMcpAddCalls.find((c) => c.name === 'agor');
+      const agorCall = mockMcpAddCalls.find((c) => c.name === 'agor_session-');
       expect(agorCall).toBeDefined();
       expect((agorCall!.config as any).url).toBe(
         `http://localhost:3030/mcp?sessionToken=${encodeURIComponent(tokenWithSpecialChars)}`
@@ -554,8 +557,8 @@ describe('OpenCodeTool', () => {
 
       await tool.executeTask?.('session-mcp', 'test prompt', 'task-2');
 
-      // Should have injected Agor MCP
-      const agorCall = mockMcpAddCalls.find((c) => c.name === 'agor');
+      // Should have injected Agor MCP (name format: agor_${sessionId.substring(0, 8)})
+      const agorCall = mockMcpAddCalls.find((c) => c.name.startsWith('agor_'));
       expect(agorCall).toBeDefined();
     });
 

@@ -194,7 +194,7 @@ export class OpenCodeTool implements ITool {
         const daemonUrl = await getDaemonUrl();
         const mcpUrl = `${daemonUrl}/mcp?sessionToken=${encodeURIComponent(mcpToken)}`;
 
-        await client.mcp.add({
+        const mcpResult = await client.mcp.add({
           body: {
             name: mcpName,
             config: {
@@ -205,7 +205,10 @@ export class OpenCodeTool implements ITool {
           },
           query: worktreePath ? { directory: worktreePath } : undefined,
         });
-        console.log(`[OpenCodeTool] Injected Agor MCP as "${mcpName}" for session ${shortId}`);
+        console.log(
+          `[OpenCodeTool] Injected Agor MCP as "${mcpName}" for session ${shortId}`,
+          mcpResult.data ? `status: ${JSON.stringify(mcpResult.data)}` : ''
+        );
       } catch (error) {
         console.warn(`[OpenCodeTool] Failed to inject Agor MCP server "${mcpName}":`, error);
       }
@@ -239,6 +242,7 @@ export class OpenCodeTool implements ITool {
                     enabled: true,
                   },
                 },
+                query: worktreePath ? { directory: worktreePath } : undefined,
               });
             } else if (server.transport === 'http' || server.transport === 'sse') {
               const headers: Record<string, string> = {};
@@ -255,6 +259,7 @@ export class OpenCodeTool implements ITool {
                     headers: Object.keys(headers).length > 0 ? headers : undefined,
                   },
                 },
+                query: worktreePath ? { directory: worktreePath } : undefined,
               });
             }
             console.log(`[OpenCodeTool] Injected MCP server: ${sanitizedName}`);
@@ -313,6 +318,9 @@ export class OpenCodeTool implements ITool {
         body: {
           title: String(config.title || 'Agor Session'),
         },
+        // Explicitly pass directory as query param (in addition to SDK header)
+        // to ensure the session is created in the correct worktree directory
+        query: config.workingDirectory ? { directory: config.workingDirectory } : undefined,
       });
 
       if (response.error) {
@@ -395,11 +403,14 @@ export class OpenCodeTool implements ITool {
           parts: Array<{ type: 'text'; text: string }>;
           model?: { providerID: string; modelID: string };
         };
+        query?: { directory?: string };
       } = {
         path: { id: context.opencodeSessionId },
         body: {
           parts: [{ type: 'text', text: prompt }],
         },
+        // Explicitly pass directory as query param to ensure correct worktree scoping
+        query: worktreePath ? { directory: worktreePath } : undefined,
       };
 
       // Include model if provided
@@ -437,7 +448,10 @@ export class OpenCodeTool implements ITool {
       // IMPORTANT: Subscribe to event stream BEFORE sending prompt
       // Events are emitted in real-time as prompt executes
       console.log('[OpenCodeTool] Subscribing to event stream...');
-      const eventStream = await client.event.subscribe();
+      const eventStream = await client.event.subscribe({
+        // Pass directory to scope event stream to correct worktree
+        query: worktreePath ? { directory: worktreePath } : undefined,
+      });
       console.log('[OpenCodeTool] Event stream ready, sending prompt...');
 
       // Start prompt in background (don't await yet)
@@ -877,6 +891,7 @@ export class OpenCodeTool implements ITool {
         parts: Array<{ type: 'text'; text: string }>;
         model?: { providerID: string; modelID: string };
       };
+      query?: { directory?: string };
     },
     opencodeSessionId: string,
     messageIndex?: number
