@@ -508,6 +508,7 @@ export class OpenCodeTool implements ITool {
                     permissionID: permId,
                   },
                   body: { response: 'always' },
+                  query: worktreePath ? { directory: worktreePath } : undefined,
                 });
                 console.log(`[OpenCodeTool] Permission auto-granted (always): id=${permId}`);
               } catch (permErr) {
