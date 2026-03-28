@@ -117,6 +117,20 @@ export class SlackConnector implements GatewayConnector {
   private static USER_CACHE_TTL_MS = 15 * 60 * 1000; // 15 min for successful lookups
   private static USER_CACHE_ERROR_TTL_MS = 60 * 1000; // 1 min for errors (transient recovery)
 
+  /**
+   * Cache: Slack channel ID → channel type string (channel/group/mpim/im).
+   *
+   * Populated from:
+   * 1. `message` events (which include reliable `channel_type`)
+   * 2. `conversations.info` API calls (fallback for `app_mention` events)
+   *
+   * This avoids relying on the channel ID prefix (C/G/D) which is unreliable —
+   * Slack private channels can have a `C` prefix.
+   */
+  private channelTypeCache = new Map<string, { type: string; expiresAt: number }>();
+  private static CHANNEL_CACHE_TTL_MS = 30 * 60 * 1000; // 30 min
+  private static CHANNEL_CACHE_ERROR_TTL_MS = 60 * 1000; // 1 min for API errors
+
   constructor(config: Record<string, unknown>) {
     this.config = config as unknown as SlackConfig;
 
@@ -180,6 +194,96 @@ export class SlackConnector implements GatewayConnector {
       });
       return null;
     }
+  }
+
+  /**
+   * Cache a known channel type from a trusted source (e.g. `message` event with explicit `channel_type`).
+   */
+  private cacheChannelType(channelId: string, type: string): void {
+    this.channelTypeCache.set(channelId, {
+      type,
+      expiresAt: Date.now() + SlackConnector.CHANNEL_CACHE_TTL_MS,
+    });
+  }
+
+  /**
+   * Resolve the Slack channel type for a given channel ID.
+   *
+   * Resolution order:
+   * 1. Explicit `channel_type` from the event (trusted, used by `message` events)
+   * 2. In-memory cache (populated from prior `message` events or API calls)
+   * 3. `conversations.info` API call (cached on success)
+   * 4. Channel ID prefix inference (last resort, unreliable for private channels)
+   */
+  private async resolveChannelType(
+    channelId: string,
+    eventChannelType: string | undefined
+  ): Promise<string | undefined> {
+    // 1. Explicit channel_type from event — always trust it and cache for later
+    if (eventChannelType) {
+      this.cacheChannelType(channelId, eventChannelType);
+      return eventChannelType;
+    }
+
+    // 2. Check cache (populated from message events or prior API calls)
+    const now = Date.now();
+    const cached = this.channelTypeCache.get(channelId);
+    if (cached && cached.expiresAt > now) {
+      return cached.type;
+    }
+
+    // 3. Call conversations.info API
+    try {
+      const result = await this.web.conversations.info({ channel: channelId });
+      if (result.ok && result.channel) {
+        const ch = result.channel as {
+          is_channel?: boolean;
+          is_group?: boolean;
+          is_mpim?: boolean;
+          is_im?: boolean;
+          is_private?: boolean;
+        };
+        let resolvedType: string;
+        if (ch.is_im) {
+          resolvedType = 'im';
+        } else if (ch.is_mpim) {
+          resolvedType = 'mpim';
+        } else if (ch.is_private || ch.is_group) {
+          resolvedType = 'group';
+        } else {
+          resolvedType = 'channel';
+        }
+        console.log(`[slack] conversations.info resolved channel ${channelId} → ${resolvedType}`);
+        this.cacheChannelType(channelId, resolvedType);
+        return resolvedType;
+      }
+    } catch (error) {
+      console.warn(`[slack] conversations.info failed for ${channelId}:`, error);
+      // Cache the error briefly so we don't hammer the API
+      // Fall through to prefix inference
+    }
+
+    // 4. Last resort: prefix inference (unreliable but better than nothing)
+    const prefix = channelId.charAt(0);
+    let inferredType: string | undefined;
+    if (prefix === 'C') {
+      inferredType = 'channel';
+    } else if (prefix === 'G') {
+      inferredType = 'group';
+    } else if (prefix === 'D') {
+      inferredType = 'im';
+    }
+    if (inferredType) {
+      console.warn(
+        `[slack] Using unreliable prefix inference for channel ${channelId} → ${inferredType}`
+      );
+      // Short TTL for prefix-inferred types — they may be wrong
+      this.channelTypeCache.set(channelId, {
+        type: inferredType,
+        expiresAt: now + SlackConnector.CHANNEL_CACHE_ERROR_TTL_MS,
+      });
+    }
+    return inferredType;
   }
 
   /**
@@ -323,6 +427,14 @@ export class SlackConnector implements GatewayConnector {
         return;
       }
 
+      // Resolve channel type early — needed for both dedup and filtering.
+      // Uses cache (populated from prior message events) + conversations.info fallback.
+      // This replaces the unreliable channel ID prefix inference that misclassified
+      // private channels with C-prefix as public channels.
+      const channelType = event.channel
+        ? await this.resolveChannelType(event.channel, event.channel_type)
+        : undefined;
+
       // IMPORTANT: Prevent duplicate processing
       // When a bot is mentioned, Slack sends BOTH 'app_mention' and 'message' events.
       // This happens for top-level messages AND thread replies.
@@ -334,18 +446,7 @@ export class SlackConnector implements GatewayConnector {
       // - Skip 'app_mention' events where the mention is only inside code blocks
       //   (those are not "real" mentions and should be handled as plain messages)
       const isThreadReply = !!event.thread_ts;
-      // Determine if this is a channel/group message for dedup purposes.
-      // app_mention events often lack channel_type, so infer from channel ID prefix.
-      // IMPORTANT: Only use prefix inference for app_mention events. For message events,
-      // rely on the explicit channel_type to avoid misclassifying MPIMs (which also
-      // use G* prefix) and accidentally dropping messages.
-      const channelPrefix = (event.channel as string | undefined)?.charAt(0);
-      const isChannelMessage =
-        event.channel_type === 'channel' ||
-        event.channel_type === 'group' ||
-        (eventType === 'app_mention' &&
-          !event.channel_type &&
-          (channelPrefix === 'C' || channelPrefix === 'G'));
+      const isChannelMessage = channelType === 'channel' || channelType === 'group';
 
       // CRITICAL: Prevent duplicates in channels/groups when bot ID unavailable
       // Strategy depends on require_mention setting:
@@ -382,21 +483,6 @@ export class SlackConnector implements GatewayConnector {
           // Skip — the parallel message event will handle it as a non-mention
           // (correctly rejected or routed via thread reply exception).
           return;
-        }
-      }
-
-      // Resolve channel type. app_mention events don't include channel_type,
-      // so infer it from the channel ID prefix when missing:
-      //   C = public channel, G = private channel/group DM, D = DM
-      let channelType: string | undefined = event.channel_type;
-      if (!channelType && event.channel) {
-        const prefix = (event.channel as string).charAt(0);
-        if (prefix === 'C') {
-          channelType = 'channel';
-        } else if (prefix === 'G') {
-          channelType = 'group';
-        } else if (prefix === 'D') {
-          channelType = 'im';
         }
       }
 
@@ -497,7 +583,7 @@ export class SlackConnector implements GatewayConnector {
         timestamp: event.ts ?? new Date().toISOString(),
         metadata: {
           channel: event.channel,
-          channel_type: event.channel_type,
+          channel_type: channelType,
           requires_mapping_verification: allowedViaThreadReplyException,
           ...(slackUserEmail ? { slack_user_email: slackUserEmail } : {}),
           // Signal that user alignment was attempted so the gateway can
