@@ -20,6 +20,7 @@ export const AgenticToolsTab: React.FC<AgenticToolsTabProps> = ({ client }) => {
     ANTHROPIC_API_KEY: false,
     OPENAI_API_KEY: false,
     GEMINI_API_KEY: false,
+    COPILOT_GITHUB_TOKEN: false,
   });
   const [baseUrl, setBaseUrl] = useState<string>('');
   const [baseUrlInput, setBaseUrlInput] = useState<string>('');
@@ -45,6 +46,7 @@ export const AgenticToolsTab: React.FC<AgenticToolsTabProps> = ({ client }) => {
           ANTHROPIC_API_KEY: !!config?.ANTHROPIC_API_KEY,
           OPENAI_API_KEY: !!config?.OPENAI_API_KEY,
           GEMINI_API_KEY: !!config?.GEMINI_API_KEY,
+          COPILOT_GITHUB_TOKEN: !!config?.COPILOT_GITHUB_TOKEN,
         });
 
         // Load base URL if set

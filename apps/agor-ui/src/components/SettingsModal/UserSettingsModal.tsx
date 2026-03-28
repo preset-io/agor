@@ -60,6 +60,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const [codexForm] = Form.useForm();
   const [geminiForm] = Form.useForm();
   const [opencodeForm] = Form.useForm();
+  const [copilotForm] = Form.useForm();
   const [audioForm] = Form.useForm();
 
   // API key management state
@@ -67,6 +68,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     ANTHROPIC_API_KEY: false,
     OPENAI_API_KEY: false,
     GEMINI_API_KEY: false,
+    COPILOT_GITHUB_TOKEN: false,
   });
   const [savingApiKeys, setSavingApiKeys] = useState<Record<string, boolean>>({});
 
@@ -80,6 +82,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     codex: false,
     gemini: false,
     opencode: false,
+    copilot: false,
   });
 
   // Initialize forms when user changes or modal opens
@@ -152,12 +155,14 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         ANTHROPIC_API_KEY: !!user.api_keys.ANTHROPIC_API_KEY,
         OPENAI_API_KEY: !!user.api_keys.OPENAI_API_KEY,
         GEMINI_API_KEY: !!user.api_keys.GEMINI_API_KEY,
+        COPILOT_GITHUB_TOKEN: !!user.api_keys.COPILOT_GITHUB_TOKEN,
       });
     } else {
       setUserApiKeyStatus({
         ANTHROPIC_API_KEY: false,
         OPENAI_API_KEY: false,
         GEMINI_API_KEY: false,
+        COPILOT_GITHUB_TOKEN: false,
       });
     }
 
@@ -302,6 +307,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       codex: codexForm,
       gemini: geminiForm,
       opencode: opencodeForm,
+      copilot: copilotForm,
     };
 
     const currentForm = formMap[tool];
@@ -345,6 +351,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       codex: codexForm,
       gemini: geminiForm,
       opencode: opencodeForm,
+      copilot: copilotForm,
     };
 
     const currentForm = formMap[tool];
@@ -599,13 +606,15 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       case 'claude-code':
       case 'codex':
       case 'gemini':
-      case 'opencode': {
+      case 'opencode':
+      case 'copilot': {
         const toolName = activeTab as AgenticToolName;
         const formMap = {
           'claude-code': claudeForm,
           codex: codexForm,
           gemini: geminiForm,
           opencode: opencodeForm,
+          copilot: copilotForm,
         };
         const currentForm = formMap[toolName];
         const displayNames: Record<AgenticToolName, string> = {
@@ -613,6 +622,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           codex: 'Codex',
           gemini: 'Gemini',
           opencode: 'OpenCode',
+          copilot: 'Copilot',
         };
         return (
           <>
