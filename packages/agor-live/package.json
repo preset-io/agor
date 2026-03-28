@@ -57,6 +57,7 @@
     "@feathersjs/socketio": "^5.0.41",
     "@feathersjs/socketio-client": "^5.0.41",
     "@feathersjs/typebox": "^5.0.41",
+    "@github/copilot-sdk": "^0.2.0",
     "@google/gemini-cli-core": "^0.31.0",
     "@google/genai": "^1.43.0",
     "@homebridge/node-pty-prebuilt-multiarch": "^0.13.1",
