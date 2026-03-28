@@ -2,36 +2,37 @@
 
 **Related:** [[agent-integration]], [[permissions]], [[conversation-ui]]
 
-This document covers Agor's integration with agentic coding tools (Claude Code, Codex, Gemini), including feature comparison, implementation patterns, and integration status.
+This document covers Agor's integration with agentic coding tools (Claude Code, Codex, Gemini, GitHub Copilot), including feature comparison, implementation patterns, and integration status.
 
 ## Supported Tools
 
-Agor integrates with three production-ready agentic coding tools:
+Agor integrates with four agentic coding tools:
 
 1. **Claude Code** (Anthropic) - `@anthropic-ai/claude-agent-sdk`
 2. **Codex** (OpenAI) - `@openai/codex-sdk`
 3. **Gemini CLI** (Google) - `@google/gemini-cli-core`
+4. **GitHub Copilot** (GitHub) - `@github/copilot-sdk` *(Technical Preview)*
 
-All three use official SDKs for programmatic control, streaming, and session management.
+All four use official SDKs for programmatic control, streaming, and session management.
 
 ## Feature Comparison Matrix
 
 ### Quick Reference
 
-| Feature                           | Claude Code          | Codex               | Gemini             |
-| --------------------------------- | -------------------- | ------------------- | ------------------ |
-| **SDK Available**                 | ✅ Official          | ✅ Official         | ✅ Official        |
-| **Streaming Support**             | ✅ Text + tools      | ⚠️ Tools only       | ✅ Text + tools    |
-| **Usage/Token Tracking**          | ✅ Full support      | ⚠️ Not exposed      | ⚠️ Not tested      |
-| **Permission Modes**              | ✅ 4 modes           | ✅ 4 modes (hybrid) | ✅ 3 modes         |
-| **Mid-Session Permission Change** | ✅ Via hooks         | ✅ Via /approvals   | ⚠️ Needs testing   |
-| **Session Continuity**            | ✅ sdk_session_id    | ✅ Thread ID        | ✅ History array   |
-| **Model Selection**               | ✅ Via SDK           | ✅ Via SDK          | ✅ Via SDK         |
-| **MCP Support**                   | ✅ Via SDK           | ✅ Via config.toml   | ✅ Via SDK         |
-| **Agor MCP Integration**          | ✅ Self-hosted       | ✅ Fully wired       | ✅ Fully wired     |
-| **Session Import**                | ✅ JSONL transcripts | ❌ Format unknown   | ❌ Not implemented |
-| **Tool Event Details**            | ✅ Rich metadata     | ✅ Rich metadata    | ✅ 13 event types  |
-| **Interactive Permissions**       | ✅ PreToolUse hook   | ❌ Config-only      | ⚠️ Unknown         |
+| Feature                           | Claude Code          | Codex               | Gemini             | Copilot              |
+| --------------------------------- | -------------------- | ------------------- | ------------------ | -------------------- |
+| **SDK Available**                 | ✅ Official          | ✅ Official         | ✅ Official        | ✅ Technical Preview |
+| **Streaming Support**             | ✅ Text + tools      | ⚠️ Tools only       | ✅ Text + tools    | ✅ Text + tools      |
+| **Usage/Token Tracking**          | ✅ Full support      | ⚠️ Not exposed      | ⚠️ Not tested      | ⚠️ Via events        |
+| **Permission Modes**              | ✅ 4 modes           | ✅ 4 modes (hybrid) | ✅ 3 modes         | ✅ 3 modes           |
+| **Mid-Session Permission Change** | ✅ Via hooks         | ✅ Via /approvals   | ⚠️ Needs testing   | ✅ Per-prompt         |
+| **Session Continuity**            | ✅ sdk_session_id    | ✅ Thread ID        | ✅ History array   | ✅ SDK session ID    |
+| **Model Selection**               | ✅ Via SDK           | ✅ Via SDK          | ✅ Via SDK         | ✅ Via SDK           |
+| **MCP Support**                   | ✅ Via SDK           | ✅ Via config.toml   | ✅ Via SDK         | ✅ Via SDK           |
+| **Agor MCP Integration**          | ✅ Self-hosted       | ✅ Fully wired       | ✅ Fully wired     | ✅ Fully wired       |
+| **Session Import**                | ✅ JSONL transcripts | ❌ Format unknown   | ❌ Not implemented | ❌ Not implemented   |
+| **Tool Event Details**            | ✅ Rich metadata     | ✅ Rich metadata    | ✅ 13 event types  | ✅ 40+ event types   |
+| **Interactive Permissions**       | ✅ PreToolUse hook   | ❌ Config-only      | ⚠️ Unknown         | ✅ onPermissionRequest|
 
 ### Detailed Breakdown
 
@@ -62,7 +63,15 @@ All three use official SDKs for programmatic control, streaming, and session man
 - Pattern: AsyncGenerator via `sendMessageStream()`
 - UX: Full typewriter effect for text responses
 
-**Agor Integration:** Claude and Gemini support `type: 'partial'` events with `textChunk` for typewriter effect. Codex emits `tool_complete` events in real-time but text only via `complete` events.
+**Copilot:** ✅ Token-level text streaming + tool event streaming
+
+- Text streaming: `assistant.message_delta` events with `deltaContent`
+- Tool streaming: `tool.execution_start`, `tool.execution_complete` events
+- 40+ distinct event types for detailed progress feedback
+- Pattern: Event emitter on CopilotSession + `sendAndWait()` blocking call
+- UX: Full typewriter effect for text responses
+
+**Agor Integration:** Claude, Gemini, and Copilot support `type: 'partial'` events with `textChunk` for typewriter effect. Codex emits `tool_complete` events in real-time but text only via `complete` events.
 
 ---
 
@@ -94,6 +103,13 @@ All three use official SDKs for programmatic control, streaming, and session man
 - Possibility: May be available in event metadata
 - Status: ⚠️ Not yet tested
 - Integration: Infrastructure ready (pricing data in `packages/core/src/utils/pricing.ts`)
+
+**Copilot:** ⚠️ Via event-based tracking
+
+- Available data: `input_tokens`, `output_tokens`, `total_tokens` via `assistant.usage` event
+- Source: CopilotSession event emitter
+- Status: ⚠️ Infrastructure in place, needs production testing
+- Integration: CopilotNormalizer handles token normalization
 
 **Implementation Details:**
 
@@ -144,6 +160,14 @@ All three use official SDKs for programmatic control, streaming, and session man
 | `ask`       | `DEFAULT`        | Prompt for each tool use |
 | `auto`      | `AUTO_EDIT`      | Auto-approve file edits  |
 | `allow-all` | `YOLO`           | Allow all operations     |
+
+**Copilot:** 3 modes via `onPermissionRequest` callback
+
+| Agor Mode   | SDK Behavior                      | Description              |
+| ----------- | --------------------------------- | ------------------------ |
+| `default`   | Callback returns `{ kind: 'approved' }` per request | Prompt for each tool use |
+| `acceptEdits` | Auto-approve file/edit, ask for others | Auto-approve edits       |
+| `bypassPermissions` | Always return `{ kind: 'approved' }` | Allow all operations     |
 
 **UI Implementation:**
 
@@ -236,6 +260,12 @@ function mapPermissionMode(mode: PermissionMode, agent: AgenticToolName): string
 - Workaround: May need to create new GeminiClient instance
 - Status: Not yet tested
 
+**Copilot:** ✅ Fully supported
+
+- Mechanism: `onPermissionRequest` callback passed per session creation
+- Permission mode resolved on each `promptSessionStreaming()` call
+- Status: ✅ Built into session config
+
 ---
 
 #### 5. Session Continuity (Resumption)
@@ -259,6 +289,13 @@ function mapPermissionMode(mode: PermissionMode, agent: AgenticToolName): string
 - API: `client.setHistory()` for manual history loading, SDK auto-persists via recording service
 - Session ID: SDK generates its own session ID (stored in session file, different from Agor's sessionId)
 - Status: ✅ Fully working (SDK manages history automatically)
+
+**Copilot:** `client.resumeSession(sessionId)` API
+
+- Storage: `session.sdk_session_id` (from CopilotSession.sessionId)
+- Resumption: `client.resumeSession(sdkSessionId, config)` resumes with full history
+- Session disconnect: `copilotSession.disconnect()` preserves state on disk
+- Status: ✅ Fully implemented
 
 ---
 
@@ -284,6 +321,14 @@ function mapPermissionMode(mode: PermissionMode, agent: AgenticToolName): string
 - Options: `'gemini-2.5-pro'`, `'gemini-2.5-flash'`, `'gemini-2.5-flash-lite'`
 - Mid-session change: May require new client instance
 - Status: ✅ Complete (needs testing for mid-session)
+
+**Copilot:**
+
+- API: Model resolved from `session.model_config.model`
+- Default: `gpt-4o` (via `DEFAULT_COPILOT_MODEL`)
+- Options: `'gpt-4o'`, `'gpt-4.1'`, `'claude-sonnet-4'`, `'o3-mini'`, `'gemini-2.0-flash'`
+- Mid-session change: New CopilotClient instance per prompt (natural support)
+- Status: ✅ Complete
 
 ---
 
@@ -313,6 +358,14 @@ function mapPermissionMode(mode: PermissionMode, agent: AgenticToolName): string
 - Unique: Tool filtering (`includeTools`/`excludeTools`), TCP transport, OAuth, service account impersonation
 - Status: ✅ Fully wired and working
 
+**Copilot:** ✅ Full support via SDK — **STDIO + Streamable HTTP**
+
+- API: `mcpServers: Record<string, MCPServerConfig>` in session config
+- Transport types: `MCPLocalServerConfig` (type: 'local', stdio) and `MCPRemoteServerConfig` (type: 'http')
+- Agor integration: Session-level MCP server selection + Agor self-access MCP server
+- Features: Supports auth headers for HTTP servers, bearer token passthrough
+- Status: ✅ Fully wired and working
+
 ---
 
 #### 8. Session Import (Loading Past Sessions)
@@ -335,6 +388,11 @@ function mapPermissionMode(mode: PermissionMode, agent: AgenticToolName): string
 - Alternative: Could use `getHistory()` for live sessions
 - Status: Deferred pending checkpoint format documentation
 
+**Copilot:** ❌ Not implemented
+
+- Challenge: Session format is SDK-internal (JSON-RPC state)
+- Status: Deferred pending SDK documentation
+
 ---
 
 #### 9. Tool Event Details
@@ -356,6 +414,12 @@ function mapPermissionMode(mode: PermissionMode, agent: AgenticToolName): string
 - Events: `content`, `tool_call_request`, `tool_call_response`, `thought`, `error`, `chat_compressed`, `citation`, `retry`, etc.
 - Unique: Agent reasoning (`thought`), loop detection, context compression
 - Status: ❌ Tool blocks not yet implemented
+
+**Copilot:** 40+ event types with detailed metadata
+
+- Events: `assistant.message_delta`, `tool.execution_start`, `tool.execution_complete`, `assistant.usage`, `agent.tool_call`, `agent.thinking`, `session.updated`, etc.
+- Unique: MCP server-qualified tool names, sub-agent orchestration events
+- Status: ⚠️ Basic rendering (event mapper implemented, tool blocks pending)
 
 ---
 
@@ -381,6 +445,13 @@ function mapPermissionMode(mode: PermissionMode, agent: AgenticToolName): string
 - Challenge: Unclear how to hook into approval flow
 - Status: Needs investigation
 
+**Copilot:** ✅ `onPermissionRequest` callback
+
+- Capabilities: Inspect tool request (kind, tool name, input), return approve/deny
+- Implementation: `createPermissionHandler()` maps Agor permission modes to SDK decisions
+- SDK types: `PermissionRequest` → `PermissionRequestResult` (returns `{ kind: 'approved' }` or `{ kind: 'denied', reason }`)
+- Status: ✅ Complete
+
 ---
 
 ## Implementation Patterns
@@ -405,10 +476,18 @@ packages/core/src/tools/
 │   ├── prompt-service.ts     # SDK wrapper with streaming
 │   └── models.ts             # Model definitions
 │
-└── gemini/
-    ├── gemini-tool.ts        # GeminiTool class (implements ITool)
-    ├── prompt-service.ts     # SDK wrapper with streaming
-    └── models.ts             # Model definitions
+├── gemini/
+│   ├── gemini-tool.ts        # GeminiTool class (implements ITool)
+│   ├── prompt-service.ts     # SDK wrapper with streaming
+│   └── models.ts             # Model definitions
+│
+└── copilot/
+    ├── copilot-tool.ts       # CopilotTool class (implements ITool)
+    ├── prompt-service.ts     # CopilotClient lifecycle + streaming
+    ├── event-mapper.ts       # Maps 40+ SDK events to StreamingCallbacks
+    ├── permission-mapper.ts  # Maps Agor permission modes to SDK callbacks
+    ├── normalizer.ts         # Token usage normalization
+    └── models.ts             # Model definitions (multi-provider)
 ```
 
 ### Common Interface (ITool)
@@ -447,7 +526,7 @@ interface StreamingCallbacks {
 ```typescript
 interface Session {
   session_id: SessionID;
-  agentic_tool: 'claude' | 'codex' | 'gemini';
+  agentic_tool: 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'copilot';
   sdk_session_id?: string; // For Claude/Codex resumption
   permission_config?: {
     mode: PermissionMode;
@@ -467,18 +546,18 @@ interface Session {
 
 ## Agor Integration Status
 
-| Feature                     | Claude Code | Codex            | Gemini             |
-| --------------------------- | ----------- | ---------------- | ------------------ |
-| **Live Execution**          | ✅ Complete | ✅ Complete      | ✅ Complete        |
-| **Streaming UI**            | ✅ Complete | ✅ Complete      | ✅ Complete        |
-| **Permission Modes**        | ✅ Complete | ✅ Complete      | ✅ Complete        |
-| **Mid-Session Mode Change** | ✅ Complete | ✅ Complete      | ⚠️ Needs testing   |
-| **Session Resumption**      | ✅ Complete | ✅ Complete      | ✅ Complete        |
-| **Model Selection UI**      | ✅ Complete | ✅ Complete      | ✅ Complete        |
-| **MCP Integration**         | ✅ Complete | ✅ Complete       | ✅ Complete        |
-| **Session Import**          | ✅ Complete | ❌ Deferred      | ❌ Not implemented |
-| **Tool Visualization**      | ✅ Complete | ⚠️ Basic         | ❌ Not implemented |
-| **Interactive Approvals**   | ✅ Complete | ❌ Not supported | ⚠️ Unknown         |
+| Feature                     | Claude Code | Codex            | Gemini             | Copilot              |
+| --------------------------- | ----------- | ---------------- | ------------------ | -------------------- |
+| **Live Execution**          | ✅ Complete | ✅ Complete      | ✅ Complete        | ✅ Complete          |
+| **Streaming UI**            | ✅ Complete | ✅ Complete      | ✅ Complete        | ⚠️ Needs testing     |
+| **Permission Modes**        | ✅ Complete | ✅ Complete      | ✅ Complete        | ✅ Complete          |
+| **Mid-Session Mode Change** | ✅ Complete | ✅ Complete      | ⚠️ Needs testing   | ✅ Complete          |
+| **Session Resumption**      | ✅ Complete | ✅ Complete      | ✅ Complete        | ✅ Complete          |
+| **Model Selection UI**      | ✅ Complete | ✅ Complete      | ✅ Complete        | ✅ Complete          |
+| **MCP Integration**         | ✅ Complete | ✅ Complete       | ✅ Complete        | ✅ Complete          |
+| **Session Import**          | ✅ Complete | ❌ Deferred      | ❌ Not implemented | ❌ Not implemented   |
+| **Tool Visualization**      | ✅ Complete | ⚠️ Basic         | ❌ Not implemented | ❌ Not implemented   |
+| **Interactive Approvals**   | ✅ Complete | ❌ Not supported | ⚠️ Unknown         | ✅ Complete          |
 
 ---
 
@@ -509,6 +588,17 @@ interface Session {
 - **Advanced MCP features** - Tool filtering, TCP transport, OAuth, service account impersonation
 - **ApprovalMode.YOLO** - Most permissive mode name
 
+### Copilot Only
+
+- **40+ event types** - Most extensive event catalog
+- **Multi-provider models** - Access GPT-4o, Claude Sonnet, Gemini Flash, o3-mini through single SDK
+- **JSON-RPC over stdio** - Unique architecture spawning `copilot` CLI process
+- **Native MCP** - First-class MCP support with both local (stdio) and http transports
+- **Sub-agent orchestration** - Built-in support for spawning sub-agents
+- **BYOK support** - Bring-your-own-key through GitHub token
+- **onPermissionRequest callback** - Runtime per-tool approval with rich request context
+- **Session disconnect/resume** - Clean session lifecycle with on-disk state preservation
+
 ---
 
 ## Cost Comparison
@@ -520,8 +610,9 @@ interface Session {
 | **Google**    | Gemini 2.5 Pro        | Higher              | Higher               | Complex reasoning          |
 | **Google**    | Gemini 2.5 Flash      | $0.30               | $2.50                | Agentic tasks (cheapest)   |
 | **Google**    | Gemini 2.5 Flash-Lite | $0.10               | $0.40                | High throughput            |
+| **GitHub**    | Copilot (GPT-4o)      | N/A (subscription)  | N/A (subscription)   | Copilot (default model)    |
 
-**Note:** Gemini Flash/Flash-Lite offer significant cost savings for high-volume usage.
+**Note:** Gemini Flash/Flash-Lite offer significant cost savings for high-volume usage. Copilot pricing is bundled with GitHub Copilot subscription.
 
 ---
 
@@ -542,6 +633,13 @@ interface Session {
 2. **Session import** - Discover and parse Codex session format
 3. ~~**HTTP/SSE MCP support**~~ - ✅ Done! Codex now supports streamable HTTP transport natively via `url` field in config.toml
 
+### Copilot Enhancements
+
+1. **Tool visualization** - Build Copilot-specific tool blocks
+2. **Token tracking** - Validate `assistant.usage` event data in production
+3. **Session import** - Discover and parse Copilot session format
+4. **Streaming UI testing** - Validate real-time text streaming end-to-end
+
 ### Cross-Tool Features
 
 1. **Permission audit trail** - Log all approval decisions
@@ -558,6 +656,7 @@ interface Session {
 - [@anthropic-ai/claude-agent-sdk](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk)
 - [@openai/codex-sdk](https://www.npmjs.com/package/@openai/codex-sdk)
 - [@google/gemini-cli-core](https://www.npmjs.com/package/@google/gemini-cli-core)
+- [@github/copilot-sdk](https://www.npmjs.com/package/@github/copilot-sdk)
 
 **Related Concepts:**
 

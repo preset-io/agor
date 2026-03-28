@@ -9,7 +9,7 @@ Related: [[core]], [[models]], [[architecture]]
 
 ## Executive Summary
 
-This document defines Agor's strategy for integrating AI coding agents (Claude Code, Codex, Gemini). We use the **Claude Agent SDK** as our reference implementation and define an abstraction layer for other agents.
+This document defines Agor's strategy for integrating AI coding agents (Claude Code, Codex, Gemini, GitHub Copilot). We use the **Claude Agent SDK** as our reference implementation and define an abstraction layer for other agents.
 
 **Key Discovery:** The `@anthropic-ai/claude-agent-sdk` provides production-ready capabilities including:
 
@@ -38,8 +38,9 @@ This document defines Agor's strategy for integrating AI coding agents (Claude C
 ┌────────────────┴────────────────────────┐
 │     Agent SDK/API Layer                 │
 │  - @anthropic-ai/claude-agent-sdk       │
-│  - openai SDK (for Codex)               │
-│  - google-generativeai (for Gemini)     │
+│  - @openai/codex-sdk (for Codex)        │
+│  - @google/gemini-cli-core (for Gemini) │
+│  - @github/copilot-sdk (for Copilot)    │
 └─────────────────────────────────────────┘
 ```
 
@@ -345,11 +346,11 @@ async executePrompt(sessionId: SessionID, prompt: string) {
 
 ## Future: Multi-Agent Abstraction
 
-**When we add a second agent** (Codex, Gemini), extract common interface:
+**When we add a second agent** (Codex, Gemini, Copilot), extract common interface:
 
 ```typescript
 interface IAgentClient {
-  readonly agentType: 'claude-code' | 'codex' | 'gemini';
+  readonly agentType: 'claude-code' | 'codex' | 'gemini' | 'copilot';
 
   executePrompt(
     sessionId: SessionID,
@@ -381,15 +382,17 @@ class ClaudeAgentClient implements IAgentClient {
 
 ## Capabilities Matrix
 
-| Feature               | Claude (Agent SDK)  | Codex                   | Gemini                  |
-| --------------------- | ------------------- | ----------------------- | ----------------------- |
-| Session management    | ✅ Built-in         | 🟡 Emulated             | 🟡 Emulated             |
-| Project instructions  | ✅ CLAUDE.md        | ❌ Manual               | ❌ Manual               |
-| Preset system prompts | ✅ Yes              | ❌ No                   | ❌ No                   |
-| Tool execution        | ✅ Built-in         | 🟡 Via function calling | 🟡 Via function calling |
-| Streaming             | ✅ Async generators | ✅ SSE                  | ✅ SSE                  |
-| Git awareness         | ✅ Built-in         | ❌ No                   | ❌ No                   |
-| Working directory     | ✅ cwd option       | ❌ No                   | ❌ No                   |
+| Feature               | Claude (Agent SDK)  | Codex                   | Gemini                  | Copilot                   |
+| --------------------- | ------------------- | ----------------------- | ----------------------- | ------------------------- |
+| Session management    | ✅ Built-in         | 🟡 Emulated             | 🟡 Emulated             | ✅ Built-in               |
+| Project instructions  | ✅ CLAUDE.md        | ❌ Manual               | ❌ Manual               | ✅ Auto via systemMessage |
+| Preset system prompts | ✅ Yes              | ❌ No                   | ❌ No                   | ✅ Yes (append mode)      |
+| Tool execution        | ✅ Built-in         | 🟡 Via function calling | 🟡 Via function calling | ✅ Built-in               |
+| Streaming             | ✅ Async generators | ✅ SSE                  | ✅ SSE                  | ✅ Event emitter          |
+| Git awareness         | ✅ Built-in         | ❌ No                   | ❌ No                   | ✅ Built-in               |
+| Working directory     | ✅ cwd option       | ❌ No                   | ❌ No                   | ✅ workingDirectory       |
+| MCP support           | ✅ Via SDK          | ✅ Via config.toml      | ✅ Via SDK              | ✅ Via SDK                |
+| Permission callback   | ✅ PreToolUse hook  | ❌ Config-only          | ⚠️ Unknown              | ✅ onPermissionRequest    |
 
 Legend:
 
@@ -558,15 +561,15 @@ interface ITool {
 
 ### Updated Capabilities Matrix
 
-| Feature               | Claude (Agent SDK)      | Codex                   | Gemini                  |
-| --------------------- | ----------------------- | ----------------------- | ----------------------- |
-| Session management    | ✅ Built-in             | 🟡 Emulated             | 🟡 Emulated             |
-| Project instructions  | ✅ CLAUDE.md            | ❌ Manual               | ❌ Manual               |
-| Preset system prompts | ✅ Yes                  | ❌ No                   | ❌ No                   |
-| Tool execution        | ✅ Built-in             | 🟡 Via function calling | 🟡 Via function calling |
-| **Streaming**         | **✅ Async generators** | 🟡 SSE                  | 🟡 SSE                  |
-| Git awareness         | ✅ Built-in             | ❌ No                   | ❌ No                   |
-| Working directory     | ✅ cwd option           | ❌ No                   | ❌ No                   |
+| Feature               | Claude (Agent SDK)      | Codex                   | Gemini                  | Copilot                    |
+| --------------------- | ----------------------- | ----------------------- | ----------------------- | -------------------------- |
+| Session management    | ✅ Built-in             | 🟡 Emulated             | 🟡 Emulated             | ✅ Built-in                |
+| Project instructions  | ✅ CLAUDE.md            | ❌ Manual               | ❌ Manual               | ✅ systemMessage (append)  |
+| Preset system prompts | ✅ Yes                  | ❌ No                   | ❌ No                   | ✅ Yes                     |
+| Tool execution        | ✅ Built-in             | 🟡 Via function calling | 🟡 Via function calling | ✅ Built-in                |
+| **Streaming**         | **✅ Async generators** | 🟡 SSE                  | 🟡 SSE                  | **✅ Event emitter**       |
+| Git awareness         | ✅ Built-in             | ❌ No                   | ❌ No                   | ✅ Built-in                |
+| Working directory     | ✅ cwd option           | ❌ No                   | ❌ No                   | ✅ workingDirectory        |
 
 ### Example: Claude with Streaming
 
