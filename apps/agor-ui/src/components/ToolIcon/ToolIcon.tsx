@@ -7,6 +7,7 @@
 import { theme } from 'antd';
 import ccLogo from '../../assets/tools/cc.png';
 import codexLogo from '../../assets/tools/codex.png';
+import copilotLogo from '../../assets/tools/copilot.png';
 import geminiLogo from '../../assets/tools/gemini.png';
 import opencodeLogo from '../../assets/tools/opencode.png';
 
@@ -26,7 +27,7 @@ const toolLogos: Record<string, string> = {
   codex: codexLogo,
   gemini: geminiLogo,
   opencode: opencodeLogo,
-  // copilot: no logo asset yet, uses fallback emoji
+  copilot: copilotLogo,
 };
 
 export const ToolIcon: React.FC<ToolIconProps> = ({ tool, size = 32, className = '' }) => {
