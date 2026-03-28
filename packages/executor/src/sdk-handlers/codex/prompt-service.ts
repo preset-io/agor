@@ -537,7 +537,10 @@ export class CodexPromptService {
         return {
           id: item.id,
           name: `${item.server}.${item.tool}`,
-          input: {},
+          input:
+            item.arguments && typeof item.arguments === 'object' && !Array.isArray(item.arguments)
+              ? (item.arguments as Record<string, unknown>)
+              : {},
           ...(status === 'completed' && {
             status: item.status,
           }),
