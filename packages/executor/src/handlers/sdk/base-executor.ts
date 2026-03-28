@@ -6,6 +6,7 @@
  */
 
 import { type ApiKeyName, resolveApiKey } from '@agor/core/config';
+import { generateId } from '@agor/core/db';
 import { getGitState } from '@agor/core/git';
 import type {
   MessageID,
@@ -16,6 +17,7 @@ import type {
   Task,
   TaskID,
 } from '@agor/core/types';
+import { MessageRole } from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
 import { normalizeRawSdkResponse } from '../../sdk-handlers/normalizer-factory.js';
@@ -468,6 +470,33 @@ export async function executeToolTask(params: {
 
     // Update task status to failed with git SHA
     await client.service('tasks').patch(taskId, patchData);
+
+    // Emit a system error message so the user sees what went wrong in the conversation
+    try {
+      const existingMessages = await client.service('messages').find({
+        query: { session_id: sessionId, $limit: 0 },
+      });
+      const messageCount =
+        typeof existingMessages === 'object' && 'total' in existingMessages
+          ? existingMessages.total
+          : Array.isArray(existingMessages)
+            ? existingMessages.length
+            : 0;
+
+      await client.service('messages').create({
+        message_id: generateId() as MessageID,
+        session_id: sessionId,
+        task_id: taskId,
+        type: 'system',
+        role: MessageRole.SYSTEM,
+        index: messageCount,
+        timestamp: new Date().toISOString(),
+        content: err.message,
+        content_preview: err.message.substring(0, 200),
+      });
+    } catch (msgErr) {
+      console.error(`[${toolName}] Failed to create error message:`, msgErr);
+    }
 
     throw err;
   } finally {
