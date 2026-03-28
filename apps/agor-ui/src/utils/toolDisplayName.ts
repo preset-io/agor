@@ -17,7 +17,8 @@
  * @example parseMcpToolName("Read") → null
  */
 function parseMcpToolName(rawName: string): { server: string; tool: string } | null {
-  // MCP tools always start with "mcp__" and have exactly 3 segments
+  // MCP tool format: mcp__{server}__{tool}
+  // Splits on the first __ after "mcp__" — server names should not contain "__"
   if (!rawName.startsWith('mcp__')) return null;
 
   const rest = rawName.slice(5); // Remove "mcp__"
@@ -59,12 +60,12 @@ export function getToolDisplayName(rawName: string, input?: Record<string, unkno
   // With input available, try to extract the inner tool name
   if (input) {
     // Execute-style proxy: extract the actual tool being called
-    if (parsed.tool.includes('execute_tool') && typeof input.tool_name === 'string') {
+    if (parsed.tool.endsWith('execute_tool') && typeof input.tool_name === 'string') {
       return input.tool_name;
     }
 
     // Search-style proxy: show what's being searched for
-    if (parsed.tool.includes('search_tool')) {
+    if (parsed.tool.endsWith('search_tools')) {
       if (typeof input.query === 'string') {
         return `search_tools: ${input.query}`;
       }

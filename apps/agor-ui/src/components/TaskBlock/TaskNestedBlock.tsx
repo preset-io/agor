@@ -10,6 +10,7 @@ import { DownOutlined, RightOutlined, ThunderboltOutlined } from '@ant-design/ic
 import { Collapse, Space, Typography, theme } from 'antd';
 import type React from 'react';
 import { useMemo, useState } from 'react';
+import { getToolDisplayName } from '../../utils/toolDisplayName';
 import { AgentChain } from '../AgentChain';
 import { Tag } from '../Tag';
 
@@ -43,7 +44,7 @@ export const TaskNestedBlock: React.FC<TaskNestedBlockProps> = ({
     for (const msg of messages) {
       if (msg.tool_uses) {
         for (const tool of msg.tool_uses) {
-          toolNames.add(tool.name);
+          toolNames.add(getToolDisplayName(tool.name, tool.input));
           toolCount++;
         }
       }
