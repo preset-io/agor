@@ -8,6 +8,7 @@
 import { CheckCircleOutlined, LoadingOutlined } from '@ant-design/icons';
 import { Space, Typography } from 'antd';
 import type { ToolExecution } from '../../hooks/useTaskEvents';
+import { getToolDisplayName } from '../../utils/toolDisplayName';
 import { Tag } from '../Tag';
 
 interface ToolExecutingIndicatorProps {
@@ -38,7 +39,7 @@ const ToolExecutingIndicator = ({ toolsExecuting }: ToolExecutingIndicatorProps)
           style={{ margin: 0 }}
         >
           <Typography.Text style={{ fontSize: 12 }}>
-            {tool.toolName}
+            {getToolDisplayName(tool.toolName)}
             {tool.status === 'executing' ? ' executing...' : ' complete'}
           </Typography.Text>
         </Tag>

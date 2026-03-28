@@ -18,6 +18,7 @@ import { CheckOutlined, ClockCircleOutlined, CloseOutlined, LockOutlined } from 
 import { Button, Card, Descriptions, Radio, Select, Space, Typography, theme } from 'antd';
 import type React from 'react';
 import { useState } from 'react';
+import { getToolDisplayName } from '../../utils/toolDisplayName';
 import { Tag } from '../Tag';
 
 const { Title, Paragraph } = Typography;
@@ -148,7 +149,7 @@ export const PermissionRequestBlock: React.FC<PermissionRequestBlockProps> = ({
         <div>
           <Space size={token.sizeUnit / 2}>
             <Typography.Text strong>Tool:</Typography.Text>
-            <Tag color="blue">{tool_name}</Tag>
+            <Tag color="blue">{getToolDisplayName(tool_name, tool_input)}</Tag>
           </Space>
         </div>
 

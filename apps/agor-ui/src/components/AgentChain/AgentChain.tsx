@@ -40,6 +40,7 @@ import { ThoughtChain } from '@ant-design/x';
 import { Popover, Space, Spin, Tooltip, Typography, theme } from 'antd';
 import React, { useMemo, useState } from 'react';
 import { copyToClipboard } from '../../utils/clipboard';
+import { getToolDisplayName } from '../../utils/toolDisplayName';
 import { CollapsibleText } from '../CollapsibleText';
 import { CopyableContent } from '../CopyableContent';
 import { Tag } from '../Tag';
@@ -269,8 +270,9 @@ export const AgentChain = React.memo<AgentChainProps>(({ messages }) => {
           toolResult?: ToolResultBlock;
         };
 
-        // Count tool names
-        toolNames.set(toolUse.name, (toolNames.get(toolUse.name) || 0) + 1);
+        // Count tool names (use display name for MCP proxy tools)
+        const displayName = getToolDisplayName(toolUse.name, toolUse.input);
+        toolNames.set(displayName, (toolNames.get(displayName) || 0) + 1);
 
         // Track files
         if (['Edit', 'Read', 'Write'].includes(toolUse.name) && toolUse.input.file_path) {
@@ -327,6 +329,11 @@ export const AgentChain = React.memo<AgentChainProps>(({ messages }) => {
       default:
         return null;
     }
+  };
+
+  // Resolve the display name for a tool (handles MCP proxy tools)
+  const resolveDisplayName = (toolUse: ToolUseBlock): string => {
+    return getToolDisplayName(toolUse.name, toolUse.input);
   };
 
   // Build ThoughtChain items
@@ -395,6 +402,9 @@ export const AgentChain = React.memo<AgentChainProps>(({ messages }) => {
         />
       );
 
+      // Resolve display name (extracts inner tool name for MCP proxy tools)
+      const displayName = resolveDisplayName(toolUse);
+
       // Build title with inline command/pattern for Bash, Grep, Glob
       let titleContent: React.ReactNode;
       if (toolUse.name === 'Bash' && toolUse.input.command) {
@@ -420,9 +430,10 @@ export const AgentChain = React.memo<AgentChainProps>(({ messages }) => {
         );
       } else {
         // Default: tool name with optional description
+        // Uses resolved display name (inner tool name for MCP proxies)
         titleContent = (
           <span style={{ cursor: 'help' }}>
-            <strong>{toolUse.name}</strong>
+            <strong>{displayName}</strong>
             {description && <>: {description}</>}
           </span>
         );
