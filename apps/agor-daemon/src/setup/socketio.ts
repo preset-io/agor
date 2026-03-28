@@ -160,8 +160,12 @@ export function createSocketIOConfig(
       );
 
       // Auto-join per-user room for user-scoped events (OAuth prompts, notifications)
+      // Try at connection time (for sockets that authenticate via handshake token)
       if (user?.user_id) {
         socket.join(`user:${user.user_id}`);
+        console.log(
+          `🏠 Socket ${socket.id} joined user room at connection: user:${user.user_id.substring(0, 8)}`
+        );
       }
 
       // Log connection lifespan after 5 seconds to identify long-lived connections
@@ -282,6 +286,29 @@ export function createSocketIOConfig(
       socket.on('error', (error) => {
         console.error(`❌ Socket.io error on ${socket.id}:`, error);
       });
+    });
+
+    // Join user room after FeathersJS authentication completes
+    // Sockets connect anonymously first, then authenticate via client.authenticate().
+    // The io.on('connection') handler above only catches pre-authenticated sockets
+    // (those with a handshake token). Most browser sockets authenticate AFTER connecting,
+    // so we need to join the user room here when the login event fires.
+    app.on('login', (authResult: unknown, context: { connection?: unknown }) => {
+      if (!context.connection) return;
+      const result = authResult as { user?: { user_id?: string } };
+      const userId = result.user?.user_id;
+      if (!userId) return;
+
+      // Find the socket whose feathers connection matches this login
+      for (const [, socket] of io.sockets.sockets) {
+        if ((socket as FeathersSocket).feathers === context.connection) {
+          socket.join(`user:${userId}`);
+          console.log(
+            `🏠 Socket ${socket.id} joined user room after login: user:${userId.substring(0, 8)}`
+          );
+          break;
+        }
+      }
     });
 
     // Log connection metrics only when count changes (every 30 seconds)
