@@ -530,11 +530,14 @@ export class GatewayService {
       return; // Not listening
     }
 
+    // Always remove from activeListeners so a fresh start can proceed,
+    // even if stopListening() throws (e.g. socket already closed).
+    this.activeListeners.delete(channelId);
+
     try {
       if (connector.stopListening) {
         await connector.stopListening();
       }
-      this.activeListeners.delete(channelId);
       console.log(`[gateway] Listener stopped for channel ${channelId.substring(0, 8)}`);
     } catch (error) {
       console.error(`[gateway] Error stopping listener for ${channelId}:`, error);
