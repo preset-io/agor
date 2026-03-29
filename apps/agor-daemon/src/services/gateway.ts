@@ -540,7 +540,12 @@ export class GatewayService {
       }
       console.log(`[gateway] Listener stopped for channel ${channelId.substring(0, 8)}`);
     } catch (error) {
-      console.error(`[gateway] Error stopping listener for ${channelId}:`, error);
+      // Old socket may still be alive — duplicate inbound messages are possible
+      // until the next daemon restart. See: listener lifecycle serialization (tech debt).
+      console.error(
+        `[gateway] Error stopping listener for ${channelId} (old socket may still be alive):`,
+        error
+      );
     }
   }
 
