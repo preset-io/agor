@@ -506,7 +506,18 @@ export class GatewayService {
       return;
     }
 
-    // Start or restart the listener
+    // Stop existing listener first so config changes are picked up.
+    // startChannelListener() is a no-op if a listener already exists,
+    // so we must tear down the old one before creating a new connector
+    // with the updated config (e.g. enable_channels toggled).
+    if (this.activeListeners.has(channelId)) {
+      console.log(
+        `[gateway] Restarting listener for channel "${channel.name}" to pick up config changes`
+      );
+      await this.stopChannelListener(channelId);
+    }
+
+    // Start with fresh config
     await this.startChannelListener(channel);
   }
 
