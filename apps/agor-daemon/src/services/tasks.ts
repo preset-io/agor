@@ -12,7 +12,7 @@ import {
 import { PAGINATION } from '@agor/core/config';
 import { type Database, MessagesRepository, TaskRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { Paginated, QueryParams, Session, Task } from '@agor/core/types';
+import type { Paginated, QueryParams, Session, SessionID, Task } from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 
@@ -223,9 +223,22 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
             console.log(
               `⏭️ [TasksService] Skipping session IDLE update - task ${task.task_id.substring(0, 8)} is not the latest (latest: ${latestTaskId.substring(0, 8)})`
             );
-            // Still process parent callbacks for subsessions (task completed, parent needs to know)
+            // Still process callbacks (task completed, callback target needs to know)
             if (session.genealogy?.parent_session_id) {
-              await this.queueParentCallback(task, session, params);
+              await this.queueCallbackToSession(
+                task,
+                session,
+                session.genealogy.parent_session_id,
+                params
+              );
+            }
+            if (session.callback_config?.callback_session_id) {
+              await this.queueCallbackToSession(
+                task,
+                session,
+                session.callback_config.callback_session_id,
+                params
+              );
             }
             return result;
           }
@@ -256,36 +269,45 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
             );
           }
 
-          // Session already fetched above, reuse it for parent callback check
-          if (session.genealogy?.parent_session_id) {
-            await this.queueParentCallback(task, session, params);
+          // Determine callback target(s):
+          // 1. Subsessions use genealogy.parent_session_id (set by spawn)
+          // 2. Remote sessions use callback_config.callback_session_id (set by create with enableCallback)
+          // Both can coexist (though unlikely in practice)
+          const callbackTargets = new Set<SessionID>();
 
-            // CRITICAL: After queuing callback to parent, ALWAYS trigger parent's queue processing.
+          if (session.genealogy?.parent_session_id) {
+            callbackTargets.add(session.genealogy.parent_session_id);
+          }
+          if (session.callback_config?.callback_session_id) {
+            callbackTargets.add(session.callback_config.callback_session_id);
+          }
+
+          for (const targetSessionId of callbackTargets) {
+            await this.queueCallbackToSession(task, session, targetSessionId, params);
+
+            // CRITICAL: After queuing callback, ALWAYS trigger target's queue processing.
             // The queue processor uses a promise-based lock that will:
-            // - If parent is busy: wait for current processing, then retry (self-healing)
-            // - If parent is idle: immediately process the callback
-            // - If parent becomes idle while waiting: the retry will catch it
+            // - If target is busy: wait for current processing, then retry (self-healing)
+            // - If target is idle: immediately process the callback
+            // - If target becomes idle while waiting: the retry will catch it
             //
-            // DO NOT check parent status before triggering - let the queue processor handle it.
+            // DO NOT check target status before triggering - let the queue processor handle it.
             // This ensures callbacks are never missed due to timing issues.
             try {
               // biome-ignore lint/suspicious/noExplicitAny: Service type casting required for custom method access
               const sessionsService = this.app.service('sessions') as any;
               if (sessionsService.triggerQueueProcessing) {
                 console.log(
-                  `🔄 [TasksService] Triggering parent queue processing for ${session.genealogy.parent_session_id.substring(0, 8)} (callback queued)`
+                  `🔄 [TasksService] Triggering callback target queue processing for ${targetSessionId.substring(0, 8)} (callback queued)`
                 );
-                // Pass empty params to avoid leaking child's auth context to parent
-                // The queue processor will reconstruct parent auth from queued message metadata
-                await sessionsService.triggerQueueProcessing(
-                  session.genealogy.parent_session_id,
-                  {}
-                );
+                // Pass empty params to avoid leaking child's auth context to target
+                // The queue processor will reconstruct target auth from queued message metadata
+                await sessionsService.triggerQueueProcessing(targetSessionId, {});
               }
             } catch (error) {
-              // Don't throw - parent issues shouldn't break child queue processing
+              // Don't throw - target issues shouldn't break child queue processing
               console.warn(
-                `⚠️  [TasksService] Failed to trigger parent queue processing (parent may be deleted):`,
+                `⚠️  [TasksService] Failed to trigger callback target queue processing (target may be deleted):`,
                 error
               );
             }
@@ -308,25 +330,31 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   }
 
   /**
-   * Queue callback message to parent session when child completes
+   * Queue callback message to a target session when a child/remote session completes
+   *
+   * Works for both:
+   * - Subsessions (target = genealogy.parent_session_id, set by spawn)
+   * - Remote sessions (target = callback_config.callback_session_id, set by create with enableCallback)
    */
-  private async queueParentCallback(
+  private async queueCallbackToSession(
     task: Task,
     childSession: Session,
+    targetSessionId: SessionID,
     params?: TaskParams
   ): Promise<void> {
-    const parentSessionId = childSession.genealogy?.parent_session_id;
-    if (!parentSessionId) return;
+    if (!targetSessionId) return;
 
     try {
-      // Get parent session to check callback config
+      // Get target session to check callback config
       // NOTE: DO NOT pass params here - params are from child session context (executor),
-      // but we need to access parent session without child's authentication constraints
-      const parentSession = await this.app.service('sessions').get(parentSessionId);
+      // but we need to access target session without child's authentication constraints
+      const targetSession = await this.app.service('sessions').get(targetSessionId);
 
-      // Check callback config - child overrides take precedence over parent defaults
+      // Check callback config - child overrides take precedence over target defaults
+      // For subsessions (parent_session_id), default is enabled=true
+      // For remote sessions (callback_session_id), enabled is explicitly set at creation time
       const callbackEnabled =
-        childSession.callback_config?.enabled ?? parentSession.callback_config?.enabled ?? true;
+        childSession.callback_config?.enabled ?? targetSession.callback_config?.enabled ?? true;
 
       if (!callbackEnabled) {
         console.log(
@@ -338,7 +366,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       // Check if we should include original spawn prompt - child overrides take precedence
       const includeOriginalPrompt =
         childSession.callback_config?.include_original_prompt ??
-        parentSession.callback_config?.include_original_prompt ??
+        targetSession.callback_config?.include_original_prompt ??
         false;
 
       // Get spawn prompt from task description (only if enabled)
@@ -352,7 +380,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       // Check if we should include last message - child overrides take precedence
       const includeLastMessage =
         childSession.callback_config?.include_last_message ??
-        parentSession.callback_config?.include_last_message ??
+        targetSession.callback_config?.include_last_message ??
         true;
 
       if (includeLastMessage) {
@@ -407,7 +435,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         childSessionFullId: childSession.session_id,
         childTaskId: task.task_id.substring(0, 8),
         childTaskFullId: task.task_id,
-        parentSessionId: parentSessionId.substring(0, 8),
+        parentSessionId: targetSessionId.substring(0, 8),
         spawnPrompt,
         status: task.status, // COMPLETED, FAILED, etc.
         completedAt: task.completed_at || new Date().toISOString(),
@@ -421,40 +449,40 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       };
 
       // Render callback message using template
-      const customTemplate = parentSession.callback_config?.template;
+      const customTemplate = targetSession.callback_config?.template;
       const callbackMessage = renderChildCompletionCallback(context, customTemplate);
 
-      // Queue message to parent session with special metadata
+      // Queue message to target session with special metadata
       const messageRepo = new MessagesRepository(this.db);
 
-      // Validate parent session has a creator for authentication
-      if (!parentSession.created_by) {
+      // Validate target session has a creator for authentication
+      if (!targetSession.created_by) {
         console.warn(
-          `⚠️  [TasksService] Cannot queue callback: parent session ${parentSessionId.substring(0, 8)} has no creator (anonymous session)`
+          `⚠️  [TasksService] Cannot queue callback: target session ${targetSessionId.substring(0, 8)} has no creator (anonymous session)`
         );
         return;
       }
 
       // Create queued message with Agor callback metadata
       // IMPORTANT: Include queued_by_user_id so authentication works when processing the callback
-      // Use the parent session's creator as the user context for callback execution
-      await messageRepo.createQueued(parentSessionId, callbackMessage, {
+      // Use the target session's creator as the user context for callback execution
+      await messageRepo.createQueued(targetSessionId, callbackMessage, {
         is_agor_callback: true,
         source: 'agor',
         child_session_id: childSession.session_id,
         child_task_id: task.task_id,
-        queued_by_user_id: parentSession.created_by,
+        queued_by_user_id: targetSession.created_by,
       });
 
       console.log(
-        `🔔 Queued callback to parent ${parentSessionId.substring(0, 8)} from child ${childSession.session_id.substring(0, 8)}`
+        `🔔 Queued callback to ${targetSessionId.substring(0, 8)} from child ${childSession.session_id.substring(0, 8)}`
       );
 
-      // NOTE: Queue processing is handled automatically via task completion hook (line 182-188)
-      // When parent session becomes idle, it will process all queued messages including this callback
+      // NOTE: Queue processing is handled automatically via task completion hook
+      // When target session becomes idle, it will process all queued messages including this callback
     } catch (error) {
       console.error(
-        `❌ [TasksService] Failed to queue parent callback for session ${childSession.session_id}:`,
+        `❌ [TasksService] Failed to queue callback to ${targetSessionId} for session ${childSession.session_id}:`,
         error
       );
       // Don't throw - callback failure shouldn't break task completion

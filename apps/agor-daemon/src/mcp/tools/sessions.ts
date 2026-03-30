@@ -340,7 +340,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_create',
     {
       description:
-        'Create a new session in an existing worktree. Use for starting fresh work on a new task in the same codebase (e.g., new feature branch, separate investigation). Unlike spawn, this creates an independent session with no parent-child relationship. Configuration is inherited from user defaults.',
+        'Create a new session in an existing worktree. Use for starting fresh work on a new task in the same codebase (e.g., new feature branch, separate investigation). Unlike spawn, this creates an independent session with no parent-child relationship. Configuration is inherited from user defaults. Supports optional callbacks to notify the creating session when the new session completes.',
       inputSchema: z.object({
         worktreeId: z.string().describe('Worktree ID where the session will run (required)'),
         agenticTool: z
@@ -356,6 +356,28 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           .string()
           .optional()
           .describe('Initial prompt to execute immediately after creating the session (optional)'),
+        enableCallback: z
+          .boolean()
+          .optional()
+          .describe(
+            'Enable callback to the creating session when the new session completes (default: false). When true, the creating session will receive a completion notification.'
+          ),
+        callbackSessionId: z
+          .string()
+          .optional()
+          .describe(
+            'Session ID to notify on completion (defaults to the current/creating session when enableCallback is true)'
+          ),
+        includeLastMessage: z
+          .boolean()
+          .optional()
+          .describe(
+            "Include the new session's final result in the callback message (default: true)"
+          ),
+        includeOriginalPrompt: z
+          .boolean()
+          .optional()
+          .describe('Include the original prompt in the callback message (default: false)'),
       }),
     },
     async (args) => {
@@ -413,6 +435,26 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
 
       const mcpServerIds = userToolDefaults?.mcpServerIds || [];
 
+      // Build callback configuration for remote session callbacks
+      const callbackConfig: Record<string, unknown> = {};
+      if (args.enableCallback !== undefined) {
+        callbackConfig.enabled = args.enableCallback;
+      }
+      if (args.enableCallback) {
+        // Default callback target to the creating session
+        callbackConfig.callback_session_id = args.callbackSessionId || ctx.sessionId;
+      } else if (args.callbackSessionId) {
+        // Explicit callback session ID implies enableCallback
+        callbackConfig.enabled = true;
+        callbackConfig.callback_session_id = args.callbackSessionId;
+      }
+      if (args.includeLastMessage !== undefined) {
+        callbackConfig.include_last_message = args.includeLastMessage;
+      }
+      if (args.includeOriginalPrompt !== undefined) {
+        callbackConfig.include_original_prompt = args.includeOriginalPrompt;
+      }
+
       const sessionData: Record<string, unknown> = {
         worktree_id: args.worktreeId,
         agentic_tool: agenticTool,
@@ -423,6 +465,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         unix_username: user.unix_username,
         permission_config: permissionConfig,
         ...(modelConfig && { model_config: modelConfig }),
+        ...(Object.keys(callbackConfig).length > 0 && { callback_config: callbackConfig }),
         contextFiles: args.contextFiles || [],
         git_state: {
           ref: currentRef,
@@ -459,12 +502,16 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           );
       }
 
+      const callbackNote = callbackConfig.callback_session_id
+        ? ` Callback will be sent to session ${(callbackConfig.callback_session_id as string).substring(0, 8)} on completion.`
+        : '';
+
       return textResult({
         session,
         taskId: promptResponse?.taskId,
         note: args.initialPrompt
-          ? 'Session created and initial prompt execution started.'
-          : 'Session created successfully.',
+          ? `Session created and initial prompt execution started.${callbackNote}`
+          : `Session created successfully.${callbackNote}`,
       });
     }
   );
