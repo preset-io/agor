@@ -277,6 +277,32 @@ export class GatewayService {
     // field is hidden in the UI), so we must not fetch it unconditionally.
     let user: User = null as unknown as User;
     if (!alignSlackUsers && !alignGitHubUsers) {
+      if (!channel.agor_user_id) {
+        const errMsg =
+          'Channel configuration error: no "Post messages as" user set. An admin needs to edit the channel and select a user, or enable user alignment.';
+        console.error(
+          `[gateway] Channel "${channel.name}" has no agor_user_id and alignment is OFF. Cannot process message.`
+        );
+        this.sendDebugMessage(channel, data.thread_id, errMsg);
+        // For GitHub: edit the Processing comment with the error
+        if (channel.channel_type === 'github' && data.metadata?.processing_comment_id) {
+          try {
+            const connector = getConnector(channel.channel_type as ChannelType, channel.config);
+            await connector.sendMessage({
+              threadId: data.thread_id,
+              text: `⚠️ ${errMsg}`,
+              metadata: { edit_comment_id: data.metadata.processing_comment_id },
+            });
+          } catch (err) {
+            console.warn('[gateway] Failed to post config error comment:', err);
+          }
+        }
+        return {
+          success: false,
+          sessionId: '',
+          created: false,
+        };
+      }
       user = await usersService.get(channel.agor_user_id);
     }
 
