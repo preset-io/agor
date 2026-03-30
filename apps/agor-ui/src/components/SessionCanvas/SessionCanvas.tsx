@@ -2701,9 +2701,11 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
                   // Attach MCP servers if provided
                   if (mcpServerIds && mcpServerIds.length > 0) {
-                    await client
-                      .service(`sessions/${targetSessionId}/mcp-servers`)
-                      .patch(null, { mcpServerIds });
+                    for (const serverId of mcpServerIds) {
+                      await client
+                        .service(`sessions/${targetSessionId}/mcp-servers`)
+                        .create({ mcpServerId: serverId });
+                    }
                   }
                 }
 
