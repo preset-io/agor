@@ -115,6 +115,7 @@ function handleManifest(daemonUrl: string) {
 
     // Return an HTML form that auto-submits to GitHub.
     // The manifest must be POSTed as a form field named "manifest".
+    // We inject the manifest via JavaScript to avoid HTML attribute escaping issues.
     res.setHeader('Content-Type', 'text/html');
     res.send(`<!DOCTYPE html>
 <html>
@@ -122,9 +123,12 @@ function handleManifest(daemonUrl: string) {
 <body>
   <p>Redirecting to GitHub to create the app...</p>
   <form id="manifest-form" action="${githubUrl}" method="post">
-    <input type="hidden" name="manifest" value='${manifestJson.replace(/'/g, '&#39;')}' />
+    <input type="hidden" id="manifest-input" name="manifest" />
   </form>
-  <script>document.getElementById('manifest-form').submit();</script>
+  <script>
+    document.getElementById('manifest-input').value = JSON.stringify(${manifestJson});
+    document.getElementById('manifest-form').submit();
+  </script>
 </body>
 </html>`);
   };
