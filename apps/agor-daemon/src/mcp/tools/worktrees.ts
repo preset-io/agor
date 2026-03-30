@@ -1,4 +1,5 @@
-import type { AgenticToolName, BoardID, WorktreeID } from '@agor/core/types';
+import { WorktreeRepository } from '@agor/core/db';
+import type { AgenticToolName, BoardID, UUID, WorktreeID } from '@agor/core/types';
 import { normalizeOptionalHttpUrl } from '@agor/core/utils/url';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
@@ -160,17 +161,11 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
       }
 
       // Auto-suffix: resolve name conflicts by appending -2, -3, etc.
+      // Uses direct DB query to bypass Feathers pagination limits
       if (autoSuffix) {
-        const worktreesService = ctx.app.service('worktrees');
-        const existingResult = await worktreesService.find({
-          query: { repo_id: repoId },
-          paginate: false,
-          ...ctx.baseServiceParams,
-        });
-        const existingWorktrees = (
-          Array.isArray(existingResult) ? existingResult : existingResult.data
-        ) as Array<{ name: string }>;
-        const existingNames = new Set(existingWorktrees.map((w) => w.name));
+        const worktreeRepo = new WorktreeRepository(ctx.db);
+        const activeNames = await worktreeRepo.getActiveNamesByRepo(repoId as UUID);
+        const existingNames = new Set(activeNames);
 
         if (existingNames.has(worktreeName)) {
           let suffix = 2;

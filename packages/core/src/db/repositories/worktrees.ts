@@ -311,6 +311,18 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
     return rows.map((row: { worktree_unique_id: number }) => row.worktree_unique_id);
   }
 
+  /**
+   * Get all active (non-archived) worktree names for a given repo.
+   * Used for auto-suffix name conflict resolution — bypasses Feathers pagination.
+   */
+  async getActiveNamesByRepo(repoId: UUID): Promise<string[]> {
+    const rows = await select(this.db, { name: worktrees.name })
+      .from(worktrees)
+      .where(and(eq(worktrees.repo_id, repoId), eq(worktrees.archived, false)))
+      .all();
+    return rows.map((row: { name: string }) => row.name);
+  }
+
   // ===== RBAC: Ownership Management =====
 
   /**
