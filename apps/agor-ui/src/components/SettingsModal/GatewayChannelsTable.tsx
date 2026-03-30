@@ -237,27 +237,23 @@ const ChannelFormFields: React.FC<{
         </Select>
       </Form.Item>
 
-      {/* Hidden when GitHub user alignment is on (sessions run as the mapped user) */}
-      <Form.Item
-        label="Post messages as"
-        name="agor_user_id"
-        rules={[
-          {
-            required: !(channelType === 'github' && alignGithubUsers),
-            message: 'Please select a user',
-          },
-        ]}
-        tooltip="Sessions from this channel will run as this Agor user"
-        style={channelType === 'github' && alignGithubUsers ? { display: 'none' } : undefined}
-      >
-        <Select placeholder="Select a user" showSearch optionFilterProp="children">
-          {Array.from(userById.values()).map((u) => (
-            <Select.Option key={u.user_id} value={u.user_id}>
-              {u.name || u.email || u.user_id}
-            </Select.Option>
-          ))}
-        </Select>
-      </Form.Item>
+      {/* For GitHub channels, "Post messages as" lives in the User Alignment section */}
+      {channelType !== 'github' && (
+        <Form.Item
+          label="Post messages as"
+          name="agor_user_id"
+          rules={[{ required: true, message: 'Please select a user' }]}
+          tooltip="Sessions from this channel will run as this Agor user"
+        >
+          <Select placeholder="Select a user" showSearch optionFilterProp="children">
+            {Array.from(userById.values()).map((u) => (
+              <Select.Option key={u.user_id} value={u.user_id}>
+                {u.name || u.email || u.user_id}
+              </Select.Option>
+            ))}
+          </Select>
+        </Form.Item>
+      )}
 
       <Form.Item
         label="Enabled"
@@ -557,7 +553,7 @@ const ChannelFormFields: React.FC<{
                       >
                         <Switch />
                       </Form.Item>
-                      {alignGithubUsers && (
+                      {alignGithubUsers ? (
                         <Form.Item
                           label="User Map"
                           name="github_user_map"
@@ -568,6 +564,25 @@ const ChannelFormFields: React.FC<{
                             rows={4}
                             placeholder={'{\n  "octocat": "user@example.com"\n}'}
                           />
+                        </Form.Item>
+                      ) : (
+                        <Form.Item
+                          label="Post messages as"
+                          name="agor_user_id"
+                          rules={[{ required: true, message: 'Please select a user' }]}
+                          tooltip="All sessions from this channel will run as this Agor user"
+                        >
+                          <Select
+                            placeholder="Select a user"
+                            showSearch
+                            optionFilterProp="children"
+                          >
+                            {Array.from(userById.values()).map((u) => (
+                              <Select.Option key={u.user_id} value={u.user_id}>
+                                {u.name || u.email || u.user_id}
+                              </Select.Option>
+                            ))}
+                          </Select>
                         </Form.Item>
                       )}
                     </>
