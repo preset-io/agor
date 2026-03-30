@@ -270,11 +270,20 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
             placeholder="Sandbox"
             popupMatchSelectWidth={false}
             style={{ minWidth: 80 }}
+            optionLabelProp="label"
             options={CODEX_SANDBOX_MODES.map(({ value, label, description }) => ({
               label,
               value,
               title: description,
             }))}
+            optionRender={(option) => (
+              <div style={{ lineHeight: 1.3 }}>
+                <div>{option.label}</div>
+                <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                  {option.data.title}
+                </Typography.Text>
+              </div>
+            )}
           />
           <Select
             value={codexApprovalPolicy}
@@ -283,17 +292,27 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
             placeholder="Approval"
             popupMatchSelectWidth={false}
             style={{ minWidth: 80 }}
+            optionLabelProp="label"
             options={CODEX_APPROVAL_POLICIES.map(({ value, label, description }) => ({
               label,
               value,
               title: description,
             }))}
+            optionRender={(option) => (
+              <div style={{ lineHeight: 1.3 }}>
+                <div>{option.label}</div>
+                <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                  {option.data.title}
+                </Typography.Text>
+              </div>
+            )}
           />
         </Space>
       );
     }
 
-    // All other cases: single permission mode dropdown with colored indicators
+    // All other cases: single permission mode dropdown
+    // Show only label in the selected value, but label + description in dropdown options
     return (
       <Select
         value={effectiveValue}
@@ -301,27 +320,28 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
         style={{ width: '100%' }}
         size={size}
         popupMatchSelectWidth={false}
-        options={modes.map(({ mode, label, description, color }) => ({
-          label: (
-            <Space size={8}>
-              <span
-                style={{
-                  display: 'inline-block',
-                  width: 8,
-                  height: 8,
-                  borderRadius: '50%',
-                  backgroundColor: color,
-                  flexShrink: 0,
-                }}
-              />
-              <span>{label}</span>
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                — {description}
-              </Typography.Text>
-            </Space>
-          ),
+        optionLabelProp="label"
+        options={modes.map(({ mode, label, description, icon, color }) => ({
+          label,
           value: mode,
+          title: description,
+          icon,
+          color,
         }))}
+        optionRender={(option) => {
+          const modeData = modes.find((m) => m.mode === option.value);
+          return (
+            <Space size={6} align="start">
+              {modeData && <span style={{ color: modeData.color }}>{modeData.icon}</span>}
+              <div style={{ lineHeight: 1.3 }}>
+                <div>{option.label}</div>
+                <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                  {option.data.title}
+                </Typography.Text>
+              </div>
+            </Space>
+          );
+        }}
       />
     );
   }
