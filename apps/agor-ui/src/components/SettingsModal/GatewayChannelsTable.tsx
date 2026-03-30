@@ -361,7 +361,7 @@ const ChannelFormFields: React.FC<{
                   if (appName) params.set('name', appName);
                   if (org) params.set('org', org);
                   const qs = params.toString();
-                  window.location.href = `${daemonUrl}/api/github/manifest${qs ? `?${qs}` : ''}`;
+                  window.open(`${daemonUrl}/api/github/manifest${qs ? `?${qs}` : ''}`, '_blank');
                 }}
               >
                 Create GitHub App on GitHub
