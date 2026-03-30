@@ -2651,10 +2651,9 @@ async function main() {
     methods: ['create', 'routeMessage'],
   });
 
-  // Register GitHub App setup routes (manifest flow for creating GitHub Apps)
+  // Register GitHub App setup routes (URL params flow for creating GitHub Apps)
   const uiUrl = isProduction ? `${daemonUrl}/ui` : `http://localhost:${UI_PORT}`;
   registerGitHubAppSetupRoutes(app, {
-    daemonUrl,
     uiUrl,
     db,
   });

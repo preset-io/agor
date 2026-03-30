@@ -340,6 +340,23 @@ export class ThreadSessionMapRepository
   }
 
   /**
+   * Update metadata for a thread-session mapping
+   */
+  async updateMetadata(id: ThreadSessionMapID, metadata: Record<string, unknown>): Promise<void> {
+    try {
+      await update(this.db, threadSessionMap)
+        .set({ metadata })
+        .where(eq(threadSessionMap.id, id))
+        .run();
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to update metadata: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
    * Find inactive mappings for garbage collection
    */
   async findInactive(daysInactive: number): Promise<ThreadSessionMap[]> {

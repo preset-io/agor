@@ -164,7 +164,10 @@ function AppContent() {
   // Detect GitHub App setup callback URL and auto-open gateway settings
   const location = useLocation();
   useEffect(() => {
-    if (location.pathname === '/gateway/github/setup' && location.search.includes('setup_token')) {
+    if (
+      location.pathname === '/gateway/github/setup' &&
+      location.search.includes('installation_id')
+    ) {
       setSettingsTabToOpen('gateway');
     }
   }, [location.pathname, location.search]);

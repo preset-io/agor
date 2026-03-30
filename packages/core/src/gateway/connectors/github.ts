@@ -205,10 +205,20 @@ export class GitHubConnector implements GatewayConnector {
       );
     }
 
-    // List all repos accessible to this installation
+    // List all repos accessible to this installation (paginated)
     const octokit = await this.getOctokit();
-    const { data } = await octokit.apps.listReposAccessibleToInstallation({ per_page: 100 });
-    return data.repositories.map((r: { full_name: string }) => r.full_name);
+    const repos: string[] = [];
+    let page = 1;
+    while (true) {
+      const { data } = await octokit.apps.listReposAccessibleToInstallation({
+        per_page: 100,
+        page,
+      });
+      repos.push(...data.repositories.map((r: { full_name: string }) => r.full_name));
+      if (repos.length >= data.total_count || data.repositories.length < 100) break;
+      page++;
+    }
+    return repos;
   }
 
   /**

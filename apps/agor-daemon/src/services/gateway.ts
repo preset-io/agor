@@ -175,6 +175,11 @@ export class GatewayService {
    * Useful for giving the user visibility into what's happening.
    */
   private sendDebugMessage(channel: GatewayChannel, threadId: string, text: string): void {
+    // Skip debug messages for GitHub channels — the "Processing..." comment
+    // already serves as the status indicator and gets edited with the final response.
+    // Posting debug messages as separate comments clutters the issue thread.
+    if (channel.channel_type === 'github') return;
+
     if (!hasConnector(channel.channel_type as ChannelType)) return;
     try {
       const connector = getConnector(channel.channel_type as ChannelType, channel.config);
@@ -360,6 +365,17 @@ export class GatewayService {
       // Touch timestamps
       await this.threadMapRepo.updateLastMessage(existingMapping.id);
 
+      // Update mapping metadata with new processing_comment_id if present.
+      // Each follow-up @mention creates a new "Processing..." comment, and
+      // the flush needs the latest comment ID to edit the right one.
+      if (data.metadata?.processing_comment_id) {
+        const updatedMetadata = {
+          ...((existingMapping.metadata as Record<string, unknown>) ?? {}),
+          processing_comment_id: data.metadata.processing_comment_id,
+        };
+        await this.threadMapRepo.updateMetadata(existingMapping.id, updatedMetadata);
+      }
+
       this.sendDebugMessage(
         channel,
         data.thread_id,
@@ -465,12 +481,15 @@ export class GatewayService {
 
       // For GitHub channels: edit the "Processing..." comment to include the session link.
       // The processing_comment_id was stored in inbound metadata by the GitHub connector.
-      if (channel.channel_type === 'github' && data.metadata?.processing_comment_id && sessionUrl) {
+      if (channel.channel_type === 'github' && data.metadata?.processing_comment_id) {
         try {
           const connector = getConnector(channel.channel_type as ChannelType, channel.config);
+          const processingText = sessionUrl
+            ? `⏳ Processing... [View session](${sessionUrl})`
+            : `⏳ Processing in session \`${sessionId.substring(0, 8)}\`...`;
           await connector.sendMessage({
             threadId: data.thread_id,
-            text: `⏳ Processing... [View session](${sessionUrl})`,
+            text: processingText,
             metadata: { edit_comment_id: data.metadata.processing_comment_id },
           });
         } catch (err) {

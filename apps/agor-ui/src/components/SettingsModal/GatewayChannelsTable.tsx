@@ -29,7 +29,6 @@ import {
   Badge,
   Button,
   Collapse,
-  Descriptions,
   Form,
   type FormInstance,
   Input,
@@ -129,43 +128,15 @@ const SectionLabel: React.FC<{ icon: React.ReactNode; title: string; subtitle?: 
 // ============================================================================
 
 /** Credentials fetched from the daemon after GitHub App manifest creation */
-interface GitHubSetupCredentials {
-  app_id: number;
-  slug: string;
-  pem: string;
-  webhook_secret: string;
-  owner: string;
-  owner_type: string;
-  html_url: string;
-}
-
-/** Simplified GitHub App installation */
-interface GitHubInstallation {
-  id: number;
-  account: {
-    login?: string;
-    type: string;
-    avatar_url: string;
-  } | null;
-  repository_selection: string;
-  html_url: string;
-  app_slug: string;
-  target_type: string;
-}
-
-/** Parameters passed via URL from the GitHub App manifest callback */
+/** Parameters passed via URL from the GitHub App setup callback */
 interface GitHubSetupParams {
-  setup_token: string;
-  app_id: string;
-  slug: string;
-  owner: string;
-  html_url: string;
+  installation_id?: string;
 }
 
 /** GitHub setup wizard steps */
 const GITHUB_SETUP_STEPS = [
   { title: 'Create App' },
-  { title: 'Select Installation' },
+  { title: 'Credentials' },
   { title: 'Configure' },
 ];
 
@@ -185,8 +156,7 @@ const ChannelFormFields: React.FC<{
   /** GitHub setup wizard state (managed by parent) */
   githubStep: number;
   onGithubStepChange: (step: number) => void;
-  githubCredentials: GitHubSetupCredentials | null;
-  githubInstallations: GitHubInstallation[];
+  githubSetupParams: GitHubSetupParams | null;
   githubLoading: boolean;
   githubError: string | null;
 }> = ({
@@ -203,8 +173,7 @@ const ChannelFormFields: React.FC<{
   onCopyKey,
   githubStep,
   onGithubStepChange,
-  githubCredentials,
-  githubInstallations,
+  githubSetupParams,
   githubLoading,
   githubError,
 }) => {
@@ -361,112 +330,72 @@ const ChannelFormFields: React.FC<{
                   if (appName) params.set('name', appName);
                   if (org) params.set('org', org);
                   const qs = params.toString();
-                  window.open(`${daemonUrl}/api/github/manifest${qs ? `?${qs}` : ''}`, '_blank');
+                  window.open(`${daemonUrl}/api/github/setup/new${qs ? `?${qs}` : ''}`, '_blank');
                 }}
               >
                 Create GitHub App on GitHub
               </Button>
 
-              <Alert
-                type="info"
-                showIcon
-                message="What happens next?"
-                description={
-                  <ol style={{ margin: '4px 0 0 0', paddingLeft: 20, fontSize: 12 }}>
-                    <li>You&apos;ll be redirected to GitHub to review and create the app</li>
-                    <li>GitHub redirects back here with the app credentials</li>
-                    <li>Pick which installation (org/repos) to connect</li>
-                    <li>Configure polling and mention settings</li>
-                  </ol>
-                }
-                style={{ marginTop: 16, fontSize: 12 }}
-              />
+              <Button
+                type="default"
+                block
+                onClick={() => onGithubStepChange(1)}
+                style={{ marginTop: 12 }}
+              >
+                I&apos;ve created the app — enter credentials
+              </Button>
             </div>
           )}
 
           {/* Step 1: Installation Picker */}
-          {githubStep === 1 && !githubLoading && githubCredentials && (
-            <div style={{ marginBottom: 16 }}>
-              <Descriptions
-                size="small"
-                column={1}
+          {githubStep >= 1 && !githubLoading && (
+            <div style={{ marginBottom: 16, display: githubStep === 1 ? undefined : 'none' }}>
+              <Alert
+                type="info"
+                showIcon
+                message="Enter your GitHub App credentials"
+                description={
+                  <span>
+                    On your GitHub App&apos;s settings page:
+                    <br />
+                    1. Copy the <strong>App ID</strong> (shown at the top under &quot;About&quot;)
+                    <br />
+                    2. Scroll to &quot;Private keys&quot; and click{' '}
+                    <strong>&quot;Generate a private key&quot;</strong>
+                    <br />
+                    3. Paste the downloaded .pem file contents below
+                  </span>
+                }
                 style={{ marginBottom: 16 }}
-                items={[
-                  { label: 'GitHub App', children: githubCredentials.slug },
-                  {
-                    label: 'Owner',
-                    children: `${githubCredentials.owner} (${githubCredentials.owner_type})`,
-                  },
-                  {
-                    label: 'App URL',
-                    children: (
-                      <Typography.Link
-                        href={githubCredentials.html_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                      >
-                        {githubCredentials.html_url}
-                      </Typography.Link>
-                    ),
-                  },
-                ]}
               />
 
-              {githubInstallations.length === 0 ? (
-                <Alert
-                  type="warning"
-                  showIcon
-                  message="No installations found"
-                  description={
-                    <span>
-                      The GitHub App hasn&apos;t been installed on any organization or account yet.{' '}
-                      <Typography.Link
-                        href={githubCredentials.html_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                      >
-                        Install it on GitHub
-                      </Typography.Link>{' '}
-                      first, then refresh this page.
-                    </span>
-                  }
-                  style={{ marginBottom: 16 }}
+              <Form.Item
+                label="App ID"
+                name="github_app_id"
+                rules={[{ required: true, message: 'Enter your GitHub App ID' }]}
+                tooltip="Found on your GitHub App's settings page (General → About)"
+              >
+                <Input placeholder="123456" />
+              </Form.Item>
+
+              <Form.Item
+                label="Private Key (PEM)"
+                name="github_private_key"
+                rules={[{ required: true, message: 'Paste your GitHub App private key' }]}
+                tooltip="Generate a private key on your GitHub App's settings page, then paste the .pem file contents"
+              >
+                <Input.TextArea
+                  rows={4}
+                  placeholder="-----BEGIN RSA PRIVATE KEY-----&#10;..."
+                  style={{ fontFamily: 'monospace', fontSize: 11 }}
                 />
-              ) : (
-                <Form.Item
-                  label="Installation"
-                  name="github_installation_id"
-                  rules={[{ required: true, message: 'Select a GitHub App installation' }]}
-                  tooltip="Choose which org or account this channel monitors"
-                >
-                  <Select placeholder="Select an installation">
-                    {githubInstallations.map((inst) => (
-                      <Select.Option key={inst.id} value={inst.id}>
-                        <Space>
-                          {inst.account?.avatar_url && (
-                            <img
-                              src={inst.account.avatar_url}
-                              alt=""
-                              style={{ width: 16, height: 16, borderRadius: 2 }}
-                            />
-                          )}
-                          {inst.account?.login || `Installation #${inst.id}`}
-                          <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                            ({inst.repository_selection === 'all' ? 'all repos' : 'selected repos'})
-                          </Typography.Text>
-                        </Space>
-                      </Select.Option>
-                    ))}
-                  </Select>
-                </Form.Item>
+              </Form.Item>
+
+              {githubError && (
+                <Alert type="error" showIcon message={githubError} style={{ marginBottom: 12 }} />
               )}
 
-              <Button
-                type="primary"
-                disabled={githubInstallations.length === 0}
-                onClick={() => onGithubStepChange(2)}
-                style={{ marginTop: 8 }}
-              >
+              <Button type="primary" onClick={() => onGithubStepChange(2)} style={{ marginTop: 8 }}>
                 Next: Configure Channel
               </Button>
             </div>
@@ -479,6 +408,53 @@ const ChannelFormFields: React.FC<{
               defaultActiveKey={mode === 'create' ? ['github-config'] : []}
               style={{ marginLeft: -16, marginRight: -16 }}
               items={[
+                // ── Credentials (edit mode) ──
+                ...(mode === 'edit'
+                  ? [
+                      {
+                        key: 'github-credentials',
+                        label: (
+                          <SectionLabel
+                            icon={<GithubOutlined />}
+                            title="App Credentials"
+                            subtitle={
+                              editingChannel?.config &&
+                              (editingChannel.config as Record<string, unknown>).private_key
+                                ? 'configured'
+                                : 'not set'
+                            }
+                          />
+                        ),
+                        children: (
+                          <>
+                            <Form.Item
+                              label="App ID"
+                              name="github_app_id"
+                              tooltip="Found on your GitHub App's settings page (General → About)"
+                            >
+                              <Input placeholder="123456" />
+                            </Form.Item>
+                            <Form.Item
+                              label="Private Key (PEM)"
+                              name="github_private_key"
+                              tooltip="Leave empty to keep the existing key. Paste a new .pem to replace it."
+                            >
+                              <Input.TextArea
+                                rows={3}
+                                placeholder={
+                                  editingChannel?.config &&
+                                  (editingChannel.config as Record<string, unknown>).private_key
+                                    ? '(private key is set — paste new key to replace)'
+                                    : '-----BEGIN RSA PRIVATE KEY-----\n...'
+                                }
+                                style={{ fontFamily: 'monospace', fontSize: 11 }}
+                              />
+                            </Form.Item>
+                          </>
+                        ),
+                      },
+                    ]
+                  : []),
                 {
                   key: 'github-config',
                   label: (
@@ -897,8 +873,6 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
 
   // ── GitHub App Setup State (lifted from ChannelFormFields) ──
   const [githubStep, setGithubStep] = useState(0);
-  const [githubCredentials, setGithubCredentials] = useState<GitHubSetupCredentials | null>(null);
-  const [githubInstallations, setGithubInstallations] = useState<GitHubInstallation[]>([]);
   const [githubLoading, setGithubLoading] = useState(false);
   const [githubError, setGithubError] = useState<string | null>(null);
   const [githubSetupParams, setGithubSetupParams] = useState<GitHubSetupParams | null>(null);
@@ -909,71 +883,22 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
-    const setupToken = params.get('setup_token');
-    const appId = params.get('app_id');
-    const slug = params.get('slug');
-    const owner = params.get('owner');
-    const htmlUrl = params.get('html_url');
+    const installationId = params.get('installation_id');
 
-    if (setupToken && appId && slug && owner && htmlUrl) {
-      setGithubSetupParams({
-        setup_token: setupToken,
-        app_id: appId,
-        slug,
-        owner,
-        html_url: htmlUrl,
-      });
+    if (installationId) {
+      setGithubSetupParams({ installation_id: installationId });
       setChannelType('github');
+      setGithubStep(1); // Skip to credentials step since app is already created
       setCreateModalOpen(true);
-      // Clean up URL params — navigate to root since /gateway/github/setup isn't a real route
+      // Clean up URL params
       navigate('/', { replace: true });
     }
   }, [location.search, navigate]);
 
-  // Fetch GitHub credentials when setup params arrive
-  useEffect(() => {
-    if (!githubSetupParams?.setup_token) return;
-
-    const fetchSetup = async () => {
-      setGithubLoading(true);
-      setGithubError(null);
-      try {
-        const daemonUrl = getDaemonUrl();
-        const credRes = await fetch(
-          `${daemonUrl}/api/github/setup/${githubSetupParams.setup_token}`
-        );
-        if (!credRes.ok) throw new Error('Setup token expired or invalid');
-        const creds = (await credRes.json()) as GitHubSetupCredentials;
-        setGithubCredentials(creds);
-
-        const instRes = await fetch(
-          `${daemonUrl}/api/github/installations?app_id=${creds.app_id}&setup_token=${githubSetupParams.setup_token}`
-        );
-        if (instRes.ok) {
-          const instData = (await instRes.json()) as { installations: GitHubInstallation[] };
-          setGithubInstallations(instData.installations);
-        }
-
-        createForm.setFieldsValue({
-          name: `GitHub: ${creds.owner}/${creds.slug}`,
-          channel_type: 'github',
-        });
-
-        setGithubStep(1);
-      } catch (err) {
-        setGithubError(err instanceof Error ? err.message : 'Failed to load setup data');
-      } finally {
-        setGithubLoading(false);
-      }
-    };
-
-    fetchSetup();
-  }, [githubSetupParams, createForm]);
+  // No automatic credential fetch — user provides App ID and PEM manually
 
   const resetGithubState = useCallback(() => {
     setGithubStep(0);
-    setGithubCredentials(null);
-    setGithubInstallations([]);
     setGithubLoading(false);
     setGithubError(null);
     setGithubSetupParams(null);
@@ -1011,15 +936,15 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     }
     const config: Record<string, unknown> = { ...sanitizedExisting };
     if (values.channel_type === 'github') {
-      // GitHub App credentials from the manifest flow
-      if (githubCredentials) {
-        config.app_id = githubCredentials.app_id;
-        config.private_key = githubCredentials.pem;
-        config.webhook_secret = githubCredentials.webhook_secret;
-        config.owner = githubCredentials.owner;
+      // GitHub App credentials from form input
+      if (values.github_app_id) {
+        config.app_id = Number(values.github_app_id);
+      }
+      if (values.github_private_key) {
+        config.private_key = values.github_private_key;
       }
       if (values.github_installation_id) {
-        config.installation_id = values.github_installation_id;
+        config.installation_id = Number(values.github_installation_id);
       }
       config.watch_repos = values.github_watch_repos ?? [];
       config.require_mention = values.github_require_mention ?? true;
@@ -1147,6 +1072,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       formValues.align_slack_users = config?.align_slack_users ?? false;
       formValues.allowed_channel_ids = (config?.allowed_channel_ids as string[]) ?? [];
     } else if (channel.channel_type === 'github') {
+      formValues.github_app_id = config?.app_id;
       formValues.github_installation_id = config?.installation_id;
       formValues.github_watch_repos = (config?.watch_repos as string[]) ?? [];
       formValues.github_require_mention = config?.require_mention ?? true;
@@ -1382,7 +1308,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         }}
         width={600}
       >
-        <Form form={createForm} layout="vertical" style={{ marginTop: 16 }}>
+        <Form form={createForm} layout="vertical" preserve style={{ marginTop: 16 }}>
           <ChannelFormFields
             form={createForm}
             mode="create"
@@ -1395,8 +1321,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             onAgentChange={setSelectedAgent}
             githubStep={githubStep}
             onGithubStepChange={setGithubStep}
-            githubCredentials={githubCredentials}
-            githubInstallations={githubInstallations}
+            githubSetupParams={githubSetupParams}
             githubLoading={githubLoading}
             githubError={githubError}
           />
@@ -1433,8 +1358,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             onCopyKey={handleCopyKey}
             githubStep={2}
             onGithubStepChange={() => {}}
-            githubCredentials={null}
-            githubInstallations={[]}
+            githubSetupParams={null}
             githubLoading={false}
             githubError={null}
           />
