@@ -76,12 +76,17 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
     'agor_worktrees_create',
     {
       description:
-        'Create a worktree (and optional branch) for a repository, with required board placement',
+        'Create a worktree (and optional branch) for a repository, with required board placement. ' +
+        'To fork from an existing branch with a unique worktree name, set sourceBranch to the base branch ' +
+        'and worktreeName to your desired unique name (e.g., sourceBranch="issue-282", worktreeName="issue-282-review-1").',
       inputSchema: z.object({
         repoId: z.string().describe('Repository ID where the worktree will be created'),
         worktreeName: z
           .string()
-          .describe('Slug name for the worktree directory (lowercase letters, numbers, hyphens)'),
+          .describe(
+            'Slug name for the worktree directory (lowercase letters, numbers, hyphens). ' +
+              'If the name conflicts with an existing worktree, set autoSuffix=true to auto-append a numeric suffix.'
+          ),
         boardId: z
           .string()
           .describe(
@@ -91,7 +96,9 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
           .string()
           .optional()
           .describe(
-            'Git ref to checkout. Defaults to the worktree name when creating a new branch.'
+            'Git branch name to create or checkout. Defaults to worktreeName when creating a new branch. ' +
+              'Set this to create a branch with a different name than the worktree directory. ' +
+              'Example: worktreeName="review-1", ref="issue-282-review-1" creates directory "review-1" on branch "issue-282-review-1".'
           ),
         refType: z
           .enum(['branch', 'tag'])
@@ -100,7 +107,10 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
         createBranch: z
           .boolean()
           .optional()
-          .describe('Whether to create a new branch. Defaults to true unless ref is a commit SHA.'),
+          .describe(
+            'Whether to create a new branch (default: true). Set to false to checkout an existing branch. ' +
+              'Auto-set to false when ref is a commit SHA.'
+          ),
         pullLatest: z
           .boolean()
           .optional()
@@ -111,7 +121,23 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
           .string()
           .optional()
           .describe(
-            'Base branch when creating a new branch (defaults to the repo default branch).'
+            'Base branch to fork from when creating a new branch (defaults to the repo default branch, usually "main"). ' +
+              'The new branch will be created from the tip of this branch. ' +
+              'Must exist on the remote (origin) or locally.'
+          ),
+        autoSuffix: z
+          .boolean()
+          .optional()
+          .describe(
+            'When true, if worktreeName conflicts with an existing worktree, automatically append a numeric suffix ' +
+              '(e.g., "my-feature" → "my-feature-2", "my-feature-3"). Defaults to false.'
+          ),
+        dryRun: z
+          .boolean()
+          .optional()
+          .describe(
+            'When true, validate all inputs and check for conflicts without actually creating the worktree. ' +
+              'Returns what would happen, including the resolved name (after auto-suffix), branch, and source branch.'
           ),
         issueUrl: z.string().optional().describe('Issue URL to associate with the worktree.'),
         pullRequestUrl: z
@@ -122,8 +148,10 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
     },
     async (args) => {
       const repoId = coerceString(args.repoId)!;
-      const worktreeName = coerceString(args.worktreeName)!;
+      let worktreeName = coerceString(args.worktreeName)!;
       const boardId = coerceString(args.boardId)!;
+      const autoSuffix = typeof args.autoSuffix === 'boolean' ? args.autoSuffix : false;
+      const dryRun = typeof args.dryRun === 'boolean' ? args.dryRun : false;
 
       if (!WORKTREE_NAME_PATTERN.test(worktreeName)) {
         throw new Error('worktreeName must use lowercase letters, numbers, or hyphens');
@@ -135,6 +163,27 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
         repo = await reposService.get(repoId);
       } catch {
         throw new Error(`Repository ${repoId} not found`);
+      }
+
+      // Auto-suffix: resolve name conflicts by appending -2, -3, etc.
+      if (autoSuffix) {
+        const worktreesService = ctx.app.service('worktrees');
+        const existingResult = await worktreesService.find({
+          query: { repo_id: repoId, $limit: 1000 },
+          ...ctx.baseServiceParams,
+        });
+        const existingWorktrees = (
+          Array.isArray(existingResult) ? existingResult : existingResult.data
+        ) as Array<{ name: string }>;
+        const existingNames = new Set(existingWorktrees.map((w) => w.name));
+
+        if (existingNames.has(worktreeName)) {
+          let suffix = 2;
+          while (existingNames.has(`${worktreeName}-${suffix}`)) {
+            suffix++;
+          }
+          worktreeName = `${worktreeName}-${suffix}`;
+        }
       }
 
       const defaultBranch =
@@ -163,6 +212,20 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
 
       const issueUrl = normalizeOptionalHttpUrl(args.issueUrl, 'issueUrl');
       const pullRequestUrl = normalizeOptionalHttpUrl(args.pullRequestUrl, 'pullRequestUrl');
+
+      // Dry run: return what would happen without actually creating
+      if (dryRun) {
+        return textResult({
+          dryRun: true,
+          resolvedWorktreeName: worktreeName,
+          resolvedRef: ref,
+          resolvedSourceBranch: sourceBranch,
+          createBranch,
+          pullLatest,
+          refType,
+          message: `Would create worktree '${worktreeName}' on branch '${ref}'${sourceBranch ? ` from '${sourceBranch}'` : ''}`,
+        });
+      }
 
       const worktree = await reposService.createWorktree(
         repoId,

@@ -248,8 +248,9 @@ async function main() {
         continue;
       }
 
-      // Auto-assign worktree unique ID using the same function as the repos service
-      const worktreeUniqueId = autoAssignWorktreeUniqueId(allWorktrees);
+      // Auto-assign worktree unique ID — use getAllUsedUniqueIds to include archived worktrees
+      const allUsedIds = await worktreeRepo.getAllUsedUniqueIds();
+      const worktreeUniqueId = autoAssignWorktreeUniqueId(allUsedIds);
       const worktreePathId = `wt-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
       const worktreePath = path.join(worktreesPath, worktreePathId);
 

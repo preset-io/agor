@@ -346,33 +346,73 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       throw new Error(`A worktree named '${data.name}' already exists in this repository`);
     }
 
-    // Pre-flight check: detect stale or conflicting branches before creating DB record
+    // Pre-flight checks: validate git state before creating DB record
     // This gives the user immediate feedback instead of a silent fire-and-forget failure
-    if (data.createBranch && repo.local_path) {
+    if (repo.local_path) {
       try {
         const git = simpleGit(repo.local_path);
-        const branches = await git.branch();
-        const branchName = data.ref || data.name;
 
-        if (branches.all.includes(branchName)) {
-          // Branch exists — check if it's in use by another worktree
-          const gitWorktrees = await listWorktrees(repo.local_path);
-          const branchInUse = gitWorktrees.some((wt: { ref?: string }) => wt.ref === branchName);
-
-          if (branchInUse) {
-            throw new Error(
-              `A branch named '${branchName}' already exists and is in use by another worktree. Please choose a different name.`
+        // Check 1: Validate sourceBranch exists on remote (if specified)
+        if (data.sourceBranch && data.createBranch) {
+          try {
+            await git.fetch(['origin']);
+            const remoteBranches = await git.branch(['-r']);
+            const remoteRef = `origin/${data.sourceBranch}`;
+            if (!remoteBranches.all.includes(remoteRef)) {
+              // Also check local branches as fallback
+              const localBranches = await git.branch();
+              if (!localBranches.all.includes(data.sourceBranch)) {
+                throw new Error(
+                  `Source branch '${data.sourceBranch}' does not exist on remote or locally. ` +
+                    `Available remote branches can be listed with 'git branch -r'. ` +
+                    `Please specify a valid sourceBranch.`
+                );
+              }
+            }
+          } catch (error) {
+            if (
+              error instanceof Error &&
+              error.message.includes('does not exist on remote or locally')
+            ) {
+              throw error;
+            }
+            // Fetch failed — log warning but continue (executor will retry)
+            console.warn(
+              `⚠️  Pre-flight sourceBranch check failed (continuing anyway):`,
+              error instanceof Error ? error.message : String(error)
             );
           }
+        }
 
-          // Branch exists but is orphaned — the executor will clean it up automatically
-          console.log(
-            `⚠️  Branch '${branchName}' exists but is orphaned (stale). Executor will clean it up.`
-          );
+        // Check 2: Detect stale or conflicting branches
+        if (data.createBranch) {
+          const branches = await git.branch();
+          const branchName = data.ref || data.name;
+
+          if (branches.all.includes(branchName)) {
+            // Branch exists — check if it's in use by another worktree
+            const gitWorktrees = await listWorktrees(repo.local_path);
+            const branchInUse = gitWorktrees.some((wt: { ref?: string }) => wt.ref === branchName);
+
+            if (branchInUse) {
+              throw new Error(
+                `A branch named '${branchName}' already exists and is in use by another worktree. Please choose a different name.`
+              );
+            }
+
+            // Branch exists but is orphaned — the executor will clean it up automatically
+            console.log(
+              `⚠️  Branch '${branchName}' exists but is orphaned (stale). Executor will clean it up.`
+            );
+          }
         }
       } catch (error) {
-        // Re-throw user-facing errors (branch conflicts)
-        if (error instanceof Error && error.message.includes('already exists and is in use')) {
+        // Re-throw user-facing errors
+        if (
+          error instanceof Error &&
+          (error.message.includes('already exists and is in use') ||
+            error.message.includes('does not exist on remote or locally'))
+        ) {
           throw error;
         }
         // Log but don't block creation for other git errors (e.g., repo not accessible)
@@ -398,19 +438,13 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       userEnv = (await resolveUserEnvironment(userId, this.db)) || {};
     }
 
-    // Get existing worktrees to compute unique_id BEFORE creating the record
-    // Use internal call (no provider) to get all worktrees regardless of RBAC
+    // Get ALL used unique IDs (including archived worktrees) to avoid collisions.
+    // Previously this queried via Feathers which excluded archived worktrees by default,
+    // causing ID collisions when archived worktrees held the assigned ID.
+    const allUsedIds = await worktreeRepo.getAllUsedUniqueIds();
+    const worktreeUniqueId = autoAssignWorktreeUniqueId(allUsedIds);
+
     const worktreesService = this.app.service('worktrees');
-    const worktreesResult = await worktreesService.find({
-      query: { $limit: 1000 },
-      paginate: false,
-    });
-
-    const existingWorktrees = (
-      Array.isArray(worktreesResult) ? worktreesResult : worktreesResult.data
-    ) as Worktree[];
-
-    const worktreeUniqueId = autoAssignWorktreeUniqueId(existingWorktrees);
 
     // NOTE: Environment command templates (start_command, stop_command, etc.) are NOT
     // rendered here. They will be rendered by the executor after Unix groups are created

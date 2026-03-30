@@ -300,6 +300,15 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
     return row ? this.rowToWorktree(row) : null;
   }
 
+  /**
+   * Get all worktree_unique_id values across ALL worktrees (including archived).
+   * Used for collision-free ID assignment — archived worktrees still hold their IDs.
+   */
+  async getAllUsedUniqueIds(): Promise<number[]> {
+    const rows = await select(this.db).from(worktrees).all();
+    return rows.map((row: WorktreeRow) => row.worktree_unique_id);
+  }
+
   // ===== RBAC: Ownership Management =====
 
   /**

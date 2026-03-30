@@ -13,26 +13,21 @@ import type { WorktreeEnvironmentInstance } from '../types';
  *
  * Strategy:
  * - Start at 1 and increment by 1 for each worktree
- * - Skip IDs that are already in use
+ * - Skip IDs that are already in use (including archived worktrees)
  * - Returns a unique ID for this worktree
  *
- * @param existingWorktrees - All existing worktrees (to check for conflicts)
+ * IMPORTANT: The input MUST include IDs from ALL worktrees (including archived ones).
+ * Archived worktrees still hold their unique IDs for environment template consistency.
+ *
+ * @param usedIds - All worktree_unique_id values currently in use (including archived)
  * @returns Unique ID number (e.g., 1, 2, 3, ...)
  */
-export function autoAssignWorktreeUniqueId(
-  existingWorktrees: Array<{
-    worktree_unique_id: number;
-  }>
-): number {
-  // Collect all existing unique IDs
-  const usedIds = new Set<number>();
-  for (const worktree of existingWorktrees) {
-    usedIds.add(worktree.worktree_unique_id);
-  }
+export function autoAssignWorktreeUniqueId(usedIds: number[]): number {
+  const usedSet = new Set<number>(usedIds);
 
   // Find next available ID starting from 1
   let id = 1;
-  while (usedIds.has(id)) {
+  while (usedSet.has(id)) {
     id++;
   }
 
