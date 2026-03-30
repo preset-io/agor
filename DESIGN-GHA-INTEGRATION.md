@@ -786,6 +786,85 @@ export type ChannelType = 'slack' | 'discord' | 'whatsapp' | 'telegram' | 'githu
 connectors.set('github', (config) => new GitHubConnector(config));
 ```
 
+## 6c. GitHub Outbound Behavior
+
+### Identity: The App IS the Bot
+
+GitHub App comments are posted as the app's bot identity (e.g., `agor[bot]`). This is automatic — `GitHubConnector.sendMessage()` uses the installation token via `@octokit/auth-app`, which authenticates as the app. The agent never needs `gh` CLI or a personal `GITHUB_TOKEN` for PR comments.
+
+```
+Agent session produces output
+  ↓
+Gateway outbound hook intercepts
+  ↓
+GitHubConnector.sendMessage() via installation token
+  ↓
+Comment appears as "agor[bot]" (or whatever the app is named)
+```
+
+This means even if the session runs as an impersonated Unix user with their own `GITHUB_TOKEN`, the PR comment still comes from the app identity. Clean separation.
+
+### Message Batching: Last Message Only
+
+**Key difference from Slack**: Slack streams every message in real-time as the agent works. For GitHub, intermediate messages ("let me look at this...", "found the file...") would be noisy — PRs aren't chat.
+
+The GitHub channel gateway should only post **the agent's final response** as a PR comment. Intermediate messages are still visible in the Agor UI but don't leak to GitHub.
+
+**Mechanism**: The outbound hook checks `channel_type === 'github'` and buffers messages. When the session task completes (status returns to `idle`), it posts the last message as a PR comment.
+
+**System prompt context** (included in initial routing message):
+
+```
+NOTE: This session was triggered via the `github` channel gateway.
+Your last message will be posted as a comment on the PR/issue.
+Intermediate messages are visible in Agor but not posted to GitHub.
+Be thorough in your work, then provide a clear final summary.
+```
+
+### Instant Feedback: Reactions + Editable Comment
+
+When a new `@agor` mention is detected, the connector should provide instant visual feedback:
+
+**Step 1: React immediately**
+```typescript
+// React to the triggering comment with 👀
+await octokit.reactions.createForIssueComment({
+  owner, repo,
+  comment_id: triggeringCommentId,
+  content: 'eyes',
+});
+```
+
+**Step 2: Post a processing comment**
+```markdown
+🔄 Processing... [View session](https://agor.sandbox.preset.zone/ui/b/board/session-id)
+```
+
+**Step 3: Edit with final response**
+When the agent completes, the connector edits the processing comment with the actual response (instead of posting a new comment). This keeps the PR thread clean — one comment per `@agor` mention, not two.
+
+```typescript
+// Edit the processing comment with the final response
+await octokit.issues.updateComment({
+  owner, repo,
+  comment_id: processingCommentId,
+  body: finalResponseText,
+});
+```
+
+**Result**: The user sees 👀 instantly, a "Processing..." comment with a session link within seconds, and that same comment transforms into the actual response when done. Clean, professional, no spam.
+
+### Comparison: Slack vs GitHub Outbound
+
+| Behavior | Slack | GitHub |
+|----------|-------|--------|
+| **Message delivery** | Stream every message in real-time | Post only the final response |
+| **Intermediate messages** | Visible in Slack thread | Visible in Agor UI only |
+| **Identity** | Bot user via `bot_token` | App bot via installation token |
+| **Instant feedback** | Message appears immediately | 👀 reaction + "Processing..." comment |
+| **Format** | `slackify-markdown` conversion | Markdown pass-through |
+| **Editing** | Not used | Edit "Processing..." → final response |
+
 ---
 
 ## 7. User Identity & Permissions

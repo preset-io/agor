@@ -1,6 +1,6 @@
 ---
 title: Message Gateway
-description: Route messages from Slack, Discord, and other platforms directly into Agor sessions — turning any chat thread into a portal to an autonomous coding agent.
+description: Route messages from Slack, GitHub, and other platforms directly into Agor sessions — turning any chat thread or PR comment into a portal to an autonomous coding agent.
 ---
 
 # Message Gateway (Beta)
@@ -23,9 +23,9 @@ This is a **beta feature**. Use at your own risk and with caution:
 
 </div>
 
-The Message Gateway connects external messaging platforms to Agor's agent sessions. DM your Slack bot, and Agor spins up a fresh coding session on the right worktree with the right agent — then streams responses back into the same thread. Follow-up messages continue the conversation in the same session.
+The Message Gateway connects external messaging platforms to Agor's agent sessions. Message your Slack bot or mention `@agor` on a GitHub PR, and Agor spins up a coding session on the right worktree with the right agent — then routes responses back to the platform. Follow-up messages continue the conversation in the same session.
 
-> Currently Slack-only. Discord, WhatsApp, and Telegram connectors are planned.
+> Currently supports **Slack** and **GitHub**. Discord, WhatsApp, and Telegram connectors are planned.
 
 ## What is a Channel?
 
@@ -41,17 +41,17 @@ You can create multiple channels for the same or different worktrees. For exampl
 - **"Scout"** — Claude Code (Sonnet 4.5) on a lighter review worktree, trust mode, no MCP servers
 - **"Codex Runner"** — Codex on a `superset-frontend` worktree for quick JS tasks
 
-Each channel gets a unique **channel key** (a UUID) that authenticates inbound messages. The Slack integration uses Socket Mode, so no public webhook URLs are needed.
+Each channel gets a unique **channel key** (a UUID) that authenticates inbound messages. The Slack integration uses Socket Mode and the GitHub integration uses API polling — both are outbound-only, so no public webhook URLs are needed.
 
 ## How It Works
 
-When a message arrives from a platform (e.g., a Slack DM), the gateway processes it through a simple pipeline:
+When a message arrives from a platform (e.g., a Slack DM or a GitHub `@agor` mention), the gateway processes it through a simple pipeline:
 
 1. **Authenticate.** The gateway looks up the channel by its key and verifies it's enabled.
 2. **Map thread to session.** If this is a new thread, create a fresh Agor session on the channel's target worktree with the channel's agentic tool configuration. If this thread has been seen before, route to the existing session.
 3. **Send prompt.** The message text is sent to the session via Agor's standard prompt flow — task creation, executor spawn, the full pipeline.
 4. **Agent runs.** The coding agent (Claude Code, Codex, etc.) processes the prompt with full access to the worktree, MCP servers, and any configured tools.
-5. **Route response back.** When the agent produces a response, Agor's outbound routing hook intercepts it and posts it back into the same platform thread. Markdown is converted to platform-native formatting (e.g., Slack mrkdwn).
+5. **Route response back.** When the agent produces a response, Agor's outbound routing hook intercepts it and posts it back into the same platform thread. Formatting is adapted per platform (Slack mrkdwn conversion, GitHub markdown pass-through).
 6. **Repeat.** Follow-up messages in the same thread continue the same session — the agent has full conversation history.
 
 ```
@@ -108,6 +108,90 @@ The outbound routing is a lightweight after-hook on message creation. For sessio
 
 Open Slack, find your bot under Apps, and send it a message. You should see system debug messages confirming session creation, followed by the agent's response — all in the same DM thread.
 
+## Setting Up GitHub Integration
+
+### How It Works
+
+When someone mentions `@agor` (or your app's name) in a PR or issue comment, Agor picks it up via API polling and creates a session. The session runs on the target worktree, and the agent's final response is posted back as a PR/issue comment under the app's bot identity (e.g., `agor[bot]`).
+
+Key differences from Slack:
+- **Polling, not WebSocket** — Agor polls the GitHub API every 15 seconds (configurable). No public endpoint needed.
+- **Per-PR/issue sessions** — Each PR or issue gets its own session. All `@agor` mentions within the same PR route to the same session.
+- **Last-message-only responses** — Unlike Slack (which streams every message), only the agent's final response is posted to GitHub. Intermediate progress is visible in the Agor UI.
+- **Bot identity** — Responses are posted as the GitHub App's bot user, not as any human user.
+
+### 1. Create a GitHub App
+
+You can create the app through Agor's setup wizard or manually:
+
+**Via Agor UI (recommended):**
+1. Open **Settings** → **Gateway** tab → **Add Channel**.
+2. Select `github` as the channel type.
+3. Click **"Create GitHub App"** — this opens GitHub's App Manifest flow.
+4. Name your app (default: "Agor") and click **Create**.
+5. Agor captures the credentials automatically.
+
+**Manually:**
+1. Go to your GitHub org's **Settings** → **Developer settings** → **GitHub Apps** → **New GitHub App**.
+2. Set permissions: `Contents: Read`, `Issues: Read & Write`, `Pull requests: Read & Write`, `Metadata: Read`.
+3. Subscribe to events: `issue_comment`, `issues`, `pull_request`, `pull_request_review`, `pull_request_review_comment`.
+4. Disable webhooks (set `Active` to false) — Agor uses polling.
+5. After creating, generate a private key and note the App ID.
+
+### 2. Install the App
+
+1. Go to your GitHub App's page → **Install App**.
+2. Select your organization and choose which repositories Agor should access.
+3. Click **Install**.
+
+### 3. Create a Channel in Agor
+
+1. Open **Settings** → **Gateway** tab → **Add Channel**.
+2. Fill in:
+   - **Name** — e.g., "GitHub: preset-io"
+   - **Channel Type** — Select `github`.
+   - **Target Worktree** — Pick the worktree where sessions will run. Ideally, this is an [assistant](/guide/assistants) worktree configured for GitHub work.
+   - **App ID** — Your GitHub App's ID.
+   - **Private Key** — The PEM private key (encrypted at rest).
+   - **Installation ID** — Found via the setup wizard or GitHub's API.
+3. Optionally configure:
+   - **Watch Repos** — Specific repos to monitor (empty = all repos in the installation).
+   - **Poll Interval** — How often to check for new mentions (default: 15 seconds).
+   - **Mention Name** — The keyword to trigger on (default: `agor`, matches `@agor`).
+4. Save. Polling starts immediately.
+
+### 4. Mention @agor on a PR
+
+Comment `@agor review this PR` on any PR in a watched repo. Within 15 seconds:
+1. The comment gets a 👀 reaction (instant feedback).
+2. A "Processing..." comment appears with a link to the Agor session.
+3. The agent reviews the PR.
+4. The "Processing..." comment is replaced with the agent's response.
+
+Follow-up `@agor` mentions on the same PR continue the same session — the agent has full conversation history.
+
+### Setting Up the Assistant
+
+The gateway routes messages to a session on the target worktree. What the agent *does* with those messages is up to you — configured via the assistant's instructions on the target worktree.
+
+A minimal assistant prompt might be:
+
+```
+You handle GitHub mentions for preset-io/agor.
+
+When mentioned on a PR:
+- Create a worktree for the PR branch
+- Spawn a child agent to review the changes
+- The child should comment on the PR when done
+- Include links to Agor sessions in your replies
+
+When mentioned on an issue:
+- Read the issue and all comments
+- Respond with analysis or next steps
+```
+
+With a capable model (like Claude Opus) and Agor MCP tools available, even a minimal prompt produces good results — the agent figures out how to use worktrees, spawn sessions, and interact with GitHub. Over time, the assistant learns the codebase, team conventions, and review patterns across PRs.
+
 ## Agentic Tool Configuration
 
 Each channel can define its own agent configuration, overriding the user's defaults:
@@ -128,7 +212,7 @@ The gateway is built as a set of loosely coupled components:
 - **Gateway Service** (`/gateway`) — Orchestrates inbound routing (platform to session) and outbound routing (session to platform). Custom FeathersJS service.
 - **Gateway Channels** (`/gateway-channels`) — CRUD for channel configurations with encrypted credential storage.
 - **Thread-Session Map** (`/thread-session-map`) — Persists the mapping between platform thread IDs and Agor session IDs.
-- **Connector Layer** — Platform-agnostic `GatewayConnector` interface with a registry pattern. Adding a new platform means implementing `sendMessage()` and optionally `startListening()`.
+- **Connector Layer** — Platform-agnostic `GatewayConnector` interface with a registry pattern. Currently: `SlackConnector` (Socket Mode) and `GitHubConnector` (API polling). Adding a new platform means implementing `sendMessage()` and optionally `startListening()`.
 - **Outbound Hook** — FeathersJS `after.create` hook on the messages service. Fire-and-forget; never blocks message creation.
 
 ### Adding a New Platform
@@ -157,11 +241,24 @@ Implement this interface, register it in the connector registry, and the gateway
 
 ## Troubleshooting
 
+### Slack
+
 - **"Sending messages to this app has been turned off."** Enable the Messages Tab in your Slack app's App Home settings, and subscribe to the `message.im` bot event.
 - **Bot doesn't respond to DMs.** Check that Socket Mode is enabled, the `app_token` is set in the channel config, and the daemon logs show `[gateway] Socket Mode listener started for channel "..."`.
-- **Agent session created but no response.** Verify that the coding agent (Claude Code, etc.) is authenticated inside the daemon's environment. Check daemon logs for executor errors.
 - **Response appears in logs but not in Slack.** The `bot_token` may lack the `chat:write` scope, or the bot may not have permission to DM the user. Check Slack app permissions.
 - **Infinite message loop.** The connector filters out bot messages (`bot_id` or `subtype: bot_message`). If you see loops, check that your Slack app's bot user is properly configured.
+
+### GitHub
+
+- **Bot doesn't respond to `@agor` mentions.** Check daemon logs for `[github] Watching N repos` and `[github] Starting poll loop`. Verify the App ID, private key, and installation ID are correct. Ensure the app is installed on the org with the right repos selected.
+- **"GitHub App authentication failed."** The private key or app ID may be wrong. Re-check credentials. If you regenerated the private key on GitHub, update it in the channel config.
+- **Mentions detected but no session created.** The `require_mention` setting may be filtering incorrectly. Check that `mention_name` matches your app's slug (default: `agor`). Mentions inside code blocks are ignored by design.
+- **Response posted as wrong user.** GitHub comments should appear as the app's bot identity (e.g., `agor[bot]`). If comments appear as a human user, something is bypassing the connector and using a personal `GITHUB_TOKEN` instead.
+- **Rate limit errors.** At 15s polling with 5 repos, you use ~1,200 req/hour out of 5,000. If you're monitoring many repos, increase `poll_interval_ms` or use `watch_repos` to narrow scope.
+
+### General
+
+- **Agent session created but no response.** Verify that the coding agent (Claude Code, etc.) is authenticated inside the daemon's environment. Check daemon logs for executor errors.
 
 ## Related Reading
 
