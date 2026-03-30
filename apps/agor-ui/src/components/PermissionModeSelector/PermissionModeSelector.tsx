@@ -24,8 +24,6 @@ export interface PermissionModeSelectorProps {
   compact?: boolean;
   /** Size for compact mode */
   size?: 'small' | 'middle' | 'large';
-  /** Width for compact mode */
-  width?: number;
   /** Codex-specific: sandbox mode value */
   codexSandboxMode?: CodexSandboxMode;
   /** Codex-specific: approval policy value */
@@ -246,12 +244,11 @@ const getDefaultMode = (tool: PermissionModeSelectorProps['agentic_tool']): Perm
 };
 
 export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
-  value = 'auto',
+  value,
   onChange,
   agentic_tool = 'claude-code',
   compact = false,
   size = 'middle',
-  width = 200,
   codexSandboxMode = 'workspace-write',
   codexApprovalPolicy = 'on-request',
   onCodexChange,
