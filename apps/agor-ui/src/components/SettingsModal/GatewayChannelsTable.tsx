@@ -1027,11 +1027,24 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       if (values.github_installation_id) {
         config.installation_id = Number(values.github_installation_id);
       }
-      config.watch_repos = values.github_watch_repos ?? [];
-      config.require_mention = values.github_require_mention ?? true;
-      config.mention_name = values.github_mention_name || 'agor';
-      config.poll_interval_ms = ((values.github_poll_interval_s as number) ?? 30) * 1000;
-      config.align_github_users = values.github_align_users ?? false;
+      // Only overwrite fields that are present in the form values.
+      // Ant Design omits values for fields inside collapsed panels,
+      // so using ?? [] would wipe existing config when the panel wasn't opened.
+      if (values.github_watch_repos !== undefined) {
+        config.watch_repos = values.github_watch_repos;
+      }
+      if (values.github_require_mention !== undefined) {
+        config.require_mention = values.github_require_mention;
+      }
+      if (values.github_mention_name !== undefined) {
+        config.mention_name = values.github_mention_name;
+      }
+      if (values.github_poll_interval_s !== undefined) {
+        config.poll_interval_ms = (values.github_poll_interval_s as number) * 1000;
+      }
+      if (values.github_align_users !== undefined) {
+        config.align_github_users = values.github_align_users;
+      }
       if (values.github_user_map) {
         try {
           config.user_map = JSON.parse(values.github_user_map as string);
