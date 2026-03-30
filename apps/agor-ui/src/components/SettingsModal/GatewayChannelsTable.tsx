@@ -1027,24 +1027,12 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       if (values.github_installation_id) {
         config.installation_id = Number(values.github_installation_id);
       }
-      // Only overwrite fields that are present in the form values.
-      // Ant Design omits values for fields inside collapsed panels,
-      // so using ?? [] would wipe existing config when the panel wasn't opened.
-      if (values.github_watch_repos !== undefined) {
-        config.watch_repos = values.github_watch_repos;
-      }
-      if (values.github_require_mention !== undefined) {
-        config.require_mention = values.github_require_mention;
-      }
-      if (values.github_mention_name !== undefined) {
-        config.mention_name = values.github_mention_name;
-      }
-      if (values.github_poll_interval_s !== undefined) {
-        config.poll_interval_ms = (values.github_poll_interval_s as number) * 1000;
-      }
-      if (values.github_align_users !== undefined) {
-        config.align_github_users = values.github_align_users;
-      }
+      // Form has preserve={true}, so all values are available even from collapsed panels.
+      config.watch_repos = values.github_watch_repos ?? [];
+      config.require_mention = values.github_require_mention ?? true;
+      config.mention_name = values.github_mention_name || 'agor';
+      config.poll_interval_ms = ((values.github_poll_interval_s as number) ?? 30) * 1000;
+      config.align_github_users = values.github_align_users ?? false;
       if (values.github_user_map) {
         try {
           config.user_map = JSON.parse(values.github_user_map as string);
@@ -1057,19 +1045,13 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       if (values.app_token) config.app_token = values.app_token;
       if (values.connection_mode) config.connection_mode = values.connection_mode;
 
-      // Message source configuration — only overwrite when the field was rendered.
-      // Ant Design omits values for fields inside collapsed panels.
-      if (values.enable_channels !== undefined) config.enable_channels = values.enable_channels;
-      if (values.enable_groups !== undefined) config.enable_groups = values.enable_groups;
-      if (values.enable_mpim !== undefined) config.enable_mpim = values.enable_mpim;
-      if (values.require_mention !== undefined) config.require_mention = values.require_mention;
-      if (values.align_slack_users !== undefined)
-        config.align_slack_users = values.align_slack_users;
-
-      // Channel whitelist — preserve existing when field wasn't rendered
-      if (values.allowed_channel_ids !== undefined) {
-        config.allowed_channel_ids = values.allowed_channel_ids;
-      }
+      // Form has preserve={true}, so all values are available even from collapsed panels.
+      config.enable_channels = values.enable_channels ?? false;
+      config.enable_groups = values.enable_groups ?? false;
+      config.enable_mpim = values.enable_mpim ?? false;
+      config.require_mention = values.require_mention ?? true;
+      config.align_slack_users = values.align_slack_users ?? false;
+      config.allowed_channel_ids = values.allowed_channel_ids ?? [];
     }
 
     // Build agentic config from form values
@@ -1094,24 +1076,17 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         : {}),
     };
 
-    const result: Partial<GatewayChannel> = {
+    // Form has preserve={true}, so agor_user_id is retained even when the
+    // "Post messages as" dropdown is hidden (GitHub alignment ON).
+    return {
       name: values.name as string,
       channel_type: values.channel_type as ChannelType,
       target_worktree_id: values.target_worktree_id as UUID,
+      agor_user_id: values.agor_user_id as UUID,
       config,
       agentic_config: agenticConfig,
       enabled: (values.enabled as boolean) ?? true,
     };
-
-    // Only set agor_user_id when the field was rendered.
-    // When GitHub alignment is ON, the "Post messages as" dropdown is hidden,
-    // so values.agor_user_id is undefined — we must not send undefined to the API
-    // as it would clear the existing value.
-    if (values.agor_user_id !== undefined) {
-      result.agor_user_id = values.agor_user_id as UUID;
-    }
-
-    return result;
   };
 
   const handleCreate = async () => {
@@ -1451,7 +1426,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         okText="Save"
         width={600}
       >
-        <Form form={editForm} layout="vertical" style={{ marginTop: 16 }}>
+        <Form form={editForm} layout="vertical" preserve style={{ marginTop: 16 }}>
           <ChannelFormFields
             form={editForm}
             mode="edit"
