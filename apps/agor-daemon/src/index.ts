@@ -6367,7 +6367,9 @@ async function main() {
   // Configure custom routes for session-MCP relationships
   // (sessionMCPServersService already created above for top-level service)
 
-  // GET /sessions/:id/mcp-servers - List MCP servers for a session
+  // /sessions/:id/mcp-servers - CRUD for session MCP server relationships
+  // All methods (find, create, remove, patch) on one service so Feathers client
+  // can call .remove(id) and .patch(id, data) correctly.
   registerAuthenticatedRoute(
     app,
     '/sessions/:id/mcp-servers',
@@ -6383,7 +6385,6 @@ async function main() {
           params
         );
       },
-      // POST /sessions/:id/mcp-servers - Add MCP server to session
       async create(data: { mcpServerId: string }, params: RouteParams) {
         const id = params.route?.id;
         if (!id) throw new Error('Session ID required');
@@ -6406,23 +6407,8 @@ async function main() {
 
         return relationship;
       },
-      // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
-    } as any,
-    {
-      find: { role: 'member', action: 'view session MCP servers' },
-      create: { role: 'member', action: 'modify session MCP servers' },
-    },
-    requireAuth
-  );
-
-  // DELETE /sessions/:id/mcp-servers/:mcpId - Remove MCP server from session
-  registerAuthenticatedRoute(
-    app,
-    '/sessions/:id/mcp-servers/:mcpId',
-    {
-      async remove(_id: unknown, params: RouteParams & { route?: { mcpId?: string } }) {
+      async remove(mcpId: string, params: RouteParams) {
         const id = params.route?.id;
-        const mcpId = params.route?.mcpId;
         if (!id) throw new Error('Session ID required');
         if (!mcpId) throw new Error('MCP Server ID required');
 
@@ -6441,14 +6427,8 @@ async function main() {
 
         return relationship;
       },
-      // PATCH /sessions/:id/mcp-servers/:mcpId - Toggle MCP server enabled state
-      async patch(
-        _id: unknown,
-        data: { enabled: boolean },
-        params: RouteParams & { route?: { mcpId?: string } }
-      ) {
+      async patch(mcpId: string, data: { enabled: boolean }, params: RouteParams) {
         const id = params.route?.id;
-        const mcpId = params.route?.mcpId;
         if (!id) throw new Error('Session ID required');
         if (!mcpId) throw new Error('MCP Server ID required');
         if (typeof data.enabled !== 'boolean') throw new Error('enabled field required');
@@ -6462,6 +6442,8 @@ async function main() {
       // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
     } as any,
     {
+      find: { role: 'member', action: 'view session MCP servers' },
+      create: { role: 'member', action: 'modify session MCP servers' },
       remove: { role: 'member', action: 'modify session MCP servers' },
       patch: { role: 'member', action: 'modify session MCP servers' },
     },
