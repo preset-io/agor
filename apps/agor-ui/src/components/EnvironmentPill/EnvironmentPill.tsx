@@ -74,7 +74,12 @@ export function EnvironmentPill({
         return <StopOutlined style={{ color: token.colorTextDisabled, fontSize: 12 }} />;
       case 'starting':
       case 'stopping':
-        return <Spin size="small" />;
+        return (
+          <Spin
+            size="small"
+            style={{ display: 'inline-flex', alignItems: 'center', fontSize: 12 }}
+          />
+        );
       case 'healthy':
         return <CheckCircleOutlined style={{ color: token.colorSuccess, fontSize: 12 }} />;
       case 'unhealthy':
