@@ -161,6 +161,14 @@ function AppContent() {
   const [openUserSettings, setOpenUserSettings] = useState(false);
   const [openNewWorktree, setOpenNewWorktree] = useState(false);
 
+  // Detect GitHub App setup callback URL and auto-open gateway settings
+  const location = useLocation();
+  useEffect(() => {
+    if (location.pathname === '/gateway/github/setup' && location.search.includes('setup_token')) {
+      setSettingsTabToOpen('gateway');
+    }
+  }, [location.pathname, location.search]);
+
   // Per-session prompt drafts (persists across session switches)
   const [promptDrafts, setPromptDrafts] = useState<Map<string, string>>(new Map());
 

@@ -393,6 +393,7 @@ import { createFileService } from './services/file';
 import { createFilesService } from './services/files';
 import { createGatewayService, type GatewayService } from './services/gateway';
 import { createGatewayChannelsService } from './services/gateway-channels';
+import { registerGitHubAppSetupRoutes } from './services/github-app-setup';
 import { createHealthMonitor } from './services/health-monitor';
 import { createLeaderboardService } from './services/leaderboard';
 import { createMCPServersService } from './services/mcp-servers';
@@ -2650,6 +2651,14 @@ async function main() {
     methods: ['create', 'routeMessage'],
   });
 
+  // Register GitHub App setup routes (manifest flow for creating GitHub Apps)
+  const uiUrl = isProduction ? `${daemonUrl}/ui` : `http://localhost:${UI_PORT}`;
+  registerGitHubAppSetupRoutes(app, {
+    daemonUrl,
+    uiUrl,
+    db,
+  });
+
   // Register config service for API key management
   const configService = createConfigService(db);
   // Store app reference for service method access
@@ -3893,23 +3902,41 @@ async function main() {
           // This ensures queued messages are processed regardless of how the session became IDLE
           const session = Array.isArray(context.result) ? context.result[0] : context.result;
 
-          if (session && session.status === 'idle' && session.ready_for_prompt) {
-            // Use setImmediate to avoid blocking the patch response
+          if (session && session.status === 'idle') {
+            // Flush GitHub message buffer (fire-and-forget).
+            // When a GitHub-connected session finishes its turn, post the last
+            // buffered message as a PR/issue comment. Must happen before queue
+            // processing so the response is posted before the next prompt starts.
             setImmediate(async () => {
               try {
-                console.log(
-                  `🔄 [SessionsService.after.patch] Session ${session.session_id.substring(0, 8)} became IDLE, checking for queued messages...`
-                );
-
-                await sessionsService.triggerQueueProcessing(session.session_id, context.params);
+                const gatewayService = context.app.service('gateway') as unknown as GatewayService;
+                await gatewayService.flushGitHubBuffer(session.session_id);
               } catch (error) {
-                console.error(
-                  `❌ [SessionsService.after.patch] Failed to process queue for session ${session.session_id.substring(0, 8)}:`,
+                console.warn(
+                  `[gateway] Failed to flush GitHub buffer for session ${session.session_id.substring(0, 8)}:`,
                   error
                 );
-                // Don't throw - queue processing failure shouldn't break session patches
               }
             });
+
+            if (session.ready_for_prompt) {
+              // Use setImmediate to avoid blocking the patch response
+              setImmediate(async () => {
+                try {
+                  console.log(
+                    `🔄 [SessionsService.after.patch] Session ${session.session_id.substring(0, 8)} became IDLE, checking for queued messages...`
+                  );
+
+                  await sessionsService.triggerQueueProcessing(session.session_id, context.params);
+                } catch (error) {
+                  console.error(
+                    `❌ [SessionsService.after.patch] Failed to process queue for session ${session.session_id.substring(0, 8)}:`,
+                    error
+                  );
+                  // Don't throw - queue processing failure shouldn't break session patches
+                }
+              });
+            }
           }
 
           return context;

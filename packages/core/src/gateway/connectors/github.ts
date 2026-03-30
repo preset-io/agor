@@ -299,6 +299,35 @@ export class GitHubConnector implements GatewayConnector {
         // Build thread ID
         const threadId = `${owner}/${repoName}#${issueNumber}`;
 
+        // ── Instant Feedback ──────────────────────────────────
+        // React with 👀 so the user knows the bot saw their mention
+        try {
+          await octokit.reactions.createForIssueComment({
+            owner,
+            repo: repoName,
+            comment_id: comment.id,
+            content: 'eyes',
+          });
+        } catch (err) {
+          console.warn(`[github] Failed to add 👀 reaction to comment ${comment.id}:`, err);
+        }
+
+        // Post a "Processing..." comment that will be edited with the final response
+        let processingCommentId: number | undefined;
+        try {
+          const { data: processingComment } = await octokit.issues.createComment({
+            owner,
+            repo: repoName,
+            issue_number: issueNumber,
+            body: '⏳ Processing...',
+          });
+          processingCommentId = processingComment.id;
+          // Mark our own processing comment as processed so we don't re-ingest it
+          addToRingBuffer(state.processedCommentIds, processingComment.id);
+        } catch (err) {
+          console.warn(`[github] Failed to post processing comment on ${threadId}:`, err);
+        }
+
         // Strip mention from body
         const text = requireMention ? stripMention(body, mentionName) : body;
 
@@ -314,6 +343,7 @@ export class GitHubConnector implements GatewayConnector {
             issue_number: issueNumber,
             repo_full_name: repo,
             comment_url: comment.html_url,
+            ...(processingCommentId ? { processing_comment_id: processingCommentId } : {}),
             ...(this.config.align_github_users ? { align_github_users: true } : {}),
           },
         });
@@ -420,7 +450,11 @@ export class GitHubConnector implements GatewayConnector {
   }
 
   /**
-   * Post a comment on a PR/issue.
+   * Post or edit a comment on a PR/issue.
+   *
+   * If `metadata.edit_comment_id` is set, edits that comment instead of
+   * creating a new one. This is used to replace the "Processing..." comment
+   * with the final agent response.
    */
   async sendMessage(req: {
     threadId: string;
@@ -429,12 +463,25 @@ export class GitHubConnector implements GatewayConnector {
   }): Promise<string> {
     const { owner, repo, number: issueNumber } = parseThreadId(req.threadId);
     const octokit = await this.getOctokit();
+    const editCommentId = req.metadata?.edit_comment_id as number | undefined;
 
+    if (editCommentId) {
+      // Edit existing comment (the "Processing..." comment → final response)
+      await octokit.issues.updateComment({
+        owner,
+        repo,
+        comment_id: editCommentId,
+        body: req.text,
+      });
+      return String(editCommentId);
+    }
+
+    // Create new comment
     const { data } = await octokit.issues.createComment({
       owner,
       repo,
       issue_number: issueNumber,
-      body: req.text, // GitHub is markdown-native — no conversion needed
+      body: req.text,
     });
 
     return String(data.id);

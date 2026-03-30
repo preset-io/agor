@@ -81,7 +81,10 @@ function hasListeningConfig(channel: GatewayChannel): boolean {
 /**
  * Build the initial prompt for a new GitHub-routed session.
  *
- * Provides minimal routing metadata (repo, PR/issue number, URL, commenter).
+ * Provides minimal routing metadata (repo, PR/issue number, URL, commenter)
+ * plus behavioral instructions for the GitHub channel. The agent needs to
+ * know that only its last message will be posted as a PR/issue comment.
+ *
  * Everything else — what to do, how to review, whether to fetch diffs — is
  * the responsibility of the assistant's instructions configured by the admin.
  */
@@ -101,6 +104,18 @@ function buildGitHubInitialPrompt(
       `${commentUrl}`,
       ``,
       text,
+      ``,
+      `---`,
+      `## GitHub Channel Behavior`,
+      ``,
+      `This session was triggered from a GitHub mention. Important behavior notes:`,
+      ``,
+      `- Your **last message** will be automatically posted as a comment on the GitHub issue/PR`,
+      `- Only the final message is posted — intermediate messages are visible in the Agor UI only`,
+      `- Keep your final response concise and GitHub-appropriate (markdown formatted)`,
+      `- If you need to delegate work to another session, mention the session link in your response`,
+      `- The comment will appear as the GitHub App bot identity, not as any human user`,
+      `- Be thorough in your work, then provide a clear final summary`,
     ].join('\n');
   } catch {
     return text;
@@ -126,6 +141,15 @@ export class GatewayService {
    * Updated on startup and whenever channels are created/deleted.
    */
   private hasActiveChannels = false;
+
+  /**
+   * GitHub message buffer: keyed by session_id, stores the latest message text.
+   * For GitHub channels, we don't send every assistant message in real-time
+   * (unlike Slack). Instead, we buffer and only send the last message when
+   * the session turn completes (goes idle). Each new message overwrites the
+   * previous one — only the final message matters.
+   */
+  private githubMessageBuffer = new Map<string, string>();
 
   constructor(db: Database, app: Application) {
     this.channelRepo = new GatewayChannelRepository(db);
@@ -371,6 +395,8 @@ export class GatewayService {
         } catch {
           // Non-fatal — thread ID might not match expected format
         }
+        // Flag for downstream consumers: only the last message is posted to GitHub
+        gatewaySource.last_message_only = true;
       }
 
       const session = await sessionsService.create({
@@ -436,6 +462,21 @@ export class GatewayService {
         : `Session ${sessionIdShort} created, sending prompt to agent...`;
 
       this.sendDebugMessage(channel, data.thread_id, message);
+
+      // For GitHub channels: edit the "Processing..." comment to include the session link.
+      // The processing_comment_id was stored in inbound metadata by the GitHub connector.
+      if (channel.channel_type === 'github' && data.metadata?.processing_comment_id && sessionUrl) {
+        try {
+          const connector = getConnector(channel.channel_type as ChannelType, channel.config);
+          await connector.sendMessage({
+            threadId: data.thread_id,
+            text: `⏳ Processing... [View session](${sessionUrl})`,
+            metadata: { edit_comment_id: data.metadata.processing_comment_id },
+          });
+        } catch (err) {
+          console.warn('[gateway] Failed to update processing comment with session URL:', err);
+        }
+      }
     }
 
     // Touch channel last_message_at
@@ -532,7 +573,18 @@ export class GatewayService {
     await this.threadMapRepo.updateLastMessage(mapping.id);
     await this.channelRepo.updateLastMessage(channel.id);
 
-    // Send via platform connector
+    // For GitHub channels, buffer the message instead of sending immediately.
+    // Only the last message will be posted when the session goes idle (via flushGitHubBuffer).
+    // This prevents noisy intermediate messages from cluttering PR threads.
+    if (channel.channel_type === 'github') {
+      this.githubMessageBuffer.set(data.session_id, data.message);
+      console.log(
+        `[gateway] Buffered GitHub message for session ${data.session_id.substring(0, 8)} (${data.message.length} chars)`
+      );
+      return { routed: true, channelType: 'github' };
+    }
+
+    // Non-GitHub channels (e.g. Slack): send immediately
     try {
       const connector = getConnector(channel.channel_type as ChannelType, channel.config);
 
@@ -556,6 +608,71 @@ export class GatewayService {
       routed: true,
       channelType: channel.channel_type,
     };
+  }
+
+  /**
+   * Flush the GitHub message buffer for a session.
+   *
+   * Called when a session transitions to idle (turn complete). Posts the
+   * last buffered message as a PR/issue comment by editing the "Processing..."
+   * comment. If no buffered message exists, this is a no-op.
+   */
+  async flushGitHubBuffer(sessionId: string): Promise<void> {
+    const bufferedMessage = this.githubMessageBuffer.get(sessionId);
+    if (!bufferedMessage) {
+      return; // No buffered message — nothing to flush
+    }
+
+    // Remove from buffer immediately (prevent double-flush)
+    this.githubMessageBuffer.delete(sessionId);
+
+    // Look up session → thread mapping
+    const mapping = await this.threadMapRepo.findBySession(sessionId);
+    if (!mapping) {
+      console.warn(
+        `[gateway] flushGitHubBuffer: no thread mapping for session ${sessionId.substring(0, 8)}`
+      );
+      return;
+    }
+
+    const channel = await this.channelRepo.findById(mapping.channel_id);
+    if (!channel || !channel.enabled || channel.channel_type !== 'github') {
+      return;
+    }
+
+    try {
+      const connector = getConnector(channel.channel_type as ChannelType, channel.config);
+
+      const text = connector.formatMessage
+        ? connector.formatMessage(bufferedMessage)
+        : bufferedMessage;
+
+      // Edit the "Processing..." comment with the final response
+      const outboundMetadata: Record<string, unknown> = {};
+      if (
+        mapping.metadata &&
+        typeof (mapping.metadata as Record<string, unknown>).processing_comment_id === 'number'
+      ) {
+        outboundMetadata.edit_comment_id = (
+          mapping.metadata as Record<string, unknown>
+        ).processing_comment_id;
+      }
+
+      await connector.sendMessage({
+        threadId: mapping.thread_id,
+        text,
+        metadata: outboundMetadata,
+      });
+
+      console.log(
+        `[gateway] Flushed GitHub buffer for session ${sessionId.substring(0, 8)} → ${mapping.thread_id} (${bufferedMessage.length} chars)`
+      );
+    } catch (error) {
+      console.error(
+        `[gateway] Failed to flush GitHub buffer for session ${sessionId.substring(0, 8)}:`,
+        error
+      );
+    }
   }
 
   /**
