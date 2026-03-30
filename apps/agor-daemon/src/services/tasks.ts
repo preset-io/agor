@@ -224,14 +224,6 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
               `⏭️ [TasksService] Skipping session IDLE update - task ${task.task_id.substring(0, 8)} is not the latest (latest: ${latestTaskId.substring(0, 8)})`
             );
             // Still process callbacks (task completed, callback target needs to know)
-            if (session.genealogy?.parent_session_id) {
-              await this.queueCallbackToSession(
-                task,
-                session,
-                session.genealogy.parent_session_id,
-                params
-              );
-            }
             if (session.callback_config?.callback_session_id) {
               await this.queueCallbackToSession(
                 task,
@@ -269,20 +261,12 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
             );
           }
 
-          // Determine callback target(s):
-          // 1. Subsessions use genealogy.parent_session_id (set by spawn)
-          // 2. Remote sessions use callback_config.callback_session_id (set by create with enableCallback)
-          // Both can coexist (though unlikely in practice)
-          const callbackTargets = new Set<SessionID>();
-
-          if (session.genealogy?.parent_session_id) {
-            callbackTargets.add(session.genealogy.parent_session_id);
-          }
+          // Queue callback to the target session if configured
+          // callback_config.callback_session_id is the single source of truth for both:
+          // - Subsessions (spawn sets it to parent session ID)
+          // - Remote sessions (create sets it when enableCallback is true)
           if (session.callback_config?.callback_session_id) {
-            callbackTargets.add(session.callback_config.callback_session_id);
-          }
-
-          for (const targetSessionId of callbackTargets) {
+            const targetSessionId = session.callback_config.callback_session_id;
             await this.queueCallbackToSession(task, session, targetSessionId, params);
 
             // CRITICAL: After queuing callback, ALWAYS trigger target's queue processing.
@@ -330,11 +314,9 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   }
 
   /**
-   * Queue callback message to a target session when a child/remote session completes
-   *
-   * Works for both:
-   * - Subsessions (target = genealogy.parent_session_id, set by spawn)
-   * - Remote sessions (target = callback_config.callback_session_id, set by create with enableCallback)
+   * Queue callback message to a target session when a session completes.
+   * The target is always callback_config.callback_session_id, set by both
+   * spawn (defaults to parent) and create (when enableCallback is true).
    */
   private async queueCallbackToSession(
     task: Task,
