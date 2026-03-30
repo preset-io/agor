@@ -1062,7 +1062,7 @@ export const gatewayChannels = pgTable(
     // Materialized for queries
     name: text('name').notNull(),
     channel_type: text('channel_type', {
-      enum: ['slack', 'discord', 'whatsapp', 'telegram'],
+      enum: ['slack', 'discord', 'whatsapp', 'telegram', 'github'],
     }).notNull(),
     target_worktree_id: varchar('target_worktree_id', { length: 36 })
       .notNull()

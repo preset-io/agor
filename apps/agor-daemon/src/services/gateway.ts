@@ -14,7 +14,7 @@ import {
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { GatewayConnector, InboundMessage } from '@agor/core/gateway';
-import { getConnector, hasConnector } from '@agor/core/gateway';
+import { getConnector, hasConnector, parseGitHubThreadId } from '@agor/core/gateway';
 import type {
   AgenticToolName,
   ChannelType,
@@ -60,6 +60,51 @@ interface RouteMessageData {
 interface RouteMessageResult {
   routed: boolean;
   channelType?: string;
+}
+
+/**
+ * Check if a channel has the required config for its connector to listen.
+ * Slack requires `app_token` (Socket Mode); GitHub requires `app_id` + `private_key` + `installation_id` (polling).
+ */
+function hasListeningConfig(channel: GatewayChannel): boolean {
+  const config = channel.config as Record<string, unknown>;
+  switch (channel.channel_type) {
+    case 'slack':
+      return !!config.app_token;
+    case 'github':
+      return !!(config.app_id && config.private_key && config.installation_id);
+    default:
+      return false;
+  }
+}
+
+/**
+ * Build the initial prompt for a new GitHub-routed session.
+ *
+ * Provides minimal routing metadata (repo, PR/issue number, URL, commenter).
+ * Everything else — what to do, how to review, whether to fetch diffs — is
+ * the responsibility of the assistant's instructions configured by the admin.
+ */
+function buildGitHubInitialPrompt(
+  threadId: string,
+  text: string,
+  metadata?: Record<string, unknown>
+): string {
+  try {
+    const { owner, repo, number } = parseGitHubThreadId(threadId);
+    const url = `https://github.com/${owner}/${repo}/issues/${number}`;
+    const userName = metadata?.github_user ? `@${metadata.github_user}` : 'a user';
+    const commentUrl = metadata?.comment_url ?? url;
+
+    return [
+      `[GitHub] ${userName} mentioned you on ${owner}/${repo}#${number}`,
+      `${commentUrl}`,
+      ``,
+      text,
+    ].join('\n');
+  } catch {
+    return text;
+  }
 }
 
 /**
@@ -184,8 +229,10 @@ export class GatewayService {
     };
     const channelOwner = await usersService.get(channel.agor_user_id);
 
-    // 6. Resolve effective user (Slack user alignment or channel owner fallback)
+    // 6. Resolve effective user (platform user alignment or channel owner fallback)
     let user = channelOwner;
+
+    // --- Slack user alignment ---
     // Check both the channel config and the connector-reported metadata flag.
     // The metadata flag signals the connector actually attempted alignment for
     // this specific message (it has access to the runtime config at listen time).
@@ -236,6 +283,39 @@ export class GatewayService {
       }
     }
 
+    // --- GitHub user alignment ---
+    // Same pattern as Slack: map GitHub login → Agor user via email.
+    // The GitHub connector provides github_user_email in metadata when available.
+    // Falls back to channel owner (no hard rejection — GitHub email is often unavailable).
+    const alignGitHubUsers =
+      (channel.config as Record<string, unknown>).align_github_users === true ||
+      data.metadata?.align_github_users === true;
+
+    if (alignGitHubUsers && !alignSlackUsers) {
+      const githubEmail =
+        data.metadata?.github_user_email && typeof data.metadata.github_user_email === 'string'
+          ? data.metadata.github_user_email.toLowerCase().trim()
+          : null;
+
+      if (githubEmail) {
+        const matchedUser = await this.usersRepo.findByEmail(githubEmail);
+        if (matchedUser) {
+          console.log(
+            `[gateway] GitHub user aligned: ${githubEmail} → Agor user ${matchedUser.user_id.substring(0, 8)} (${matchedUser.name || matchedUser.email})`
+          );
+          user = await usersService.get(matchedUser.user_id);
+        } else {
+          console.log(
+            `[gateway] GitHub user alignment: no Agor user with email ${githubEmail} (GitHub user: ${data.metadata?.github_user ?? 'unknown'}), falling back to channel owner`
+          );
+        }
+      } else {
+        console.log(
+          `[gateway] GitHub user alignment: no email available for GitHub user ${data.metadata?.github_user ?? data.user_name ?? 'unknown'}, falling back to channel owner`
+        );
+      }
+    }
+
     let sessionId: string;
     let created = false;
 
@@ -273,6 +353,26 @@ export class GatewayService {
         `Creating new ${agenticTool} session (${permissionMode} mode)...`
       );
 
+      // Build custom_context with gateway metadata + platform-specific fields
+      const gatewaySource: Record<string, unknown> = {
+        channel_id: channel.id,
+        channel_name: channel.name,
+        channel_type: channel.channel_type,
+        thread_id: data.thread_id,
+      };
+
+      // Add GitHub-specific metadata for richer context
+      if (channel.channel_type === 'github') {
+        try {
+          const parsed = parseGitHubThreadId(data.thread_id);
+          gatewaySource.github_repo = `${parsed.owner}/${parsed.repo}`;
+          gatewaySource.github_issue_number = parsed.number;
+          gatewaySource.github_thread_id = data.thread_id;
+        } catch {
+          // Non-fatal — thread ID might not match expected format
+        }
+      }
+
       const session = await sessionsService.create({
         title: data.text.substring(0, 100),
         description: data.text,
@@ -299,12 +399,7 @@ export class GatewayService {
         // Denormalized gateway metadata (immutable snapshot at creation time)
         // Avoids N+1 lookups when rendering board cards
         custom_context: {
-          gateway_source: {
-            channel_id: channel.id,
-            channel_name: channel.name,
-            channel_type: channel.channel_type,
-            thread_id: data.thread_id,
-          },
+          gateway_source: gatewaySource,
         },
       });
 
@@ -356,10 +451,18 @@ export class GatewayService {
         ) => Promise<Record<string, unknown>>;
       };
 
+      // For new GitHub sessions, wrap the prompt with repository/PR context
+      // so the agent knows where it's operating. Follow-up messages (existing
+      // mapping) are sent as-is since the session already has context.
+      let promptText = data.text;
+      if (created && channel.channel_type === 'github') {
+        promptText = buildGitHubInitialPrompt(data.thread_id, data.text, data.metadata);
+      }
+
       // Internal call: pass user, omit provider to bypass auth hooks
-      // Mark message source as 'gateway' so it won't be echoed back to Slack
+      // Mark message source as 'gateway' so it won't be echoed back to the platform
       const response = await promptService.create(
-        { prompt: data.text, permissionMode, messageSource: 'gateway' },
+        { prompt: promptText, permissionMode, messageSource: 'gateway' },
         { route: { id: sessionId }, user }
       );
 
@@ -463,11 +566,11 @@ export class GatewayService {
   async startListeners(): Promise<void> {
     const channels = await this.channelRepo.findAll();
     const eligible = channels.filter(
-      (ch) => ch.enabled && hasConnector(ch.channel_type as ChannelType) && ch.config.app_token
+      (ch) => ch.enabled && hasConnector(ch.channel_type as ChannelType) && hasListeningConfig(ch)
     );
 
     if (eligible.length === 0) {
-      console.log('[gateway] No channels with Socket Mode configured');
+      console.log('[gateway] No channels with listener config (Socket Mode / polling)');
       return;
     }
 
@@ -494,14 +597,16 @@ export class GatewayService {
       return;
     }
 
-    // If no connector or no app_token, stop any existing listener
+    // If no connector or missing listener config, stop any existing listener
     if (!hasConnector(channel.channel_type as ChannelType)) {
       console.warn(`[gateway] No connector for channel type: ${channel.channel_type}`);
       await this.stopChannelListener(channelId);
       return;
     }
-    if (!channel.config.app_token) {
-      console.log(`[gateway] Skipping listener for channel ${channel.name} (no app_token)`);
+    if (!hasListeningConfig(channel)) {
+      console.log(
+        `[gateway] Skipping listener for channel ${channel.name} (missing listener config)`
+      );
       await this.stopChannelListener(channelId);
       return;
     }

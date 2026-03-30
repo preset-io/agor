@@ -7,4 +7,5 @@
 
 export type { GatewayConnector, InboundMessage } from './connector';
 export { getConnector, hasConnector, registerConnector } from './connector-registry';
+export { GitHubConnector, parseThreadId as parseGitHubThreadId } from './connectors/github';
 export { SlackConnector } from './connectors/slack';

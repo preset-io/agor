@@ -25,7 +25,7 @@ export type ThreadSessionMapID = UUID;
 // ============================================================================
 
 /** Supported messaging platform types */
-export type ChannelType = 'slack' | 'discord' | 'whatsapp' | 'telegram';
+export type ChannelType = 'slack' | 'discord' | 'whatsapp' | 'telegram' | 'github';
 
 /** Thread lifecycle status */
 export type ThreadStatus = 'active' | 'archived' | 'paused';

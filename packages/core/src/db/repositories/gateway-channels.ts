@@ -26,7 +26,13 @@ import {
 } from './base';
 
 /** Sensitive config fields that should be encrypted at rest */
-const SENSITIVE_CONFIG_FIELDS = ['bot_token', 'app_token', 'signing_secret'];
+const SENSITIVE_CONFIG_FIELDS = [
+  'bot_token',
+  'app_token',
+  'signing_secret', // Slack
+  'private_key',
+  'webhook_secret', // GitHub
+];
 
 /** Sentinel value used by the API to redact sensitive fields in responses */
 const REDACTED_SENTINEL = '••••••••';
