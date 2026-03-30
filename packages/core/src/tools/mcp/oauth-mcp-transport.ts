@@ -109,7 +109,8 @@ const dynamicClientCache = new Map<
 async function registerDynamicClient(
   registrationEndpoint: string,
   redirectUri: string,
-  clientName: string = 'Agor MCP Client'
+  clientName: string = 'Agor MCP Client',
+  scope?: string
 ): Promise<DynamicClientRegistrationResponse> {
   // Check cache first
   const cacheKey = registrationEndpoint;
@@ -121,13 +122,21 @@ async function registerDynamicClient(
 
   console.log('[MCP OAuth] Performing Dynamic Client Registration at:', registrationEndpoint);
 
-  const registrationRequest = {
+  // biome-ignore lint/suspicious/noExplicitAny: DCR request shape varies per RFC 7591
+  const registrationRequest: any = {
     client_name: clientName,
     redirect_uris: [redirectUri],
     grant_types: ['authorization_code', 'refresh_token'],
     response_types: ['code'],
     token_endpoint_auth_method: 'none', // Public client (no client_secret)
   };
+
+  // Include scope in registration so the client is authorized to request them later.
+  // Per RFC 7591 §2, the scope field is a space-separated string of scope values.
+  if (scope) {
+    registrationRequest.scope = scope;
+    console.log('[MCP OAuth] Registering client with scope:', scope);
+  }
 
   const response = await fetch(registrationEndpoint, {
     method: 'POST',
@@ -506,6 +515,12 @@ export async function performMCPOAuthFlow(
     let actualClientId = clientId;
     let clientSecret: string | undefined;
 
+    // Compute scopes early — needed for both DCR registration and auth URL
+    const scopeString =
+      resourceMetadata.scopes_supported && resourceMetadata.scopes_supported.length > 0
+        ? resourceMetadata.scopes_supported.join(' ')
+        : undefined;
+
     if (!actualClientId) {
       // Check if server supports Dynamic Client Registration (RFC 7591)
       if (authServerMetadata.registration_endpoint) {
@@ -513,7 +528,8 @@ export async function performMCPOAuthFlow(
         const registration = await registerDynamicClient(
           authServerMetadata.registration_endpoint,
           callback.url,
-          'Agor MCP Client'
+          'Agor MCP Client',
+          scopeString
         );
         actualClientId = registration.client_id;
         clientSecret = registration.client_secret;
@@ -527,7 +543,8 @@ export async function performMCPOAuthFlow(
           const registration = await registerDynamicClient(
             mcpRegisterEndpoint,
             callback.url,
-            'Agor MCP Client'
+            'Agor MCP Client',
+            scopeString
           );
           actualClientId = registration.client_id;
           clientSecret = registration.client_secret;
@@ -556,9 +573,9 @@ export async function performMCPOAuthFlow(
     authUrl.searchParams.set('code_challenge_method', 'S256');
     authUrl.searchParams.set('state', state);
 
-    // Add scopes if available
-    if (resourceMetadata.scopes_supported && resourceMetadata.scopes_supported.length > 0) {
-      authUrl.searchParams.set('scope', resourceMetadata.scopes_supported.join(' '));
+    // Add scopes if available (same scopes used during DCR registration)
+    if (scopeString) {
+      authUrl.searchParams.set('scope', scopeString);
     }
 
     console.log('[MCP OAuth] Opening browser for user authentication...');
@@ -839,6 +856,13 @@ export async function startMCPOAuthFlow(
   // so we use a known URI pattern that the user will copy from
   const actualRedirectUri = redirectUri || 'http://127.0.0.1:0/oauth/callback';
 
+  // Compute scopes early — needed for both DCR registration and auth URL
+  const scopeString = options?.scope
+    ? options.scope
+    : resourceMetadata.scopes_supported && resourceMetadata.scopes_supported.length > 0
+      ? resourceMetadata.scopes_supported.join(' ')
+      : undefined;
+
   // Step 6: Get or register client_id
   let actualClientId = clientId;
   let clientSecret: string | undefined = options?.clientSecret;
@@ -850,7 +874,8 @@ export async function startMCPOAuthFlow(
       const registration = await registerDynamicClient(
         authServerMetadata.registration_endpoint,
         actualRedirectUri,
-        'Agor MCP Client'
+        'Agor MCP Client',
+        scopeString
       );
       actualClientId = registration.client_id;
       clientSecret = registration.client_secret;
@@ -863,7 +888,8 @@ export async function startMCPOAuthFlow(
         const registration = await registerDynamicClient(
           mcpRegisterEndpoint,
           actualRedirectUri,
-          'Agor MCP Client'
+          'Agor MCP Client',
+          scopeString
         );
         actualClientId = registration.client_id;
         clientSecret = registration.client_secret;
@@ -916,11 +942,9 @@ export async function startMCPOAuthFlow(
   authUrl.searchParams.set('code_challenge_method', 'S256');
   authUrl.searchParams.set('state', state);
 
-  // Add scopes: prefer explicit scope option, then auto-discovered scopes
-  if (options?.scope) {
-    authUrl.searchParams.set('scope', options.scope);
-  } else if (resourceMetadata.scopes_supported && resourceMetadata.scopes_supported.length > 0) {
-    authUrl.searchParams.set('scope', resourceMetadata.scopes_supported.join(' '));
+  // Add scopes (same scopes used during DCR registration)
+  if (scopeString) {
+    authUrl.searchParams.set('scope', scopeString);
   }
 
   console.log('[MCP OAuth] Authorization URL:', authUrl.toString());
