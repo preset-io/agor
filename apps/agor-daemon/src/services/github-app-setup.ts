@@ -108,6 +108,15 @@ function handleManifest(daemonUrl: string) {
     const manifest = buildManifest({ daemonUrl, appName });
     const manifestJson = JSON.stringify(manifest);
 
+    // HTML-escape the JSON for safe embedding in an HTML attribute value.
+    // We use the attribute approach (not inline JS) to avoid CSP issues
+    // with inline scripts being blocked by the browser or proxy.
+    const htmlEscaped = manifestJson
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+
     // GitHub's manifest creation endpoint
     const githubUrl = org
       ? `https://github.com/organizations/${org}/settings/apps/new`
@@ -116,7 +125,6 @@ function handleManifest(daemonUrl: string) {
     // Return an HTML page with the manifest form.
     // We don't auto-submit because GitHub may require 2FA/login first,
     // and the POST data gets lost in auth redirect chains.
-    // Instead, we set the value via JS and let the user click to proceed.
     res.setHeader('Content-Type', 'text/html');
     res.send(`<!DOCTYPE html>
 <html>
@@ -137,12 +145,11 @@ function handleManifest(daemonUrl: string) {
     <h2>Create GitHub App</h2>
     <p>This will create a GitHub App for Agor in your organization. Make sure you're logged into GitHub first.</p>
     <form id="manifest-form" action="${githubUrl}" method="post">
-      <input type="hidden" id="manifest-input" name="manifest" />
+      <input type="hidden" name="manifest" value="${htmlEscaped}" />
       <button type="submit">Create GitHub App on GitHub</button>
     </form>
     <p class="hint">You'll be redirected to GitHub to authorize the app.</p>
   </div>
-  <script>document.getElementById('manifest-input').value = JSON.stringify(${manifestJson});</script>
 </body>
 </html>`);
   };
