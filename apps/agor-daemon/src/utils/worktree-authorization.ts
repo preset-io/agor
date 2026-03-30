@@ -863,6 +863,60 @@ export function validateSessionUnixUsername(
 }
 
 /**
+ * Validate that a user has 'prompt' permission on the worktree containing a session.
+ *
+ * Standalone helper (not a Feathers hook) — usable from MCP tools, service hooks, or anywhere
+ * with access to the app and worktree repository. Resolves worktree ownership internally.
+ *
+ * Use case: validating callback targets ("can this user queue a prompt to that session?").
+ *
+ * @param sessionId - Target session ID to check prompt permission for
+ * @param userId - User ID requesting access
+ * @param app - FeathersJS app (for session lookup)
+ * @param worktreeRepo - WorktreeRepository (for worktree + ownership lookup)
+ * @returns The target session (for further use by caller)
+ * @throws Forbidden if user lacks prompt permission
+ * @throws Error if session or worktree not found
+ */
+export async function ensureCanPromptSession(
+  sessionId: string,
+  userId: string,
+  // biome-ignore lint/suspicious/noExplicitAny: FeathersJS app type
+  app: { service(name: string): any },
+  worktreeRepo: WorktreeRepository
+): Promise<Session> {
+  // Load target session
+  let targetSession: Session;
+  try {
+    targetSession = await app.service('sessions').get(sessionId, { provider: undefined });
+  } catch {
+    throw new Forbidden(`Invalid callback target: session ${sessionId.substring(0, 8)} not found`);
+  }
+
+  // Load its worktree
+  const worktree = await worktreeRepo.findById(targetSession.worktree_id);
+  if (!worktree) {
+    throw new Forbidden(
+      `Cannot resolve permissions: worktree ${targetSession.worktree_id} not found`
+    );
+  }
+
+  // Resolve ownership internally — callers shouldn't need to know this
+  const isOwner = await worktreeRepo.isOwner(worktree.worktree_id, userId as UUID);
+
+  if (!hasWorktreePermission(worktree, userId as UUID, isOwner, 'prompt')) {
+    const effectiveLevel = resolveWorktreePermission(worktree, userId as UUID, isOwner);
+    throw new Forbidden(
+      `Cannot set callback target: you need 'prompt' permission on worktree ` +
+        `${worktree.name || worktree.worktree_id.substring(0, 8)}. ` +
+        `You have '${effectiveLevel}' permission.`
+    );
+  }
+
+  return targetSession;
+}
+
+/**
  * Check if user can create a session in a worktree
  *
  * Creating a session requires 'all' permission (full access).

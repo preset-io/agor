@@ -1,7 +1,9 @@
+import { WorktreeRepository } from '@agor/core/db';
 import type { AgenticToolName } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { SessionsServiceImpl } from '../../declarations.js';
+import { ensureCanPromptSession } from '../../utils/worktree-authorization.js';
 import type { McpContext } from '../server.js';
 import { textResult } from '../server.js';
 
@@ -442,25 +444,10 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       const effectiveCallbackSessionId = args.callbackSessionId || ctx.sessionId;
       const wantsCallback = args.enableCallback || args.callbackSessionId;
 
-      // Validate callback target session exists and belongs to the same user
+      // Validate user has prompt permission on the callback target session's worktree
       if (wantsCallback && args.callbackSessionId) {
-        try {
-          const targetSession = await ctx.app
-            .service('sessions')
-            .get(args.callbackSessionId, ctx.baseServiceParams);
-          if (targetSession.created_by !== ctx.userId) {
-            throw new Error(
-              `Cannot set callback target: session ${args.callbackSessionId.substring(0, 8)} belongs to a different user`
-            );
-          }
-        } catch (error) {
-          if (error instanceof Error && error.message.includes('belongs to a different user')) {
-            throw error;
-          }
-          throw new Error(
-            `Invalid callbackSessionId: session ${args.callbackSessionId.substring(0, 8)} not found`
-          );
-        }
+        const worktreeRepo = new WorktreeRepository(ctx.db);
+        await ensureCanPromptSession(args.callbackSessionId, ctx.userId, ctx.app, worktreeRepo);
       }
 
       if (args.enableCallback !== undefined) {
