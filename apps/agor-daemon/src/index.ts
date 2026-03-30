@@ -3691,10 +3691,12 @@ async function main() {
             | { callback_session_id?: string }
             | undefined;
           if (cbConfig?.callback_session_id) {
-            const creatorId = (context.data as Record<string, unknown>)?.created_by as string;
+            // Use authenticated user, NOT context.data.created_by (which could be client-supplied)
+            const authenticatedUserId =
+              (context.params as { user?: { user_id: string } }).user?.user_id || 'anonymous';
             await ensureCanPromptSession(
               cbConfig.callback_session_id,
-              creatorId,
+              authenticatedUserId,
               context.app,
               worktreeRepository
             );
