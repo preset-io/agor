@@ -23,6 +23,7 @@ import type {
   Session,
 } from '@agor/core/types';
 import { DownOutlined, SettingOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import type { CollapseProps } from 'antd';
 import { Collapse, Divider, Form, Modal, Typography } from 'antd';
 import React from 'react';
 import { AdvancedSettingsForm } from '../AdvancedSettingsForm';
@@ -156,10 +157,14 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
   const [initialValues, setInitialValues] = React.useState<FormValues>(() =>
     buildInitialValues(session, sessionMcpServerIds)
   );
+  const prevOpenRef = React.useRef(false);
 
-  // Reset form values only when modal opens
+  // Reset form values only when modal transitions to open (not on prop changes while open)
   React.useEffect(() => {
-    if (open) {
+    const wasOpen = prevOpenRef.current;
+    prevOpenRef.current = open;
+
+    if (open && !wasOpen) {
       const values = buildInitialValues(session, sessionMcpServerIds);
       setInitialValues(values);
       form.setFieldsValue(values);
@@ -190,7 +195,7 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
   const isCodex = session.agentic_tool === 'codex';
 
   // Build secondary (collapsed) sections
-  const secondaryItems = [];
+  const secondaryItems: NonNullable<CollapseProps['items']> = [];
 
   if (isCodex) {
     secondaryItems.push({

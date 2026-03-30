@@ -259,43 +259,8 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
   const modes = getModesForTool(agentic_tool);
   const effectiveValue = value || getDefaultMode(agentic_tool);
 
-  // Compact mode: render as Select dropdown(s)
+  // Compact mode: render as Select dropdown with colored indicators
   if (compact) {
-    // Codex: Render 2 dropdowns (sandbox + approval)
-    if (agentic_tool === 'codex') {
-      return (
-        <Space size={8}>
-          <Select
-            value={codexSandboxMode}
-            onChange={(val) => onCodexChange?.(val, codexApprovalPolicy)}
-            size={size}
-            placeholder="Sandbox"
-            popupMatchSelectWidth={false}
-            style={{ minWidth: 80 }}
-            options={CODEX_SANDBOX_MODES.map(({ value, label, description }) => ({
-              label,
-              value,
-              title: description,
-            }))}
-          />
-          <Select
-            value={codexApprovalPolicy}
-            onChange={(val) => onCodexChange?.(codexSandboxMode, val)}
-            size={size}
-            placeholder="Approval"
-            popupMatchSelectWidth={false}
-            style={{ minWidth: 80 }}
-            options={CODEX_APPROVAL_POLICIES.map(({ value, label, description }) => ({
-              label,
-              value,
-              title: description,
-            }))}
-          />
-        </Space>
-      );
-    }
-
-    // Non-Codex: Single dropdown with colored indicators
     return (
       <Select
         value={effectiveValue}
