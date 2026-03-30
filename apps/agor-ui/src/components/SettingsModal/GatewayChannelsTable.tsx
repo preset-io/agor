@@ -56,6 +56,7 @@ import { useThemedMessage } from '@/utils/message';
 import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
 import { AgentSelectionGrid } from '../AgentSelectionGrid';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
+import { JSONEditor, validateJSON } from '../JSONEditor';
 
 interface GatewayChannelsTableProps {
   client: AgorClient | null;
@@ -551,14 +552,12 @@ const ChannelFormFields: React.FC<{
                       <Form.Item
                         label="User Map"
                         name="github_user_map"
-                        tooltip="Map GitHub logins to Agor emails. One per line: github_login=agor@email.com"
+                        tooltip="JSON object mapping GitHub logins to Agor email addresses"
+                        rules={[{ validator: validateJSON }]}
                       >
-                        <Input.TextArea
+                        <JSONEditor
                           rows={4}
-                          placeholder={
-                            '# GitHub login = Agor email\nmistercrunch=max@preset.io\noctocat=user@example.com'
-                          }
-                          style={{ fontFamily: 'monospace', fontSize: 12 }}
+                          placeholder={'{\n  "octocat": "user@example.com"\n}'}
                         />
                       </Form.Item>
                     </>
@@ -1007,18 +1006,12 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       config.mention_name = values.github_mention_name || 'agor';
       config.poll_interval_ms = ((values.github_poll_interval_s as number) ?? 30) * 1000;
       config.align_github_users = values.github_align_users ?? false;
-      // Parse user_map from "githubLogin=email" textarea lines
       if (values.github_user_map) {
-        const map: Record<string, string> = {};
-        for (const line of (values.github_user_map as string).split('\n')) {
-          const trimmed = line.trim();
-          if (!trimmed || trimmed.startsWith('#')) continue;
-          const eqIdx = trimmed.indexOf('=');
-          if (eqIdx > 0) {
-            map[trimmed.substring(0, eqIdx).trim()] = trimmed.substring(eqIdx + 1).trim();
-          }
+        try {
+          config.user_map = JSON.parse(values.github_user_map as string);
+        } catch {
+          // validateJSON rule handles the error display
         }
-        config.user_map = map;
       }
     } else if (values.channel_type === 'slack') {
       if (values.bot_token) config.bot_token = values.bot_token;
@@ -1149,12 +1142,9 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       formValues.github_mention_name = (config?.mention_name as string) || 'agor';
       formValues.github_poll_interval_s = ((config?.poll_interval_ms as number) ?? 30000) / 1000;
       formValues.github_align_users = config?.align_github_users ?? false;
-      // Convert user_map object to "login=email" lines
       const userMap = config?.user_map as Record<string, string> | undefined;
-      if (userMap && typeof userMap === 'object') {
-        formValues.github_user_map = Object.entries(userMap)
-          .map(([login, email]) => `${login}=${email}`)
-          .join('\n');
+      if (userMap && typeof userMap === 'object' && Object.keys(userMap).length > 0) {
+        formValues.github_user_map = JSON.stringify(userMap, null, 2);
       }
     }
 
