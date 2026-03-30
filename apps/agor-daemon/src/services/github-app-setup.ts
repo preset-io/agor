@@ -113,22 +113,36 @@ function handleManifest(daemonUrl: string) {
       ? `https://github.com/organizations/${org}/settings/apps/new`
       : 'https://github.com/settings/apps/new';
 
-    // Return an HTML form that auto-submits to GitHub.
-    // The manifest must be POSTed as a form field named "manifest".
-    // We inject the manifest via JavaScript to avoid HTML attribute escaping issues.
+    // Return an HTML page with the manifest form.
+    // We don't auto-submit because GitHub may require 2FA/login first,
+    // and the POST data gets lost in auth redirect chains.
+    // Instead, we set the value via JS and let the user click to proceed.
     res.setHeader('Content-Type', 'text/html');
     res.send(`<!DOCTYPE html>
 <html>
-<head><title>Creating GitHub App...</title></head>
+<head>
+  <title>Create GitHub App — Agor</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background: #0d1117; color: #e6edf3; }
+    .card { background: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 32px; max-width: 480px; text-align: center; }
+    h2 { margin: 0 0 8px; }
+    p { color: #8b949e; margin: 0 0 24px; font-size: 14px; }
+    button { background: #238636; color: #fff; border: none; border-radius: 6px; padding: 12px 24px; font-size: 16px; cursor: pointer; font-weight: 600; }
+    button:hover { background: #2ea043; }
+    .hint { font-size: 12px; color: #8b949e; margin-top: 16px; }
+  </style>
+</head>
 <body>
-  <p>Redirecting to GitHub to create the app...</p>
-  <form id="manifest-form" action="${githubUrl}" method="post">
-    <input type="hidden" id="manifest-input" name="manifest" />
-  </form>
-  <script>
-    document.getElementById('manifest-input').value = JSON.stringify(${manifestJson});
-    document.getElementById('manifest-form').submit();
-  </script>
+  <div class="card">
+    <h2>Create GitHub App</h2>
+    <p>This will create a GitHub App for Agor in your organization. Make sure you're logged into GitHub first.</p>
+    <form id="manifest-form" action="${githubUrl}" method="post">
+      <input type="hidden" id="manifest-input" name="manifest" />
+      <button type="submit">Create GitHub App on GitHub</button>
+    </form>
+    <p class="hint">You'll be redirected to GitHub to authorize the app.</p>
+  </div>
+  <script>document.getElementById('manifest-input').value = JSON.stringify(${manifestJson});</script>
 </body>
 </html>`);
   };
