@@ -158,13 +158,16 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
     buildInitialValues(session, sessionMcpServerIds)
   );
   const prevOpenRef = React.useRef(false);
+  const prevSessionIdRef = React.useRef(session.session_id);
 
-  // Reset form values only when modal transitions to open (not on prop changes while open)
+  // Reset form when modal opens OR when session changes while open (retargeting)
   React.useEffect(() => {
     const wasOpen = prevOpenRef.current;
+    const sessionChanged = session.session_id !== prevSessionIdRef.current;
     prevOpenRef.current = open;
+    prevSessionIdRef.current = session.session_id;
 
-    if (open && !wasOpen) {
+    if ((open && !wasOpen) || (open && sessionChanged)) {
       const values = buildInitialValues(session, sessionMcpServerIds);
       setInitialValues(values);
       form.setFieldsValue(values);
