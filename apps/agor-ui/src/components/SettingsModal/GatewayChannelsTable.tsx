@@ -185,6 +185,7 @@ const ChannelFormFields: React.FC<{
   const enableMpim = Form.useWatch('enable_mpim', form) ?? false;
   const requireMention = Form.useWatch('require_mention', form) ?? true;
   const alignSlackUsers = Form.useWatch('align_slack_users', form) ?? false;
+  const alignGithubUsers = Form.useWatch('github_align_users', form) ?? false;
 
   const sourcesEnabled = enableChannels || enableGroups || enableMpim;
 
@@ -236,11 +237,18 @@ const ChannelFormFields: React.FC<{
         </Select>
       </Form.Item>
 
+      {/* Hidden when GitHub user alignment is on (sessions run as the mapped user) */}
       <Form.Item
         label="Post messages as"
         name="agor_user_id"
-        rules={[{ required: true, message: 'Please select a user' }]}
-        tooltip="Messages from this channel will be attributed to this Agor user. When user alignment is enabled, this acts as the fallback user."
+        rules={[
+          {
+            required: !(channelType === 'github' && alignGithubUsers),
+            message: 'Please select a user',
+          },
+        ]}
+        tooltip="Sessions from this channel will run as this Agor user"
+        style={channelType === 'github' && alignGithubUsers ? { display: 'none' } : undefined}
       >
         <Select placeholder="Select a user" showSearch optionFilterProp="children">
           {Array.from(userById.values()).map((u) => (
