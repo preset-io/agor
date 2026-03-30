@@ -150,6 +150,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
               thinkingMode: session.model_config.thinkingMode ?? 'auto',
             }
           : undefined,
+        callback_config: session.callback_config,
         custom_context: session.custom_context,
         current_context_usage: session.current_context_usage,
         context_window_limit: session.context_window_limit,

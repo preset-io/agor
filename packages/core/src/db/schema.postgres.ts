@@ -142,6 +142,9 @@ export const sessions = pgTable(
         // Model config (session-level model selection)
         model_config?: Session['model_config'];
 
+        // Callback config (child/remote session completion notifications)
+        callback_config?: Session['callback_config'];
+
         // Context window tracking (cumulative usage from latest task)
         current_context_usage?: number; // Tokens currently in context
         context_window_limit?: number; // Model's max context (e.g., 200K)
