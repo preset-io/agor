@@ -3685,6 +3685,32 @@ async function main() {
             }
           }
 
+          // Validate callback_config.callback_session_id ownership at service level
+          // Ensures security regardless of entry point (MCP, REST, internal)
+          const sessionData = context.data as Record<string, unknown> | undefined;
+          const callbackConfig = sessionData?.callback_config as
+            | { callback_session_id?: string }
+            | undefined;
+          if (callbackConfig?.callback_session_id) {
+            const creatorId = sessionData?.created_by as string | undefined;
+            try {
+              const targetSession = await context.app
+                .service('sessions')
+                .get(callbackConfig.callback_session_id);
+              if (targetSession.created_by !== creatorId) {
+                throw new Error(
+                  `Cannot set callback target: session ${callbackConfig.callback_session_id.substring(0, 8)} belongs to a different user`
+                );
+              }
+            } catch (err) {
+              if (err instanceof Error && err.message.includes('belongs to a different user'))
+                throw err;
+              throw new Error(
+                `Invalid callback_session_id: session ${callbackConfig.callback_session_id.substring(0, 8)} not found`
+              );
+            }
+          }
+
           return context;
         },
       ],
@@ -3698,6 +3724,34 @@ async function main() {
               ensureWorktreePermission('all', 'update sessions'), // Require 'all' permission
             ]
           : []),
+        // Validate callback_config.callback_session_id ownership on patch too
+        async (context) => {
+          const patchData = context.data as Record<string, unknown> | undefined;
+          const patchCbConfig = patchData?.callback_config as
+            | { callback_session_id?: string }
+            | undefined;
+          if (patchCbConfig?.callback_session_id) {
+            const user = (context.params as { user?: { user_id: string } }).user;
+            const userId = user?.user_id || 'anonymous';
+            try {
+              const target = await context.app
+                .service('sessions')
+                .get(patchCbConfig.callback_session_id);
+              if (target.created_by !== userId) {
+                throw new Error(
+                  `Cannot set callback target: session ${patchCbConfig.callback_session_id.substring(0, 8)} belongs to a different user`
+                );
+              }
+            } catch (err) {
+              if (err instanceof Error && err.message.includes('belongs to a different user'))
+                throw err;
+              throw new Error(
+                `Invalid callback_session_id: session ${patchCbConfig.callback_session_id.substring(0, 8)} not found`
+              );
+            }
+          }
+          return context;
+        },
       ],
       remove: [
         ...(worktreeRbacEnabled

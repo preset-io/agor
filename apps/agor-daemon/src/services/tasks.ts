@@ -418,7 +418,8 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         childSessionFullId: childSession.session_id,
         childTaskId: task.task_id.substring(0, 8),
         childTaskFullId: task.task_id,
-        parentSessionId: targetSessionId.substring(0, 8),
+        parentSessionId: targetSessionId.substring(0, 8), // backward compat
+        callbackSessionId: targetSessionId.substring(0, 8),
         spawnPrompt,
         status: task.status, // COMPLETED, FAILED, etc.
         completedAt: task.completed_at || new Date().toISOString(),

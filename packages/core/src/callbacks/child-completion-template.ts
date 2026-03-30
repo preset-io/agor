@@ -7,7 +7,7 @@ import Handlebars from 'handlebars';
  * - childSessionFullId: Full UUIDv7 of child session
  * - childTaskId: Short ID of completed task
  * - childTaskFullId: Full UUIDv7 of task
- * - parentSessionId: Short ID of parent session
+ * - parentSessionId: Short ID of callback target session (alias: callbackSessionId)
  * - spawnPrompt: Original prompt given to child
  * - status: Task status (COMPLETED, FAILED, etc.)
  * - completedAt: ISO timestamp of completion
@@ -33,7 +33,8 @@ export interface ChildCompletionContext {
   childSessionFullId: string; // Full UUIDv7
   childTaskId: string; // Short ID of completed task
   childTaskFullId: string; // Full UUIDv7 of task
-  parentSessionId: string; // Short ID of parent
+  parentSessionId: string; // Short ID of callback target (kept for backward compat)
+  callbackSessionId: string; // Alias: Short ID of callback target session
   spawnPrompt?: string; // Original prompt from spawn (truncated to 120 chars, optional based on include_original_prompt)
   status: string; // Task status (COMPLETED, FAILED, etc.)
   completedAt: string; // ISO timestamp
