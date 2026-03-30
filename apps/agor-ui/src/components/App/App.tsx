@@ -54,7 +54,7 @@ import { SettingsModal, UserSettingsModal } from '../SettingsModal';
 import { TerminalModal } from '../TerminalModal';
 import { ThemeEditorModal } from '../ThemeEditorModal';
 import { WorktreeListDrawer } from '../WorktreeListDrawer';
-import { WorktreeModal } from '../WorktreeModal';
+import { WorktreeModal, type WorktreeModalTab } from '../WorktreeModal';
 import type { WorktreeUpdate } from '../WorktreeModal/tabs/GeneralTab';
 
 const { Content } = Layout;
@@ -272,7 +272,7 @@ export const App: React.FC<AppProps> = ({
   const [terminalWorktreeId, setTerminalWorktreeId] = useState<string | undefined>(undefined);
   const [sessionSettingsId, setSessionSettingsId] = useState<string | null>(null);
   const [worktreeModalWorktreeId, setWorktreeModalWorktreeId] = useState<string | null>(null);
-  const [worktreeModalTab, setWorktreeModalTab] = useState<string | undefined>(undefined);
+  const [worktreeModalTab, setWorktreeModalTab] = useState<WorktreeModalTab | undefined>(undefined);
   const [logsModalWorktreeId, setLogsModalWorktreeId] = useState<string | null>(null);
   const [themeEditorOpen, setThemeEditorOpen] = useState(false);
 
@@ -602,7 +602,7 @@ export const App: React.FC<AppProps> = ({
       onNukeEnvironment,
       onViewLogs: (worktreeId: string) => setLogsModalWorktreeId(worktreeId),
       onOpenSettings: (sessionId: string) => setSessionSettingsId(sessionId),
-      onOpenWorktree: (worktreeId: string, tab?: string) => {
+      onOpenWorktree: (worktreeId: string, tab?: WorktreeModalTab) => {
         setWorktreeModalWorktreeId(worktreeId);
         setWorktreeModalTab(tab);
       },

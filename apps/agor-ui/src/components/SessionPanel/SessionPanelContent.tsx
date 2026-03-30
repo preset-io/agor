@@ -70,6 +70,7 @@ export const SessionPanelContent: React.FC<SessionPanelContentProps> = ({
     onOpenWorktree,
     onStartEnvironment,
     onStopEnvironment,
+    onNukeEnvironment,
     onViewLogs,
     onPermissionDecision,
     onInputResponse,
@@ -101,6 +102,7 @@ export const SessionPanelContent: React.FC<SessionPanelContentProps> = ({
                 onOpenWorktree={onOpenWorktree}
                 onStartEnvironment={onStartEnvironment}
                 onStopEnvironment={onStopEnvironment}
+                onNukeEnvironment={onNukeEnvironment}
                 onViewLogs={onViewLogs}
               />
             )}

@@ -19,6 +19,14 @@ import { GeneralTab, type WorktreeUpdate } from './tabs/GeneralTab';
 import { ScheduleTab } from './tabs/ScheduleTab';
 import { SessionsTab } from './tabs/SessionsTab';
 
+export type WorktreeModalTab =
+  | 'general'
+  | 'assistant'
+  | 'sessions'
+  | 'environment'
+  | 'files'
+  | 'schedule';
+
 export interface WorktreeModalProps {
   open: boolean;
   onClose: () => void;
@@ -41,7 +49,7 @@ export interface WorktreeModalProps {
   ) => void;
   onOpenSettings?: () => void; // Navigate to Settings → Repositories
   onSessionClick?: (sessionId: string) => void;
-  defaultTab?: string; // Open modal to a specific tab
+  defaultTab?: WorktreeModalTab; // Open modal to a specific tab
 }
 
 export const WorktreeModal: React.FC<WorktreeModalProps> = ({
@@ -65,12 +73,12 @@ export const WorktreeModal: React.FC<WorktreeModalProps> = ({
   const { token } = theme.useToken();
   const [activeTab, setActiveTab] = useState('general');
 
-  // Sync active tab when defaultTab changes (e.g., opening modal to a specific tab)
+  // Sync active tab when modal opens — use defaultTab if specified, otherwise reset to general
   useEffect(() => {
-    if (defaultTab) {
-      setActiveTab(defaultTab);
+    if (open) {
+      setActiveTab(defaultTab || 'general');
     }
-  }, [defaultTab]);
+  }, [open, defaultTab]);
 
   const isAnAssistant = worktree ? isAssistant(worktree) : false;
   const assistantConfig = useMemo(

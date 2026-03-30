@@ -18,12 +18,13 @@ import {
 import { Button, Spin, Tooltip, theme } from 'antd';
 import { getEnvironmentState } from '../../utils/environmentState';
 import { Tag } from '../Tag';
+import type { WorktreeModalTab } from '../WorktreeModal/WorktreeModal';
 
 interface WorktreeHeaderPillProps {
   repo: Repo;
   worktree: Worktree;
   sessionCount?: number;
-  onOpenWorktree?: (worktreeId: string, tab?: string) => void;
+  onOpenWorktree?: (worktreeId: string, tab?: WorktreeModalTab) => void;
   onStartEnvironment?: (worktreeId: string) => void;
   onStopEnvironment?: (worktreeId: string) => void;
   onNukeEnvironment?: (worktreeId: string) => void;
@@ -38,10 +39,6 @@ const iconButtonStyle: React.CSSProperties = {
   width: PILL_HEIGHT,
   minWidth: PILL_HEIGHT,
   padding: 0,
-};
-
-const sectionDivider: React.CSSProperties = {
-  borderLeft: '1px solid rgba(255, 255, 255, 0.15)',
 };
 
 export function WorktreeHeaderPill({
@@ -76,7 +73,7 @@ export function WorktreeHeaderPill({
   const stopDisabled =
     connectionDisabled || !hasConfig || !onStopEnvironment || isStopping || !canStop;
 
-  const openTab = (tab: string) => (e: React.MouseEvent) => {
+  const openTab = (tab: WorktreeModalTab) => (e: React.MouseEvent) => {
     e.stopPropagation();
     onOpenWorktree?.(worktree.worktree_id, tab);
   };
@@ -195,7 +192,7 @@ export function WorktreeHeaderPill({
           gap: 2,
           padding: '0 4px',
           height: PILL_HEIGHT,
-          ...sectionDivider,
+          borderLeft: `1px solid ${token.colorBorderSecondary}`,
         }}
       >
         {hasConfig ? (
@@ -250,6 +247,7 @@ export function WorktreeHeaderPill({
                 <Button
                   type="text"
                   size="small"
+                  aria-label="Start environment"
                   icon={<PlayCircleOutlined />}
                   onClick={(e) => {
                     e.stopPropagation();
@@ -277,6 +275,7 @@ export function WorktreeHeaderPill({
                 <Button
                   type="text"
                   size="small"
+                  aria-label="Stop environment"
                   icon={<StopOutlined />}
                   onClick={(e) => {
                     e.stopPropagation();
@@ -294,6 +293,7 @@ export function WorktreeHeaderPill({
                 <Button
                   type="text"
                   size="small"
+                  aria-label="View environment logs"
                   icon={<FileTextOutlined />}
                   onClick={(e) => {
                     e.stopPropagation();
@@ -311,6 +311,7 @@ export function WorktreeHeaderPill({
                   type="text"
                   size="small"
                   danger
+                  aria-label="Nuke environment"
                   icon={<FireOutlined />}
                   onClick={(e) => {
                     e.stopPropagation();
@@ -356,13 +357,14 @@ export function WorktreeHeaderPill({
           gap: 1,
           padding: '0 3px',
           height: PILL_HEIGHT,
-          ...sectionDivider,
+          borderLeft: `1px solid ${token.colorBorderSecondary}`,
         }}
       >
         <Tooltip title={`Sessions${sessionCount != null ? ` (${sessionCount})` : ''}`}>
           <Button
             type="text"
             size="small"
+            aria-label="Sessions"
             icon={<TeamOutlined />}
             onClick={openTab('sessions')}
             style={iconButtonStyle}
@@ -372,6 +374,7 @@ export function WorktreeHeaderPill({
           <Button
             type="text"
             size="small"
+            aria-label="Files"
             icon={<FolderOutlined />}
             onClick={openTab('files')}
             style={iconButtonStyle}
@@ -381,6 +384,7 @@ export function WorktreeHeaderPill({
           <Button
             type="text"
             size="small"
+            aria-label="Schedule"
             icon={<CalendarOutlined />}
             onClick={openTab('schedule')}
             style={iconButtonStyle}
@@ -390,6 +394,7 @@ export function WorktreeHeaderPill({
           <Button
             type="text"
             size="small"
+            aria-label="Edit environment"
             icon={<EditOutlined />}
             onClick={openTab('environment')}
             style={iconButtonStyle}
