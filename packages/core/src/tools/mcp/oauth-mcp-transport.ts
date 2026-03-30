@@ -166,28 +166,74 @@ async function registerDynamicClient(
 }
 
 /**
+ * Build RFC 8414 Section 3 well-known URL with path-aware discovery.
+ *
+ * Per the RFC, the well-known URI is constructed by inserting the well-known
+ * segment after the authority component. For example:
+ *   - https://example.com           → https://example.com/.well-known/oauth-authorization-server
+ *   - https://example.com/tenant1   → https://example.com/.well-known/oauth-authorization-server/tenant1
+ *   - https://example.com/a/b       → https://example.com/.well-known/oauth-authorization-server/a/b
+ */
+function buildWellKnownUrl(issuerUrl: string, wellKnownSuffix: string): string {
+  const url = new URL(issuerUrl);
+  const path = url.pathname === '/' ? '' : url.pathname.replace(/\/$/, '');
+  url.pathname = `/.well-known/${wellKnownSuffix}${path}`;
+  return url.toString();
+}
+
+/**
  * Fetch Authorization Server Metadata (RFC 8414)
+ *
+ * Implements path-aware discovery per RFC 8414 Section 3.
+ * Falls back to OIDC discovery and naive URL construction.
  */
 async function fetchAuthorizationServerMetadata(
   authServerUrl: string
 ): Promise<AuthorizationServerMetadata> {
-  // Try OAuth 2.0 discovery first (RFC 8414), then fall back to OIDC discovery.
-  // This order matters: OIDC endpoints (e.g. Slack's /openid/connect/authorize) don't
-  // support regular API scopes — only the OAuth 2.0 endpoint does.
-  let metadataUrl = `${authServerUrl}/.well-known/oauth-authorization-server`;
-  let response = await fetch(metadataUrl, { signal: AbortSignal.timeout(15_000) });
+  const cleanUrl = authServerUrl.replace(/\/$/, '');
+  const urlsToTry: { url: string; label: string }[] = [];
 
-  // Fall back to OIDC discovery
-  if (!response.ok) {
-    metadataUrl = `${authServerUrl}/.well-known/openid-configuration`;
-    response = await fetch(metadataUrl, { signal: AbortSignal.timeout(15_000) });
+  // 1. RFC 8414 path-aware discovery (correct per spec)
+  const rfc8414Url = buildWellKnownUrl(cleanUrl, 'oauth-authorization-server');
+  urlsToTry.push({ url: rfc8414Url, label: 'RFC 8414 (path-aware)' });
+
+  // 2. Naive append (common non-compliant servers just append /.well-known/...)
+  const naiveUrl = `${cleanUrl}/.well-known/oauth-authorization-server`;
+  if (naiveUrl !== rfc8414Url) {
+    urlsToTry.push({ url: naiveUrl, label: 'RFC 8414 (naive append)' });
   }
 
-  if (!response.ok) {
-    throw new Error(`Failed to fetch authorization server metadata: ${response.status}`);
+  // 3. OIDC discovery — path-aware
+  const oidcUrl = buildWellKnownUrl(cleanUrl, 'openid-configuration');
+  urlsToTry.push({ url: oidcUrl, label: 'OIDC (path-aware)' });
+
+  // 4. OIDC discovery — naive append
+  const naiveOidcUrl = `${cleanUrl}/.well-known/openid-configuration`;
+  if (naiveOidcUrl !== oidcUrl) {
+    urlsToTry.push({ url: naiveOidcUrl, label: 'OIDC (naive append)' });
   }
 
-  return (await response.json()) as AuthorizationServerMetadata;
+  const errors: string[] = [];
+  for (const { url, label } of urlsToTry) {
+    try {
+      console.log(`[MCP OAuth] Trying ${label}: ${url}`);
+      const response = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+      if (response.ok) {
+        console.log(`[MCP OAuth] ✓ Fetched metadata via ${label}`);
+        return (await response.json()) as AuthorizationServerMetadata;
+      }
+      errors.push(`${label} (${url}): HTTP ${response.status}`);
+    } catch (err) {
+      errors.push(`${label} (${url}): ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  throw new Error(
+    `Failed to fetch authorization server metadata from ${authServerUrl}.\n` +
+      `Tried:\n${errors.map((e) => `  - ${e}`).join('\n')}\n\n` +
+      'The authorization server may not support RFC 8414 or OIDC metadata discovery.\n' +
+      'You can manually provide oauth_authorization_url and oauth_token_url in the MCP server config.'
+  );
 }
 
 // Timeout for waiting for the OAuth callback (2 minutes)
