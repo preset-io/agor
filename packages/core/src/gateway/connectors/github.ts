@@ -11,8 +11,7 @@
  *     private_key: string,           // PEM, encrypted at rest
  *     installation_id: number,
  *     webhook_secret?: string,       // encrypted at rest (webhook mode)
- *     owner: string,                 // org or user
- *     watch_repos?: string[],        // empty = all repos in installation
+ *     watch_repos: string[],         // "owner/repo" format, required
  *     poll_interval_ms?: number,     // default 15000
  *     require_mention?: boolean,     // default true
  *     mention_name?: string,         // app slug for @mention detection
@@ -40,8 +39,7 @@ export interface GitHubChannelConfig {
   webhook_secret?: string; // only for webhook mode
 
   // ── Scope ───────────────────────────────────────────────
-  owner: string; // org or user
-  watch_repos?: string[]; // empty = all repos in installation
+  watch_repos: string[]; // "owner/repo" format, e.g. ["preset-io/agor"]
 
   // ── Polling ─────────────────────────────────────────────
   poll_interval_ms?: number; // default 15000
@@ -164,8 +162,10 @@ export class GitHubConnector implements GatewayConnector {
     if (!this.config.installation_id) {
       throw new Error('GitHub connector requires installation_id in config');
     }
-    if (!this.config.owner) {
-      throw new Error('GitHub connector requires owner in config');
+    if (!this.config.watch_repos || this.config.watch_repos.length === 0) {
+      throw new Error(
+        'GitHub connector requires at least one repo in watch_repos (format: "owner/repo")'
+      );
     }
   }
 
@@ -197,31 +197,10 @@ export class GitHubConnector implements GatewayConnector {
 
   /**
    * Resolve the list of repos to poll.
-   *
-   * If watch_repos is set, uses those (prefixed with owner).
-   * Otherwise, lists all repos accessible to the installation.
+   * Uses watch_repos directly — entries must be in "owner/repo" format.
    */
-  private async resolveRepos(): Promise<string[]> {
-    if (this.config.watch_repos && this.config.watch_repos.length > 0) {
-      return this.config.watch_repos.map((repo) =>
-        repo.includes('/') ? repo : `${this.config.owner}/${repo}`
-      );
-    }
-
-    // List all repos accessible to this installation (paginated)
-    const octokit = await this.getOctokit();
-    const repos: string[] = [];
-    let page = 1;
-    while (true) {
-      const { data } = await octokit.apps.listReposAccessibleToInstallation({
-        per_page: 100,
-        page,
-      });
-      repos.push(...data.repositories.map((r: { full_name: string }) => r.full_name));
-      if (repos.length >= data.total_count || data.repositories.length < 100) break;
-      page++;
-    }
-    return repos;
+  private resolveRepos(): string[] {
+    return this.config.watch_repos;
   }
 
   /**
@@ -426,7 +405,7 @@ export class GitHubConnector implements GatewayConnector {
     }
 
     // Resolve repos to watch
-    const repos = await this.resolveRepos();
+    const repos = this.resolveRepos();
     console.log(`[github] Watching ${repos.length} repos:`, repos);
 
     // Initialize poll state for each repo

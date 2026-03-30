@@ -72,7 +72,12 @@ function hasListeningConfig(channel: GatewayChannel): boolean {
     case 'slack':
       return !!config.app_token;
     case 'github':
-      return !!(config.app_id && config.private_key && config.installation_id);
+      return !!(
+        config.app_id &&
+        config.private_key &&
+        config.installation_id &&
+        (config.watch_repos as string[] | undefined)?.length
+      );
     default:
       return false;
   }

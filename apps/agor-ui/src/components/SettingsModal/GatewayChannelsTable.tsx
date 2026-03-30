@@ -493,11 +493,12 @@ const ChannelFormFields: React.FC<{
                       <Form.Item
                         label="Watch Repos"
                         name="github_watch_repos"
-                        tooltip="Repos to watch for @mentions. Leave empty to watch all repos accessible to the installation."
+                        rules={[{ required: true, message: 'At least one repo is required' }]}
+                        tooltip="Repos to watch for @mentions, in owner/repo format"
                       >
                         <Select
                           mode="tags"
-                          placeholder="owner/repo (leave empty for all)"
+                          placeholder="preset-io/agor"
                           tokenSeparators={[',', ' ']}
                         />
                       </Form.Item>
