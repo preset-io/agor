@@ -8,6 +8,14 @@ import {
 } from '@ant-design/icons';
 import { Radio, Select, Space, Typography } from 'antd';
 
+interface ModeOption {
+  mode: PermissionMode;
+  label: string;
+  description: string;
+  icon: React.ReactNode;
+  color: string;
+}
+
 export interface PermissionModeSelectorProps {
   value?: PermissionMode;
   onChange?: (value: PermissionMode) => void;
@@ -27,13 +35,7 @@ export interface PermissionModeSelectorProps {
 }
 
 // Claude Code permission modes (Claude Agent SDK)
-const CLAUDE_CODE_MODES: {
-  mode: PermissionMode;
-  label: string;
-  description: string;
-  icon: React.ReactNode;
-  color: string;
-}[] = [
+const CLAUDE_CODE_MODES: ModeOption[] = [
   {
     mode: 'default',
     label: 'default',
@@ -65,13 +67,7 @@ const CLAUDE_CODE_MODES: {
 ];
 
 // Codex permission modes (OpenAI Codex SDK)
-const CODEX_MODES: {
-  mode: PermissionMode;
-  label: string;
-  description: string;
-  icon: React.ReactNode;
-  color: string;
-}[] = [
+const CODEX_MODES: ModeOption[] = [
   {
     mode: 'ask',
     label: 'untrusted',
@@ -103,13 +99,7 @@ const CODEX_MODES: {
 ];
 
 // Gemini permission modes (Google Gemini SDK - native ApprovalMode values)
-const GEMINI_MODES: {
-  mode: PermissionMode;
-  label: string;
-  description: string;
-  icon: React.ReactNode;
-  color: string;
-}[] = [
+const GEMINI_MODES: ModeOption[] = [
   {
     mode: 'default',
     label: 'default',
@@ -134,13 +124,7 @@ const GEMINI_MODES: {
 ];
 
 // Copilot permission modes (GitHub Copilot SDK - same semantics as Claude Code)
-const COPILOT_MODES: {
-  mode: PermissionMode;
-  label: string;
-  description: string;
-  icon: React.ReactNode;
-  color: string;
-}[] = [
+const COPILOT_MODES: ModeOption[] = [
   {
     mode: 'default',
     label: 'default',
@@ -165,13 +149,7 @@ const COPILOT_MODES: {
 ];
 
 // OpenCode permission modes (uses Gemini-like modes since OpenCode auto-approves)
-const OPENCODE_MODES: {
-  mode: PermissionMode;
-  label: string;
-  description: string;
-  icon: React.ReactNode;
-  color: string;
-}[] = [
+const OPENCODE_MODES: ModeOption[] = [
   {
     mode: 'default',
     label: 'default',
@@ -238,6 +216,35 @@ export const CODEX_APPROVAL_POLICIES = [
   },
 ];
 
+/** Get the mode options for a given agentic tool */
+const getModesForTool = (tool: PermissionModeSelectorProps['agentic_tool']): ModeOption[] => {
+  switch (tool) {
+    case 'codex':
+      return CODEX_MODES;
+    case 'gemini':
+      return GEMINI_MODES;
+    case 'opencode':
+      return OPENCODE_MODES;
+    case 'copilot':
+      return COPILOT_MODES;
+    default:
+      return CLAUDE_CODE_MODES;
+  }
+};
+
+/** Get the default permission mode for a given agentic tool */
+const getDefaultMode = (tool: PermissionModeSelectorProps['agentic_tool']): PermissionMode => {
+  switch (tool) {
+    case 'codex':
+      return 'auto';
+    case 'gemini':
+    case 'opencode':
+      return 'autoEdit';
+    default:
+      return 'acceptEdits';
+  }
+};
+
 export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
   value = 'auto',
   onChange,
@@ -249,22 +256,8 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
   codexApprovalPolicy = 'on-request',
   onCodexChange,
 }) => {
-  // Select modes based on agentic tool type
-  const modes =
-    agentic_tool === 'codex'
-      ? CODEX_MODES
-      : agentic_tool === 'gemini'
-        ? GEMINI_MODES
-        : agentic_tool === 'opencode'
-          ? OPENCODE_MODES
-          : agentic_tool === 'copilot'
-            ? COPILOT_MODES
-            : CLAUDE_CODE_MODES;
-
-  // Get default value based on agentic tool type (native SDK modes)
-  const defaultValue =
-    agentic_tool === 'codex' ? 'auto' : agentic_tool === 'gemini' ? 'autoEdit' : 'acceptEdits'; // Claude Code / Copilot default
-  const effectiveValue = value || defaultValue;
+  const modes = getModesForTool(agentic_tool);
+  const effectiveValue = value || getDefaultMode(agentic_tool);
 
   // Compact mode: render as Select dropdown(s)
   if (compact) {
@@ -302,19 +295,34 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
       );
     }
 
-    // Claude/Gemini: Single dropdown
+    // Non-Codex: Single dropdown with colored indicators
     return (
       <Select
         value={effectiveValue}
         onChange={onChange}
-        style={{ minWidth: 100 }}
+        style={{ width: '100%' }}
         size={size}
-        suffixIcon={<SafetyOutlined />}
         popupMatchSelectWidth={false}
-        options={modes.map(({ mode, label, description }) => ({
-          label,
+        options={modes.map(({ mode, label, description, color }) => ({
+          label: (
+            <Space size={8}>
+              <span
+                style={{
+                  display: 'inline-block',
+                  width: 8,
+                  height: 8,
+                  borderRadius: '50%',
+                  backgroundColor: color,
+                  flexShrink: 0,
+                }}
+              />
+              <span>{label}</span>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                — {description}
+              </Typography.Text>
+            </Space>
+          ),
           value: mode,
-          title: description,
         }))}
       />
     );

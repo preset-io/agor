@@ -5,8 +5,13 @@
  * - Model selection (Claude/Codex/Gemini specific)
  * - Permission mode
  * - MCP server attachments
+ * - Codex-specific fields (sandbox, approval, network) — only in full mode
  *
- * Used in both NewSessionModal and SessionSettingsModal
+ * Used in both NewSessionModal (full mode) and SessionSettingsModal (compact mode).
+ *
+ * In compact mode:
+ * - PermissionModeSelector renders as a dropdown instead of radio group
+ * - Codex-specific fields are omitted (rendered separately via CodexSettingsForm)
  */
 
 import type { AgenticToolName, MCPServer } from '@agor/core/types';
@@ -28,47 +33,39 @@ export interface AgenticToolConfigFormProps {
   mcpServerById: Map<string, MCPServer>;
   /** Whether to show help text under each field */
   showHelpText?: boolean;
+  /**
+   * Compact mode for edit contexts (e.g., SessionSettingsModal).
+   * - Permission mode renders as a Select dropdown instead of radio group.
+   * - Codex-specific fields (sandbox, approval, network) are omitted.
+   *   Use CodexSettingsForm separately for those.
+   */
+  compact?: boolean;
 }
 
-/**
- * Form fields for agentic tool configuration
- *
- * Expects to be used within a Form context with these field names:
- * - modelConfig
- * - permissionMode
- * - mcpServerIds
- */
+const MODEL_LABELS: Record<string, string> = {
+  codex: 'Codex Model',
+  gemini: 'Gemini Model',
+  opencode: 'OpenCode LLM Provider',
+  copilot: 'Copilot Model',
+};
+
 export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
   agenticTool,
   mcpServerById,
   showHelpText = true,
+  compact = false,
 }) => {
-  // Get model label based on tool
-  const getModelLabel = () => {
-    switch (agenticTool) {
-      case 'codex':
-        return 'Codex Model';
-      case 'gemini':
-        return 'Gemini Model';
-      case 'opencode':
-        return 'OpenCode LLM Provider';
-      case 'copilot':
-        return 'Copilot Model';
-      default:
-        return 'Claude Model';
-    }
-  };
+  const modelLabel = MODEL_LABELS[agenticTool] ?? 'Claude Model';
+  const showCodexFields = agenticTool === 'codex' && !compact;
 
   return (
     <>
       <Form.Item
         name="modelConfig"
-        label={getModelLabel()}
+        label={modelLabel}
         help={
-          showHelpText
-            ? agenticTool === 'claude-code'
-              ? 'Choose which Claude model to use (defaults to claude-sonnet-4-5-latest)'
-              : undefined
+          showHelpText && agenticTool === 'claude-code'
+            ? 'Choose which Claude model to use (defaults to claude-sonnet-4-5-latest)'
             : undefined
         }
       >
@@ -80,10 +77,10 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
         label="Permission Mode"
         help={showHelpText ? 'Control how the agent handles tool execution approvals' : undefined}
       >
-        <PermissionModeSelector agentic_tool={agenticTool} />
+        <PermissionModeSelector agentic_tool={agenticTool} compact={compact} />
       </Form.Item>
 
-      {agenticTool === 'codex' && (
+      {showCodexFields && (
         <Form.Item
           name="codexSandboxMode"
           label="Sandbox Mode"
@@ -103,7 +100,7 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
         </Form.Item>
       )}
 
-      {agenticTool === 'codex' && (
+      {showCodexFields && (
         <Form.Item
           name="codexApprovalPolicy"
           label="Approval Policy"
@@ -121,7 +118,7 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
         </Form.Item>
       )}
 
-      {agenticTool === 'codex' && (
+      {showCodexFields && (
         <Form.Item
           name="codexNetworkAccess"
           label="Network Access"
