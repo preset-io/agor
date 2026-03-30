@@ -224,13 +224,10 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
               `⏭️ [TasksService] Skipping session IDLE update - task ${task.task_id.substring(0, 8)} is not the latest (latest: ${latestTaskId.substring(0, 8)})`
             );
             // Still process callbacks (task completed, callback target needs to know)
-            if (session.callback_config?.callback_session_id) {
-              await this.queueCallbackToSession(
-                task,
-                session,
-                session.callback_config.callback_session_id,
-                params
-              );
+            const earlyCallbackTarget =
+              session.callback_config?.callback_session_id ?? session.genealogy?.parent_session_id;
+            if (earlyCallbackTarget) {
+              await this.queueCallbackToSession(task, session, earlyCallbackTarget, params);
             }
             return result;
           }
@@ -265,8 +262,12 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
           // callback_config.callback_session_id is the single source of truth for both:
           // - Subsessions (spawn sets it to parent session ID)
           // - Remote sessions (create sets it when enableCallback is true)
-          if (session.callback_config?.callback_session_id) {
-            const targetSessionId = session.callback_config.callback_session_id;
+          // Fallback: legacy spawned sessions may only have genealogy.parent_session_id
+          // Fallback to genealogy.parent_session_id for legacy spawned sessions
+          const callbackTarget =
+            session.callback_config?.callback_session_id ?? session.genealogy?.parent_session_id;
+          if (callbackTarget) {
+            const targetSessionId = callbackTarget;
             await this.queueCallbackToSession(task, session, targetSessionId, params);
 
             // CRITICAL: After queuing callback, ALWAYS trigger target's queue processing.

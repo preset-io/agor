@@ -437,16 +437,38 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
 
       // Build callback configuration for remote session callbacks
       const callbackConfig: Record<string, unknown> = {};
+
+      // Determine the effective callback target session ID
+      const effectiveCallbackSessionId = args.callbackSessionId || ctx.sessionId;
+      const wantsCallback = args.enableCallback || args.callbackSessionId;
+
+      // Validate callback target session exists and belongs to the same user
+      if (wantsCallback && args.callbackSessionId) {
+        try {
+          const targetSession = await ctx.app
+            .service('sessions')
+            .get(args.callbackSessionId, ctx.baseServiceParams);
+          if (targetSession.created_by !== ctx.userId) {
+            throw new Error(
+              `Cannot set callback target: session ${args.callbackSessionId.substring(0, 8)} belongs to a different user`
+            );
+          }
+        } catch (error) {
+          if (error instanceof Error && error.message.includes('belongs to a different user')) {
+            throw error;
+          }
+          throw new Error(
+            `Invalid callbackSessionId: session ${args.callbackSessionId.substring(0, 8)} not found`
+          );
+        }
+      }
+
       if (args.enableCallback !== undefined) {
         callbackConfig.enabled = args.enableCallback;
       }
-      if (args.enableCallback) {
-        // Default callback target to the creating session
-        callbackConfig.callback_session_id = args.callbackSessionId || ctx.sessionId;
-      } else if (args.callbackSessionId) {
-        // Explicit callback session ID implies enableCallback
+      if (wantsCallback) {
         callbackConfig.enabled = true;
-        callbackConfig.callback_session_id = args.callbackSessionId;
+        callbackConfig.callback_session_id = effectiveCallbackSessionId;
       }
       if (args.includeLastMessage !== undefined) {
         callbackConfig.include_last_message = args.includeLastMessage;
