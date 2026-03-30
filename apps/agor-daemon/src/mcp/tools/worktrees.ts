@@ -163,7 +163,8 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
       if (autoSuffix) {
         const worktreesService = ctx.app.service('worktrees');
         const existingResult = await worktreesService.find({
-          query: { repo_id: repoId, $limit: 1000 },
+          query: { repo_id: repoId },
+          paginate: false,
           ...ctx.baseServiceParams,
         });
         const existingWorktrees = (

@@ -353,7 +353,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         const git = simpleGit(repo.local_path);
 
         // Check 1: Validate sourceBranch exists on remote (if specified)
-        if (data.sourceBranch && data.createBranch) {
+        // Skip for tags — tags are validated differently (they don't have origin/ prefix)
+        if (data.sourceBranch && data.createBranch && data.refType !== 'tag') {
           try {
             await git.fetch(['origin']);
             const remoteBranches = await git.branch(['-r']);
