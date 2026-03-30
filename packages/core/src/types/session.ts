@@ -346,6 +346,14 @@ export interface Session {
      * in agor_sessions_create.
      */
     callback_session_id?: SessionID;
+    /**
+     * User ID of the person who set up this callback.
+     *
+     * Used as queued_by_user_id when the callback is delivered, so the
+     * resulting task is attributed to the callback setter, not the target
+     * session owner. Execution still runs as the target session's Unix user.
+     */
+    callback_created_by?: string;
   };
 
   // ===== Archive State =====

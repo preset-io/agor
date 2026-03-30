@@ -456,6 +456,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       if (wantsCallback) {
         callbackConfig.enabled = true;
         callbackConfig.callback_session_id = effectiveCallbackSessionId;
+        callbackConfig.callback_created_by = ctx.userId;
       }
       if (args.includeLastMessage !== undefined) {
         callbackConfig.include_last_message = args.includeLastMessage;

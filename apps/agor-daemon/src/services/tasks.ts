@@ -448,14 +448,17 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       }
 
       // Create queued message with Agor callback metadata
-      // IMPORTANT: Include queued_by_user_id so authentication works when processing the callback
-      // Use the target session's creator as the user context for callback execution
+      // IMPORTANT: queued_by_user_id = the person who set up the callback (task attribution),
+      // NOT the target session owner. Execution still runs as the target session's Unix user.
+      // Falls back to target session creator for backward compat (legacy sessions without callback_created_by).
+      const callbackCreator =
+        childSession.callback_config?.callback_created_by ?? targetSession.created_by;
       await messageRepo.createQueued(targetSessionId, callbackMessage, {
         is_agor_callback: true,
         source: 'agor',
         child_session_id: childSession.session_id,
         child_task_id: task.task_id,
-        queued_by_user_id: targetSession.created_by,
+        queued_by_user_id: callbackCreator,
       });
 
       console.log(

@@ -249,7 +249,9 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     const isCallbackEnabled = data.enableCallback !== false; // default: true for spawn
     const callbackConfig = {
       ...(data.enableCallback !== undefined ? { enabled: data.enableCallback } : {}),
-      ...(isCallbackEnabled ? { callback_session_id: parent.session_id } : {}),
+      ...(isCallbackEnabled
+        ? { callback_session_id: parent.session_id, callback_created_by: parent.created_by }
+        : {}),
       ...(data.includeLastMessage !== undefined
         ? { include_last_message: data.includeLastMessage }
         : {}),
