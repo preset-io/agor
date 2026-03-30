@@ -557,17 +557,19 @@ const ChannelFormFields: React.FC<{
                       >
                         <Switch />
                       </Form.Item>
-                      <Form.Item
-                        label="User Map"
-                        name="github_user_map"
-                        tooltip="JSON object mapping GitHub logins to Agor email addresses"
-                        rules={[{ validator: validateJSON }]}
-                      >
-                        <JSONEditor
-                          rows={4}
-                          placeholder={'{\n  "octocat": "user@example.com"\n}'}
-                        />
-                      </Form.Item>
+                      {alignGithubUsers && (
+                        <Form.Item
+                          label="User Map"
+                          name="github_user_map"
+                          tooltip="JSON object mapping GitHub logins to Agor email addresses"
+                          rules={[{ validator: validateJSON }]}
+                        >
+                          <JSONEditor
+                            rows={4}
+                            placeholder={'{\n  "octocat": "user@example.com"\n}'}
+                          />
+                        </Form.Item>
+                      )}
                     </>
                   ),
                 },
