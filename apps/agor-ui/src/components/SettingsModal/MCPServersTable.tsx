@@ -548,6 +548,7 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                     }
                     if (value !== 'oauth') {
                       form.setFieldsValue({
+                        oauth_authorization_url: undefined,
                         oauth_token_url: undefined,
                         oauth_client_id: undefined,
                         oauth_client_secret: undefined,
@@ -624,6 +625,14 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
 
               {authType === 'oauth' && (
                 <>
+                  <Form.Item
+                    label="Authorization URL"
+                    name="oauth_authorization_url"
+                    tooltip="OAuth authorization endpoint for browser-based login. Leave empty for auto-discovery (RFC 8414)."
+                  >
+                    <Input placeholder="https://auth.example.com/oauth/authorize" allowClear />
+                  </Form.Item>
+
                   <Form.Item
                     label="Token URL"
                     name="oauth_token_url"
@@ -1264,6 +1273,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       formValues.jwt_api_token = server.auth?.api_token;
       formValues.jwt_api_secret = server.auth?.api_secret;
     } else if (serverAuthType === 'oauth') {
+      formValues.oauth_authorization_url = server.auth?.oauth_authorization_url;
       formValues.oauth_token_url = server.auth?.oauth_token_url;
       formValues.oauth_client_id = server.auth?.oauth_client_id;
       formValues.oauth_client_secret = server.auth?.oauth_client_secret;

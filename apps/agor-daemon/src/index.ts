@@ -1388,9 +1388,11 @@ async function main() {
 
         let probeResponse: Response;
         try {
+          // Use POST since MCP servers use JSON-RPC over POST — many reject GET with 405
           probeResponse = await fetch(data.mcp_url, {
-            method: 'GET',
-            headers: { Accept: 'application/json' },
+            method: 'POST',
+            headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+            body: JSON.stringify({ jsonrpc: '2.0', method: 'initialize', id: 1 }),
             signal: AbortSignal.timeout(15_000),
           });
         } catch (fetchError) {
@@ -1510,11 +1512,13 @@ async function main() {
               }
 
               const testResponse = await fetch(data.mcp_url, {
-                method: 'GET',
+                method: 'POST',
                 headers: {
                   Authorization: `Bearer ${token}`,
                   Accept: 'application/json',
+                  'Content-Type': 'application/json',
                 },
+                body: JSON.stringify({ jsonrpc: '2.0', method: 'initialize', id: 1 }),
                 signal: AbortSignal.timeout(15_000),
               });
 
@@ -1685,11 +1689,13 @@ async function main() {
 
             try {
               const mcpResponse = await fetch(data.mcp_url, {
-                method: 'GET',
+                method: 'POST',
                 headers: {
                   Authorization: `Bearer ${token}`,
                   Accept: 'application/json',
+                  'Content-Type': 'application/json',
                 },
+                body: JSON.stringify({ jsonrpc: '2.0', method: 'initialize', id: 1 }),
               });
               mcpStatus = mcpResponse.status;
               mcpStatusText = mcpResponse.statusText;
@@ -1826,6 +1832,8 @@ async function main() {
         let authorizationUrlOverride: string | undefined;
         let tokenUrlOverride: string | undefined;
         let clientSecretOverride: string | undefined;
+        let clientIdFromConfig: string | undefined;
+        let scopeOverride: string | undefined;
         if (data.mcp_server_id) {
           const mcpServerRepo = new MCPServerRepository(db);
           const server = await mcpServerRepo.findById(data.mcp_server_id);
@@ -1833,7 +1841,9 @@ async function main() {
             oauthMode = server.auth.oauth_mode || 'per_user';
             authorizationUrlOverride = server.auth.oauth_authorization_url;
             tokenUrlOverride = server.auth.oauth_token_url;
+            clientIdFromConfig = server.auth.oauth_client_id;
             clientSecretOverride = server.auth.oauth_client_secret;
+            scopeOverride = server.auth.oauth_scope;
             console.log('[OAuth Start] OAuth mode from server config:', oauthMode);
             if (authorizationUrlOverride) {
               console.log('[OAuth Start] Authorization URL override:', authorizationUrlOverride);
@@ -1841,13 +1851,18 @@ async function main() {
             if (tokenUrlOverride) {
               console.log('[OAuth Start] Token URL override:', tokenUrlOverride);
             }
+            if (scopeOverride) {
+              console.log('[OAuth Start] Scope override:', scopeOverride);
+            }
           }
         }
 
         // Probe the MCP URL to get WWW-Authenticate header
+        // Use POST since MCP servers use JSON-RPC over POST — many reject GET with 405
         const probeResponse = await fetch(data.mcp_url, {
-          method: 'GET',
-          headers: { Accept: 'application/json' },
+          method: 'POST',
+          headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jsonrpc: '2.0', method: 'initialize', id: 1 }),
           signal: AbortSignal.timeout(15_000),
         });
 
@@ -1866,10 +1881,13 @@ async function main() {
         // getBaseUrl() resolves: AGOR_BASE_URL env → daemon.base_url config → localhost fallback
         const baseUrl = await getBaseUrl();
         const redirectUri = new URL('/mcp-servers/oauth-callback', baseUrl).toString();
-        const context = await startMCPOAuthFlow(wwwAuthenticate, data.client_id, redirectUri, {
+        // Use client_id from request (UI form) or fall back to saved server config
+        const effectiveClientId = data.client_id || clientIdFromConfig;
+        const context = await startMCPOAuthFlow(wwwAuthenticate, effectiveClientId, redirectUri, {
           authorizationUrlOverride,
           tokenUrlOverride,
           clientSecret: clientSecretOverride,
+          scope: scopeOverride,
         });
 
         // Capture initiating socket ID for scoped notifications

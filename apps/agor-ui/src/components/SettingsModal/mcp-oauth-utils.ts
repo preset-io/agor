@@ -14,6 +14,7 @@ export function isTemplateValue(value: string | undefined): boolean {
 }
 
 export interface OAuthConfig {
+  oauth_authorization_url?: string;
   oauth_token_url?: string;
   oauth_client_id?: string;
   oauth_client_secret?: string;
@@ -28,6 +29,11 @@ export interface OAuthConfig {
  */
 export function extractOAuthConfig(values: Record<string, unknown>): OAuthConfig {
   const config: OAuthConfig = {};
+
+  // Only include authorization URL if it's provided
+  if (values.oauth_authorization_url && typeof values.oauth_authorization_url === 'string') {
+    config.oauth_authorization_url = values.oauth_authorization_url;
+  }
 
   // Only include token URL if it's provided (can be template or real value)
   if (values.oauth_token_url && typeof values.oauth_token_url === 'string') {

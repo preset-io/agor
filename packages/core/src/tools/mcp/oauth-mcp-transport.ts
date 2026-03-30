@@ -723,7 +723,12 @@ export async function startMCPOAuthFlow(
   wwwAuthenticateHeader: string,
   clientId?: string,
   redirectUri?: string,
-  options?: { authorizationUrlOverride?: string; tokenUrlOverride?: string; clientSecret?: string }
+  options?: {
+    authorizationUrlOverride?: string;
+    tokenUrlOverride?: string;
+    clientSecret?: string;
+    scope?: string;
+  }
 ): Promise<OAuthFlowContext> {
   console.log('[MCP OAuth] Starting two-phase OAuth 2.1 flow');
 
@@ -752,8 +757,33 @@ export async function startMCPOAuthFlow(
   console.log('[MCP OAuth] Authorization server:', authServerUrl);
 
   // Step 3: Fetch Authorization Server Metadata (RFC 8414)
-  const authServerMetadata = await fetchAuthorizationServerMetadata(authServerUrl);
-  console.log('[MCP OAuth] Authorization server metadata:', authServerMetadata);
+  // Skip auto-discovery when both authorization URL and token URL overrides are provided.
+  // Many OAuth providers (e.g. custom internal services) don't implement RFC 8414
+  // (.well-known/oauth-authorization-server) or OIDC discovery.
+  const hasFullOverrides = options?.authorizationUrlOverride && options?.tokenUrlOverride;
+  let authServerMetadata: AuthorizationServerMetadata | null = null;
+
+  if (hasFullOverrides) {
+    console.log('[MCP OAuth] Skipping auth server metadata fetch — manual overrides provided:', {
+      authorization: options.authorizationUrlOverride,
+      token: options.tokenUrlOverride,
+    });
+  } else {
+    try {
+      authServerMetadata = await fetchAuthorizationServerMetadata(authServerUrl);
+      console.log('[MCP OAuth] Authorization server metadata:', authServerMetadata);
+    } catch (metadataError) {
+      // If we have at least partial overrides, we can continue without metadata
+      if (options?.authorizationUrlOverride || options?.tokenUrlOverride) {
+        console.log(
+          '[MCP OAuth] Auth server metadata fetch failed, but partial overrides available:',
+          metadataError instanceof Error ? metadataError.message : String(metadataError)
+        );
+      } else {
+        throw metadataError;
+      }
+    }
+  }
 
   // Step 4: Generate PKCE challenge
   const pkce = generatePKCE();
@@ -769,7 +799,7 @@ export async function startMCPOAuthFlow(
 
   if (!actualClientId) {
     // Check if server supports Dynamic Client Registration (RFC 7591)
-    if (authServerMetadata.registration_endpoint) {
+    if (authServerMetadata?.registration_endpoint) {
       console.log('[MCP OAuth] Server supports Dynamic Client Registration');
       const registration = await registerDynamicClient(
         authServerMetadata.registration_endpoint,
@@ -778,7 +808,7 @@ export async function startMCPOAuthFlow(
       );
       actualClientId = registration.client_id;
       clientSecret = registration.client_secret;
-    } else {
+    } else if (!hasFullOverrides) {
       // No DCR support and no client_id provided - try MCP-style endpoint
       const mcpRegisterEndpoint = `${authServerUrl}/register`;
       console.log('[MCP OAuth] Trying MCP-style registration endpoint:', mcpRegisterEndpoint);
@@ -798,6 +828,11 @@ export async function startMCPOAuthFlow(
             'Please provide a client_id in the MCP server configuration.'
         );
       }
+    } else {
+      throw new Error(
+        'OAuth client_id is required when using manual OAuth URL overrides.\n\n' +
+          'Please provide a client_id in the MCP server configuration.'
+      );
     }
   }
 
@@ -805,15 +840,27 @@ export async function startMCPOAuthFlow(
   const state = crypto.randomUUID();
 
   // Resolve token endpoint (use override if provided)
-  const tokenEndpoint = options?.tokenUrlOverride || authServerMetadata.token_endpoint;
+  const tokenEndpoint = options?.tokenUrlOverride || authServerMetadata?.token_endpoint;
+  if (!tokenEndpoint) {
+    throw new Error(
+      'No token endpoint available. Either provide oauth_token_url in the MCP server config, ' +
+        'or ensure the authorization server supports RFC 8414 metadata discovery.'
+    );
+  }
   console.log('[MCP OAuth] Using token endpoint:', tokenEndpoint);
   if (options?.tokenUrlOverride) {
-    console.log('[MCP OAuth] (overridden from:', authServerMetadata.token_endpoint, ')');
+    console.log('[MCP OAuth] (overridden from:', authServerMetadata?.token_endpoint, ')');
   }
 
   // Step 7: Build authorization URL (use override if provided)
   const authorizationEndpoint =
-    options?.authorizationUrlOverride || authServerMetadata.authorization_endpoint;
+    options?.authorizationUrlOverride || authServerMetadata?.authorization_endpoint;
+  if (!authorizationEndpoint) {
+    throw new Error(
+      'No authorization endpoint available. Either provide oauth_authorization_url in the MCP server config, ' +
+        'or ensure the authorization server supports RFC 8414 metadata discovery.'
+    );
+  }
   console.log('[MCP OAuth] Using authorization endpoint:', authorizationEndpoint);
   const authUrl = new URL(authorizationEndpoint);
   authUrl.searchParams.set('response_type', 'code');
@@ -823,8 +870,10 @@ export async function startMCPOAuthFlow(
   authUrl.searchParams.set('code_challenge_method', 'S256');
   authUrl.searchParams.set('state', state);
 
-  // Add scopes if available
-  if (resourceMetadata.scopes_supported && resourceMetadata.scopes_supported.length > 0) {
+  // Add scopes: prefer explicit scope option, then auto-discovered scopes
+  if (options?.scope) {
+    authUrl.searchParams.set('scope', options.scope);
+  } else if (resourceMetadata.scopes_supported && resourceMetadata.scopes_supported.length > 0) {
     authUrl.searchParams.set('scope', resourceMetadata.scopes_supported.join(' '));
   }
 
