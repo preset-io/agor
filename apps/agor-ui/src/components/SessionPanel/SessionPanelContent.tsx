@@ -15,10 +15,10 @@ import { useAppActions } from '../../contexts/AppActionsContext';
 import { useAppData } from '../../contexts/AppDataContext';
 import { copyToClipboard } from '../../utils/clipboard';
 import { ConversationView } from '../ConversationView';
-import { EnvironmentPill } from '../EnvironmentPill';
 import { ForkSpawnModal } from '../ForkSpawnModal';
-import { IssuePill, PullRequestPill, RepoPill } from '../Pill';
+import { IssuePill, PullRequestPill } from '../Pill';
 import { Tag } from '../Tag';
+import { WorktreeHeaderPill } from '../WorktreeHeaderPill';
 
 export interface SessionPanelContentProps {
   client: AgorClient | null;
@@ -93,19 +93,12 @@ export const SessionPanelContent: React.FC<SessionPanelContentProps> = ({
         {/* Pills section (only shown if there's content) */}
         {(worktree || sessionMcpServerIds.length > 0) && (
           <Space size={8} wrap style={{ flex: 1 }}>
-            {/* Worktree Info */}
+            {/* Unified Worktree Pill */}
             {worktree && repo && (
-              <RepoPill
-                repoName={repo.slug}
-                worktreeName={worktree.name}
-                onClick={onOpenWorktree ? () => onOpenWorktree(worktree.worktree_id) : undefined}
-              />
-            )}
-            {worktree && repo && (
-              <EnvironmentPill
+              <WorktreeHeaderPill
                 repo={repo}
                 worktree={worktree}
-                onEdit={onOpenWorktree ? () => onOpenWorktree(worktree.worktree_id) : undefined}
+                onOpenWorktree={onOpenWorktree}
                 onStartEnvironment={onStartEnvironment}
                 onStopEnvironment={onStopEnvironment}
                 onViewLogs={onViewLogs}

@@ -272,6 +272,7 @@ export const App: React.FC<AppProps> = ({
   const [terminalWorktreeId, setTerminalWorktreeId] = useState<string | undefined>(undefined);
   const [sessionSettingsId, setSessionSettingsId] = useState<string | null>(null);
   const [worktreeModalWorktreeId, setWorktreeModalWorktreeId] = useState<string | null>(null);
+  const [worktreeModalTab, setWorktreeModalTab] = useState<string | undefined>(undefined);
   const [logsModalWorktreeId, setLogsModalWorktreeId] = useState<string | null>(null);
   const [themeEditorOpen, setThemeEditorOpen] = useState(false);
 
@@ -601,7 +602,10 @@ export const App: React.FC<AppProps> = ({
       onNukeEnvironment,
       onViewLogs: (worktreeId: string) => setLogsModalWorktreeId(worktreeId),
       onOpenSettings: (sessionId: string) => setSessionSettingsId(sessionId),
-      onOpenWorktree: (worktreeId: string) => setWorktreeModalWorktreeId(worktreeId),
+      onOpenWorktree: (worktreeId: string, tab?: string) => {
+        setWorktreeModalWorktreeId(worktreeId);
+        setWorktreeModalTab(tab);
+      },
       onOpenTerminal: handleOpenTerminal,
     }),
     [
@@ -967,7 +971,11 @@ export const App: React.FC<AppProps> = ({
           )}
           <WorktreeModal
             open={!!worktreeModalWorktreeId}
-            onClose={() => setWorktreeModalWorktreeId(null)}
+            onClose={() => {
+              setWorktreeModalWorktreeId(null);
+              setWorktreeModalTab(undefined);
+            }}
+            defaultTab={worktreeModalTab}
             worktree={selectedWorktree || null}
             repo={selectedWorktreeRepo || null}
             sessions={worktreeSessions}

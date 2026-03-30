@@ -38,7 +38,7 @@ export interface AppActionsContextValue {
 
   // Navigation/UI actions
   onOpenSettings?: (sessionId: string) => void;
-  onOpenWorktree?: (worktreeId: string) => void;
+  onOpenWorktree?: (worktreeId: string, tab?: string) => void;
   onOpenTerminal?: (commands: string[], worktreeId?: string) => void;
 }
 
