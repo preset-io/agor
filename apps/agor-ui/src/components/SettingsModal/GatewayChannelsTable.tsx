@@ -373,7 +373,6 @@ const ChannelFormFields: React.FC<{
               <Form.Item
                 label="App ID"
                 name="github_app_id"
-                rules={[{ required: true, message: 'Enter your GitHub App ID' }]}
                 tooltip="Found on your GitHub App's settings page (General → About)"
               >
                 <Input placeholder="123456" />
@@ -382,7 +381,6 @@ const ChannelFormFields: React.FC<{
               <Form.Item
                 label="Private Key (PEM)"
                 name="github_private_key"
-                rules={[{ required: true, message: 'Paste your GitHub App private key' }]}
                 tooltip="Generate a private key on your GitHub App's settings page, then paste the .pem file contents"
               >
                 <Input.TextArea
@@ -396,7 +394,27 @@ const ChannelFormFields: React.FC<{
                 <Alert type="error" showIcon message={githubError} style={{ marginBottom: 12 }} />
               )}
 
-              <Button type="primary" onClick={() => onGithubStepChange(2)} style={{ marginTop: 8 }}>
+              <Button
+                type="primary"
+                onClick={() => {
+                  const appId = form.getFieldValue('github_app_id');
+                  const pem = form.getFieldValue('github_private_key');
+                  if (!appId || !pem) {
+                    const errors: { name: string; errors: string[] }[] = [];
+                    if (!appId)
+                      errors.push({ name: 'github_app_id', errors: ['Enter your GitHub App ID'] });
+                    if (!pem)
+                      errors.push({
+                        name: 'github_private_key',
+                        errors: ['Paste your GitHub App private key'],
+                      });
+                    form.setFields(errors);
+                    return;
+                  }
+                  onGithubStepChange(2);
+                }}
+                style={{ marginTop: 8 }}
+              >
                 Next: Configure Channel
               </Button>
             </div>
