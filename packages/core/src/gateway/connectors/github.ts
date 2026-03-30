@@ -17,6 +17,7 @@
  *     require_mention?: boolean,     // default true
  *     mention_name?: string,         // app slug for @mention detection
  *     align_github_users?: boolean,  // map GitHub login → Agor user
+ *     user_map?: Record<string, string>, // GitHub login → Agor email
  *   }
  *
  * Thread ID format: "owner/repo#number"
@@ -51,6 +52,8 @@ export interface GitHubChannelConfig {
 
   // ── User Alignment ─────────────────────────────────────
   align_github_users?: boolean;
+  /** Explicit GitHub login → Agor email mapping (checked first, before email lookup) */
+  user_map?: Record<string, string>;
 }
 
 /** Per-repo poll state for exactly-once processing */
@@ -341,20 +344,46 @@ export class GitHubConnector implements GatewayConnector {
         // Strip mention from body
         const text = requireMention ? stripMention(body, mentionName) : body;
 
+        // Resolve user identity for alignment
+        const githubLogin = comment.user?.login;
+        let githubUserEmail: string | undefined;
+        let mappedAgorEmail: string | undefined;
+
+        if (this.config.align_github_users && githubLogin) {
+          // 1. Check explicit user_map first
+          if (this.config.user_map?.[githubLogin]) {
+            mappedAgorEmail = this.config.user_map[githubLogin];
+          } else {
+            // 2. Fetch GitHub user's public email
+            try {
+              const { data: ghUser } = await octokit.users.getByUsername({
+                username: githubLogin,
+              });
+              if (ghUser.email) {
+                githubUserEmail = ghUser.email;
+              }
+            } catch (err) {
+              console.warn(`[github] Failed to fetch user profile for ${githubLogin}:`, err);
+            }
+          }
+        }
+
         messages.push({
           threadId,
           text,
-          userId: comment.user?.login ?? 'unknown',
+          userId: githubLogin ?? 'unknown',
           timestamp: comment.created_at,
           metadata: {
             comment_id: comment.id,
-            github_user: comment.user?.login,
+            github_user: githubLogin,
             github_user_url: comment.user?.html_url,
             issue_number: issueNumber,
             repo_full_name: repo,
             comment_url: comment.html_url,
             ...(processingCommentId ? { processing_comment_id: processingCommentId } : {}),
             ...(this.config.align_github_users ? { align_github_users: true } : {}),
+            ...(mappedAgorEmail ? { mapped_agor_email: mappedAgorEmail } : {}),
+            ...(githubUserEmail ? { github_user_email: githubUserEmail } : {}),
           },
         });
 

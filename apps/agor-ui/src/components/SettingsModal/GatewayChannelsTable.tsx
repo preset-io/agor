@@ -23,6 +23,7 @@ import {
   TeamOutlined,
   ThunderboltOutlined,
   ToolOutlined,
+  UserOutlined,
 } from '@ant-design/icons';
 import {
   Alert,
@@ -508,6 +509,43 @@ const ChannelFormFields: React.FC<{
                     </>
                   ),
                 },
+                // ── User Alignment ──
+                {
+                  key: 'user-alignment',
+                  label: (
+                    <SectionLabel
+                      icon={<UserOutlined />}
+                      title="User Alignment"
+                      subtitle="Map GitHub users to Agor accounts"
+                    />
+                  ),
+                  children: (
+                    <>
+                      <Form.Item
+                        label="Enable User Alignment"
+                        name="github_align_users"
+                        valuePropName="checked"
+                        initialValue={false}
+                        tooltip="When enabled, GitHub users are mapped to Agor users. Unmapped users are rejected."
+                      >
+                        <Switch />
+                      </Form.Item>
+                      <Form.Item
+                        label="User Map"
+                        name="github_user_map"
+                        tooltip="Map GitHub logins to Agor emails. One per line: github_login=agor@email.com"
+                      >
+                        <Input.TextArea
+                          rows={4}
+                          placeholder={
+                            '# GitHub login = Agor email\nmistercrunch=max@preset.io\noctocat=user@example.com'
+                          }
+                          style={{ fontFamily: 'monospace', fontSize: 12 }}
+                        />
+                      </Form.Item>
+                    </>
+                  ),
+                },
                 // ── Agentic Tool Configuration ──
                 {
                   key: 'agentic-tool-config',
@@ -950,6 +988,20 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       config.require_mention = values.github_require_mention ?? true;
       config.mention_name = values.github_mention_name || 'agor';
       config.poll_interval_ms = ((values.github_poll_interval_s as number) ?? 30) * 1000;
+      config.align_github_users = values.github_align_users ?? false;
+      // Parse user_map from "githubLogin=email" textarea lines
+      if (values.github_user_map) {
+        const map: Record<string, string> = {};
+        for (const line of (values.github_user_map as string).split('\n')) {
+          const trimmed = line.trim();
+          if (!trimmed || trimmed.startsWith('#')) continue;
+          const eqIdx = trimmed.indexOf('=');
+          if (eqIdx > 0) {
+            map[trimmed.substring(0, eqIdx).trim()] = trimmed.substring(eqIdx + 1).trim();
+          }
+        }
+        config.user_map = map;
+      }
     } else if (values.channel_type === 'slack') {
       if (values.bot_token) config.bot_token = values.bot_token;
       if (values.app_token) config.app_token = values.app_token;
@@ -1078,6 +1130,14 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       formValues.github_require_mention = config?.require_mention ?? true;
       formValues.github_mention_name = (config?.mention_name as string) || 'agor';
       formValues.github_poll_interval_s = ((config?.poll_interval_ms as number) ?? 30000) / 1000;
+      formValues.github_align_users = config?.align_github_users ?? false;
+      // Convert user_map object to "login=email" lines
+      const userMap = config?.user_map as Record<string, string> | undefined;
+      if (userMap && typeof userMap === 'object') {
+        formValues.github_user_map = Object.entries(userMap)
+          .map(([login, email]) => `${login}=${email}`)
+          .join('\n');
+      }
     }
 
     editForm.setFieldsValue(formValues);

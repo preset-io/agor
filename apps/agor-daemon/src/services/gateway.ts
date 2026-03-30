@@ -313,35 +313,79 @@ export class GatewayService {
     }
 
     // --- GitHub user alignment ---
-    // Same pattern as Slack: map GitHub login → Agor user via email.
-    // The GitHub connector provides github_user_email in metadata when available.
-    // Falls back to channel owner (no hard rejection — GitHub email is often unavailable).
+    // 3-tier resolution: user_map → GitHub email → reject.
+    // Never falls back to channel owner — unmapped users are rejected.
     const alignGitHubUsers =
       (channel.config as Record<string, unknown>).align_github_users === true ||
       data.metadata?.align_github_users === true;
 
     if (alignGitHubUsers && !alignSlackUsers) {
-      const githubEmail =
-        data.metadata?.github_user_email && typeof data.metadata.github_user_email === 'string'
-          ? data.metadata.github_user_email.toLowerCase().trim()
+      const githubLogin = data.metadata?.github_user as string | undefined;
+      let resolved = false;
+
+      // Tier 1: Explicit user_map (GitHub login → Agor email)
+      const mappedEmail =
+        data.metadata?.mapped_agor_email && typeof data.metadata.mapped_agor_email === 'string'
+          ? data.metadata.mapped_agor_email.toLowerCase().trim()
           : null;
 
-      if (githubEmail) {
-        const matchedUser = await this.usersRepo.findByEmail(githubEmail);
+      if (mappedEmail) {
+        const matchedUser = await this.usersRepo.findByEmail(mappedEmail);
         if (matchedUser) {
           console.log(
-            `[gateway] GitHub user aligned: ${githubEmail} → Agor user ${matchedUser.user_id.substring(0, 8)} (${matchedUser.name || matchedUser.email})`
+            `[gateway] GitHub user aligned via user_map: ${githubLogin} → ${mappedEmail} → Agor user ${matchedUser.user_id.substring(0, 8)}`
           );
           user = await usersService.get(matchedUser.user_id);
+          resolved = true;
         } else {
-          console.log(
-            `[gateway] GitHub user alignment: no Agor user with email ${githubEmail} (GitHub user: ${data.metadata?.github_user ?? 'unknown'}), falling back to channel owner`
+          console.warn(
+            `[gateway] user_map entry ${githubLogin} → ${mappedEmail} but no Agor user with that email`
           );
         }
-      } else {
+      }
+
+      // Tier 2: GitHub public email → Agor user email match
+      if (!resolved) {
+        const githubEmail =
+          data.metadata?.github_user_email && typeof data.metadata.github_user_email === 'string'
+            ? data.metadata.github_user_email.toLowerCase().trim()
+            : null;
+
+        if (githubEmail) {
+          const matchedUser = await this.usersRepo.findByEmail(githubEmail);
+          if (matchedUser) {
+            console.log(
+              `[gateway] GitHub user aligned via email: ${githubLogin} (${githubEmail}) → Agor user ${matchedUser.user_id.substring(0, 8)}`
+            );
+            user = await usersService.get(matchedUser.user_id);
+            resolved = true;
+          }
+        }
+      }
+
+      // Tier 3: Reject — no silent fallback to channel owner
+      if (!resolved) {
         console.log(
-          `[gateway] GitHub user alignment: no email available for GitHub user ${data.metadata?.github_user ?? data.user_name ?? 'unknown'}, falling back to channel owner`
+          `[gateway] GitHub user alignment failed: no Agor mapping for ${githubLogin ?? 'unknown'} (thread=${data.thread_id})`
         );
+        // Edit the Processing comment with rejection message (if we have one)
+        if (data.metadata?.processing_comment_id) {
+          try {
+            const connector = getConnector(channel.channel_type as ChannelType, channel.config);
+            await connector.sendMessage({
+              threadId: data.thread_id,
+              text: `⚠️ @${githubLogin ?? 'unknown'} — your GitHub account isn't linked to an Agor user. Ask an admin to add a \`user_map\` entry for your GitHub login, or set a public email on your GitHub profile that matches your Agor account.`,
+              metadata: { edit_comment_id: data.metadata.processing_comment_id },
+            });
+          } catch (err) {
+            console.warn('[gateway] Failed to post rejection comment:', err);
+          }
+        }
+        return {
+          success: false,
+          sessionId: '',
+          created: false,
+        };
       }
     }
 
