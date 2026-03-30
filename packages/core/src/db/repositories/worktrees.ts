@@ -10,7 +10,12 @@ import { formatShortId, generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { type WorktreeInsert, type WorktreeRow, worktreeOwners, worktrees } from '../schema';
-import { AmbiguousIdError, type BaseRepository, EntityNotFoundError } from './base';
+import {
+  AmbiguousIdError,
+  type BaseRepository,
+  EntityNotFoundError,
+  RepositoryError,
+} from './base';
 import { deepMerge } from './merge-utils';
 
 /**
@@ -149,8 +154,27 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
    */
   async create(worktree: Partial<Worktree>): Promise<Worktree> {
     const insertData = this.worktreeToInsert(worktree);
-    const row = await insert(this.db, worktrees).values(insertData).returning().one();
-    return this.rowToWorktree(row);
+    try {
+      const row = await insert(this.db, worktrees).values(insertData).returning().one();
+      return this.rowToWorktree(row);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      // Surface helpful messages for common constraint violations
+      if (msg.includes('FOREIGN KEY constraint failed')) {
+        throw new RepositoryError(
+          `Failed to create worktree '${worktree.name}': a referenced entity does not exist. ` +
+            `Check that repo_id ('${worktree.repo_id}') and board_id ('${worktree.board_id ?? 'none'}') are valid.`,
+          error
+        );
+      }
+      if (msg.includes('UNIQUE constraint failed') || msg.includes('already exists')) {
+        throw new RepositoryError(
+          `Failed to create worktree '${worktree.name}': a record with the same key already exists. ${msg}`,
+          error
+        );
+      }
+      throw new RepositoryError(`Failed to create worktree '${worktree.name}': ${msg}`, error);
+    }
   }
 
   /**

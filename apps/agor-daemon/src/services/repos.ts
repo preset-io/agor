@@ -424,6 +424,18 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       }
     }
 
+    // Validate boardId exists before creating DB record (FK constraint would reject it)
+    if (data.boardId) {
+      try {
+        await this.app.service('boards').get(data.boardId, params);
+      } catch {
+        throw new Error(
+          `Board '${data.boardId}' not found. Provide a valid boardId ` +
+            `(use agor_boards_list to see available boards).`
+        );
+      }
+    }
+
     const worktreePath = getWorktreePath(repo.slug, data.name);
 
     console.log('🔍 RepoService.createWorktree - computed paths:', {
