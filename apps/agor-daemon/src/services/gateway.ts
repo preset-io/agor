@@ -252,26 +252,28 @@ export class GatewayService {
       };
     }
 
-    // 5. Fetch channel owner user (needed for auth context + agentic defaults)
-    const usersService = this.app.service('users') as {
-      get: (id: string) => Promise<User>;
-    };
-    const channelOwner = await usersService.get(channel.agor_user_id);
-
-    // 6. Resolve effective user (platform user alignment or channel owner fallback)
+    // 5. Resolve effective user (platform user alignment or channel owner fallback)
     //
     // Alignment flags are checked FIRST: when alignment is active, the channel
     // owner ("run as") is NOT used — user is resolved entirely via alignment
     // (or rejected). This prevents privilege escalation where any org member
     // with @mention access would inherit the channel owner's permissions.
+    const usersService = this.app.service('users') as {
+      get: (id: string) => Promise<User>;
+    };
     const channelConfig = channel.config as Record<string, unknown>;
     const alignSlackUsers =
       channelConfig.align_slack_users === true || data.metadata?.align_slack_users === true;
     const alignGitHubUsers =
       channelConfig.align_github_users === true || data.metadata?.align_github_users === true;
 
-    // Only use channel owner when NO alignment is active
-    let user = !alignSlackUsers && !alignGitHubUsers ? channelOwner : (null as unknown as User);
+    // Only fetch and use channel owner when NO alignment is active.
+    // When alignment is ON, agor_user_id may be empty (the "Post messages as"
+    // field is hidden in the UI), so we must not fetch it unconditionally.
+    let user: User = null as unknown as User;
+    if (!alignSlackUsers && !alignGitHubUsers) {
+      user = await usersService.get(channel.agor_user_id);
+    }
 
     // --- Slack user alignment ---
     if (alignSlackUsers) {
@@ -733,8 +735,12 @@ export class GatewayService {
         `[gateway] Flushed GitHub buffer for session ${sessionId.substring(0, 8)} → ${mapping.thread_id} (${bufferedMessage.length} chars)`
       );
     } catch (error) {
+      // Re-queue the message so it can be retried on next flush (e.g. session
+      // goes idle again, or daemon restarts). Without this, a transient GitHub
+      // API error would permanently lose the agent's final response.
+      this.githubMessageBuffer.set(sessionId, bufferedMessage);
       console.error(
-        `[gateway] Failed to flush GitHub buffer for session ${sessionId.substring(0, 8)}:`,
+        `[gateway] Failed to flush GitHub buffer for session ${sessionId.substring(0, 8)} (re-queued):`,
         error
       );
     }

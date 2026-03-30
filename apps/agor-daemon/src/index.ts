@@ -3301,7 +3301,13 @@ async function main() {
           const redact = (channel: Record<string, unknown>) => {
             if (channel?.config && typeof channel.config === 'object') {
               const config = { ...(channel.config as Record<string, unknown>) };
-              for (const field of ['bot_token', 'app_token', 'signing_secret']) {
+              for (const field of [
+                'bot_token',
+                'app_token',
+                'signing_secret',
+                'private_key',
+                'webhook_secret',
+              ]) {
                 if (config[field]) {
                   config[field] = '••••••••';
                 }
