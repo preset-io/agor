@@ -77,7 +77,7 @@ function cleanExpiredSetups(): void {
 function buildManifest(opts: { daemonUrl: string; appName?: string }): Record<string, unknown> {
   return {
     name: opts.appName || 'Agor',
-    url: opts.daemonUrl,
+    url: 'https://agor.live',
     hook_attributes: { active: false }, // We poll, no webhooks needed
     redirect_url: `${opts.daemonUrl}/api/github/manifest/callback`,
     public: false,
