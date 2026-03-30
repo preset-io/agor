@@ -85,7 +85,8 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
           .string()
           .describe(
             'Slug name for the worktree directory (lowercase letters, numbers, hyphens). ' +
-              'If the name conflicts with an existing worktree, set autoSuffix=true to auto-append a numeric suffix.'
+              'If the name conflicts with an existing worktree, a numeric suffix is auto-appended (e.g., "my-feature-2"). ' +
+              'Set autoSuffix=false to get an error on conflict instead.'
           ),
         boardId: z
           .string()
@@ -129,15 +130,8 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
           .boolean()
           .optional()
           .describe(
-            'When true, if worktreeName conflicts with an existing worktree, automatically append a numeric suffix ' +
-              '(e.g., "my-feature" → "my-feature-2", "my-feature-3"). Defaults to false.'
-          ),
-        dryRun: z
-          .boolean()
-          .optional()
-          .describe(
-            'When true, validate all inputs and check for conflicts without actually creating the worktree. ' +
-              'Returns what would happen, including the resolved name (after auto-suffix), branch, and source branch.'
+            'If worktreeName conflicts with an existing worktree, automatically append a numeric suffix ' +
+              '(e.g., "my-feature" → "my-feature-2", "my-feature-3"). Defaults to true. Set to false to get an error on conflict instead.'
           ),
         issueUrl: z.string().optional().describe('Issue URL to associate with the worktree.'),
         pullRequestUrl: z
@@ -149,9 +143,9 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
     async (args) => {
       const repoId = coerceString(args.repoId)!;
       let worktreeName = coerceString(args.worktreeName)!;
+      const originalName = worktreeName;
       const boardId = coerceString(args.boardId)!;
-      const autoSuffix = typeof args.autoSuffix === 'boolean' ? args.autoSuffix : false;
-      const dryRun = typeof args.dryRun === 'boolean' ? args.dryRun : false;
+      const autoSuffix = typeof args.autoSuffix === 'boolean' ? args.autoSuffix : true;
 
       if (!WORKTREE_NAME_PATTERN.test(worktreeName)) {
         throw new Error('worktreeName must use lowercase letters, numbers, or hyphens');
@@ -213,18 +207,9 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
       const issueUrl = normalizeOptionalHttpUrl(args.issueUrl, 'issueUrl');
       const pullRequestUrl = normalizeOptionalHttpUrl(args.pullRequestUrl, 'pullRequestUrl');
 
-      // Dry run: return what would happen without actually creating
-      if (dryRun) {
-        return textResult({
-          dryRun: true,
-          resolvedWorktreeName: worktreeName,
-          resolvedRef: ref,
-          resolvedSourceBranch: sourceBranch,
-          createBranch,
-          pullLatest,
-          refType,
-          message: `Would create worktree '${worktreeName}' on branch '${ref}'${sourceBranch ? ` from '${sourceBranch}'` : ''}`,
-        });
+      // If auto-suffix changed the ref (branch name defaults to worktreeName), update it
+      if (createBranch && !coerceString(args.ref) && worktreeName !== originalName) {
+        ref = worktreeName;
       }
 
       const worktree = await reposService.createWorktree(
@@ -242,6 +227,14 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
         },
         ctx.baseServiceParams
       );
+
+      // Make it very clear when auto-suffix was applied
+      if (worktreeName !== originalName) {
+        return textResult({
+          ...worktree,
+          _note: `Name '${originalName}' was already taken. Created as '${worktreeName}' instead (autoSuffix applied).`,
+        });
+      }
       return textResult(worktree);
     }
   );
