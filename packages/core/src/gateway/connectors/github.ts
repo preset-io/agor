@@ -345,26 +345,23 @@ export class GitHubConnector implements GatewayConnector {
         const text = requireMention ? stripMention(body, mentionName) : body;
 
         // Resolve user identity for alignment
+        // NOTE: user_map lookup is done in the gateway (not here) because the gateway
+        // reads fresh channel config from DB on every message. The connector's this.config
+        // is set at construction time and would go stale if user_map is updated in the UI.
         const githubLogin = comment.user?.login;
         let githubUserEmail: string | undefined;
-        let mappedAgorEmail: string | undefined;
 
         if (this.config.align_github_users && githubLogin) {
-          // 1. Check explicit user_map first
-          if (this.config.user_map?.[githubLogin]) {
-            mappedAgorEmail = this.config.user_map[githubLogin];
-          } else {
-            // 2. Fetch GitHub user's public email
-            try {
-              const { data: ghUser } = await octokit.users.getByUsername({
-                username: githubLogin,
-              });
-              if (ghUser.email) {
-                githubUserEmail = ghUser.email;
-              }
-            } catch (err) {
-              console.warn(`[github] Failed to fetch user profile for ${githubLogin}:`, err);
+          // Fetch GitHub user's public email (used by gateway tier-2 alignment)
+          try {
+            const { data: ghUser } = await octokit.users.getByUsername({
+              username: githubLogin,
+            });
+            if (ghUser.email) {
+              githubUserEmail = ghUser.email;
             }
+          } catch (err) {
+            console.warn(`[github] Failed to fetch user profile for ${githubLogin}:`, err);
           }
         }
 
@@ -382,7 +379,6 @@ export class GitHubConnector implements GatewayConnector {
             comment_url: comment.html_url,
             ...(processingCommentId ? { processing_comment_id: processingCommentId } : {}),
             ...(this.config.align_github_users ? { align_github_users: true } : {}),
-            ...(mappedAgorEmail ? { mapped_agor_email: mappedAgorEmail } : {}),
             ...(githubUserEmail ? { github_user_email: githubUserEmail } : {}),
           },
         });

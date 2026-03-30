@@ -259,16 +259,21 @@ export class GatewayService {
     const channelOwner = await usersService.get(channel.agor_user_id);
 
     // 6. Resolve effective user (platform user alignment or channel owner fallback)
-    let user = channelOwner;
+    //
+    // Alignment flags are checked FIRST: when alignment is active, the channel
+    // owner ("run as") is NOT used — user is resolved entirely via alignment
+    // (or rejected). This prevents privilege escalation where any org member
+    // with @mention access would inherit the channel owner's permissions.
+    const channelConfig = channel.config as Record<string, unknown>;
+    const alignSlackUsers =
+      channelConfig.align_slack_users === true || data.metadata?.align_slack_users === true;
+    const alignGitHubUsers =
+      channelConfig.align_github_users === true || data.metadata?.align_github_users === true;
+
+    // Only use channel owner when NO alignment is active
+    let user = !alignSlackUsers && !alignGitHubUsers ? channelOwner : (null as unknown as User);
 
     // --- Slack user alignment ---
-    // Check both the channel config and the connector-reported metadata flag.
-    // The metadata flag signals the connector actually attempted alignment for
-    // this specific message (it has access to the runtime config at listen time).
-    const alignSlackUsers =
-      (channel.config as Record<string, unknown>).align_slack_users === true ||
-      data.metadata?.align_slack_users === true;
-
     if (alignSlackUsers) {
       if (data.metadata?.slack_user_email && typeof data.metadata.slack_user_email === 'string') {
         const email = data.metadata.slack_user_email.toLowerCase().trim();
@@ -315,19 +320,16 @@ export class GatewayService {
     // --- GitHub user alignment ---
     // 3-tier resolution: user_map → GitHub email → reject.
     // Never falls back to channel owner — unmapped users are rejected.
-    const alignGitHubUsers =
-      (channel.config as Record<string, unknown>).align_github_users === true ||
-      data.metadata?.align_github_users === true;
-
     if (alignGitHubUsers && !alignSlackUsers) {
       const githubLogin = data.metadata?.github_user as string | undefined;
       let resolved = false;
 
       // Tier 1: Explicit user_map (GitHub login → Agor email)
+      // Read user_map from fresh channel.config (NOT from connector metadata,
+      // which can be stale since the connector holds config from construction time).
+      const userMap = channelConfig.user_map as Record<string, string> | undefined;
       const mappedEmail =
-        data.metadata?.mapped_agor_email && typeof data.metadata.mapped_agor_email === 'string'
-          ? data.metadata.mapped_agor_email.toLowerCase().trim()
-          : null;
+        githubLogin && userMap?.[githubLogin] ? userMap[githubLogin].toLowerCase().trim() : null;
 
       if (mappedEmail) {
         const matchedUser = await this.usersRepo.findByEmail(mappedEmail);
@@ -393,14 +395,14 @@ export class GatewayService {
     let created = false;
 
     // Resolve agentic config: channel config > user defaults > system defaults
-    const channelConfig = channel.agentic_config;
-    const agenticTool: AgenticToolName = (channelConfig?.agent as AgenticToolName) ?? 'claude-code';
+    const agenticConfig = channel.agentic_config;
+    const agenticTool: AgenticToolName = (agenticConfig?.agent as AgenticToolName) ?? 'claude-code';
     const userDefaults = user.default_agentic_config?.[agenticTool];
     const permissionMode =
-      channelConfig?.permissionMode ??
+      agenticConfig?.permissionMode ??
       userDefaults?.permissionMode ??
       getDefaultPermissionMode(agenticTool);
-    const modelConfig = channelConfig?.modelConfig ?? userDefaults?.modelConfig;
+    const modelConfig = agenticConfig?.modelConfig ?? userDefaults?.modelConfig;
 
     if (existingMapping) {
       // Existing thread → existing session
