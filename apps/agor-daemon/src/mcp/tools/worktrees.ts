@@ -335,7 +335,7 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
       }
       if (args.mcpServerIds !== undefined) {
         fieldsProvided++;
-        updates.mcp_server_ids = args.mcpServerIds === null ? undefined : args.mcpServerIds;
+        updates.mcp_server_ids = args.mcpServerIds === null ? [] : args.mcpServerIds;
       }
 
       if (fieldsProvided === 0) throw new Error('provide at least one field to update');
@@ -623,8 +623,11 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
             };
           }
 
-          // Resolve MCP server IDs from user defaults
-          const mcpServerIds = userToolDefaults?.mcpServerIds || [];
+          // MCP server inheritance: worktree config > user defaults
+          const mcpServerIds =
+            worktree.mcp_server_ids && worktree.mcp_server_ids.length > 0
+              ? worktree.mcp_server_ids
+              : userToolDefaults?.mcpServerIds || [];
 
           // Create new session
           const sessionData: Record<string, unknown> = {
@@ -653,16 +656,22 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
             `✅ Auto-created session ${newSession.session_id.substring(0, 8)} (${agenticTool})`
           );
 
-          // Attach MCP servers from user defaults
+          // Attach MCP servers (inherited from worktree or user defaults)
           if (mcpServerIds.length > 0) {
             for (const mcpServerId of mcpServerIds) {
-              await ctx.app.service('session-mcp-servers').create(
-                {
-                  session_id: newSession.session_id,
-                  mcp_server_id: mcpServerId,
-                },
-                ctx.baseServiceParams
-              );
+              try {
+                await ctx.app.service('session-mcp-servers').create(
+                  {
+                    session_id: newSession.session_id,
+                    mcp_server_id: mcpServerId,
+                  },
+                  ctx.baseServiceParams
+                );
+              } catch (error) {
+                console.warn(
+                  `Skipped MCP server ${mcpServerId} for session ${newSession.session_id}: ${error instanceof Error ? error.message : String(error)}`
+                );
+              }
             }
             console.log(`✅ Attached ${mcpServerIds.length} MCP servers`);
           }

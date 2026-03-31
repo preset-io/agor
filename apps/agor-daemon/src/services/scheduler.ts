@@ -372,26 +372,8 @@ export class SchedulerService {
       const createdSession = await sessionsService.create(session);
       console.log(`      ✅ Spawned scheduled session for ${worktree.name} (run #${runIndex})`);
 
-      // 6. Trigger prompt execution (creates task and starts agent)
-      // IMPORTANT: Must pass provider: undefined to bypass auth (internal call)
-      // AND pass user: creator so the executor's session token is generated for the correct user.
-      // Without the user, the token defaults to 'anonymous' which doesn't exist in the database,
-      // causing the executor to fail with "User not found: anonymous" error.
-      const promptService = this.app.service('/sessions/:id/prompt');
-      await promptService.create(
-        {
-          prompt: renderedPrompt,
-          permissionMode: createdSession.permission_config?.mode || 'acceptEdits',
-          stream: true,
-        },
-        {
-          route: { id: createdSession.session_id },
-          provider: undefined, // Bypass auth for internal scheduler call
-          user: creator, // Pass creator user for session token generation
-        } as import('@agor/core/types').AuthenticatedParams & { route: { id: string } }
-      );
-
-      // Attach MCP servers: schedule config > worktree defaults
+      // 6. Attach MCP servers BEFORE triggering prompt (so agent has tools from the start)
+      // Precedence: schedule config > worktree defaults
       const effectiveMcpIds =
         schedule.mcp_server_ids && schedule.mcp_server_ids.length > 0
           ? schedule.mcp_server_ids
@@ -411,6 +393,25 @@ export class SchedulerService {
           }
         }
       }
+
+      // 7. Trigger prompt execution (creates task and starts agent)
+      // IMPORTANT: Must pass provider: undefined to bypass auth (internal call)
+      // AND pass user: creator so the executor's session token is generated for the correct user.
+      // Without the user, the token defaults to 'anonymous' which doesn't exist in the database,
+      // causing the executor to fail with "User not found: anonymous" error.
+      const promptService = this.app.service('/sessions/:id/prompt');
+      await promptService.create(
+        {
+          prompt: renderedPrompt,
+          permissionMode: createdSession.permission_config?.mode || 'acceptEdits',
+          stream: true,
+        },
+        {
+          route: { id: createdSession.session_id },
+          provider: undefined, // Bypass auth for internal scheduler call
+          user: creator, // Pass creator user for session token generation
+        } as import('@agor/core/types').AuthenticatedParams & { route: { id: string } }
+      );
 
       // 7. Update schedule metadata
       await this.updateScheduleMetadata(worktree, scheduledRunAt, now);
