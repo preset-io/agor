@@ -146,7 +146,12 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
       ),
       children: (
         <div>
-          <Alert type="info" message={PURPOSE_TEXT.worktree} style={{ marginBottom: 16 }} />
+          <Alert
+            type="info"
+            showIcon
+            description={PURPOSE_TEXT.worktree}
+            style={{ marginBottom: 16 }}
+          />
           <WorktreeTab
             repoById={repoById}
             currentBoardId={currentBoardId}
@@ -167,7 +172,12 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
       ),
       children: (
         <div>
-          <Alert type="info" message={PURPOSE_TEXT.assistant} style={{ marginBottom: 16 }} />
+          <Alert
+            type="info"
+            showIcon
+            description={PURPOSE_TEXT.assistant}
+            style={{ marginBottom: 16 }}
+          />
           <AssistantTab
             repoById={repoById}
             boardById={boardById}
@@ -187,7 +197,12 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
       ),
       children: (
         <div>
-          <Alert type="info" message={PURPOSE_TEXT.board} style={{ marginBottom: 16 }} />
+          <Alert
+            type="info"
+            showIcon
+            description={PURPOSE_TEXT.board}
+            style={{ marginBottom: 16 }}
+          />
           <BoardTab onValidityChange={handleValidityChange} formRef={boardFormRef} />
         </div>
       ),
@@ -202,7 +217,12 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
       ),
       children: (
         <div>
-          <Alert type="info" message={PURPOSE_TEXT.repository} style={{ marginBottom: 16 }} />
+          <Alert
+            type="info"
+            showIcon
+            description={PURPOSE_TEXT.repository}
+            style={{ marginBottom: 16 }}
+          />
           <RepoTab onValidityChange={handleValidityChange} formRef={repoFormRef} />
         </div>
       ),
