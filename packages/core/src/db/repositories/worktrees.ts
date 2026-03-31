@@ -144,6 +144,7 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
         environment_instance: worktree.environment_instance,
         last_used: worktree.last_used ?? new Date(now).toISOString(),
         custom_context: worktree.custom_context,
+        mcp_server_ids: worktree.mcp_server_ids,
         schedule: worktree.schedule,
       },
     };

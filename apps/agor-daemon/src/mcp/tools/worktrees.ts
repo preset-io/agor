@@ -280,6 +280,13 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
           .describe(
             'Custom context object for templates and automations. Pass null to clear existing context.'
           ),
+        mcpServerIds: z
+          .array(z.string())
+          .nullable()
+          .optional()
+          .describe(
+            'Default MCP server IDs for new sessions in this worktree. Sessions inherit these unless they explicitly specify their own. Pass null to clear.'
+          ),
       }),
     },
     async (args) => {
@@ -325,6 +332,10 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
       if (args.customContext !== undefined) {
         fieldsProvided++;
         updates.custom_context = args.customContext === null ? null : args.customContext;
+      }
+      if (args.mcpServerIds !== undefined) {
+        fieldsProvided++;
+        updates.mcp_server_ids = args.mcpServerIds === null ? undefined : args.mcpServerIds;
       }
 
       if (fieldsProvided === 0) throw new Error('provide at least one field to update');

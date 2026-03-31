@@ -511,6 +511,9 @@ export const worktrees = pgTable(
         // Custom context for templates (accessible as {{custom.*}})
         custom_context?: Record<string, unknown>;
 
+        // Default MCP servers for new sessions in this worktree
+        mcp_server_ids?: string[];
+
         // Schedule configuration (full config in JSON blob)
         schedule?: {
           timezone: string; // IANA timezone (default: 'UTC')

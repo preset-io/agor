@@ -24,8 +24,20 @@
  */
 
 import type { Database } from '@agor/core/db';
-import { SessionRepository, UsersRepository, WorktreeRepository } from '@agor/core/db';
-import type { PermissionMode, Session, User, Worktree } from '@agor/core/types';
+import {
+  SessionMCPServerRepository,
+  SessionRepository,
+  UsersRepository,
+  WorktreeRepository,
+} from '@agor/core/db';
+import type {
+  MCPServerID,
+  PermissionMode,
+  Session,
+  SessionID,
+  User,
+  Worktree,
+} from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
 import type { UnixUserMode } from '@agor/core/unix';
 import { getNextRunTime, getPrevRunTime } from '@agor/core/utils/cron';
@@ -51,6 +63,7 @@ export class SchedulerService {
   private worktreeRepo: WorktreeRepository;
   private sessionRepo: SessionRepository;
   private userRepo: UsersRepository;
+  private sessionMCPRepo: SessionMCPServerRepository;
 
   constructor(db: Database, app: Application, config: SchedulerConfig = {}) {
     this.app = app;
@@ -63,6 +76,7 @@ export class SchedulerService {
     this.worktreeRepo = new WorktreeRepository(db);
     this.sessionRepo = new SessionRepository(db);
     this.userRepo = new UsersRepository(db);
+    this.sessionMCPRepo = new SessionMCPServerRepository(db);
   }
 
   /**
@@ -377,7 +391,26 @@ export class SchedulerService {
         } as import('@agor/core/types').AuthenticatedParams & { route: { id: string } }
       );
 
-      // TODO: Attach MCP servers if specified in schedule.mcp_server_ids
+      // Attach MCP servers: schedule config > worktree defaults
+      const effectiveMcpIds =
+        schedule.mcp_server_ids && schedule.mcp_server_ids.length > 0
+          ? schedule.mcp_server_ids
+          : worktree.mcp_server_ids && worktree.mcp_server_ids.length > 0
+            ? worktree.mcp_server_ids
+            : [];
+
+      if (effectiveMcpIds.length > 0) {
+        for (const serverId of effectiveMcpIds) {
+          try {
+            await this.sessionMCPRepo.addServer(
+              createdSession.session_id as SessionID,
+              serverId as MCPServerID
+            );
+          } catch {
+            // Silently skip deleted/invalid MCP servers
+          }
+        }
+      }
 
       // 7. Update schedule metadata
       await this.updateScheduleMetadata(worktree, scheduledRunAt, now);

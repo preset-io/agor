@@ -209,6 +209,21 @@ export interface Worktree {
    */
   custom_context?: Record<string, unknown>;
 
+  // ===== MCP Server Configuration =====
+
+  /**
+   * Default MCP servers to attach to new sessions in this worktree
+   *
+   * When creating a session, MCP servers are resolved with this priority:
+   * 1. Caller explicitly specifies mcpServerIds → use those
+   * 2. Worktree mcp_server_ids → use these
+   * 3. User defaults → fallback
+   *
+   * Not used during spawn (spawn inherits from parent session).
+   * References to deleted MCP servers are silently skipped.
+   */
+  mcp_server_ids?: string[];
+
   // ===== UI State =====
 
   /**

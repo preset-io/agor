@@ -75,28 +75,40 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
     // Get default config for the selected agent
     const agentDefaults = currentUser?.default_agentic_config?.['claude-code'];
 
+    // MCP inheritance: worktree config > user defaults
+    const effectiveMcpServerIds =
+      worktree?.mcp_server_ids && worktree.mcp_server_ids.length > 0
+        ? worktree.mcp_server_ids
+        : agentDefaults?.mcpServerIds || [];
+
     form.setFieldsValue({
       title: '',
       initialPrompt: '',
       permissionMode: agentDefaults?.permissionMode || getDefaultPermissionMode('claude-code'),
-      mcpServerIds: agentDefaults?.mcpServerIds || [],
+      mcpServerIds: effectiveMcpServerIds,
       modelConfig: agentDefaults?.modelConfig,
       codexSandboxMode: agentDefaults?.codexSandboxMode || 'workspace-write',
       codexApprovalPolicy: agentDefaults?.codexApprovalPolicy || 'on-request',
       codexNetworkAccess: agentDefaults?.codexNetworkAccess ?? false,
     });
-  }, [open, form, currentUser]);
+  }, [open, form, currentUser, worktree]);
 
   // Update permission mode and other defaults when agent changes
   useEffect(() => {
     if (selectedAgent) {
       const agentDefaults = currentUser?.default_agentic_config?.[selectedAgent as AgenticToolName];
 
+      // MCP inheritance: worktree config > user defaults
+      const effectiveMcpServerIds =
+        worktree?.mcp_server_ids && worktree.mcp_server_ids.length > 0
+          ? worktree.mcp_server_ids
+          : agentDefaults?.mcpServerIds || [];
+
       form.setFieldsValue({
         permissionMode:
           agentDefaults?.permissionMode ||
           getDefaultPermissionMode((selectedAgent as AgenticToolName) || 'claude-code'),
-        mcpServerIds: agentDefaults?.mcpServerIds || [],
+        mcpServerIds: effectiveMcpServerIds,
         modelConfig: agentDefaults?.modelConfig,
         ...(selectedAgent === 'codex'
           ? {
@@ -111,7 +123,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
             }),
       });
     }
-  }, [selectedAgent, form, currentUser]);
+  }, [selectedAgent, form, currentUser, worktree?.mcp_server_ids]);
 
   const handleCreate = () => {
     form.validateFields().then((values) => {

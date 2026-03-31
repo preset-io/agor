@@ -506,6 +506,9 @@ export const worktrees = sqliteTable(
         // Custom context for templates (accessible as {{custom.*}})
         custom_context?: Record<string, unknown>;
 
+        // Default MCP servers for new sessions in this worktree
+        mcp_server_ids?: string[];
+
         // Unix integration
         unix_gid?: number; // GID of worktree's unix_group (best effort capture)
 

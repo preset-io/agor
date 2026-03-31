@@ -121,6 +121,7 @@ export const WorktreeModal: React.FC<WorktreeModalProps> = ({
           repo={repo}
           sessions={sessions}
           boards={mapToArray(boardById)}
+          mcpServers={mapToArray(mcpServerById)}
           client={client}
           currentUser={currentUser}
           onUpdate={onUpdateWorktree}

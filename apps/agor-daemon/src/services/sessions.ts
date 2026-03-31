@@ -6,9 +6,21 @@
  */
 
 import { PAGINATION } from '@agor/core/config';
-import { type Database, SessionRepository, type SessionWithLastMessage } from '@agor/core/db';
+import {
+  type Database,
+  SessionMCPServerRepository,
+  SessionRepository,
+  type SessionWithLastMessage,
+} from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { Paginated, QueryParams, Session, TaskID } from '@agor/core/types';
+import type {
+  MCPServerID,
+  Paginated,
+  QueryParams,
+  Session,
+  SessionID,
+  TaskID,
+} from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 
@@ -66,6 +78,7 @@ function parseTruncationLength(value: unknown): number {
 export class SessionsService extends DrizzleService<Session, Partial<Session>, SessionParams> {
   private sessionRepo: SessionRepository;
   private app: Application;
+  private db: Database;
 
   constructor(db: Database, app: Application) {
     const sessionRepo = new SessionRepository(db);
@@ -81,6 +94,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
 
     this.sessionRepo = sessionRepo;
     this.app = app;
+    this.db = db;
   }
 
   /**
@@ -241,7 +255,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
       };
     }
 
-    // TODO: Handle MCP server attachment from data.mcpServerIds via session_mcp_servers junction table
+    // MCP server attachment is handled after session creation (copies from parent)
 
     // Build callback configuration
     // callback_session_id is the single source of truth for where to deliver callbacks.
@@ -289,13 +303,30 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
         model_config: modelConfig,
         callback_config: callbackConfig,
         // Don't copy sdk_session_id - spawn will get its own via forkSession:true
-        // TODO: Handle MCP server attachment via session_mcp_servers junction table
       },
       params
     );
 
     // Cast spawnedSession to Session to handle return type (create returns Session | Session[])
     const session = spawnedSession as Session;
+
+    // Copy MCP servers from parent session to spawned session
+    try {
+      const sessionMCPRepo = new SessionMCPServerRepository(this.db);
+      const parentServers = await sessionMCPRepo.listServers(parent.session_id as SessionID, true);
+      for (const server of parentServers) {
+        try {
+          await sessionMCPRepo.addServer(
+            session.session_id as SessionID,
+            server.mcp_server_id as MCPServerID
+          );
+        } catch {
+          // Silently skip — server may have been deleted between list and add
+        }
+      }
+    } catch (error) {
+      console.warn('Failed to copy MCP servers during spawn:', error);
+    }
 
     // Update parent's children list
     const parentChildren = parent.genealogy?.children || [];

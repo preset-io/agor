@@ -154,20 +154,26 @@ export const ZoneTriggerModal = ({
       // Get user defaults for this agent as fallback
       const agentDefaults = currentUser?.default_agentic_config?.[selectedAgent as AgenticToolName];
 
+      // MCP inheritance: worktree config > user defaults
+      const effectiveMcpServerIds =
+        worktree?.mcp_server_ids && worktree.mcp_server_ids.length > 0
+          ? worktree.mcp_server_ids
+          : agentDefaults?.mcpServerIds || [];
+
       // Calculate config values (priority: most recent session > user defaults)
       const configValues = {
         permissionMode: mostRecentSession?.permission_config?.mode || agentDefaults?.permissionMode,
         modelConfig:
           mostRecentSession?.model_config ||
           (agentDefaults?.modelConfig as ModelConfig | undefined),
-        mcpServerIds: agentDefaults?.mcpServerIds || [],
+        mcpServerIds: effectiveMcpServerIds,
       };
 
       // Store in both form (for UI) AND component state (for execution)
       form.setFieldsValue(configValues);
       setSessionConfig(configValues);
     }
-  }, [mode, selectedAgent, currentUser, worktreeSessions, form]);
+  }, [mode, selectedAgent, currentUser, worktreeSessions, form, worktree?.mcp_server_ids]);
 
   // Pre-populate form with selected session's config when reusing
   useEffect(() => {

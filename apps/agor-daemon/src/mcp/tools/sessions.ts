@@ -342,7 +342,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_create',
     {
       description:
-        'Create a new session in an existing worktree. Use for starting fresh work on a new task in the same codebase (e.g., new feature branch, separate investigation). Unlike spawn, this creates an independent session with no parent-child relationship. Configuration is inherited from user defaults. Supports optional callbacks to notify the creating session when the new session completes.',
+        'Create a new session in an existing worktree. Use for starting fresh work on a new task in the same codebase (e.g., new feature branch, separate investigation). Unlike spawn, this creates an independent session with no parent-child relationship. MCP servers are inherited from the worktree (if configured) or user defaults. Supports optional callbacks to notify the creating session when the new session completes.',
       inputSchema: z.object({
         worktreeId: z.string().describe('Worktree ID where the session will run (required)'),
         agenticTool: z
@@ -435,7 +435,11 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         };
       }
 
-      const mcpServerIds = userToolDefaults?.mcpServerIds || [];
+      // MCP server inheritance: worktree config > user defaults
+      const mcpServerIds =
+        worktree.mcp_server_ids && worktree.mcp_server_ids.length > 0
+          ? worktree.mcp_server_ids
+          : userToolDefaults?.mcpServerIds || [];
 
       // Build callback configuration for remote session callbacks
       const callbackConfig: Record<string, unknown> = {};
@@ -489,15 +493,22 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
 
       const session = await ctx.app.service('sessions').create(sessionData, ctx.baseServiceParams);
 
-      // Attach MCP servers from user defaults
+      // Attach MCP servers (inherited from worktree or user defaults)
       if (mcpServerIds && mcpServerIds.length > 0) {
         for (const mcpServerId of mcpServerIds) {
-          await ctx.app
-            .service('session-mcp-servers')
-            .create(
-              { session_id: session.session_id, mcp_server_id: mcpServerId },
-              ctx.baseServiceParams
+          try {
+            await ctx.app
+              .service('session-mcp-servers')
+              .create(
+                { session_id: session.session_id, mcp_server_id: mcpServerId },
+                ctx.baseServiceParams
+              );
+          } catch (error) {
+            // Gracefully skip deleted/invalid MCP servers
+            console.warn(
+              `Skipped MCP server ${mcpServerId} for session ${session.session_id}: ${error instanceof Error ? error.message : String(error)}`
             );
+          }
         }
       }
 

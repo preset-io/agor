@@ -1,10 +1,11 @@
 import type { AgorClient } from '@agor/core/api';
-import type { Board, Repo, Session, User, Worktree } from '@agor/core/types';
+import type { Board, MCPServer, Repo, Session, User, Worktree } from '@agor/core/types';
 import { DeleteOutlined, FolderOutlined, LinkOutlined } from '@ant-design/icons';
 import { Button, Descriptions, Form, Input, Select, Space, Tooltip, Typography } from 'antd';
 import { useEffect, useState } from 'react';
 import { useThemedMessage } from '../../../utils/message';
 import { ArchiveDeleteWorktreeModal } from '../../ArchiveDeleteWorktreeModal';
+import { MCPServerSelect } from '../../MCPServerSelect';
 import { Tag } from '../../Tag';
 import { OwnersSection } from '../components/OwnersSection';
 
@@ -25,6 +26,7 @@ interface GeneralTabProps {
   repo: Repo;
   sessions: Session[]; // Used to count sessions for this worktree
   boards?: Board[];
+  mcpServers?: MCPServer[];
   client?: AgorClient | null;
   currentUser?: User | null;
   onUpdate?: (worktreeId: string, updates: WorktreeUpdate) => void;
@@ -43,6 +45,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
   repo,
   sessions,
   boards = [],
+  mcpServers = [],
   client = null,
   currentUser,
   onUpdate,
@@ -57,6 +60,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
   const [issueUrl, setIssueUrl] = useState(worktree.issue_url || '');
   const [prUrl, setPrUrl] = useState(worktree.pull_request_url || '');
   const [notes, setNotes] = useState(worktree.notes || '');
+  const [mcpServerIds, setMcpServerIds] = useState<string[]>(worktree.mcp_server_ids || []);
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
   const [owners, setOwners] = useState<User[]>([]);
   const [loadingOwners, setLoadingOwners] = useState(true);
@@ -68,6 +72,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
       setIssueUrl(worktree.issue_url || '');
       setPrUrl(worktree.pull_request_url || '');
       setNotes(worktree.notes || '');
+      setMcpServerIds(worktree.mcp_server_ids || []);
       setIsInitialized(true);
     }
   }, [
@@ -76,6 +81,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
     worktree.issue_url,
     worktree.pull_request_url,
     worktree.notes,
+    worktree.mcp_server_ids,
   ]);
 
   // Load worktree owners to check edit permissions
@@ -113,18 +119,24 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
   // After loading, check ownership OR admin status
   const canEdit = loadingOwners ? isAdmin : isAdmin || isOwner;
 
+  const mcpChanged =
+    JSON.stringify([...mcpServerIds].sort()) !==
+    JSON.stringify([...(worktree.mcp_server_ids || [])].sort());
+
   const hasChanges =
     boardId !== worktree.board_id ||
     issueUrl !== (worktree.issue_url || '') ||
     prUrl !== (worktree.pull_request_url || '') ||
-    notes !== (worktree.notes || '');
+    notes !== (worktree.notes || '') ||
+    mcpChanged;
 
   const handleSave = () => {
-    const updates = {
+    const updates: WorktreeUpdate = {
       board_id: boardId || undefined,
       issue_url: (issueUrl.trim() === '' ? null : issueUrl) as string | null | undefined,
       pull_request_url: (prUrl.trim() === '' ? null : prUrl) as string | null | undefined,
       notes: (notes.trim() === '' ? null : notes) as string | null | undefined,
+      ...(mcpChanged ? { mcp_server_ids: mcpServerIds } : {}),
     };
     onUpdate?.(worktree.worktree_id, updates);
     showSuccess('Worktree updated');
@@ -136,6 +148,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
     setIssueUrl(worktree.issue_url || '');
     setPrUrl(worktree.pull_request_url || '');
     setNotes(worktree.notes || '');
+    setMcpServerIds(worktree.mcp_server_ids || []);
   };
 
   const handleArchiveOrDelete = (options: {
@@ -268,6 +281,21 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
                 onChange={(e) => setNotes(e.target.value)}
                 placeholder="Freeform notes about this worktree..."
                 rows={4}
+                disabled={!canEdit}
+              />
+            </Form.Item>
+
+            <Form.Item
+              label="MCP Servers"
+              labelCol={{ span: 6 }}
+              wrapperCol={{ span: 18 }}
+              extra="Default MCP servers for new sessions in this worktree"
+            >
+              <MCPServerSelect
+                mcpServers={mcpServers}
+                value={mcpServerIds}
+                onChange={setMcpServerIds}
+                placeholder="Select default MCP servers..."
                 disabled={!canEdit}
               />
             </Form.Item>
