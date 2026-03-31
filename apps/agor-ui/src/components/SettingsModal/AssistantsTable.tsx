@@ -5,38 +5,19 @@ import {
   DeleteOutlined,
   EditOutlined,
   FolderOutlined,
-  InfoCircleOutlined,
   PlusOutlined,
   RobotOutlined,
-  SettingOutlined,
 } from '@ant-design/icons';
-import {
-  Alert,
-  Button,
-  Collapse,
-  Empty,
-  Form,
-  Input,
-  Modal,
-  Select,
-  Space,
-  Table,
-  Tooltip,
-  Typography,
-  theme,
-} from 'antd';
+import { Button, Empty, Form, Input, Modal, Space, Table, Tooltip, Typography, theme } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
 import { slugify } from '@/utils/repoSlug';
 import { ArchiveDeleteWorktreeModal } from '../ArchiveDeleteWorktreeModal';
-import { FormEmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
+import { AssistantFormFields, CREATE_NEW_BOARD } from '../forms/AssistantFormFields';
 import type { WorktreeUpdate } from '../WorktreeModal/tabs/GeneralTab';
 import { renderEnvCell } from './WorktreeEnvColumn';
 
 const FRAMEWORK_REPO_SLUG = 'preset-io/agor-assistant';
-
-/** Special sentinel for "create new board" option */
-const CREATE_NEW_BOARD = '__create_new__';
 
 interface AssistantsTableProps {
   worktreeById: Map<string, Worktree>;
@@ -87,7 +68,6 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
   const boards = mapToArray(boardById);
   const { token } = theme.useToken();
 
-  // Find the framework repo if available
   const frameworkRepo = useMemo(
     () =>
       repos.find(
@@ -99,27 +79,19 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
     [repos]
   );
 
-  // Framework repo is registered during onboarding or when the user explicitly creates an assistant.
-  // We no longer auto-register on mount to avoid "already exists" errors on page load.
-
-  // Track whether user has selected a custom (non-framework) repo
   const [customRepoSelected, setCustomRepoSelected] = useState(false);
-
-  // Create modal state
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [form] = Form.useForm();
   const [isFormValid, setIsFormValid] = useState(false);
   const [creating, setCreating] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
 
-  // Pre-select framework repo in form when it becomes available
   useEffect(() => {
     if (frameworkRepo && !form.getFieldValue('repoId')) {
       form.setFieldValue('repoId', frameworkRepo.repo_id);
     }
   }, [frameworkRepo, form]);
 
-  // Archive/delete modal
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
   const [selectedWorktree, setSelectedWorktree] = useState<Worktree | null>(null);
 
@@ -130,15 +102,12 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
     setIsFormValid(hasDisplayName && hasRepo);
   }, [form, frameworkRepo]);
 
-  // Track last auto-generated worktree name (useRef avoids Ant Design form timing issues)
   const lastAutoName = useRef('');
 
-  // Auto-generate worktree name from display name
   const handleDisplayNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const displayName = e.target.value;
     const currentName = form.getFieldValue('name');
     const autoName = `private-${slugify(displayName)}`;
-    // Only auto-update if user hasn't manually edited the name
     if (!currentName || currentName === lastAutoName.current) {
       form.setFieldValue('name', autoName);
       lastAutoName.current = autoName;
@@ -151,7 +120,6 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
       const values = await form.validateFields();
       setCreating(true);
 
-      // Resolve repo — default to framework repo
       const repoId = values.repoId || frameworkRepo?.repo_id;
       if (!repoId) {
         form.setFields([
@@ -169,16 +137,14 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
       const worktreeName = values.name || `private-${slugify(values.displayName)}`;
       const sourceBranch = values.sourceBranch || repo?.default_branch || 'main';
 
-      // Resolve board — create new or use existing
       const assistantEmoji = values.emoji || undefined;
       let boardId: string | undefined;
       if (values.boardChoice === CREATE_NEW_BOARD) {
-        // Create a new board named after the assistant
         if (client) {
           try {
             const newBoard = (await client.service('boards').create({
               name: values.displayName.trim(),
-              icon: assistantEmoji || '\u{1F916}',
+              icon: assistantEmoji || '🤖',
             })) as Board;
             boardId = newBoard.board_id;
           } catch (err) {
@@ -189,7 +155,6 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
         boardId = values.boardChoice;
       }
 
-      // Step 1: Create the worktree
       const worktree = await onCreateWorktree?.(repoId, {
         name: worktreeName,
         ref: worktreeName,
@@ -200,7 +165,6 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
       });
 
       if (worktree) {
-        // Step 2: Tag as assistant
         const assistantConfig: AssistantConfig = {
           kind: 'assistant',
           displayName: values.displayName.trim(),
@@ -232,7 +196,6 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
     lastAutoName.current = '';
   };
 
-  // Filter to only assistant worktrees
   const assistants = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
     const assistantWorktrees = Array.from(worktreeById.values())
@@ -368,20 +331,6 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
     },
   ];
 
-  // Board options: "Create new" first, then existing boards
-  const boardOptions = [
-    {
-      value: CREATE_NEW_BOARD,
-      label: '+ Create a new board for this assistant (Recommended)',
-    },
-    ...boards
-      .sort((a: Board, b: Board) => a.name.localeCompare(b.name))
-      .map((board: Board) => ({
-        value: board.board_id,
-        label: `${board.icon || '\u{1F4CB}'} ${board.name}`,
-      })),
-  ];
-
   return (
     <div>
       <Space
@@ -461,131 +410,14 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
           onFieldsChange={validateForm}
           initialValues={{ boardChoice: CREATE_NEW_BOARD, sourceBranch: 'main' }}
         >
-          <Form.Item
-            name="displayName"
-            label="Display Name"
-            rules={[{ required: true, message: 'Please enter a display name' }]}
-            tooltip="Human-friendly name for this assistant"
-          >
-            <Input
-              placeholder="e.g. PR Reviewer, Command Center"
-              autoFocus
-              onChange={handleDisplayNameChange}
-            />
-          </Form.Item>
-
-          <Form.Item name="emoji" label="Icon">
-            <FormEmojiPickerInput form={form} fieldName="emoji" defaultEmoji="🤖" />
-          </Form.Item>
-
-          <Form.Item name="boardChoice" label="Board">
-            <Select
-              showSearch
-              filterOption={(input, option) =>
-                String(option?.label ?? '')
-                  .toLowerCase()
-                  .includes(input.toLowerCase())
-              }
-              options={boardOptions}
-            />
-          </Form.Item>
-
-          <Alert
-            type="info"
-            showIcon={false}
-            style={{ marginBottom: 16 }}
-            message={
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                While assistants can act across boards, we recommend giving each assistant its own
-                board.
-              </Typography.Text>
-            }
-          />
-
-          {/* Advanced options — collapsed by default */}
-          <Collapse
-            ghost
-            size="small"
-            items={[
-              {
-                key: 'advanced',
-                label: (
-                  <Space>
-                    <SettingOutlined />
-                    <Typography.Text type="secondary">Advanced</Typography.Text>
-                  </Space>
-                ),
-                children: (
-                  <>
-                    <Form.Item name="repoId" label="Framework Repository">
-                      <Select
-                        placeholder={
-                          frameworkRepo
-                            ? `${frameworkRepo.name || frameworkRepo.slug} (default)`
-                            : 'Registering preset-io/agor-assistant...'
-                        }
-                        allowClear
-                        showSearch
-                        filterOption={(input, option) =>
-                          String(option?.label ?? '')
-                            .toLowerCase()
-                            .includes(input.toLowerCase())
-                        }
-                        options={repos
-                          .sort((a, b) => (a.name || a.slug).localeCompare(b.name || b.slug))
-                          .map((repo: Repo) => ({
-                            value: repo.repo_id,
-                            label: `${repo.name || repo.slug}${repo.repo_id === frameworkRepo?.repo_id ? ' (default)' : ''}`,
-                          }))}
-                        onChange={(value) => {
-                          if (value && value !== frameworkRepo?.repo_id) {
-                            setCustomRepoSelected(true);
-                          } else {
-                            setCustomRepoSelected(false);
-                          }
-                        }}
-                        onClear={() => setCustomRepoSelected(false)}
-                      />
-                    </Form.Item>
-
-                    {customRepoSelected && (
-                      <Alert
-                        type="warning"
-                        showIcon
-                        icon={<InfoCircleOutlined />}
-                        style={{ marginBottom: 16 }}
-                        message="Custom repository selected"
-                        description={
-                          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                            The repository should be preset-io/agor-assistant or a fork/derivative.
-                            It contains an OpenClaw-inspired agent framework adapted for Agor that
-                            your assistant needs to operate.
-                          </Typography.Text>
-                        }
-                      />
-                    )}
-
-                    <Form.Item
-                      name="name"
-                      label="Worktree Name"
-                      rules={[
-                        {
-                          pattern: /^[a-z0-9-]+$/,
-                          message: 'Only lowercase letters, numbers, and hyphens allowed',
-                        },
-                      ]}
-                      tooltip="Auto-generated from display name. Override if needed."
-                    >
-                      <Input placeholder="private-my-assistant" style={{ width: '100%' }} />
-                    </Form.Item>
-
-                    <Form.Item name="sourceBranch" label="Source Branch">
-                      <Input placeholder="main" />
-                    </Form.Item>
-                  </>
-                ),
-              },
-            ]}
+          <AssistantFormFields
+            form={form}
+            repos={repos}
+            boards={boards}
+            frameworkRepo={frameworkRepo}
+            onDisplayNameChange={handleDisplayNameChange}
+            customRepoSelected={customRepoSelected}
+            onCustomRepoChange={setCustomRepoSelected}
           />
         </Form>
       </Modal>

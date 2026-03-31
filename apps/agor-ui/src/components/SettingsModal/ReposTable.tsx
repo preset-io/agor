@@ -1,10 +1,10 @@
 import type { Repo } from '@agor/core/types';
 import { DeleteOutlined, EditOutlined, FolderOutlined, PlusOutlined } from '@ant-design/icons';
 import type { RadioChangeEvent } from 'antd';
-import { Button, Card, Empty, Form, Input, Modal, Radio, Space, Typography } from 'antd';
+import { Button, Card, Empty, Form, Modal, Space, Typography } from 'antd';
 import { useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
-import { extractSlugFromPath, extractSlugFromUrl } from '@/utils/repoSlug';
+import { RepoFormFields } from '../forms/RepoFormFields';
 import { Tag } from '../Tag';
 
 interface ReposTableProps {
@@ -31,28 +31,6 @@ export const ReposTable: React.FC<ReposTableProps> = ({
   const [repoToDelete, setRepoToDelete] = useState<Repo | null>(null);
 
   const isEditing = !!editingRepo;
-  const isLocalMode = repoMode === 'local';
-
-  // Auto-extract slug when URL changes in repo form
-  const handleUrlChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const url = e.target.value;
-    if (url) {
-      const slug = extractSlugFromUrl(url);
-      if (slug) {
-        repoForm.setFieldsValue({ slug });
-      }
-    }
-  };
-
-  const handlePathChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const path = e.target.value;
-    if (path) {
-      const slug = extractSlugFromPath(path);
-      if (slug) {
-        repoForm.setFieldsValue({ slug });
-      }
-    }
-  };
 
   const handleOpenDeleteModal = (repo: Repo) => {
     setRepoToDelete(repo);
@@ -71,7 +49,6 @@ export const ReposTable: React.FC<ReposTableProps> = ({
     setEditingRepo(null);
     setRepoMode('remote');
     repoForm.resetFields();
-    // Set default values for new repo
     repoForm.setFieldsValue({
       default_branch: 'main',
     });
@@ -91,7 +68,6 @@ export const ReposTable: React.FC<ReposTableProps> = ({
   const handleSaveRepo = () => {
     repoForm.validateFields().then((values) => {
       if (isEditing && editingRepo) {
-        // Update existing repo
         const updates: Partial<Repo> = {
           slug: values.slug,
         };
@@ -138,16 +114,12 @@ export const ReposTable: React.FC<ReposTableProps> = ({
     });
   };
 
-  const slugHelperText = isLocalMode
-    ? 'Provide org/repo format (e.g., local/myapp). Agor will try to infer from git remotes if available.'
-    : 'Auto-detected from URL (editable). Format: org/repo (dots allowed)';
-
   const modalTitle = isEditing
     ? 'Edit Repository'
-    : isLocalMode
+    : repoMode === 'local'
       ? 'Add Local Repository'
       : 'Clone Repository';
-  const modalOkText = isEditing ? 'Save' : isLocalMode ? 'Add' : 'Clone';
+  const modalOkText = isEditing ? 'Save' : repoMode === 'local' ? 'Add' : 'Clone';
 
   return (
     <div>
@@ -279,80 +251,12 @@ export const ReposTable: React.FC<ReposTableProps> = ({
         okText={modalOkText}
       >
         <Form form={repoForm} layout="vertical" style={{ marginTop: 16 }}>
-          <Form.Item label="Repository Type">
-            <Radio.Group
-              value={repoMode}
-              onChange={handleModeChange}
-              disabled={isEditing}
-              buttonStyle="solid"
-            >
-              <Radio.Button value="remote">Remote (clone)</Radio.Button>
-              <Radio.Button value="local">Local (existing)</Radio.Button>
-            </Radio.Group>
-          </Form.Item>
-
-          {!isEditing && !isLocalMode && (
-            <Form.Item
-              label="Repository URL"
-              name="url"
-              rules={[
-                { required: !isEditing, message: 'Please enter a git repository URL' },
-                {
-                  pattern:
-                    /^((ssh:\/\/)?git@[\w.-]+(:\d+)?[:/][\w./-]+|https?:\/\/[\w.-]+(:\d+)?\/[\w./-]+)$/,
-                  message:
-                    'Please enter a valid git URL (e.g., git@github.com:org/repo.git or https://github.com/org/repo.git)',
-                },
-              ]}
-              extra="HTTPS or SSH URL (e.g., git@github.com:org/repo.git)"
-            >
-              <Input
-                placeholder="https://github.com/apache/superset.git"
-                onChange={handleUrlChange}
-                autoFocus
-              />
-            </Form.Item>
-          )}
-
-          {!isEditing && isLocalMode && (
-            <Form.Item
-              label="Local Repository Path"
-              name="path"
-              rules={[
-                { required: true, message: 'Please enter an absolute path to a git repository' },
-              ]}
-              extra="Absolute path on this machine (supports ~/ expansion). Example: ~/code/my-app"
-            >
-              <Input placeholder="~/code/my-app" onChange={handlePathChange} autoFocus />
-            </Form.Item>
-          )}
-
-          <Form.Item
-            label="Repository Slug"
-            name="slug"
-            rules={[
-              { required: true, message: 'Please enter a slug' },
-              {
-                pattern: /^[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+$/,
-                message: 'Slug must be in org/repo format (supports dots, hyphens, underscores)',
-              },
-            ]}
-            extra={slugHelperText}
-          >
-            <Input placeholder="apache/superset" disabled={isEditing} />
-          </Form.Item>
-
-          {!isLocalMode && (
-            <Form.Item
-              label="Default Branch"
-              name="default_branch"
-              initialValue="main"
-              rules={[{ required: true, message: 'Please enter the default branch' }]}
-              extra="The main branch to base new worktrees on (e.g., 'main', 'master', 'develop')"
-            >
-              <Input placeholder="main" />
-            </Form.Item>
-          )}
+          <RepoFormFields
+            form={repoForm}
+            mode={isEditing ? 'edit' : 'create'}
+            repoMode={repoMode}
+            onRepoModeChange={handleModeChange}
+          />
         </Form>
       </Modal>
 
@@ -374,7 +278,6 @@ export const ReposTable: React.FC<ReposTableProps> = ({
             </Typography.Text>
 
             {repoToDelete.repo_type === 'local' ? (
-              // For local repos, only show database removal option
               <Card style={{ marginBottom: 8 }} styles={{ body: { padding: 16 } }}>
                 <Space orientation="vertical" size={8} style={{ width: '100%' }}>
                   <Typography.Text strong>Remove from Agor</Typography.Text>
@@ -393,7 +296,6 @@ export const ReposTable: React.FC<ReposTableProps> = ({
                 </Space>
               </Card>
             ) : (
-              // For remote repos, show both options
               <>
                 <Card style={{ marginBottom: 8 }} styles={{ body: { padding: 16 } }}>
                   <Space orientation="vertical" size={8} style={{ width: '100%' }}>

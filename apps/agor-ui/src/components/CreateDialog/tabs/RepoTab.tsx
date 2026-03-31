@@ -1,7 +1,7 @@
 import type { RadioChangeEvent } from 'antd';
-import { Form, Input, Radio, Typography } from 'antd';
+import { Form } from 'antd';
 import { useCallback, useState } from 'react';
-import { extractSlugFromPath, extractSlugFromUrl } from '@/utils/repoSlug';
+import { RepoFormFields } from '../../forms/RepoFormFields';
 
 export interface RepoTabResult {
   mode: 'remote' | 'local';
@@ -17,7 +17,6 @@ export interface RepoTabProps {
 export const RepoTab: React.FC<RepoTabProps> = ({ onValidityChange, formRef }) => {
   const [form] = Form.useForm();
   const [repoMode, setRepoMode] = useState<'remote' | 'local'>('remote');
-  const isLocal = repoMode === 'local';
 
   const handleValuesChange = useCallback(() => {
     setTimeout(() => {
@@ -29,22 +28,6 @@ export const RepoTab: React.FC<RepoTabProps> = ({ onValidityChange, formRef }) =
       }
     }, 0);
   }, [form, onValidityChange, repoMode]);
-
-  const handleUrlChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const url = e.target.value;
-    if (url) {
-      const slug = extractSlugFromUrl(url);
-      if (slug) form.setFieldsValue({ slug });
-    }
-  };
-
-  const handlePathChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const path = e.target.value;
-    if (path) {
-      const slug = extractSlugFromPath(path);
-      if (slug) form.setFieldsValue({ slug });
-    }
-  };
 
   const handleModeChange = (e: RadioChangeEvent) => {
     const value = e.target.value as 'remote' | 'local';
@@ -85,81 +68,12 @@ export const RepoTab: React.FC<RepoTabProps> = ({ onValidityChange, formRef }) =
       onValuesChange={handleValuesChange}
       initialValues={{ default_branch: 'main' }}
     >
-      <Form.Item label="Repository Type">
-        <Radio.Group value={repoMode} onChange={handleModeChange} buttonStyle="solid">
-          <Radio.Button value="remote">Remote (clone)</Radio.Button>
-          <Radio.Button value="local">Local (existing)</Radio.Button>
-        </Radio.Group>
-      </Form.Item>
-
-      {!isLocal && (
-        <Form.Item
-          label="Repository URL"
-          name="url"
-          rules={[
-            { required: true, message: 'Please enter a git repository URL' },
-            {
-              pattern:
-                /^((ssh:\/\/)?git@[\w.-]+(:\d+)?[:/][\w./-]+|https?:\/\/[\w.-]+(:\d+)?\/[\w./-]+)$/,
-              message: 'Please enter a valid git URL',
-            },
-          ]}
-          extra="HTTPS or SSH URL (e.g., git@github.com:org/repo.git)"
-        >
-          <Input
-            placeholder="https://github.com/apache/superset.git"
-            onChange={handleUrlChange}
-            autoFocus
-          />
-        </Form.Item>
-      )}
-
-      {isLocal && (
-        <Form.Item
-          label="Local Repository Path"
-          name="path"
-          rules={[{ required: true, message: 'Please enter an absolute path' }]}
-          extra="Absolute path on this machine (supports ~/ expansion)"
-        >
-          <Input placeholder="~/code/my-app" onChange={handlePathChange} autoFocus />
-        </Form.Item>
-      )}
-
-      <Form.Item
-        label="Repository Slug"
-        name="slug"
-        rules={[
-          { required: !isLocal, message: 'Please enter a slug' },
-          {
-            pattern: /^[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+$/,
-            message: 'Slug must be in org/repo format',
-          },
-        ]}
-        extra={
-          isLocal
-            ? 'Provide org/repo format (e.g., local/myapp)'
-            : 'Auto-detected from URL (editable)'
-        }
-      >
-        <Input placeholder="apache/superset" />
-      </Form.Item>
-
-      {!isLocal && (
-        <Form.Item
-          label="Default Branch"
-          name="default_branch"
-          rules={[{ required: true, message: 'Please enter the default branch' }]}
-          extra="The main branch to base new worktrees on"
-        >
-          <Input placeholder="main" />
-        </Form.Item>
-      )}
-
-      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-        {isLocal
-          ? 'Link an existing git clone on this machine.'
-          : 'The repository will be cloned to the server.'}
-      </Typography.Text>
+      <RepoFormFields
+        form={form}
+        mode="create"
+        repoMode={repoMode}
+        onRepoModeChange={handleModeChange}
+      />
     </Form>
   );
 };
