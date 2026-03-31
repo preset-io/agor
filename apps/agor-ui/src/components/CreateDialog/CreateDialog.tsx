@@ -20,13 +20,13 @@ type ActiveTab = 'worktree' | 'assistant' | 'board' | 'repository';
 const PURPOSE_TEXT: Record<ActiveTab, React.ReactNode> = {
   worktree: (
     <>
-      Worktrees are isolated working directories on their own branch, sharing the same repo history
-      (
+      A worktree (built on{' '}
       <a href="https://git-scm.com/docs/git-worktree" target="_blank" rel="noopener noreferrer">
         git worktrees
       </a>
-      ). Perfect for coding tasks — generally ephemeral, with the lifecycle of a feature. Can
-      include multiple AI sessions.
+      ) is essentially a place in the filesystem representing an isolated development branch. This
+      is where one or more coding sessions take place. In Agor, they're generally ephemeral and
+      follow the lifecycle of a given feature.
     </>
   ),
   assistant:
