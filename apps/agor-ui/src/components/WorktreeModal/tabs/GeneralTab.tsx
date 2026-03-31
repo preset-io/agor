@@ -213,11 +213,11 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
                 allowClear
                 disabled={!canEdit}
                 options={boards
+                  .sort((a, b) => a.name.localeCompare(b.name))
                   .map((board) => ({
                     value: board.board_id,
                     label: `${board.icon || '📋'} ${board.name}`,
-                  }))
-                  .sort((a, b) => a.label.localeCompare(b.label))}
+                  }))}
               />
             </Form.Item>
 

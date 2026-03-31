@@ -104,11 +104,11 @@ export const WorktreeFormFields: React.FC<WorktreeFormFieldsProps> = ({
                 .includes(input.toLowerCase())
             }
             options={mapToArray(boardById)
+              .sort((a: Board, b: Board) => a.name.localeCompare(b.name))
               .map((board: Board) => ({
                 value: board.board_id,
                 label: `${board.icon || '📋'} ${board.name}`,
-              }))
-              .sort((a, b) => a.label.localeCompare(b.label))}
+              }))}
             onChange={onFormChange}
           />
         </Form.Item>
