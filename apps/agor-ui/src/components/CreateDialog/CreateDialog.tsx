@@ -5,7 +5,7 @@ import {
   FolderOutlined,
   RobotOutlined,
 } from '@ant-design/icons';
-import { Button, Modal, Tabs, Typography, theme } from 'antd';
+import { Alert, Button, Modal, Tabs } from 'antd';
 import { useCallback, useRef, useState } from 'react';
 import type { AssistantTabResult } from './tabs/AssistantTab';
 import { AssistantTab } from './tabs/AssistantTab';
@@ -64,7 +64,6 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
   onCreateLocalRepo,
   onCreateAssistant,
 }) => {
-  const { token } = theme.useToken();
   const [activeTab, setActiveTab] = useState<ActiveTab>(defaultTab);
   const [isValid, setIsValid] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -147,9 +146,7 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
       ),
       children: (
         <div>
-          <Typography.Paragraph type="secondary" style={{ fontSize: 13, marginBottom: 16 }}>
-            {PURPOSE_TEXT.worktree}
-          </Typography.Paragraph>
+          <Alert type="info" message={PURPOSE_TEXT.worktree} style={{ marginBottom: 16 }} />
           <WorktreeTab
             repoById={repoById}
             currentBoardId={currentBoardId}
@@ -170,9 +167,7 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
       ),
       children: (
         <div>
-          <Typography.Paragraph type="secondary" style={{ fontSize: 13, marginBottom: 16 }}>
-            {PURPOSE_TEXT.assistant}
-          </Typography.Paragraph>
+          <Alert type="info" message={PURPOSE_TEXT.assistant} style={{ marginBottom: 16 }} />
           <AssistantTab
             repoById={repoById}
             boardById={boardById}
@@ -192,9 +187,7 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
       ),
       children: (
         <div>
-          <Typography.Paragraph type="secondary" style={{ fontSize: 13, marginBottom: 16 }}>
-            {PURPOSE_TEXT.board}
-          </Typography.Paragraph>
+          <Alert type="info" message={PURPOSE_TEXT.board} style={{ marginBottom: 16 }} />
           <BoardTab onValidityChange={handleValidityChange} formRef={boardFormRef} />
         </div>
       ),
@@ -209,9 +202,7 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
       ),
       children: (
         <div>
-          <Typography.Paragraph type="secondary" style={{ fontSize: 13, marginBottom: 16 }}>
-            {PURPOSE_TEXT.repository}
-          </Typography.Paragraph>
+          <Alert type="info" message={PURPOSE_TEXT.repository} style={{ marginBottom: 16 }} />
           <RepoTab onValidityChange={handleValidityChange} formRef={repoFormRef} />
         </div>
       ),
@@ -245,13 +236,8 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
       <Tabs
         activeKey={activeTab}
         onChange={handleTabChange}
-        tabPosition="left"
         items={tabItems}
-        style={{ minHeight: 400 }}
-        tabBarStyle={{
-          width: 140,
-          borderRight: `1px solid ${token.colorBorderSecondary}`,
-        }}
+        style={{ minHeight: 360 }}
       />
     </Modal>
   );
