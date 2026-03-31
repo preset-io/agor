@@ -209,12 +209,19 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
   /**
    * Find all worktrees (with optional filters)
    *
+   * By default, returns ALL worktrees including archived. This matches the generic
+   * Repository interface contract and allows the DrizzleService adapter to apply
+   * client-side filtering (e.g., `archived: true` or `archived: false` query params).
+   *
+   * Callers that explicitly want to exclude archived worktrees should pass
+   * `{ includeArchived: false }`.
+   *
    * @param filter - Optional filters (repo_id, includeArchived)
    * @param filter.repo_id - Filter by repository ID
-   * @param filter.includeArchived - Include archived worktrees (default: false)
+   * @param filter.includeArchived - Include archived worktrees (default: true)
    */
   async findAll(filter?: { repo_id?: UUID; includeArchived?: boolean }): Promise<Worktree[]> {
-    const includeArchived = filter?.includeArchived ?? false;
+    const includeArchived = filter?.includeArchived ?? true;
 
     // Build where conditions
     const conditions = [];
@@ -489,9 +496,28 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
    * (which returns all worktrees without filtering).
    *
    * @param userId - User ID to check access for
+   * @param filter - Optional filters
+   * @param filter.archived - If true, return only archived. If false, only non-archived. If undefined, return all.
    * @returns Array of accessible worktrees
    */
-  async findAccessibleWorktrees(userId: UUID): Promise<Worktree[]> {
+  async findAccessibleWorktrees(
+    userId: UUID,
+    filter?: { archived?: boolean }
+  ): Promise<Worktree[]> {
+    const conditions = [
+      or(
+        isNotNull(worktreeOwners.user_id),
+        inArray(worktrees.others_can, ['view', 'prompt', 'all'])
+      ),
+    ];
+
+    // Apply archived filter at SQL level
+    if (filter?.archived === true) {
+      conditions.push(eq(worktrees.archived, true));
+    } else if (filter?.archived === false) {
+      conditions.push(eq(worktrees.archived, false));
+    }
+
     const rows = await select(this.db, getTableColumns(worktrees))
       .from(worktrees)
       .leftJoin(
@@ -501,12 +527,7 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
           eq(worktreeOwners.user_id, userId)
         )
       )
-      .where(
-        or(
-          isNotNull(worktreeOwners.user_id),
-          inArray(worktrees.others_can, ['view', 'prompt', 'all'])
-        )
-      )
+      .where(and(...conditions))
       .all();
 
     return rows.map((row: WorktreeRow) => this.rowToWorktree(row));

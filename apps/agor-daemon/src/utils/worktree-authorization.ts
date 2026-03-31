@@ -243,15 +243,31 @@ export function scopeWorktreeQuery(worktreeRepo: WorktreeRepository) {
     }
 
     // Use optimized repository method (single SQL query with JOIN)
-    const accessibleWorktrees = await worktreeRepo.findAccessibleWorktrees(userId);
+    const query = context.params.query ?? {};
+    const accessibleWorktrees = await worktreeRepo.findAccessibleWorktrees(userId, {
+      archived: query.archived,
+    });
+
+    // Apply client-side filtering for non-special query params (repo_id, name, etc.)
+    let filtered = accessibleWorktrees;
+    for (const [key, value] of Object.entries(query)) {
+      if (key.startsWith('$') || key === 'archived') continue; // Skip operators and already-applied filters
+      // biome-ignore lint/suspicious/noExplicitAny: Dynamic property access for generic query filtering
+      filtered = filtered.filter((item: any) => item[key] === value);
+    }
+
+    // Apply pagination
+    const limit = query.$limit ?? filtered.length;
+    const skip = query.$skip ?? 0;
+    const paginated = filtered.slice(skip, skip + limit);
 
     // Set result directly to bypass default query
     // This prevents the N+1 problem from the old filterWorktreesByPermission approach
     context.result = {
-      total: accessibleWorktrees.length,
-      limit: context.params.query?.$limit ?? accessibleWorktrees.length,
-      skip: context.params.query?.$skip ?? 0,
-      data: accessibleWorktrees,
+      total: filtered.length,
+      limit,
+      skip,
+      data: paginated,
     };
 
     return context;

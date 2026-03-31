@@ -154,8 +154,8 @@ export class SchedulerService {
    * Uses repository directly (bypasses FeathersJS service layer and auth hooks)
    */
   private async getEnabledSchedules(): Promise<Worktree[]> {
-    // Fetch all worktrees using repository (no auth checks, we're in the same process)
-    const allWorktrees = await this.worktreeRepo.findAll();
+    // Fetch non-archived worktrees using repository (no auth checks, we're in the same process)
+    const allWorktrees = await this.worktreeRepo.findAll({ includeArchived: false });
 
     // Filter to only enabled schedules
     const enabledSchedules = allWorktrees.filter((wt) => wt.schedule_enabled === true);

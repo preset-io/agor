@@ -223,11 +223,11 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
     // Get all data from repository
     let data = await this.repository.findAll();
 
-    // Get total count before filtering
-    const total = data.length;
-
     // Apply filters
     data = this.filterData(data, query);
+
+    // Get total count after filtering (reflects the actual matching records)
+    const total = data.length;
 
     // Apply sorting
     data = this.sortData(data, query.$sort);
