@@ -98,6 +98,30 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
   }
 
   /**
+   * Attach explicit MCP server IDs to a session.
+   * Emits WebSocket events so the UI updates in real-time.
+   */
+  private async setMCPServers(
+    sessionId: SessionID,
+    serverIds: string[],
+    label: string
+  ): Promise<void> {
+    for (const serverId of serverIds) {
+      try {
+        await this.sessionMCPRepo.addServer(sessionId, serverId as MCPServerID);
+        this.app?.service('session-mcp-servers')?.emit?.('created', {
+          session_id: sessionId,
+          mcp_server_id: serverId,
+          enabled: true,
+          added_at: new Date(),
+        });
+      } catch {
+        console.warn(`Skipped MCP server ${serverId} during ${label}`);
+      }
+    }
+  }
+
+  /**
    * Copy MCP servers from a source session to a target session.
    * Emits WebSocket events so the UI updates in real-time.
    */
@@ -293,8 +317,6 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
       };
     }
 
-    // MCP server attachment is handled after session creation (copies from parent)
-
     // Build callback configuration
     // callback_session_id is the single source of truth for where to deliver callbacks.
     // Default to parent session when callbacks are enabled (which is the default for spawn).
@@ -348,12 +370,17 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     // Cast spawnedSession to Session to handle return type (create returns Session | Session[])
     const session = spawnedSession as Session;
 
-    // Copy MCP servers from parent session to spawned session
-    await this.copyMCPServers(
-      parent.session_id as SessionID,
-      session.session_id as SessionID,
-      'spawn'
-    );
+    // MCP servers: explicit mcpServerIds > copy from parent
+    // An explicit empty array means "no MCPs" — does NOT fall through to parent.
+    if (data.mcpServerIds !== undefined) {
+      await this.setMCPServers(session.session_id as SessionID, data.mcpServerIds, 'spawn');
+    } else {
+      await this.copyMCPServers(
+        parent.session_id as SessionID,
+        session.session_id as SessionID,
+        'spawn'
+      );
+    }
 
     // Update parent's children list
     const parentChildren = parent.genealogy?.children || [];

@@ -183,6 +183,12 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           .optional()
           .describe('Extra instructions appended to spawn prompt'),
         taskId: z.string().optional().describe('Optional task ID to link the spawned session to'),
+        mcpServerIds: z
+          .array(z.string())
+          .optional()
+          .describe(
+            'MCP server IDs to attach. Overrides parent session inheritance. Omit to inherit from parent. Pass empty array for no MCPs.'
+          ),
       }),
     },
     async (args) => {
@@ -195,6 +201,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         includeOriginalPrompt: args.includeOriginalPrompt,
         extraInstructions: args.extraInstructions,
         task_id: args.taskId,
+        mcpServerIds: args.mcpServerIds,
       };
 
       const childSession = await (
@@ -244,6 +251,12 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           ),
         title: z.string().optional().describe('Session title (for fork/subsession only)'),
         taskId: z.string().optional().describe('Fork/spawn point task ID (optional)'),
+        mcpServerIds: z
+          .array(z.string())
+          .optional()
+          .describe(
+            'MCP server IDs for subsession mode. Overrides parent inheritance. Omit to inherit from parent. Pass empty array for no MCPs.'
+          ),
       }),
     },
     async (args) => {
@@ -307,6 +320,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       } else if (mode === 'subsession') {
         const spawnData: Partial<import('@agor/core/types').SpawnConfig> = {
           prompt: args.prompt,
+          mcpServerIds: args.mcpServerIds,
         };
         if (args.title) spawnData.title = args.title;
         if (args.agenticTool) spawnData.agent = args.agenticTool as AgenticToolName;
