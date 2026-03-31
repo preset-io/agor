@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y \
     jq \
     less \
     tree \
+    ripgrep \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Zellij (terminal multiplexer)
