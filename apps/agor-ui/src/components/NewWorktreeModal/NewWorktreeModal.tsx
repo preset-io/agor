@@ -2,21 +2,11 @@ import type { Repo } from '@agor/core/types';
 import { Button, Form, Modal } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
+import type { WorktreeTabConfig } from '../CreateDialog/tabs/WorktreeTab';
 import { WorktreeFormFields } from '../WorktreeFormFields';
 
-export interface NewWorktreeConfig {
-  repoId: string;
-  name: string;
-  ref: string;
-  refType?: 'branch' | 'tag';
-  createBranch: boolean;
-  sourceBranch: string;
-  pullLatest: boolean;
-  issue_url?: string;
-  pull_request_url?: string;
-  board_id?: string; // Board to add worktree to after creation
-  position?: { x: number; y: number }; // Position on board (defaults to center of viewport)
-}
+/** @deprecated Use WorktreeTabConfig directly. Kept as alias for backward compat. */
+export type NewWorktreeConfig = WorktreeTabConfig;
 
 export interface NewWorktreeModalProps {
   open: boolean;

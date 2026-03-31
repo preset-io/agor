@@ -49,7 +49,6 @@ import { EnvironmentLogsModal } from '../EnvironmentLogsModal';
 import { EventStreamPanel } from '../EventStreamPanel';
 import { NewSessionButton } from '../NewSessionButton';
 import { type NewSessionConfig, NewSessionModal } from '../NewSessionModal';
-import type { NewWorktreeConfig } from '../NewWorktreeModal';
 import { SessionCanvas, type SessionCanvasRef } from '../SessionCanvas';
 import { SessionPanel } from '../SessionPanel';
 import { SessionSettingsModal } from '../SessionSettingsModal';
@@ -399,7 +398,7 @@ export const App: React.FC<AppProps> = ({
     }
   };
 
-  const handleCreateWorktree = async (config: NewWorktreeConfig) => {
+  const handleCreateWorktree = async (config: WorktreeTabConfig) => {
     const worktree = await onCreateWorktree?.(config.repoId, {
       name: config.name,
       ref: config.ref,
@@ -419,10 +418,6 @@ export const App: React.FC<AppProps> = ({
     }
 
     setCreateDialogOpen(false);
-  };
-
-  const handleCreateWorktreeFromDialog = async (config: WorktreeTabConfig) => {
-    await handleCreateWorktree(config);
   };
 
   const handleCreateAssistant = async (result: AssistantTabResult) => {
@@ -1038,7 +1033,7 @@ export const App: React.FC<AppProps> = ({
             boardById={boardById}
             currentBoardId={currentBoardId}
             defaultPosition={newWorktreeDefaultPosition || undefined}
-            onCreateWorktree={handleCreateWorktreeFromDialog}
+            onCreateWorktree={handleCreateWorktree}
             onCreateBoard={(board) => onCreateBoard?.(board)}
             onCreateRepo={(data) => onCreateRepo?.(data)}
             onCreateLocalRepo={(data) => onCreateLocalRepo?.(data)}
