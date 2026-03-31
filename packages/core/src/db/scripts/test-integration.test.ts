@@ -349,7 +349,7 @@ describe('Task Repository Integration', () => {
         ref_at_start: 'main',
         sha_at_start: 'abc123',
       },
-      model: 'claude-sonnet-4-5',
+      model: 'claude-sonnet-4-6',
       tool_use_count: 5,
     });
 
@@ -395,7 +395,7 @@ describe('Task Repository Integration', () => {
           start_timestamp: new Date().toISOString(),
         },
         git_state: { ref_at_start: 'main', sha_at_start: 'abc' },
-        model: 'claude-sonnet-4-5',
+        model: 'claude-sonnet-4-6',
       });
 
     await createTask(session1.session_id, 'Task 1');
@@ -440,7 +440,7 @@ describe('Task Repository Integration', () => {
         start_timestamp: new Date().toISOString(),
       },
       git_state: { ref_at_start: 'main', sha_at_start: 'abc' },
-      model: 'claude-sonnet-4-5',
+      model: 'claude-sonnet-4-6',
     });
 
     const completedAt = new Date().toISOString();
@@ -867,7 +867,7 @@ describe('Edge Cases and Data Integrity', () => {
         start_timestamp: timestamp,
       },
       git_state: { ref_at_start: 'main', sha_at_start: 'abc' },
-      model: 'claude-sonnet-4-5',
+      model: 'claude-sonnet-4-6',
     });
 
     expect(task.message_range.start_timestamp).toBe(timestamp);
@@ -905,7 +905,7 @@ describe('Edge Cases and Data Integrity', () => {
         start_timestamp: new Date().toISOString(),
       },
       git_state: { ref_at_start: 'main', sha_at_start: 'abc' },
-      model: 'claude-sonnet-4-5',
+      model: 'claude-sonnet-4-6',
     });
 
     expect(task.description).toBe(description);

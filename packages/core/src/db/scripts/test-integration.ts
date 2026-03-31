@@ -156,7 +156,7 @@ async function testTaskRepository(db: ReturnType<typeof createDatabase>, session
       ref_at_start: 'main',
       sha_at_start: 'abc123',
     },
-    model: 'claude-sonnet-4-5',
+    model: 'claude-sonnet-4-6',
     tool_use_count: 5,
   });
 

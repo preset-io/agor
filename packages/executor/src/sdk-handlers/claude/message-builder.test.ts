@@ -553,7 +553,7 @@ describe('createAssistantMessage', () => {
       undefined,
       undefined,
       0,
-      'claude-sonnet-4-5',
+      'claude-sonnet-4-6',
       messagesService
     );
 
@@ -563,7 +563,7 @@ describe('createAssistantMessage', () => {
     expect(result.role).toBe(MessageRole.ASSISTANT);
     expect(result.content).toEqual(content);
     expect(result.content_preview).toBe('Hello, I am Claude!');
-    expect(result.metadata?.model).toBe('claude-sonnet-4-5');
+    expect(result.metadata?.model).toBe('claude-sonnet-4-6');
   });
 
   it('should extract text from multiple text blocks', async () => {
@@ -715,7 +715,7 @@ describe('createAssistantMessage', () => {
       messagesService
     );
 
-    expect(result.metadata?.model).toBe('claude-sonnet-4-5'); // DEFAULT_CLAUDE_MODEL
+    expect(result.metadata?.model).toBe('claude-sonnet-4-6'); // DEFAULT_CLAUDE_MODEL
   });
 
   it('should update task with resolved model', async () => {
@@ -755,7 +755,7 @@ describe('createAssistantMessage', () => {
       undefined,
       undefined,
       0,
-      'claude-sonnet-4-5',
+      'claude-sonnet-4-6',
       messagesService,
       tasksService
     );
@@ -800,7 +800,7 @@ describe('createAssistantMessage', () => {
       undefined,
       taskId,
       0,
-      'claude-sonnet-4-5',
+      'claude-sonnet-4-6',
       messagesService,
       undefined
     );

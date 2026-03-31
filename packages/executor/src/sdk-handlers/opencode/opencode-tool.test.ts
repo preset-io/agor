@@ -143,7 +143,7 @@ describe('OpenCodeTool', () => {
       tool.setSessionContext(
         'agor-session-1',
         'opencode-session-1',
-        'claude-sonnet-4-5',
+        'claude-sonnet-4-6',
         'anthropic',
         '/path/to/worktree',
         'mcp-token-abc'
@@ -153,7 +153,7 @@ describe('OpenCodeTool', () => {
       const ctx = (tool as any).getSessionContext('agor-session-1');
       expect(ctx).toBeDefined();
       expect(ctx.opencodeSessionId).toBe('opencode-session-1');
-      expect(ctx.model).toBe('claude-sonnet-4-5');
+      expect(ctx.model).toBe('claude-sonnet-4-6');
       expect(ctx.provider).toBe('anthropic');
       expect(ctx.worktreePath).toBe('/path/to/worktree');
       expect(ctx.mcpToken).toBe('mcp-token-abc');

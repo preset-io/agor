@@ -24,56 +24,50 @@ export interface ClaudeModel {
  */
 export const AVAILABLE_CLAUDE_MODEL_ALIASES: ClaudeModel[] = [
   {
-    id: 'claude-sonnet-4-5',
-    displayName: 'Claude Sonnet 4.5',
+    id: 'claude-sonnet-4-6',
+    displayName: 'Claude Sonnet 4.6',
     family: 'claude-4',
-    description: 'Best for coding',
+    description: 'Best combination of speed and intelligence',
   },
   {
     id: 'claude-opus-4-6',
     displayName: 'Claude Opus 4.6',
     family: 'claude-4',
-    description: 'Latest most capable model',
+    description: 'Most intelligent model for agents and coding',
+  },
+  {
+    id: 'claude-sonnet-4-5',
+    displayName: 'Claude Sonnet 4.5',
+    family: 'claude-4',
+    description: 'Fast and capable',
   },
   {
     id: 'claude-opus-4-5',
     displayName: 'Claude Opus 4.5',
     family: 'claude-4',
-    description: 'Most capable model',
-  },
-  {
-    id: 'claude-opus-4-1',
-    displayName: 'Claude Opus 4.1',
-    family: 'claude-4',
     description: 'High-performance reasoning',
-  },
-  {
-    id: 'claude-sonnet-4-0',
-    displayName: 'Claude Sonnet 4.0',
-    family: 'claude-4',
-    description: 'Balanced performance',
-  },
-  {
-    id: 'claude-3-7-sonnet-latest',
-    displayName: 'Claude 3.7 Sonnet',
-    family: 'claude-3.7',
-    description: 'Fast and balanced',
   },
   {
     id: 'claude-haiku-4-5',
     displayName: 'Claude Haiku 4.5',
     family: 'claude-4',
-    description: 'Fastest response',
+    description: 'Fastest with near-frontier intelligence',
   },
   {
-    id: 'claude-3-5-haiku-latest',
-    displayName: 'Claude 3.5 Haiku',
-    family: 'claude-3.5',
-    description: 'Fast and efficient',
+    id: 'claude-opus-4-1',
+    displayName: 'Claude Opus 4.1',
+    family: 'claude-4',
+    description: 'Legacy reasoning model',
+  },
+  {
+    id: 'claude-sonnet-4-0',
+    displayName: 'Claude Sonnet 4.0',
+    family: 'claude-4',
+    description: 'Legacy balanced model',
   },
 ];
 
 /**
- * Default Claude model for new sessions (uses Sonnet 4.5 for best coding performance)
+ * Default Claude model for new sessions (uses Sonnet 4.6 for best speed/intelligence balance)
  */
-export const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-5';
+export const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-6';

@@ -102,7 +102,7 @@ export class OpenCodeTool implements ITool {
    *
    * @param agorSessionId - Agor session ID
    * @param opencodeSessionId - OpenCode session ID
-   * @param model - Model identifier (e.g., 'gpt-4o', 'claude-sonnet-4-5')
+   * @param model - Model identifier (e.g., 'gpt-4o', 'claude-sonnet-4-6')
    * @param provider - Provider ID (e.g., 'openai', 'opencode'). If omitted, uses legacy mapping.
    * @param worktreePath - Worktree directory path for project-scoped operations
    * @param mcpToken - MCP token for Agor MCP server injection

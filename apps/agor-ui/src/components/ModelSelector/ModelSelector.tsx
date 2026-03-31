@@ -120,7 +120,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         defaultModel = 'default';
       } else {
         // claude-code (opencode is handled earlier in the component)
-        defaultModel = 'claude-sonnet-4-5-20250929';
+        defaultModel = 'claude-sonnet-4-6';
       }
       onChange({
         mode: newMode,

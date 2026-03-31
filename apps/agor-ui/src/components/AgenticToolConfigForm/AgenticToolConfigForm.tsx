@@ -65,7 +65,7 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
         label={modelLabel}
         help={
           showHelpText && agenticTool === 'claude-code'
-            ? 'Choose which Claude model to use (defaults to claude-sonnet-4-5-latest)'
+            ? 'Choose which Claude model to use (defaults to claude-sonnet-4-6)'
             : undefined
         }
       >

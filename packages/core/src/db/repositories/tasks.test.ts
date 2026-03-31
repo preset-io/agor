@@ -38,7 +38,7 @@ function createTaskData(overrides?: Partial<Task>): Partial<Task> {
       ref_at_start: 'main',
       sha_at_start: 'abc123',
     },
-    model: 'claude-sonnet-4-5',
+    model: 'claude-sonnet-4-6',
     ...overrides,
   };
 }

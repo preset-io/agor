@@ -105,7 +105,7 @@ export function extractTasksFromMessages(
         ref_at_start: 'unknown', // No git tracking in Claude Code transcripts
         sha_at_start: 'unknown', // No git tracking in Claude Code transcripts
       },
-      model: userMessage.metadata?.model || 'claude-sonnet-4-5',
+      model: userMessage.metadata?.model || 'claude-sonnet-4-6',
       tool_use_count: toolUseCount,
       created_at: startTimestamp,
       completed_at: endTimestamp,
