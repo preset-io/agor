@@ -5,7 +5,7 @@
  * Automatically loads CLAUDE.md and uses preset system prompts matching Claude Code CLI.
  */
 
-import type { PermissionMode } from '@agor/core/sdk';
+import type { PermissionMode, SDKResultMessage } from '@agor/core/sdk';
 import type {
   MCPServerRepository,
   MessagesRepository,
@@ -160,7 +160,7 @@ This is a CLI-only command that only works in the standalone Claude Code termina
               output_tokens: 0,
               cache_creation_input_tokens: 0,
               cache_read_input_tokens: 0,
-            },
+            } as SDKResultMessage['usage'],
             modelUsage: {},
             permission_denials: [],
             uuid: '00000000-0000-0000-0000-000000000000',
