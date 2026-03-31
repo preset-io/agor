@@ -1,5 +1,5 @@
 import type { AgorClient } from '@agor/core/api';
-import type { AssistantConfig, Board, Repo, Session, Worktree } from '@agor/core/types';
+import type { Board, Repo, Session, Worktree } from '@agor/core/types';
 import { getAssistantConfig, isAssistant } from '@agor/core/types';
 import {
   DeleteOutlined,
@@ -9,15 +9,15 @@ import {
   RobotOutlined,
 } from '@ant-design/icons';
 import { Button, Empty, Form, Input, Modal, Space, Table, Tooltip, Typography, theme } from 'antd';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
+import { useAssistantForm } from '@/hooks/useAssistantForm';
+import { useFrameworkRepo } from '@/hooks/useFrameworkRepo';
+import { createAssistantWorktree } from '@/utils/assistantCreation';
 import { mapToArray } from '@/utils/mapHelpers';
-import { slugify } from '@/utils/repoSlug';
 import { ArchiveDeleteWorktreeModal } from '../ArchiveDeleteWorktreeModal';
 import { AssistantFormFields, CREATE_NEW_BOARD } from '../forms/AssistantFormFields';
 import type { WorktreeUpdate } from '../WorktreeModal/tabs/GeneralTab';
 import { renderEnvCell } from './WorktreeEnvColumn';
-
-const FRAMEWORK_REPO_SLUG = 'preset-io/agor-assistant';
 
 interface AssistantsTableProps {
   worktreeById: Map<string, Worktree>;
@@ -68,52 +68,23 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
   const boards = mapToArray(boardById);
   const { token } = theme.useToken();
 
-  const frameworkRepo = useMemo(
-    () =>
-      repos.find(
-        (r) =>
-          r.slug === FRAMEWORK_REPO_SLUG ||
-          r.remote_url?.includes('agor-assistant') ||
-          r.remote_url?.includes('agor-openclaw')
-      ),
-    [repos]
-  );
+  const frameworkRepo = useFrameworkRepo(repos);
+  const {
+    form,
+    isFormValid,
+    customRepoSelected,
+    setCustomRepoSelected,
+    validateForm,
+    handleDisplayNameChange,
+    resetForm,
+  } = useAssistantForm(frameworkRepo);
 
-  const [customRepoSelected, setCustomRepoSelected] = useState(false);
   const [createModalOpen, setCreateModalOpen] = useState(false);
-  const [form] = Form.useForm();
-  const [isFormValid, setIsFormValid] = useState(false);
   const [creating, setCreating] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
 
-  useEffect(() => {
-    if (frameworkRepo && !form.getFieldValue('repoId')) {
-      form.setFieldValue('repoId', frameworkRepo.repo_id);
-    }
-  }, [frameworkRepo, form]);
-
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
   const [selectedWorktree, setSelectedWorktree] = useState<Worktree | null>(null);
-
-  const validateForm = useCallback(() => {
-    const values = form.getFieldsValue();
-    const hasDisplayName = !!values.displayName?.trim();
-    const hasRepo = Boolean(values.repoId || frameworkRepo?.repo_id);
-    setIsFormValid(hasDisplayName && hasRepo);
-  }, [form, frameworkRepo]);
-
-  const lastAutoName = useRef('');
-
-  const handleDisplayNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const displayName = e.target.value;
-    const currentName = form.getFieldValue('name');
-    const autoName = `private-${slugify(displayName)}`;
-    if (!currentName || currentName === lastAutoName.current) {
-      form.setFieldValue('name', autoName);
-      lastAutoName.current = autoName;
-    }
-    validateForm();
-  };
 
   const handleCreate = async () => {
     try {
@@ -133,54 +104,22 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
         return;
       }
 
-      const repo = repoById.get(repoId);
-      const worktreeName = values.name || `private-${slugify(values.displayName)}`;
-      const sourceBranch = values.sourceBranch || repo?.default_branch || 'main';
+      if (!onCreateWorktree || !onUpdateWorktree) return;
 
-      const assistantEmoji = values.emoji || undefined;
-      let boardId: string | undefined;
-      if (values.boardChoice === CREATE_NEW_BOARD) {
-        if (client) {
-          try {
-            const newBoard = (await client.service('boards').create({
-              name: values.displayName.trim(),
-              icon: assistantEmoji || '🤖',
-            })) as Board;
-            boardId = newBoard.board_id;
-          } catch (err) {
-            console.error('Failed to create board:', err);
-          }
-        }
-      } else if (values.boardChoice) {
-        boardId = values.boardChoice;
-      }
-
-      const worktree = await onCreateWorktree?.(repoId, {
-        name: worktreeName,
-        ref: worktreeName,
-        createBranch: true,
-        sourceBranch,
-        pullLatest: true,
-        boardId,
-      });
-
-      if (worktree) {
-        const assistantConfig: AssistantConfig = {
-          kind: 'assistant',
+      await createAssistantWorktree(
+        {
           displayName: values.displayName.trim(),
-          emoji: assistantEmoji,
-          frameworkRepo: repo?.slug,
-          createdViaOnboarding: false,
-        };
-        onUpdateWorktree?.(worktree.worktree_id, {
-          custom_context: { assistant: assistantConfig },
-        });
-      }
+          emoji: values.emoji || undefined,
+          boardChoice: values.boardChoice,
+          repoId,
+          worktreeName: values.name || undefined,
+          sourceBranch: values.sourceBranch || undefined,
+        },
+        { client, repoById, onCreateWorktree, onUpdateWorktree }
+      );
 
       setCreateModalOpen(false);
-      form.resetFields();
-      setCustomRepoSelected(false);
-      lastAutoName.current = '';
+      resetForm();
     } catch (error) {
       console.error('Assistant creation failed:', error);
     } finally {
@@ -190,10 +129,7 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
 
   const handleCancel = () => {
     setCreateModalOpen(false);
-    form.resetFields();
-    setIsFormValid(false);
-    setCustomRepoSelected(false);
-    lastAutoName.current = '';
+    resetForm();
   };
 
   const assistants = useMemo(() => {

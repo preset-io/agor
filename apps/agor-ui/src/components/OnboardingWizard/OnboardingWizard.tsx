@@ -43,6 +43,7 @@ import {
   theme,
 } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { FRAMEWORK_REPO_SLUG, findFrameworkRepo } from '../../hooks/useFrameworkRepo';
 import type { NewSessionConfig } from '../NewSessionModal/NewSessionModal';
 
 const { Text, Title, Paragraph } = Typography;
@@ -51,7 +52,6 @@ const { useToken } = theme;
 // ─── Constants ──────────────────────────────────────────
 
 const FRAMEWORK_REPO_URL = 'https://github.com/preset-io/agor-assistant.git';
-const FRAMEWORK_REPO_SLUG = 'preset-io/agor-assistant';
 const CLONE_TIMEOUT_MS = 120_000;
 
 // ─── Types ──────────────────────────────────────────────
@@ -319,19 +319,11 @@ export function OnboardingWizard({
       setCurrentStep('worktree');
     } else if (resumedPath === 'assistant') {
       // Check if the framework repo already exists
-      let foundRepo = false;
-      for (const [id, repo] of repoById) {
-        if (
-          repo.slug === FRAMEWORK_REPO_SLUG ||
-          repo.remote_url?.includes('agor-assistant') ||
-          repo.remote_url?.includes('agor-openclaw')
-        ) {
-          setCreatedRepoId(id);
-          foundRepo = true;
-          break;
-        }
+      const found = findFrameworkRepo(repoById);
+      if (found) {
+        setCreatedRepoId(found[0]);
       }
-      setCurrentStep(foundRepo ? 'board' : 'clone');
+      setCurrentStep(found ? 'board' : 'clone');
     } else {
       setCurrentStep('add-repo');
     }
@@ -357,22 +349,17 @@ export function OnboardingWizard({
 
     if (path === 'assistant') {
       // Look for framework repo
-      for (const [id, repo] of repoById) {
-        if (
-          repo.slug === FRAMEWORK_REPO_SLUG ||
-          repo.remote_url?.includes('agor-assistant') ||
-          repo.remote_url?.includes('agor-openclaw')
-        ) {
-          setCreatedRepoId(id);
-          setLoading(false);
-          setError(null);
-          if (cloneTimeoutRef.current) {
-            clearTimeout(cloneTimeoutRef.current);
-            cloneTimeoutRef.current = null;
-          }
-          setCurrentStep('board');
-          return;
+      const found = findFrameworkRepo(repoById);
+      if (found) {
+        setCreatedRepoId(found[0]);
+        setLoading(false);
+        setError(null);
+        if (cloneTimeoutRef.current) {
+          clearTimeout(cloneTimeoutRef.current);
+          cloneTimeoutRef.current = null;
         }
+        setCurrentStep('board');
+        return;
       }
     } else if (path === 'own-repo' && repoUrl) {
       // Look for user's repo by URL or slug
@@ -462,16 +449,11 @@ export function OnboardingWizard({
 
       if (selectedPath === 'assistant') {
         // Check if framework repo already exists
-        for (const [id, repo] of repoById) {
-          if (
-            repo.slug === FRAMEWORK_REPO_SLUG ||
-            repo.remote_url?.includes('agor-assistant') ||
-            repo.remote_url?.includes('agor-openclaw')
-          ) {
-            setCreatedRepoId(id);
-            setCurrentStep('board');
-            return;
-          }
+        const found = findFrameworkRepo(repoById);
+        if (found) {
+          setCreatedRepoId(found[0]);
+          setCurrentStep('board');
+          return;
         }
         setCurrentStep('clone');
       } else {

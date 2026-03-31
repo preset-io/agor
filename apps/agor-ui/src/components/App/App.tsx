@@ -38,6 +38,7 @@ import { useRecentBoards } from '../../hooks/useRecentBoards';
 import { useSettingsRoute } from '../../hooks/useSettingsRoute';
 import { useUrlState } from '../../hooks/useUrlState';
 import type { AgenticToolOption } from '../../types';
+import { createAssistantWorktree } from '../../utils/assistantCreation';
 import { initializeAudioOnInteraction } from '../../utils/audio';
 import { AppHeader } from '../AppHeader';
 import { CommentsPanel } from '../CommentsPanel';
@@ -46,7 +47,6 @@ import type { AssistantTabResult } from '../CreateDialog/tabs/AssistantTab';
 import type { WorktreeTabConfig } from '../CreateDialog/tabs/WorktreeTab';
 import { EnvironmentLogsModal } from '../EnvironmentLogsModal';
 import { EventStreamPanel } from '../EventStreamPanel';
-import { CREATE_NEW_BOARD } from '../forms/AssistantFormFields';
 import { NewSessionButton } from '../NewSessionButton';
 import { type NewSessionConfig, NewSessionModal } from '../NewSessionModal';
 import type { NewWorktreeConfig } from '../NewWorktreeModal';
@@ -427,62 +427,19 @@ export const App: React.FC<AppProps> = ({
 
   const handleCreateAssistant = async (result: AssistantTabResult) => {
     const repoId = result.repoId;
-    if (!repoId) return;
+    if (!repoId || !onCreateWorktree || !onUpdateWorktree) return;
 
-    const repo = repoById.get(repoId);
-    const worktreeName =
-      result.worktreeName ||
-      `private-${result.displayName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
-    const sourceBranch = result.sourceBranch || repo?.default_branch || 'main';
-
-    // Create a new board if requested
-    let boardId: string | undefined;
-    if (result.boardChoice === CREATE_NEW_BOARD) {
-      if (client) {
-        try {
-          const newBoard = (await client.service('boards').create({
-            name: result.displayName,
-            icon: result.emoji || '\u{1F916}',
-          })) as Board;
-          boardId = newBoard.board_id;
-        } catch (err) {
-          console.error('Failed to create board:', err);
-        }
-      }
-    } else if (result.boardChoice) {
-      boardId = result.boardChoice;
-    }
-
-    // Create the worktree
-    const worktree = await onCreateWorktree?.(repoId, {
-      name: worktreeName,
-      ref: worktreeName,
-      createBranch: true,
-      sourceBranch,
-      pullLatest: true,
-    });
-
-    if (worktree) {
-      // Assign to board
-      if (boardId) {
-        await onUpdateWorktree?.(worktree.worktree_id, {
-          board_id: boardId as BoardID,
-        });
-      }
-
-      // Tag as assistant
-      onUpdateWorktree?.(worktree.worktree_id, {
-        custom_context: {
-          assistant: {
-            kind: 'assistant',
-            displayName: result.displayName,
-            emoji: result.emoji,
-            frameworkRepo: repo?.slug,
-            createdViaOnboarding: false,
-          },
-        },
-      });
-    }
+    await createAssistantWorktree(
+      {
+        displayName: result.displayName,
+        emoji: result.emoji,
+        boardChoice: result.boardChoice,
+        repoId,
+        worktreeName: result.worktreeName,
+        sourceBranch: result.sourceBranch,
+      },
+      { client, repoById, onCreateWorktree, onUpdateWorktree }
+    );
   };
 
   const handleSessionClick = (sessionId: string) => {
