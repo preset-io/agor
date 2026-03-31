@@ -380,6 +380,12 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           .boolean()
           .optional()
           .describe('Include the original prompt in the callback message (default: false)'),
+        mcpServerIds: z
+          .array(z.string())
+          .optional()
+          .describe(
+            'MCP server IDs to attach. Overrides worktree and user default inheritance. Omit to use worktree config > user defaults.'
+          ),
       }),
     },
     async (args) => {
@@ -435,11 +441,14 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         };
       }
 
-      // MCP server inheritance: worktree config > user defaults
+      // MCP server inheritance: explicit param > worktree config > user defaults
+      // An explicit empty array means "no MCPs" — does NOT fall through to worktree/user defaults.
       const mcpServerIds =
-        worktree.mcp_server_ids && worktree.mcp_server_ids.length > 0
-          ? worktree.mcp_server_ids
-          : userToolDefaults?.mcpServerIds || [];
+        args.mcpServerIds !== undefined
+          ? args.mcpServerIds
+          : worktree.mcp_server_ids && worktree.mcp_server_ids.length > 0
+            ? worktree.mcp_server_ids
+            : userToolDefaults?.mcpServerIds || [];
 
       // Build callback configuration for remote session callbacks
       const callbackConfig: Record<string, unknown> = {};

@@ -373,9 +373,10 @@ export class SchedulerService {
       console.log(`      ✅ Spawned scheduled session for ${worktree.name} (run #${runIndex})`);
 
       // 6. Attach MCP servers BEFORE triggering prompt (so agent has tools from the start)
-      // Precedence: schedule config > worktree defaults
+      // Precedence: schedule config (if defined) > worktree defaults
+      // An explicit empty array in schedule means "no MCPs" — does NOT fall through to worktree.
       const effectiveMcpIds =
-        schedule.mcp_server_ids && schedule.mcp_server_ids.length > 0
+        schedule.mcp_server_ids !== undefined
           ? schedule.mcp_server_ids
           : worktree.mcp_server_ids && worktree.mcp_server_ids.length > 0
             ? worktree.mcp_server_ids
