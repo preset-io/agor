@@ -1,7 +1,7 @@
 import type { AgorClient } from '@agor/core/api';
 import type { AssistantConfig, Board, BoardID, Repo, Worktree } from '@agor/core/types';
+import { CREATE_NEW_BOARD } from '@/utils/assistantConstants';
 import { slugify } from '@/utils/repoSlug';
-import { CREATE_NEW_BOARD } from '../components/forms/AssistantFormFields';
 
 export interface AssistantCreationInput {
   displayName: string;

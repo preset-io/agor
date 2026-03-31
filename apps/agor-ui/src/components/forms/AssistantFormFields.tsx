@@ -2,10 +2,8 @@ import type { Board, Repo } from '@agor/core/types';
 import { InfoCircleOutlined, SettingOutlined } from '@ant-design/icons';
 import type { FormInstance } from 'antd';
 import { Alert, Collapse, Form, Input, Select, Space, Typography } from 'antd';
+import { CREATE_NEW_BOARD } from '@/utils/assistantConstants';
 import { FormEmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
-
-/** Special sentinel for "create new board" option */
-const CREATE_NEW_BOARD = '__create_new__';
 
 export { CREATE_NEW_BOARD };
 
