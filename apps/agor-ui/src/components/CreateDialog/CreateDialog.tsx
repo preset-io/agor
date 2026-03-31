@@ -6,7 +6,7 @@ import {
   RobotOutlined,
 } from '@ant-design/icons';
 import { Alert, Button, Modal, Tabs } from 'antd';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AssistantTabResult } from './tabs/AssistantTab';
 import { AssistantTab } from './tabs/AssistantTab';
 import { BoardTab } from './tabs/BoardTab';
@@ -74,6 +74,14 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
   const repoFormRef = useRef<(() => Promise<RepoTabResult | null>) | null>(null);
   const assistantFormRef = useRef<(() => Promise<AssistantTabResult | null>) | null>(null);
 
+  // Reset state when dialog closes (covers both cancel and successful submit)
+  useEffect(() => {
+    if (!open) {
+      setIsValid(false);
+      setActiveTab(defaultTab);
+    }
+  }, [open, defaultTab]);
+
   const handleValidityChange = useCallback((valid: boolean) => {
     setIsValid(valid);
   }, []);
@@ -131,8 +139,6 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
 
   const handleCancel = () => {
     onClose();
-    setActiveTab(defaultTab);
-    setIsValid(false);
   };
 
   const tabItems = [
