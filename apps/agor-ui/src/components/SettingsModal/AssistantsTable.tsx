@@ -68,7 +68,13 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
   const boards = mapToArray(boardById);
   const { token } = theme.useToken();
 
-  const { frameworkRepo, isCloning } = useEnsureFrameworkRepo(repos, onCreateRepo);
+  const [createModalOpen, setCreateModalOpen] = useState(false);
+
+  // Only auto-clone the framework repo when the create modal is open,
+  // so merely visiting the Assistants settings tab doesn't trigger a clone.
+  const { frameworkRepo, isCloning } = useEnsureFrameworkRepo(repos, onCreateRepo, {
+    enabled: createModalOpen,
+  });
   const {
     form,
     isFormValid,
@@ -78,8 +84,6 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
     handleDisplayNameChange,
     resetForm,
   } = useAssistantForm(frameworkRepo);
-
-  const [createModalOpen, setCreateModalOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
 
