@@ -161,16 +161,18 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
           onChange={handleProviderChange}
           placeholder="Select provider"
         >
-          {providers.map((provider) => (
-            <Select.Option key={provider.id} value={provider.id}>
-              <Space>
-                <span>{provider.name}</span>
-                <Text type="secondary" style={{ fontSize: 12 }}>
-                  ({provider.models.length} models)
-                </Text>
-              </Space>
-            </Select.Option>
-          ))}
+          {[...providers]
+            .sort((a, b) => a.name.localeCompare(b.name))
+            .map((provider) => (
+              <Select.Option key={provider.id} value={provider.id}>
+                <Space>
+                  <span>{provider.name}</span>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    ({provider.models.length} models)
+                  </Text>
+                </Space>
+              </Select.Option>
+            ))}
         </Select>
       </div>
 
@@ -188,11 +190,13 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
             showSearch
             optionFilterProp="children"
           >
-            {availableModels.map((model) => (
-              <Select.Option key={model.id} value={model.id}>
-                {model.name}
-              </Select.Option>
-            ))}
+            {[...availableModels]
+              .sort((a, b) => a.name.localeCompare(b.name))
+              .map((model) => (
+                <Select.Option key={model.id} value={model.id}>
+                  {model.name}
+                </Select.Option>
+              ))}
           </Select>
         </div>
       )}

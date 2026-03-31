@@ -195,10 +195,12 @@ export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({ user, form }
                         <Select
                           style={{ flex: 1 }}
                           disabled={!enabled}
-                          options={getAvailableChimes().map((chime) => ({
-                            label: getChimeDisplayName(chime),
-                            value: chime,
-                          }))}
+                          options={getAvailableChimes()
+                            .map((chime) => ({
+                              label: getChimeDisplayName(chime),
+                              value: chime,
+                            }))
+                            .sort((a, b) => a.label.localeCompare(b.label))}
                         />
                       </Form.Item>
                       <Button

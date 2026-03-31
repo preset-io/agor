@@ -226,16 +226,18 @@ export const OwnersSection: React.FC<OwnersSectionProps> = ({ worktree, client, 
               (option?.label?.toString() || '').toLowerCase().includes(input.toLowerCase())
             }
             optionLabelProp="label"
-            options={allUsers.map((user) => {
-              const isCurrentUser = user.user_id === currentUserId;
-              const label = user.email || `User ${user.user_id.substring(0, 8)}`;
-              const displayLabel = isCurrentUser ? `${label} (You)` : label;
+            options={allUsers
+              .map((user) => {
+                const isCurrentUser = user.user_id === currentUserId;
+                const label = user.email || `User ${user.user_id.substring(0, 8)}`;
+                const displayLabel = isCurrentUser ? `${label} (You)` : label;
 
-              return {
-                value: user.user_id,
-                label: displayLabel,
-              };
-            })}
+                return {
+                  value: user.user_id,
+                  label: displayLabel,
+                };
+              })
+              .sort((a, b) => a.label.localeCompare(b.label))}
             tagRender={(props) => {
               const user = allUsers.find((u) => u.user_id === props.value);
               const isCurrentUser = user?.user_id === currentUserId;

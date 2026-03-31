@@ -34,11 +34,13 @@ export const MCPServerSelect: React.FC<MCPServerSelectProps> = ({
   // Only show enabled servers
   const enabledServers = filteredServers.filter((server) => server.enabled);
 
-  const options = enabledServers.map((server) => ({
-    label: `${server.display_name || server.name} (${server.transport})`,
-    value: server.mcp_server_id,
-    disabled: !server.enabled,
-  }));
+  const options = enabledServers
+    .map((server) => ({
+      label: `${server.display_name || server.name} (${server.transport})`,
+      value: server.mcp_server_id,
+      disabled: !server.enabled,
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label));
 
   return (
     <Select

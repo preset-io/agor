@@ -229,11 +229,15 @@ const ChannelFormFields: React.FC<{
         }
       >
         <Select placeholder="Select a worktree" showSearch optionFilterProp="children">
-          {Array.from(worktreeById.values()).map((wt) => (
-            <Select.Option key={wt.worktree_id} value={wt.worktree_id}>
-              {wt.name || wt.ref || wt.worktree_id}
-            </Select.Option>
-          ))}
+          {Array.from(worktreeById.values())
+            .sort((a, b) =>
+              (a.name || a.ref || a.worktree_id).localeCompare(b.name || b.ref || b.worktree_id)
+            )
+            .map((wt) => (
+              <Select.Option key={wt.worktree_id} value={wt.worktree_id}>
+                {wt.name || wt.ref || wt.worktree_id}
+              </Select.Option>
+            ))}
         </Select>
       </Form.Item>
 
@@ -246,11 +250,15 @@ const ChannelFormFields: React.FC<{
           tooltip="Sessions from this channel will run as this Agor user"
         >
           <Select placeholder="Select a user" showSearch optionFilterProp="children">
-            {Array.from(userById.values()).map((u) => (
-              <Select.Option key={u.user_id} value={u.user_id}>
-                {u.name || u.email || u.user_id}
-              </Select.Option>
-            ))}
+            {Array.from(userById.values())
+              .sort((a, b) =>
+                (a.name || a.email || a.user_id).localeCompare(b.name || b.email || b.user_id)
+              )
+              .map((u) => (
+                <Select.Option key={u.user_id} value={u.user_id}>
+                  {u.name || u.email || u.user_id}
+                </Select.Option>
+              ))}
           </Select>
         </Form.Item>
       )}
@@ -593,11 +601,17 @@ const ChannelFormFields: React.FC<{
                             showSearch
                             optionFilterProp="children"
                           >
-                            {Array.from(userById.values()).map((u) => (
-                              <Select.Option key={u.user_id} value={u.user_id}>
-                                {u.name || u.email || u.user_id}
-                              </Select.Option>
-                            ))}
+                            {Array.from(userById.values())
+                              .sort((a, b) =>
+                                (a.name || a.email || a.user_id).localeCompare(
+                                  b.name || b.email || b.user_id
+                                )
+                              )
+                              .map((u) => (
+                                <Select.Option key={u.user_id} value={u.user_id}>
+                                  {u.name || u.email || u.user_id}
+                                </Select.Option>
+                              ))}
                           </Select>
                         </Form.Item>
                       )}
