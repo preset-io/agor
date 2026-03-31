@@ -17,15 +17,24 @@ import { WorktreeTab } from './tabs/WorktreeTab';
 
 type ActiveTab = 'worktree' | 'assistant' | 'board' | 'repository';
 
-const PURPOSE_TEXT: Record<ActiveTab, string> = {
-  worktree:
-    'Perfect for coding tasks. Requires a code repository. Generally ephemeral \u2014 has the lifecycle of a feature\u2019s development. Can include multiple AI sessions.',
+const PURPOSE_TEXT: Record<ActiveTab, React.ReactNode> = {
+  worktree: (
+    <>
+      Worktrees are isolated working directories on their own branch, sharing the same repo history
+      (
+      <a href="https://git-scm.com/docs/git-worktree" target="_blank" rel="noopener noreferrer">
+        git worktrees
+      </a>
+      ). Perfect for coding tasks — generally ephemeral, with the lifecycle of a feature. Can
+      include multiple AI sessions.
+    </>
+  ),
   assistant:
-    'Long-lived agent with an identity, purpose, and goals. Think of it like an employee. Assistants have memory, can build their own skills, can coordinate multiple coding agents, typically operate on their own Agor board, and can act proactively.',
+    'Assistants are long-lived agents with an identity, purpose, and goals. Think of them like employees. They have memory, can build their own skills, coordinate multiple coding agents, typically operate on their own Agor board, and can act proactively.',
   board:
-    'A spatial canvas for organizing work. Boards contain worktrees, zones, cards, and other visual elements. Use boards to create workspaces for teams, projects, or assistants.',
+    'Boards are spatial canvases for organizing work. They contain worktrees, zones, cards, and other visual elements. Use boards to create workspaces for teams, projects, or assistants.',
   repository:
-    'Connect a code repository to Agor. Repositories can be cloned from GitHub or registered from a local path. Once connected, you can create worktrees for coding tasks.',
+    'Repositories connect your code to Agor. They can be cloned from GitHub or registered from a local path. Once connected, you can create worktrees for coding tasks.',
 };
 
 const ACTION_LABELS: Record<ActiveTab, string> = {
