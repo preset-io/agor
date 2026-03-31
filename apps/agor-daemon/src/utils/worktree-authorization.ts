@@ -256,6 +256,23 @@ export function scopeWorktreeQuery(worktreeRepo: WorktreeRepository) {
       filtered = filtered.filter((item: any) => item[key] === value);
     }
 
+    // Apply sorting if specified (matches scopeSessionQuery behavior)
+    const sort = query.$sort;
+    if (sort) {
+      const sortField = Object.keys(sort)[0] as keyof Worktree;
+      const sortOrder = sort[sortField] as 1 | -1;
+      filtered = [...filtered].sort((a, b) => {
+        const aVal = a[sortField];
+        const bVal = b[sortField];
+        if (aVal == null && bVal == null) return 0;
+        if (aVal == null) return 1;
+        if (bVal == null) return -1;
+        if (aVal < bVal) return sortOrder === -1 ? 1 : -1;
+        if (aVal > bVal) return sortOrder === -1 ? -1 : 1;
+        return 0;
+      });
+    }
+
     // Apply pagination
     const limit = query.$limit ?? filtered.length;
     const skip = query.$skip ?? 0;
