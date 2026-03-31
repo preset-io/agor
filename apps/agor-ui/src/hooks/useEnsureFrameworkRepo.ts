@@ -47,13 +47,21 @@ export function useEnsureFrameworkRepo(
     });
 
     // Safety timeout — if repo never appears, clear the loading state
-    // so the user can pick an alternate repo or retry.
+    // so the user can pick an alternate repo or retry on next open.
     const timer = setTimeout(() => {
       setIsCloning(false);
+      cloneTriggeredRef.current = false;
     }, CLONE_TIMEOUT_MS);
 
     return () => clearTimeout(timer);
   }, [frameworkRepo, onCreateRepo, enabled]);
+
+  // Reset when disabled (e.g., modal closed) so next open can retry
+  useEffect(() => {
+    if (!enabled && !frameworkRepo) {
+      cloneTriggeredRef.current = false;
+    }
+  }, [enabled, frameworkRepo]);
 
   return { frameworkRepo, isCloning: isCloning && !frameworkRepo };
 }
