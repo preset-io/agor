@@ -388,6 +388,13 @@ export class SchedulerService {
               createdSession.session_id as SessionID,
               serverId as MCPServerID
             );
+            // Emit WebSocket event for real-time UI updates
+            this.app.service('session-mcp-servers')?.emit?.('created', {
+              session_id: createdSession.session_id,
+              mcp_server_id: serverId,
+              enabled: true,
+              added_at: new Date(),
+            });
           } catch {
             // Silently skip deleted/invalid MCP servers
           }

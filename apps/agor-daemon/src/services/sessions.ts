@@ -78,7 +78,7 @@ function parseTruncationLength(value: unknown): number {
 export class SessionsService extends DrizzleService<Session, Partial<Session>, SessionParams> {
   private sessionRepo: SessionRepository;
   private app: Application;
-  private db: Database;
+  private sessionMCPRepo: SessionMCPServerRepository;
 
   constructor(db: Database, app: Application) {
     const sessionRepo = new SessionRepository(db);
@@ -94,7 +94,37 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
 
     this.sessionRepo = sessionRepo;
     this.app = app;
-    this.db = db;
+    this.sessionMCPRepo = new SessionMCPServerRepository(db);
+  }
+
+  /**
+   * Copy MCP servers from a source session to a target session.
+   * Emits WebSocket events so the UI updates in real-time.
+   */
+  private async copyMCPServers(
+    sourceSessionId: SessionID,
+    targetSessionId: SessionID,
+    label: string
+  ): Promise<void> {
+    try {
+      const parentServers = await this.sessionMCPRepo.listServers(sourceSessionId, true);
+      for (const server of parentServers) {
+        try {
+          await this.sessionMCPRepo.addServer(targetSessionId, server.mcp_server_id as MCPServerID);
+          // Emit WebSocket event for real-time UI updates
+          this.app?.service('session-mcp-servers')?.emit?.('created', {
+            session_id: targetSessionId,
+            mcp_server_id: server.mcp_server_id,
+            enabled: true,
+            added_at: new Date(),
+          });
+        } catch {
+          // Silently skip — server may have been deleted between list and add
+        }
+      }
+    } catch (error) {
+      console.warn(`Failed to copy MCP servers during ${label}:`, error);
+    }
   }
 
   /**
@@ -133,10 +163,18 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
       params
     );
 
-    // Update parent's children list
-    const parentChildren = parent.genealogy?.children || [];
     // Cast forkedSession to Session to handle return type
     const session = forkedSession as Session;
+
+    // Copy MCP servers from parent session to forked session
+    await this.copyMCPServers(
+      parent.session_id as SessionID,
+      session.session_id as SessionID,
+      'fork'
+    );
+
+    // Update parent's children list
+    const parentChildren = parent.genealogy?.children || [];
     await this.patch(
       id,
       {
@@ -311,22 +349,11 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     const session = spawnedSession as Session;
 
     // Copy MCP servers from parent session to spawned session
-    try {
-      const sessionMCPRepo = new SessionMCPServerRepository(this.db);
-      const parentServers = await sessionMCPRepo.listServers(parent.session_id as SessionID, true);
-      for (const server of parentServers) {
-        try {
-          await sessionMCPRepo.addServer(
-            session.session_id as SessionID,
-            server.mcp_server_id as MCPServerID
-          );
-        } catch {
-          // Silently skip — server may have been deleted between list and add
-        }
-      }
-    } catch (error) {
-      console.warn('Failed to copy MCP servers during spawn:', error);
-    }
+    await this.copyMCPServers(
+      parent.session_id as SessionID,
+      session.session_id as SessionID,
+      'spawn'
+    );
 
     // Update parent's children list
     const parentChildren = parent.genealogy?.children || [];
