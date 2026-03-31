@@ -39,14 +39,16 @@ import { useSettingsRoute } from '../../hooks/useSettingsRoute';
 import { useUrlState } from '../../hooks/useUrlState';
 import type { AgenticToolOption } from '../../types';
 import { initializeAudioOnInteraction } from '../../utils/audio';
-import { useThemedMessage } from '../../utils/message';
 import { AppHeader } from '../AppHeader';
 import { CommentsPanel } from '../CommentsPanel';
+import { CreateDialog } from '../CreateDialog';
+import type { AssistantTabResult } from '../CreateDialog/tabs/AssistantTab';
+import type { WorktreeTabConfig } from '../CreateDialog/tabs/WorktreeTab';
 import { EnvironmentLogsModal } from '../EnvironmentLogsModal';
 import { EventStreamPanel } from '../EventStreamPanel';
 import { NewSessionButton } from '../NewSessionButton';
 import { type NewSessionConfig, NewSessionModal } from '../NewSessionModal';
-import { type NewWorktreeConfig, NewWorktreeModal } from '../NewWorktreeModal';
+import type { NewWorktreeConfig } from '../NewWorktreeModal';
 import { SessionCanvas, type SessionCanvasRef } from '../SessionCanvas';
 import { SessionPanel } from '../SessionPanel';
 import { SessionSettingsModal } from '../SessionSettingsModal';
@@ -212,10 +214,9 @@ export const App: React.FC<AppProps> = ({
   instanceLabel,
   instanceDescription,
 }) => {
-  const { showWarning } = useThemedMessage();
   const sessionCanvasRef = useRef<SessionCanvasRef>(null);
   const [newSessionWorktreeId, setNewSessionWorktreeId] = useState<string | null>(null);
-  const [newWorktreeModalOpen, setNewWorktreeModalOpen] = useState(false);
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [newWorktreeDefaultPosition, setNewWorktreeDefaultPosition] = useState<{
     x: number;
     y: number;
@@ -357,11 +358,11 @@ export const App: React.FC<AppProps> = ({
   // This ensures worktrees spawn at the center of the new board's viewport
   // biome-ignore lint/correctness/useExhaustiveDependencies: currentBoardId is intentionally included to trigger recalculation on board switch
   useEffect(() => {
-    if (newWorktreeModalOpen) {
+    if (createDialogOpen) {
       const center = sessionCanvasRef.current?.getViewportCenter();
       setNewWorktreeDefaultPosition(center || null);
     }
-  }, [currentBoardId, newWorktreeModalOpen]);
+  }, [currentBoardId, createDialogOpen]);
 
   // Update favicon based on session activity on current board
   useFaviconStatus(currentBoardId, sessionsByWorktree, mapToArray(boardObjectById));
@@ -416,7 +417,71 @@ export const App: React.FC<AppProps> = ({
       });
     }
 
-    setNewWorktreeModalOpen(false);
+    setCreateDialogOpen(false);
+  };
+
+  const handleCreateWorktreeFromDialog = async (config: WorktreeTabConfig) => {
+    await handleCreateWorktree(config);
+  };
+
+  const handleCreateAssistant = async (result: AssistantTabResult) => {
+    const repoId = result.repoId;
+    if (!repoId) return;
+
+    const repo = repoById.get(repoId);
+    const worktreeName =
+      result.worktreeName ||
+      `private-${result.displayName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+    const sourceBranch = result.sourceBranch || repo?.default_branch || 'main';
+
+    // Create a new board if requested
+    let boardId: string | undefined;
+    if (result.boardChoice === '__create_new__') {
+      if (client) {
+        try {
+          const newBoard = (await client.service('boards').create({
+            name: result.displayName,
+            icon: result.emoji || '\u{1F916}',
+          })) as Board;
+          boardId = newBoard.board_id;
+        } catch (err) {
+          console.error('Failed to create board:', err);
+        }
+      }
+    } else if (result.boardChoice) {
+      boardId = result.boardChoice;
+    }
+
+    // Create the worktree
+    const worktree = await onCreateWorktree?.(repoId, {
+      name: worktreeName,
+      ref: worktreeName,
+      createBranch: true,
+      sourceBranch,
+      pullLatest: true,
+    });
+
+    if (worktree) {
+      // Assign to board
+      if (boardId) {
+        await onUpdateWorktree?.(worktree.worktree_id, {
+          board_id: boardId as BoardID,
+        });
+      }
+
+      // Tag as assistant
+      onUpdateWorktree?.(worktree.worktree_id, {
+        custom_context: {
+          assistant: {
+            kind: 'assistant',
+            displayName: result.displayName,
+            emoji: result.emoji,
+            frameworkRepo: repo?.slug,
+            createdViaOnboarding: false,
+          },
+        },
+      });
+    }
   };
 
   const handleSessionClick = (sessionId: string) => {
@@ -813,15 +878,10 @@ export const App: React.FC<AppProps> = ({
                       />
                       <NewSessionButton
                         onClick={() => {
-                          if (repoById.size === 0) {
-                            showWarning('Please create a repository first in Settings');
-                          } else {
-                            const center = sessionCanvasRef.current?.getViewportCenter();
-                            setNewWorktreeDefaultPosition(center || null);
-                            setNewWorktreeModalOpen(true);
-                          }
+                          const center = sessionCanvasRef.current?.getViewportCenter();
+                          setNewWorktreeDefaultPosition(center || null);
+                          setCreateDialogOpen(true);
                         }}
-                        hasRepos={repoById.size > 0}
                       />
                     </div>
                   </Panel>
@@ -1010,16 +1070,21 @@ export const App: React.FC<AppProps> = ({
             worktreeId={terminalWorktreeId}
             initialCommands={terminalCommands}
           />
-          <NewWorktreeModal
-            open={newWorktreeModalOpen}
+          <CreateDialog
+            open={createDialogOpen}
             onClose={() => {
-              setNewWorktreeModalOpen(false);
+              setCreateDialogOpen(false);
               setNewWorktreeDefaultPosition(null);
             }}
-            onCreate={handleCreateWorktree}
             repoById={repoById}
+            boardById={boardById}
             currentBoardId={currentBoardId}
             defaultPosition={newWorktreeDefaultPosition || undefined}
+            onCreateWorktree={handleCreateWorktreeFromDialog}
+            onCreateBoard={(board) => onCreateBoard?.(board)}
+            onCreateRepo={(data) => onCreateRepo?.(data)}
+            onCreateLocalRepo={(data) => onCreateLocalRepo?.(data)}
+            onCreateAssistant={handleCreateAssistant}
           />
           {logsModalWorktreeId && (
             <EnvironmentLogsModal

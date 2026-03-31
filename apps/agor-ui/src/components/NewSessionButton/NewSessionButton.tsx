@@ -4,16 +4,11 @@ import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 
 export interface NewSessionButtonProps {
   onClick?: () => void;
-  hasRepos?: boolean;
 }
 
-export const NewSessionButton: React.FC<NewSessionButtonProps> = ({ onClick, hasRepos = true }) => {
+export const NewSessionButton: React.FC<NewSessionButtonProps> = ({ onClick }) => {
   const connectionDisabled = useConnectionDisabled();
-  const tooltip = connectionDisabled
-    ? 'Disconnected from daemon'
-    : hasRepos
-      ? 'Create new worktree'
-      : 'Create a repository first';
+  const tooltip = connectionDisabled ? 'Disconnected from daemon' : 'Create new...';
 
   return (
     <Tooltip title={tooltip} placement="left">
