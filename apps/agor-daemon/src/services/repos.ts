@@ -194,6 +194,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
 
     // Fire and forget - spawn executor and return immediately
     // Executor handles EVERYTHING: git clone, .agor.yml parsing, DB record, Unix group
+    const app = this.app;
     spawnExecutorFireAndForget(
       {
         command: 'git.clone',
@@ -211,6 +212,23 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       },
       {
         logPrefix: `[clone ${slug}]`,
+        onExit: (code) => {
+          if (code !== 0 && code !== null) {
+            // Broadcast clone failure to all connected clients
+            console.error(
+              `[clone ${slug}] Clone failed with exit code ${code}, broadcasting error`
+            );
+            const io = (app as unknown as { io?: { emit: (event: string, data: unknown) => void } })
+              .io;
+            if (io) {
+              io.emit('repo:cloneError', {
+                slug,
+                url: data.url,
+                error: `Clone failed (exit code ${code}). Check that the repository URL is correct and accessible.`,
+              });
+            }
+          }
+        },
       }
     );
 

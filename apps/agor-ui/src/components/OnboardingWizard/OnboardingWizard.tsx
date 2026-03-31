@@ -81,7 +81,7 @@ export interface OnboardingWizardProps {
   client: any;
 
   // Actions
-  onCreateRepo: (data: { url: string; slug: string; default_branch: string }) => void;
+  onCreateRepo: (data: { url: string; slug: string; default_branch: string }) => Promise<void>;
   onCreateLocalRepo: (data: { path: string; slug?: string }) => void;
   onCreateWorktree: (
     repoId: string,
@@ -233,6 +233,9 @@ export function OnboardingWizard({
 
   // Timeout ref for clone
   const cloneTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Elapsed time for clone progress
+  const [cloneElapsedSeconds, setCloneElapsedSeconds] = useState(0);
+  const cloneIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // ─── Derived ──────────────────────────────────────
   const steps = useMemo(() => getStepsForPath(path), [path]);
@@ -414,11 +417,51 @@ export function OnboardingWizard({
     }
   }, [currentStep, loading, worktreeById, createdWorktreeId]);
 
+  // ─── Listen for clone error events from backend ──
+  useEffect(() => {
+    if (!client?.io) return;
+
+    const handleCloneError = (data: { slug: string; url: string; error: string }) => {
+      // Only handle if we're on the clone step and loading
+      if (currentStep !== 'clone' || !loading) return;
+
+      // Check if the error is for our clone operation
+      const isOurClone =
+        (path === 'assistant' && data.slug === FRAMEWORK_REPO_SLUG) ||
+        (path === 'own-repo' && (data.url === repoUrl || data.slug === repoSlug));
+
+      if (isOurClone) {
+        setLoading(false);
+        setError(data.error);
+        if (cloneTimeoutRef.current) {
+          clearTimeout(cloneTimeoutRef.current);
+          cloneTimeoutRef.current = null;
+        }
+      }
+    };
+
+    client.io.on('repo:cloneError', handleCloneError);
+    return () => {
+      client.io.off('repo:cloneError', handleCloneError);
+    };
+  }, [client, currentStep, loading, path, repoUrl, repoSlug]);
+
+  // Stop elapsed timer when loading stops
+  useEffect(() => {
+    if (!loading && cloneIntervalRef.current) {
+      clearInterval(cloneIntervalRef.current);
+      cloneIntervalRef.current = null;
+    }
+  }, [loading]);
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (cloneTimeoutRef.current) {
         clearTimeout(cloneTimeoutRef.current);
+      }
+      if (cloneIntervalRef.current) {
+        clearInterval(cloneIntervalRef.current);
       }
     };
   }, []);
@@ -466,33 +509,47 @@ export function OnboardingWizard({
     [repoById, saveOnboardingProgress]
   );
 
-  const handleStartClone = useCallback(() => {
+  const handleStartClone = useCallback(async () => {
     setError(null);
     setLoading(true);
+    setCloneElapsedSeconds(0);
+    // Start elapsed timer
+    if (cloneIntervalRef.current) clearInterval(cloneIntervalRef.current);
+    cloneIntervalRef.current = setInterval(() => {
+      setCloneElapsedSeconds((s) => s + 1);
+    }, 1000);
 
-    if (path === 'assistant') {
-      onCreateRepo({
-        url: effectiveFrameworkUrl,
-        slug: FRAMEWORK_REPO_SLUG,
-        default_branch: 'main',
-      });
-    } else if (repoMode === 'remote') {
-      onCreateRepo({
-        url: repoUrl,
-        slug: repoSlug || '',
-        default_branch: 'main',
-      });
-    } else {
-      onCreateLocalRepo({
-        path: localRepoPath,
-        slug: repoSlug || undefined,
-      });
+    try {
+      if (path === 'assistant') {
+        await onCreateRepo({
+          url: effectiveFrameworkUrl,
+          slug: FRAMEWORK_REPO_SLUG,
+          default_branch: 'main',
+        });
+      } else if (repoMode === 'remote') {
+        await onCreateRepo({
+          url: repoUrl,
+          slug: repoSlug || '',
+          default_branch: 'main',
+        });
+      } else {
+        onCreateLocalRepo({
+          path: localRepoPath,
+          slug: repoSlug || undefined,
+        });
+      }
+    } catch (err) {
+      setLoading(false);
+      setError(`Failed to start clone: ${err instanceof Error ? err.message : String(err)}`);
+      return;
     }
 
-    // Set timeout
+    // Set timeout for async clone completion
     cloneTimeoutRef.current = setTimeout(() => {
       setLoading(false);
-      setError('Clone timed out. Please check the URL and try again.');
+      setError(
+        'Clone is taking too long. This could be due to network issues, an unreachable repository, or a missing GITHUB_TOKEN for private repos. Please check and try again.'
+      );
     }, CLONE_TIMEOUT_MS);
   }, [
     path,
@@ -816,13 +873,20 @@ export function OnboardingWizard({
               ? 'Cloning assistant framework...'
               : 'Setting up your repository...'}
           </Paragraph>
-          <Text type="secondary">This may take a moment</Text>
+          <Text type="secondary">
+            {cloneElapsedSeconds < 10
+              ? 'This may take a moment'
+              : cloneElapsedSeconds < 30
+                ? `Cloning in progress... (${cloneElapsedSeconds}s)`
+                : `Still working... large repos can take a while (${cloneElapsedSeconds}s)`}
+          </Text>
         </>
       ) : error ? (
         <>
           <Alert
             type="error"
-            message={error}
+            message="Clone failed"
+            description={error}
             showIcon
             style={{ marginBottom: 16, textAlign: 'left' }}
           />
