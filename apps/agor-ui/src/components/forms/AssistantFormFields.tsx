@@ -120,7 +120,7 @@ export const AssistantFormFields: React.FC<AssistantFormFieldsProps> = ({
                         .toLowerCase()
                         .includes(input.toLowerCase())
                     }
-                    options={repos
+                    options={[...repos]
                       .sort((a, b) => (a.name || a.slug).localeCompare(b.name || b.slug))
                       .map((repo: Repo) => ({
                         value: repo.repo_id,

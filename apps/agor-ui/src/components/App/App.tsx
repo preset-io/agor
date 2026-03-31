@@ -46,6 +46,7 @@ import type { AssistantTabResult } from '../CreateDialog/tabs/AssistantTab';
 import type { WorktreeTabConfig } from '../CreateDialog/tabs/WorktreeTab';
 import { EnvironmentLogsModal } from '../EnvironmentLogsModal';
 import { EventStreamPanel } from '../EventStreamPanel';
+import { CREATE_NEW_BOARD } from '../forms/AssistantFormFields';
 import { NewSessionButton } from '../NewSessionButton';
 import { type NewSessionConfig, NewSessionModal } from '../NewSessionModal';
 import type { NewWorktreeConfig } from '../NewWorktreeModal';
@@ -436,7 +437,7 @@ export const App: React.FC<AppProps> = ({
 
     // Create a new board if requested
     let boardId: string | undefined;
-    if (result.boardChoice === '__create_new__') {
+    if (result.boardChoice === CREATE_NEW_BOARD) {
       if (client) {
         try {
           const newBoard = (await client.service('boards').create({

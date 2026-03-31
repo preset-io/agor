@@ -234,6 +234,7 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
       title="Create New..."
       open={open}
       onCancel={handleCancel}
+      destroyOnClose
       width={720}
       footer={[
         <Button key="cancel" onClick={handleCancel}>
