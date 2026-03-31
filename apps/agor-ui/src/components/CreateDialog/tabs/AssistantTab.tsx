@@ -4,7 +4,7 @@ import { useEffect } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
 import { slugify } from '@/utils/repoSlug';
 import { useAssistantForm } from '../../../hooks/useAssistantForm';
-import { useFrameworkRepo } from '../../../hooks/useFrameworkRepo';
+import { useEnsureFrameworkRepo } from '../../../hooks/useEnsureFrameworkRepo';
 import { AssistantFormFields, CREATE_NEW_BOARD } from '../../forms/AssistantFormFields';
 
 export interface AssistantTabResult {
@@ -21,6 +21,7 @@ export interface AssistantTabProps {
   boardById: Map<string, Board>;
   onValidityChange: (valid: boolean) => void;
   formRef: React.MutableRefObject<(() => Promise<AssistantTabResult | null>) | null>;
+  onCreateRepo?: (data: { url: string; slug: string; default_branch: string }) => void;
 }
 
 export const AssistantTab: React.FC<AssistantTabProps> = ({
@@ -28,10 +29,11 @@ export const AssistantTab: React.FC<AssistantTabProps> = ({
   boardById,
   onValidityChange,
   formRef,
+  onCreateRepo,
 }) => {
   const repos = mapToArray(repoById);
   const boards = mapToArray(boardById);
-  const frameworkRepo = useFrameworkRepo(repos);
+  const { frameworkRepo, isCloning } = useEnsureFrameworkRepo(repos, onCreateRepo);
 
   const {
     form,
@@ -75,6 +77,7 @@ export const AssistantTab: React.FC<AssistantTabProps> = ({
         repos={repos}
         boards={boards}
         frameworkRepo={frameworkRepo}
+        isCloning={isCloning}
         onDisplayNameChange={handleDisplayNameChange}
         customRepoSelected={customRepoSelected}
         onCustomRepoChange={setCustomRepoSelected}

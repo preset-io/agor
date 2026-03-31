@@ -11,7 +11,7 @@ import {
 import { Button, Empty, Form, Input, Modal, Space, Table, Tooltip, Typography, theme } from 'antd';
 import { useMemo, useState } from 'react';
 import { useAssistantForm } from '@/hooks/useAssistantForm';
-import { useFrameworkRepo } from '@/hooks/useFrameworkRepo';
+import { useEnsureFrameworkRepo } from '@/hooks/useEnsureFrameworkRepo';
 import { createAssistantWorktree } from '@/utils/assistantCreation';
 import { mapToArray } from '@/utils/mapHelpers';
 import { ArchiveDeleteWorktreeModal } from '../ArchiveDeleteWorktreeModal';
@@ -68,7 +68,7 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
   const boards = mapToArray(boardById);
   const { token } = theme.useToken();
 
-  const frameworkRepo = useFrameworkRepo(repos);
+  const { frameworkRepo, isCloning } = useEnsureFrameworkRepo(repos, onCreateRepo);
   const {
     form,
     isFormValid,
@@ -351,6 +351,7 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
             repos={repos}
             boards={boards}
             frameworkRepo={frameworkRepo}
+            isCloning={isCloning}
             onDisplayNameChange={handleDisplayNameChange}
             customRepoSelected={customRepoSelected}
             onCustomRepoChange={setCustomRepoSelected}

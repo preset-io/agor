@@ -198,6 +198,7 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
             boardById={boardById}
             onValidityChange={handleValidityChange}
             formRef={assistantFormRef}
+            onCreateRepo={onCreateRepo}
           />
         </div>
       ),

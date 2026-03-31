@@ -43,7 +43,11 @@ import {
   theme,
 } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FRAMEWORK_REPO_SLUG, findFrameworkRepo } from '../../hooks/useFrameworkRepo';
+import {
+  FRAMEWORK_REPO_SLUG,
+  FRAMEWORK_REPO_URL,
+  findFrameworkRepo,
+} from '../../hooks/useFrameworkRepo';
 import type { NewSessionConfig } from '../NewSessionModal/NewSessionModal';
 
 const { Text, Title, Paragraph } = Typography;
@@ -51,7 +55,6 @@ const { useToken } = theme;
 
 // ─── Constants ──────────────────────────────────────────
 
-const FRAMEWORK_REPO_URL = 'https://github.com/preset-io/agor-assistant.git';
 const CLONE_TIMEOUT_MS = 120_000;
 
 // ─── Types ──────────────────────────────────────────────

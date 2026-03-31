@@ -1,5 +1,5 @@
 import type { Board, Repo } from '@agor/core/types';
-import { InfoCircleOutlined, SettingOutlined } from '@ant-design/icons';
+import { InfoCircleOutlined, LoadingOutlined, SettingOutlined } from '@ant-design/icons';
 import type { FormInstance } from 'antd';
 import { Alert, Collapse, Form, Input, Select, Space, Typography } from 'antd';
 import { CREATE_NEW_BOARD } from '@/utils/assistantConstants';
@@ -12,6 +12,7 @@ export interface AssistantFormFieldsProps {
   repos: Repo[];
   boards: Board[];
   frameworkRepo: Repo | undefined;
+  isCloning?: boolean;
   onDisplayNameChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   customRepoSelected: boolean;
   onCustomRepoChange: (selected: boolean) => void;
@@ -30,6 +31,7 @@ export const AssistantFormFields: React.FC<AssistantFormFieldsProps> = ({
   repos,
   boards,
   frameworkRepo,
+  isCloning,
   onDisplayNameChange,
   customRepoSelected,
   onCustomRepoChange,
@@ -43,9 +45,15 @@ export const AssistantFormFields: React.FC<AssistantFormFieldsProps> = ({
       .sort((a: Board, b: Board) => a.name.localeCompare(b.name))
       .map((board: Board) => ({
         value: board.board_id,
-        label: `${board.icon || '📋'} ${board.name}`,
+        label: `${board.icon || '\u{1F4CB}'} ${board.name}`,
       })),
   ];
+
+  const repoPlaceholder = frameworkRepo
+    ? `${frameworkRepo.name || frameworkRepo.slug} (default)`
+    : isCloning
+      ? 'Setting up framework repository...'
+      : 'No framework repository found';
 
   return (
     <>
@@ -63,7 +71,7 @@ export const AssistantFormFields: React.FC<AssistantFormFieldsProps> = ({
       </Form.Item>
 
       <Form.Item name="emoji" label="Icon">
-        <FormEmojiPickerInput form={form} fieldName="emoji" defaultEmoji="🤖" />
+        <FormEmojiPickerInput form={form} fieldName="emoji" defaultEmoji="\u{1F916}" />
       </Form.Item>
 
       <Form.Item name="boardChoice" label="Board">
@@ -90,6 +98,21 @@ export const AssistantFormFields: React.FC<AssistantFormFieldsProps> = ({
         }
       />
 
+      {isCloning && !frameworkRepo && (
+        <Alert
+          type="info"
+          showIcon
+          icon={<LoadingOutlined />}
+          style={{ marginBottom: 16 }}
+          message="Setting up framework repository"
+          description={
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              Cloning preset-io/agor-assistant. This usually takes 10-30 seconds.
+            </Typography.Text>
+          }
+        />
+      )}
+
       <Collapse
         ghost
         size="small"
@@ -106,13 +129,10 @@ export const AssistantFormFields: React.FC<AssistantFormFieldsProps> = ({
               <>
                 <Form.Item name="repoId" label="Framework Repository">
                   <Select
-                    placeholder={
-                      frameworkRepo
-                        ? `${frameworkRepo.name || frameworkRepo.slug} (default)`
-                        : 'Registering preset-io/agor-assistant...'
-                    }
+                    placeholder={repoPlaceholder}
                     allowClear
                     showSearch
+                    disabled={isCloning && !frameworkRepo}
                     filterOption={(input, option) =>
                       String(option?.label ?? '')
                         .toLowerCase()
