@@ -4,62 +4,8 @@ import type { RadioChangeEvent } from 'antd';
 import { Button, Card, Empty, Form, Input, Modal, Radio, Space, Typography } from 'antd';
 import { useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
+import { extractSlugFromPath, extractSlugFromUrl } from '@/utils/repoSlug';
 import { Tag } from '../Tag';
-
-// Using Typography.Text directly to avoid DOM Text interface collision
-
-// Utility: Extract slug from Git URL (org/repo format)
-function extractSlugFromUrl(url: string): string {
-  try {
-    // Remove .git suffix if present
-    const cleanUrl = url.endsWith('.git') ? url.slice(0, -4) : url;
-
-    // Handle SSH format: git@github.com:org/repo
-    if (cleanUrl.includes('@')) {
-      const match = cleanUrl.match(/:([^/]+\/[^/]+)$/);
-      if (match) {
-        return match[1];
-      }
-    }
-
-    // Handle HTTPS format: https://github.com/org/repo
-    const match = cleanUrl.match(/[:/]([^/]+\/[^/]+)$/);
-    if (match) {
-      return match[1];
-    }
-
-    // Fallback: use last two path segments
-    const segments = cleanUrl.split('/').filter(Boolean);
-    if (segments.length >= 2) {
-      return `${segments[segments.length - 2]}/${segments[segments.length - 1]}`;
-    }
-
-    return '';
-  } catch {
-    return '';
-  }
-}
-
-// Utility: Create a best-effort slug from a local path (local/<dirname>)
-function extractSlugFromPath(path: string): string {
-  if (!path) return '';
-
-  const normalized = path.replace(/\\/g, '/');
-  const segments = normalized.split('/').filter(Boolean);
-  const lastSegment = segments[segments.length - 1] || '';
-
-  if (!lastSegment) return '';
-
-  const sanitized = lastSegment
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-
-  if (!sanitized) return '';
-
-  return `local/${sanitized}`;
-}
 
 interface ReposTableProps {
   repoById: Map<string, Repo>;

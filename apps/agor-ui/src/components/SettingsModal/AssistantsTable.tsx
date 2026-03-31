@@ -27,6 +27,7 @@ import {
 } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
+import { slugify } from '@/utils/repoSlug';
 import { ArchiveDeleteWorktreeModal } from '../ArchiveDeleteWorktreeModal';
 import { FormEmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
 import type { WorktreeUpdate } from '../WorktreeModal/tabs/GeneralTab';
@@ -66,14 +67,6 @@ interface AssistantsTableProps {
   onCreateRepo?: (data: { url: string; slug: string; default_branch: string }) => void;
   onStartEnvironment?: (worktreeId: string) => void;
   onStopEnvironment?: (worktreeId: string) => void;
-}
-
-/** Slugify a display name into a valid worktree name */
-function slugify(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '');
 }
 
 export const AssistantsTable: React.FC<AssistantsTableProps> = ({

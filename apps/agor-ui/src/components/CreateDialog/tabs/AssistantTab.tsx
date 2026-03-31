@@ -3,17 +3,11 @@ import { InfoCircleOutlined, SettingOutlined } from '@ant-design/icons';
 import { Alert, Collapse, Form, Input, Select, Space, Typography } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
+import { slugify } from '@/utils/repoSlug';
 import { FormEmojiPickerInput } from '../../EmojiPickerInput/EmojiPickerInput';
 
 const FRAMEWORK_REPO_SLUG = 'preset-io/agor-assistant';
 const CREATE_NEW_BOARD = '__create_new__';
-
-function slugify(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '');
-}
 
 export interface AssistantTabResult {
   displayName: string;
@@ -126,7 +120,7 @@ export const AssistantTab: React.FC<AssistantTabProps> = ({
       </Form.Item>
 
       <Form.Item name="emoji" label="Icon">
-        <FormEmojiPickerInput form={form} fieldName="emoji" defaultEmoji="\u{1F916}" />
+        <FormEmojiPickerInput form={form} fieldName="emoji" defaultEmoji="🤖" />
       </Form.Item>
 
       <Form.Item name="boardChoice" label="Board">
