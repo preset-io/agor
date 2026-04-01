@@ -207,7 +207,7 @@ export interface AgorExecutionSettings {
   /** Enable worktree RBAC and ownership system (default: false). When enabled, enforces permission checks and Unix group isolation. */
   worktree_rbac?: boolean;
 
-  /** Allow superadmin role (default: true). When false, superadmin role behaves identically to admin (no worktree RBAC bypass). Set to false for hosted/cloud deployments. */
+  /** Allow superadmin role (default: false). When true, superadmin role gets worktree RBAC bypass. Opt-in for self-hosted deployments. */
   allow_superadmin?: boolean;
 
   /**

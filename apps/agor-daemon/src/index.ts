@@ -1186,8 +1186,8 @@ async function main() {
 
   // Feature flag: Worktree RBAC (default: false)
   const worktreeRbacEnabled = config.execution?.worktree_rbac === true;
-  // Feature flag: Allow superadmin role (default: true for self-hosted)
-  const allowSuperadmin = config.execution?.allow_superadmin !== false;
+  // Feature flag: Allow superadmin role (default: false, opt-in)
+  const allowSuperadmin = config.execution?.allow_superadmin === true;
   const superadminOpts = { allowSuperadmin };
   console.log(`[RBAC] Worktree RBAC ${worktreeRbacEnabled ? 'Enabled' : 'Disabled'}`);
   console.log(`[RBAC] Superadmin bypass ${allowSuperadmin ? 'Enabled' : 'Disabled'}`);

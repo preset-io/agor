@@ -4,7 +4,7 @@ import type { PermissionMode } from './session';
 
 /**
  * User role types
- * - superadmin: Full system access including worktree RBAC bypass (gated by allow_superadmin config)
+ * - superadmin: Full system access including worktree RBAC bypass (requires allow_superadmin=true in config)
  * - admin: Can manage most resources (MCP servers, config, users), no worktree RBAC bypass
  * - member: Standard user access, can create and manage own sessions
  * - viewer: Read-only access
