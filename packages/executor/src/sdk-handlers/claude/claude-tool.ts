@@ -338,6 +338,7 @@ export class ClaudeTool implements ITool {
 
     let streamStartTime = Date.now();
     let firstTokenTime: number | null = null;
+    let firstActivityTime: number | null = null; // Any SDK activity (thinking, tools, text)
     let apiWaitMessageSent = false; // Track whether we've sent an "API waiting" message
     const API_WAIT_THRESHOLD_MS = 30_000; // 30 seconds before warning user
     let tokenUsage: TokenUsage | undefined;
@@ -426,10 +427,22 @@ export class ClaudeTool implements ITool {
         }
       }
 
-      // Detect slow API response — emit system message if waiting too long for first token
+      // Track first SDK activity (thinking, tools, text — anything that shows the API responded)
+      if (
+        !firstActivityTime &&
+        (event.type === 'partial' ||
+          event.type === 'thinking_partial' ||
+          event.type === 'tool_start' ||
+          event.type === 'message_start')
+      ) {
+        firstActivityTime = Date.now();
+      }
+
+      // Detect slow API response — emit system message if waiting too long for ANY activity
+      // Only fires when the API hasn't responded at all (no thinking, no tools, no text)
       if (
         !apiWaitMessageSent &&
-        !firstTokenTime &&
+        !firstActivityTime &&
         Date.now() - streamStartTime > API_WAIT_THRESHOLD_MS
       ) {
         apiWaitMessageSent = true;
@@ -746,6 +759,7 @@ export class ClaudeTool implements ITool {
           currentThinkingMessageId = null;
           streamStartTime = Date.now();
           firstTokenTime = null;
+          firstActivityTime = null;
           apiWaitMessageSent = false; // Reset for next message cycle
         } else if (event.type === 'complete' && event.role === MessageRole.USER) {
           // Type assertion for user message

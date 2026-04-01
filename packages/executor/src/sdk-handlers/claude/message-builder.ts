@@ -188,10 +188,12 @@ function extractContentPreview(
     return 'Compacting conversation context...';
   }
 
-  // For text blocks, return text preview
-  const textBlocks = content.filter((b) => b.type === 'text').map((b) => b.text || '');
-  const fullTextContent = textBlocks.join('');
-  return fullTextContent.substring(0, 200);
+  // For any block with a text field, return text preview
+  const textContent = content
+    .filter((b) => b.text)
+    .map((b) => b.text || '')
+    .join('');
+  return textContent.substring(0, 200);
 }
 
 /**
