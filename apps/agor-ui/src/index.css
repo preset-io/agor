@@ -5,10 +5,10 @@
 
 /* Global styles for Agor UI */
 
-/* Fix Ant Design Collapse header text overflow for ellipsis truncation.
-   Only target the header-text wrapper — NOT the whole header, which would
-   clip flex-wrapped pill/badge rows (see issue #869). */
-.ant-collapse-header-text {
+/* Fix Ant Design Collapse title overflow for ellipsis truncation.
+   Only target the title wrapper — NOT the whole .ant-collapse-header,
+   which would clip flex-wrapped pill/badge rows (see #869). */
+.ant-collapse-header > .ant-collapse-title {
   overflow: hidden;
   min-width: 0;
 }
