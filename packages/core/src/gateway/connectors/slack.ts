@@ -120,7 +120,7 @@ export function wrapTablesInCodeBlocks(md: string): string {
   }
 
   for (const line of lines) {
-    if (/^```/.test(line)) {
+    if (/^(`{3,}|~{3,})/.test(line)) {
       flushTable();
       inCodeBlock = !inCodeBlock;
       result.push(line);

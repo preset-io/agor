@@ -216,4 +216,14 @@ describe('wrapTablesInCodeBlocks', () => {
   it('handles empty input', () => {
     expect(wrapTablesInCodeBlocks('')).toBe('');
   });
+
+  it('does not wrap tables inside tilde-fenced code blocks', () => {
+    const input = '~~~\n| Col1 | Col2 |\n|------|------|\n| A    | B    |\n~~~';
+    expect(wrapTablesInCodeBlocks(input)).toBe(input);
+  });
+
+  it('does not wrap tables inside 4+ backtick fences', () => {
+    const input = '````\n| Col1 | Col2 |\n|------|------|\n| A    | B    |\n````';
+    expect(wrapTablesInCodeBlocks(input)).toBe(input);
+  });
 });
