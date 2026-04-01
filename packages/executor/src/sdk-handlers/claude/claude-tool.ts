@@ -77,6 +77,26 @@ function formatRateLimitText(event: Extract<ProcessedEvent, { type: 'rate_limit'
 }
 
 /**
+ * Build a rate_limit content block for system messages.
+ * Shared between streaming and non-streaming paths.
+ */
+function buildRateLimitContentBlock(
+  event: Extract<ProcessedEvent, { type: 'rate_limit' }>
+): Array<{ type: string; [key: string]: unknown }> {
+  return [
+    {
+      type: 'rate_limit',
+      text: formatRateLimitText(event),
+      status: event.status,
+      rateLimitType: event.rateLimitType,
+      resetsAt: event.resetsAt,
+      overageStatus: event.overageStatus,
+      isUsingOverage: event.isUsingOverage,
+    },
+  ];
+}
+
+/**
  * Wrapper for withSessionGuard that accepts Feathers repositories
  * The Feathers repositories have the same interface but different type signatures
  */
@@ -551,9 +571,8 @@ export class ClaudeTool implements ITool {
       // Handle rate_limit events — surface as system messages
       if (event.type === 'rate_limit') {
         const rateLimitEvent = event as Extract<ProcessedEvent, { type: 'rate_limit' }>;
-        const text = formatRateLimitText(rateLimitEvent);
-
-        console.log(`⏳ Rate limit → system message: ${text}`);
+        const content = buildRateLimitContentBlock(rateLimitEvent);
+        console.log(`⏳ Rate limit → system message: ${content[0].text}`);
 
         await withFeathersSessionGuard(sessionId, this.sessionsRepo, async () => {
           const rateLimitMessageId = generateId() as MessageID;
@@ -570,17 +589,7 @@ export class ClaudeTool implements ITool {
           await createSystemMessage(
             sessionId,
             rateLimitMessageId,
-            [
-              {
-                type: 'rate_limit',
-                text,
-                status: rateLimitEvent.status,
-                rateLimitType: rateLimitEvent.rateLimitType,
-                resetsAt: rateLimitEvent.resetsAt,
-                overageStatus: rateLimitEvent.overageStatus,
-                isUsingOverage: rateLimitEvent.isUsingOverage,
-              },
-            ],
+            content,
             taskId,
             nextIndex++,
             resolvedModel,
@@ -946,30 +955,21 @@ export class ClaudeTool implements ITool {
       // Handle rate_limit events in non-streaming path
       if (event.type === 'rate_limit') {
         const rateLimitEvent = event as Extract<ProcessedEvent, { type: 'rate_limit' }>;
-        const text = formatRateLimitText(rateLimitEvent);
+        const content = buildRateLimitContentBlock(rateLimitEvent);
+        console.log(`⏳ Rate limit → system message: ${content[0].text}`);
 
-        console.log(`⏳ Rate limit → system message: ${text}`);
-
-        const rateLimitMessageId = generateId() as MessageID;
-        await createSystemMessage(
-          sessionId,
-          rateLimitMessageId,
-          [
-            {
-              type: 'rate_limit',
-              text,
-              status: rateLimitEvent.status,
-              rateLimitType: rateLimitEvent.rateLimitType,
-              resetsAt: rateLimitEvent.resetsAt,
-              overageStatus: rateLimitEvent.overageStatus,
-              isUsingOverage: rateLimitEvent.isUsingOverage,
-            },
-          ],
-          taskId,
-          nextIndex++,
-          resolvedModel,
-          this.messagesService!
-        );
+        await withFeathersSessionGuard(sessionId, this.sessionsRepo, async () => {
+          const rateLimitMessageId = generateId() as MessageID;
+          await createSystemMessage(
+            sessionId,
+            rateLimitMessageId,
+            content,
+            taskId,
+            nextIndex++,
+            resolvedModel,
+            this.messagesService!
+          );
+        });
       }
 
       // Capture raw SDK response for token accounting
