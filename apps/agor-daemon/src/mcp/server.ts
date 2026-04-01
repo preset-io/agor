@@ -48,7 +48,7 @@ export interface McpContext {
   userId: UserID;
   sessionId: SessionID;
   authenticatedUser: AuthenticatedUser;
-  baseServiceParams: Pick<AuthenticatedParams, 'user' | 'authenticated'>;
+  baseServiceParams: Pick<AuthenticatedParams, 'user' | 'authenticated' | 'provider'>;
 }
 
 /**
@@ -351,13 +351,14 @@ export function setupMCPRoutes(app: Application, db: Database, toolSearchEnabled
         throw error;
       }
 
-      const baseServiceParams: Pick<AuthenticatedParams, 'user' | 'authenticated'> = {
+      const baseServiceParams: Pick<AuthenticatedParams, 'user' | 'authenticated' | 'provider'> = {
         user: {
           user_id: authenticatedUser.user_id,
           email: authenticatedUser.email,
           role: authenticatedUser.role,
         },
         authenticated: true,
+        provider: 'mcp',
       };
 
       // Create a per-request McpServer with all tools registered

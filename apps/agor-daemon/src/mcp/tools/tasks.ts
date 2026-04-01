@@ -19,7 +19,7 @@ export function registerTaskTools(server: McpServer, ctx: McpContext): void {
       const query: Record<string, unknown> = {};
       if (args.sessionId) query.session_id = args.sessionId;
       if (args.limit) query.$limit = args.limit;
-      const tasks = await ctx.app.service('tasks').find({ query });
+      const tasks = await ctx.app.service('tasks').find({ query, ...ctx.baseServiceParams });
       return textResult(tasks);
     }
   );
@@ -35,7 +35,7 @@ export function registerTaskTools(server: McpServer, ctx: McpContext): void {
       }),
     },
     async (args) => {
-      const task = await ctx.app.service('tasks').get(args.taskId);
+      const task = await ctx.app.service('tasks').get(args.taskId, ctx.baseServiceParams);
       return textResult(task);
     }
   );

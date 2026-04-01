@@ -120,14 +120,6 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
       }),
     },
     async (args) => {
-      // Guard: only superadmins can assign the superadmin role (MCP bypasses Feathers hooks)
-      if (args.role === 'superadmin') {
-        const callerRole = ctx.authenticatedUser.role;
-        if (callerRole !== 'superadmin') {
-          throw new Error('Only superadmins can assign the superadmin role');
-        }
-      }
-
       const updateData: Record<string, unknown> = {};
       if (args.email !== undefined) updateData.email = args.email;
       if (args.name !== undefined) updateData.name = args.name;
@@ -185,14 +177,6 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
       }),
     },
     async (args) => {
-      // Guard: only superadmins can create superadmin users (MCP bypasses Feathers hooks)
-      if (args.role === 'superadmin') {
-        const callerRole = ctx.authenticatedUser.role;
-        if (callerRole !== 'superadmin') {
-          throw new Error('Only superadmins can create superadmin users');
-        }
-      }
-
       const createData: Record<string, unknown> = {
         email: args.email,
         password: args.password,

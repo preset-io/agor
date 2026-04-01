@@ -18,7 +18,7 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
       }),
     },
     async (args) => {
-      const board = await ctx.app.service('boards').get(args.boardId);
+      const board = await ctx.app.service('boards').get(args.boardId, ctx.baseServiceParams);
       return textResult(board);
     }
   );
@@ -37,7 +37,7 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
     async (args) => {
       const query: Record<string, unknown> = {};
       if (args.limit) query.$limit = args.limit;
-      const boards = await ctx.app.service('boards').find({ query });
+      const boards = await ctx.app.service('boards').find({ query, ...ctx.baseServiceParams });
       return textResult(boards);
     }
   );

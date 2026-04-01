@@ -62,7 +62,9 @@ export function registerAnalyticsTools(server: McpServer, ctx: McpContext): void
       if (args.limit) query.limit = args.limit;
       if (args.offset) query.offset = args.offset;
 
-      const leaderboard = await ctx.app.service('leaderboard').find({ query });
+      const leaderboard = await ctx.app
+        .service('leaderboard')
+        .find({ query, ...ctx.baseServiceParams });
       return textResult(leaderboard);
     }
   );

@@ -48,7 +48,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       } else if (!args.includeArchived) {
         query.archived = false;
       }
-      const sessions = await ctx.app.service('sessions').find({ query });
+      const sessions = await ctx.app.service('sessions').find({ query, ...ctx.baseServiceParams });
       return textResult(sessions);
     }
   );

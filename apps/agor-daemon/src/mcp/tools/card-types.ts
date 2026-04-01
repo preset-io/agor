@@ -69,7 +69,7 @@ export function registerCardTypeTools(server: McpServer, ctx: McpContext): void 
       const limit = typeof args.limit === 'number' ? args.limit : 50;
       const result = await ctx.app
         .service('card-types')
-        .find({ query: { $limit: limit } } as never);
+        .find({ query: { $limit: limit }, ...ctx.baseServiceParams } as never);
       const data = 'data' in result ? result.data : result;
       return textResult({ total: Array.isArray(data) ? data.length : 0, data });
     }
