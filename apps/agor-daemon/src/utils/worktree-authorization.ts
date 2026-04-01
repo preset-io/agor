@@ -105,14 +105,18 @@ export function resolveWorktreePermission(
   worktree: Worktree,
   userId: UUID,
   isOwner: boolean,
-  userRole?: string
+  userRole?: string,
+  allowSuperadmin = true
 ): WorktreePermissionLevel {
   if (isOwner) {
     return 'all';
   }
   // Superadmins get at least 'view' on all worktrees, even others_can=none
   const basePermission = worktree.others_can ?? 'view';
-  if (isSuperAdmin(userRole) && PERMISSION_RANK[basePermission] < PERMISSION_RANK.view) {
+  if (
+    isSuperAdmin(userRole, allowSuperadmin) &&
+    PERMISSION_RANK[basePermission] < PERMISSION_RANK.view
+  ) {
     return 'view';
   }
   return basePermission;
@@ -235,7 +239,13 @@ export function ensureWorktreePermission(
     if (
       !hasWorktreePermission(worktree, userId, isOwner, requiredLevel, userRole, allowSuperadmin)
     ) {
-      const effectiveLevel = resolveWorktreePermission(worktree, userId, isOwner, userRole);
+      const effectiveLevel = resolveWorktreePermission(
+        worktree,
+        userId,
+        isOwner,
+        userRole,
+        allowSuperadmin
+      );
       throw new Forbidden(
         `You need '${requiredLevel}' permission to ${action}. You have '${effectiveLevel}' permission.`
       );

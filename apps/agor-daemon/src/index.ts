@@ -3517,10 +3517,10 @@ async function main() {
                 callerRole !== 'owner'
               ) {
                 // Bootstrap: allow first superadmin promotion if none exist yet
-                const existing = (await usersService.find({
-                  query: { role: 'superadmin', $limit: 1 },
-                })) as Paginated<User>;
-                if (existing.total > 0) {
+                // Note: usersService.find() doesn't filter by role, so filter in JS
+                const allUsers = (await usersService.find({})) as Paginated<User>;
+                const hasSuperadmin = allUsers.data.some((u) => u.role === 'superadmin');
+                if (hasSuperadmin) {
                   throw new Forbidden('Only superadmins can assign the superadmin role');
                 }
               }
