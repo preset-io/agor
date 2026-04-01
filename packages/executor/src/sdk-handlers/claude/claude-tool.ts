@@ -427,13 +427,17 @@ export class ClaudeTool implements ITool {
         }
       }
 
-      // Track first SDK activity (thinking, tools, text — anything that shows the API responded)
+      // Track first SDK activity that indicates the API is responding to the prompt.
+      // Excludes SDK bootstrap events (session_id_captured, slash_commands_discovered)
+      // which fire during init before any API call.
       if (
         !firstActivityTime &&
         (event.type === 'partial' ||
           event.type === 'thinking_partial' ||
           event.type === 'tool_start' ||
-          event.type === 'message_start')
+          event.type === 'message_start' ||
+          event.type === 'rate_limit' ||
+          event.type === 'complete')
       ) {
         firstActivityTime = Date.now();
       }
