@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { markdownToMrkdwn } from './slack';
+import { markdownToMrkdwn, wrapTablesInCodeBlocks } from './slack';
 
 /**
  * slackify-markdown uses zero-width spaces (\u200B) around inline formatting
@@ -77,9 +77,11 @@ describe('markdownToMrkdwn', () => {
     expect(markdownToMrkdwn('> quoted text')).toBe('> quoted text');
   });
 
-  it('preserves tables', () => {
+  it('renders tables as monospace code blocks', () => {
     const input = '| Col1 | Col2 |\n|------|------|\n| A    | B    |';
     const output = markdownToMrkdwn(input);
+    // Table content is preserved inside a code block
+    expect(output).toContain('```');
     expect(output).toContain('Col1');
     expect(output).toContain('Col2');
     expect(output).toContain('A');
@@ -174,5 +176,44 @@ describe('markdownToMrkdwn', () => {
     expect(output).toContain('item 2');
     // Nested items should be indented
     expect(output).toMatch(/\n\s+.*subitem/);
+  });
+});
+
+describe('wrapTablesInCodeBlocks', () => {
+  it('wraps a GFM table in code fences', () => {
+    const input = '| Col1 | Col2 |\n|------|------|\n| A    | B    |';
+    const output = wrapTablesInCodeBlocks(input);
+    expect(output).toBe('```\n| Col1 | Col2 |\n|------|------|\n| A    | B    |\n```');
+  });
+
+  it('does not wrap tables already inside code blocks', () => {
+    const input = '```\n| Col1 | Col2 |\n|------|------|\n| A    | B    |\n```';
+    expect(wrapTablesInCodeBlocks(input)).toBe(input);
+  });
+
+  it('does not wrap pipe lines without a separator row', () => {
+    const input = '| not a table |\n| just pipes |';
+    expect(wrapTablesInCodeBlocks(input)).toBe(input);
+  });
+
+  it('handles multiple tables separated by text', () => {
+    const input = '| A | B |\n|---|---|\n| 1 | 2 |\n\nText\n\n| C | D |\n|---|---|\n| 3 | 4 |';
+    const output = wrapTablesInCodeBlocks(input);
+    expect(output).toContain('```\n| A | B |');
+    expect(output).toContain('```\n| C | D |');
+    // Should have 2 pairs of code fences (4 total)
+    expect(output.match(/```/g)?.length).toBe(4);
+  });
+
+  it('preserves surrounding text', () => {
+    const input = 'Before\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\nAfter';
+    const output = wrapTablesInCodeBlocks(input);
+    expect(output).toContain('Before');
+    expect(output).toContain('After');
+    expect(output).toContain('```\n| A | B |');
+  });
+
+  it('handles empty input', () => {
+    expect(wrapTablesInCodeBlocks('')).toBe('');
   });
 });

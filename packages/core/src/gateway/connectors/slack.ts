@@ -91,17 +91,68 @@ function hasActiveMention(text: string, mentionPattern: RegExp): boolean {
 }
 
 /**
+ * Wrap GFM tables in code fences so Slack renders them monospace.
+ *
+ * Slack's mrkdwn has no native table syntax, so pipe-delimited tables
+ * render as misaligned plain text. Wrapping them in triple-backtick code
+ * blocks preserves column alignment via Slack's monospace rendering.
+ *
+ * Skips tables that are already inside fenced code blocks.
+ */
+export function wrapTablesInCodeBlocks(md: string): string {
+  const lines = md.split('\n');
+  const result: string[] = [];
+  let inCodeBlock = false;
+  let tableLines: string[] = [];
+
+  function flushTable() {
+    if (tableLines.length === 0) return;
+    // Only wrap if it contains a GFM separator row (e.g. |---|---|)
+    const block = tableLines.join('\n');
+    if (/^\|[\s:]*-[\s:-]*\|/m.test(block)) {
+      result.push('```');
+      result.push(...tableLines);
+      result.push('```');
+    } else {
+      result.push(...tableLines);
+    }
+    tableLines = [];
+  }
+
+  for (const line of lines) {
+    if (/^```/.test(line)) {
+      flushTable();
+      inCodeBlock = !inCodeBlock;
+      result.push(line);
+      continue;
+    }
+    if (inCodeBlock) {
+      result.push(line);
+      continue;
+    }
+    if (/^\s*\|/.test(line)) {
+      tableLines.push(line);
+    } else {
+      flushTable();
+      result.push(line);
+    }
+  }
+  flushTable();
+  return result.join('\n');
+}
+
+/**
  * Convert GitHub-flavored markdown to Slack mrkdwn format.
  *
  * Delegates to `slackify-markdown` which uses `unified`/`remark` with
  * custom Slack handlers. Handles bold, italic, strikethrough, links,
  * headings (→ bold), images (→ links), code blocks (strips lang),
- * lists, blockquotes, tables, and Slack character escaping.
+ * lists, blockquotes, tables (→ code blocks), and Slack character escaping.
  *
  * @see https://github.com/jsarafajr/slackify-markdown
  */
 export function markdownToMrkdwn(markdown: string): string {
-  return slackifyMarkdown(markdown).trim();
+  return slackifyMarkdown(wrapTablesInCodeBlocks(markdown)).trim();
 }
 
 export class SlackConnector implements GatewayConnector {
