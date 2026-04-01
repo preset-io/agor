@@ -5,13 +5,14 @@
 import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type { AuthenticatedParams, HookContext } from '@agor/core/types';
 
-export type Role = 'owner' | 'admin' | 'member' | 'viewer';
+export type Role = 'superadmin' | 'admin' | 'member' | 'viewer';
 
-const ROLE_RANK: Record<Role, number> = {
+const ROLE_RANK: Record<string, number> = {
   viewer: 0,
   member: 1,
   admin: 2,
-  owner: 3,
+  superadmin: 3,
+  owner: 3, // Deprecated alias for superadmin (backwards compat)
 };
 
 /**

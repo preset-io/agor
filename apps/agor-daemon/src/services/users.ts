@@ -30,7 +30,7 @@ interface CreateUserData {
   password: string;
   name?: string;
   emoji?: string;
-  role?: 'owner' | 'admin' | 'member' | 'viewer';
+  role?: 'superadmin' | 'admin' | 'member' | 'viewer';
   unix_username?: string;
   must_change_password?: boolean;
 }
@@ -43,7 +43,7 @@ interface UpdateUserData {
   password?: string;
   name?: string;
   emoji?: string;
-  role?: 'owner' | 'admin' | 'member' | 'viewer';
+  role?: 'superadmin' | 'admin' | 'member' | 'viewer';
   unix_username?: string;
   must_change_password?: boolean;
   avatar?: string;
@@ -379,7 +379,11 @@ export class UsersService {
       email: row.email,
       name: row.name ?? undefined,
       emoji: row.emoji ?? undefined,
-      role: (row.role ?? 'member') as 'owner' | 'admin' | 'member' | 'viewer',
+      role: (((row.role as string) === 'owner' ? 'superadmin' : row.role) ?? 'member') as
+        | 'superadmin'
+        | 'admin'
+        | 'member'
+        | 'viewer',
       unix_username: row.unix_username ?? undefined,
       avatar: data.avatar,
       preferences: data.preferences,
@@ -448,7 +452,11 @@ class UsersServiceWithAuth extends UsersService {
       password: row.password, // Include for authentication
       name: row.name ?? undefined,
       emoji: row.emoji ?? undefined,
-      role: (row.role ?? 'member') as 'owner' | 'admin' | 'member' | 'viewer',
+      role: (((row.role as string) === 'owner' ? 'superadmin' : row.role) ?? 'member') as
+        | 'superadmin'
+        | 'admin'
+        | 'member'
+        | 'viewer',
       avatar: data.avatar,
       preferences: data.preferences,
       onboarding_completed: !!row.onboarding_completed,

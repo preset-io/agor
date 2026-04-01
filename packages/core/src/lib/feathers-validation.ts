@@ -176,10 +176,11 @@ export const userQuerySchema = createQuerySchema(
     email: Type.Optional(Type.String({ maxLength: 255 })),
     role: Type.Optional(
       Type.Union([
-        Type.Literal('owner'),
+        Type.Literal('superadmin'),
         Type.Literal('admin'),
         Type.Literal('member'),
         Type.Literal('viewer'),
+        Type.Literal('owner'), // Deprecated alias for superadmin (backwards compat)
       ])
     ),
     created_at: Type.Optional(CommonSchemas.timestamp),

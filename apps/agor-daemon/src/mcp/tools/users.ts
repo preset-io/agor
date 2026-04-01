@@ -95,9 +95,11 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
         name: z.string().optional().describe('New display name (optional)'),
         password: z.string().optional().describe('New password (optional, will be hashed)'),
         role: z
-          .enum(['owner', 'admin', 'member', 'viewer'])
+          .enum(['superadmin', 'admin', 'member', 'viewer'])
           .optional()
-          .describe('New user role (optional)'),
+          .describe(
+            'New user role (optional). superadmin=full system access + worktree RBAC bypass, admin=manage resources, member=standard user, viewer=read-only'
+          ),
         unix_username: z
           .string()
           .optional()
@@ -163,10 +165,10 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
           .optional()
           .describe('Force user to change password on first login (optional, defaults to false)'),
         role: z
-          .enum(['owner', 'admin', 'member', 'viewer'])
+          .enum(['superadmin', 'admin', 'member', 'viewer'])
           .optional()
           .describe(
-            'User role (optional, defaults to "member"). Roles: owner=full system access, admin=manage most resources, member=standard user, viewer=read-only'
+            'User role (optional, defaults to "member"). Roles: superadmin=full system access + worktree RBAC bypass, admin=manage resources, member=standard user, viewer=read-only'
           ),
       }),
     },

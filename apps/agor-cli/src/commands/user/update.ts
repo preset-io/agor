@@ -38,7 +38,7 @@ export default class UserUpdate extends BaseCommand {
     }),
     role: Flags.string({
       description: 'New role',
-      options: ['owner', 'admin', 'member', 'viewer'],
+      options: ['superadmin', 'admin', 'member', 'viewer'],
     }),
     'unix-username': Flags.string({
       description: 'New Unix username for shell access',
@@ -139,7 +139,7 @@ export default class UserUpdate extends BaseCommand {
             name: 'role',
             message: 'New role:',
             when: fields.includes('role'),
-            choices: ['owner', 'admin', 'member', 'viewer'],
+            choices: ['superadmin', 'admin', 'member', 'viewer'],
             default: user.role,
           },
           {
@@ -177,7 +177,7 @@ export default class UserUpdate extends BaseCommand {
       if (flags.email) updates.email = flags.email;
       if (flags.name) updates.name = flags.name;
       if (flags.password) updates.password = flags.password;
-      if (flags.role) updates.role = flags.role as 'owner' | 'admin' | 'member' | 'viewer';
+      if (flags.role) updates.role = flags.role as 'superadmin' | 'admin' | 'member' | 'viewer';
       if (flags['unix-username']) updates.unix_username = flags['unix-username'];
       if (flags['force-password-change'] !== undefined) {
         updates.must_change_password = flags['force-password-change'];

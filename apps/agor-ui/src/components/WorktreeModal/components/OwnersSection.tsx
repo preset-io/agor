@@ -40,7 +40,7 @@ export const OwnersSection: React.FC<OwnersSectionProps> = ({ worktree, client, 
   // Check if current user can edit owners
   // Owners can edit, AND admins have super powers (can edit any worktree)
   const currentUserId = currentUser?.user_id;
-  const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'owner';
+  const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'superadmin';
   const isOwner = owners.some((o) => o.user_id === currentUserId);
 
   // Admins can always edit, regardless of loading state

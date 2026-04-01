@@ -110,7 +110,7 @@ describe('createUser', () => {
   });
 
   dbTest('should set member emoji for non-admin roles', async ({ db }) => {
-    const roles = ['owner', 'member', 'viewer'] as const;
+    const roles = ['superadmin', 'member', 'viewer'] as const;
 
     for (const role of roles) {
       const data = createUserData({
@@ -356,7 +356,7 @@ describe('getUserByEmail', () => {
     const data = createUserData({
       email: 'complete@example.com',
       name: 'Complete User',
-      role: 'owner',
+      role: 'superadmin',
     });
     await createUser(db, data);
 
@@ -366,7 +366,7 @@ describe('getUserByEmail', () => {
     expect(user?.user_id).toBeDefined();
     expect(user?.email).toBe('complete@example.com');
     expect(user?.name).toBe('Complete User');
-    expect(user?.role).toBe('owner');
+    expect(user?.role).toBe('superadmin');
     expect(user?.emoji).toBe('👤');
     expect(user?.onboarding_completed).toBe(false);
     expect(user?.created_at).toBeInstanceOf(Date);
@@ -528,9 +528,9 @@ describe('User utilities integration', () => {
   });
 
   dbTest('should handle mixed user roles in same database', async ({ db }) => {
-    const owner = await createUser(
+    const superadmin = await createUser(
       db,
-      createUserData({ email: 'owner@example.com', role: 'owner' })
+      createUserData({ email: 'superadmin@example.com', role: 'superadmin' })
     );
     const admin = await createUser(
       db,
@@ -545,13 +545,13 @@ describe('User utilities integration', () => {
       createUserData({ email: 'viewer@example.com', role: 'viewer' })
     );
 
-    expect(owner.role).toBe('owner');
+    expect(superadmin.role).toBe('superadmin');
     expect(admin.role).toBe('admin');
     expect(member.role).toBe('member');
     expect(viewer.role).toBe('viewer');
 
     expect(admin.emoji).toBe('⭐');
-    expect(owner.emoji).toBe('👤');
+    expect(superadmin.emoji).toBe('👤');
     expect(member.emoji).toBe('👤');
     expect(viewer.emoji).toBe('👤');
   });

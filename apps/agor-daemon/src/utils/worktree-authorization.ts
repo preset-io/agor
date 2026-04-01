@@ -21,6 +21,22 @@ import type {
 } from '@agor/core/types';
 
 /**
+ * Check if a user has the superadmin role (or deprecated 'owner' alias).
+ * Superadmins bypass worktree-level RBAC — they can view all worktrees
+ * (including others_can=none) and self-assign ownership.
+ *
+ * Note: This does NOT grant automatic prompt access. Superadmins must
+ * self-assign as worktree owner first, leaving an audit trail.
+ *
+ * The allow_superadmin config flag gates this. When false, superadmins
+ * are treated as regular admins (no worktree RBAC bypass).
+ */
+export function isSuperAdmin(role: string | undefined, allowSuperadmin = true): boolean {
+  if (!allowSuperadmin) return false;
+  return role === 'superadmin' || role === 'owner';
+}
+
+/**
  * Permission level hierarchy (for comparisons)
  */
 export const PERMISSION_RANK: Record<WorktreePermissionLevel, number> = {
@@ -35,6 +51,8 @@ export const PERMISSION_RANK: Record<WorktreePermissionLevel, number> = {
  *
  * Logic:
  * - Owners always have 'all' permission
+ * - Superadmins get 'view' permission on all worktrees (can see everything)
+ *   but must self-assign ownership to get 'prompt'/'all' (leaves audit trail)
  * - Non-owners inherit from worktree.others_can
  * - Compare effective permission against required level
  *
@@ -42,16 +60,25 @@ export const PERMISSION_RANK: Record<WorktreePermissionLevel, number> = {
  * @param userId - User ID to check
  * @param isOwner - Whether user is an owner
  * @param requiredLevel - Minimum permission level required
+ * @param userRole - User's global role (for superadmin bypass)
  * @returns true if user has sufficient permission
  */
 export function hasWorktreePermission(
   worktree: Worktree,
   userId: UUID,
   isOwner: boolean,
-  requiredLevel: WorktreePermissionLevel
+  requiredLevel: WorktreePermissionLevel,
+  userRole?: string,
+  allowSuperadmin = true
 ): boolean {
   // Owners always have 'all' permission
   if (isOwner) {
+    return true;
+  }
+
+  // Superadmins can always view any worktree (including others_can=none)
+  // For prompt/all, they must self-assign ownership first
+  if (isSuperAdmin(userRole, allowSuperadmin) && requiredLevel === 'view') {
     return true;
   }
 
@@ -71,17 +98,24 @@ export function hasWorktreePermission(
  * @param worktree - Worktree to check
  * @param userId - User ID to check
  * @param isOwner - Whether user is an owner
- * @returns Effective permission level ('view', 'prompt', or 'all')
+ * @param userRole - User's global role (for superadmin bypass)
+ * @returns Effective permission level ('none', 'view', 'prompt', or 'all')
  */
 export function resolveWorktreePermission(
   worktree: Worktree,
   userId: UUID,
-  isOwner: boolean
+  isOwner: boolean,
+  userRole?: string
 ): WorktreePermissionLevel {
   if (isOwner) {
     return 'all';
   }
-  return worktree.others_can ?? 'view';
+  // Superadmins get at least 'view' on all worktrees, even others_can=none
+  const basePermission = worktree.others_can ?? 'view';
+  if (isSuperAdmin(userRole) && PERMISSION_RANK[basePermission] < PERMISSION_RANK.view) {
+    return 'view';
+  }
+  return basePermission;
 }
 
 /**
@@ -167,7 +201,8 @@ export function loadWorktree(worktreeRepo: WorktreeRepository, worktreeIdField =
  */
 export function ensureWorktreePermission(
   requiredLevel: WorktreePermissionLevel,
-  action: string = 'perform this action'
+  action: string = 'perform this action',
+  options?: { allowSuperadmin?: boolean }
 ) {
   return (context: HookContext) => {
     // Skip for internal calls
@@ -194,9 +229,13 @@ export function ensureWorktreePermission(
     }
 
     const userId = context.params.user.user_id as UUID;
+    const userRole = context.params.user.role as string | undefined;
+    const allowSuperadmin = options?.allowSuperadmin ?? true;
 
-    if (!hasWorktreePermission(worktree, userId, isOwner, requiredLevel)) {
-      const effectiveLevel = resolveWorktreePermission(worktree, userId, isOwner);
+    if (
+      !hasWorktreePermission(worktree, userId, isOwner, requiredLevel, userRole, allowSuperadmin)
+    ) {
+      const effectiveLevel = resolveWorktreePermission(worktree, userId, isOwner, userRole);
       throw new Forbidden(
         `You need '${requiredLevel}' permission to ${action}. You have '${effectiveLevel}' permission.`
       );
@@ -218,7 +257,10 @@ export function ensureWorktreePermission(
  * @param worktreeRepo - WorktreeRepository instance
  * @returns Feathers hook
  */
-export function scopeWorktreeQuery(worktreeRepo: WorktreeRepository) {
+export function scopeWorktreeQuery(
+  worktreeRepo: WorktreeRepository,
+  options?: { allowSuperadmin?: boolean }
+) {
   return async (context: HookContext) => {
     // Skip for internal calls
     if (!context.params.provider) {
@@ -242,11 +284,28 @@ export function scopeWorktreeQuery(worktreeRepo: WorktreeRepository) {
       return context;
     }
 
+    // Superadmins see all worktrees (bypass access filtering)
+    const userRole = context.params.user?.role as string | undefined;
+    const allowSuperadmin = options?.allowSuperadmin ?? true;
+
     // Use optimized repository method (single SQL query with JOIN)
     const query = context.params.query ?? {};
-    const accessibleWorktrees = await worktreeRepo.findAccessibleWorktrees(userId, {
-      archived: query.archived,
-    });
+    let accessibleWorktrees: Worktree[];
+    if (isSuperAdmin(userRole, allowSuperadmin)) {
+      // Superadmins see all worktrees — use findAll and apply archived filter manually
+      const all = await worktreeRepo.findAll({ includeArchived: true });
+      if (query.archived === true) {
+        accessibleWorktrees = all.filter((wt) => wt.archived === true);
+      } else if (query.archived === false) {
+        accessibleWorktrees = all.filter((wt) => !wt.archived);
+      } else {
+        accessibleWorktrees = all;
+      }
+    } else {
+      accessibleWorktrees = await worktreeRepo.findAccessibleWorktrees(userId, {
+        archived: query.archived,
+      });
+    }
 
     // Apply client-side filtering for non-special query params (repo_id, name, etc.)
     let filtered = accessibleWorktrees;
@@ -322,7 +381,10 @@ function compareSessionFields(a: Session, b: Session, field: keyof Session, orde
  * @param sessionRepo - SessionRepository instance
  * @returns Feathers hook
  */
-export function scopeSessionQuery(sessionRepo: SessionRepository) {
+export function scopeSessionQuery(
+  sessionRepo: SessionRepository,
+  options?: { allowSuperadmin?: boolean }
+) {
   return async (context: HookContext) => {
     // Skip for internal calls
     if (!context.params.provider) {
@@ -351,8 +413,14 @@ export function scopeSessionQuery(sessionRepo: SessionRepository) {
       return context;
     }
 
+    // Superadmins see all sessions (bypass access filtering)
+    const userRole = context.params.user?.role as string | undefined;
+    const allowSuperadmin = options?.allowSuperadmin ?? true;
+
     // Use optimized repository method (single SQL query with JOINs)
-    const accessibleSessions = await sessionRepo.findAccessibleSessions(userId);
+    const accessibleSessions = isSuperAdmin(userRole, allowSuperadmin)
+      ? await sessionRepo.findAll()
+      : await sessionRepo.findAccessibleSessions(userId);
 
     // Apply sorting if specified in query
     let sortedSessions = accessibleSessions;
@@ -957,8 +1025,8 @@ export async function ensureCanPromptSession(
  *
  * @returns Feathers hook
  */
-export function ensureCanCreateSession() {
-  return ensureWorktreePermission('all', 'create sessions in this worktree');
+export function ensureCanCreateSession(options?: { allowSuperadmin?: boolean }) {
+  return ensureWorktreePermission('all', 'create sessions in this worktree', options);
 }
 
 /**
@@ -968,8 +1036,8 @@ export function ensureCanCreateSession() {
  *
  * @returns Feathers hook
  */
-export function ensureCanPrompt() {
-  return ensureWorktreePermission('prompt', 'create tasks/messages in this worktree');
+export function ensureCanPrompt(options?: { allowSuperadmin?: boolean }) {
+  return ensureWorktreePermission('prompt', 'create tasks/messages in this worktree', options);
 }
 
 /**
@@ -979,6 +1047,6 @@ export function ensureCanPrompt() {
  *
  * @returns Feathers hook
  */
-export function ensureCanView() {
-  return ensureWorktreePermission('view', 'view this worktree');
+export function ensureCanView(options?: { allowSuperadmin?: boolean }) {
+  return ensureWorktreePermission('view', 'view this worktree', options);
 }

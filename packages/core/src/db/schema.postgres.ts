@@ -595,7 +595,7 @@ export const users = pgTable(
     name: text('name'),
     emoji: text('emoji'),
     role: text('role', {
-      enum: ['owner', 'admin', 'member', 'viewer'], // owner rarely used, hidden from UI
+      enum: ['superadmin', 'admin', 'member', 'viewer'], // 'owner' is deprecated alias for 'superadmin'
     })
       .notNull()
       .default('member'),

@@ -19,7 +19,7 @@ export interface CreateUserData {
   email: string;
   password: string;
   name?: string;
-  role?: 'owner' | 'admin' | 'member' | 'viewer';
+  role?: 'superadmin' | 'admin' | 'member' | 'viewer';
   unix_username?: string;
 }
 
@@ -84,7 +84,11 @@ export async function createUser(db: Database, data: CreateUserData): Promise<Us
     email: row.email,
     name: row.name ?? undefined,
     emoji: row.emoji ?? undefined,
-    role: row.role as 'owner' | 'admin' | 'member' | 'viewer',
+    role: ((row.role as string) === 'owner' ? 'superadmin' : row.role) as
+      | 'superadmin'
+      | 'admin'
+      | 'member'
+      | 'viewer',
     unix_username: row.unix_username ?? undefined,
     avatar: userData.avatar,
     preferences: userData.preferences,
@@ -128,7 +132,11 @@ export async function getUserByEmail(db: Database, email: string): Promise<User 
     email: row.email,
     name: row.name ?? undefined,
     emoji: row.emoji ?? undefined,
-    role: row.role as 'owner' | 'admin' | 'member' | 'viewer',
+    role: ((row.role as string) === 'owner' ? 'superadmin' : row.role) as
+      | 'superadmin'
+      | 'admin'
+      | 'member'
+      | 'viewer',
     unix_username: row.unix_username ?? undefined,
     avatar: userData.avatar,
     preferences: userData.preferences,

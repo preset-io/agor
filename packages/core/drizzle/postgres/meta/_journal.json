@@ -134,6 +134,13 @@
       "when": 1774200110469,
       "tag": "0018_married_lady_deathstrike",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1775200000000,
+      "tag": "0029_rename_owner_to_superadmin",
+      "breakpoints": true
     }
   ]
 }

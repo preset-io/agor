@@ -26,6 +26,7 @@ import {
   getDaemonUrl,
   spawnExecutorFireAndForget,
 } from '../utils/spawn-executor.js';
+import { isSuperAdmin } from '../utils/worktree-authorization.js';
 
 interface WorktreeOwnerCreateData {
   user_id: string;
@@ -65,6 +66,12 @@ function requireViewPermission(worktreeRepo: WorktreeRepository) {
     const worktreeId = params.route?.id;
     if (!worktreeId) {
       throw new Error('Worktree ID is required');
+    }
+
+    // Superadmins can view owners of any worktree
+    const userRole = params.user?.role as string | undefined;
+    if (isSuperAdmin(userRole)) {
+      return context;
     }
 
     // Load worktree and check permission
@@ -114,6 +121,12 @@ function requireWorktreeOwner(worktreeRepo: WorktreeRepository) {
     const worktreeId = params.route?.id;
     if (!worktreeId) {
       throw new Error('Worktree ID is required');
+    }
+
+    // Superadmins can manage owners on any worktree (self-assign ownership)
+    const userRole = params.user?.role as string | undefined;
+    if (isSuperAdmin(userRole)) {
+      return context;
     }
 
     // Check if user is an owner of this worktree

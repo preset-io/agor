@@ -91,7 +91,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
   }>({});
 
   // Check if user has admin role
-  const isAdmin = user?.role === 'admin' || user?.role === 'owner';
+  const isAdmin = user?.role === 'admin' || user?.role === 'superadmin';
 
   useEffect(() => {
     if (!open || !modalReady || !terminalDivRef.current || !client) return;

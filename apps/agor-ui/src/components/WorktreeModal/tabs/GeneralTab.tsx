@@ -112,7 +112,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
   // Check if current user can edit this worktree
   // Owners can edit, AND admins have super powers (can edit any worktree)
   const currentUserId = currentUser?.user_id;
-  const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'owner';
+  const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'superadmin';
   const isOwner = owners.some((o) => o.user_id === currentUserId);
 
   // While loading, assume admins can edit (we know their role immediately)

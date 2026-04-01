@@ -92,7 +92,7 @@ export default class UserList extends Command {
       for (const user of userList) {
         const shortId = user.user_id.substring(0, 8);
         const roleColor =
-          user.role === 'owner'
+          user.role === 'superadmin'
             ? chalk.red
             : user.role === 'admin'
               ? chalk.yellow

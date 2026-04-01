@@ -67,7 +67,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
 
   const getRoleColor = (role: User['role']) => {
     switch (role) {
-      case 'owner':
+      case 'superadmin':
         return 'purple';
       case 'admin':
         return 'red';

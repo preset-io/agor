@@ -4,12 +4,23 @@ import type { PermissionMode } from './session';
 
 /**
  * User role types
- * - owner: Full system access, can manage all users and settings
- * - admin: Can manage most resources, cannot modify owner
+ * - superadmin: Full system access including worktree RBAC bypass (gated by allow_superadmin config)
+ * - admin: Can manage most resources (MCP servers, config, users), no worktree RBAC bypass
  * - member: Standard user access, can create and manage own sessions
  * - viewer: Read-only access
+ *
+ * Note: 'owner' is a deprecated alias for 'superadmin' kept for backwards compatibility.
  */
-export type UserRole = 'owner' | 'admin' | 'member' | 'viewer';
+export type UserRole = 'superadmin' | 'admin' | 'member' | 'viewer';
+
+/**
+ * Normalize legacy role values.
+ * Converts deprecated 'owner' to 'superadmin' for backwards compatibility.
+ */
+export function normalizeRole(role: string | undefined): UserRole {
+  if (role === 'owner') return 'superadmin';
+  return (role as UserRole) || 'member';
+}
 
 /**
  * Model configuration for session creation
