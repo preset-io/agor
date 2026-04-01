@@ -1,7 +1,7 @@
 /**
  * MCP Tools Integration Tests
  *
- * These tests verify all 24 MCP tools work end-to-end.
+ * These tests verify all 25 MCP tools work end-to-end.
  * Requires daemon to be running on localhost:3030.
  *
  * Run with: INTEGRATION=true pnpm test
@@ -55,7 +55,7 @@ async function callMCPTool(name: string, args: Record<string, unknown> = {}) {
 }
 
 describeIntegration('MCP Tools - Session Tools', () => {
-  it('tools/list returns all 24 tools', async () => {
+  it('tools/list returns all 25 tools', async () => {
     const resp = await fetch(`${DAEMON_URL}/mcp?sessionToken=${sessionToken}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -67,12 +67,13 @@ describeIntegration('MCP Tools - Session Tools', () => {
     });
 
     const data = (await resp.json()) as { result: { tools: Array<{ name: string }> } };
-    expect(data.result.tools).toHaveLength(24);
+    expect(data.result.tools).toHaveLength(25);
 
     const toolNames = data.result.tools.map((t) => t.name);
     expect(toolNames).toContain('agor_sessions_list');
     expect(toolNames).toContain('agor_sessions_get');
     expect(toolNames).toContain('agor_sessions_get_current');
+    expect(toolNames).toContain('agor_sessions_get_current_context');
     expect(toolNames).toContain('agor_sessions_spawn');
     expect(toolNames).toContain('agor_sessions_prompt');
     expect(toolNames).toContain('agor_sessions_create');

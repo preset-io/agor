@@ -1,5 +1,5 @@
-import { WorktreeRepository } from '@agor/core/db';
-import type { AgenticToolName, ZoneBoardObject } from '@agor/core/types';
+import { WorktreeRepository, type WorktreeWithZoneAndSessions } from '@agor/core/db';
+import type { AgenticToolName, Board, ZoneBoardObject } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { SessionsServiceImpl } from '../../declarations.js';
@@ -213,10 +213,10 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
 
       if (session.worktree_id) {
         try {
-          // worktrees.get already enriches with zone info
-          const wt = await ctx.app
+          // worktrees.get already enriches with zone info (returns WorktreeWithZoneAndSessions)
+          const wt = (await ctx.app
             .service('worktrees')
-            .get(session.worktree_id, ctx.baseServiceParams);
+            .get(session.worktree_id, ctx.baseServiceParams)) as WorktreeWithZoneAndSessions;
 
           worktreeContext = {
             worktree_id: wt.worktree_id,
@@ -229,10 +229,10 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
             issue_url: wt.issue_url,
             pull_request_url: wt.pull_request_url,
             notes: wt.notes,
-            zone_id: (wt as Record<string, unknown>).zone_id || null,
-            zone_label: (wt as Record<string, unknown>).zone_label || null,
+            zone_id: wt.zone_id || null,
+            zone_label: wt.zone_label || null,
             environment_status: wt.environment_instance?.status || null,
-            environment_app_url: wt.environment_instance?.access_urls?.app_url || null,
+            environment_app_url: wt.app_url || null,
           };
 
           // Fetch repo and board in parallel
@@ -266,13 +266,17 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           if (boardResult.status === 'fulfilled') {
             const b = boardResult.value;
             // Extract zones from board objects
-            const zones: Record<string, unknown>[] = [];
-            if (b.objects) {
-              for (const [objId, obj] of Object.entries(
-                b.objects as Record<string, Record<string, unknown>>
-              )) {
+            const zones: {
+              zone_id: string;
+              label?: string;
+              status?: string;
+              has_trigger: boolean;
+            }[] = [];
+            const boardObjects: Board['objects'] = b.objects;
+            if (boardObjects) {
+              for (const [objId, obj] of Object.entries(boardObjects)) {
                 if (obj.type === 'zone') {
-                  const zone = obj as unknown as ZoneBoardObject;
+                  const zone = obj as ZoneBoardObject;
                   zones.push({
                     zone_id: objId,
                     label: zone.label,
@@ -294,17 +298,19 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           // Fetch sibling sessions in the same worktree (lightweight list)
           if (includeSiblings) {
             try {
+              // Fetch 11 to guarantee 10 siblings after excluding current session
               const siblings = await ctx.app.service('sessions').find({
                 query: {
                   worktree_id: session.worktree_id,
                   archived: false,
-                  $limit: 10,
+                  $limit: 11,
                   $sort: { last_updated: -1 },
                 },
                 ...ctx.baseServiceParams,
               });
               const siblingList = (Array.isArray(siblings) ? siblings : siblings.data)
                 .filter((s: { session_id: string }) => s.session_id !== session.session_id)
+                .slice(0, 10)
                 .map(
                   (s: {
                     session_id: string;
