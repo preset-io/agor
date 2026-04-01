@@ -245,6 +245,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         {/* Advanced Configuration (Collapsible) */}
         <Collapse
           ghost
+          destroyInactivePanel={false}
           expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
           items={[
             {

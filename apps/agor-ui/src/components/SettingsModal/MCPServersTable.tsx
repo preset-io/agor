@@ -121,7 +121,7 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
       setEffectiveServerId(newServerId);
     }
 
-    const values = form.getFieldsValue();
+    const values = form.getFieldsValue(true);
     const requestData = extractOAuthConfigForTesting(values);
     if (!requestData) {
       showError('MCP URL is required');
@@ -261,7 +261,7 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
       return;
     }
 
-    const values = form.getFieldsValue();
+    const values = form.getFieldsValue(true);
     const currentAuthType = values.auth_type || authType;
 
     setTestingAuth(true);
@@ -876,6 +876,7 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
     <>
       <Collapse
         ghost
+        destroyInactivePanel={false}
         defaultActiveKey={['basic']}
         expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
         items={collapseItems}
@@ -1119,7 +1120,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       return;
     }
 
-    const values = form.getFieldsValue();
+    const values = form.getFieldsValue(true);
 
     // Validate required fields for connection test
     if (!values.url) {

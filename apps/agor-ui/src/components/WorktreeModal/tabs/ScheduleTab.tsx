@@ -101,7 +101,7 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
 
     try {
       // Get form values for advanced settings
-      const formValues = form.getFieldsValue();
+      const formValues = form.getFieldsValue(true);
 
       // Build schedule config object
       const scheduleConfig = {
@@ -129,7 +129,7 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
   };
 
   // Get current form values to detect changes
-  const formValues = form.getFieldsValue();
+  const formValues = form.getFieldsValue(true);
 
   const hasChanges =
     scheduleEnabled !== (worktree.schedule_enabled || false) ||
@@ -237,6 +237,7 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
         {/* Agent Configuration (collapsible advanced settings) */}
         <Collapse
           ghost
+          destroyInactivePanel={false}
           items={[
             {
               key: 'agent-config',

@@ -269,7 +269,7 @@ export const ZoneTriggerModal = ({
       });
     } else {
       // Reuse existing session
-      const formValues = form.getFieldsValue();
+      const formValues = form.getFieldsValue(true);
 
       // IMPORTANT: Always include permissionMode for all actions
       // The backend executor needs this to override the session's default permission mode
@@ -402,6 +402,7 @@ export const ZoneTriggerModal = ({
 
           <Collapse
             ghost
+            destroyInactivePanel={false}
             defaultActiveKey={[]}
             expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
             items={[

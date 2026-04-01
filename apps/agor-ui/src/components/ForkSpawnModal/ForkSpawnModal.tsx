@@ -84,7 +84,9 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
 
   const handleOk = async () => {
     try {
-      const values = await form.validateFields();
+      await form.validateFields();
+      // Use getFieldsValue(true) to include values from collapsed panels
+      const values = form.getFieldsValue(true);
       const prompt = values.prompt?.trim();
 
       if (!prompt) {
@@ -223,6 +225,7 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
                 {/* Agentic Tool Configuration (Collapsible) */}
                 <Collapse
                   ghost
+                  destroyInactivePanel={false}
                   expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
                   items={[
                     {

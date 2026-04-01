@@ -175,7 +175,9 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
   }, [open, session, sessionMcpServerIds, form]);
 
   const handleOk = () => {
-    form.validateFields().then((values: FormValues) => {
+    form.validateFields().then(() => {
+      // Use getFieldsValue(true) to include values from collapsed panels
+      const values = form.getFieldsValue(true) as FormValues;
       const updates = buildUpdates(values, session);
 
       if (Object.keys(updates).length > 0 && onUpdate) {
@@ -259,6 +261,7 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
         <Divider dashed style={{ margin: '8px 0 16px' }} />
         <Collapse
           ghost
+          destroyInactivePanel={false}
           expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
           items={secondaryItems}
         />

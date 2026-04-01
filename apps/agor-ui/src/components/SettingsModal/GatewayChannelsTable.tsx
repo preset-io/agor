@@ -445,6 +445,7 @@ const ChannelFormFields: React.FC<{
           {githubStep === 2 && !githubLoading && (
             <Collapse
               ghost
+              destroyInactivePanel={false}
               defaultActiveKey={mode === 'create' ? ['github-config'] : []}
               style={{ marginLeft: -16, marginRight: -16 }}
               items={[
@@ -660,6 +661,7 @@ const ChannelFormFields: React.FC<{
       {channelType === 'slack' && (
         <Collapse
           ghost
+          destroyInactivePanel={false}
           defaultActiveKey={mode === 'create' ? ['credentials'] : []}
           style={{ marginLeft: -16, marginRight: -16 }}
           items={[
@@ -1120,7 +1122,10 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
 
   const handleCreate = async () => {
     try {
-      const values = await createForm.validateFields();
+      await createForm.validateFields();
+      // Use getFieldsValue(true) to include values from collapsed (unmounted)
+      // panels that validateFields() may omit.
+      const values = createForm.getFieldsValue(true);
       const data = extractFormData(values, undefined, selectedAgent);
 
       if (!client) {
@@ -1200,7 +1205,10 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     if (!editingChannel) return;
     editForm
       .validateFields()
-      .then((values) => {
+      .then(() => {
+        // Use getFieldsValue(true) to include values from collapsed (unmounted)
+        // panels that validateFields() may omit.
+        const values = editForm.getFieldsValue(true);
         const updates = extractFormData(
           values,
           editingChannel.config as Record<string, unknown>,
