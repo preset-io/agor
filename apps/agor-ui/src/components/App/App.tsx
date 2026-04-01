@@ -441,24 +441,23 @@ export const App: React.FC<AppProps> = ({
     setSelectedSessionId(sessionId);
 
     const session = sessionById.get(sessionId);
-    const worktree = session?.worktree_id ? worktreeById.get(session.worktree_id) : undefined;
 
-    // Check if the current user has write access to the worktree.
-    // Owners (including the creator) have 'all' permission; non-owners use others_can.
-    // We use created_by as a proxy for ownership since the full owners list requires an API call.
-    const isAdmin = user?.role === 'admin' || user?.role === 'owner';
-    const isCreator = worktree?.created_by === user?.user_id;
-    const othersCanWrite = worktree?.others_can === 'all';
-    const canWrite = isAdmin || isCreator || othersCanWrite;
-
-    // Clear the ready_for_prompt flag when opening the conversation
-    if (canWrite && session?.ready_for_prompt) {
-      onUpdateSession?.(sessionId, { ready_for_prompt: false });
+    // Best-effort: clear highlight flags when opening the conversation.
+    // These updates may fail silently if the user lacks write permission (e.g. read-only
+    // access via RBAC). We suppress errors to avoid spurious toasts for read-only users.
+    if (client && session?.ready_for_prompt) {
+      client
+        .service('sessions')
+        .patch(sessionId, { ready_for_prompt: false })
+        .catch(() => {});
     }
 
-    // Clear the worktree's needs_attention flag when user interacts with it
-    if (canWrite && worktree?.needs_attention) {
-      onUpdateWorktree?.(worktree.worktree_id, { needs_attention: false });
+    const worktree = session?.worktree_id ? worktreeById.get(session.worktree_id) : undefined;
+    if (client && worktree?.needs_attention) {
+      client
+        .service('worktrees')
+        .patch(worktree.worktree_id, { needs_attention: false })
+        .catch(() => {});
     }
   };
 
