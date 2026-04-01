@@ -49,6 +49,34 @@ import type { ProcessedEvent } from './message-processor.js';
 import { ClaudePromptService } from './prompt-service.js';
 
 /**
+ * Format a human-readable rate limit message for the conversation UI.
+ *
+ * SDK statuses:
+ * - 'rejected': Hard blocked — show urgently
+ * - 'allowed_warning': Approaching limit — show as warning
+ * - 'allowed' + overage issue: Informational but important
+ */
+function formatRateLimitText(event: Extract<ProcessedEvent, { type: 'rate_limit' }>): string {
+  const type = event.rateLimitType || 'unknown';
+  const resetsAtStr = event.resetsAt ? new Date(event.resetsAt * 1000).toLocaleString() : undefined;
+
+  if (event.status === 'rejected') {
+    return `Rate limited (${type}). ${resetsAtStr ? `Resets at ${resetsAtStr}.` : ''} Waiting for limit to reset...`;
+  }
+  if (event.status === 'allowed_warning') {
+    return `Approaching rate limit (${type}). ${resetsAtStr ? `Resets at ${resetsAtStr}.` : ''} Requests may be delayed.`;
+  }
+  // 'allowed' with concerning overage
+  if (event.overageStatus === 'rejected') {
+    return `Rate limit overage rejected (${type}). API calls may be delayed.`;
+  }
+  if (event.overageStatus === 'allowed_warning') {
+    return `Approaching rate limit overage (${type}). API calls may be delayed.`;
+  }
+  return `Rate limit: ${event.status} (${type})`;
+}
+
+/**
  * Wrapper for withSessionGuard that accepts Feathers repositories
  * The Feathers repositories have the same interface but different type signatures
  */
@@ -523,18 +551,7 @@ export class ClaudeTool implements ITool {
       // Handle rate_limit events — surface as system messages
       if (event.type === 'rate_limit') {
         const rateLimitEvent = event as Extract<ProcessedEvent, { type: 'rate_limit' }>;
-        const resetsAtStr = rateLimitEvent.resetsAt
-          ? new Date(rateLimitEvent.resetsAt * 1000).toLocaleString()
-          : undefined;
-
-        let text: string;
-        if (rateLimitEvent.status === 'allowed' && rateLimitEvent.overageStatus === 'rejected') {
-          text = `Rate limit: overage rejected (type: ${rateLimitEvent.rateLimitType || 'unknown'}). API calls may be delayed.`;
-        } else if (rateLimitEvent.status !== 'allowed') {
-          text = `Rate limited (${rateLimitEvent.rateLimitType || 'unknown'}). ${resetsAtStr ? `Resets at ${resetsAtStr}.` : ''} Waiting...`;
-        } else {
-          text = `Rate limit info: ${rateLimitEvent.status}`;
-        }
+        const text = formatRateLimitText(rateLimitEvent);
 
         console.log(`⏳ Rate limit → system message: ${text}`);
 
@@ -929,18 +946,7 @@ export class ClaudeTool implements ITool {
       // Handle rate_limit events in non-streaming path
       if (event.type === 'rate_limit') {
         const rateLimitEvent = event as Extract<ProcessedEvent, { type: 'rate_limit' }>;
-        const resetsAtStr = rateLimitEvent.resetsAt
-          ? new Date(rateLimitEvent.resetsAt * 1000).toLocaleString()
-          : undefined;
-
-        let text: string;
-        if (rateLimitEvent.status === 'allowed' && rateLimitEvent.overageStatus === 'rejected') {
-          text = `Rate limit: overage rejected (type: ${rateLimitEvent.rateLimitType || 'unknown'}). API calls may be delayed.`;
-        } else if (rateLimitEvent.status !== 'allowed') {
-          text = `Rate limited (${rateLimitEvent.rateLimitType || 'unknown'}). ${resetsAtStr ? `Resets at ${resetsAtStr}.` : ''} Waiting...`;
-        } else {
-          text = `Rate limit info: ${rateLimitEvent.status}`;
-        }
+        const text = formatRateLimitText(rateLimitEvent);
 
         console.log(`⏳ Rate limit → system message: ${text}`);
 

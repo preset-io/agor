@@ -715,6 +715,11 @@ export class SDKMessageProcessor {
 
   /**
    * Handle rate_limit_event messages from the SDK
+   *
+   * SDK statuses (from SDKRateLimitInfo):
+   * - 'allowed': Normal, fires on every API call — only surface if overage is concerning
+   * - 'allowed_warning': Approaching rate limit — always surface
+   * - 'rejected': Hard blocked by rate limit — always surface
    */
   private handleRateLimitEvent(msg: {
     type: string;
@@ -738,9 +743,16 @@ export class SDKMessageProcessor {
       );
     }
 
-    // For non-'allowed' statuses, surface to the user as a system message
-    // For 'allowed', only emit if overage is rejected (informational but important)
-    if (status !== 'allowed' || overageStatus === 'rejected') {
+    // Surface all events EXCEPT plain 'allowed' with no concerning overage.
+    // 'allowed' fires on every API call and would be extremely noisy.
+    // 'allowed_warning' and 'rejected' always get surfaced.
+    const shouldSurface =
+      status === 'allowed_warning' ||
+      status === 'rejected' ||
+      (status === 'allowed' &&
+        (overageStatus === 'rejected' || overageStatus === 'allowed_warning'));
+
+    if (shouldSurface) {
       return [
         {
           type: 'rate_limit',
