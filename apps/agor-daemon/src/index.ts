@@ -102,6 +102,7 @@ import type {
   Task,
   TaskID,
   User,
+  UserID,
 } from '@agor/core/types';
 import { SessionStatus, TaskStatus } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
@@ -2764,6 +2765,42 @@ async function main() {
   // Register users service (for authentication)
   const usersService = createUsersService(db);
   app.use('/users', usersService);
+
+  // Optional bootstrap: promote configured users to superadmin (promote-only, no demotion)
+  const bootstrapSuperadminUsers = config.execution?.bootstrap_superadmin_users ?? [];
+  if (bootstrapSuperadminUsers.length > 0) {
+    if (!allowSuperadmin) {
+      console.warn(
+        '[RBAC] execution.bootstrap_superadmin_users is set but allow_superadmin=false; skipping bootstrap promotions'
+      );
+    } else {
+      let promotedCount = 0;
+      for (const rawUserId of bootstrapSuperadminUsers) {
+        const userId = rawUserId?.trim();
+        if (!userId) continue;
+
+        try {
+          const user = await usersService.get(userId as UserID);
+          if (user.role === 'superadmin') {
+            continue; // Already promoted
+          }
+
+          await usersService.patch(userId as UserID, { role: 'superadmin' });
+          promotedCount++;
+          console.log(
+            `[RBAC] Bootstrap promoted user ${userId.substring(0, 8)} (${user.email}) to superadmin`
+          );
+        } catch (error) {
+          console.warn(
+            `[RBAC] Failed to bootstrap superadmin for user ${userId.substring(0, 8)}: ${error instanceof Error ? error.message : String(error)}`
+          );
+        }
+      }
+      console.log(
+        `[RBAC] Bootstrap superadmin sync complete (${promotedCount}/${bootstrapSuperadminUsers.length} promoted)`
+      );
+    }
+  }
 
   // Configure service hooks for authentication and authorization
   app.service('messages').hooks({

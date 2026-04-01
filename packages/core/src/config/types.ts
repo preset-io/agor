@@ -210,6 +210,15 @@ export interface AgorExecutionSettings {
   /** Allow superadmin role (default: true). When false, superadmin role behaves identically to admin (no worktree RBAC bypass). Set to false for hosted/cloud deployments. */
   allow_superadmin?: boolean;
 
+  /**
+   * User IDs to promote to superadmin at daemon startup (promote-only, no demotion).
+   *
+   * - Applied only when allow_superadmin is true
+   * - Intended for bootstrap/recovery in self-hosted deployments
+   * - Uses stable user IDs (UUIDv7), not emails
+   */
+  bootstrap_superadmin_users?: string[];
+
   /** Session token expiration in ms (default: 86400000 = 24 hours) */
   session_token_expiration_ms?: number;
 
