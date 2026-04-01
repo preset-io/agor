@@ -290,6 +290,8 @@ export class ClaudeTool implements ITool {
 
     let streamStartTime = Date.now();
     let firstTokenTime: number | null = null;
+    let apiWaitMessageSent = false; // Track whether we've sent an "API waiting" message
+    const API_WAIT_THRESHOLD_MS = 30_000; // 30 seconds before warning user
     let tokenUsage: TokenUsage | undefined;
     let durationMs: number | undefined;
     let contextWindow: number | undefined;
@@ -374,6 +376,51 @@ export class ClaudeTool implements ITool {
             tool_use_id: event.toolUseId,
           });
         }
+      }
+
+      // Detect slow API response — emit system message if waiting too long for first token
+      if (
+        !apiWaitMessageSent &&
+        !firstTokenTime &&
+        Date.now() - streamStartTime > API_WAIT_THRESHOLD_MS
+      ) {
+        apiWaitMessageSent = true;
+        const waitSeconds = Math.round((Date.now() - streamStartTime) / 1000);
+        const waitText = `API response delayed (waiting ${waitSeconds}s+). The API may be experiencing high load.`;
+        console.warn(`⏳ ${waitText}`);
+
+        await withFeathersSessionGuard(sessionId, this.sessionsRepo, async () => {
+          const waitMessageId = generateId() as MessageID;
+
+          if (streamingCallbacks) {
+            await streamingCallbacks.onStreamStart(waitMessageId, {
+              session_id: sessionId,
+              task_id: taskId,
+              role: MessageRole.SYSTEM,
+              timestamp: new Date().toISOString(),
+            });
+          }
+
+          await createSystemMessage(
+            sessionId,
+            waitMessageId,
+            [
+              {
+                type: 'api_wait',
+                text: waitText,
+                waitMs: Date.now() - streamStartTime,
+              },
+            ],
+            taskId,
+            nextIndex++,
+            resolvedModel,
+            this.messagesService!
+          );
+
+          if (streamingCallbacks) {
+            await streamingCallbacks.onStreamEnd(waitMessageId);
+          }
+        });
       }
 
       // Handle thinking partial (streaming)
@@ -471,6 +518,62 @@ export class ClaudeTool implements ITool {
             }
           });
         }
+      }
+
+      // Handle rate_limit events — surface as system messages
+      if (event.type === 'rate_limit') {
+        const rateLimitEvent = event as Extract<ProcessedEvent, { type: 'rate_limit' }>;
+        const resetsAtStr = rateLimitEvent.resetsAt
+          ? new Date(rateLimitEvent.resetsAt * 1000).toLocaleString()
+          : undefined;
+
+        let text: string;
+        if (rateLimitEvent.status === 'allowed' && rateLimitEvent.overageStatus === 'rejected') {
+          text = `Rate limit: overage rejected (type: ${rateLimitEvent.rateLimitType || 'unknown'}). API calls may be delayed.`;
+        } else if (rateLimitEvent.status !== 'allowed') {
+          text = `Rate limited (${rateLimitEvent.rateLimitType || 'unknown'}). ${resetsAtStr ? `Resets at ${resetsAtStr}.` : ''} Waiting...`;
+        } else {
+          text = `Rate limit info: ${rateLimitEvent.status}`;
+        }
+
+        console.log(`⏳ Rate limit → system message: ${text}`);
+
+        await withFeathersSessionGuard(sessionId, this.sessionsRepo, async () => {
+          const rateLimitMessageId = generateId() as MessageID;
+
+          if (streamingCallbacks) {
+            await streamingCallbacks.onStreamStart(rateLimitMessageId, {
+              session_id: sessionId,
+              task_id: taskId,
+              role: MessageRole.SYSTEM,
+              timestamp: new Date().toISOString(),
+            });
+          }
+
+          await createSystemMessage(
+            sessionId,
+            rateLimitMessageId,
+            [
+              {
+                type: 'rate_limit',
+                text,
+                status: rateLimitEvent.status,
+                rateLimitType: rateLimitEvent.rateLimitType,
+                resetsAt: rateLimitEvent.resetsAt,
+                overageStatus: rateLimitEvent.overageStatus,
+                isUsingOverage: rateLimitEvent.isUsingOverage,
+              },
+            ],
+            taskId,
+            nextIndex++,
+            resolvedModel,
+            this.messagesService!
+          );
+
+          if (streamingCallbacks) {
+            await streamingCallbacks.onStreamEnd(rateLimitMessageId);
+          }
+        });
       }
 
       // Capture raw SDK response for token accounting
@@ -617,6 +720,7 @@ export class ClaudeTool implements ITool {
           currentThinkingMessageId = null;
           streamStartTime = Date.now();
           firstTokenTime = null;
+          apiWaitMessageSent = false; // Reset for next message cycle
         } else if (event.type === 'complete' && event.role === MessageRole.USER) {
           // Type assertion for user message
           const completeEvent = event as Extract<ProcessedEvent, { type: 'complete' }>;
@@ -820,6 +924,46 @@ export class ClaudeTool implements ITool {
       if (!capturedAgentSessionId && 'agentSessionId' in event && event.agentSessionId) {
         capturedAgentSessionId = event.agentSessionId;
         await this.captureAgentSessionId(sessionId, capturedAgentSessionId);
+      }
+
+      // Handle rate_limit events in non-streaming path
+      if (event.type === 'rate_limit') {
+        const rateLimitEvent = event as Extract<ProcessedEvent, { type: 'rate_limit' }>;
+        const resetsAtStr = rateLimitEvent.resetsAt
+          ? new Date(rateLimitEvent.resetsAt * 1000).toLocaleString()
+          : undefined;
+
+        let text: string;
+        if (rateLimitEvent.status === 'allowed' && rateLimitEvent.overageStatus === 'rejected') {
+          text = `Rate limit: overage rejected (type: ${rateLimitEvent.rateLimitType || 'unknown'}). API calls may be delayed.`;
+        } else if (rateLimitEvent.status !== 'allowed') {
+          text = `Rate limited (${rateLimitEvent.rateLimitType || 'unknown'}). ${resetsAtStr ? `Resets at ${resetsAtStr}.` : ''} Waiting...`;
+        } else {
+          text = `Rate limit info: ${rateLimitEvent.status}`;
+        }
+
+        console.log(`⏳ Rate limit → system message: ${text}`);
+
+        const rateLimitMessageId = generateId() as MessageID;
+        await createSystemMessage(
+          sessionId,
+          rateLimitMessageId,
+          [
+            {
+              type: 'rate_limit',
+              text,
+              status: rateLimitEvent.status,
+              rateLimitType: rateLimitEvent.rateLimitType,
+              resetsAt: rateLimitEvent.resetsAt,
+              overageStatus: rateLimitEvent.overageStatus,
+              isUsingOverage: rateLimitEvent.isUsingOverage,
+            },
+          ],
+          taskId,
+          nextIndex++,
+          resolvedModel,
+          this.messagesService!
+        );
       }
 
       // Capture raw SDK response for token accounting

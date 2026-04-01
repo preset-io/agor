@@ -122,6 +122,15 @@ export type ProcessedEvent =
       agentSessionId?: string;
     }
   | {
+      type: 'rate_limit';
+      status: string;
+      resetsAt?: number;
+      rateLimitType?: string;
+      overageStatus?: string;
+      isUsingOverage?: boolean;
+      agentSessionId?: string;
+    }
+  | {
       type: 'stopped';
     }
   | {
@@ -271,6 +280,10 @@ export class SDKMessageProcessor {
         return this.handleResult(msg as SDKResultMessage);
       case 'system':
         return this.handleSystem(msg as SDKSystemMessage | SDKCompactBoundaryMessage);
+      case 'rate_limit_event':
+        return this.handleRateLimitEvent(
+          msg as { type: string; rate_limit_info?: Record<string, unknown> }
+        );
       default:
         return this.handleUnknown(msg);
     }
@@ -697,6 +710,50 @@ export class SDKMessageProcessor {
     }
 
     console.debug(`ℹ️  SDK system message:`, msg);
+    return [];
+  }
+
+  /**
+   * Handle rate_limit_event messages from the SDK
+   */
+  private handleRateLimitEvent(msg: {
+    type: string;
+    rate_limit_info?: Record<string, unknown>;
+  }): ProcessedEvent[] {
+    const info = msg.rate_limit_info || {};
+    const status = (info.status as string) || 'unknown';
+    const rateLimitType = info.rateLimitType as string | undefined;
+    const resetsAt = info.resetsAt as number | undefined;
+    const overageStatus = info.overageStatus as string | undefined;
+    const isUsingOverage = info.isUsingOverage as boolean | undefined;
+
+    // Always log rate limit events
+    if (status === 'allowed') {
+      console.log(
+        `⏳ Rate limit event: allowed (type: ${rateLimitType || 'unknown'}, overage: ${overageStatus || 'unknown'})`
+      );
+    } else {
+      console.warn(
+        `🚫 Rate limit event: ${status} (type: ${rateLimitType || 'unknown'}, resets: ${resetsAt ? new Date(resetsAt * 1000).toISOString() : 'unknown'})`
+      );
+    }
+
+    // For non-'allowed' statuses, surface to the user as a system message
+    // For 'allowed', only emit if overage is rejected (informational but important)
+    if (status !== 'allowed' || overageStatus === 'rejected') {
+      return [
+        {
+          type: 'rate_limit',
+          status,
+          resetsAt,
+          rateLimitType,
+          overageStatus,
+          isUsingOverage,
+          agentSessionId: this.state.capturedAgentSessionId,
+        },
+      ];
+    }
+
     return [];
   }
 
