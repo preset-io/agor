@@ -8,7 +8,7 @@ import type { Repo, UUID } from '@agor/core/types';
 import { eq, like, sql } from 'drizzle-orm';
 import { formatShortId, generateId } from '../../lib/ids';
 import type { Database } from '../client';
-import { deleteFrom, insert, select, update } from '../database-wrapper';
+import { deleteFrom, insert, lockRowForUpdate, select, update } from '../database-wrapper';
 import { type RepoInsert, type RepoRow, repos } from '../schema';
 import {
   AmbiguousIdError,
@@ -209,6 +209,10 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
 
       // Use transaction to make read-merge-write atomic
       return await this.db.transaction(async (tx) => {
+        // Acquire row-level lock on PostgreSQL to prevent lost updates
+        // biome-ignore lint/suspicious/noExplicitAny: Transaction context requires type assertion for database wrapper functions
+        await lockRowForUpdate(tx as any, this.db, repos, eq(repos.repo_id, fullId));
+
         // STEP 1: Read current repo (within transaction)
         // biome-ignore lint/suspicious/noExplicitAny: Transaction context requires type assertion for database wrapper functions
         const currentRow = await select(tx as any)

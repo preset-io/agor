@@ -11,7 +11,7 @@ import { getBaseUrl } from '../../config/config-manager';
 import { formatShortId, generateId } from '../../lib/ids';
 import { getSessionUrl } from '../../utils/url';
 import type { Database } from '../client';
-import { deleteFrom, insert, isPostgresDatabase, select, update } from '../database-wrapper';
+import { deleteFrom, insert, lockRowForUpdate, select, update } from '../database-wrapper';
 import {
   boards,
   type SessionInsert,
@@ -492,13 +492,8 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         // STEP 0: Acquire row-level lock on PostgreSQL to prevent lost updates.
         // Without FOR UPDATE, two concurrent patches can both read the same state,
         // then the last writer silently overwrites the first writer's changes.
-        // SQLite doesn't need this — its transaction model provides implicit locking.
-        if (isPostgresDatabase(this.db)) {
-          // biome-ignore lint/suspicious/noExplicitAny: Transaction context requires type assertion for raw SQL execution
-          await (tx as any).execute(
-            sql`SELECT 1 FROM sessions WHERE session_id = ${fullId} FOR UPDATE`
-          );
-        }
+        // biome-ignore lint/suspicious/noExplicitAny: Transaction context requires type assertion for database wrapper functions
+        await lockRowForUpdate(tx as any, this.db, sessions, eq(sessions.session_id, fullId));
 
         // STEP 1: Read current session with worktree and board JOINs (within transaction)
         // biome-ignore lint/suspicious/noExplicitAny: Transaction context requires type assertion for database wrapper functions

@@ -107,6 +107,31 @@ export function jsonExtract(db: Database, column: SQL.Aliased | SQL | any, path:
 }
 
 /**
+ * Acquire a row-level lock within a transaction (PostgreSQL FOR UPDATE).
+ *
+ * On PostgreSQL, executes `SELECT 1 FROM <table> WHERE <pk> = <id> FOR UPDATE`
+ * so that concurrent transactions block until this one commits.
+ * On SQLite, this is a no-op — SQLite's transaction model provides implicit locking.
+ *
+ * @param tx - Transaction context (from db.transaction callback)
+ * @param db - Database instance (used for dialect detection only)
+ * @param table - The Drizzle table to lock
+ * @param where - WHERE clause identifying the row (e.g., eq(sessions.session_id, id))
+ */
+export async function lockRowForUpdate(
+  tx: Database,
+  db: Database,
+  table: SQLiteTable | PgTable,
+  where: SQL
+): Promise<void> {
+  if (isPostgresDatabase(db)) {
+    // biome-ignore lint/suspicious/noExplicitAny: Transaction context requires type assertion for raw SQL execution
+    await (tx as any).execute(sql`SELECT 1 FROM ${table} WHERE ${where} FOR UPDATE`);
+  }
+  // SQLite: no-op — implicit locking via transaction
+}
+
+/**
  * Raw SQL query result type
  */
 export type RawQueryResult = {

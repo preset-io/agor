@@ -8,7 +8,7 @@ import type { AgenticToolName, SessionStatus, UUID, Worktree, WorktreeID } from 
 import { and, desc, eq, getTableColumns, inArray, isNotNull, isNull, like, or } from 'drizzle-orm';
 import { formatShortId, generateId } from '../../lib/ids';
 import type { Database } from '../client';
-import { deleteFrom, insert, select, update } from '../database-wrapper';
+import { deleteFrom, insert, lockRowForUpdate, select, update } from '../database-wrapper';
 import { type WorktreeInsert, type WorktreeRow, worktreeOwners, worktrees } from '../schema';
 import {
   AmbiguousIdError,
@@ -255,6 +255,15 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
 
     // Use transaction to make read-merge-write atomic
     return await this.db.transaction(async (tx) => {
+      // Acquire row-level lock on PostgreSQL to prevent lost updates
+      await lockRowForUpdate(
+        // biome-ignore lint/suspicious/noExplicitAny: Transaction context requires type assertion for database wrapper functions
+        tx as any,
+        this.db,
+        worktrees,
+        eq(worktrees.worktree_id, existing.worktree_id)
+      );
+
       // STEP 2: Re-read within transaction to ensure we have latest data
       // biome-ignore lint/suspicious/noExplicitAny: Transaction context requires type assertion for database wrapper functions
       const currentRow = await select(tx as any)
