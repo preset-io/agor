@@ -51,10 +51,9 @@ import { ClaudePromptService } from './prompt-service.js';
 /**
  * Format a human-readable rate limit message for the conversation UI.
  *
- * SDK statuses:
+ * Only called for statuses that indicate actual throttling:
  * - 'rejected': Hard blocked — show urgently
  * - 'allowed_warning': Approaching limit — show as warning
- * - 'allowed' + overage issue: Informational but important
  */
 function formatRateLimitText(event: Extract<ProcessedEvent, { type: 'rate_limit' }>): string {
   const type = event.rateLimitType || 'unknown';
@@ -65,13 +64,6 @@ function formatRateLimitText(event: Extract<ProcessedEvent, { type: 'rate_limit'
   }
   if (event.status === 'allowed_warning') {
     return `Approaching rate limit (${type}). ${resetsAtStr ? `Resets at ${resetsAtStr}.` : ''} Requests may be delayed.`;
-  }
-  // 'allowed' with concerning overage
-  if (event.overageStatus === 'rejected') {
-    return `Rate limit overage rejected (${type}). API calls may be delayed.`;
-  }
-  if (event.overageStatus === 'allowed_warning') {
-    return `Approaching rate limit overage (${type}). API calls may be delayed.`;
   }
   return `Rate limit: ${event.status} (${type})`;
 }
