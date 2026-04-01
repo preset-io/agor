@@ -123,7 +123,7 @@ export type ProcessedEvent =
     }
   | {
       type: 'rate_limit';
-      status: string;
+      status: 'allowed' | 'allowed_warning' | 'rejected';
       resetsAt?: number;
       rateLimitType?: string;
       overageStatus?: string;
@@ -743,7 +743,7 @@ export class SDKMessageProcessor {
    * Handle rate_limit_event messages from the SDK
    *
    * SDK statuses (from SDKRateLimitInfo):
-   * - 'allowed': Normal, fires on every API call — only surface if overage is concerning
+   * - 'allowed': Normal, fires on every API call — never surfaced (too noisy)
    * - 'allowed_warning': Approaching rate limit — always surface
    * - 'rejected': Hard blocked by rate limit — always surface
    */
