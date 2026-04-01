@@ -11,7 +11,7 @@ import { getBaseUrl } from '../../config/config-manager';
 import { formatShortId, generateId } from '../../lib/ids';
 import { getSessionUrl } from '../../utils/url';
 import type { Database } from '../client';
-import { deleteFrom, insert, select, update } from '../database-wrapper';
+import { deleteFrom, insert, isPostgresDatabase, select, update } from '../database-wrapper';
 import {
   boards,
   type SessionInsert,
@@ -489,6 +489,17 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       // Use transaction to make read-merge-write atomic
       // This prevents race conditions where another update happens between read and write
       const result = await this.db.transaction(async (tx) => {
+        // STEP 0: Acquire row-level lock on PostgreSQL to prevent lost updates.
+        // Without FOR UPDATE, two concurrent patches can both read the same state,
+        // then the last writer silently overwrites the first writer's changes.
+        // SQLite doesn't need this — its transaction model provides implicit locking.
+        if (isPostgresDatabase(this.db)) {
+          // biome-ignore lint/suspicious/noExplicitAny: Transaction context requires type assertion for raw SQL execution
+          await (tx as any).execute(
+            sql`SELECT 1 FROM sessions WHERE session_id = ${fullId} FOR UPDATE`
+          );
+        }
+
         // STEP 1: Read current session with worktree and board JOINs (within transaction)
         // biome-ignore lint/suspicious/noExplicitAny: Transaction context requires type assertion for database wrapper functions
         const currentResult = await select(tx as any)
