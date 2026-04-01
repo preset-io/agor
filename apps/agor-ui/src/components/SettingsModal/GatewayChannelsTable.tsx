@@ -445,7 +445,7 @@ const ChannelFormFields: React.FC<{
           {githubStep === 2 && !githubLoading && (
             <Collapse
               ghost
-              destroyInactivePanel={false}
+              destroyOnHidden={false}
               defaultActiveKey={mode === 'create' ? ['github-config'] : []}
               style={{ marginLeft: -16, marginRight: -16 }}
               items={[
@@ -661,7 +661,7 @@ const ChannelFormFields: React.FC<{
       {channelType === 'slack' && (
         <Collapse
           ghost
-          destroyInactivePanel={false}
+          destroyOnHidden={false}
           defaultActiveKey={mode === 'create' ? ['credentials'] : []}
           style={{ marginLeft: -16, marginRight: -16 }}
           items={[

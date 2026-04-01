@@ -225,7 +225,7 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
                 {/* Agentic Tool Configuration (Collapsible) */}
                 <Collapse
                   ghost
-                  destroyInactivePanel={false}
+                  destroyOnHidden={false}
                   expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
                   items={[
                     {

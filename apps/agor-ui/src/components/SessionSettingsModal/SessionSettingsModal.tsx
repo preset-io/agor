@@ -261,7 +261,7 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
         <Divider dashed style={{ margin: '8px 0 16px' }} />
         <Collapse
           ghost
-          destroyInactivePanel={false}
+          destroyOnHidden={false}
           expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
           items={secondaryItems}
         />

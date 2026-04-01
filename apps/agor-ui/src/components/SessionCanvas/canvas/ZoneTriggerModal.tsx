@@ -402,7 +402,7 @@ export const ZoneTriggerModal = ({
 
           <Collapse
             ghost
-            destroyInactivePanel={false}
+            destroyOnHidden={false}
             defaultActiveKey={[]}
             expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
             items={[

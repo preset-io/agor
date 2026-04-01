@@ -130,7 +130,9 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
   }, [selectedAgent, form, currentUser, worktree?.mcp_server_ids]);
 
   const handleCreate = () => {
-    form.validateFields().then((values) => {
+    form.validateFields().then(() => {
+      // Use getFieldsValue(true) to include values from collapsed panels
+      const values = form.getFieldsValue(true);
       // Prevent duplicate submissions
       setIsCreating(true);
 
@@ -245,7 +247,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         {/* Advanced Configuration (Collapsible) */}
         <Collapse
           ghost
-          destroyInactivePanel={false}
+          destroyOnHidden={false}
           expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
           items={[
             {

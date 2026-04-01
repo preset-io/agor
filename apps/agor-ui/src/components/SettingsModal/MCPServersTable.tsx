@@ -876,7 +876,7 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
     <>
       <Collapse
         ghost
-        destroyInactivePanel={false}
+        destroyOnHidden={false}
         defaultActiveKey={['basic']}
         expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
         items={collapseItems}
@@ -986,7 +986,8 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   const handleSaveFirstForCreate = async (): Promise<string | null> => {
     if (!client) return null;
     try {
-      const values = await form.validateFields();
+      await form.validateFields();
+      const values = form.getFieldsValue(true);
       const data: CreateMCPServerInput = {
         name: values.name,
         display_name: values.display_name,
@@ -1048,7 +1049,8 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
 
     form
       .validateFields()
-      .then((values) => {
+      .then(() => {
+        const values = form.getFieldsValue(true);
         const data: CreateMCPServerInput = {
           name: values.name,
           display_name: values.display_name,
@@ -1292,7 +1294,8 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     if (!editingServer || !client) return;
 
     try {
-      const values = await form.validateFields();
+      await form.validateFields();
+      const values = form.getFieldsValue(true);
 
       const updates: UpdateMCPServerInput = {
         display_name: values.display_name,

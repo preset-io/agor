@@ -116,7 +116,7 @@ export const AssistantFormFields: React.FC<AssistantFormFieldsProps> = ({
       <Collapse
         ghost
         size="small"
-        destroyInactivePanel={false}
+        destroyOnHidden={false}
         items={[
           {
             key: 'advanced',

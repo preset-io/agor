@@ -237,7 +237,7 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
         {/* Agent Configuration (collapsible advanced settings) */}
         <Collapse
           ghost
-          destroyInactivePanel={false}
+          destroyOnHidden={false}
           items={[
             {
               key: 'agent-config',
