@@ -1,5 +1,5 @@
 import { WorktreeRepository } from '@agor/core/db';
-import type { AgenticToolName } from '@agor/core/types';
+import type { AgenticToolName, ZoneBoardObject } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { SessionsServiceImpl } from '../../declarations.js';
@@ -146,6 +146,216 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         worktree,
         repo,
         board,
+      });
+    }
+  );
+
+  // Tool 3b: agor_sessions_get_current_context
+  server.registerTool(
+    'agor_sessions_get_current_context',
+    {
+      description:
+        'Get comprehensive context about the current session and its environment in a single call. Returns everything an agent needs to orient itself: full session details, user info (who created it, who is authenticated), rich worktree context (branch, zone, issue/PR URLs, notes, environment status, sibling sessions), board context (with zones), and full repo info (default branch, local path). Use this instead of making multiple separate calls.',
+      annotations: { readOnlyHint: true },
+      inputSchema: z.object({
+        includeSiblings: z
+          .boolean()
+          .optional()
+          .describe(
+            'Include other active sessions in the same worktree (default: true). Set false to reduce response size.'
+          ),
+      }),
+    },
+    async (args) => {
+      const includeSiblings = args.includeSiblings !== false;
+
+      // Fetch session and user in parallel (no dependencies)
+      const [session, user] = await Promise.all([
+        ctx.app.service('sessions').get(ctx.sessionId, {
+          ...ctx.baseServiceParams,
+          _include_last_message: true,
+          _last_message_truncation_length: 500,
+          // biome-ignore lint/suspicious/noExplicitAny: custom service params with underscored options
+        } as any),
+        ctx.app.service('users').get(ctx.userId, ctx.baseServiceParams),
+      ]);
+
+      // Build user context (safe subset, no secrets)
+      const userContext = {
+        user_id: user.user_id,
+        email: user.email,
+        name: user.name,
+        emoji: user.emoji,
+        role: user.role,
+      };
+
+      // Determine if the session creator is different from the authenticated user
+      let creatorContext: Record<string, unknown> | null = null;
+      if (session.created_by && session.created_by !== ctx.userId) {
+        try {
+          const creator = await ctx.app
+            .service('users')
+            .get(session.created_by, ctx.baseServiceParams);
+          creatorContext = {
+            user_id: creator.user_id,
+            email: creator.email,
+            name: creator.name,
+          };
+        } catch {
+          // creator may have been deleted
+        }
+      }
+
+      // Build worktree, repo, and board context
+      let worktreeContext: Record<string, unknown> | null = null;
+      let repoContext: Record<string, unknown> | null = null;
+      let boardContext: Record<string, unknown> | null = null;
+
+      if (session.worktree_id) {
+        try {
+          // worktrees.get already enriches with zone info
+          const wt = await ctx.app
+            .service('worktrees')
+            .get(session.worktree_id, ctx.baseServiceParams);
+
+          worktreeContext = {
+            worktree_id: wt.worktree_id,
+            name: wt.name,
+            ref: wt.ref,
+            base_ref: wt.base_ref,
+            path: wt.path,
+            board_id: wt.board_id,
+            repo_id: wt.repo_id,
+            issue_url: wt.issue_url,
+            pull_request_url: wt.pull_request_url,
+            notes: wt.notes,
+            zone_id: (wt as Record<string, unknown>).zone_id || null,
+            zone_label: (wt as Record<string, unknown>).zone_label || null,
+            environment_status: wt.environment_instance?.status || null,
+            environment_app_url: wt.environment_instance?.access_urls?.app_url || null,
+          };
+
+          // Fetch repo and board in parallel
+          const [repoResult, boardResult] = await Promise.allSettled([
+            wt.repo_id
+              ? ctx.app.service('repos').get(wt.repo_id, ctx.baseServiceParams)
+              : Promise.reject(new Error('no repo')),
+            wt.board_id
+              ? ctx.app.service('boards').get(wt.board_id, ctx.baseServiceParams)
+              : Promise.reject(new Error('no board')),
+          ]);
+
+          if (repoResult.status === 'fulfilled') {
+            const r = repoResult.value;
+            repoContext = {
+              repo_id: r.repo_id,
+              name: r.name,
+              slug: r.slug,
+              local_path: r.local_path,
+              default_branch: r.default_branch,
+              environment_config: r.environment_config
+                ? {
+                    up_command: r.environment_config.up_command,
+                    health_check: r.environment_config.health_check,
+                    app_url_template: r.environment_config.app_url_template,
+                  }
+                : null,
+            };
+          }
+
+          if (boardResult.status === 'fulfilled') {
+            const b = boardResult.value;
+            // Extract zones from board objects
+            const zones: Record<string, unknown>[] = [];
+            if (b.objects) {
+              for (const [objId, obj] of Object.entries(
+                b.objects as Record<string, Record<string, unknown>>
+              )) {
+                if (obj.type === 'zone') {
+                  const zone = obj as unknown as ZoneBoardObject;
+                  zones.push({
+                    zone_id: objId,
+                    label: zone.label,
+                    status: zone.status,
+                    has_trigger: !!zone.trigger,
+                  });
+                }
+              }
+            }
+            boardContext = {
+              board_id: b.board_id,
+              name: b.name,
+              slug: b.slug,
+              description: b.description,
+              zones,
+            };
+          }
+
+          // Fetch sibling sessions in the same worktree (lightweight list)
+          if (includeSiblings) {
+            try {
+              const siblings = await ctx.app.service('sessions').find({
+                query: {
+                  worktree_id: session.worktree_id,
+                  archived: false,
+                  $limit: 10,
+                  $sort: { last_updated: -1 },
+                },
+                ...ctx.baseServiceParams,
+              });
+              const siblingList = (Array.isArray(siblings) ? siblings : siblings.data)
+                .filter((s: { session_id: string }) => s.session_id !== session.session_id)
+                .map(
+                  (s: {
+                    session_id: string;
+                    title?: string;
+                    status: string;
+                    agentic_tool: string;
+                    message_count?: number;
+                  }) => ({
+                    session_id: s.session_id,
+                    title: s.title,
+                    status: s.status,
+                    agentic_tool: s.agentic_tool,
+                    message_count: s.message_count,
+                  })
+                );
+              if (siblingList.length > 0) {
+                (worktreeContext as Record<string, unknown>).sibling_sessions = siblingList;
+              }
+            } catch {
+              // non-critical, skip
+            }
+          }
+        } catch {
+          // worktree may have been deleted
+        }
+      }
+
+      // Build genealogy summary (without recursive queries)
+      const genealogySummary: Record<string, unknown> = {};
+      if (session.genealogy) {
+        const gen = session.genealogy;
+        if (gen.parent_session_id) {
+          genealogySummary.parent_session_id = gen.parent_session_id;
+          genealogySummary.relationship = 'spawned';
+        } else if (gen.forked_from_session_id) {
+          genealogySummary.forked_from_session_id = gen.forked_from_session_id;
+          genealogySummary.relationship = 'forked';
+        } else {
+          genealogySummary.relationship = 'root';
+        }
+        genealogySummary.children_count = gen.children?.length || 0;
+      }
+
+      return textResult({
+        session,
+        user: userContext,
+        created_by_user: creatorContext,
+        worktree: worktreeContext,
+        repo: repoContext,
+        board: boardContext,
+        genealogy_summary: genealogySummary,
       });
     }
   );
