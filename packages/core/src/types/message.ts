@@ -53,7 +53,8 @@ export interface ContentBlock {
     | 'system_status'
     | 'system_complete'
     | 'rate_limit'
-    | 'api_wait';
+    | 'api_wait'
+    | 'sdk_event';
   [key: string]: unknown; // Additional type-specific fields
 }
 

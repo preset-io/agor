@@ -427,26 +427,21 @@ export class ClaudeTool implements ITool {
         }
       }
 
-      // Track first SDK activity that indicates the API is responding to the prompt.
-      // Excludes SDK bootstrap events (session_id_captured, slash_commands_discovered)
-      // which fire during init before any API call.
-      if (
-        !firstActivityTime &&
-        (event.type === 'partial' ||
-          event.type === 'thinking_partial' ||
-          event.type === 'tool_start' ||
-          event.type === 'message_start' ||
-          event.type === 'rate_limit' ||
-          event.type === 'complete')
-      ) {
-        firstActivityTime = Date.now();
-      }
+      // Check for slow API response BEFORE marking first activity.
+      // This ensures the warning fires when the first event arrives after the threshold.
+      const isActivityEvent =
+        event.type === 'partial' ||
+        event.type === 'thinking_partial' ||
+        event.type === 'tool_start' ||
+        event.type === 'message_start' ||
+        event.type === 'rate_limit' ||
+        event.type === 'sdk_event' ||
+        event.type === 'complete';
 
-      // Detect slow API response — emit system message if waiting too long for ANY activity
-      // Only fires when the API hasn't responded at all (no thinking, no tools, no text)
       if (
         !apiWaitMessageSent &&
         !firstActivityTime &&
+        isActivityEvent &&
         Date.now() - streamStartTime > API_WAIT_THRESHOLD_MS
       ) {
         apiWaitMessageSent = true;
@@ -486,6 +481,11 @@ export class ClaudeTool implements ITool {
             await streamingCallbacks.onStreamEnd(waitMessageId);
           }
         });
+      }
+
+      // Track first SDK activity AFTER the api_wait check so the warning can fire
+      if (!firstActivityTime && isActivityEvent) {
+        firstActivityTime = Date.now();
       }
 
       // Handle thinking partial (streaming)
@@ -615,6 +615,55 @@ export class ClaudeTool implements ITool {
 
           if (streamingCallbacks) {
             await streamingCallbacks.onStreamEnd(rateLimitMessageId);
+          }
+        });
+      }
+
+      // Handle sdk_event — surface unhandled SDK messages as system messages
+      if (event.type === 'sdk_event') {
+        const sdkEvent = event as Extract<ProcessedEvent, { type: 'sdk_event' }>;
+        const content: Array<{
+          type: string;
+          text?: string;
+          sdkType?: string;
+          sdkSubtype?: string;
+          metadata?: Record<string, unknown>;
+          [key: string]: unknown;
+        }> = [
+          {
+            type: 'sdk_event',
+            text: sdkEvent.summary,
+            sdkType: sdkEvent.sdkType,
+            sdkSubtype: sdkEvent.sdkSubtype,
+            metadata: sdkEvent.rawMessage,
+          },
+        ];
+        console.log(`📡 SDK event → system message: ${sdkEvent.summary}`);
+
+        await withFeathersSessionGuard(sessionId, this.sessionsRepo, async () => {
+          const sdkEventMessageId = generateId() as MessageID;
+
+          if (streamingCallbacks) {
+            await streamingCallbacks.onStreamStart(sdkEventMessageId, {
+              session_id: sessionId,
+              task_id: taskId,
+              role: MessageRole.SYSTEM,
+              timestamp: new Date().toISOString(),
+            });
+          }
+
+          await createSystemMessage(
+            sessionId,
+            sdkEventMessageId,
+            content,
+            taskId,
+            nextIndex++,
+            resolvedModel,
+            this.messagesService!
+          );
+
+          if (streamingCallbacks) {
+            await streamingCallbacks.onStreamEnd(sdkEventMessageId);
           }
         });
       }
@@ -982,6 +1031,33 @@ export class ClaudeTool implements ITool {
             sessionId,
             rateLimitMessageId,
             content,
+            taskId,
+            nextIndex++,
+            resolvedModel,
+            this.messagesService!
+          );
+        });
+      }
+
+      // Handle sdk_event in non-streaming path
+      if (event.type === 'sdk_event') {
+        const sdkEvent = event as Extract<ProcessedEvent, { type: 'sdk_event' }>;
+        console.log(`📡 SDK event → system message: ${sdkEvent.summary}`);
+
+        await withFeathersSessionGuard(sessionId, this.sessionsRepo, async () => {
+          const sdkEventMessageId = generateId() as MessageID;
+          await createSystemMessage(
+            sessionId,
+            sdkEventMessageId,
+            [
+              {
+                type: 'sdk_event',
+                text: sdkEvent.summary,
+                sdkType: sdkEvent.sdkType,
+                sdkSubtype: sdkEvent.sdkSubtype,
+                metadata: sdkEvent.rawMessage,
+              },
+            ],
             taskId,
             nextIndex++,
             resolvedModel,

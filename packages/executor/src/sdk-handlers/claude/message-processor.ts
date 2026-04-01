@@ -131,6 +131,14 @@ export type ProcessedEvent =
       agentSessionId?: string;
     }
   | {
+      type: 'sdk_event';
+      sdkType: string;
+      sdkSubtype?: string;
+      summary: string;
+      rawMessage: Record<string, unknown>;
+      agentSessionId?: string;
+    }
+  | {
       type: 'stopped';
     }
   | {
@@ -709,8 +717,26 @@ export class SDKMessageProcessor {
       return events;
     }
 
-    console.debug(`ℹ️  SDK system message:`, msg);
-    return [];
+    // Blacklist approach: surface unhandled system subtypes by default
+    const subtype =
+      ('subtype' in msg ? (msg as { subtype?: string }).subtype : undefined) || 'unknown';
+
+    if (SDKMessageProcessor.SUPPRESSED_SYSTEM_SUBTYPES.has(subtype)) {
+      console.debug(`🔇 Suppressed system subtype: ${subtype}`);
+      return [];
+    }
+
+    console.log(`📡 Surfacing unhandled system subtype: ${subtype}`);
+    return [
+      {
+        type: 'sdk_event',
+        sdkType: 'system',
+        sdkSubtype: subtype,
+        summary: this.summarizeMessage(msg as Record<string, unknown>),
+        rawMessage: msg as Record<string, unknown>,
+        agentSessionId: this.state.capturedAgentSessionId,
+      },
+    ];
   }
 
   /**
@@ -770,11 +796,110 @@ export class SDKMessageProcessor {
   }
 
   /**
-   * Handle unknown message types
+   * Message types to suppress (log-only, don't surface to users).
+   * Everything NOT in this set is surfaced as a system message by default.
+   */
+  private static readonly SUPPRESSED_MESSAGE_TYPES = new Set([
+    'tool_progress', // Fires constantly during tool execution — extremely noisy
+    'prompt_suggestion', // End-of-conversation suggestions, not relevant in Agor
+  ]);
+
+  /**
+   * System message subtypes to suppress (log-only, don't surface to users).
+   * Everything NOT in this set (and not already handled) is surfaced by default.
+   */
+  private static readonly SUPPRESSED_SYSTEM_SUBTYPES = new Set([
+    'files_persisted', // Internal SDK bookkeeping
+    'session_state_changed', // Internal SDK state transitions
+  ]);
+
+  /**
+   * Handle unknown/unhandled top-level message types.
+   * Blacklist approach: surface everything by default, suppress only known-noisy types.
    */
   private handleUnknown(msg: { type?: string; [key: string]: unknown }): ProcessedEvent[] {
-    console.warn(`⚠️  Unknown SDK message type: ${msg.type}`, msg);
-    return []; // Continue processing - don't fail on unknown types
+    const msgType = msg.type || 'unknown';
+
+    if (SDKMessageProcessor.SUPPRESSED_MESSAGE_TYPES.has(msgType)) {
+      console.debug(`🔇 Suppressed SDK message type: ${msgType}`);
+      return [];
+    }
+
+    console.log(`📡 Surfacing unhandled SDK message type: ${msgType}`);
+    return [
+      {
+        type: 'sdk_event',
+        sdkType: msgType,
+        summary: this.summarizeMessage(msg),
+        rawMessage: msg as Record<string, unknown>,
+        agentSessionId: this.state.capturedAgentSessionId,
+      },
+    ];
+  }
+
+  /**
+   * Create a human-readable summary from an SDK message for display in the conversation UI.
+   */
+  private summarizeMessage(msg: Record<string, unknown>): string {
+    const type = (msg.type as string) || 'unknown';
+    const subtype = msg.subtype as string | undefined;
+    const label = subtype ? `${type}/${subtype}` : type;
+
+    // Type-specific summaries for known unhandled types
+    if (type === 'api_retry') {
+      const attempt = msg.attempt as number | undefined;
+      const maxRetries = msg.max_retries as number | undefined;
+      const delayMs = msg.retry_delay_ms as number | undefined;
+      const errorStatus = msg.error_status as number | undefined;
+      const parts = [`API retry attempt ${attempt ?? '?'}/${maxRetries ?? '?'}`];
+      if (errorStatus) parts.push(`(HTTP ${errorStatus})`);
+      if (delayMs) parts.push(`— waiting ${Math.round(delayMs / 1000)}s`);
+      return parts.join(' ');
+    }
+
+    if (type === 'auth_status') {
+      const isAuth = msg.isAuthenticating as boolean | undefined;
+      const error = msg.error as string | undefined;
+      if (error) return `Authentication error: ${error}`;
+      return isAuth ? 'Authenticating...' : 'Authentication complete';
+    }
+
+    if (type === 'tool_use_summary') {
+      return (msg.summary as string) || 'Tool use summary';
+    }
+
+    if (subtype === 'api_retry') {
+      const attempt = msg.attempt as number | undefined;
+      const maxRetries = msg.max_retries as number | undefined;
+      const delayMs = msg.retry_delay_ms as number | undefined;
+      const parts = [`API retry ${attempt ?? '?'}/${maxRetries ?? '?'}`];
+      if (delayMs) parts.push(`— waiting ${Math.round(delayMs / 1000)}s`);
+      return parts.join(' ');
+    }
+
+    if (subtype === 'hook_started' || subtype === 'hook_progress' || subtype === 'hook_response') {
+      return `Hook: ${subtype.replace('hook_', '')}`;
+    }
+
+    if (
+      subtype === 'task_notification' ||
+      subtype === 'task_started' ||
+      subtype === 'task_progress'
+    ) {
+      return `Task: ${subtype.replace('task_', '')}`;
+    }
+
+    if (subtype === 'local_command_output') {
+      return 'Local command output';
+    }
+
+    if (subtype === 'status') {
+      const status = msg.status as string | undefined;
+      return status ? `Status: ${status}` : 'Status update';
+    }
+
+    // Generic fallback
+    return `SDK event: ${label}`;
   }
 
   /**

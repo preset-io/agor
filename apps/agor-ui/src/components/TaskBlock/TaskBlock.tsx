@@ -104,12 +104,14 @@ interface TaskBlockProps {
 }
 
 /**
- * Check if message contains ONLY tools/thinking/tool-results (no user-facing text)
- * Returns true if message should be in AgentChain, false if it should be a regular message bubble
+ * Check if a system message is an SDK status event (rate limit, API wait, or other SDK event).
+ * These render via RateLimitBlock instead of the regular MessageBlock.
  */
-function isRateLimitOrApiWaitMessage(message: Message): boolean {
+function isSdkStatusMessage(message: Message): boolean {
   if (message.role !== MessageRole.SYSTEM || !Array.isArray(message.content)) return false;
-  return message.content.some((b) => b.type === 'rate_limit' || b.type === 'api_wait');
+  return message.content.some(
+    (b) => b.type === 'rate_limit' || b.type === 'api_wait' || b.type === 'sdk_event'
+  );
 }
 
 function isAgentChainMessage(message: Message): boolean {
@@ -604,8 +606,8 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                         }
                       }
 
-                      // Render rate limit / API wait messages with dedicated component
-                      if (isRateLimitOrApiWaitMessage(block.message)) {
+                      // Render SDK status messages (rate limit, API wait, etc.) with dedicated component
+                      if (isSdkStatusMessage(block.message)) {
                         return (
                           <RateLimitBlock
                             key={block.message.message_id}
