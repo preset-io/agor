@@ -4275,6 +4275,36 @@ async function main() {
     // biome-ignore lint/suspicious/noExplicitAny: Custom service methods not in default hook map
   } as any);
 
+  // POST /boards/:id/archive - Archive a board
+  app.use('/boards/:id/archive', {
+    async create(_data: unknown, params: RouteParams) {
+      const id = params.route?.id;
+      if (!id) throw new Error('Board ID required');
+      return boardsService.archive(id, params);
+    },
+  });
+
+  app.service('/boards/:id/archive').hooks({
+    before: {
+      create: [requireAuth, requireMinimumRole('member', 'archive boards')],
+    },
+  });
+
+  // POST /boards/:id/unarchive - Unarchive a board
+  app.use('/boards/:id/unarchive', {
+    async create(_data: unknown, params: RouteParams) {
+      const id = params.route?.id;
+      if (!id) throw new Error('Board ID required');
+      return boardsService.unarchive(id, params);
+    },
+  });
+
+  app.service('/boards/:id/unarchive').hooks({
+    before: {
+      create: [requireAuth, requireMinimumRole('member', 'unarchive boards')],
+    },
+  });
+
   // Configure authentication options BEFORE creating service
   // Note: jwtSecret is initialized earlier (before Socket.io config)
   const authStrategiesArray = ['jwt', 'local', 'anonymous'];

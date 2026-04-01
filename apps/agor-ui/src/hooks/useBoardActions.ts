@@ -76,10 +76,7 @@ export function useBoardActions(client: AgorClient | null): UseBoardActionsResul
 
     try {
       setLoading(true);
-      const archived = await client.service('boards').patch(boardId, {
-        archived: true,
-        archived_at: new Date().toISOString(),
-      });
+      const archived = await client.service(`boards/${boardId}/archive`).create({});
       return archived as Board;
     } catch (error) {
       showError(
@@ -96,11 +93,7 @@ export function useBoardActions(client: AgorClient | null): UseBoardActionsResul
 
     try {
       setLoading(true);
-      const unarchived = await client.service('boards').patch(boardId, {
-        archived: false,
-        archived_at: undefined,
-        archived_by: undefined,
-      });
+      const unarchived = await client.service(`boards/${boardId}/unarchive`).create({});
       return unarchived as Board;
     } catch (error) {
       showError(

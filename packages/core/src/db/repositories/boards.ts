@@ -57,7 +57,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
         : new Date(row.created_at).toISOString(),
       created_by: row.created_by,
       url,
-      archived: row.archived ?? false,
+      archived: Boolean(row.archived),
       archived_at: row.archived_at ? new Date(row.archived_at).toISOString() : undefined,
       archived_by: row.archived_by ?? undefined,
       ...data,
