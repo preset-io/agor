@@ -8,6 +8,7 @@ import bcrypt from 'bcryptjs';
 import { eq } from 'drizzle-orm';
 import { generateId } from '../lib/ids';
 import type { User, UserID } from '../types';
+import { normalizeRole } from '../types/user';
 import type { Database } from './client';
 import { insert, select } from './database-wrapper';
 import { users } from './schema';
@@ -84,11 +85,7 @@ export async function createUser(db: Database, data: CreateUserData): Promise<Us
     email: row.email,
     name: row.name ?? undefined,
     emoji: row.emoji ?? undefined,
-    role: ((row.role as string) === 'owner' ? 'superadmin' : row.role) as
-      | 'superadmin'
-      | 'admin'
-      | 'member'
-      | 'viewer',
+    role: normalizeRole(row.role ?? undefined),
     unix_username: row.unix_username ?? undefined,
     avatar: userData.avatar,
     preferences: userData.preferences,
@@ -132,11 +129,7 @@ export async function getUserByEmail(db: Database, email: string): Promise<User 
     email: row.email,
     name: row.name ?? undefined,
     emoji: row.emoji ?? undefined,
-    role: ((row.role as string) === 'owner' ? 'superadmin' : row.role) as
-      | 'superadmin'
-      | 'admin'
-      | 'member'
-      | 'viewer',
+    role: normalizeRole(row.role ?? undefined),
     unix_username: row.unix_username ?? undefined,
     avatar: userData.avatar,
     preferences: userData.preferences,

@@ -21,6 +21,7 @@ import {
   users,
 } from '@agor/core/db';
 import type { Paginated, Params, User, UserID } from '@agor/core/types';
+import { normalizeRole } from '@agor/core/types';
 
 /**
  * Create user input
@@ -379,11 +380,7 @@ export class UsersService {
       email: row.email,
       name: row.name ?? undefined,
       emoji: row.emoji ?? undefined,
-      role: (((row.role as string) === 'owner' ? 'superadmin' : row.role) ?? 'member') as
-        | 'superadmin'
-        | 'admin'
-        | 'member'
-        | 'viewer',
+      role: normalizeRole(row.role ?? undefined),
       unix_username: row.unix_username ?? undefined,
       avatar: data.avatar,
       preferences: data.preferences,
@@ -452,11 +449,7 @@ class UsersServiceWithAuth extends UsersService {
       password: row.password, // Include for authentication
       name: row.name ?? undefined,
       emoji: row.emoji ?? undefined,
-      role: (((row.role as string) === 'owner' ? 'superadmin' : row.role) ?? 'member') as
-        | 'superadmin'
-        | 'admin'
-        | 'member'
-        | 'viewer',
+      role: normalizeRole(row.role ?? undefined),
       avatar: data.avatar,
       preferences: data.preferences,
       onboarding_completed: !!row.onboarding_completed,

@@ -42,7 +42,7 @@ interface WorktreeOwnerParams {
 /**
  * Authorization hook - ensure user has 'view' permission to see owners
  */
-function requireViewPermission(worktreeRepo: WorktreeRepository) {
+function requireViewPermission(worktreeRepo: WorktreeRepository, allowSuperadmin = true) {
   return async (context: HookContext) => {
     // Skip for internal calls
     if (!context.params.provider) {
@@ -70,7 +70,7 @@ function requireViewPermission(worktreeRepo: WorktreeRepository) {
 
     // Superadmins can view owners of any worktree
     const userRole = params.user?.role as string | undefined;
-    if (isSuperAdmin(userRole)) {
+    if (isSuperAdmin(userRole, allowSuperadmin)) {
       return context;
     }
 
@@ -97,7 +97,7 @@ function requireViewPermission(worktreeRepo: WorktreeRepository) {
 /**
  * Authorization hook - ensure user is a worktree owner (for create/remove)
  */
-function requireWorktreeOwner(worktreeRepo: WorktreeRepository) {
+function requireWorktreeOwner(worktreeRepo: WorktreeRepository, allowSuperadmin = true) {
   return async (context: HookContext) => {
     // Skip for internal calls
     if (!context.params.provider) {
@@ -125,7 +125,7 @@ function requireWorktreeOwner(worktreeRepo: WorktreeRepository) {
 
     // Superadmins can manage owners on any worktree (self-assign ownership)
     const userRole = params.user?.role as string | undefined;
-    if (isSuperAdmin(userRole)) {
+    if (isSuperAdmin(userRole, allowSuperadmin)) {
       return context;
     }
 
@@ -147,6 +147,8 @@ export interface WorktreeOwnersServiceConfig {
   jwtSecret?: string;
   /** Daemon Unix user (for group membership) */
   daemonUser?: string;
+  /** Whether superadmin bypass is enabled (default: true) */
+  allowSuperadmin?: boolean;
 }
 
 /**
@@ -236,11 +238,12 @@ export function setupWorktreeOwnersService(
   );
 
   // Add authorization and Unix integration hooks
+  const allowSuperadmin = config.allowSuperadmin ?? true;
   app.service('worktrees/:id/owners').hooks({
     before: {
-      find: [requireViewPermission(worktreeRepo)],
-      create: [requireWorktreeOwner(worktreeRepo)],
-      remove: [requireWorktreeOwner(worktreeRepo)],
+      find: [requireViewPermission(worktreeRepo, allowSuperadmin)],
+      create: [requireWorktreeOwner(worktreeRepo, allowSuperadmin)],
+      remove: [requireWorktreeOwner(worktreeRepo, allowSuperadmin)],
     },
     after: {
       // After adding owner: fire-and-forget sync to executor

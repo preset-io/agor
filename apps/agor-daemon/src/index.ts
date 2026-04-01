@@ -1202,6 +1202,7 @@ async function main() {
     setupWorktreeOwnersService(app, worktreeRepo, {
       jwtSecret,
       daemonUser: config.daemon?.unix_user,
+      allowSuperadmin,
     });
   }
 
@@ -3439,9 +3440,10 @@ async function main() {
           }
 
           // Only superadmins can create superadmin users
+          // Guard both 'superadmin' and legacy 'owner' to prevent bypass
           // biome-ignore lint/suspicious/noExplicitAny: Feathers context data
           const data = context.data as any;
-          if (data?.role === 'superadmin') {
+          if (data?.role === 'superadmin' || data?.role === 'owner') {
             const callerRole = params.user?.role;
             if (callerRole !== 'superadmin' && callerRole !== 'owner') {
               throw new Forbidden('Only superadmins can create superadmin users');
@@ -3452,7 +3454,7 @@ async function main() {
         },
       ],
       patch: [
-        (context) => {
+        async (context) => {
           const params = context.params as AuthenticatedParams;
           const userId = context.id as string;
           const callerRole = params.user?.role;
@@ -3471,12 +3473,19 @@ async function main() {
                 throw new Forbidden('Only admins can modify user roles');
               }
               // Only superadmins can assign the superadmin role
+              // Guard both 'superadmin' and legacy 'owner' to prevent bypass
               if (
-                context.data.role === 'superadmin' &&
+                (context.data.role === 'superadmin' || context.data.role === 'owner') &&
                 callerRole !== 'superadmin' &&
                 callerRole !== 'owner'
               ) {
-                throw new Forbidden('Only superadmins can assign the superadmin role');
+                // Bootstrap: allow first superadmin promotion if none exist yet
+                const existing = (await usersService.find({
+                  query: { role: 'superadmin', $limit: 1 },
+                })) as Paginated<User>;
+                if (existing.total > 0) {
+                  throw new Forbidden('Only superadmins can assign the superadmin role');
+                }
               }
             }
             if (context.data?.must_change_password !== undefined) {
@@ -6265,7 +6274,12 @@ async function main() {
               // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type
               const userRole = (context.params as any).user?.role;
 
-              if (!isOwner && userRole !== 'admin' && userRole !== 'owner') {
+              if (
+                !isOwner &&
+                userRole !== 'admin' &&
+                userRole !== 'superadmin' &&
+                userRole !== 'owner'
+              ) {
                 throw new Forbidden(
                   'You must be the worktree owner or a global admin to archive/delete worktrees'
                 );
@@ -6330,7 +6344,12 @@ async function main() {
               // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type
               const userRole = (context.params as any).user?.role;
 
-              if (!isOwner && userRole !== 'admin' && userRole !== 'owner') {
+              if (
+                !isOwner &&
+                userRole !== 'admin' &&
+                userRole !== 'superadmin' &&
+                userRole !== 'owner'
+              ) {
                 throw new Forbidden(
                   'You must be the worktree owner or a global admin to unarchive worktrees'
                 );

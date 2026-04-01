@@ -17,7 +17,7 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
     async (args) => {
       const query: Record<string, unknown> = {};
       if (args.limit) query.$limit = args.limit;
-      const users = await ctx.app.service('users').find({ query });
+      const users = await ctx.app.service('users').find({ query, ...ctx.baseServiceParams });
       return textResult(users);
     }
   );
@@ -33,7 +33,7 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
       }),
     },
     async (args) => {
-      const user = await ctx.app.service('users').get(args.userId);
+      const user = await ctx.app.service('users').get(args.userId, ctx.baseServiceParams);
       return textResult(user);
     }
   );
@@ -48,7 +48,7 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
       inputSchema: z.object({}),
     },
     async () => {
-      const user = await ctx.app.service('users').get(ctx.userId);
+      const user = await ctx.app.service('users').get(ctx.userId, ctx.baseServiceParams);
       return textResult(user);
     }
   );
@@ -77,7 +77,9 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
       if (args.emoji !== undefined) updateData.emoji = args.emoji;
       if (args.avatar !== undefined) updateData.avatar = args.avatar;
       if (args.preferences !== undefined) updateData.preferences = args.preferences;
-      const updatedUser = await ctx.app.service('users').patch(ctx.userId, updateData);
+      const updatedUser = await ctx.app
+        .service('users')
+        .patch(ctx.userId, updateData, ctx.baseServiceParams);
       return textResult(updatedUser);
     }
   );
@@ -118,6 +120,14 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
       }),
     },
     async (args) => {
+      // Guard: only superadmins can assign the superadmin role (MCP bypasses Feathers hooks)
+      if (args.role === 'superadmin') {
+        const callerRole = ctx.authenticatedUser.role;
+        if (callerRole !== 'superadmin') {
+          throw new Error('Only superadmins can assign the superadmin role');
+        }
+      }
+
       const updateData: Record<string, unknown> = {};
       if (args.email !== undefined) updateData.email = args.email;
       if (args.name !== undefined) updateData.name = args.name;
@@ -134,7 +144,9 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
         throw new Error('at least one field must be provided to update');
       }
 
-      const updatedUser = await ctx.app.service('users').patch(args.userId, updateData);
+      const updatedUser = await ctx.app
+        .service('users')
+        .patch(args.userId, updateData, ctx.baseServiceParams);
       return textResult(updatedUser);
     }
   );
@@ -173,6 +185,14 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
       }),
     },
     async (args) => {
+      // Guard: only superadmins can create superadmin users (MCP bypasses Feathers hooks)
+      if (args.role === 'superadmin') {
+        const callerRole = ctx.authenticatedUser.role;
+        if (callerRole !== 'superadmin') {
+          throw new Error('Only superadmins can create superadmin users');
+        }
+      }
+
       const createData: Record<string, unknown> = {
         email: args.email,
         password: args.password,
@@ -185,7 +205,7 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
         createData.must_change_password = args.must_change_password;
       if (args.role !== undefined) createData.role = args.role;
 
-      const newUser = await ctx.app.service('users').create(createData);
+      const newUser = await ctx.app.service('users').create(createData, ctx.baseServiceParams);
       return textResult(newUser);
     }
   );
