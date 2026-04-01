@@ -1,9 +1,11 @@
 import type { AgorClient } from '@agor/core/api';
 import type { Board, Session, Worktree } from '@agor/core/types';
 import {
+  CodeSandboxOutlined,
   CopyOutlined,
   DeleteOutlined,
   DownloadOutlined,
+  DropboxOutlined,
   EditOutlined,
   PlusOutlined,
   UploadOutlined,
@@ -15,10 +17,12 @@ import {
   Input,
   Modal,
   Popconfirm,
+  Select,
   Space,
   Table,
   Tooltip,
   Typography,
+  theme,
 } from 'antd';
 import { useMemo, useState } from 'react';
 import { mapToSortedArray } from '@/utils/mapHelpers';
@@ -34,6 +38,8 @@ interface BoardsTableProps {
   onCreate?: (board: Partial<Board>) => void;
   onUpdate?: (boardId: string, updates: Partial<Board>) => void;
   onDelete?: (boardId: string) => void;
+  onArchive?: (boardId: string) => void;
+  onUnarchive?: (boardId: string) => void;
 }
 
 export const BoardsTable: React.FC<BoardsTableProps> = ({
@@ -44,14 +50,19 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
   onCreate,
   onUpdate,
   onDelete,
+  onArchive,
+  onUnarchive,
 }) => {
   const { modal } = App.useApp();
   const { showSuccess, showError } = useThemedMessage();
+  const { token } = theme.useToken();
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editingBoard, setEditingBoard] = useState<Board | null>(null);
   const [useCustomCSSCreate, setUseCustomCSSCreate] = useState(false);
   const [useCustomCSSEdit, setUseCustomCSSEdit] = useState(false);
+  const [archiveFilter, setArchiveFilter] = useState<'active' | 'archived' | 'all'>('active');
+  const [hoveredArchiveButton, setHoveredArchiveButton] = useState<string | null>(null);
   const [form] = Form.useForm();
 
   // Helper to detect if a background value is custom CSS (not a simple hex color)
@@ -276,9 +287,37 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
     {
       title: 'Actions',
       key: 'actions',
-      width: 240,
+      width: 280,
       render: (_: unknown, board: Board) => (
         <Space size="small">
+          <Tooltip title={board.archived ? 'Archived • Click to unarchive' : 'Click to archive'}>
+            <Button
+              type="text"
+              size="small"
+              icon={
+                hoveredArchiveButton === board.board_id ? (
+                  board.archived ? (
+                    <DropboxOutlined style={{ color: token.colorSuccess }} />
+                  ) : (
+                    <CodeSandboxOutlined style={{ color: token.colorWarning }} />
+                  )
+                ) : board.archived ? (
+                  <CodeSandboxOutlined style={{ color: token.colorWarning }} />
+                ) : (
+                  <DropboxOutlined style={{ color: token.colorTextSecondary }} />
+                )
+              }
+              onMouseEnter={() => setHoveredArchiveButton(board.board_id)}
+              onMouseLeave={() => setHoveredArchiveButton(null)}
+              onClick={() => {
+                if (board.archived) {
+                  onUnarchive?.(board.board_id);
+                } else {
+                  onArchive?.(board.board_id);
+                }
+              }}
+            />
+          </Tooltip>
           <Tooltip title="Clone board (zones, configuration, and positions only)">
             <Button
               type="text"
@@ -334,6 +373,16 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
           Create and manage boards for organizing sessions.
         </Typography.Text>
         <Space>
+          <Select
+            value={archiveFilter}
+            onChange={(value) => setArchiveFilter(value)}
+            style={{ width: 120 }}
+            options={[
+              { value: 'active', label: 'Active' },
+              { value: 'all', label: 'All' },
+              { value: 'archived', label: 'Archived' },
+            ]}
+          />
           <Button icon={<UploadOutlined />} onClick={handleImportClick}>
             Import Board
           </Button>
@@ -346,11 +395,18 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
       <Table
         dataSource={mapToSortedArray(boardById, (a, b) =>
           a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
-        )}
+        ).filter((board) => {
+          if (archiveFilter === 'active') return !board.archived;
+          if (archiveFilter === 'archived') return board.archived;
+          return true; // 'all'
+        })}
         columns={columns}
         rowKey="board_id"
         pagination={false}
         size="small"
+        onRow={(record) => ({
+          style: record.archived ? { opacity: 0.5 } : undefined,
+        })}
       />
 
       {/* Create Board Modal */}

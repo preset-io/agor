@@ -154,7 +154,8 @@ function AppContent() {
     useSessionActions(client);
 
   // Board actions
-  const { createBoard, updateBoard, deleteBoard } = useBoardActions(client);
+  const { createBoard, updateBoard, deleteBoard, archiveBoard, unarchiveBoard } =
+    useBoardActions(client);
 
   // Onboarding state (for new users)
   const [settingsTabToOpen, setSettingsTabToOpen] = useState<string | null>(null);
@@ -804,6 +805,20 @@ function AppContent() {
     }
   };
 
+  const handleArchiveBoard = async (boardId: string) => {
+    const archived = await archiveBoard(boardId as UUID);
+    if (archived) {
+      showSuccess('Board archived successfully!');
+    }
+  };
+
+  const handleUnarchiveBoard = async (boardId: string) => {
+    const unarchived = await unarchiveBoard(boardId as UUID);
+    if (unarchived) {
+      showSuccess('Board unarchived successfully!');
+    }
+  };
+
   // Handle repo CRUD
   const handleCreateRepo = async (data: { url: string; slug: string; default_branch: string }) => {
     if (!client) return;
@@ -1360,6 +1375,8 @@ function AppContent() {
                 onCreateBoard={handleCreateBoard}
                 onUpdateBoard={handleUpdateBoard}
                 onDeleteBoard={handleDeleteBoard}
+                onArchiveBoard={handleArchiveBoard}
+                onUnarchiveBoard={handleUnarchiveBoard}
                 onCreateRepo={handleCreateRepo}
                 onCreateLocalRepo={handleCreateLocalRepo}
                 onUpdateRepo={handleUpdateRepo}
@@ -1437,6 +1454,8 @@ function AppContent() {
                 onCreateBoard={handleCreateBoard}
                 onUpdateBoard={handleUpdateBoard}
                 onDeleteBoard={handleDeleteBoard}
+                onArchiveBoard={handleArchiveBoard}
+                onUnarchiveBoard={handleUnarchiveBoard}
                 onCreateRepo={handleCreateRepo}
                 onCreateLocalRepo={handleCreateLocalRepo}
                 onUpdateRepo={handleUpdateRepo}
@@ -1514,6 +1533,8 @@ function AppContent() {
                 onCreateBoard={handleCreateBoard}
                 onUpdateBoard={handleUpdateBoard}
                 onDeleteBoard={handleDeleteBoard}
+                onArchiveBoard={handleArchiveBoard}
+                onUnarchiveBoard={handleUnarchiveBoard}
                 onCreateRepo={handleCreateRepo}
                 onCreateLocalRepo={handleCreateLocalRepo}
                 onUpdateRepo={handleUpdateRepo}

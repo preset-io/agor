@@ -57,6 +57,9 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
         : new Date(row.created_at).toISOString(),
       created_by: row.created_by,
       url,
+      archived: row.archived ?? false,
+      archived_at: row.archived_at ? new Date(row.archived_at).toISOString() : undefined,
+      archived_by: row.archived_by ?? undefined,
       ...data,
     };
   }
@@ -309,15 +312,23 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
       };
       const insertData = this.boardToInsert(merged);
 
-      await update(this.db, boards)
-        .set({
-          name: insertData.name,
-          slug: insertData.slug,
-          updated_at: new Date(),
-          data: insertData.data,
-        })
-        .where(eq(boards.board_id, fullId))
-        .run();
+      const setData: Record<string, unknown> = {
+        name: insertData.name,
+        slug: insertData.slug,
+        updated_at: new Date(),
+        data: insertData.data,
+      };
+
+      // Include archive fields if provided
+      if (updates.archived !== undefined) setData.archived = updates.archived;
+      if (Object.hasOwn(updates, 'archived_at')) {
+        setData.archived_at = updates.archived_at ? new Date(updates.archived_at) : null;
+      }
+      if (Object.hasOwn(updates, 'archived_by')) {
+        setData.archived_by = updates.archived_by ?? null;
+      }
+
+      await update(this.db, boards).set(setData).where(eq(boards.board_id, fullId)).run();
 
       const updated = await this.findById(fullId);
       if (!updated) {

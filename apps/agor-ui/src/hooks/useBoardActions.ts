@@ -11,6 +11,8 @@ interface UseBoardActionsResult {
   createBoard: (board: Partial<Board>) => Promise<Board | null>;
   updateBoard: (boardId: UUID, updates: Partial<Board>) => Promise<Board | null>;
   deleteBoard: (boardId: UUID) => Promise<boolean>;
+  archiveBoard: (boardId: UUID) => Promise<Board | null>;
+  unarchiveBoard: (boardId: UUID) => Promise<Board | null>;
   loading: boolean;
 }
 
@@ -69,10 +71,53 @@ export function useBoardActions(client: AgorClient | null): UseBoardActionsResul
     }
   };
 
+  const archiveBoard = async (boardId: UUID): Promise<Board | null> => {
+    if (!client) return null;
+
+    try {
+      setLoading(true);
+      const archived = await client.service('boards').patch(boardId, {
+        archived: true,
+        archived_at: new Date().toISOString(),
+      });
+      return archived as Board;
+    } catch (error) {
+      showError(
+        `Failed to archive board: ${error instanceof Error ? error.message : String(error)}`
+      );
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const unarchiveBoard = async (boardId: UUID): Promise<Board | null> => {
+    if (!client) return null;
+
+    try {
+      setLoading(true);
+      const unarchived = await client.service('boards').patch(boardId, {
+        archived: false,
+        archived_at: undefined,
+        archived_by: undefined,
+      });
+      return unarchived as Board;
+    } catch (error) {
+      showError(
+        `Failed to unarchive board: ${error instanceof Error ? error.message : String(error)}`
+      );
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return {
     createBoard,
     updateBoard,
     deleteBoard,
+    archiveBoard,
+    unarchiveBoard,
     loading,
   };
 }

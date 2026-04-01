@@ -66,6 +66,8 @@ export interface SettingsModalProps {
   onCreateBoard?: (board: Partial<Board>) => void;
   onUpdateBoard?: (boardId: string, updates: Partial<Board>) => void;
   onDeleteBoard?: (boardId: string) => void;
+  onArchiveBoard?: (boardId: string) => void;
+  onUnarchiveBoard?: (boardId: string) => void;
   onCreateRepo?: (data: { url: string; slug: string; default_branch: string }) => void;
   onCreateLocalRepo?: (data: { path: string; slug?: string }) => void;
   onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
@@ -124,6 +126,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onCreateBoard,
   onUpdateBoard,
   onDeleteBoard,
+  onArchiveBoard,
+  onUnarchiveBoard,
   onCreateRepo,
   onCreateLocalRepo,
   onUpdateRepo,
@@ -293,6 +297,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             onCreate={onCreateBoard}
             onUpdate={onUpdateBoard}
             onDelete={onDeleteBoard}
+            onArchive={onArchiveBoard}
+            onUnarchive={onUnarchiveBoard}
           />
         );
       case 'repos':

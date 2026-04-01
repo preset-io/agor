@@ -62,10 +62,10 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
 
   // Build menu items (board list only — filter input rendered separately via dropdownRender)
   const menuItems: MenuProps['items'] = useMemo(() => {
-    // Sort boards alphabetically by name
-    const sortedBoards = [...boards].sort((a, b) =>
-      a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
-    );
+    // Filter out archived boards, then sort alphabetically by name
+    const sortedBoards = boards
+      .filter((b) => !b.archived)
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
 
     // Apply text filter
     const filteredBoards = filterText

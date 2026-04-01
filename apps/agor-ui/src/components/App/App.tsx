@@ -95,6 +95,8 @@ export interface AppProps {
   onCreateBoard?: (board: Partial<Board>) => void;
   onUpdateBoard?: (boardId: string, updates: Partial<Board>) => void;
   onDeleteBoard?: (boardId: string) => void;
+  onArchiveBoard?: (boardId: string) => void;
+  onUnarchiveBoard?: (boardId: string) => void;
   onCreateRepo?: (data: { url: string; slug: string; default_branch: string }) => void;
   onCreateLocalRepo?: (data: { path: string; slug?: string }) => void;
   onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
@@ -182,6 +184,8 @@ export const App: React.FC<AppProps> = ({
   onCreateBoard,
   onUpdateBoard,
   onDeleteBoard,
+  onArchiveBoard,
+  onUnarchiveBoard,
   onCreateRepo,
   onCreateLocalRepo,
   onUpdateRepo,
@@ -957,6 +961,8 @@ export const App: React.FC<AppProps> = ({
             onCreateBoard={onCreateBoard}
             onUpdateBoard={onUpdateBoard}
             onDeleteBoard={onDeleteBoard}
+            onArchiveBoard={onArchiveBoard}
+            onUnarchiveBoard={onUnarchiveBoard}
             onCreateRepo={onCreateRepo}
             onCreateLocalRepo={onCreateLocalRepo}
             onUpdateRepo={onUpdateRepo}

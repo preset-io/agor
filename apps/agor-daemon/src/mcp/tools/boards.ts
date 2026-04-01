@@ -28,15 +28,32 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
     'agor_boards_list',
     {
       description:
-        'List all boards accessible to the current user. Each board includes a `url` field with a clickable link to view the board in the UI.',
+        'List all boards accessible to the current user. Each board includes a `url` field with a clickable link to view the board in the UI. By default, archived boards are excluded.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         limit: z.number().optional().describe('Maximum number of results (default: 50)'),
+        includeArchived: z
+          .boolean()
+          .optional()
+          .describe(
+            'Include archived boards in results (default: false). By default, archived boards are excluded.'
+          ),
+        archived: z
+          .boolean()
+          .optional()
+          .describe(
+            'Filter to show ONLY archived boards. When true, returns only archived boards. Overrides includeArchived.'
+          ),
       }),
     },
     async (args) => {
       const query: Record<string, unknown> = {};
       if (args.limit) query.$limit = args.limit;
+      if (args.archived === true) {
+        query.archived = true;
+      } else if (!args.includeArchived) {
+        query.archived = false;
+      }
       const boards = await ctx.app.service('boards').find({ query, ...ctx.baseServiceParams });
       return textResult(boards);
     }
@@ -162,6 +179,50 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
 
       const board = await ctx.app.service('boards').create(boardData, ctx.baseServiceParams);
       return textResult(board);
+    }
+  );
+
+  // Tool 5: agor_boards_archive
+  server.registerTool(
+    'agor_boards_archive',
+    {
+      description:
+        'Archive a board (soft delete). Archived boards are hidden from listings by default. Use agor_boards_unarchive to restore.',
+      annotations: { destructiveHint: true },
+      inputSchema: z.object({
+        boardId: z.string().describe('Board ID to archive (UUIDv7 or short ID)'),
+      }),
+    },
+    async (args) => {
+      const boardId = coerceString(args.boardId)!;
+      const boardsService = ctx.app.service('boards') as unknown as BoardsServiceImpl;
+      const result = await boardsService.archive(boardId, ctx.baseServiceParams);
+      return textResult({
+        success: true,
+        board: result,
+        message: 'Board archived successfully.',
+      });
+    }
+  );
+
+  // Tool 6: agor_boards_unarchive
+  server.registerTool(
+    'agor_boards_unarchive',
+    {
+      description: 'Restore a previously archived board. The board will appear in listings again.',
+      inputSchema: z.object({
+        boardId: z.string().describe('Board ID to unarchive (UUIDv7 or short ID)'),
+      }),
+    },
+    async (args) => {
+      const boardId = coerceString(args.boardId)!;
+      const boardsService = ctx.app.service('boards') as unknown as BoardsServiceImpl;
+      const result = await boardsService.unarchive(boardId, ctx.baseServiceParams);
+      return textResult({
+        success: true,
+        board: result,
+        message: 'Board unarchived successfully.',
+      });
     }
   );
 }

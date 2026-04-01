@@ -196,6 +196,15 @@ export interface Board {
    * Format: {baseUrl}/b/{boardId}/
    */
   url: string;
+
+  /** Whether this board is archived (soft deleted) */
+  archived: boolean;
+
+  /** ISO 8601 timestamp when the board was archived */
+  archived_at?: string;
+
+  /** User ID of the user who archived this board */
+  archived_by?: string;
 }
 
 /**

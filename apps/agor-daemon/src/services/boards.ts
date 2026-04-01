@@ -218,6 +218,59 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     return clonedBoard;
   }
 
+  /**
+   * Custom method: Archive a board (soft delete)
+   */
+  async archive(id: string, params?: BoardParams): Promise<Board> {
+    const board = await this.get(id, params);
+
+    if (board.archived) {
+      throw new Error(`Board "${board.name}" is already archived`);
+    }
+
+    console.log(`📦 Archiving board: ${board.name}`);
+
+    const currentUserId = params?.user?.user_id || 'anonymous';
+    const archivedBoard = await this.patch(
+      id,
+      {
+        archived: true,
+        archived_at: new Date().toISOString(),
+        archived_by: currentUserId,
+      } as Partial<Board>,
+      params
+    );
+
+    console.log(`✅ Archived board ${board.name}`);
+    return archivedBoard as Board;
+  }
+
+  /**
+   * Custom method: Unarchive a board
+   */
+  async unarchive(id: string, params?: BoardParams): Promise<Board> {
+    const board = await this.get(id, params);
+
+    if (!board.archived) {
+      throw new Error(`Board "${board.name}" is not archived`);
+    }
+
+    console.log(`📦 Unarchiving board: ${board.name}`);
+
+    const unarchivedBoard = await this.patch(
+      id,
+      {
+        archived: false,
+        archived_at: undefined,
+        archived_by: undefined,
+      } as Partial<Board>,
+      params
+    );
+
+    console.log(`✅ Unarchived board ${board.name}`);
+    return unarchivedBoard as Board;
+  }
+
   private async resolveBoardId(
     data: { boardId?: string; id?: string; slug?: string } | string
   ): Promise<string> {

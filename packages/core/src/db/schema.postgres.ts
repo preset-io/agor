@@ -342,6 +342,11 @@ export const boards = pgTable(
         custom_context?: Record<string, unknown>; // Custom context for Handlebars templates
       }>()
       .notNull(),
+
+    // Archive state (for soft deletes)
+    archived: t.bool('archived').notNull().default(false),
+    archived_at: t.timestamp('archived_at'),
+    archived_by: varchar('archived_by', { length: 36 }),
   },
   (table) => ({
     nameIdx: index('boards_name_idx').on(table.name),
