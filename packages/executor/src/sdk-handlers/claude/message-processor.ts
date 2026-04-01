@@ -811,6 +811,9 @@ export class SDKMessageProcessor {
   private static readonly SUPPRESSED_SYSTEM_SUBTYPES = new Set([
     'files_persisted', // Internal SDK bookkeeping
     'session_state_changed', // Internal SDK state transitions
+    'task_started', // SDK task lifecycle — no user-facing value
+    'task_progress', // SDK task lifecycle — fires repeatedly, very noisy
+    'task_notification', // SDK task lifecycle notification
   ]);
 
   /**
