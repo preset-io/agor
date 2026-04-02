@@ -3013,6 +3013,7 @@ async function main() {
         ...(allowAnonymous ? [] : [requireMinimumRole('member', 'access repositories')]),
       ],
       create: [requireMinimumRole('member', 'create repositories'), requireAdminForEnvConfig()],
+      update: [requireMinimumRole('member', 'update repositories'), requireAdminForEnvConfig()],
       patch: [requireMinimumRole('member', 'update repositories'), requireAdminForEnvConfig()],
       remove: [requireMinimumRole('member', 'delete repositories')],
     },

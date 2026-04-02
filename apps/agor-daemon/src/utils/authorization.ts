@@ -80,7 +80,13 @@ export function requireAdminForEnvConfig() {
   return (context: HookContext) => {
     // biome-ignore lint/suspicious/noExplicitAny: context.data shape varies per service
     const data = context.data as any;
-    if (!data || data.environment_config == null) {
+
+    // Check both single objects and array payloads (bulk create)
+    const items = Array.isArray(data) ? data : [data];
+    const hasEnvConfig = items.some(
+      (item: Record<string, unknown>) => item?.environment_config != null
+    );
+    if (!hasEnvConfig) {
       return context;
     }
 
