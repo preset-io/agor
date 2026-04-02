@@ -413,6 +413,7 @@ import { AnonymousStrategy } from './strategies/anonymous';
 import {
   ensureMinimumRole,
   registerAuthenticatedRoute,
+  requireAdminForEnvConfig,
   requireMinimumRole,
 } from './utils/authorization';
 import { createUploadMiddleware } from './utils/upload';
@@ -3011,8 +3012,8 @@ async function main() {
         ...getReadAuthHooks(),
         ...(allowAnonymous ? [] : [requireMinimumRole('member', 'access repositories')]),
       ],
-      create: [requireMinimumRole('member', 'create repositories')],
-      patch: [requireMinimumRole('member', 'update repositories')],
+      create: [requireMinimumRole('member', 'create repositories'), requireAdminForEnvConfig()],
+      patch: [requireMinimumRole('member', 'update repositories'), requireAdminForEnvConfig()],
       remove: [requireMinimumRole('member', 'delete repositories')],
     },
   });
@@ -6102,7 +6103,7 @@ async function main() {
       },
     },
     {
-      create: { role: 'member', action: 'import .agor.yml' },
+      create: { role: 'admin', action: 'import environment config from .agor.yml' },
     },
     requireAuth
   );

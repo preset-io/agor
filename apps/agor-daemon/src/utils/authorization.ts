@@ -71,6 +71,31 @@ export function requireMinimumRole(minimumRole: Role, action?: string) {
 }
 
 /**
+ * Feathers hook that requires admin role when environment_config is being modified.
+ *
+ * Environment commands (up_command, down_command, nuke_command, etc.) execute as the
+ * system user, so only admins/superadmins may set or change them.
+ */
+export function requireAdminForEnvConfig() {
+  return (context: HookContext) => {
+    // biome-ignore lint/suspicious/noExplicitAny: context.data shape varies per service
+    const data = context.data as any;
+    if (!data || data.environment_config == null) {
+      return context;
+    }
+
+    // Internal calls and service accounts bypass (handled by ensureMinimumRole)
+    ensureMinimumRole(
+      context.params,
+      'admin',
+      'modify environment commands (up_command, down_command, etc.)'
+    );
+
+    return context;
+  };
+}
+
+/**
  * Helper to register authenticated custom routes with hooks.
  *
  * This utility reduces boilerplate when creating custom Feathers routes that require authentication.
