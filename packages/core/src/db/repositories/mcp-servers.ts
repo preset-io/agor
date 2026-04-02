@@ -233,8 +233,7 @@ export class MCPServerRepository
       }
 
       if (conditions.length > 0) {
-        // biome-ignore lint/suspicious/noExplicitAny: Drizzle query builder type
-        query = query.where(and(...conditions)) as any;
+        query = query.where(and(...conditions));
       }
 
       const rows = await query.all();

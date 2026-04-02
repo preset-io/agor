@@ -561,6 +561,14 @@ async function main() {
   // Helper: Return empty array for auth in anonymous mode (read-only services don't need auth)
   const getReadAuthHooks = () => (allowAnonymous ? [] : [requireAuth]);
 
+  // Helper: Wrap validateQuery to produce a FeathersJS-compatible HookFunction.
+  // validateQuery returns Promise<any> but hooks arrays expect Promise<HookContext | void>.
+  // The types are runtime-compatible; this wrapper bridges the TypeScript gap.
+  const typedValidateQuery = (
+    validator: Parameters<typeof validateQuery>[0]
+  ): ((context: HookContext) => Promise<void>) =>
+    validateQuery(validator) as unknown as (context: HookContext) => Promise<void>;
+
   // SECURITY: Enforce authentication in public deployments
   const isPublicDeployment =
     process.env.CODESPACES === 'true' ||
@@ -2687,9 +2695,8 @@ async function main() {
 
   // Register config service for API key management
   const configService = createConfigService(db);
-  // Store app reference for service method access
-  // biome-ignore lint/suspicious/noExplicitAny: Service needs app reference for cross-service calls
-  (configService as any).app = app;
+  // Store app reference for service method access (app property defined on ConfigService)
+  configService.app = app;
   app.use('/config', configService);
 
   // Register custom method for API key resolution (used by executors)
@@ -2891,8 +2898,7 @@ async function main() {
   app.service('board-objects').hooks({
     before: {
       all: [
-        // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type compatibility
-        (validateQuery as any)(boardObjectQueryValidator),
+        typedValidateQuery(boardObjectQueryValidator),
         ...getReadAuthHooks(),
         ...(allowAnonymous ? [] : [requireMinimumRole(ROLES.MEMBER, 'manage board objects')]),
       ],
@@ -2908,8 +2914,9 @@ async function main() {
                   return context;
                 }
 
-                // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type not fully typed
-                const userId = (context.params as any).user?.user_id;
+                const userId = context.params.user?.user_id as
+                  | import('@agor/core/types').UUID
+                  | undefined;
                 if (!userId) {
                   // Not authenticated - return empty results
                   context.result = {
@@ -2989,11 +2996,7 @@ async function main() {
 
   app.service('board-comments').hooks({
     before: {
-      all: [
-        // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type compatibility
-        (validateQuery as any)(boardCommentQueryValidator),
-        ...getReadAuthHooks(),
-      ],
+      all: [typedValidateQuery(boardCommentQueryValidator), ...getReadAuthHooks()],
       create: [requireMinimumRole(ROLES.MEMBER, 'create board comments')],
       patch: [requireMinimumRole(ROLES.MEMBER, 'update board comments')],
       remove: [requireMinimumRole(ROLES.MEMBER, 'delete board comments')],
@@ -3006,8 +3009,7 @@ async function main() {
   app.service('repos').hooks({
     before: {
       all: [
-        // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type compatibility
-        (validateQuery as any)(repoQueryValidator),
+        typedValidateQuery(repoQueryValidator),
         ...getReadAuthHooks(),
         ...(allowAnonymous ? [] : [requireMinimumRole(ROLES.MEMBER, 'access repositories')]),
       ],
@@ -3021,8 +3023,7 @@ async function main() {
   app.service('worktrees').hooks({
     before: {
       all: [
-        // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type compatibility
-        (validateQuery as any)(worktreeQueryValidator),
+        typedValidateQuery(worktreeQueryValidator),
         ...getReadAuthHooks(),
         ...(allowAnonymous ? [] : [requireMinimumRole(ROLES.MEMBER, 'access worktrees')]),
       ],
@@ -3291,11 +3292,7 @@ async function main() {
 
   app.service('mcp-servers').hooks({
     before: {
-      all: [
-        // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type compatibility
-        (validateQuery as any)(mcpServerQueryValidator),
-        ...getReadAuthHooks(),
-      ],
+      all: [typedValidateQuery(mcpServerQueryValidator), ...getReadAuthHooks()],
       create: [requireMinimumRole(ROLES.ADMIN, 'create MCP servers')],
       patch: [requireMinimumRole(ROLES.ADMIN, 'update MCP servers')],
       remove: [requireMinimumRole(ROLES.ADMIN, 'delete MCP servers')],
@@ -3433,10 +3430,7 @@ async function main() {
 
   app.service('users').hooks({
     before: {
-      all: [
-        // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type compatibility
-        (validateQuery as any)(userQueryValidator),
-      ],
+      all: [typedValidateQuery(userQueryValidator)],
       find: [
         (context) => {
           const params = context.params as AuthenticatedParams;
@@ -3481,8 +3475,8 @@ async function main() {
 
           // Only superadmins can create superadmin users
           // Guard both 'superadmin' and legacy 'owner' to prevent bypass
-          // biome-ignore lint/suspicious/noExplicitAny: Feathers context data
-          const data = context.data as any;
+          // Cast to include 'owner' for legacy client compatibility (UserRole excludes 'owner')
+          const data = context.data as Partial<Omit<User, 'role'> & { role?: string }>;
           if (hasMinimumRole(data?.role, ROLES.SUPERADMIN)) {
             const callerRole = params.user?.role;
             if (!hasMinimumRole(callerRole, ROLES.SUPERADMIN)) {
@@ -3669,11 +3663,7 @@ async function main() {
   // Add hooks to inject created_by from authenticated user and populate repo from worktree
   app.service('sessions').hooks({
     before: {
-      all: [
-        // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type compatibility
-        (validateQuery as any)(sessionQueryValidator),
-        ...getReadAuthHooks(),
-      ],
+      all: [typedValidateQuery(sessionQueryValidator), ...getReadAuthHooks()],
       find: [
         // RBAC: Optimized SQL-based filtering (single query with JOIN on worktrees, no N+1)
         ...(worktreeRbacEnabled ? [scopeSessionQuery(sessionsRepository, superadminOpts)] : []),
@@ -3695,25 +3685,23 @@ async function main() {
               // Check worktree permission BEFORE injecting created_by (need worktree_id)
               async (context: HookContext) => {
                 // RBAC: Ensure user can create sessions in this worktree ('all' permission)
-                // biome-ignore lint/suspicious/noExplicitAny: FeathersJS data type not fully typed
-                const data = context.data as any;
+                const data = context.data as Partial<Session>;
                 if (context.params.provider && data?.worktree_id) {
                   try {
                     const worktree = await worktreeRepository.findById(data.worktree_id);
                     if (!worktree) {
                       throw new Forbidden(`Worktree not found: ${data.worktree_id}`);
                     }
-                    // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type not fully typed
-                    const userId = (context.params as any).user?.user_id;
+                    const userId = context.params.user?.user_id as
+                      | import('@agor/core/types').UUID
+                      | undefined;
                     const isOwner = userId
                       ? await worktreeRepository.isOwner(worktree.worktree_id, userId)
                       : false;
 
-                    // Cache for later hooks
-                    // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type not fully typed
-                    (context.params as any).worktree = worktree;
-                    // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type not fully typed
-                    (context.params as any).isWorktreeOwner = isOwner;
+                    // Cache for later hooks (RBACParams fields)
+                    context.params.worktree = worktree;
+                    context.params.isWorktreeOwner = isOwner;
                   } catch (error) {
                     console.error('Failed to load worktree for RBAC check:', error);
                     throw error;
@@ -4051,11 +4039,7 @@ async function main() {
 
   app.service('tasks').hooks({
     before: {
-      all: [
-        // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type compatibility
-        (validateQuery as any)(taskQueryValidator),
-        requireAuth,
-      ],
+      all: [typedValidateQuery(taskQueryValidator), requireAuth],
       get: [
         ...(worktreeRbacEnabled
           ? [
@@ -4116,11 +4100,7 @@ async function main() {
 
   app.service('boards').hooks({
     before: {
-      all: [
-        // biome-ignore lint/suspicious/noExplicitAny: FeathersJS hook type compatibility
-        (validateQuery as any)(boardQueryValidator),
-        ...getReadAuthHooks(),
-      ],
+      all: [typedValidateQuery(boardQueryValidator), ...getReadAuthHooks()],
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create boards'),
         async (context: HookContext<Board>) => {
@@ -4416,12 +4396,16 @@ async function main() {
 
           // Only rate limit external requests (not internal service calls)
           if (context.params.provider) {
-            // biome-ignore lint/suspicious/noExplicitAny: FeathersJS request params are untyped
-            const params = context.params as any;
+            // FeathersJS passes HTTP request metadata (ip, headers, connection) via params
+            const httpParams = context.params as AuthenticatedParams & {
+              ip?: string;
+              headers?: Record<string, string | string[] | undefined>;
+              connection?: { remoteAddress?: string };
+            };
             const ip =
-              params.ip ||
-              params.headers?.['x-forwarded-for']?.split(',')[0] ||
-              params.connection?.remoteAddress ||
+              httpParams.ip ||
+              (httpParams.headers?.['x-forwarded-for'] as string | undefined)?.split(',')[0] ||
+              httpParams.connection?.remoteAddress ||
               'unknown';
             const identifier = data?.email || ip;
 
@@ -4483,11 +4467,15 @@ async function main() {
     async create(data: { refreshToken: string }, params?: Params) {
       // SECURITY: Rate limit refresh token requests
       if (params?.provider) {
-        // biome-ignore lint/suspicious/noExplicitAny: FeathersJS request params are untyped
-        const p = params as any;
+        // FeathersJS passes HTTP request metadata (ip, headers, connection) via params
+        const p = params as Params & {
+          ip?: string;
+          headers?: Record<string, string | string[] | undefined>;
+          connection?: { remoteAddress?: string };
+        };
         const ip =
           p.ip ||
-          p.headers?.['x-forwarded-for']?.split(',')[0] ||
+          (p.headers?.['x-forwarded-for'] as string | undefined)?.split(',')[0] ||
           p.connection?.remoteAddress ||
           'unknown';
         const identifier = ip;
@@ -6318,17 +6306,16 @@ async function main() {
             throw new Forbidden(`Worktree not found: ${id}`);
           }
 
-          // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type
-          const userId = (context.params as any).user?.user_id;
+          const userId = context.params.user?.user_id as
+            | import('@agor/core/types').UUID
+            | undefined;
           const isOwner = userId
             ? await worktreeRepository.isOwner(worktree.worktree_id, userId)
             : false;
 
-          // Cache for downstream hooks
-          // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type
-          (context.params as any).worktree = worktree;
-          // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type
-          (context.params as any).isWorktreeOwner = isOwner;
+          // Cache for downstream hooks (RBACParams fields)
+          context.params.worktree = worktree;
+          context.params.isWorktreeOwner = isOwner;
 
           return context;
         },
@@ -6337,10 +6324,8 @@ async function main() {
           ? ensureWorktreePermission('all', 'archive or delete worktrees', superadminOpts)
           : (context: HookContext) => {
               // When RBAC disabled, still require worktree ownership OR admin role
-              // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type
-              const isOwner = (context.params as any).isWorktreeOwner;
-              // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type
-              const userRole = (context.params as any).user?.role;
+              const isOwner = context.params.isWorktreeOwner;
+              const userRole = context.params.user?.role;
 
               if (!isOwner && !hasMinimumRole(userRole, ROLES.ADMIN)) {
                 throw new Forbidden(
@@ -6383,17 +6368,16 @@ async function main() {
             throw new Forbidden(`Worktree not found: ${id}`);
           }
 
-          // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type
-          const userId = (context.params as any).user?.user_id;
+          const userId = context.params.user?.user_id as
+            | import('@agor/core/types').UUID
+            | undefined;
           const isOwner = userId
             ? await worktreeRepository.isOwner(worktree.worktree_id, userId)
             : false;
 
-          // Cache for downstream hooks
-          // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type
-          (context.params as any).worktree = worktree;
-          // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type
-          (context.params as any).isWorktreeOwner = isOwner;
+          // Cache for downstream hooks (RBACParams fields)
+          context.params.worktree = worktree;
+          context.params.isWorktreeOwner = isOwner;
 
           return context;
         },
@@ -6402,10 +6386,8 @@ async function main() {
           ? ensureWorktreePermission('all', 'unarchive worktrees', superadminOpts)
           : (context: HookContext) => {
               // When RBAC disabled, still require worktree ownership OR admin role
-              // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type
-              const isOwner = (context.params as any).isWorktreeOwner;
-              // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type
-              const userRole = (context.params as any).user?.role;
+              const isOwner = context.params.isWorktreeOwner;
+              const userRole = context.params.user?.role;
 
               if (!isOwner && !hasMinimumRole(userRole, ROLES.ADMIN)) {
                 throw new Forbidden(
@@ -6561,7 +6543,7 @@ async function main() {
   // SECURITY: Minimal public endpoint for uptime monitoring
   // Authenticated users can get detailed info, public users get basic status only
   app.use('/health', {
-    async find(params?: Params) {
+    async find(params?: AuthenticatedParams) {
       // Basic status (always public for monitoring systems)
       // IMPORTANT: Include auth config in public response so frontend can decide
       // whether to show login page BEFORE authenticating (avoid chicken-egg problem)
@@ -6602,8 +6584,7 @@ async function main() {
 
       // If user is authenticated (via requireAuth hook check), provide detailed info
       // Check if this is an authenticated request
-      // biome-ignore lint/suspicious/noExplicitAny: FeathersJS request params are untyped
-      const isAuthenticated = (params as any)?.user !== undefined;
+      const isAuthenticated = params?.user !== undefined;
 
       if (isAuthenticated) {
         // Prepare database info with dialect and masked credentials
@@ -6624,10 +6605,8 @@ async function main() {
           database: databaseInfo,
           auth: {
             ...publicResponse.auth,
-            // biome-ignore lint/suspicious/noExplicitAny: FeathersJS request params are untyped
-            user: (params as any)?.user?.email,
-            // biome-ignore lint/suspicious/noExplicitAny: FeathersJS request params are untyped
-            role: (params as any)?.user?.role,
+            user: params?.user?.email,
+            role: params?.user?.role,
           },
           encryption: {
             enabled: !!process.env.AGOR_MASTER_SECRET,

@@ -15,6 +15,7 @@ import type { Application } from '@agor/core/feathers';
 import type { Paginated, QueryParams, Session, SessionID, Task } from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
+import type { SessionsService } from './sessions';
 
 /**
  * Task service params
@@ -279,8 +280,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
             // DO NOT check target status before triggering - let the queue processor handle it.
             // This ensures callbacks are never missed due to timing issues.
             try {
-              // biome-ignore lint/suspicious/noExplicitAny: Service type casting required for custom method access
-              const sessionsService = this.app.service('sessions') as any;
+              const sessionsService = this.app.service('sessions') as unknown as SessionsService;
               if (sessionsService.triggerQueueProcessing) {
                 console.log(
                   `🔄 [TasksService] Triggering callback target queue processing for ${targetSessionId.substring(0, 8)} (callback queued)`
@@ -300,8 +300,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
           // IMPORTANT: Now that session is idle, process any queued messages (including callbacks)
           // This handles the case where callbacks were queued while this session was running
-          // biome-ignore lint/suspicious/noExplicitAny: Service type casting required for custom method access
-          const sessionsService = this.app.service('sessions') as any;
+          const sessionsService = this.app.service('sessions') as unknown as SessionsService;
           if (sessionsService.triggerQueueProcessing) {
             await sessionsService.triggerQueueProcessing(task.session_id);
           }

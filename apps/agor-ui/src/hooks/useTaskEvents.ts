@@ -95,17 +95,16 @@ export function useTaskEvents(
     };
 
     // Register event listeners
-    // biome-ignore lint/suspicious/noExplicitAny: FeathersJS emit types are not strict
-    tasksService.on('tool:start', handleToolStart as any);
-    // biome-ignore lint/suspicious/noExplicitAny: FeathersJS emit types are not strict
-    tasksService.on('tool:complete', handleToolComplete as any);
+    // FeathersJS .on() expects (event: string, handler: (data: T) => void) but these
+    // handlers receive custom tool event payloads, not Task objects.
+    type AnyHandler = (data: unknown) => void;
+    tasksService.on('tool:start', handleToolStart as unknown as AnyHandler);
+    tasksService.on('tool:complete', handleToolComplete as unknown as AnyHandler);
 
     // Cleanup on unmount or client/taskId change
     return () => {
-      // biome-ignore lint/suspicious/noExplicitAny: FeathersJS emit types are not strict
-      tasksService.removeListener('tool:start', handleToolStart as any);
-      // biome-ignore lint/suspicious/noExplicitAny: FeathersJS emit types are not strict
-      tasksService.removeListener('tool:complete', handleToolComplete as any);
+      tasksService.removeListener('tool:start', handleToolStart as unknown as AnyHandler);
+      tasksService.removeListener('tool:complete', handleToolComplete as unknown as AnyHandler);
     };
   }, [client, taskId]);
 

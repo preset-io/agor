@@ -6,6 +6,7 @@ import type {
   BoardID,
   CardType,
   CardWithType,
+  CreateMCPServerInput,
   CreateUserInput,
   GatewayChannel,
   MCPServer,
@@ -129,7 +130,7 @@ export interface AppProps {
   onCreateUser?: (data: CreateUserInput) => void;
   onUpdateUser?: (userId: string, updates: UpdateUserInput) => void;
   onDeleteUser?: (userId: string) => void;
-  onCreateMCPServer?: (data: Partial<MCPServer>) => void;
+  onCreateMCPServer?: (data: CreateMCPServerInput) => void;
   onUpdateMCPServer?: (mcpServerId: string, updates: Partial<MCPServer>) => void;
   onDeleteMCPServer?: (mcpServerId: string) => void;
   gatewayChannelById: Map<string, GatewayChannel>;

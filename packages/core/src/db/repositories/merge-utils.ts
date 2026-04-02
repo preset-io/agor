@@ -61,15 +61,13 @@ export function deepMerge<T>(target: T, source: Partial<T>): T {
 
     // null in source = explicit null assignment
     if (sourceValue === null) {
-      // biome-ignore lint/suspicious/noExplicitAny: Generic merge needs dynamic assignment
-      (result as any)[key] = null;
+      (result as Record<string, unknown>)[key] = null;
       continue;
     }
 
     // Array in source = replace (don't concatenate)
     if (Array.isArray(sourceValue)) {
-      // biome-ignore lint/suspicious/noExplicitAny: Generic merge needs dynamic assignment
-      (result as any)[key] = sourceValue;
+      (result as Record<string, unknown>)[key] = sourceValue;
       continue;
     }
 
@@ -77,22 +75,19 @@ export function deepMerge<T>(target: T, source: Partial<T>): T {
     if (isPlainObject(sourceValue)) {
       if (isPlainObject(targetValue)) {
         // Both are plain objects - recursively merge
-        // biome-ignore lint/suspicious/noExplicitAny: Generic merge needs dynamic assignment
-        (result as any)[key] = deepMerge(
+        (result as Record<string, unknown>)[key] = deepMerge(
           targetValue as Record<string, unknown>,
           sourceValue as Record<string, unknown>
         );
       } else {
         // Target is not an object - replace with source
-        // biome-ignore lint/suspicious/noExplicitAny: Generic merge needs dynamic assignment
-        (result as any)[key] = sourceValue;
+        (result as Record<string, unknown>)[key] = sourceValue;
       }
       continue;
     }
 
     // Primitive in source = replace
-    // biome-ignore lint/suspicious/noExplicitAny: Generic merge needs dynamic assignment
-    (result as any)[key] = sourceValue;
+    (result as Record<string, unknown>)[key] = sourceValue;
   }
 
   return result;

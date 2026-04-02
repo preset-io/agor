@@ -144,8 +144,10 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
       try {
         setLoadingOpencode(true);
 
-        // biome-ignore lint/suspicious/noExplicitAny: Config service returns dynamic object
-        const config = (await client.service('config').get('opencode')) as any;
+        const config = (await client.service('config').get('opencode')) as unknown as {
+          enabled?: boolean;
+          serverUrl?: string;
+        };
 
         if (config) {
           setOpencodeEnabled(config.enabled || false);
@@ -265,8 +267,9 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
     setOpencodeTesting(true);
 
     try {
-      // biome-ignore lint/suspicious/noExplicitAny: Health check returns dynamic result
-      const result = (await client.service('opencode/health').find()) as any;
+      const result = (await client.service('opencode/health').find()) as unknown as {
+        connected?: boolean;
+      };
       setOpencodeConnected(result.connected === true);
     } catch (error) {
       console.error('[OpenCode] Health check error:', error);

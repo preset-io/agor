@@ -28,6 +28,28 @@ const authCodeTokenCache = new Map<string, CachedAuthCodeToken>();
 // Default token validity: 1 hour if not specified by OAuth server
 const DEFAULT_AUTHCODE_TOKEN_TTL_SECONDS = 3600;
 
+/**
+ * Raw OAuth 2.0 token response shape.
+ * Covers standard RFC 6749 fields and Slack-style nested authed_user tokens.
+ */
+interface OAuthRawTokenResponse {
+  access_token?: string;
+  token_type?: string;
+  expires_in?: number;
+  refresh_token?: string;
+  scope?: string;
+  /** Slack-specific: present when request was denied at HTTP layer but body carries error */
+  ok?: boolean;
+  error?: string;
+  error_description?: string;
+  /** Slack-specific: user-scoped token nested under authed_user */
+  authed_user?: {
+    access_token?: string;
+    token_type?: string;
+    scope?: string;
+  };
+}
+
 // Buffer before expiry to avoid using soon-to-expire tokens
 const EXPIRY_BUFFER_SECONDS = 60;
 
@@ -403,8 +425,7 @@ async function exchangeCodeForToken(
     throw new Error(`Token exchange failed (${response.status}): ${errorText}`);
   }
 
-  // biome-ignore lint/suspicious/noExplicitAny: OAuth providers return varied response shapes
-  const json = (await response.json()) as any;
+  const json = (await response.json()) as OAuthRawTokenResponse;
   console.log(
     '[MCP OAuth] Token response keys:',
     Object.keys(json),

@@ -1282,8 +1282,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                         _action: 'upsertObject',
                         objectId: nodeId,
                         objectData: updatedObject,
-                        // biome-ignore lint/suspicious/noExplicitAny: Board patch with custom _action field
-                      } as any);
+                      } as unknown as Partial<Board>);
                     } catch (error) {
                       console.error('Failed to persist zone resize:', error);
                     }
@@ -1643,7 +1642,9 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               parentType,
               newReactFlowParentId,
             } of commentUpdates) {
-              const commentData: Partial<BoardComment> = {};
+              const commentData: Partial<Omit<BoardComment, 'worktree_id'>> & {
+                worktree_id?: WorktreeID | null;
+              } = {};
 
               if (parentId && parentType === 'zone') {
                 // Comment pinned to zone
@@ -1664,8 +1665,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                   };
                 } else {
                   commentData.position = { absolute: position };
-                  // biome-ignore lint/suspicious/noExplicitAny: need null to clear DB field, not undefined
-                  commentData.worktree_id = null as any;
+                  commentData.worktree_id = null;
                 }
               } else if (parentId && parentType === 'worktree') {
                 // Comment pinned to worktree
@@ -1687,16 +1687,14 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                   };
                 } else {
                   commentData.position = { absolute: position };
-                  // biome-ignore lint/suspicious/noExplicitAny: need null to clear DB field, not undefined
-                  commentData.worktree_id = null as any;
+                  commentData.worktree_id = null;
                 }
               } else {
                 // Free-floating comment - use absolute positioning
                 commentData.position = { absolute: position };
                 // IMPORTANT: Use null to explicitly clear worktree association
                 // (undefined would be omitted from the patch, leaving old value)
-                // biome-ignore lint/suspicious/noExplicitAny: need null to clear DB field, not undefined
-                commentData.worktree_id = null as any;
+                commentData.worktree_id = null;
               }
 
               await client.service('board-comments').patch(comment_id, commentData);
@@ -1851,8 +1849,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                         _action: 'upsertObject',
                         objectId: id,
                         objectData: data,
-                        // biome-ignore lint/suspicious/noExplicitAny: Board patch with custom _action field
-                      } as any)
+                      } as unknown as Partial<Board>)
                       .catch(console.error);
                   }
                 },
@@ -1877,8 +1874,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                   borderColor: defaultBorderColor,
                   backgroundColor: defaultBackgroundColor,
                 },
-                // biome-ignore lint/suspicious/noExplicitAny: Board patch with custom _action field
-              } as any)
+              } as unknown as Partial<Board>)
               .catch((error: unknown) => {
                 console.error('Failed to add zone:', error);
                 setNodes((nodes) => nodes.filter((n) => n.id !== objectId));
@@ -2035,8 +2031,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                       _action: 'upsertObject',
                       objectId: id,
                       objectData: data,
-                      // biome-ignore lint/suspicious/noExplicitAny: Board patch with custom _action field
-                    } as any)
+                    } as unknown as Partial<Board>)
                     .catch(console.error);
                 }
               },
@@ -2058,8 +2053,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             width: markdownWidth,
             content: markdownContent,
           },
-          // biome-ignore lint/suspicious/noExplicitAny: Board patch with custom _action field
-        } as any);
+        } as unknown as Partial<Board>);
       } catch (error) {
         console.error('Failed to save markdown note:', error);
         // Rollback optimistic update

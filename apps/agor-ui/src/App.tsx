@@ -1391,8 +1391,7 @@ function AppContent() {
                 onCreateUser={handleCreateUser}
                 onUpdateUser={handleUpdateUser}
                 onDeleteUser={handleDeleteUser}
-                // biome-ignore lint/suspicious/noExplicitAny: CreateMCPServerInput vs Partial<MCPServer> type mismatch
-                onCreateMCPServer={handleCreateMCPServer as any}
+                onCreateMCPServer={handleCreateMCPServer}
                 onUpdateMCPServer={handleUpdateMCPServer}
                 onDeleteMCPServer={handleDeleteMCPServer}
                 gatewayChannelById={gatewayChannelById}
@@ -1470,8 +1469,7 @@ function AppContent() {
                 onCreateUser={handleCreateUser}
                 onUpdateUser={handleUpdateUser}
                 onDeleteUser={handleDeleteUser}
-                // biome-ignore lint/suspicious/noExplicitAny: CreateMCPServerInput vs Partial<MCPServer> type mismatch
-                onCreateMCPServer={handleCreateMCPServer as any}
+                onCreateMCPServer={handleCreateMCPServer}
                 onUpdateMCPServer={handleUpdateMCPServer}
                 onDeleteMCPServer={handleDeleteMCPServer}
                 gatewayChannelById={gatewayChannelById}
@@ -1549,8 +1547,7 @@ function AppContent() {
                 onCreateUser={handleCreateUser}
                 onUpdateUser={handleUpdateUser}
                 onDeleteUser={handleDeleteUser}
-                // biome-ignore lint/suspicious/noExplicitAny: CreateMCPServerInput vs Partial<MCPServer> type mismatch
-                onCreateMCPServer={handleCreateMCPServer as any}
+                onCreateMCPServer={handleCreateMCPServer}
                 onUpdateMCPServer={handleUpdateMCPServer}
                 onDeleteMCPServer={handleDeleteMCPServer}
                 gatewayChannelById={gatewayChannelById}

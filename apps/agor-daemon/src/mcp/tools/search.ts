@@ -86,12 +86,13 @@ export function registerSearchTools(server: McpServer, registry: ToolRegistry): 
     async (args) => {
       const toolName = args.tool_name;
 
-      // Access the internal registered tools map
-      // biome-ignore lint/suspicious/noExplicitAny: accessing private SDK internals for proxy dispatch
-      const registeredTools = (server as any)._registeredTools as Record<
+      // Access the internal registered tools map (private SDK field, cast required)
+      type RegisteredToolsMap = Record<
         string,
         { enabled: boolean; handler: (args: unknown, extra: unknown) => Promise<unknown> }
       >;
+      const registeredTools = (server as unknown as { _registeredTools: RegisteredToolsMap })
+        ._registeredTools;
 
       const tool = registeredTools[toolName];
       if (!tool) {

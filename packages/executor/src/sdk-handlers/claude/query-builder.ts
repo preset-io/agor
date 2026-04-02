@@ -14,6 +14,7 @@ import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 
 const { query } = Claude;
 type PermissionMode = Claude.PermissionMode;
+type Options = Claude.Options;
 
 import { getDaemonUrl, resolveUserEnvironment } from '../../config.js';
 import type {
@@ -633,8 +634,9 @@ export async function setupQuery(
   try {
     result = query({
       prompt,
-      // biome-ignore lint/suspicious/noExplicitAny: SDK Options type doesn't include all available fields
-      options: queryOptions as any,
+      // queryOptions uses Record<string,unknown> to accommodate undocumented fields (debug, apiKey)
+      // that are valid at runtime but not in the public Options type
+      options: queryOptions as unknown as Options,
     });
     console.log(`✅ query() returned AsyncGenerator successfully`);
   } catch (syncError) {

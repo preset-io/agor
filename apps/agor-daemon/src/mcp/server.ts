@@ -130,12 +130,14 @@ function buildRegistry(): ToolRegistry {
     ...args: unknown[]
   ) => ReturnType<typeof tempServer.registerTool>;
 
-  // biome-ignore lint/suspicious/noExplicitAny: intercepting overloaded method
-  (tempServer as any).registerTool = (
-    name: string,
-    config: Record<string, unknown>,
-    cb: unknown
-  ) => {
+  // Override the registerTool method to intercept metadata.
+  // Cast required because registerTool is an overloaded generic method — TypeScript
+  // cannot represent the replacement function with the exact overload signature.
+  (
+    tempServer as unknown as {
+      registerTool: (name: string, config: Record<string, unknown>, cb: unknown) => void;
+    }
+  ).registerTool = (name: string, config: Record<string, unknown>, cb: unknown) => {
     // Convert Zod schema to JSON Schema using Zod v4's built-in converter
     let jsonSchema: Record<string, unknown> = { type: 'object' };
     if (config.inputSchema) {

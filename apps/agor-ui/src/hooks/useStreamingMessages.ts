@@ -273,41 +273,43 @@ export function useStreamingMessages(
     };
 
     // Register event listeners
-    // biome-ignore lint/suspicious/noExplicitAny: FeathersJS emit types are not strict
-    messagesService.on('streaming:start', handleStreamingStart as any);
-    // biome-ignore lint/suspicious/noExplicitAny: FeathersJS emit types are not strict
-    messagesService.on('streaming:chunk', handleStreamingChunk as any);
-    // biome-ignore lint/suspicious/noExplicitAny: FeathersJS emit types are not strict
-    messagesService.on('streaming:end', handleStreamingEnd as any);
-    // biome-ignore lint/suspicious/noExplicitAny: FeathersJS emit types are not strict
-    messagesService.on('streaming:error', handleStreamingError as any);
-    // biome-ignore lint/suspicious/noExplicitAny: FeathersJS emit types are not strict
-    messagesService.on('thinking:start', handleThinkingStart as any);
-    // biome-ignore lint/suspicious/noExplicitAny: FeathersJS emit types are not strict
-    messagesService.on('thinking:chunk', handleThinkingChunk as any);
-    // biome-ignore lint/suspicious/noExplicitAny: FeathersJS emit types are not strict
-    messagesService.on('thinking:end', handleThinkingEnd as any);
-    // biome-ignore lint/suspicious/noExplicitAny: FeathersJS emit types are not strict
-    messagesService.on('created', handleMessageCreated as any);
+    // FeathersJS .on() expects (event: string, handler: (data: T) => void) but these
+    // handlers receive custom streaming event payloads, not Message objects.
+    type AnyHandler = (data: unknown) => void;
+    messagesService.on('streaming:start', handleStreamingStart as unknown as AnyHandler);
+    messagesService.on('streaming:chunk', handleStreamingChunk as unknown as AnyHandler);
+    messagesService.on('streaming:end', handleStreamingEnd as unknown as AnyHandler);
+    messagesService.on('streaming:error', handleStreamingError as unknown as AnyHandler);
+    messagesService.on('thinking:start', handleThinkingStart as unknown as AnyHandler);
+    messagesService.on('thinking:chunk', handleThinkingChunk as unknown as AnyHandler);
+    messagesService.on('thinking:end', handleThinkingEnd as unknown as AnyHandler);
+    messagesService.on('created', handleMessageCreated as unknown as AnyHandler);
 
     // Cleanup on unmount or client change
     return () => {
-      // biome-ignore lint/suspicious/noExplicitAny: FeathersJS emit types are not strict
-      messagesService.removeListener('streaming:start', handleStreamingStart as any);
-      // biome-ignore lint/suspicious/noExplicitAny: FeathersJS emit types are not strict
-      messagesService.removeListener('streaming:chunk', handleStreamingChunk as any);
-      // biome-ignore lint/suspicious/noExplicitAny: FeathersJS emit types are not strict
-      messagesService.removeListener('streaming:end', handleStreamingEnd as any);
-      // biome-ignore lint/suspicious/noExplicitAny: FeathersJS emit types are not strict
-      messagesService.removeListener('streaming:error', handleStreamingError as any);
-      // biome-ignore lint/suspicious/noExplicitAny: FeathersJS emit types are not strict
-      messagesService.removeListener('thinking:start', handleThinkingStart as any);
-      // biome-ignore lint/suspicious/noExplicitAny: FeathersJS emit types are not strict
-      messagesService.removeListener('thinking:chunk', handleThinkingChunk as any);
-      // biome-ignore lint/suspicious/noExplicitAny: FeathersJS emit types are not strict
-      messagesService.removeListener('thinking:end', handleThinkingEnd as any);
-      // biome-ignore lint/suspicious/noExplicitAny: FeathersJS emit types are not strict
-      messagesService.removeListener('created', handleMessageCreated as any);
+      messagesService.removeListener(
+        'streaming:start',
+        handleStreamingStart as unknown as AnyHandler
+      );
+      messagesService.removeListener(
+        'streaming:chunk',
+        handleStreamingChunk as unknown as AnyHandler
+      );
+      messagesService.removeListener('streaming:end', handleStreamingEnd as unknown as AnyHandler);
+      messagesService.removeListener(
+        'streaming:error',
+        handleStreamingError as unknown as AnyHandler
+      );
+      messagesService.removeListener(
+        'thinking:start',
+        handleThinkingStart as unknown as AnyHandler
+      );
+      messagesService.removeListener(
+        'thinking:chunk',
+        handleThinkingChunk as unknown as AnyHandler
+      );
+      messagesService.removeListener('thinking:end', handleThinkingEnd as unknown as AnyHandler);
+      messagesService.removeListener('created', handleMessageCreated as unknown as AnyHandler);
     };
   }, [client, sessionId, enabled]);
 

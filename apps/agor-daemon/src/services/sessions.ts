@@ -33,7 +33,12 @@ export type SessionParams = QueryParams<{
   board_id?: string;
   include_last_message?: boolean | 'true' | 'false'; // Opt-in last message enrichment
   last_message_truncation_length?: number; // Default: 500 chars, min: 50, max: 10000
-}>;
+}> & {
+  /** Root-level include_last_message flag (bypasses Feathers query filtering, used by internal service calls) */
+  _include_last_message?: boolean | 'true' | 'false';
+  /** Root-level truncation length (bypasses Feathers query filtering, used by internal service calls) */
+  _last_message_truncation_length?: number;
+};
 
 /**
  * Execute task data payload
@@ -550,8 +555,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
   async get(id: string, params?: SessionParams): Promise<SessionWithLastMessage> {
     // Check both query params and root-level params (root-level bypasses Feathers query filtering)
     const includeLastMessageQuery = params?.query?.include_last_message;
-    // biome-ignore lint/suspicious/noExplicitAny: Custom params bypass Feathers type system
-    const includeLastMessageRoot = (params as any)?._include_last_message;
+    const includeLastMessageRoot = params?._include_last_message;
     const includeLastMessage = includeLastMessageRoot ?? includeLastMessageQuery;
 
     const session = await super.get(id, params);
@@ -559,8 +563,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     // Only enrich with last message if explicitly requested
     if (includeLastMessage === true || includeLastMessage === 'true') {
       const truncationLengthQuery = params?.query?.last_message_truncation_length;
-      // biome-ignore lint/suspicious/noExplicitAny: Custom params bypass Feathers type system
-      const truncationLengthRoot = (params as any)?._last_message_truncation_length;
+      const truncationLengthRoot = params?._last_message_truncation_length;
       const truncationLength = parseTruncationLength(truncationLengthRoot ?? truncationLengthQuery);
       const result = await this.sessionRepo.enrichWithLastMessage(
         session as Session,

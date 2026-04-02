@@ -39,14 +39,12 @@ export async function executeClaudeCodeTask(params: {
   // Create PermissionService that emits via Feathers WebSocket
   const permissionService = new PermissionService(async (event, data) => {
     // Emit permission events directly via Feathers
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers service types don't include emit method
-    (client.service('sessions') as any).emit(event, data);
+    client.service('sessions').emit(event, data);
   }, permissionTimeoutMs);
 
   // Create InputRequestService that emits via Feathers WebSocket (5 min timeout)
   const inputRequestService = new InputRequestService(async (event, data) => {
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers service types don't include emit method
-    (client.service('sessions') as any).emit(event, data);
+    client.service('sessions').emit(event, data);
   }, 300_000);
 
   // Register with global managers

@@ -1,9 +1,10 @@
 import { WorktreeRepository } from '@agor/core/db';
-import type { AgenticToolName, BoardID, UUID, WorktreeID } from '@agor/core/types';
+import type { AgenticToolName, BoardID, UUID, Worktree, WorktreeID } from '@agor/core/types';
 import { normalizeOptionalHttpUrl } from '@agor/core/utils/url';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ReposServiceImpl, WorktreesServiceImpl } from '../../declarations.js';
+import type { WorktreeParams } from '../../services/worktrees.js';
 import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
 
@@ -23,12 +24,14 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
       }),
     },
     async (args) => {
-      const worktree = await ctx.app.service('worktrees').get(args.worktreeId, {
+      const worktreeParams: WorktreeParams = {
         ...ctx.baseServiceParams,
         _include_sessions: true,
         _last_message_truncation_length: 500,
-        // biome-ignore lint/suspicious/noExplicitAny: custom service params with underscored options
-      } as any);
+      };
+      const worktree = await ctx.app
+        .service('worktrees')
+        .get(args.worktreeId, worktreeParams as Parameters<WorktreesServiceImpl['get']>[1]);
       return textResult(worktree);
     }
   );
@@ -342,8 +345,11 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
 
       const worktree = await ctx.app
         .service('worktrees')
-        // biome-ignore lint/suspicious/noExplicitAny: dynamic field updates from validated input
-        .patch(resolvedWorktreeId as string, updates as any, ctx.baseServiceParams);
+        .patch(
+          resolvedWorktreeId as string,
+          updates as unknown as Partial<Worktree>,
+          ctx.baseServiceParams
+        );
       return textResult({ worktree, note: 'Worktree metadata updated successfully.' });
     }
   );

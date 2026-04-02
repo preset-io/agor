@@ -50,26 +50,23 @@ function requireViewPermission(worktreeRepo: WorktreeRepository, allowSuperadmin
     }
 
     // Service accounts (executor) bypass RBAC
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
-    if ((context.params as any).user?._isServiceAccount) {
+    if (context.params.user?._isServiceAccount) {
       return context;
     }
 
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
-    const params = context.params as any;
-    const userId = params.user?.user_id;
+    const userId = context.params.user?.user_id;
 
     if (!userId) {
       throw new NotAuthenticated('Authentication required');
     }
 
-    const worktreeId = params.route?.id;
+    const worktreeId = context.params.route?.id;
     if (!worktreeId) {
       throw new Error('Worktree ID is required');
     }
 
     // Superadmins can view owners of any worktree
-    const userRole = params.user?.role as string | undefined;
+    const userRole = context.params.user?.role;
     if (isSuperAdmin(userRole, allowSuperadmin)) {
       return context;
     }
@@ -105,26 +102,23 @@ function requireWorktreeOwner(worktreeRepo: WorktreeRepository, allowSuperadmin 
     }
 
     // Service accounts (executor) bypass RBAC
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
-    if ((context.params as any).user?._isServiceAccount) {
+    if (context.params.user?._isServiceAccount) {
       return context;
     }
 
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
-    const params = context.params as any;
-    const userId = params.user?.user_id;
+    const userId = context.params.user?.user_id;
 
     if (!userId) {
       throw new NotAuthenticated('Authentication required');
     }
 
-    const worktreeId = params.route?.id;
+    const worktreeId = context.params.route?.id;
     if (!worktreeId) {
       throw new Error('Worktree ID is required');
     }
 
     // Superadmins can manage owners on any worktree (self-assign ownership)
-    const userRole = params.user?.role as string | undefined;
+    const userRole = context.params.user?.role;
     if (isSuperAdmin(userRole, allowSuperadmin)) {
       return context;
     }
@@ -255,9 +249,7 @@ export function setupWorktreeOwnersService(
             return context;
           }
 
-          // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
-          const params = context.params as any;
-          const worktreeId = params.route?.id as WorktreeID;
+          const worktreeId = context.params.route?.id as WorktreeID;
 
           // Fire-and-forget sync to executor
           // Syncing the worktree will pick up the new owner from the DB
@@ -290,9 +282,7 @@ export function setupWorktreeOwnersService(
             return context;
           }
 
-          // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
-          const params = context.params as any;
-          const worktreeId = params.route?.id as WorktreeID;
+          const worktreeId = context.params.route?.id as WorktreeID;
 
           // Fire-and-forget sync to executor
           // Syncing the worktree will handle the removed owner

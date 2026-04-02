@@ -22,8 +22,7 @@ async function main() {
   const db = drizzle(client);
 
   // Find all tasks
-  // biome-ignore lint/suspicious/noExplicitAny: SQLite-specific .all() method not available in unified Database type
-  const allTasks = await (db as any).select().from(tasks).all();
+  const allTasks = await db.select().from(tasks).all();
   console.log(`Found ${allTasks.length} tasks total\n`);
 
   let fixedSessions = 0;

@@ -183,8 +183,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
     fetchQueue();
 
-    // biome-ignore lint/suspicious/noExplicitAny: FeathersJS types
-    const messagesService = client.service('messages') as any;
+    const messagesService = client.service('messages');
 
     const handleQueued = (msg: Message) => {
       if (msg.session_id === session.session_id) {

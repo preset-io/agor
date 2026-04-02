@@ -257,16 +257,15 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
     return await this.db.transaction(async (tx) => {
       // Acquire row-level lock on PostgreSQL to prevent lost updates
       await lockRowForUpdate(
-        // biome-ignore lint/suspicious/noExplicitAny: Transaction context requires type assertion for database wrapper functions
-        tx as any,
+        // Drizzle transaction types are dialect-specific; cast to Database for wrapper compatibility
+        tx as unknown as Database,
         this.db,
         worktrees,
         eq(worktrees.worktree_id, existing.worktree_id)
       );
 
       // STEP 2: Re-read within transaction to ensure we have latest data
-      // biome-ignore lint/suspicious/noExplicitAny: Transaction context requires type assertion for database wrapper functions
-      const currentRow = await select(tx as any)
+      const currentRow = await select(tx as unknown as Database)
         .from(worktrees)
         .where(eq(worktrees.worktree_id, existing.worktree_id))
         .one();
@@ -290,8 +289,7 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
       const insertData = this.worktreeToInsert(merged);
 
       // STEP 4: Write merged worktree (within same transaction)
-      // biome-ignore lint/suspicious/noExplicitAny: Transaction context requires type assertion for database wrapper functions
-      const row = await update(tx as any, worktrees)
+      const row = await update(tx as unknown as Database, worktrees)
         .set(insertData)
         .where(eq(worktrees.worktree_id, current.worktree_id))
         .returning()
@@ -737,8 +735,7 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
 
         // Chain orderBy and limit, then execute with one()
         // The spread operator in the wrapper passes through these methods
-        // biome-ignore lint/suspicious/noExplicitAny: Wrapper spreads query builder methods
-        const lastMessage = await (query as any).orderBy(desc(messagesTable.index)).limit(1).one();
+        const lastMessage = await query.orderBy(desc(messagesTable.index)).limit(1).one();
 
         if (lastMessage) {
           // Extract text content from message data and truncate to requested length

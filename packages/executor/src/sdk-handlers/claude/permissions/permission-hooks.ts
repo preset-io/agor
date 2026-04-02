@@ -147,13 +147,12 @@ export function createCanUseToolCallback(
 
           // Update message status
           if (deps.messagesService) {
-            // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service has patch method but type definition is incomplete
-            await (deps.messagesService as any).patch(inputMessage.message_id, {
+            await deps.messagesService.patch(inputMessage.message_id, {
               content: {
                 ...(inputMessage.content as unknown as Record<string, unknown>),
                 status: InputRequestStatus.TIMED_OUT,
               },
-            });
+            } as Partial<Message>);
           }
 
           await deps.tasksService.patch(taskId, {
@@ -176,8 +175,7 @@ export function createCanUseToolCallback(
 
         // Update message with answer
         if (deps.messagesService) {
-          // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service has patch method but type definition is incomplete
-          await (deps.messagesService as any).patch(inputMessage.message_id, {
+          await deps.messagesService.patch(inputMessage.message_id, {
             content: {
               ...(inputMessage.content as unknown as Record<string, unknown>),
               status: InputRequestStatus.ANSWERED,
@@ -186,7 +184,7 @@ export function createCanUseToolCallback(
               answered_by: response.respondedBy,
               answered_at: new Date().toISOString(),
             },
-          });
+          } as Partial<Message>);
         }
 
         // Restore task/session status to running
@@ -402,8 +400,7 @@ export function createCanUseToolCallback(
             ? permissionMessage.content
             : {};
 
-        // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service has patch method but type definition is incomplete
-        await (deps.messagesService as any).patch(permissionMessage.message_id, {
+        await deps.messagesService.patch(permissionMessage.message_id, {
           content: {
             ...(baseContent as Record<string, unknown>),
             status: permissionStatus,
@@ -411,7 +408,7 @@ export function createCanUseToolCallback(
             approved_by: decision.decidedBy,
             approved_at: new Date().toISOString(),
           },
-        });
+        } as Partial<Message>);
         console.log(`✅ [canUseTool] Permission request updated: ${permissionStatus}`);
       }
 

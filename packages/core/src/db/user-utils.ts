@@ -66,10 +66,8 @@ export async function createUser(db: Database, data: CreateUserData): Promise<Us
       emoji: defaultEmoji,
       role,
       unix_username: data.unix_username ?? null,
-      // biome-ignore lint/suspicious/noExplicitAny: Database wrapper accepts Date but schema types vary by dialect
-      created_at: createdAt as any,
-      // biome-ignore lint/suspicious/noExplicitAny: Database wrapper accepts Date but schema types vary by dialect
-      updated_at: updatedAt as any,
+      created_at: createdAt,
+      updated_at: updatedAt,
       data: {
         preferences: {},
       },

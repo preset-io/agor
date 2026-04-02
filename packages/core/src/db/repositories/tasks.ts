@@ -302,12 +302,16 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       // Use transaction to make read-merge-write atomic
       const result = await this.db.transaction(async (tx) => {
         // Acquire row-level lock on PostgreSQL to prevent lost updates
-        // biome-ignore lint/suspicious/noExplicitAny: Transaction context requires type assertion for database wrapper functions
-        await lockRowForUpdate(tx as any, this.db, tasks, eq(tasks.task_id, fullId));
+        // Drizzle transaction types are dialect-specific; cast to Database for wrapper compatibility
+        await lockRowForUpdate(
+          tx as unknown as Database,
+          this.db,
+          tasks,
+          eq(tasks.task_id, fullId)
+        );
 
         // STEP 1: Read current task (within transaction)
-        // biome-ignore lint/suspicious/noExplicitAny: Transaction context requires type assertion for database wrapper functions
-        const currentRow = await select(tx as any)
+        const currentRow = await select(tx as unknown as Database)
           .from(tasks)
           .where(eq(tasks.task_id, fullId))
           .one();
@@ -324,8 +328,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         const insertData = this.taskToInsert(merged);
 
         // STEP 3: Write merged task (within same transaction)
-        // biome-ignore lint/suspicious/noExplicitAny: Transaction context requires type assertion for database wrapper functions
-        await update(tx as any, tasks)
+        await update(tx as unknown as Database, tasks)
           .set({
             status: insertData.status,
             completed_at: insertData.completed_at,

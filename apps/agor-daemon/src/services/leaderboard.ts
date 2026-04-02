@@ -195,7 +195,9 @@ export class LeaderboardService {
 
     // Execute aggregation query
     // Join: tasks -> sessions -> worktrees, optionally LEFT JOIN users for display info
-    // biome-ignore lint/suspicious/noExplicitAny: Complex multi-table join with dynamic grouping requires Drizzle type assertion
+    // Cast required: Database is a LibSQL|Postgres union; TypeScript cannot narrow the union
+    // for dynamic-field SELECT queries even though both dialects share identical .select() API.
+    // biome-ignore lint/suspicious/noExplicitAny: Database union type prevents calling .select() with dynamic fields
     let qb = (this.db as any)
       .select(selectFields)
       .from(tasks)
@@ -223,7 +225,7 @@ export class LeaderboardService {
         ? sql`COUNT(DISTINCT ${sql.raw(distinctParts.join(" || '-' || "))})`
         : sql`COUNT(*)`;
 
-    // biome-ignore lint/suspicious/noExplicitAny: Complex aggregation query with dynamic SELECT fields requires Drizzle type assertion
+    // biome-ignore lint/suspicious/noExplicitAny: Database union type prevents calling .select() with dynamic fields
     let countQb = (this.db as any)
       .select({
         count: sql<number>`${distinctExpr}`,

@@ -3,6 +3,7 @@ import type { AgenticToolName, Board, ZoneBoardObject } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { SessionsServiceImpl } from '../../declarations.js';
+import type { SessionParams } from '../../services/sessions.js';
 import { ensureCanPromptSession } from '../../utils/worktree-authorization.js';
 import type { McpContext } from '../server.js';
 import { textResult } from '../server.js';
@@ -65,12 +66,14 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       }),
     },
     async (args) => {
-      const session = await ctx.app.service('sessions').get(args.sessionId, {
+      const sessionParams: SessionParams = {
         ...ctx.baseServiceParams,
         _include_last_message: true,
         _last_message_truncation_length: 500,
-        // biome-ignore lint/suspicious/noExplicitAny: custom service params with underscored options
-      } as any);
+      };
+      const session = await ctx.app
+        .service('sessions')
+        .get(args.sessionId, sessionParams as Parameters<SessionsServiceImpl['get']>[1]);
       return textResult(session);
     }
   );
@@ -85,12 +88,14 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       inputSchema: z.object({}),
     },
     async () => {
-      const session = await ctx.app.service('sessions').get(ctx.sessionId, {
+      const currentSessionParams: SessionParams = {
         ...ctx.baseServiceParams,
         _include_last_message: true,
         _last_message_truncation_length: 500,
-        // biome-ignore lint/suspicious/noExplicitAny: custom service params with underscored options
-      } as any);
+      };
+      const session = await ctx.app
+        .service('sessions')
+        .get(ctx.sessionId, currentSessionParams as Parameters<SessionsServiceImpl['get']>[1]);
 
       // Denormalize worktree, repo, and board context
       let worktree: Record<string, unknown> | null = null;

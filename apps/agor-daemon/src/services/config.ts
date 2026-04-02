@@ -5,8 +5,15 @@
  * Wraps @agor/core/config functions for UI access.
  */
 
-import { type AgorConfig, loadConfig, resolveApiKey, saveConfig } from '@agor/core/config';
+import {
+  type AgorConfig,
+  type ApiKeyName,
+  loadConfig,
+  resolveApiKey,
+  saveConfig,
+} from '@agor/core/config';
 import type { Database } from '@agor/core/db';
+import type { Application } from '@agor/core/feathers';
 import type { Params, TaskID, UserID } from '@agor/core/types';
 
 /**
@@ -41,6 +48,8 @@ function maskCredentials(config: AgorConfig): AgorConfig {
  */
 export class ConfigService {
   private db: Database;
+  /** App reference injected after registration for cross-service calls */
+  app?: Application;
 
   constructor(db: Database) {
     this.db = db;
@@ -95,8 +104,7 @@ export class ConfigService {
     // Fetch task to get creator user ID
     let userId: UserID | undefined;
     try {
-      // biome-ignore lint/suspicious/noExplicitAny: App reference stored dynamically for cross-service calls
-      const tasksService = (this as any).app?.service('tasks');
+      const tasksService = this.app?.service('tasks');
       if (tasksService) {
         const task = await tasksService.get(taskId, { provider: undefined });
         userId = task?.created_by;
@@ -106,8 +114,7 @@ export class ConfigService {
     }
 
     // Use core resolveApiKey with database access
-    // biome-ignore lint/suspicious/noExplicitAny: ApiKeyName type check happens at runtime
-    const result = await resolveApiKey(keyName as any, {
+    const result = await resolveApiKey(keyName as ApiKeyName, {
       userId,
       db: this.db,
     });

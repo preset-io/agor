@@ -17,6 +17,7 @@
 import { generateId } from '@agor/core';
 import type { Message, MessageID, SessionID, TaskID } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
+import type { Part as OpenCodePart } from '@opencode-ai/sdk';
 import { createOpencodeClient } from '@opencode-ai/sdk';
 import { getDaemonUrl } from '../../config.js';
 import type {
@@ -561,10 +562,9 @@ export class OpenCodeTool implements ITool {
               // OpenCode sends full text each time, not deltas
               // We need to calculate the delta ourselves
               const newText =
-                // biome-ignore lint/suspicious/noExplicitAny: Part types vary, text field is runtime checked
-                'text' in part && typeof (part as any).text === 'string'
-                  ? // biome-ignore lint/suspicious/noExplicitAny: Part types vary, text field is runtime checked
-                    (part as any).text
+                'text' in part &&
+                typeof (part as OpenCodePart & { text?: string }).text === 'string'
+                  ? (part as OpenCodePart & { text: string }).text
                   : undefined;
 
               if (newText) {
@@ -632,12 +632,7 @@ export class OpenCodeTool implements ITool {
             }
 
             // Check for session idle status - indicates response is complete
-            if (
-              // biome-ignore lint/suspicious/noExplicitAny: Event types incomplete, runtime check needed
-              (event as any).type === 'session.status' &&
-              // biome-ignore lint/suspicious/noExplicitAny: Event types incomplete, runtime check needed
-              (event as any).properties?.status?.type === 'idle'
-            ) {
+            if (event.type === 'session.status' && event.properties.status.type === 'idle') {
               console.log('[OpenCodeTool] Session became idle, response complete');
               _responseCompleted = true;
               break; // Exit event loop
@@ -665,10 +660,13 @@ export class OpenCodeTool implements ITool {
       // Check for error in response
       let hasError = false;
       let errorMessage = '';
-      // biome-ignore lint/suspicious/noExplicitAny: Response structure varies, runtime check needed
-      if (response.data.info && (response.data.info as any).error) {
-        // biome-ignore lint/suspicious/noExplicitAny: Error structure varies
-        const errorInfo = (response.data.info as any).error;
+      const responseInfo = response.data.info as
+        | (typeof response.data.info & {
+            error?: { data?: { message?: string }; message?: string };
+          })
+        | undefined;
+      if (responseInfo?.error) {
+        const errorInfo = responseInfo.error;
         errorMessage =
           errorInfo.data?.message || errorInfo.message || 'Unknown error from OpenCode';
         console.error('[OpenCodeTool] OpenCode returned error:', errorMessage);
@@ -709,12 +707,9 @@ export class OpenCodeTool implements ITool {
         // Only extract text from parts if no error occurred
         for (const part of response.data.parts || []) {
           // Collect text from reasoning and text parts
+          // TextPart and ReasoningPart both have a .text property
           if (part.type === 'reasoning' || part.type === 'text') {
-            // biome-ignore lint/suspicious/noExplicitAny: Part types vary, check for text field at runtime
-            if ('text' in part && typeof (part as any).text === 'string') {
-              // biome-ignore lint/suspicious/noExplicitAny: Checked above
-              textParts.push((part as any).text);
-            }
+            textParts.push(part.text);
           }
 
           // Extract metadata from step-finish part
@@ -765,36 +760,33 @@ export class OpenCodeTool implements ITool {
         finalParts.length,
         'parts in final response'
       );
-      // biome-ignore lint/suspicious/noExplicitAny: Part types vary at runtime
-      console.log('[OpenCodeTool] Part types:', finalParts.map((p: any) => p.type).join(', '));
+      console.log('[OpenCodeTool] Part types:', finalParts.map((p) => p.type).join(', '));
       for (const part of finalParts) {
-        // biome-ignore lint/suspicious/noExplicitAny: Part types vary, runtime check needed
-        const partData = part as any;
-        console.log('[OpenCodeTool] Processing part type:', partData.type);
+        console.log('[OpenCodeTool] Processing part type:', part.type);
 
-        if (partData.type === 'reasoning' && partData.text) {
-          console.log('[OpenCodeTool] Adding reasoning block, text length:', partData.text.length);
+        if (part.type === 'reasoning' && part.text) {
+          console.log('[OpenCodeTool] Adding reasoning block, text length:', part.text.length);
           contentBlocks.push({
             type: 'thinking',
-            text: partData.text,
+            text: part.text,
           });
-        } else if (partData.type === 'reasoning') {
+        } else if (part.type === 'reasoning') {
           console.log('[OpenCodeTool] Skipping reasoning part - no text field or empty text');
         }
 
-        if (partData.type === 'text' && partData.text) {
+        if (part.type === 'text' && part.text) {
           contentBlocks.push({
             type: 'text',
-            text: partData.text,
+            text: part.text,
           });
-        } else if (partData.type === 'tool') {
+        } else if (part.type === 'tool') {
           // Tool use block - extract tool info
           // OpenCode structure: { tool: string, callID: string, state: { input: {...}, output: "..." } }
-          console.log('[OpenCodeTool] Processing tool part:', JSON.stringify(partData, null, 2));
+          console.log('[OpenCodeTool] Processing tool part:', JSON.stringify(part, null, 2));
 
-          const toolName = partData.tool || 'unknown';
-          const toolInput = partData.state?.input || {};
-          const toolCallId = partData.callID || partData.id;
+          const toolName = part.tool || 'unknown';
+          const toolInput = (part.state as { input?: Record<string, unknown> })?.input || {};
+          const toolCallId = part.callID || part.id;
 
           // Add tool_use block
           contentBlocks.push({
@@ -812,11 +804,12 @@ export class OpenCodeTool implements ITool {
           });
 
           // If tool has completed with output, add tool_result block
-          if (partData.state?.status === 'completed' && partData.state?.output) {
+          const toolState = part.state as { status?: string; output?: unknown } | undefined;
+          if (toolState?.status === 'completed' && toolState.output) {
             contentBlocks.push({
               type: 'tool_result',
               tool_use_id: toolCallId,
-              content: partData.state.output,
+              content: toolState.output,
             });
           }
         }
@@ -938,10 +931,9 @@ export class OpenCodeTool implements ITool {
       // Extract text from all parts that have text content (text, reasoning, etc.)
       const textParts: string[] = [];
       for (const part of response.data.parts) {
-        // biome-ignore lint/suspicious/noExplicitAny: Part types vary, check for text field at runtime
-        if ('text' in part && typeof (part as any).text === 'string') {
-          // biome-ignore lint/suspicious/noExplicitAny: Checked above
-          textParts.push((part as any).text);
+        // TextPart and ReasoningPart both have a .text property
+        if (part.type === 'text' || part.type === 'reasoning') {
+          textParts.push(part.text);
         }
       }
       responseText = textParts.join('\n');

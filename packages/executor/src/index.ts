@@ -99,10 +99,8 @@ export class AgorExecutor {
     if (!this.client) return;
 
     // Listen for permission_resolved events
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers types don't support custom events
-    (this.client.service('messages') as any).on(
-      'permission_resolved',
-      (data: {
+    this.client.service('messages').on('permission_resolved', (data: unknown) => {
+      const event = data as {
         requestId: string;
         taskId: string;
         allow: boolean;
@@ -110,50 +108,46 @@ export class AgorExecutor {
         remember: boolean;
         scope: string;
         decidedBy: string;
-      }) => {
-        console.log('[executor] Received permission_resolved event:', data);
+      };
+      console.log('[executor] Received permission_resolved event:', event);
 
-        if (data.taskId === this.config.taskId) {
-          // Forward to global permission manager
-          globalPermissionManager.resolvePermission({
-            requestId: data.requestId,
-            taskId: data.taskId as TaskID,
-            allow: data.allow,
-            reason: data.reason,
-            remember: data.remember,
-            scope: data.scope as PermissionScope,
-            decidedBy: data.decidedBy,
-          });
-        }
+      if (event.taskId === this.config.taskId) {
+        // Forward to global permission manager
+        globalPermissionManager.resolvePermission({
+          requestId: event.requestId,
+          taskId: event.taskId as TaskID,
+          allow: event.allow,
+          reason: event.reason,
+          remember: event.remember,
+          scope: event.scope as PermissionScope,
+          decidedBy: event.decidedBy,
+        });
       }
-    );
+    });
 
     // Listen for input_resolved events (AskUserQuestion responses)
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers types don't support custom events
-    (this.client.service('messages') as any).on(
-      'input_resolved',
-      (data: {
+    this.client.service('messages').on('input_resolved', (data: unknown) => {
+      const event = data as {
         requestId: string;
         taskId: string;
         sessionId: string;
         answers: Record<string, string>;
         annotations?: Record<string, { markdown?: string; notes?: string }>;
         respondedBy: string;
-      }) => {
-        console.log('[executor] Received input_resolved event:', data);
+      };
+      console.log('[executor] Received input_resolved event:', event);
 
-        if (data.taskId === this.config.taskId) {
-          // Forward to global input request manager
-          globalInputRequestManager.resolveInput({
-            requestId: data.requestId,
-            taskId: data.taskId as TaskID,
-            answers: data.answers,
-            annotations: data.annotations,
-            respondedBy: data.respondedBy,
-          });
-        }
+      if (event.taskId === this.config.taskId) {
+        // Forward to global input request manager
+        globalInputRequestManager.resolveInput({
+          requestId: event.requestId,
+          taskId: event.taskId as TaskID,
+          answers: event.answers,
+          annotations: event.annotations,
+          respondedBy: event.respondedBy,
+        });
       }
-    );
+    });
 
     console.log('[executor] Event listeners registered');
   }

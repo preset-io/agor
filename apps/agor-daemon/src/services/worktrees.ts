@@ -39,7 +39,12 @@ export type WorktreeParams = QueryParams<{
   deleteFromFilesystem?: boolean;
   include_sessions?: boolean | 'true' | 'false'; // Opt-in session activity enrichment
   last_message_truncation_length?: number; // Default: 500 chars, min: 50, max: 10000
-}>;
+}> & {
+  /** Root-level include_sessions flag (bypasses Feathers query filtering, used by internal service calls) */
+  _include_sessions?: boolean | 'true' | 'false';
+  /** Root-level truncation length (bypasses Feathers query filtering, used by internal service calls) */
+  _last_message_truncation_length?: number;
+};
 
 /**
  * Parse and validate last_message_truncation_length parameter
@@ -240,8 +245,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
   async get(id: WorktreeID, params?: WorktreeParams): Promise<WorktreeWithZoneAndSessions> {
     // Check both query params and root-level params (root-level bypasses Feathers query filtering)
     const includeSessionsQuery = params?.query?.include_sessions;
-    // biome-ignore lint/suspicious/noExplicitAny: Custom params bypass Feathers type system
-    const includeSessionsRoot = (params as any)?._include_sessions;
+    const includeSessionsRoot = params?._include_sessions;
     const includeSessions = includeSessionsRoot ?? includeSessionsQuery;
 
     const worktree = await super.get(id, params);
@@ -250,8 +254,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     // Only enrich with session activity if explicitly requested
     if (includeSessions === true || includeSessions === 'true') {
       const truncationLengthQuery = params?.query?.last_message_truncation_length;
-      // biome-ignore lint/suspicious/noExplicitAny: Custom params bypass Feathers type system
-      const truncationLengthRoot = (params as any)?._last_message_truncation_length;
+      const truncationLengthRoot = params?._last_message_truncation_length;
       const truncationLength = parseTruncationLength(truncationLengthRoot ?? truncationLengthQuery);
       const result = await this.worktreeRepo.enrichWithSessionActivity(withZone, truncationLength);
       return result;

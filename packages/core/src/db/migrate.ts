@@ -89,8 +89,11 @@ async function _bootstrapMigrations(db: Database): Promise<void> {
     }
 
     // Create migrations table (Drizzle's schema)
-    // biome-ignore lint/suspicious/noExplicitAny: SQLite-specific .run() method not available in unified Database type
-    await (db as any).run(sql`
+    // This bootstrap function is only called for SQLite databases
+    if (!isSQLiteDatabase(db)) {
+      throw new MigrationError('Bootstrap is only supported for SQLite databases');
+    }
+    await db.run(sql`
       CREATE TABLE __drizzle_migrations (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         hash TEXT NOT NULL,
@@ -101,8 +104,7 @@ async function _bootstrapMigrations(db: Database): Promise<void> {
     // Mark baseline migration as applied
     // This hash comes from drizzle/meta/_journal.json: "tag": "0000_pretty_mac_gargan"
     const baselineHash = '0000_pretty_mac_gargan';
-    // biome-ignore lint/suspicious/noExplicitAny: SQLite-specific .run() method not available in unified Database type
-    await (db as any).run(sql`
+    await db.run(sql`
       INSERT INTO __drizzle_migrations (hash, created_at)
       VALUES (${baselineHash}, ${Date.now()})
     `);

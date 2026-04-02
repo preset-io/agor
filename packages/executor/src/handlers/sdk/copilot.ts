@@ -38,8 +38,7 @@ export async function executeCopilotTask(params: {
   // Create PermissionService that emits via Feathers WebSocket
   const permissionService = new PermissionService(async (event, data) => {
     // Emit permission events directly via Feathers
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers service types don't include emit method
-    (client.service('sessions') as any).emit(event, data);
+    client.service('sessions').emit(event, data);
   }, permissionTimeoutMs);
 
   // Register with global manager

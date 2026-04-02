@@ -492,12 +492,16 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         // STEP 0: Acquire row-level lock on PostgreSQL to prevent lost updates.
         // Without FOR UPDATE, two concurrent patches can both read the same state,
         // then the last writer silently overwrites the first writer's changes.
-        // biome-ignore lint/suspicious/noExplicitAny: Transaction context requires type assertion for database wrapper functions
-        await lockRowForUpdate(tx as any, this.db, sessions, eq(sessions.session_id, fullId));
+        // Drizzle transaction types are dialect-specific; cast to Database for wrapper compatibility
+        await lockRowForUpdate(
+          tx as unknown as Database,
+          this.db,
+          sessions,
+          eq(sessions.session_id, fullId)
+        );
 
         // STEP 1: Read current session with worktree and board JOINs (within transaction)
-        // biome-ignore lint/suspicious/noExplicitAny: Transaction context requires type assertion for database wrapper functions
-        const currentResult = await select(tx as any)
+        const currentResult = await select(tx as unknown as Database)
           .from(sessions)
           .leftJoin(worktrees, eq(sessions.worktree_id, worktrees.worktree_id))
           .leftJoin(boards, eq(worktrees.board_id, boards.board_id))
@@ -531,8 +535,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         // would erroneously clear sdk_session_id and disconnect agents from their history.
         insertData.updated_at = new Date();
 
-        // biome-ignore lint/suspicious/noExplicitAny: Transaction context requires type assertion for database wrapper functions
-        await update(tx as any, sessions)
+        await update(tx as unknown as Database, sessions)
           .set(insertData)
           .where(eq(sessions.session_id, fullId))
           .run();
@@ -712,8 +715,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
 
         // Chain orderBy and limit, then execute with one()
         // The spread operator in the wrapper passes through these methods
-        // biome-ignore lint/suspicious/noExplicitAny: Wrapper spreads query builder methods
-        const lastMessage = await (query as any).orderBy(desc(messagesTable.index)).limit(1).one();
+        const lastMessage = await query.orderBy(desc(messagesTable.index)).limit(1).one();
 
         if (lastMessage) {
           // Extract text content from message data and truncate to requested length

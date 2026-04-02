@@ -110,23 +110,25 @@ async function withFeathersSessionGuard<T>(
 }
 
 /**
- * Service interface for creating messages via FeathersJS
- * This ensures WebSocket events are emitted when messages are created
+ * Service interface for creating and updating messages via FeathersJS
+ * This ensures WebSocket events are emitted when messages are created or updated
  */
 export interface MessagesService {
   create(data: Partial<Message>): Promise<Message>;
+  patch(id: string, data: Partial<Message>): Promise<Message>;
 }
 
 /**
  * Service interface for updating tasks via FeathersJS
  * This ensures WebSocket events are emitted when tasks are updated
- * Note: emit() is called directly on the service in handlers (socket.io feature)
+ * Note: emit() is called directly on the service (socket.io EventEmitter feature)
  */
 export interface TasksService {
   // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service returns dynamic task data
   get(id: string): Promise<any>;
   // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service accepts partial task updates
   patch(id: string, data: Partial<any>): Promise<any>;
+  emit(event: string, data: unknown): void;
 }
 
 /**
@@ -397,8 +399,7 @@ export class ClaudeTool implements ITool {
       // Handle tool execution start
       if (event.type === 'tool_start') {
         if (this.tasksService && taskId) {
-          // biome-ignore lint/suspicious/noExplicitAny: emit is available at runtime from socket.io
-          (this.tasksService as any).emit('tool:start', {
+          this.tasksService.emit('tool:start', {
             task_id: taskId,
             session_id: sessionId,
             tool_use_id: event.toolUseId,
@@ -410,8 +411,7 @@ export class ClaudeTool implements ITool {
       // Handle tool execution complete
       if (event.type === 'tool_complete') {
         if (this.tasksService && taskId) {
-          // biome-ignore lint/suspicious/noExplicitAny: emit is available at runtime from socket.io
-          (this.tasksService as any).emit('tool:complete', {
+          this.tasksService.emit('tool:complete', {
             task_id: taskId,
             session_id: sessionId,
             tool_use_id: event.toolUseId,
@@ -484,8 +484,7 @@ export class ClaudeTool implements ITool {
       if (event.type === 'thinking_partial') {
         // Emit to tasks service for task-level tracking
         if (this.tasksService && taskId) {
-          // biome-ignore lint/suspicious/noExplicitAny: emit is available at runtime from socket.io
-          (this.tasksService as any).emit('thinking:chunk', {
+          this.tasksService.emit('thinking:chunk', {
             task_id: taskId,
             session_id: sessionId,
             chunk: event.thinkingChunk,

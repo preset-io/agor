@@ -69,8 +69,7 @@ export const useBoardObjects = ({
           _action: 'upsertObject',
           objectId,
           objectData,
-          // biome-ignore lint/suspicious/noExplicitAny: Board patch with custom _action field
-        } as any);
+        } as unknown as Partial<Board>);
       } catch (error) {
         console.error('Failed to update object:', error);
       }
@@ -112,8 +111,7 @@ export const useBoardObjects = ({
         await client.service('boards').patch(board.board_id, {
           _action: 'deleteZone',
           objectId,
-          // biome-ignore lint/suspicious/noExplicitAny: Board patch with custom _action field
-        } as any);
+        } as unknown as Partial<Board>);
 
         // After successful deletion, we can remove from the tracking set
         setTimeout(() => {
@@ -281,8 +279,7 @@ export const useBoardObjects = ({
             label: 'New Zone',
             // No color specified - will use theme default
           },
-          // biome-ignore lint/suspicious/noExplicitAny: Board patch with custom _action field
-        } as any);
+        } as unknown as Partial<Board>);
       } catch (error) {
         console.error('Failed to add zone node:', error);
         // Rollback
@@ -310,8 +307,7 @@ export const useBoardObjects = ({
         await client.service('boards').patch(currentBoard.board_id, {
           _action: 'removeObject',
           objectId,
-          // biome-ignore lint/suspicious/noExplicitAny: Board patch with custom _action field
-        } as any);
+        } as unknown as Partial<Board>);
 
         // After successful deletion, we can remove from the tracking set
         // (the object will no longer exist in board.objects)
@@ -362,8 +358,7 @@ export const useBoardObjects = ({
         await client.service('boards').patch(currentBoard.board_id, {
           _action: 'batchUpsertObjects',
           objects,
-          // biome-ignore lint/suspicious/noExplicitAny: Board patch with custom _action field
-        } as any);
+        } as unknown as Partial<Board>);
       } catch (error) {
         console.error('Failed to persist object positions:', error);
       }

@@ -8,6 +8,7 @@
  * fresh Unix group memberships (groups are cached at login time).
  */
 
+import type { SpawnOptions } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
@@ -78,8 +79,7 @@ function createGit(baseDir?: string, env?: Record<string, string>) {
     spawnOptions: env
       ? ({
           env: { ...process.env, ...env } as NodeJS.ProcessEnv,
-          // biome-ignore lint/suspicious/noExplicitAny: simple-git types don't expose env in spawnOptions
-        } as any)
+        } as unknown as Pick<SpawnOptions, 'uid' | 'gid'>)
       : undefined,
   });
 

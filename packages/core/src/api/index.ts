@@ -68,8 +68,23 @@ export interface AgorService<T> {
   remove(id: string, params?: Params): Promise<T>;
 
   // Event emitter methods (for real-time updates)
-  on(event: string, handler: (data: T) => void): void;
-  removeListener(event: string, handler: (data: T) => void): void;
+  // Standard CRUD events use the service entity type T
+  on(event: 'created' | 'updated' | 'patched' | 'removed', handler: (data: T) => void): void;
+  // Custom events (e.g. permission_resolved, input_resolved, queued)
+  // biome-ignore lint/suspicious/noExplicitAny: FeathersJS event handlers have varied signatures
+  on(event: string, handler: (...args: any[]) => void): void;
+  off(event: 'created' | 'updated' | 'patched' | 'removed', handler: (data: T) => void): void;
+  // biome-ignore lint/suspicious/noExplicitAny: FeathersJS event handlers have varied signatures
+  off(event: string, handler: (...args: any[]) => void): void;
+  removeListener(
+    event: 'created' | 'updated' | 'patched' | 'removed',
+    handler: (data: T) => void
+  ): void;
+  // biome-ignore lint/suspicious/noExplicitAny: FeathersJS event handlers have varied signatures
+  removeListener(event: string, handler: (...args: any[]) => void): void;
+
+  // Emit custom events to WebSocket clients (available at runtime via FeathersJS socket.io integration)
+  emit(event: string, data: unknown): void;
 }
 
 /**
@@ -465,8 +480,7 @@ export async function createRestClient(url: string = DEFAULT_DAEMON_URL): Promis
     close: () => {},
     removeAllListeners: () => {},
     io: { opts: {} },
-    // biome-ignore lint/suspicious/noExplicitAny: Dummy socket for REST-only mode
-  } as any;
+  } as unknown as Socket;
 
   extendBoardsService(client);
 

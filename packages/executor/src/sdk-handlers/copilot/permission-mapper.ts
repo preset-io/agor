@@ -314,8 +314,7 @@ export function createPermissionHandler(
             ? permissionMessage.content
             : {};
 
-        // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service has patch method but type definition is incomplete
-        await (deps.messagesService as any).patch(permissionMessage.message_id, {
+        await deps.messagesService.patch(permissionMessage.message_id, {
           content: {
             ...(baseContent as Record<string, unknown>),
             status: permissionStatus,
@@ -323,7 +322,7 @@ export function createPermissionHandler(
             approved_by: decision.decidedBy,
             approved_at: new Date().toISOString(),
           },
-        });
+        } as Partial<Message>);
       }
 
       // Handle timeout

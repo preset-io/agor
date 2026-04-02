@@ -58,9 +58,7 @@ const CardNodeComponent = ({ data }: { data: CardNodeData }) => {
     if (card.description.length <= DESCRIPTION_MAX_CHARS || descExpanded) return card.description;
     const truncated = card.description.slice(0, DESCRIPTION_MAX_CHARS);
     const lastSpace = truncated.lastIndexOf(' ');
-    return (
-      (lastSpace > DESCRIPTION_MAX_CHARS * 0.7 ? truncated.slice(0, lastSpace) : truncated) + '...'
-    );
+    return `${lastSpace > DESCRIPTION_MAX_CHARS * 0.7 ? truncated.slice(0, lastSpace) : truncated}...`;
   }, [card.description, descExpanded]);
 
   const needsTruncation = (card.description?.length ?? 0) > DESCRIPTION_MAX_CHARS;
