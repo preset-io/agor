@@ -51,10 +51,6 @@ export interface BaseTool {
     errorDetails?: string[];
     /** Raw SDK response for token accounting - stored and normalized */
     rawSdkResponse?: unknown;
-    /** Context window usage from SDK's getContextUsage() (total tokens in context) */
-    contextWindow?: number;
-    /** Context window limit from SDK's getContextUsage() (max tokens for model) */
-    contextWindowLimit?: number;
   }>;
 
   // Optional stopTask method for tools that support interruption
@@ -427,23 +423,8 @@ export async function executeToolTask(params: {
         );
       }
 
-      // Use context window from SDK's getContextUsage() if available (Claude Code)
-      // This is the most accurate source — directly from the SDK's internal tracking
-      if (result.contextWindow && result.contextWindow > 0) {
-        patchData.computed_context_window = result.contextWindow;
-        // Also update contextWindowLimit in normalized response if SDK provided it
-        if (result.contextWindowLimit && patchData.normalized_sdk_response) {
-          patchData.normalized_sdk_response.contextWindowLimit = result.contextWindowLimit;
-        }
-        console.log(
-          `[${toolName}] Context window from SDK: ${result.contextWindow} tokens` +
-            (result.contextWindowLimit
-              ? ` (${((result.contextWindow / result.contextWindowLimit) * 100).toFixed(1)}% of ${result.contextWindowLimit})`
-              : '')
-        );
-      }
-      // Fallback: compute context window using tool-specific logic (other SDK tools)
-      else if (tool.computeContextWindow) {
+      // Compute context window usage using tool-specific logic
+      if (tool.computeContextWindow) {
         try {
           const contextWindow = await tool.computeContextWindow(
             sessionId,

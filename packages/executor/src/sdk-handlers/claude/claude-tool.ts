@@ -716,14 +716,6 @@ export class ClaudeTool implements ITool {
         modelUsage = event.model_usage;
       }
 
-      // Capture context window usage from SDK's getContextUsage()
-      if (event.type === 'context_usage') {
-        const ctxEvent = event as Extract<ProcessedEvent, { type: 'context_usage' }>;
-        contextWindow = ctxEvent.totalTokens;
-        contextWindowLimit = ctxEvent.maxTokens;
-        continue;
-      }
-
       // Handle partial streaming events (token-level chunks)
       if (event.type === 'partial' && event.textChunk) {
         // Start new text stream if needed (separate from thinking stream)
@@ -1120,14 +1112,6 @@ export class ClaudeTool implements ITool {
         // Save full model usage for later (per-model breakdown)
         // Token accounting now handled by ClaudeCodeNormalizer.normalizeMultiModel()
         modelUsage = event.model_usage;
-      }
-
-      // Capture context window usage from SDK's getContextUsage()
-      if (event.type === 'context_usage') {
-        const ctxEvent = event as Extract<ProcessedEvent, { type: 'context_usage' }>;
-        contextWindow = ctxEvent.totalTokens;
-        contextWindowLimit = ctxEvent.maxTokens;
-        continue;
       }
 
       // Skip partial events in non-streaming mode
