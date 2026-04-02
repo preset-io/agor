@@ -1,6 +1,6 @@
 import type { AgorClient } from '@agor/core/api';
 import type { Board, MCPServer, Repo, Session, User, Worktree } from '@agor/core/types';
-import { hasMinimumRole, ROLES } from '@agor/core/types';
+import { hasMinimumRole, isAssistant, ROLES } from '@agor/core/types';
 import { DeleteOutlined, FolderOutlined, LinkOutlined } from '@ant-design/icons';
 import { Button, Descriptions, Form, Input, Select, Space, Tooltip, Typography } from 'antd';
 import { useEffect, useState } from 'react';
@@ -257,36 +257,39 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
               />
             </Form.Item>
 
-            <Form.Item
-              label={
-                <Space size={4}>
-                  <span>Notes</span>
-                  <Tooltip title="Markdown formatting supported (headings, bold, italic, lists, code blocks, etc.)">
-                    <span
-                      style={{
-                        fontSize: '10px',
-                        fontWeight: 'bold',
-                        fontFamily: 'monospace',
-                        opacity: 0.6,
-                        cursor: 'help',
-                      }}
-                    >
-                      MD
-                    </span>
-                  </Tooltip>
-                </Space>
-              }
-              labelCol={{ span: 6 }}
-              wrapperCol={{ span: 18 }}
-            >
-              <TextArea
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                placeholder="Freeform notes about this worktree..."
-                rows={4}
-                disabled={!canEdit}
-              />
-            </Form.Item>
+            {/* Hide Notes for assistants — edited as "Description" in the Assistant tab */}
+            {!isAssistant(worktree) && (
+              <Form.Item
+                label={
+                  <Space size={4}>
+                    <span>Notes</span>
+                    <Tooltip title="Markdown formatting supported (headings, bold, italic, lists, code blocks, etc.)">
+                      <span
+                        style={{
+                          fontSize: '10px',
+                          fontWeight: 'bold',
+                          fontFamily: 'monospace',
+                          opacity: 0.6,
+                          cursor: 'help',
+                        }}
+                      >
+                        MD
+                      </span>
+                    </Tooltip>
+                  </Space>
+                }
+                labelCol={{ span: 6 }}
+                wrapperCol={{ span: 18 }}
+              >
+                <TextArea
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  placeholder="Freeform notes about this worktree..."
+                  rows={4}
+                  disabled={!canEdit}
+                />
+              </Form.Item>
+            )}
 
             <Form.Item
               label="MCP Servers"
