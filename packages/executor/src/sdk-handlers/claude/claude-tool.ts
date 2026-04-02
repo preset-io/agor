@@ -716,6 +716,14 @@ export class ClaudeTool implements ITool {
         modelUsage = event.model_usage;
       }
 
+      // Capture context window usage from SDK's getContextUsage()
+      if (event.type === 'context_usage') {
+        const ctxEvent = event as Extract<ProcessedEvent, { type: 'context_usage' }>;
+        contextWindow = ctxEvent.totalTokens;
+        contextWindowLimit = ctxEvent.maxTokens;
+        continue;
+      }
+
       // Handle partial streaming events (token-level chunks)
       if (event.type === 'partial' && event.textChunk) {
         // Start new text stream if needed (separate from thinking stream)
@@ -1114,6 +1122,14 @@ export class ClaudeTool implements ITool {
         modelUsage = event.model_usage;
       }
 
+      // Capture context window usage from SDK's getContextUsage()
+      if (event.type === 'context_usage') {
+        const ctxEvent = event as Extract<ProcessedEvent, { type: 'context_usage' }>;
+        contextWindow = ctxEvent.totalTokens;
+        contextWindowLimit = ctxEvent.maxTokens;
+        continue;
+      }
+
       // Skip partial events in non-streaming mode
       if (event.type === 'partial') {
         continue;
@@ -1247,239 +1263,70 @@ export class ClaudeTool implements ITool {
   }
 
   /**
-   * Compute token count from a Claude SDK raw response
+   * Compute context window usage for a Claude Code session
    *
-   * Sums across ALL models (Haiku for tools, Sonnet for responses, etc.)
-   * since they all contribute to the context window.
+   * Primary source: SDK's getContextUsage() (captured during prompt execution as context_usage event).
+   * This method serves as a fallback when getContextUsage() is not available.
    *
-   * @param rawResponse - Raw SDK response from Claude Agent SDK
-   * @returns Total tokens (input + output) across all models
-   */
-  private computeContextTokensFromRawResponse(rawResponse: unknown): number {
-    const response = rawResponse as import('../../types/sdk-response').ClaudeCodeSdkResponseTyped;
-
-    // If modelUsage exists, sum across all models
-    if (response.modelUsage && typeof response.modelUsage === 'object') {
-      let total = 0;
-      for (const modelData of Object.values(response.modelUsage)) {
-        const input = modelData.inputTokens || 0;
-        const output = modelData.outputTokens || 0;
-        total += input + output;
-      }
-      return total;
-    }
-
-    // Fallback to top-level usage (older SDK or single model)
-    const inputTokens = response.usage?.input_tokens || 0;
-    const outputTokens = response.usage?.output_tokens || 0;
-    return inputTokens + outputTokens;
-  }
-
-  /**
-   * Compute cumulative context window usage for a Claude Code session
+   * Uses the result message's usage data to estimate context:
+   *   context = input_tokens + cache_creation_input_tokens + cache_read_input_tokens
    *
-   * Algorithm:
-   * 1. Query messages to find compaction boundary events
-   * 2. Build set of task IDs that had compaction events
-   * 3. Query previous completed tasks (ordered by created_at ASC for proper iteration)
-   * 4. Find the most recent compaction task
-   * 5. Sum tokens only from tasks AFTER the last compaction
-   * 6. Add BASELINE context on FIRST message after session start or compaction:
-   *    - Fresh session: cache_read + cache_creation (~23-27K for system prompt + tools)
-   *    - Post-compaction: cache_creation only (the compacted conversation summary)
-   * 7. Add current task tokens (and baseline if this IS the first task)
+   * This represents what's actually in the context window for the current turn,
+   * as input_tokens + cache tokens = total input context sent to the model.
    *
-   * Why baseline matters:
-   * - cache_read_tokens: System prompt, tool definitions (~20K tokens)
-   * - cache_creation_tokens: CLAUDE.md, MCP server tools (~3-7K tokens)
-   * - These are part of the context window but not reported in input/output tokens
-   *
-   * Note: This is called BEFORE the task UPDATE, so querying the DB is safe.
-   * The current task is not yet in the DB, so we receive its raw response separately.
+   * Note: In practice this fallback is rarely used — getContextUsage() from the SDK
+   * is the primary source and is captured via the context_usage event in prompt-service.
    *
    * @param sessionId - Session ID to compute context for
-   * @param currentTaskId - Current task ID (excluded from DB query)
-   * @param currentRawSdkResponse - Raw SDK response for the current task (not yet in DB)
+   * @param _currentTaskId - Current task ID (unused in new implementation)
+   * @param currentRawSdkResponse - Raw SDK response for the current task
    * @returns Promise resolving to computed context window usage in tokens
    */
   async computeContextWindow(
     sessionId: string,
-    currentTaskId?: string,
+    _currentTaskId?: string,
     currentRawSdkResponse?: unknown
   ): Promise<number> {
-    // Start with current task tokens
-    let currentTaskTokens = 0;
-    if (currentRawSdkResponse) {
-      currentTaskTokens = this.computeContextTokensFromRawResponse(currentRawSdkResponse);
-    }
-
-    // Query previous completed tasks to sum their tokens
-    // This is safe because we're called BEFORE the UPDATE (not during)
-    if (!this.tasksService) {
+    if (!currentRawSdkResponse) {
       console.warn(
-        `⚠️  computeContextWindow: tasksService not available, returning current task tokens only`
+        `⚠️  computeContextWindow: no raw SDK response available for session ${sessionId}`
       );
-      return currentTaskTokens;
+      return 0;
     }
 
-    try {
-      // Step 1: Find compaction events from messages
-      const compactionTaskIds = await this.findCompactionTaskIds(sessionId as SessionID);
+    const response =
+      currentRawSdkResponse as import('../../types/sdk-response').ClaudeCodeSdkResponseTyped;
 
-      // Step 2: Query previous completed tasks (chronological order for proper iteration)
-      // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service find returns paginated or array
-      const result = await (this.tasksService as any).find({
-        query: {
-          session_id: sessionId,
-          status: 'completed', // Only completed tasks have token data
-          $sort: { created_at: 1 }, // Chronological order (oldest first)
-          $limit: 100, // Reasonable limit for context window computation
-        },
-      });
-
-      // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service returns dynamic task data
-      const tasks: any[] = Array.isArray(result) ? result : result.data || [];
-
-      // Step 3: Find the most recent compaction event index
-      let lastCompactionIndex = -1;
-      for (let i = tasks.length - 1; i >= 0; i--) {
-        if (compactionTaskIds.has(tasks[i].task_id)) {
-          lastCompactionIndex = i;
-          break;
-        }
-      }
-
-      // Step 4: Sum tokens starting from after the last compaction
-      const startIndex = lastCompactionIndex >= 0 ? lastCompactionIndex + 1 : 0;
-      let totalTokens = 0;
-      let tasksCounted = 0;
-      let baselineTokensAdded = 0;
-
-      for (let i = startIndex; i < tasks.length; i++) {
-        const task = tasks[i];
-        // Skip current task (it's not in DB yet anyway, but just in case)
-        if (task.task_id === currentTaskId) continue;
-
-        // Get tokens from normalized_sdk_response
-        const normalized = task.normalized_sdk_response;
-        if (normalized?.tokenUsage) {
-          const taskTokens =
-            (normalized.tokenUsage.inputTokens || 0) + (normalized.tokenUsage.outputTokens || 0);
-          totalTokens += taskTokens;
-          tasksCounted++;
-
-          // CRITICAL: Add baseline context on FIRST message after start/compaction
-          // This accounts for system prompt, CLAUDE.md, MCP tools, etc.
-          if (i === startIndex) {
-            if (lastCompactionIndex === -1) {
-              // Fresh session: cache_read (~20K system prompt) + cache_creation (CLAUDE.md + MCP tools ~3-7K)
-              // Total baseline: ~23K-27K tokens for a fresh session
-              const cacheRead = normalized.tokenUsage.cacheReadInputTokens || 0;
-              const cacheCreation = normalized.tokenUsage.cacheCreationInputTokens || 0;
-              baselineTokensAdded = cacheRead + cacheCreation;
-              totalTokens += baselineTokensAdded;
-            } else {
-              // Post-compaction: cache_creation only (the compacted conversation summary)
-              // Note: We exclude cache_read here because it can exceed 200K context limits
-              // post-compaction (observed: 248K-1.9M tokens), likely due to cumulative caching
-              const cacheCreation = normalized.tokenUsage.cacheCreationInputTokens || 0;
-              baselineTokensAdded = cacheCreation;
-              totalTokens += baselineTokensAdded;
-            }
-          }
-        }
-      }
-
-      // Add current task tokens
-      totalTokens += currentTaskTokens;
-
-      // CRITICAL: Handle the case where THIS is the first task (no previous tasks)
-      // In this case, we need to add baseline context from the current task's raw response
-      if (tasksCounted === 0 && currentRawSdkResponse && lastCompactionIndex === -1) {
-        const response =
-          currentRawSdkResponse as import('../../types/sdk-response').ClaudeCodeSdkResponseTyped;
-        // Extract cache tokens from the first model in modelUsage
-        if (response.modelUsage && typeof response.modelUsage === 'object') {
-          const firstModelUsage = Object.values(response.modelUsage)[0];
-          if (firstModelUsage) {
-            // Fresh session: add cache_read + cache_creation as baseline
-            const cacheRead = firstModelUsage.cacheReadInputTokens || 0;
-            const cacheCreation = firstModelUsage.cacheCreationInputTokens || 0;
-            baselineTokensAdded = cacheRead + cacheCreation;
-            totalTokens += baselineTokensAdded;
-          }
-        }
-      }
-
-      const compactionInfo =
-        lastCompactionIndex >= 0
-          ? ` (reset after compaction at task index ${lastCompactionIndex})`
-          : ' (no compaction detected)';
-
-      const baselineInfo = baselineTokensAdded > 0 ? `, baseline: ${baselineTokensAdded}` : '';
+    // Use the result message's usage which contains cumulative totals for this turn
+    // Context = input_tokens + cache_creation + cache_read (everything sent to the model)
+    if (response.usage) {
+      const inputTokens = response.usage.input_tokens || 0;
+      const cacheCreation = response.usage.cache_creation_input_tokens || 0;
+      const cacheRead = response.usage.cache_read_input_tokens || 0;
+      const contextTokens = inputTokens + cacheCreation + cacheRead;
 
       console.log(
-        `✅ Computed cumulative context window for session ${sessionId}: ${totalTokens} tokens (${tasksCounted} previous tasks + current${baselineInfo})${compactionInfo}`
+        `📊 Context window fallback for session ${sessionId}: ${contextTokens} tokens ` +
+          `(input: ${inputTokens}, cache_creation: ${cacheCreation}, cache_read: ${cacheRead})`
       );
-
-      return totalTokens;
-    } catch (error) {
-      console.error(`❌ Failed to compute context window:`, error);
-      // Fall back to just current task tokens
-      return currentTaskTokens;
+      return contextTokens;
     }
-  }
 
-  /**
-   * Find task IDs that have compaction events in their messages
-   *
-   * Compaction events are system messages with:
-   * - type === 'system' AND content is object with status === 'compacting'
-   * - OR content is array with a block having type === 'system_status' and status === 'compacting'
-   */
-  private async findCompactionTaskIds(sessionId: SessionID): Promise<Set<string>> {
-    const compactionTaskIds = new Set<string>();
-
-    if (!this.messagesRepo) {
-      console.warn(
-        `⚠️  findCompactionTaskIds: messagesRepo not available, skipping compaction detection`
+    // If modelUsage exists but no top-level usage, sum across models
+    if (response.modelUsage && typeof response.modelUsage === 'object') {
+      let totalContext = 0;
+      for (const modelData of Object.values(response.modelUsage)) {
+        totalContext +=
+          (modelData.inputTokens || 0) +
+          (modelData.cacheReadInputTokens || 0) +
+          (modelData.cacheCreationInputTokens || 0);
+      }
+      console.log(
+        `📊 Context window fallback (multi-model) for session ${sessionId}: ${totalContext} tokens`
       );
-      return compactionTaskIds;
+      return totalContext;
     }
 
-    try {
-      const messages = await this.messagesRepo.findBySessionId(sessionId);
-
-      for (const msg of messages) {
-        if (msg.role !== MessageRole.SYSTEM) continue;
-        if (!msg.content || typeof msg.content !== 'object') continue;
-
-        const content = msg.content as { type?: string; status?: string } | unknown[];
-
-        // Check if content is array with compaction block
-        if (Array.isArray(content)) {
-          const hasCompaction = (content as Array<{ type?: string; status?: string }>).some(
-            (block) => block.type === 'system_status' && block.status === 'compacting'
-          );
-          if (hasCompaction && msg.task_id) {
-            compactionTaskIds.add(msg.task_id);
-          }
-        }
-        // Check if content is object with compacting status
-        else if (content.status === 'compacting' && msg.task_id) {
-          compactionTaskIds.add(msg.task_id);
-        }
-      }
-
-      if (compactionTaskIds.size > 0) {
-        console.log(
-          `🔄 Found ${compactionTaskIds.size} compaction event(s) in session ${sessionId}`
-        );
-      }
-    } catch (error) {
-      console.error(`❌ Failed to find compaction events:`, error);
-    }
-
-    return compactionTaskIds;
+    return 0;
   }
 }

@@ -127,6 +127,11 @@ export interface QuerySetupDeps {
  */
 export interface InterruptibleQuery {
   interrupt(): Promise<void>;
+  getContextUsage(): Promise<{
+    totalTokens: number;
+    maxTokens: number;
+    percentage: number;
+  }>;
   // biome-ignore lint/suspicious/noExplicitAny: SDK returns complex union of message types
   [Symbol.asyncIterator](): AsyncIterator<any>;
 }

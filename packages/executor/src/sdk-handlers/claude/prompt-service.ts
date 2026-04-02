@@ -288,6 +288,26 @@ This is a CLI-only command that only works in the standalone Claude Code termina
           break;
         }
       }
+
+      // After query completes, fetch context window usage from SDK
+      // This uses the SDK's native getContextUsage() which returns accurate per-turn data
+      try {
+        const contextUsage = await result.getContextUsage();
+        if (contextUsage) {
+          console.log(
+            `📊 Context window: ${contextUsage.totalTokens.toLocaleString()}/${contextUsage.maxTokens.toLocaleString()} tokens (${contextUsage.percentage.toFixed(1)}%)`
+          );
+          yield {
+            type: 'context_usage',
+            totalTokens: contextUsage.totalTokens,
+            maxTokens: contextUsage.maxTokens,
+            percentage: contextUsage.percentage,
+          } as ProcessedEvent;
+        }
+      } catch (ctxError) {
+        // Non-fatal - context usage is informational
+        console.warn(`⚠️  Failed to get context usage from SDK:`, ctxError);
+      }
     } catch (error) {
       const state = processor.getState();
 

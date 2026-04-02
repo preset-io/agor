@@ -139,6 +139,12 @@ export type ProcessedEvent =
       agentSessionId?: string;
     }
   | {
+      type: 'context_usage';
+      totalTokens: number;
+      maxTokens: number;
+      percentage: number;
+    }
+  | {
       type: 'stopped';
     }
   | {
