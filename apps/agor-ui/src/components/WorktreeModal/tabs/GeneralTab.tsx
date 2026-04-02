@@ -126,11 +126,15 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
     JSON.stringify([...mcpServerIds].sort()) !==
     JSON.stringify([...(worktree.mcp_server_ids || [])].sort());
 
+  // For assistants, notes is edited as "Description" in the Assistant tab — exclude from General tab
+  const isAssistantWorktree = isAssistant(worktree);
+  const notesChanged = !isAssistantWorktree && notes !== (worktree.notes || '');
+
   const hasChanges =
     boardId !== worktree.board_id ||
     issueUrl !== (worktree.issue_url || '') ||
     prUrl !== (worktree.pull_request_url || '') ||
-    notes !== (worktree.notes || '') ||
+    notesChanged ||
     mcpChanged;
 
   const handleSave = () => {
@@ -138,7 +142,9 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
       board_id: boardId || undefined,
       issue_url: (issueUrl.trim() === '' ? null : issueUrl) as string | null | undefined,
       pull_request_url: (prUrl.trim() === '' ? null : prUrl) as string | null | undefined,
-      notes: (notes.trim() === '' ? null : notes) as string | null | undefined,
+      ...(!isAssistantWorktree
+        ? { notes: (notes.trim() === '' ? null : notes) as string | null | undefined }
+        : {}),
       ...(mcpChanged ? { mcp_server_ids: mcpServerIds } : {}),
     };
     onUpdate?.(worktree.worktree_id, updates);

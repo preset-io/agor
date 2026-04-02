@@ -55,6 +55,7 @@ export const AssistantTab: React.FC<AssistantTabProps> = ({
       const values = await form.validateFields();
       return {
         displayName: values.displayName.trim(),
+        description: values.description || undefined,
         emoji: values.emoji || undefined,
         boardChoice: values.boardChoice,
         repoId: values.repoId || frameworkRepo?.repo_id,

@@ -833,14 +833,15 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
     'agor_assistants_list',
     {
       description:
-        "List all assistants (long-lived agents with schedules). Returns each assistant's name, description, schedule status, and last session info. Use this to discover other assistants on the platform.",
+        "List all assistants (long-lived agents with schedules). Returns each assistant's name, description, schedule status, and last activity timestamp. Use this to discover other assistants on the platform.",
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         repoId: z.string().optional().describe('Filter assistants by repository ID'),
+        limit: z.number().optional().describe('Maximum number of worktrees to scan (default: 200)'),
       }),
     },
     async (args) => {
-      const query: Record<string, unknown> = { archived: false, $limit: 200 };
+      const query: Record<string, unknown> = { archived: false, $limit: args.limit || 200 };
       if (args.repoId) query.repo_id = args.repoId;
 
       const result = await ctx.app.service('worktrees').find({ query, ...ctx.baseServiceParams });
