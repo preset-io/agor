@@ -74,6 +74,17 @@ export const AssistantFormFields: React.FC<AssistantFormFieldsProps> = ({
         <FormEmojiPickerInput form={form} fieldName="emoji" defaultEmoji="\u{1F916}" />
       </Form.Item>
 
+      <Form.Item
+        name="description"
+        label="Description"
+        tooltip="What does this assistant do? Visible to other agents via MCP."
+      >
+        <Input.TextArea
+          placeholder="e.g. Reviews PRs and provides feedback, Monitors CI/CD pipelines"
+          rows={2}
+        />
+      </Form.Item>
+
       <Form.Item name="boardChoice" label="Board">
         <Select
           showSearch

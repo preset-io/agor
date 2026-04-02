@@ -432,6 +432,7 @@ export const App: React.FC<AppProps> = ({
     await createAssistantWorktree(
       {
         displayName: result.displayName,
+        description: result.description,
         emoji: result.emoji,
         boardChoice: result.boardChoice,
         repoId,

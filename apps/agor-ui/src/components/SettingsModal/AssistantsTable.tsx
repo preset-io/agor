@@ -113,6 +113,7 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
       await createAssistantWorktree(
         {
           displayName: values.displayName.trim(),
+          description: values.description || undefined,
           emoji: values.emoji || undefined,
           boardChoice: values.boardChoice,
           repoId,

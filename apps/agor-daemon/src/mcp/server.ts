@@ -80,7 +80,7 @@ This server uses progressive tool discovery. Only 2 tools are listed directly â€
 Domains:
 - sessions: Agent conversations with genealogy (fork/spawn), task tracking, and message history
 - repos: Repository registration and management
-- worktrees: Git worktrees with isolated branches, board placement, and zone pinning
+- worktrees: Git worktrees with isolated branches, board placement, zone pinning, and assistant discovery
 - environment: Start/stop/health/logs for worktree dev environments
 - boards: Spatial canvases with zones for organizing worktrees and cards
 - cards: Kanban-style cards and card type definitions on boards

@@ -27,19 +27,24 @@ export const AssistantTab: React.FC<AssistantTabProps> = ({
 
   const [displayName, setDisplayName] = useState(config?.displayName || '');
   const [emoji, setEmoji] = useState(config?.emoji || '');
+  const [description, setDescription] = useState(worktree.notes || '');
   const [isInitialized, setIsInitialized] = useState(false);
 
   useEffect(() => {
     if (!isInitialized) {
       setDisplayName(config?.displayName || '');
       setEmoji(config?.emoji || '');
+      setDescription(worktree.notes || '');
       setIsInitialized(true);
     }
-  }, [isInitialized, config?.displayName, config?.emoji]);
+  }, [isInitialized, config?.displayName, config?.emoji, worktree.notes]);
 
   if (!config) return null;
 
-  const hasChanges = displayName.trim() !== config.displayName || emoji !== (config.emoji || '');
+  const hasChanges =
+    displayName.trim() !== config.displayName ||
+    emoji !== (config.emoji || '') ||
+    description.trim() !== (worktree.notes || '');
 
   const handleSave = async () => {
     const updatedConfig: AssistantConfig = {
@@ -50,6 +55,7 @@ export const AssistantTab: React.FC<AssistantTabProps> = ({
     };
     onUpdate?.(worktree.worktree_id, {
       custom_context: { assistant: updatedConfig },
+      notes: description.trim() || null,
     });
 
     // Also update the associated board icon if emoji changed
@@ -70,6 +76,7 @@ export const AssistantTab: React.FC<AssistantTabProps> = ({
   const handleCancel = () => {
     setDisplayName(config.displayName);
     setEmoji(config.emoji || '');
+    setDescription(worktree.notes || '');
   };
 
   return (
@@ -97,6 +104,19 @@ export const AssistantTab: React.FC<AssistantTabProps> = ({
           </Form.Item>
           <Form.Item label="Icon" labelCol={{ span: 6 }} wrapperCol={{ span: 18 }}>
             <EmojiPickerInput value={emoji} onChange={(val) => setEmoji(val)} defaultEmoji="🤖" />
+          </Form.Item>
+          <Form.Item
+            label="Description"
+            labelCol={{ span: 6 }}
+            wrapperCol={{ span: 18 }}
+            tooltip="What does this assistant do? Visible to other agents via MCP."
+          >
+            <Input.TextArea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="What does this assistant do?"
+              rows={2}
+            />
           </Form.Item>
         </Form>
 

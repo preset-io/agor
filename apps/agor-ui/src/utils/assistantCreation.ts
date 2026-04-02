@@ -5,6 +5,7 @@ import { slugify } from '@/utils/repoSlug';
 
 export interface AssistantCreationInput {
   displayName: string;
+  description?: string;
   emoji?: string;
   boardChoice?: string;
   repoId: string;
@@ -28,7 +29,7 @@ export interface AssistantCreationDeps {
   ) => Promise<Worktree | null>;
   onUpdateWorktree: (
     worktreeId: string,
-    updates: { board_id?: BoardID; custom_context?: Record<string, unknown> }
+    updates: { board_id?: BoardID; custom_context?: Record<string, unknown>; notes?: string | null }
   ) => void;
 }
 
@@ -83,7 +84,7 @@ export async function createAssistantWorktree(
       });
     }
 
-    // Tag as assistant
+    // Tag as assistant and set description as notes
     const assistantConfig: AssistantConfig = {
       kind: 'assistant',
       displayName: input.displayName.trim(),
@@ -93,6 +94,7 @@ export async function createAssistantWorktree(
     };
     deps.onUpdateWorktree(worktree.worktree_id, {
       custom_context: { assistant: assistantConfig },
+      ...(input.description?.trim() ? { notes: input.description.trim() } : {}),
     });
   }
 

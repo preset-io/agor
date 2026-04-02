@@ -9,6 +9,7 @@ import { AssistantFormFields, CREATE_NEW_BOARD } from '../../forms/AssistantForm
 
 export interface AssistantTabResult {
   displayName: string;
+  description?: string;
   emoji?: string;
   boardChoice?: string;
   repoId?: string;

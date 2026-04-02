@@ -1,5 +1,6 @@
 import { WorktreeRepository } from '@agor/core/db';
 import type { AgenticToolName, BoardID, UUID, Worktree, WorktreeID } from '@agor/core/types';
+import { getAssistantConfig, isAssistant } from '@agor/core/types';
 import { normalizeOptionalHttpUrl } from '@agor/core/utils/url';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
@@ -823,6 +824,57 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
         success: true,
         worktree_id: worktreeId,
         message: 'Worktree permanently deleted.',
+      });
+    }
+  );
+
+  // Tool 9: agor_assistants_list
+  server.registerTool(
+    'agor_assistants_list',
+    {
+      description:
+        "List all assistants (long-lived agents with schedules). Returns each assistant's name, description, schedule status, and last session info. Use this to discover other assistants on the platform.",
+      annotations: { readOnlyHint: true },
+      inputSchema: z.object({
+        repoId: z.string().optional().describe('Filter assistants by repository ID'),
+      }),
+    },
+    async (args) => {
+      const query: Record<string, unknown> = { archived: false, $limit: 200 };
+      if (args.repoId) query.repo_id = args.repoId;
+
+      const result = await ctx.app.service('worktrees').find({ query, ...ctx.baseServiceParams });
+
+      // Filter to assistants only and shape the response
+      const worktrees: Worktree[] = Array.isArray(result)
+        ? result
+        : (result as { data: Worktree[] }).data;
+      const assistants = worktrees.filter((w) => isAssistant(w));
+
+      const shaped = assistants.map((w) => {
+        const config = getAssistantConfig(w);
+        return {
+          worktree_id: w.worktree_id,
+          name: w.name,
+          display_name: config?.displayName ?? w.name,
+          emoji: config?.emoji,
+          description: w.notes || null,
+          board_id: w.board_id || null,
+          repo_id: w.repo_id,
+          schedule: {
+            enabled: w.schedule_enabled,
+            cron: w.schedule_cron || null,
+            next_run_at: w.schedule_next_run_at || null,
+            last_triggered_at: w.schedule_last_triggered_at || null,
+            agent: w.schedule?.agentic_tool || null,
+          },
+          last_used: w.last_used,
+        };
+      });
+
+      return textResult({
+        total: shaped.length,
+        assistants: shaped,
       });
     }
   );
