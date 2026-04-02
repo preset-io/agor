@@ -376,6 +376,63 @@ export interface Session {
 }
 
 /**
+ * Gateway source metadata denormalized into session.custom_context.gateway_source
+ *
+ * Present on sessions created via messaging platform integrations (Slack, Discord, GitHub).
+ * Stamped at creation time and immutable — avoids N+1 lookups on the gatewayChannels table.
+ */
+export interface GatewaySource {
+  channel_id: string;
+  channel_name: string;
+  channel_type: string;
+  thread_id: string;
+  /** GitHub-specific: "owner/repo" format */
+  github_repo?: string;
+  /** GitHub-specific: PR/issue number */
+  github_issue_number?: number;
+  /** GitHub-specific: only post last message */
+  last_message_only?: boolean;
+}
+
+/**
+ * Check if a session is a gateway session (created via Slack, Discord, GitHub, etc.)
+ *
+ * Gateway sessions have `custom_context.gateway_source` set at creation time.
+ */
+export function isGatewaySession(session: Pick<Session, 'custom_context'>): boolean {
+  const ctx = session.custom_context as Record<string, unknown> | undefined;
+  return !!ctx?.gateway_source;
+}
+
+/**
+ * Get the gateway source from a session, or null if not a gateway session.
+ */
+export function getGatewaySource(session: Pick<Session, 'custom_context'>): GatewaySource | null {
+  const ctx = session.custom_context as Record<string, unknown> | undefined;
+  const source = ctx?.gateway_source;
+  if (!source || typeof source !== 'object') return null;
+  const s = source as Record<string, unknown>;
+  if (!s.channel_id || !s.channel_name || !s.channel_type || !s.thread_id) return null;
+  return source as GatewaySource;
+}
+
+/**
+ * Session type categories matching UI rendering in WorktreeCard
+ */
+export type SessionType = 'gateway' | 'scheduled' | 'agent';
+
+/**
+ * Determine the session type category.
+ */
+export function getSessionType(
+  session: Pick<Session, 'custom_context' | 'scheduled_from_worktree'>
+): SessionType {
+  if (isGatewaySession(session)) return 'gateway';
+  if (session.scheduled_from_worktree) return 'scheduled';
+  return 'agent';
+}
+
+/**
  * Metadata for sessions created by the scheduler
  *
  * Stored in session.custom_context.scheduled_run

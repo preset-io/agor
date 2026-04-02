@@ -21,12 +21,10 @@
  *   pnpm tsx scripts/archive-old-gateway-sessions.ts --days 3 --execute # archive, 3 days
  */
 
+import os from 'node:os';
+import path from 'node:path';
 import { createDatabase, SessionRepository } from '@agor/core/db';
-
-function isGatewaySession(session: { custom_context?: unknown }): boolean {
-  const ctx = session.custom_context as Record<string, unknown> | undefined;
-  return !!ctx?.gateway_source;
-}
+import { getGatewaySource, isGatewaySession } from '@agor/core/types';
 
 async function main() {
   const args = process.argv.slice(2);
@@ -46,8 +44,17 @@ async function main() {
   console.log(`   Cutoff: ${days} days (before ${cutoffDate.toISOString()})`);
   console.log('');
 
-  // Connect to database
-  const db = await createDatabase();
+  // Connect to database (same pattern as scripts/get-admin-id.ts)
+  const dialect = process.env.AGOR_DB_DIALECT;
+  let databaseUrl: string;
+  if (dialect === 'postgresql') {
+    databaseUrl = process.env.DATABASE_URL || 'postgresql://localhost:5432/agor';
+  } else {
+    const dbPath = path.join(os.homedir(), '.agor', 'agor.db');
+    databaseUrl = process.env.DATABASE_URL || `file:${dbPath}`;
+  }
+
+  const db = createDatabase({ url: databaseUrl });
   const sessionRepo = new SessionRepository(db);
 
   // Fetch all sessions
@@ -76,11 +83,9 @@ async function main() {
   console.log('Sessions to archive:');
   console.log('─'.repeat(100));
   for (const s of toArchive) {
-    const gatewaySource = (s.custom_context as Record<string, unknown>)?.gateway_source as
-      | Record<string, unknown>
-      | undefined;
-    const channelType = gatewaySource?.channel_type || 'unknown';
-    const channelName = gatewaySource?.channel_name || 'unknown';
+    const source = getGatewaySource(s);
+    const channelType = source?.channel_type || 'unknown';
+    const channelName = source?.channel_name || 'unknown';
     const age = Math.floor(
       (Date.now() - new Date(s.last_updated || s.created_at).getTime()) / (24 * 60 * 60 * 1000)
     );

@@ -1,19 +1,18 @@
 import { WorktreeRepository, type WorktreeWithZoneAndSessions } from '@agor/core/db';
-import type { AgenticToolName, Board, Session, ZoneBoardObject } from '@agor/core/types';
+import {
+  type AgenticToolName,
+  type Board,
+  getSessionType,
+  type Session,
+  type SessionType,
+  type ZoneBoardObject,
+} from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { SessionsServiceImpl } from '../../declarations.js';
 import { ensureCanPromptSession } from '../../utils/worktree-authorization.js';
 import type { McpContext } from '../server.js';
 import { textResult } from '../server.js';
-
-/**
- * Check if a session is a gateway session (has custom_context.gateway_source)
- */
-function isGatewaySession(session: Session): boolean {
-  const ctx = session.custom_context as Record<string, unknown> | undefined;
-  return !!ctx?.gateway_source;
-}
 
 export function registerSessionTools(server: McpServer, ctx: McpContext): void {
   // Tool 1: agor_sessions_list
@@ -66,12 +65,8 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
 
       // Apply sessionType filter (post-query since custom_context/scheduled_from_worktree aren't in query schema)
       if (args.sessionType) {
-        const filterFn =
-          args.sessionType === 'gateway'
-            ? (s: Session) => isGatewaySession(s)
-            : args.sessionType === 'scheduled'
-              ? (s: Session) => s.scheduled_from_worktree === true
-              : (s: Session) => !isGatewaySession(s) && !s.scheduled_from_worktree;
+        const targetType = args.sessionType as SessionType;
+        const filterFn = (s: Session) => getSessionType(s) === targetType;
 
         if (Array.isArray(result)) {
           return textResult(result.filter(filterFn));
@@ -933,18 +928,31 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     }
   );
 
-  // Tool 10: agor_sessions_archive_old_gateway
+  // Tool 10: agor_sessions_bulk_archive
   server.registerTool(
-    'agor_sessions_archive_old_gateway',
+    'agor_sessions_bulk_archive',
     {
       description:
-        'Archive gateway sessions older than a specified number of days. Gateway sessions are those created via messaging platform integrations (Slack, Discord, GitHub). Useful for cleaning up accumulated gateway sessions. Returns a dry-run preview by default — set dryRun to false to actually archive.',
+        'Archive multiple sessions matching filter criteria. Supports filtering by session type (gateway/scheduled/agent), age, status, board, and worktree. Returns a dry-run preview by default — set dryRun to false to actually archive. Respects RBAC: sessions the current user cannot modify are skipped and reported as errors.',
       annotations: { destructiveHint: true },
       inputSchema: z.object({
+        sessionType: z
+          .enum(['gateway', 'scheduled', 'agent'])
+          .optional()
+          .describe(
+            "Filter by session type. 'gateway' = messaging integrations, 'scheduled' = cron-triggered, 'agent' = manually created."
+          ),
         olderThanDays: z
           .number()
+          .int()
+          .positive()
+          .max(365)
           .optional()
-          .describe('Archive gateway sessions older than this many days (default: 7)'),
+          .describe('Only archive sessions last updated more than this many days ago'),
+        status: z
+          .enum(['idle', 'running', 'completed', 'failed'])
+          .optional()
+          .describe('Only archive sessions with this status'),
         boardId: z.string().optional().describe('Only archive sessions on this board'),
         worktreeId: z.string().optional().describe('Only archive sessions in this worktree'),
         dryRun: z
@@ -956,44 +964,63 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       }),
     },
     async (args) => {
-      const olderThanDays = args.olderThanDays ?? 7;
       const dryRun = args.dryRun !== false;
-      const cutoffDate = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000);
 
-      // Fetch all non-archived sessions
-      const query: Record<string, unknown> = { archived: false, $limit: 1000 };
+      // Build service query for non-archived sessions
+      const query: Record<string, unknown> = { archived: false };
+      if (args.status) query.status = args.status;
       if (args.boardId) query.board_id = args.boardId;
       if (args.worktreeId) query.worktree_id = args.worktreeId;
 
-      const result = await ctx.app.service('sessions').find({ query, ...ctx.baseServiceParams });
-      const allSessions: Session[] = Array.isArray(result) ? result : result.data;
+      // Fetch all matching sessions (paginate through all results)
+      const allSessions: Session[] = [];
+      let skip = 0;
+      const pageSize = 200;
 
-      // Filter to gateway sessions older than cutoff
+      while (true) {
+        const result = await ctx.app
+          .service('sessions')
+          .find({ query: { ...query, $limit: pageSize, $skip: skip }, ...ctx.baseServiceParams });
+        const page: Session[] = Array.isArray(result) ? result : result.data;
+        allSessions.push(...page);
+        if (page.length < pageSize) break;
+        skip += pageSize;
+      }
+
+      // Apply post-query filters (sessionType, age)
+      const cutoffDate = args.olderThanDays
+        ? new Date(Date.now() - args.olderThanDays * 24 * 60 * 60 * 1000)
+        : null;
+
       const toArchive = allSessions.filter((s) => {
-        if (!isGatewaySession(s)) return false;
-        const lastUpdated = new Date(s.last_updated || s.created_at);
-        return lastUpdated < cutoffDate;
+        if (args.sessionType && getSessionType(s) !== args.sessionType) return false;
+        if (cutoffDate) {
+          const lastUpdated = new Date(s.last_updated || s.created_at);
+          if (lastUpdated >= cutoffDate) return false;
+        }
+        return true;
       });
 
       if (dryRun) {
         return textResult({
           dryRun: true,
           wouldArchive: toArchive.length,
-          cutoffDate: cutoffDate.toISOString(),
+          totalMatched: allSessions.length,
+          ...(cutoffDate && { cutoffDate: cutoffDate.toISOString() }),
           sessions: toArchive.map((s) => ({
             session_id: s.session_id,
             title: s.title,
             status: s.status,
+            session_type: getSessionType(s),
             last_updated: s.last_updated,
             created_at: s.created_at,
             worktree_id: s.worktree_id,
-            gateway_source: (s.custom_context as Record<string, unknown>)?.gateway_source,
           })),
-          message: `Would archive ${toArchive.length} gateway session(s) older than ${olderThanDays} days. Set dryRun=false to proceed.`,
+          message: `Would archive ${toArchive.length} session(s). Set dryRun=false to proceed.`,
         });
       }
 
-      // Archive each session
+      // Archive each session (through service layer for RBAC)
       let archivedCount = 0;
       const errors: { session_id: string; error: string }[] = [];
 
@@ -1018,9 +1045,10 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       return textResult({
         success: true,
         archivedCount,
-        cutoffDate: cutoffDate.toISOString(),
+        failedCount: errors.length,
+        ...(cutoffDate && { cutoffDate: cutoffDate.toISOString() }),
         errors: errors.length > 0 ? errors : undefined,
-        message: `Archived ${archivedCount} gateway session(s) older than ${olderThanDays} days.${errors.length > 0 ? ` ${errors.length} error(s) occurred.` : ''}`,
+        message: `Archived ${archivedCount} session(s).${errors.length > 0 ? ` ${errors.length} failed (insufficient permissions or other errors).` : ''}`,
       });
     }
   );

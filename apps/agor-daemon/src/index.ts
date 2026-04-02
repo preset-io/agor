@@ -4862,7 +4862,19 @@ async function main() {
         }
 
         // Get session to find current message count
-        const session = await sessionsService.get(id, params);
+        let session = await sessionsService.get(id, params);
+
+        // Auto-unarchive on prompt: if someone prompts an archived session, they want it back
+        if (session.archived) {
+          console.log(
+            `📦 [Prompt] Auto-unarchiving session ${id.substring(0, 8)} (was archived: ${session.archived_reason || 'unknown reason'})`
+          );
+          session = (await sessionsService.patch(
+            id,
+            { archived: false, archived_reason: undefined },
+            params
+          )) as typeof session;
+        }
 
         // Reject prompts if session is stopping
         if (session.status === SessionStatus.STOPPING) {
