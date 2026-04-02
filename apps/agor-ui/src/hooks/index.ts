@@ -1,3 +1,11 @@
+/**
+ * Generic event handler type for FeathersJS custom events.
+ * Used to cast typed handlers when registering for custom (non-CRUD) events
+ * where the AgorService overload expects `(...args: any[]) => void`.
+ */
+// biome-ignore lint/suspicious/noExplicitAny: Bridge type for FeathersJS event handler compatibility
+export type FeathersEventHandler = (...args: any[]) => void;
+
 export * from './useAgorClient';
 export * from './useAgorData';
 export * from './useAuth';

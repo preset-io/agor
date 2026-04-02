@@ -25,6 +25,15 @@ import { SessionStatus } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 
 /**
+ * Internal service params shared between services that support last-message enrichment.
+ * Bypasses Feathers query filtering for internal service-to-service calls.
+ */
+export interface InternalEnrichmentParams {
+  /** Root-level truncation length (bypasses Feathers query filtering, used by internal service calls) */
+  _last_message_truncation_length?: number;
+}
+
+/**
  * Session service params
  */
 export type SessionParams = QueryParams<{
@@ -33,12 +42,11 @@ export type SessionParams = QueryParams<{
   board_id?: string;
   include_last_message?: boolean | 'true' | 'false'; // Opt-in last message enrichment
   last_message_truncation_length?: number; // Default: 500 chars, min: 50, max: 10000
-}> & {
-  /** Root-level include_last_message flag (bypasses Feathers query filtering, used by internal service calls) */
-  _include_last_message?: boolean | 'true' | 'false';
-  /** Root-level truncation length (bypasses Feathers query filtering, used by internal service calls) */
-  _last_message_truncation_length?: number;
-};
+}> &
+  InternalEnrichmentParams & {
+    /** Root-level include_last_message flag (bypasses Feathers query filtering, used by internal service calls) */
+    _include_last_message?: boolean | 'true' | 'false';
+  };
 
 /**
  * Execute task data payload

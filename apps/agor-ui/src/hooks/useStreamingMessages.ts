@@ -8,6 +8,7 @@
 
 import type { Message, MessageID, SessionID } from '@agor/core/types';
 import { useEffect, useState } from 'react';
+import type { FeathersEventHandler } from './index';
 import type { useAgorClient } from './useAgorClient';
 
 export interface StreamingMessage {
@@ -275,41 +276,34 @@ export function useStreamingMessages(
     // Register event listeners
     // FeathersJS .on() expects (event: string, handler: (data: T) => void) but these
     // handlers receive custom streaming event payloads, not Message objects.
-    type AnyHandler = (data: unknown) => void;
-    messagesService.on('streaming:start', handleStreamingStart as unknown as AnyHandler);
-    messagesService.on('streaming:chunk', handleStreamingChunk as unknown as AnyHandler);
-    messagesService.on('streaming:end', handleStreamingEnd as unknown as AnyHandler);
-    messagesService.on('streaming:error', handleStreamingError as unknown as AnyHandler);
-    messagesService.on('thinking:start', handleThinkingStart as unknown as AnyHandler);
-    messagesService.on('thinking:chunk', handleThinkingChunk as unknown as AnyHandler);
-    messagesService.on('thinking:end', handleThinkingEnd as unknown as AnyHandler);
-    messagesService.on('created', handleMessageCreated as unknown as AnyHandler);
+    messagesService.on('streaming:start', handleStreamingStart as FeathersEventHandler);
+    messagesService.on('streaming:chunk', handleStreamingChunk as FeathersEventHandler);
+    messagesService.on('streaming:end', handleStreamingEnd as FeathersEventHandler);
+    messagesService.on('streaming:error', handleStreamingError as FeathersEventHandler);
+    messagesService.on('thinking:start', handleThinkingStart as FeathersEventHandler);
+    messagesService.on('thinking:chunk', handleThinkingChunk as FeathersEventHandler);
+    messagesService.on('thinking:end', handleThinkingEnd as FeathersEventHandler);
+    messagesService.on('created', handleMessageCreated as FeathersEventHandler);
 
     // Cleanup on unmount or client change
     return () => {
       messagesService.removeListener(
         'streaming:start',
-        handleStreamingStart as unknown as AnyHandler
+        handleStreamingStart as FeathersEventHandler
       );
       messagesService.removeListener(
         'streaming:chunk',
-        handleStreamingChunk as unknown as AnyHandler
+        handleStreamingChunk as FeathersEventHandler
       );
-      messagesService.removeListener('streaming:end', handleStreamingEnd as unknown as AnyHandler);
+      messagesService.removeListener('streaming:end', handleStreamingEnd as FeathersEventHandler);
       messagesService.removeListener(
         'streaming:error',
-        handleStreamingError as unknown as AnyHandler
+        handleStreamingError as FeathersEventHandler
       );
-      messagesService.removeListener(
-        'thinking:start',
-        handleThinkingStart as unknown as AnyHandler
-      );
-      messagesService.removeListener(
-        'thinking:chunk',
-        handleThinkingChunk as unknown as AnyHandler
-      );
-      messagesService.removeListener('thinking:end', handleThinkingEnd as unknown as AnyHandler);
-      messagesService.removeListener('created', handleMessageCreated as unknown as AnyHandler);
+      messagesService.removeListener('thinking:start', handleThinkingStart as FeathersEventHandler);
+      messagesService.removeListener('thinking:chunk', handleThinkingChunk as FeathersEventHandler);
+      messagesService.removeListener('thinking:end', handleThinkingEnd as FeathersEventHandler);
+      messagesService.removeListener('created', handleMessageCreated as FeathersEventHandler);
     };
   }, [client, sessionId, enabled]);
 

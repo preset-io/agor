@@ -28,6 +28,7 @@ import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
 import { DrizzleService } from '../adapters/drizzle';
 import { resolveGitImpersonationForWorktree } from '../utils/git-impersonation.js';
 import { getDaemonUrl, spawnExecutor } from '../utils/spawn-executor.js';
+import type { InternalEnrichmentParams } from './sessions';
 
 /**
  * Worktree service params
@@ -39,12 +40,11 @@ export type WorktreeParams = QueryParams<{
   deleteFromFilesystem?: boolean;
   include_sessions?: boolean | 'true' | 'false'; // Opt-in session activity enrichment
   last_message_truncation_length?: number; // Default: 500 chars, min: 50, max: 10000
-}> & {
-  /** Root-level include_sessions flag (bypasses Feathers query filtering, used by internal service calls) */
-  _include_sessions?: boolean | 'true' | 'false';
-  /** Root-level truncation length (bypasses Feathers query filtering, used by internal service calls) */
-  _last_message_truncation_length?: number;
-};
+}> &
+  InternalEnrichmentParams & {
+    /** Root-level include_sessions flag (bypasses Feathers query filtering, used by internal service calls) */
+    _include_sessions?: boolean | 'true' | 'false';
+  };
 
 /**
  * Parse and validate last_message_truncation_length parameter

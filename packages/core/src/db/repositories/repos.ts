@@ -8,7 +8,7 @@ import type { Repo, UUID } from '@agor/core/types';
 import { eq, like, sql } from 'drizzle-orm';
 import { formatShortId, generateId } from '../../lib/ids';
 import type { Database } from '../client';
-import { deleteFrom, insert, lockRowForUpdate, select, update } from '../database-wrapper';
+import { deleteFrom, insert, lockRowForUpdate, select, txAsDb, update } from '../database-wrapper';
 import { type RepoInsert, type RepoRow, repos } from '../schema';
 import {
   AmbiguousIdError,
@@ -210,16 +210,11 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
       // Use transaction to make read-merge-write atomic
       return await this.db.transaction(async (tx) => {
         // Acquire row-level lock on PostgreSQL to prevent lost updates
-        // Drizzle transaction types are dialect-specific; cast to Database for wrapper compatibility
-        await lockRowForUpdate(
-          tx as unknown as Database,
-          this.db,
-          repos,
-          eq(repos.repo_id, fullId)
-        );
+
+        await lockRowForUpdate(txAsDb(tx), this.db, repos, eq(repos.repo_id, fullId));
 
         // STEP 1: Read current repo (within transaction)
-        const currentRow = await select(tx as unknown as Database)
+        const currentRow = await select(txAsDb(tx))
           .from(repos)
           .where(eq(repos.repo_id, fullId))
           .one();
@@ -236,7 +231,7 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
         const insertData = this.repoToInsert(merged);
 
         // STEP 3: Write merged repo (within same transaction)
-        await update(tx as unknown as Database, repos)
+        await update(txAsDb(tx), repos)
           .set({
             slug: insertData.slug,
             updated_at: new Date(),

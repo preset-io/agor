@@ -67,7 +67,6 @@ import {
   NotAuthenticated,
   rest,
   socketio,
-  validateQuery,
 } from '@agor/core/feathers';
 import {
   boardCommentQueryValidator,
@@ -77,6 +76,7 @@ import {
   repoQueryValidator,
   sessionQueryValidator,
   taskQueryValidator,
+  typedValidateQuery,
   userQueryValidator,
   worktreeQueryValidator,
 } from '@agor/core/lib/feathers-validation';
@@ -561,13 +561,7 @@ async function main() {
   // Helper: Return empty array for auth in anonymous mode (read-only services don't need auth)
   const getReadAuthHooks = () => (allowAnonymous ? [] : [requireAuth]);
 
-  // Helper: Wrap validateQuery to produce a FeathersJS-compatible HookFunction.
-  // validateQuery returns Promise<any> but hooks arrays expect Promise<HookContext | void>.
-  // The types are runtime-compatible; this wrapper bridges the TypeScript gap.
-  const typedValidateQuery = (
-    validator: Parameters<typeof validateQuery>[0]
-  ): ((context: HookContext) => Promise<void>) =>
-    validateQuery(validator) as unknown as (context: HookContext) => Promise<void>;
+  // typedValidateQuery is now imported from @agor/core/lib/feathers-validation
 
   // SECURITY: Enforce authentication in public deployments
   const isPublicDeployment =

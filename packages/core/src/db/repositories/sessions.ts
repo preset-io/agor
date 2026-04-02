@@ -11,7 +11,7 @@ import { getBaseUrl } from '../../config/config-manager';
 import { formatShortId, generateId } from '../../lib/ids';
 import { getSessionUrl } from '../../utils/url';
 import type { Database } from '../client';
-import { deleteFrom, insert, lockRowForUpdate, select, update } from '../database-wrapper';
+import { deleteFrom, insert, lockRowForUpdate, select, txAsDb, update } from '../database-wrapper';
 import {
   boards,
   type SessionInsert,
@@ -492,16 +492,11 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         // STEP 0: Acquire row-level lock on PostgreSQL to prevent lost updates.
         // Without FOR UPDATE, two concurrent patches can both read the same state,
         // then the last writer silently overwrites the first writer's changes.
-        // Drizzle transaction types are dialect-specific; cast to Database for wrapper compatibility
-        await lockRowForUpdate(
-          tx as unknown as Database,
-          this.db,
-          sessions,
-          eq(sessions.session_id, fullId)
-        );
+
+        await lockRowForUpdate(txAsDb(tx), this.db, sessions, eq(sessions.session_id, fullId));
 
         // STEP 1: Read current session with worktree and board JOINs (within transaction)
-        const currentResult = await select(tx as unknown as Database)
+        const currentResult = await select(txAsDb(tx))
           .from(sessions)
           .leftJoin(worktrees, eq(sessions.worktree_id, worktrees.worktree_id))
           .leftJoin(boards, eq(worktrees.board_id, boards.board_id))
@@ -535,7 +530,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         // would erroneously clear sdk_session_id and disconnect agents from their history.
         insertData.updated_at = new Date();
 
-        await update(tx as unknown as Database, sessions)
+        await update(txAsDb(tx), sessions)
           .set(insertData)
           .where(eq(sessions.session_id, fullId))
           .run();

@@ -35,7 +35,8 @@ const DEFAULT_AUTHCODE_TOKEN_TTL_SECONDS = 3600;
 interface OAuthRawTokenResponse {
   access_token?: string;
   token_type?: string;
-  expires_in?: number;
+  /** Some providers return this as a string instead of a number */
+  expires_in?: number | string;
   refresh_token?: string;
   scope?: string;
   /** Slack-specific: present when request was denied at HTTP layer but body carries error */
@@ -453,7 +454,12 @@ async function exchangeCodeForToken(
   return {
     access_token: accessToken,
     token_type: json.token_type || json.authed_user?.token_type || 'bearer',
-    expires_in: json.expires_in,
+    expires_in:
+      json.expires_in != null
+        ? Number.isFinite(Number(json.expires_in))
+          ? Number(json.expires_in)
+          : undefined
+        : undefined,
     refresh_token: json.refresh_token,
     scope: json.scope || json.authed_user?.scope,
   } as OAuthTokenResponse;

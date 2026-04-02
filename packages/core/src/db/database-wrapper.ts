@@ -24,6 +24,18 @@ import type * as postgresSchema from './schema.postgres';
 import type * as sqliteSchema from './schema.sqlite';
 
 /**
+ * Cast a Drizzle transaction handle to the unified Database type.
+ *
+ * Drizzle transaction callbacks receive dialect-specific types (LibSQLTransaction / PostgresJsTransaction)
+ * that aren't assignable to `Database` (LibSQLDatabase | PostgresJsDatabase). The wrapper functions
+ * in this module (`select`, `update`, `lockRowForUpdate`, etc.) accept `Database`, so this helper
+ * centralizes the unavoidable double-cast instead of repeating `tx as unknown as Database` everywhere.
+ */
+export function txAsDb(tx: unknown): Database {
+  return tx as unknown as Database;
+}
+
+/**
  * Result of a mutation query (INSERT/UPDATE/DELETE)
  */
 export interface MutationResult {

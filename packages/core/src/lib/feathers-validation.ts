@@ -254,3 +254,19 @@ export const boardObjectQueryValidator = getValidator(boardObjectQuerySchema, qu
 export const boardCommentQueryValidator = getValidator(boardCommentQuerySchema, queryValidator);
 export const repoQueryValidator = getValidator(repoQuerySchema, queryValidator);
 export const mcpServerQueryValidator = getValidator(mcpServerQuerySchema, queryValidator);
+
+/**
+ * Wrap validateQuery to produce a FeathersJS-compatible hook function.
+ *
+ * validateQuery (from @feathersjs/schema) returns `Promise<any>` but FeathersJS
+ * hooks arrays expect `(context: HookContext) => Promise<HookContext | void>`.
+ * The types are runtime-compatible; this wrapper bridges the TypeScript gap.
+ */
+export function typedValidateQuery(
+  validator: Parameters<typeof validateQueryFn>[0]
+): (context: unknown) => Promise<void> {
+  return validateQueryFn(validator) as unknown as (context: unknown) => Promise<void>;
+}
+
+// Re-export validateQuery for direct usage
+import { validateQuery as validateQueryFn } from '@feathersjs/schema';

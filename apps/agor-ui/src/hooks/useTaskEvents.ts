@@ -7,6 +7,7 @@
 
 import type { TaskID } from '@agor/core/types';
 import { useEffect, useState } from 'react';
+import type { FeathersEventHandler } from './index';
 import type { useAgorClient } from './useAgorClient';
 
 export interface ToolExecution {
@@ -97,14 +98,13 @@ export function useTaskEvents(
     // Register event listeners
     // FeathersJS .on() expects (event: string, handler: (data: T) => void) but these
     // handlers receive custom tool event payloads, not Task objects.
-    type AnyHandler = (data: unknown) => void;
-    tasksService.on('tool:start', handleToolStart as unknown as AnyHandler);
-    tasksService.on('tool:complete', handleToolComplete as unknown as AnyHandler);
+    tasksService.on('tool:start', handleToolStart as FeathersEventHandler);
+    tasksService.on('tool:complete', handleToolComplete as FeathersEventHandler);
 
     // Cleanup on unmount or client/taskId change
     return () => {
-      tasksService.removeListener('tool:start', handleToolStart as unknown as AnyHandler);
-      tasksService.removeListener('tool:complete', handleToolComplete as unknown as AnyHandler);
+      tasksService.removeListener('tool:start', handleToolStart as FeathersEventHandler);
+      tasksService.removeListener('tool:complete', handleToolComplete as FeathersEventHandler);
     };
   }, [client, taskId]);
 
