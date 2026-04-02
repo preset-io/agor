@@ -18,7 +18,9 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
       }),
     },
     async (args) => {
-      const board = await ctx.app.service('boards').get(args.boardId, ctx.baseServiceParams);
+      const boardId = coerceString(args.boardId);
+      if (!boardId) throw new Error('boardId is required');
+      const board = await ctx.app.service('boards').get(boardId, ctx.baseServiceParams);
       return textResult(board);
     }
   );
@@ -96,6 +98,8 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
       }),
     },
     async (args) => {
+      const boardId = coerceString(args.boardId);
+      if (!boardId) throw new Error('boardId is required');
       const boardsService = ctx.app.service('boards') as unknown as BoardsServiceImpl;
 
       const metadataUpdates: Record<string, unknown> = {};
@@ -109,7 +113,7 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
       if (args.customContext !== undefined) metadataUpdates.custom_context = args.customContext;
 
       if (Object.keys(metadataUpdates).length > 0) {
-        await ctx.app.service('boards').patch(args.boardId, metadataUpdates, ctx.baseServiceParams);
+        await ctx.app.service('boards').patch(boardId, metadataUpdates, ctx.baseServiceParams);
       }
 
       if (
@@ -118,7 +122,7 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
         !Array.isArray(args.upsertObjects)
       ) {
         const updatedBoard = await boardsService.batchUpsertBoardObjects(
-          args.boardId,
+          boardId,
           args.upsertObjects as unknown as unknown[],
           ctx.baseServiceParams
         );
@@ -129,7 +133,7 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
         let finalBoard: Board | undefined;
         for (const objectId of args.removeObjects) {
           finalBoard = await boardsService.removeBoardObject(
-            args.boardId,
+            boardId,
             objectId,
             ctx.baseServiceParams
           );
@@ -137,7 +141,7 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
         if (finalBoard) ctx.app.service('boards').emit('patched', finalBoard);
       }
 
-      const board = await ctx.app.service('boards').get(args.boardId, ctx.baseServiceParams);
+      const board = await ctx.app.service('boards').get(boardId, ctx.baseServiceParams);
       return textResult({ board, note: 'Board updated successfully.' });
     }
   );

@@ -75,13 +75,15 @@ export function registerSearchTools(server: McpServer, registry: ToolRegistry): 
     {
       description:
         'Execute an Agor MCP tool by name. Use agor_search_tools first to discover available tools and their input schemas, then call this to invoke them.',
-      inputSchema: z.object({
-        tool_name: z.string().describe('The tool name to execute (e.g. "agor_worktrees_list")'),
-        arguments: z
-          .record(z.string(), z.unknown())
-          .optional()
-          .describe('Arguments to pass to the tool, matching its input schema'),
-      }),
+      inputSchema: z
+        .object({
+          tool_name: z.string().describe('The tool name to execute (e.g. "agor_worktrees_list")'),
+          arguments: z
+            .record(z.string(), z.unknown())
+            .optional()
+            .describe('Arguments to pass to the tool, matching its input schema'),
+        })
+        .passthrough(),
     },
     async (args) => {
       const toolName = args.tool_name;
@@ -89,7 +91,11 @@ export function registerSearchTools(server: McpServer, registry: ToolRegistry): 
       // Access the internal registered tools map (private SDK field, cast required)
       type RegisteredToolsMap = Record<
         string,
-        { enabled: boolean; handler: (args: unknown, extra: unknown) => Promise<unknown> }
+        {
+          enabled: boolean;
+          inputSchema?: unknown;
+          handler: (args: unknown, extra: unknown) => Promise<unknown>;
+        }
       >;
       const registeredTools = (server as unknown as { _registeredTools: RegisteredToolsMap })
         ._registeredTools;
@@ -110,8 +116,41 @@ export function registerSearchTools(server: McpServer, registry: ToolRegistry): 
       }
 
       try {
-        // Invoke the tool handler directly with provided arguments
-        const result = await tool.handler(args.arguments ?? {}, {});
+        // Build tool arguments — handle both properly nested and flattened formats.
+        // Agents sometimes place tool parameters at the top level alongside tool_name
+        // instead of nesting them under the "arguments" key (due to the confusing
+        // double-nesting of MCP's own "arguments" field and our "arguments" param).
+        let toolArgs: Record<string, unknown> = args.arguments ?? {};
+
+        if (Object.keys(toolArgs).length === 0) {
+          // No nested arguments provided — check for flattened params at top level
+          const allArgs = args as Record<string, unknown>;
+          const extraArgs: Record<string, unknown> = {};
+          for (const key of Object.keys(allArgs)) {
+            if (key !== 'tool_name' && key !== 'arguments') {
+              extraArgs[key] = allArgs[key];
+            }
+          }
+          if (Object.keys(extraArgs).length > 0) {
+            toolArgs = extraArgs;
+          }
+        }
+
+        // Validate through target tool's input schema. The proxy bypasses the SDK's
+        // normal validateToolInput step, so we need to parse explicitly to get proper
+        // type coercion and validation error messages.
+        type ZodLike = { safeParse: (data: unknown) => { success: boolean; data?: unknown } };
+        const inputSchema = tool.inputSchema as ZodLike | undefined;
+        if (inputSchema && typeof inputSchema.safeParse === 'function') {
+          const parseResult = inputSchema.safeParse(toolArgs);
+          if (parseResult.success) {
+            toolArgs = parseResult.data as Record<string, unknown>;
+          }
+          // If validation fails, still try with raw args — the handler may do its own validation
+        }
+
+        // Invoke the tool handler with the resolved arguments
+        const result = await tool.handler(toolArgs, {});
         return result as { content: Array<{ type: 'text'; text: string }> };
       } catch (error) {
         return {
