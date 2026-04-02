@@ -3039,8 +3039,10 @@ async function main() {
             ]
           : []),
       ],
-      create: [requireMinimumRole('member', 'create worktrees')],
+      create: [requireMinimumRole('member', 'create worktrees'), requireAdminForEnvConfig()],
+      update: [requireMinimumRole('member', 'update worktrees'), requireAdminForEnvConfig()],
       patch: [
+        requireAdminForEnvConfig(),
         ...(worktreeRbacEnabled
           ? [
               loadWorktree(worktreeRepository),

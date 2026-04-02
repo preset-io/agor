@@ -71,10 +71,26 @@ export function requireMinimumRole(minimumRole: Role, action?: string) {
 }
 
 /**
- * Feathers hook that requires admin role when environment_config is being modified.
+ * Fields that contain executable commands or environment configuration.
+ * Repos store templates in `environment_config`; worktrees store resolved values
+ * as top-level fields. Both execute as the system user and require admin access.
+ */
+const ENV_COMMAND_FIELDS = [
+  'environment_config', // Repo-level: template object
+  'start_command', // Worktree-level: resolved commands
+  'stop_command',
+  'nuke_command',
+  'logs_command',
+  'health_check_url',
+  'app_url',
+];
+
+/**
+ * Feathers hook that requires admin role when environment command fields are being modified.
  *
- * Environment commands (up_command, down_command, nuke_command, etc.) execute as the
- * system user, so only admins/superadmins may set or change them.
+ * Environment commands execute as the system user, so only admins/superadmins
+ * may set or change them. Works for both repo-level (environment_config) and
+ * worktree-level (start_command, stop_command, etc.) fields.
  */
 export function requireAdminForEnvConfig() {
   return (context: HookContext) => {
@@ -83,8 +99,8 @@ export function requireAdminForEnvConfig() {
 
     // Check both single objects and array payloads (bulk create)
     const items = Array.isArray(data) ? data : [data];
-    const hasEnvConfig = items.some(
-      (item: Record<string, unknown>) => item?.environment_config != null
+    const hasEnvConfig = items.some((item: Record<string, unknown>) =>
+      ENV_COMMAND_FIELDS.some((field) => item?.[field] != null)
     );
     if (!hasEnvConfig) {
       return context;
