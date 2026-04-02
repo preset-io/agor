@@ -1,5 +1,6 @@
 import type { AgorClient } from '@agor/core/api';
 import type { Board, MCPServer, Repo, Session, User, Worktree } from '@agor/core/types';
+import { hasMinimumRole, ROLES } from '@agor/core/types';
 import { DeleteOutlined, FolderOutlined, LinkOutlined } from '@ant-design/icons';
 import { Button, Descriptions, Form, Input, Select, Space, Tooltip, Typography } from 'antd';
 import { useEffect, useState } from 'react';
@@ -116,7 +117,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
   // When RBAC is disabled, all authenticated members can edit
   // When RBAC is enabled, owners and admins can edit
   const currentUserId = currentUser?.user_id;
-  const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'superadmin';
+  const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
   const isOwner = owners.some((o) => o.user_id === currentUserId);
 
   const canEdit = loadingOwners ? isAdmin : !rbacActive || isAdmin || isOwner;

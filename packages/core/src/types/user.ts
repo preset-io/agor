@@ -14,12 +14,43 @@ import type { PermissionMode } from './session';
 export type UserRole = 'superadmin' | 'admin' | 'member' | 'viewer';
 
 /**
+ * Role constants to avoid string literals throughout the codebase.
+ */
+export const ROLES = {
+  SUPERADMIN: 'superadmin',
+  ADMIN: 'admin',
+  MEMBER: 'member',
+  VIEWER: 'viewer',
+} as const satisfies Record<string, UserRole>;
+
+/**
+ * Role rank used for minimum-role comparisons.
+ * Higher rank = more privileges. 'owner' is a deprecated alias for superadmin.
+ */
+const ROLE_RANK: Record<string, number> = {
+  [ROLES.VIEWER]: 0,
+  [ROLES.MEMBER]: 1,
+  [ROLES.ADMIN]: 2,
+  [ROLES.SUPERADMIN]: 3,
+  owner: 3,
+};
+
+/**
  * Normalize legacy role values.
  * Converts deprecated 'owner' to 'superadmin' for backwards compatibility.
  */
 export function normalizeRole(role: string | undefined): UserRole {
-  if (role === 'owner') return 'superadmin';
-  return (role as UserRole) || 'member';
+  if (role === 'owner') return ROLES.SUPERADMIN;
+  return (role as UserRole) || ROLES.MEMBER;
+}
+
+/**
+ * Check whether a user's role meets or exceeds a minimum required role.
+ * Shared by backend hooks and frontend permission checks.
+ */
+export function hasMinimumRole(userRole: string | undefined, minimumRole: UserRole): boolean {
+  const normalized = normalizeRole(userRole);
+  return (ROLE_RANK[normalized] ?? 0) >= ROLE_RANK[minimumRole];
 }
 
 /**

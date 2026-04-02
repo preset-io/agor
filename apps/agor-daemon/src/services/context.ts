@@ -22,6 +22,7 @@ import type {
   QueryParams,
   ServiceMethods,
 } from '@agor/core/types';
+import { ROLES } from '@agor/core/types';
 import { ensureMinimumRole } from '../utils/authorization';
 
 /**
@@ -58,7 +59,7 @@ export class ContextService
       '[Context Service] DEPRECATED: This service is deprecated. Use /file endpoint instead for browsing all files in a worktree.'
     );
 
-    ensureMinimumRole(params, 'member', 'list context files');
+    ensureMinimumRole(params, ROLES.MEMBER, 'list context files');
 
     const worktreeId = params?.query?.worktree_id;
 
@@ -95,7 +96,7 @@ export class ContextService
    * @param id - Relative path from worktree root (e.g., "context/concepts/core.md", "CLAUDE.md")
    */
   async get(id: Id, params?: ContextParams): Promise<ContextFileDetail> {
-    ensureMinimumRole(params, 'member', 'read context file');
+    ensureMinimumRole(params, ROLES.MEMBER, 'read context file');
 
     const worktreeId = params?.query?.worktree_id;
 

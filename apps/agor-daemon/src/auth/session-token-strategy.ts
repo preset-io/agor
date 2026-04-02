@@ -7,6 +7,7 @@
 
 import { AuthenticationBaseStrategy } from '@agor/core/feathers';
 import type { AuthenticationResult, Params } from '@agor/core/types';
+import { ROLES } from '@agor/core/types';
 import type { SessionTokenService } from '../services/session-token-service.js';
 
 export class SessionTokenStrategy extends AuthenticationBaseStrategy {
@@ -129,7 +130,7 @@ export class SessionTokenStrategy extends AuthenticationBaseStrategy {
       user: {
         user_id: sessionInfo.user_id,
         email: '',
-        role: 'member', // Default role for session token auth
+        role: ROLES.MEMBER, // Default role for session token auth
       },
       // Include session_id for downstream services
       session_id: sessionInfo.session_id,
@@ -171,7 +172,7 @@ export class SessionTokenStrategy extends AuthenticationBaseStrategy {
       user: {
         user_id: sessionInfo.user_id,
         email: '',
-        role: 'member', // Default role for session token auth
+        role: ROLES.MEMBER, // Default role for session token auth
       },
       session_id: sessionInfo.session_id,
     };

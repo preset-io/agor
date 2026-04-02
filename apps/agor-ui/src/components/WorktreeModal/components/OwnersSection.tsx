@@ -10,6 +10,7 @@
 
 import type { AgorClient } from '@agor/core/api';
 import type { User, Worktree, WorktreePermissionLevel } from '@agor/core/types';
+import { hasMinimumRole, ROLES } from '@agor/core/types';
 import { UserOutlined } from '@ant-design/icons';
 import { Button, Form, Select, Space, Typography } from 'antd';
 import { useEffect, useState } from 'react';
@@ -40,7 +41,7 @@ export const OwnersSection: React.FC<OwnersSectionProps> = ({ worktree, client, 
   // Check if current user can edit owners
   // Owners can edit, AND admins have super powers (can edit any worktree)
   const currentUserId = currentUser?.user_id;
-  const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'superadmin';
+  const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
   const isOwner = owners.some((o) => o.user_id === currentUserId);
 
   // Admins can always edit, regardless of loading state

@@ -3,31 +3,10 @@
  */
 
 import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
-import type { AuthenticatedParams, HookContext } from '@agor/core/types';
+import type { AuthenticatedParams, HookContext, UserRole } from '@agor/core/types';
+import { hasMinimumRole, ROLES } from '@agor/core/types';
 
-export type Role = 'superadmin' | 'admin' | 'member' | 'viewer';
-
-const ROLE_RANK: Record<string, number> = {
-  viewer: 0,
-  member: 1,
-  admin: 2,
-  superadmin: 3,
-  owner: 3, // Deprecated alias for superadmin (backwards compat)
-};
-
-/**
- * Determine whether a role meets or exceeds the minimum role requirement.
- */
-function hasMinimumRole(userRole: string | undefined, minimumRole: Role): boolean {
-  if (!userRole) {
-    return minimumRole === 'viewer';
-  }
-
-  const normalizedRole = (userRole.toLowerCase() as Role) || 'viewer';
-  const userRank = ROLE_RANK[normalizedRole] ?? ROLE_RANK.viewer;
-  const requiredRank = ROLE_RANK[minimumRole];
-  return userRank >= requiredRank;
-}
+export type Role = UserRole;
 
 /**
  * Ensure the request is authenticated and has the minimum required role.
@@ -109,7 +88,7 @@ export function requireAdminForEnvConfig() {
     // Internal calls and service accounts bypass (handled by ensureMinimumRole)
     ensureMinimumRole(
       context.params,
-      'admin',
+      ROLES.ADMIN,
       'modify environment commands (up_command, down_command, etc.)'
     );
 
@@ -139,7 +118,7 @@ export function requireAdminForEnvConfig() {
  *     }
  *   },
  *   {
- *     create: { role: 'member', action: 'spawn sessions' }
+ *     create: { role: ROLES.MEMBER, action: 'spawn sessions' }
  *   },
  *   requireAuth
  * );

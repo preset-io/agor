@@ -1,5 +1,5 @@
 import type { AgenticToolName, MCPServer, UpdateUserInput, User } from '@agor/core/types';
-import { getDefaultPermissionMode } from '@agor/core/types';
+import { getDefaultPermissionMode, hasMinimumRole, ROLES } from '@agor/core/types';
 import {
   CloseOutlined,
   KeyOutlined,
@@ -207,7 +207,10 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           updates.password = values.password;
         }
         // Only admins can set must_change_password, and only for other users
-        if (currentUser?.role === 'admin' && user.user_id !== currentUser.user_id) {
+        if (
+          hasMinimumRole(currentUser?.role, ROLES.ADMIN) &&
+          user.user_id !== currentUser?.user_id
+        ) {
           updates.must_change_password = values.must_change_password;
         }
         onUpdate?.(user.user_id, updates);
@@ -510,7 +513,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
               label="Unix Username"
               name="unix_username"
               help={
-                currentUser?.role === 'admin'
+                hasMinimumRole(currentUser?.role, ROLES.ADMIN)
                   ? 'Unix user for process impersonation (alphanumeric, hyphens, underscores only)'
                   : 'Maintained by administrators'
               }
@@ -525,7 +528,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
               <Input
                 placeholder="johnsmith"
                 maxLength={32}
-                disabled={currentUser?.role !== 'admin'}
+                disabled={!hasMinimumRole(currentUser?.role, ROLES.ADMIN)}
               />
             </Form.Item>
 
@@ -553,9 +556,13 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
               label="Role"
               name="role"
               rules={[{ required: true, message: 'Please select a role' }]}
-              help={currentUser?.role !== 'admin' ? 'Maintained by administrators' : undefined}
+              help={
+                !hasMinimumRole(currentUser?.role, ROLES.ADMIN)
+                  ? 'Maintained by administrators'
+                  : undefined
+              }
             >
-              <Select disabled={currentUser?.role !== 'admin'}>
+              <Select disabled={!hasMinimumRole(currentUser?.role, ROLES.ADMIN)}>
                 {/* <Select.Option value="owner">Owner</Select.Option> */}
                 <Select.Option value="admin">Admin</Select.Option>
                 <Select.Option value="member">Member</Select.Option>
@@ -564,11 +571,13 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
             </Form.Item>
 
             {/* Only show for admins editing other users */}
-            {currentUser?.role === 'admin' && user && user.user_id !== currentUser.user_id && (
-              <Form.Item name="must_change_password" valuePropName="checked">
-                <Checkbox>Force password change on next login</Checkbox>
-              </Form.Item>
-            )}
+            {hasMinimumRole(currentUser?.role, ROLES.ADMIN) &&
+              user &&
+              user.user_id !== currentUser?.user_id && (
+                <Form.Item name="must_change_password" valuePropName="checked">
+                  <Checkbox>Force password change on next login</Checkbox>
+                </Form.Item>
+              )}
           </Form>
         );
       case 'api-keys':

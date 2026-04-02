@@ -20,8 +20,8 @@ import {
   update,
   users,
 } from '@agor/core/db';
-import type { Paginated, Params, User, UserID } from '@agor/core/types';
-import { normalizeRole } from '@agor/core/types';
+import type { Paginated, Params, User, UserID, UserRole } from '@agor/core/types';
+import { normalizeRole, ROLES } from '@agor/core/types';
 
 /**
  * Create user input
@@ -31,7 +31,7 @@ interface CreateUserData {
   password: string;
   name?: string;
   emoji?: string;
-  role?: 'superadmin' | 'admin' | 'member' | 'viewer';
+  role?: UserRole;
   unix_username?: string;
   must_change_password?: boolean;
 }
@@ -44,7 +44,7 @@ interface UpdateUserData {
   password?: string;
   name?: string;
   emoji?: string;
-  role?: 'superadmin' | 'admin' | 'member' | 'viewer';
+  role?: UserRole;
   unix_username?: string;
   must_change_password?: boolean;
   avatar?: string;
@@ -126,8 +126,8 @@ export class UsersService {
     const now = new Date();
     const user_id = generateId() as UserID;
 
-    const role = data.role || 'member';
-    const defaultEmoji = role === 'admin' ? '⭐' : '👤';
+    const role = data.role || ROLES.MEMBER;
+    const defaultEmoji = role === ROLES.ADMIN ? '⭐' : '👤';
 
     const row = await insert(this.db, users)
       .values({

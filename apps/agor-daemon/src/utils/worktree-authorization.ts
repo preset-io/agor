@@ -19,6 +19,7 @@ import type {
   Worktree,
   WorktreePermissionLevel,
 } from '@agor/core/types';
+import { ROLES } from '@agor/core/types';
 
 /**
  * Check if a user has the superadmin role (or deprecated 'owner' alias).
@@ -33,7 +34,7 @@ import type {
  */
 export function isSuperAdmin(role: string | undefined, allowSuperadmin = true): boolean {
   if (!allowSuperadmin) return false;
-  return role === 'superadmin' || role === 'owner';
+  return role === ROLES.SUPERADMIN || role === 'owner';
 }
 
 /**

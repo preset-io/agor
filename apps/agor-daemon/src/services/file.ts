@@ -15,6 +15,7 @@ import { lstat, readdir, readFile, realpath } from 'node:fs/promises';
 import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { WorktreeRepository } from '@agor/core/db';
 import type { FileDetail, FileListItem, Id, QueryParams, ServiceMethods } from '@agor/core/types';
+import { ROLES } from '@agor/core/types';
 import { ensureMinimumRole } from '../utils/authorization';
 
 const MAX_FILES = 50000; // Hard limit to prevent browser crashes
@@ -140,7 +141,7 @@ export class FileService
    * Returns lightweight list items without content
    */
   async find(params?: FileParams): Promise<FileListItem[]> {
-    ensureMinimumRole(params, 'member', 'list files');
+    ensureMinimumRole(params, ROLES.MEMBER, 'list files');
 
     const worktreeId = params?.query?.worktree_id;
 
@@ -186,7 +187,7 @@ export class FileService
    * @param id - Relative path from worktree root (e.g., "src/index.ts", "README.md")
    */
   async get(id: Id, params?: FileParams): Promise<FileDetail> {
-    ensureMinimumRole(params, 'member', 'read file');
+    ensureMinimumRole(params, ROLES.MEMBER, 'read file');
 
     const worktreeId = params?.query?.worktree_id;
 

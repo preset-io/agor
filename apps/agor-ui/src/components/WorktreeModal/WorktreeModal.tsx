@@ -163,7 +163,6 @@ export const WorktreeModal: React.FC<WorktreeModalProps> = ({
           worktree={worktree}
           repo={repo}
           client={client}
-          currentUser={currentUser}
           onUpdateRepo={onUpdateRepo}
           onUpdateWorktree={onUpdateWorktree}
         />

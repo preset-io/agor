@@ -40,6 +40,7 @@ import {
   theme,
 } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { usePermissions } from '../../../hooks/usePermissions';
 import { useCopyToClipboard } from '../../../utils/clipboard';
 import {
   getEnvironmentState,
@@ -56,7 +57,6 @@ interface EnvironmentTabProps {
   worktree: Worktree;
   repo: Repo;
   client: AgorClient | null;
-  currentUser?: { role?: string } | null;
   onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
   onUpdateWorktree?: (worktreeId: string, updates: Partial<Worktree>) => void;
 }
@@ -104,15 +104,14 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   worktree,
   repo,
   client,
-  currentUser,
   onUpdateRepo,
   onUpdateWorktree,
 }) => {
   const { token } = theme.useToken();
   const { showSuccess, showError, showWarning } = useThemedMessage();
   const { confirm } = useThemedModal();
+  const { isAdmin } = usePermissions();
   const hasEnvironmentConfig = !!repo.environment_config;
-  const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'superadmin';
 
   // Repository template state (editable)
   const [isEditingTemplate, setIsEditingTemplate] = useState(false);

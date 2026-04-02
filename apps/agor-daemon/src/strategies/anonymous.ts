@@ -8,6 +8,7 @@
 import { loadConfig } from '@agor/core/config';
 import { AuthenticationBaseStrategy } from '@agor/core/feathers';
 import type { AuthenticationResult, Params } from '@agor/core/types';
+import { ROLES } from '@agor/core/types';
 
 // NotAuthenticated error (simplified implementation)
 class NotAuthenticated extends Error {
@@ -41,7 +42,7 @@ export class AnonymousStrategy extends AuthenticationBaseStrategy {
       user: {
         user_id: 'anonymous',
         email: 'anonymous@localhost',
-        role: 'viewer',
+        role: ROLES.VIEWER,
       },
     };
   }

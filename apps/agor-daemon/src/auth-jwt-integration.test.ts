@@ -31,6 +31,7 @@ import {
   LocalStrategy,
 } from '@agor/core/feathers';
 import type { HookContext } from '@agor/core/types';
+import { ROLES } from '@agor/core/types';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { requireMinimumRole } from './utils/authorization';
 
@@ -103,7 +104,7 @@ describe('JWT Authentication Integration - Production Auth Hooks', () => {
 
     // Should accept authenticated request
     const result = await app.service('/test-authenticated').find({
-      user: { user_id: 'user-1', email: 'test@example.com', role: 'member' },
+      user: { user_id: 'user-1', email: 'test@example.com', role: ROLES.MEMBER },
       authenticated: true,
     } as any);
 
@@ -121,21 +122,21 @@ describe('JWT Authentication Integration - Production Auth Hooks', () => {
     app.use('/test-admin', adminService);
     app.service('/test-admin').hooks({
       before: {
-        create: [requireAuth, requireMinimumRole('admin', 'perform admin action')],
+        create: [requireAuth, requireMinimumRole(ROLES.ADMIN, 'perform admin action')],
       },
     });
 
     // Should reject member role
     await expect(
       app.service('/test-admin').create({}, {
-        user: { user_id: 'user-1', email: 'test@example.com', role: 'member' },
+        user: { user_id: 'user-1', email: 'test@example.com', role: ROLES.MEMBER },
         authenticated: true,
       } as any)
     ).rejects.toThrow();
 
     // Should accept admin role
     const result = await app.service('/test-admin').create({}, {
-      user: { user_id: 'admin-1', email: 'admin@example.com', role: 'admin' },
+      user: { user_id: 'admin-1', email: 'admin@example.com', role: ROLES.ADMIN },
       authenticated: true,
     } as any);
 
@@ -177,7 +178,7 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
       app.use('/sessions/:id/spawn', spawnService);
       app.service('/sessions/:id/spawn').hooks({
         before: {
-          create: [populateRouteParams, requireAuth, requireMinimumRole('member', 'spawn')],
+          create: [populateRouteParams, requireAuth, requireMinimumRole(ROLES.MEMBER, 'spawn')],
         },
       });
 
@@ -195,13 +196,13 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
       app.use('/sessions/:id/spawn-auth', spawnService);
       app.service('/sessions/:id/spawn-auth').hooks({
         before: {
-          create: [populateRouteParams, requireAuth, requireMinimumRole('member', 'spawn')],
+          create: [populateRouteParams, requireAuth, requireMinimumRole(ROLES.MEMBER, 'spawn')],
         },
       });
 
       // Should accept with valid user
       const result = await app.service('/sessions/:id/spawn-auth').create({}, {
-        user: { user_id: 'user-1', email: 'test@example.com', role: 'member' },
+        user: { user_id: 'user-1', email: 'test@example.com', role: ROLES.MEMBER },
         authenticated: true,
       } as any);
       expect(result.spawned).toBe(true);
@@ -217,7 +218,7 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
       app.use('/sessions/:id/fork', forkService);
       app.service('/sessions/:id/fork').hooks({
         before: {
-          create: [populateRouteParams, requireAuth, requireMinimumRole('member', 'fork')],
+          create: [populateRouteParams, requireAuth, requireMinimumRole(ROLES.MEMBER, 'fork')],
         },
       });
 
@@ -234,7 +235,7 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
       app.use('/sessions/:id/stop', stopService);
       app.service('/sessions/:id/stop').hooks({
         before: {
-          create: [populateRouteParams, requireAuth, requireMinimumRole('member', 'stop')],
+          create: [populateRouteParams, requireAuth, requireMinimumRole(ROLES.MEMBER, 'stop')],
         },
       });
 
@@ -251,7 +252,7 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
       app.use('/sessions/:id/mcp-servers', mcpServersService);
       app.service('/sessions/:id/mcp-servers').hooks({
         before: {
-          find: [populateRouteParams, requireAuth, requireMinimumRole('member', 'view')],
+          find: [populateRouteParams, requireAuth, requireMinimumRole(ROLES.MEMBER, 'view')],
         },
       });
 
@@ -270,7 +271,7 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
       app.use('/tasks/bulk', tasksBulkService);
       app.service('/tasks/bulk').hooks({
         before: {
-          create: [requireAuth, requireMinimumRole('member', 'create tasks')],
+          create: [requireAuth, requireMinimumRole(ROLES.MEMBER, 'create tasks')],
         },
       });
 
@@ -287,7 +288,7 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
       app.use('/tasks/:id/complete', tasksCompleteService);
       app.service('/tasks/:id/complete').hooks({
         before: {
-          create: [populateRouteParams, requireAuth, requireMinimumRole('member', 'complete')],
+          create: [populateRouteParams, requireAuth, requireMinimumRole(ROLES.MEMBER, 'complete')],
         },
       });
 
@@ -304,7 +305,7 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
       app.use('/tasks/:id/fail', tasksFailService);
       app.service('/tasks/:id/fail').hooks({
         before: {
-          create: [populateRouteParams, requireAuth, requireMinimumRole('member', 'fail')],
+          create: [populateRouteParams, requireAuth, requireMinimumRole(ROLES.MEMBER, 'fail')],
         },
       });
 
@@ -323,7 +324,7 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
       app.use('/repos/local', reposLocalService);
       app.service('/repos/local').hooks({
         before: {
-          create: [requireAuth, requireMinimumRole('member', 'add repos')],
+          create: [requireAuth, requireMinimumRole(ROLES.MEMBER, 'add repos')],
         },
       });
 
@@ -340,7 +341,7 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
       app.use('/repos/:id/worktrees', reposWorktreesService);
       app.service('/repos/:id/worktrees').hooks({
         before: {
-          create: [populateRouteParams, requireAuth, requireMinimumRole('member', 'create')],
+          create: [populateRouteParams, requireAuth, requireMinimumRole(ROLES.MEMBER, 'create')],
         },
       });
 
@@ -357,7 +358,7 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
       app.use('/repos/:id/worktrees/:name', reposWorktreesDeleteService);
       app.service('/repos/:id/worktrees/:name').hooks({
         before: {
-          remove: [populateRouteParams, requireAuth, requireMinimumRole('member', 'remove')],
+          remove: [populateRouteParams, requireAuth, requireMinimumRole(ROLES.MEMBER, 'remove')],
         },
       });
 
@@ -376,7 +377,7 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
       app.use('/board-comments/:id/toggle-reaction', toggleReactionService);
       app.service('/board-comments/:id/toggle-reaction').hooks({
         before: {
-          create: [populateRouteParams, requireAuth, requireMinimumRole('member', 'react')],
+          create: [populateRouteParams, requireAuth, requireMinimumRole(ROLES.MEMBER, 'react')],
         },
       });
 
@@ -393,7 +394,7 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
       app.use('/boards/:id/sessions', boardsSessionsService);
       app.service('/boards/:id/sessions').hooks({
         before: {
-          create: [populateRouteParams, requireAuth, requireMinimumRole('member', 'modify')],
+          create: [populateRouteParams, requireAuth, requireMinimumRole(ROLES.MEMBER, 'modify')],
         },
       });
 
@@ -412,7 +413,7 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
       app.use('/worktrees/:id/start', worktreesStartService);
       app.service('/worktrees/:id/start').hooks({
         before: {
-          create: [populateRouteParams, requireAuth, requireMinimumRole('admin', 'start')],
+          create: [populateRouteParams, requireAuth, requireMinimumRole(ROLES.ADMIN, 'start')],
         },
       });
 
@@ -422,7 +423,7 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
       // Reject non-admin (member role)
       await expect(
         app.service('/worktrees/:id/start').create({}, {
-          user: { user_id: 'user-1', email: 'test@example.com', role: 'member' },
+          user: { user_id: 'user-1', email: 'test@example.com', role: ROLES.MEMBER },
           authenticated: true,
         } as any)
       ).rejects.toThrow();
@@ -438,7 +439,7 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
       app.use('/worktrees/:id/stop', worktreesStopService);
       app.service('/worktrees/:id/stop').hooks({
         before: {
-          create: [populateRouteParams, requireAuth, requireMinimumRole('admin', 'stop')],
+          create: [populateRouteParams, requireAuth, requireMinimumRole(ROLES.ADMIN, 'stop')],
         },
       });
 
@@ -455,7 +456,7 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
       app.use('/worktrees/:id/health', worktreesHealthService);
       app.service('/worktrees/:id/health').hooks({
         before: {
-          find: [populateRouteParams, requireAuth, requireMinimumRole('member', 'check')],
+          find: [populateRouteParams, requireAuth, requireMinimumRole(ROLES.MEMBER, 'check')],
         },
       });
 
@@ -472,7 +473,7 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
       app.use('/worktrees/logs', worktreesLogsService);
       app.service('/worktrees/logs').hooks({
         before: {
-          find: [requireAuth, requireMinimumRole('member', 'view logs')],
+          find: [requireAuth, requireMinimumRole(ROLES.MEMBER, 'view logs')],
         },
       });
 
@@ -491,7 +492,7 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
       app.use('/files', filesService);
       app.service('/files').hooks({
         before: {
-          find: [requireAuth, requireMinimumRole('member', 'search files')],
+          find: [requireAuth, requireMinimumRole(ROLES.MEMBER, 'search files')],
         },
       });
 

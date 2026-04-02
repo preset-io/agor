@@ -7,6 +7,7 @@
  * Run with: INTEGRATION=true pnpm test
  */
 
+import { ROLES } from '@agor/core/types';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 // Skip integration tests by default - require daemon running
@@ -573,14 +574,14 @@ describeIntegration('MCP Tools - User Tools', () => {
       password: 'test-password-123',
       name: 'Test User',
       emoji: '🧪',
-      role: 'admin',
+      role: ROLES.ADMIN,
     });
 
     expect(newUser).toHaveProperty('user_id');
     expect(newUser.email).toBe(testEmail);
     expect(newUser.name).toBe('Test User');
     expect(newUser.emoji).toBe('🧪');
-    expect(newUser.role).toBe('admin');
+    expect(newUser.role).toBe(ROLES.ADMIN);
 
     // Verify password is NOT in response (it should be hashed internally)
     expect(newUser).not.toHaveProperty('password');

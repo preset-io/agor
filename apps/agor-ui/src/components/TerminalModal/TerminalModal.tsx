@@ -1,5 +1,6 @@
 import type { AgorClient } from '@agor/core/api';
 import type { User, UserID } from '@agor/core/types';
+import { hasMinimumRole, ROLES } from '@agor/core/types';
 import { ClipboardAddon } from '@xterm/addon-clipboard';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Terminal } from '@xterm/xterm';
@@ -91,7 +92,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
   }>({});
 
   // Check if user has admin role
-  const isAdmin = user?.role === 'admin' || user?.role === 'superadmin';
+  const isAdmin = hasMinimumRole(user?.role, ROLES.ADMIN);
 
   useEffect(() => {
     if (!open || !modalReady || !terminalDivRef.current || !client) return;

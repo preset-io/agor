@@ -15,6 +15,7 @@ import type {
   User,
   Worktree,
 } from '@agor/core/types';
+import { hasMinimumRole, ROLES } from '@agor/core/types';
 import {
   ApiOutlined,
   AppstoreOutlined,
@@ -396,7 +397,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             client={client}
             connected={client?.io?.connected ?? false}
             connectionError={undefined}
-            isAdmin={currentUser?.role === 'admin'}
+            isAdmin={hasMinimumRole(currentUser?.role, ROLES.ADMIN)}
           />
         );
       default:
