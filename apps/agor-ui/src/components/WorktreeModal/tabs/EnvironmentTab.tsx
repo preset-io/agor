@@ -56,6 +56,7 @@ interface EnvironmentTabProps {
   worktree: Worktree;
   repo: Repo;
   client: AgorClient | null;
+  currentUser?: { role?: string } | null;
   onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
   onUpdateWorktree?: (worktreeId: string, updates: Partial<Worktree>) => void;
 }
@@ -103,6 +104,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   worktree,
   repo,
   client,
+  currentUser,
   onUpdateRepo,
   onUpdateWorktree,
 }) => {
@@ -110,6 +112,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   const { showSuccess, showError, showWarning } = useThemedMessage();
   const { confirm } = useThemedModal();
   const hasEnvironmentConfig = !!repo.environment_config;
+  const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'superadmin';
 
   // Repository template state (editable)
   const [isEditingTemplate, setIsEditingTemplate] = useState(false);
@@ -485,9 +488,8 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     }
   };
 
-  // Auto-enable editing if no config exists
-  if (!hasEnvironmentConfig && !isEditingTemplate) {
-    // Automatically show the form in edit mode
+  // Auto-enable editing if no config exists (admins only)
+  if (isAdmin && !hasEnvironmentConfig && !isEditingTemplate) {
     setTimeout(() => setIsEditingTemplate(true), 0);
   }
 
@@ -724,8 +726,20 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
           size="small"
           extra={
             <Space size="small">
-              <Tooltip title="Import environment configuration from .agor.yml in repository root">
-                <Button type="text" size="small" icon={<DownloadOutlined />} onClick={handleImport}>
+              <Tooltip
+                title={
+                  isAdmin
+                    ? 'Import environment configuration from .agor.yml in repository root'
+                    : 'Only admins can modify environment commands'
+                }
+              >
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<DownloadOutlined />}
+                  onClick={handleImport}
+                  disabled={!isAdmin}
+                >
                   Import
                 </Button>
               </Tooltip>
@@ -748,14 +762,19 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                       Export
                     </Button>
                   </Tooltip>
-                  <Button
-                    type="text"
-                    size="small"
-                    icon={<EditOutlined />}
-                    onClick={() => setIsEditingTemplate(true)}
+                  <Tooltip
+                    title={isAdmin ? undefined : 'Only admins can modify environment commands'}
                   >
-                    Edit
-                  </Button>
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<EditOutlined />}
+                      onClick={() => setIsEditingTemplate(true)}
+                      disabled={!isAdmin}
+                    >
+                      Edit
+                    </Button>
+                  </Tooltip>
                 </>
               )}
             </Space>
@@ -1089,28 +1108,38 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                 </Typography.Text>
                 {!isEditingUrls && (
                   <Space size={4}>
-                    <Button
-                      type="text"
-                      size="small"
-                      icon={<ReloadOutlined />}
-                      onClick={handleRegenerateFromTemplate}
-                      disabled={!repo.environment_config}
+                    <Tooltip
                       title={
-                        repo.environment_config
-                          ? 'Regenerate from repository templates'
-                          : 'No repository templates configured'
+                        isAdmin
+                          ? repo.environment_config
+                            ? 'Regenerate from repository templates'
+                            : 'No repository templates configured'
+                          : 'Only admins can modify environment commands'
                       }
                     >
-                      Regenerate
-                    </Button>
-                    <Button
-                      type="text"
-                      size="small"
-                      icon={<EditOutlined />}
-                      onClick={() => setIsEditingUrls(true)}
+                      <Button
+                        type="text"
+                        size="small"
+                        icon={<ReloadOutlined />}
+                        onClick={handleRegenerateFromTemplate}
+                        disabled={!isAdmin || !repo.environment_config}
+                      >
+                        Regenerate
+                      </Button>
+                    </Tooltip>
+                    <Tooltip
+                      title={isAdmin ? undefined : 'Only admins can modify environment commands'}
                     >
-                      Edit
-                    </Button>
+                      <Button
+                        type="text"
+                        size="small"
+                        icon={<EditOutlined />}
+                        onClick={() => setIsEditingUrls(true)}
+                        disabled={!isAdmin}
+                      >
+                        Edit
+                      </Button>
+                    </Tooltip>
                   </Space>
                 )}
               </Space>
