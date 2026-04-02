@@ -44,10 +44,10 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
             'Filter to show ONLY archived sessions. When true, returns only archived sessions. Overrides includeArchived.'
           ),
         sessionType: z
-          .enum(['gateway', 'agent'])
+          .enum(['gateway', 'scheduled', 'agent'])
           .optional()
           .describe(
-            "Filter by session type. 'gateway' returns only sessions created via gateway channels (Slack, Discord, GitHub). 'agent' returns only non-gateway sessions."
+            "Filter by session type. 'gateway' = sessions from messaging integrations (Slack, Discord, GitHub). 'scheduled' = sessions created by worktree schedules. 'agent' = manually created sessions (excludes gateway and scheduled)."
           ),
       }),
     },
@@ -64,12 +64,14 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       }
       const result = await ctx.app.service('sessions').find({ query, ...ctx.baseServiceParams });
 
-      // Apply sessionType filter (post-query since custom_context is a JSON blob)
+      // Apply sessionType filter (post-query since custom_context/scheduled_from_worktree aren't in query schema)
       if (args.sessionType) {
         const filterFn =
           args.sessionType === 'gateway'
             ? (s: Session) => isGatewaySession(s)
-            : (s: Session) => !isGatewaySession(s);
+            : args.sessionType === 'scheduled'
+              ? (s: Session) => s.scheduled_from_worktree === true
+              : (s: Session) => !isGatewaySession(s) && !s.scheduled_from_worktree;
 
         if (Array.isArray(result)) {
           return textResult(result.filter(filterFn));
