@@ -197,6 +197,13 @@
       "when": 1775200000000,
       "tag": "0029_rename_owner_to_superadmin",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "6",
+      "when": 1775089256871,
+      "tag": "0030_flat_mantis",
+      "breakpoints": true
     }
   ]
 }
