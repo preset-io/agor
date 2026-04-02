@@ -29,4 +29,14 @@ Agor uses **Drizzle ORM migrations** to version the LibSQL database. Migrations 
 3. If pending, run `pnpm -w agor db migrate` (shell prompts you to back up first).
 4. Restart daemon—startup check verifies everything is current.
 
+## Gotchas
+
+### Journal timestamps must be monotonically increasing
+
+Drizzle determines pending migrations by comparing each journal entry's `when` timestamp against the max `created_at` in `__drizzle_migrations`. A migration is "pending" only if `when > maxAppliedMillis`.
+
+**If you manually add a migration with a `when` timestamp earlier than an already-applied migration, it will be silently skipped.** The migrator (and `checkMigrationStatus`) will classify it as "already applied" even though it never ran.
+
+When adding manual/backfill migrations to `meta/_journal.json`, always ensure the `when` value is **strictly greater** than all preceding entries. This applies to both `postgres` and `sqlite` journals independently.
+
 _Detailed planning doc archived in `context/archives/database-migrations.md`._
