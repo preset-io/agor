@@ -171,12 +171,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
 
       // Fetch session and user in parallel (no dependencies)
       const [session, user] = await Promise.all([
-        ctx.app.service('sessions').get(ctx.sessionId, {
-          ...ctx.baseServiceParams,
-          _include_last_message: true,
-          _last_message_truncation_length: 500,
-          // biome-ignore lint/suspicious/noExplicitAny: custom service params with underscored options
-        } as any),
+        ctx.app.service('sessions').get(ctx.sessionId, ctx.baseServiceParams),
         ctx.app.service('users').get(ctx.userId, ctx.baseServiceParams),
       ]);
 
@@ -338,30 +333,40 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         }
       }
 
-      // Build genealogy summary (without recursive queries)
-      const genealogySummary: Record<string, unknown> = {};
-      if (session.genealogy) {
-        const gen = session.genealogy;
-        if (gen.parent_session_id) {
-          genealogySummary.parent_session_id = gen.parent_session_id;
-          genealogySummary.relationship = 'spawned';
-        } else if (gen.forked_from_session_id) {
-          genealogySummary.forked_from_session_id = gen.forked_from_session_id;
-          genealogySummary.relationship = 'forked';
-        } else {
-          genealogySummary.relationship = 'root';
-        }
-        genealogySummary.children_count = gen.children?.length || 0;
-      }
+      // Build trimmed session context (orientation-relevant fields only)
+      // Agents can call get_current or sessions_get for full details
+      const gen = session.genealogy;
+      const sessionContext = {
+        session_id: session.session_id,
+        status: session.status,
+        agentic_tool: session.agentic_tool,
+        title: session.title,
+        created_at: session.created_at,
+        worktree_id: session.worktree_id,
+        url: session.url,
+        git_state: session.git_state,
+        model_config: session.model_config
+          ? { model: session.model_config.model, thinkingMode: session.model_config.thinkingMode }
+          : null,
+        message_count: session.message_count,
+        genealogy: {
+          relationship: gen?.parent_session_id
+            ? 'spawned'
+            : gen?.forked_from_session_id
+              ? 'forked'
+              : 'root',
+          parent_session_id: gen?.parent_session_id || gen?.forked_from_session_id || null,
+          children_count: gen?.children?.length || 0,
+        },
+      };
 
       return textResult({
-        session,
+        session: sessionContext,
         user: userContext,
         created_by_user: creatorContext,
         worktree: worktreeContext,
         repo: repoContext,
         board: boardContext,
-        genealogy_summary: genealogySummary,
       });
     }
   );
