@@ -1,6 +1,11 @@
 import type { AgorClient } from '@agor/core/api';
 import type { Repo, Session, SpawnConfig, User, Worktree } from '@agor/core/types';
-import { getAssistantConfig, isAssistant } from '@agor/core/types';
+import {
+  getAssistantConfig,
+  getGatewaySource as getGatewaySourceCore,
+  isAssistant,
+  isGatewaySession as isGatewaySessionCore,
+} from '@agor/core/types';
 import {
   BranchesOutlined,
   ClockCircleOutlined,
@@ -145,59 +150,15 @@ const WorktreeCardComponent = ({
     }
   };
 
-  // Type guard for gateway source metadata
+  // Gateway session helpers (delegating to @agor/core/types)
   const getGatewaySource = useCallback(
-    (
-      session: Session
-    ):
-      | { channel_id: string; channel_name: string; channel_type: string; thread_id: string }
-      | undefined => {
-      const context = session.custom_context as Record<string, unknown> | undefined;
-      if (!context) return undefined;
-
-      const source = context.gateway_source;
-      if (
-        typeof source === 'object' &&
-        source !== null &&
-        'channel_id' in source &&
-        'channel_name' in source &&
-        'channel_type' in source &&
-        'thread_id' in source &&
-        typeof source.channel_id === 'string' &&
-        typeof source.channel_name === 'string' &&
-        typeof source.channel_type === 'string' &&
-        typeof source.thread_id === 'string'
-      ) {
-        return source as {
-          channel_id: string;
-          channel_name: string;
-          channel_type: string;
-          thread_id: string;
-        };
-      }
-
-      return undefined;
-    },
+    (session: Session) => getGatewaySourceCore(session) ?? undefined,
     []
   );
 
-  // Check if session has gateway_source (presence check, not validation)
-  const hasGatewaySource = useCallback((session: Session): boolean => {
-    const context = session.custom_context as Record<string, unknown> | undefined;
-    return !!(
-      context &&
-      typeof context.gateway_source === 'object' &&
-      context.gateway_source !== null
-    );
+  const isGatewaySession = useCallback((session: Session): boolean => {
+    return isGatewaySessionCore(session);
   }, []);
-
-  // Helper to check if a session is from gateway (has denormalized gateway metadata)
-  const isGatewaySession = useCallback(
-    (session: Session): boolean => {
-      return hasGatewaySource(session);
-    },
-    [hasGatewaySource]
-  );
 
   // Filter out archived sessions from board card display
   const activeSessions = useMemo(() => sessions.filter((s) => !s.archived), [sessions]);

@@ -52,7 +52,10 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     },
     async (args) => {
       const query: Record<string, unknown> = {};
-      if (args.limit) query.$limit = args.limit;
+      // When sessionType is set, skip service-level pagination (it runs before our filter)
+      // and apply the requested limit ourselves after filtering.
+      const requestedLimit = args.limit;
+      if (!args.sessionType && requestedLimit) query.$limit = requestedLimit;
       if (args.status) query.status = args.status;
       if (args.boardId) query.board_id = args.boardId;
       if (args.worktreeId) query.worktree_id = args.worktreeId;
@@ -67,13 +70,14 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       if (args.sessionType) {
         const targetType = args.sessionType as SessionType;
         const filterFn = (s: Session) => getSessionType(s) === targetType;
+        const allData: Session[] = Array.isArray(result) ? result : result.data;
+        const filtered = allData.filter(filterFn);
+        const limited = requestedLimit ? filtered.slice(0, requestedLimit) : filtered;
 
         if (Array.isArray(result)) {
-          return textResult(result.filter(filterFn));
+          return textResult(limited);
         }
-        // Paginated result
-        const filtered = result.data.filter(filterFn);
-        return textResult({ ...result, data: filtered, total: filtered.length });
+        return textResult({ ...result, data: limited, total: filtered.length });
       }
 
       return textResult(result);
