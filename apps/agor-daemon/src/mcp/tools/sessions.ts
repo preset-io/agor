@@ -151,11 +151,13 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
   );
 
   // Tool 3b: agor_sessions_get_current_context
+  // Returns a lean, deduplicated orientation payload. Each field appears exactly once.
+  // Agents needing full entity details should call get_current, sessions_get, etc.
   server.registerTool(
     'agor_sessions_get_current_context',
     {
       description:
-        'Get comprehensive context about the current session and its environment in a single call. Returns everything an agent needs to orient itself: full session details, user info (who created it, who is authenticated), rich worktree context (branch, zone, issue/PR URLs, notes, environment status, sibling sessions), board context (with zones), and full repo info (default branch, local path). Use this instead of making multiple separate calls.',
+        'Get a lean orientation snapshot for the current session in ONE call. Returns deduplicated context: session identity, user, git state, worktree (zone, issue/PR, notes, environment), board (with zones), repo (slug, default branch), genealogy, and sibling sessions. Every field appears exactly once. Use get_current or entity-specific tools for full details.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         includeSiblings: z
@@ -175,60 +177,70 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         ctx.app.service('users').get(ctx.userId, ctx.baseServiceParams),
       ]);
 
-      // Build user context (safe subset, no secrets)
-      const userContext = {
-        user_id: user.user_id,
-        email: user.email,
-        name: user.name,
-        emoji: user.emoji,
-        role: user.role,
+      // Build the lean response — each piece of information appears exactly once
+      const result: Record<string, unknown> = {
+        // Session identity (the minimum to know "who am I")
+        session_id: session.session_id,
+        url: session.url,
+        status: session.status,
+        agentic_tool: session.agentic_tool,
+        title: session.title,
+        message_count: session.message_count,
+        model: session.model_config?.model || null,
+        thinking_mode: session.model_config?.thinkingMode || null,
+
+        // User (who is authenticated / who is prompting)
+        user_name: user.name,
+        user_email: user.email,
+        user_role: user.role,
       };
 
-      // Determine if the session creator is different from the authenticated user
-      let creatorContext: Record<string, unknown> | null = null;
+      // Creator info only when different from authenticated user
       if (session.created_by && session.created_by !== ctx.userId) {
         try {
           const creator = await ctx.app
             .service('users')
             .get(session.created_by, ctx.baseServiceParams);
-          creatorContext = {
-            user_id: creator.user_id,
-            email: creator.email,
-            name: creator.name,
-          };
+          result.created_by_name = creator.name;
+          result.created_by_email = creator.email;
         } catch {
           // creator may have been deleted
         }
       }
 
-      // Build worktree, repo, and board context
-      let worktreeContext: Record<string, unknown> | null = null;
-      let repoContext: Record<string, unknown> | null = null;
-      let boardContext: Record<string, unknown> | null = null;
+      // Genealogy (flat — no nested object needed)
+      const gen = session.genealogy;
+      result.genealogy = gen?.parent_session_id
+        ? 'spawned'
+        : gen?.forked_from_session_id
+          ? 'forked'
+          : 'root';
+      result.parent_session_id = gen?.parent_session_id || gen?.forked_from_session_id || null;
+      result.children_count = gen?.children?.length || 0;
+
+      // Git state (flat)
+      result.branch = session.git_state?.ref || null;
+      result.base_sha = session.git_state?.base_sha || null;
+      result.current_sha = session.git_state?.current_sha || null;
 
       if (session.worktree_id) {
         try {
-          // worktrees.get already enriches with zone info (returns WorktreeWithZoneAndSessions)
+          // worktrees.get returns WorktreeWithZoneAndSessions (enriched with zone info)
           const wt = (await ctx.app
             .service('worktrees')
             .get(session.worktree_id, ctx.baseServiceParams)) as WorktreeWithZoneAndSessions;
 
-          worktreeContext = {
-            worktree_id: wt.worktree_id,
-            name: wt.name,
-            ref: wt.ref,
-            base_ref: wt.base_ref,
-            path: wt.path,
-            board_id: wt.board_id,
-            repo_id: wt.repo_id,
-            issue_url: wt.issue_url,
-            pull_request_url: wt.pull_request_url,
-            notes: wt.notes,
-            zone_id: wt.zone_id || null,
-            zone_label: wt.zone_label || null,
-            environment_status: wt.environment_instance?.status || null,
-            environment_app_url: wt.app_url || null,
-          };
+          // Worktree context (no IDs that duplicate other sections)
+          result.worktree_id = wt.worktree_id;
+          result.worktree_name = wt.name;
+          result.worktree_path = wt.path;
+          result.base_ref = wt.base_ref || null;
+          result.issue_url = wt.issue_url || null;
+          result.pull_request_url = wt.pull_request_url || null;
+          result.notes = wt.notes || null;
+          result.zone_label = wt.zone_label || null;
+          result.environment_status = wt.environment_instance?.status || null;
+          result.app_url = wt.app_url || null;
 
           // Fetch repo and board in parallel
           const [repoResult, boardResult] = await Promise.allSettled([
@@ -242,55 +254,38 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
 
           if (repoResult.status === 'fulfilled') {
             const r = repoResult.value;
-            repoContext = {
-              repo_id: r.repo_id,
-              name: r.name,
-              slug: r.slug,
-              local_path: r.local_path,
-              default_branch: r.default_branch,
-              environment_config: r.environment_config
-                ? {
-                    up_command: r.environment_config.up_command,
-                    health_check: r.environment_config.health_check,
-                    app_url_template: r.environment_config.app_url_template,
-                  }
-                : null,
-            };
+            result.repo_slug = r.slug;
+            result.repo_name = r.name;
+            result.repo_path = r.local_path;
+            result.default_branch = r.default_branch || null;
           }
 
           if (boardResult.status === 'fulfilled') {
             const b = boardResult.value;
+            result.board_name = b.name;
+            result.board_slug = b.slug;
+
             // Extract zones from board objects
-            const zones: {
-              zone_id: string;
-              label?: string;
-              status?: string;
-              has_trigger: boolean;
-            }[] = [];
             const boardObjects: Board['objects'] = b.objects;
             if (boardObjects) {
-              for (const [objId, obj] of Object.entries(boardObjects)) {
+              const zones: { label?: string; status?: string; has_trigger: boolean }[] = [];
+              for (const obj of Object.values(boardObjects)) {
                 if (obj.type === 'zone') {
                   const zone = obj as ZoneBoardObject;
                   zones.push({
-                    zone_id: objId,
                     label: zone.label,
                     status: zone.status,
                     has_trigger: !!zone.trigger,
                   });
                 }
               }
+              if (zones.length > 0) {
+                result.board_zones = zones;
+              }
             }
-            boardContext = {
-              board_id: b.board_id,
-              name: b.name,
-              slug: b.slug,
-              description: b.description,
-              zones,
-            };
           }
 
-          // Fetch sibling sessions in the same worktree (lightweight list)
+          // Sibling sessions in the same worktree
           if (includeSiblings) {
             try {
               // Fetch 11 to guarantee 10 siblings after excluding current session
@@ -322,7 +317,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
                   })
                 );
               if (siblingList.length > 0) {
-                (worktreeContext as Record<string, unknown>).sibling_sessions = siblingList;
+                result.sibling_sessions = siblingList;
               }
             } catch {
               // non-critical, skip
@@ -333,41 +328,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         }
       }
 
-      // Build trimmed session context (orientation-relevant fields only)
-      // Agents can call get_current or sessions_get for full details
-      const gen = session.genealogy;
-      const sessionContext = {
-        session_id: session.session_id,
-        status: session.status,
-        agentic_tool: session.agentic_tool,
-        title: session.title,
-        created_at: session.created_at,
-        worktree_id: session.worktree_id,
-        url: session.url,
-        git_state: session.git_state,
-        model_config: session.model_config
-          ? { model: session.model_config.model, thinkingMode: session.model_config.thinkingMode }
-          : null,
-        message_count: session.message_count,
-        genealogy: {
-          relationship: gen?.parent_session_id
-            ? 'spawned'
-            : gen?.forked_from_session_id
-              ? 'forked'
-              : 'root',
-          parent_session_id: gen?.parent_session_id || gen?.forked_from_session_id || null,
-          children_count: gen?.children?.length || 0,
-        },
-      };
-
-      return textResult({
-        session: sessionContext,
-        user: userContext,
-        created_by_user: creatorContext,
-        worktree: worktreeContext,
-        repo: repoContext,
-        board: boardContext,
-      });
+      return textResult(result);
     }
   );
 
