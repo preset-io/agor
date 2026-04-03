@@ -5,7 +5,7 @@ import type { BoardID, WorktreeID } from './id';
 /**
  * Board object types for canvas annotations
  */
-export type BoardObjectType = 'text' | 'zone' | 'markdown';
+export type BoardObjectType = 'text' | 'zone' | 'markdown' | 'app' | 'artifact';
 
 /**
  * Entity type discriminator for board objects
@@ -119,9 +119,74 @@ export interface MarkdownBoardObject {
 }
 
 /**
+ * Sandpack template options for app board objects
+ */
+export type SandpackTemplate =
+  | 'react'
+  | 'react-ts'
+  | 'vanilla'
+  | 'vanilla-ts'
+  | 'vue'
+  | 'vue3'
+  | 'svelte'
+  | 'solid'
+  | 'angular';
+
+/**
+ * Live web application rendered via Sandpack (in-browser bundler)
+ *
+ * Apps render as interactive iframes on the board canvas.
+ * Agents can create/update apps via MCP tools.
+ */
+export interface AppBoardObject {
+  type: 'app';
+  x: number;
+  y: number;
+  width: number; // Default: 600, min: 300
+  height: number; // Default: 400, min: 200
+  /** App title shown in the card header */
+  title: string;
+  /** Optional description */
+  description?: string;
+  /** Sandpack template (default: 'react') */
+  template: SandpackTemplate;
+  /** File map: path -> code content */
+  files: Record<string, string>;
+  /** NPM dependencies beyond template defaults */
+  dependencies?: Record<string, string>;
+  /** Entry file path (default: determined by template) */
+  entryFile?: string;
+  /** Whether to show the code editor alongside preview */
+  showEditor?: boolean;
+  /** Whether to show the console output */
+  showConsole?: boolean;
+}
+
+/**
+ * Artifact board object - thin reference to an Artifact entity
+ *
+ * Unlike AppBoardObject (which inlines all code), this stores only the
+ * artifact_id. The frontend fetches the payload from the daemon REST API.
+ */
+export interface ArtifactBoardObject {
+  type: 'artifact';
+  x: number;
+  y: number;
+  width: number; // Default: 600, min: 300
+  height: number; // Default: 400, min: 200
+  /** Reference to the artifact entity */
+  artifact_id: string;
+}
+
+/**
  * Union type for all board objects
  */
-export type BoardObject = TextBoardObject | ZoneBoardObject | MarkdownBoardObject;
+export type BoardObject =
+  | TextBoardObject
+  | ZoneBoardObject
+  | MarkdownBoardObject
+  | AppBoardObject
+  | ArtifactBoardObject;
 
 export interface Board {
   /** Unique board identifier (UUIDv7) */

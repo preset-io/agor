@@ -5,6 +5,7 @@
  */
 
 import type {
+  Artifact,
   AuthenticationResult,
   Board,
   BoardExportBlob,
@@ -51,6 +52,7 @@ export interface ServiceTypes {
   users: User;
   cards: CardWithType;
   'card-types': CardType; // CardType CRUD
+  artifacts: Artifact;
   'mcp-servers': MCPServer;
   context: ContextFileListItem | ContextFileDetail; // GET /context returns list, GET /context/:path returns detail
 }

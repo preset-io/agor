@@ -384,6 +384,7 @@ import type {
   TasksServiceImpl,
 } from './declarations';
 import { gatewayRouteHook } from './hooks/gateway-route';
+import { type ArtifactsService, createArtifactsService } from './services/artifacts';
 import { createBoardCommentsService } from './services/board-comments';
 import { createBoardObjectsService } from './services/board-objects';
 import { createBoardsService } from './services/boards';
@@ -1180,6 +1181,9 @@ async function main() {
 
   // Register cards service (generic entities on boards)
   app.use('/cards', createCardsService(db));
+
+  // Register artifacts service (live Sandpack web apps on boards)
+  app.use('/artifacts', createArtifactsService(db));
 
   // Register board-comments service (human-to-human conversations)
   app.use('/board-comments', createBoardCommentsService(db));
@@ -2987,6 +2991,69 @@ async function main() {
       remove: [requireMinimumRole(ROLES.MEMBER, 'delete cards')],
     },
   });
+
+  app.service('artifacts').hooks({
+    before: {
+      all: [...getReadAuthHooks()],
+      create: [requireMinimumRole(ROLES.MEMBER, 'create artifacts')],
+      patch: [requireMinimumRole(ROLES.MEMBER, 'update artifacts')],
+      remove: [requireMinimumRole(ROLES.MEMBER, 'delete artifacts')],
+    },
+  });
+
+  // Custom REST routes for artifact payload and console
+  // These bypass FeathersJS service layer for direct filesystem operations
+  registerAuthenticatedRoute(
+    app,
+    '/artifacts/:id/payload',
+    {
+      async find(_params: RouteParams) {
+        const artifactId = _params.route?.id;
+        if (!artifactId) throw new Error('Artifact ID required');
+        const artifactsService = app.service('artifacts') as unknown as ArtifactsService;
+        return artifactsService.getPayload(artifactId);
+      },
+    },
+    {},
+    requireAuth
+  );
+
+  registerAuthenticatedRoute(
+    app,
+    '/artifacts/:id/hash',
+    {
+      async find(_params: RouteParams) {
+        const artifactId = _params.route?.id;
+        if (!artifactId) throw new Error('Artifact ID required');
+        const artifactsService = app.service('artifacts') as unknown as ArtifactsService;
+        const hash = await artifactsService.getHash(artifactId);
+        return { hash };
+      },
+    },
+    {},
+    requireAuth
+  );
+
+  registerAuthenticatedRoute(
+    app,
+    '/artifacts/:id/console',
+    {
+      async create(
+        data: { entries: Array<{ timestamp: number; level: string; message: string }> },
+        _params: RouteParams
+      ) {
+        const artifactId = _params.route?.id;
+        if (!artifactId) throw new Error('Artifact ID required');
+        const artifactsService = app.service('artifacts') as unknown as ArtifactsService;
+        artifactsService.appendConsoleLogs(artifactId, data.entries as never);
+        return { success: true };
+      },
+    },
+    {
+      create: { role: ROLES.MEMBER, action: 'post artifact console logs' },
+    },
+    requireAuth
+  );
 
   app.service('board-comments').hooks({
     before: {

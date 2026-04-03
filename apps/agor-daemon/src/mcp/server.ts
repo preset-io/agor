@@ -26,6 +26,7 @@ import type { AuthenticatedParams, AuthenticatedUser } from '../declarations.js'
 import { validateSessionToken } from './tokens.js';
 import { ToolRegistry } from './tool-registry.js';
 import { registerAnalyticsTools } from './tools/analytics.js';
+import { registerArtifactTools } from './tools/artifacts.js';
 import { registerBoardTools } from './tools/boards.js';
 import { registerCardTypeTools } from './tools/card-types.js';
 import { registerCardTools } from './tools/cards.js';
@@ -186,6 +187,9 @@ function buildRegistry(): ToolRegistry {
   registerCardTools(tempServer, dummyCtx);
   registerCardTypeTools(tempServer, dummyCtx);
 
+  registry.setCurrentDomain('artifacts');
+  registerArtifactTools(tempServer, dummyCtx);
+
   registry.setCurrentDomain('sessions');
   registerTaskTools(tempServer, dummyCtx);
   registerMessageTools(tempServer, dummyCtx);
@@ -258,6 +262,7 @@ function createMcpServer(ctx: McpContext, toolSearchEnabled: boolean): McpServer
   registerBoardTools(server, ctx);
   registerCardTools(server, ctx);
   registerCardTypeTools(server, ctx);
+  registerArtifactTools(server, ctx);
   registerTaskTools(server, ctx);
   registerMessageTools(server, ctx);
   registerUserTools(server, ctx);

@@ -67,6 +67,8 @@ import CardNode from '../CardNode';
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
 import SessionCard from '../SessionCard';
 import WorktreeCard from '../WorktreeCard';
+import { AppNode } from './canvas/AppNode';
+import { ArtifactNode } from './canvas/ArtifactNode';
 import { CommentNode, ZoneNode } from './canvas/BoardObjectNodes';
 import { CursorNode } from './canvas/CursorNode';
 import { MarkdownNode } from './canvas/MarkdownNode';
@@ -254,6 +256,8 @@ const nodeTypes = {
   cursor: CursorNode,
   comment: CommentNode,
   markdown: MarkdownNode,
+  appNode: AppNode,
+  artifactNode: ArtifactNode,
 };
 
 const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(

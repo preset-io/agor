@@ -2,6 +2,7 @@
  * Repository Exports
  */
 
+export * from './artifacts';
 export * from './base';
 export * from './board-comments';
 export * from './board-objects';

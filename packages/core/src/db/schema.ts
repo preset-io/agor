@@ -31,6 +31,7 @@ export const users = schema.users;
 export const mcpServers = schema.mcpServers;
 export const cardTypes = schema.cardTypes;
 export const cards = schema.cards;
+export const artifacts = schema.artifacts;
 export const boardObjects = schema.boardObjects;
 export const sessionMcpServers = schema.sessionMcpServers;
 export const userMcpOauthTokens = schema.userMcpOauthTokens;

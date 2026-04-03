@@ -152,6 +152,16 @@ export type RepoID = UUID;
 export type CommentID = UUID;
 
 /**
+ * Artifact identifier
+ *
+ * Uniquely identifies a Sandpack artifact (live web app on a board).
+ *
+ * @example
+ * const artifactId: ArtifactID = "0194a1b2-3c4d-7e5f-a8f3-9d2e1c4b5a6f";
+ */
+export type ArtifactID = UUID;
+
+/**
  * Note: Concepts and Reports use file paths as identifiers, not UUIDs.
  *
  * - Concepts: ConceptPath (e.g., "core.md", "explorations/cli.md")

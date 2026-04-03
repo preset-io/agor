@@ -857,6 +857,45 @@ export const cards = pgTable(
 );
 
 /**
+ * Artifacts table - Live web applications rendered via Sandpack
+ *
+ * Artifacts are filesystem-backed apps managed by agents via MCP tools.
+ * Code lives at {worktree_path}/.agor/artifacts/{artifact_id}/ with a sandpack.json manifest.
+ */
+export const artifacts = pgTable(
+  'artifacts',
+  {
+    artifact_id: varchar('artifact_id', { length: 36 }).primaryKey(),
+    worktree_id: varchar('worktree_id', { length: 36 })
+      .notNull()
+      .references(() => worktrees.worktree_id, { onDelete: 'cascade' }),
+    board_id: varchar('board_id', { length: 36 })
+      .notNull()
+      .references(() => boards.board_id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    description: text('description'),
+    path: text('path').notNull(), // relative path within worktree: .agor/artifacts/{id}
+    template: text('template').notNull().default('react'),
+    build_status: text('build_status').notNull().default('unknown'),
+    build_errors: text('build_errors'), // JSON array of error strings
+    content_hash: text('content_hash'),
+    created_by: varchar('created_by', { length: 36 }),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+    archived: t.bool('archived').notNull().default(false),
+    archived_at: t.timestamp('archived_at'),
+  },
+  (table) => ({
+    worktreeIdx: index('artifacts_worktree_idx').on(table.worktree_id),
+    boardIdx: index('artifacts_board_idx').on(table.board_id),
+    archivedIdx: index('artifacts_archived_idx').on(table.archived),
+  })
+);
+
+export type ArtifactRow = typeof artifacts.$inferSelect;
+export type ArtifactInsert = typeof artifacts.$inferInsert;
+
+/**
  * Board Objects table - Positioned entities (worktrees and cards) on boards
  *
  * Polymorphic placement: exactly one of worktree_id or card_id must be set.

@@ -20,6 +20,7 @@
     "@agor/core": "workspace:*",
     "@ant-design/icons": "^6.1.0",
     "@ant-design/x": "^2.3.0",
+    "@codesandbox/sandpack-react": "^2.20.0",
     "@tsparticles/engine": "^3.9.0",
     "@tsparticles/react": "^3.0.0",
     "@tsparticles/slim": "^3.9.0",
