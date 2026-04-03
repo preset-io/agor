@@ -92,7 +92,7 @@ export function registerArtifactTools(server: McpServer, ctx: McpContext): void 
     'agor_artifacts_check_build',
     {
       description:
-        'Check build status of an artifact. Reads files from the filesystem and validates syntax. Returns errors if the code has issues. Use this after editing files to verify before refreshing.',
+        'Check build readiness of an artifact. Verifies source files exist and are non-empty (does not run a real build or syntax check). Use this after editing files to verify basic structure before refreshing.',
       inputSchema: z.object({
         artifactId: z.string().describe('Artifact ID'),
       }),

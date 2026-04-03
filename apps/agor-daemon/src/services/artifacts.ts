@@ -240,7 +240,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     const worktree = await this.worktreeRepo.findById(artifact.worktree_id);
     if (!worktree) throw new Error(`Worktree ${artifact.worktree_id} not found`);
 
-    const artifactDir = path.join(worktree.path, artifact.path);
+    const artifactDir = this.resolveArtifactDir(worktree.path, artifact.path);
 
     if (!fs.existsSync(artifactDir)) {
       throw new Error(`Artifact directory not found: ${artifactDir}`);
@@ -281,7 +281,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     const worktree = await this.worktreeRepo.findById(artifact.worktree_id);
     if (!worktree) throw new Error(`Worktree ${artifact.worktree_id} not found`);
 
-    const artifactDir = path.join(worktree.path, artifact.path);
+    const artifactDir = this.resolveArtifactDir(worktree.path, artifact.path);
     return this.computeHash(artifactDir);
   }
 
@@ -338,7 +338,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     const worktree = await this.worktreeRepo.findById(artifact.worktree_id);
     if (!worktree) throw new Error(`Worktree ${artifact.worktree_id} not found`);
 
-    const artifactDir = path.join(worktree.path, artifact.path);
+    const artifactDir = this.resolveArtifactDir(worktree.path, artifact.path);
     const newHash = this.computeHash(artifactDir);
 
     // Update hash in DB
@@ -388,7 +388,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     // Remove filesystem directory
     const worktree = await this.worktreeRepo.findById(artifact.worktree_id);
     if (worktree) {
-      const artifactDir = path.join(worktree.path, artifact.path);
+      const artifactDir = this.resolveArtifactDir(worktree.path, artifact.path);
       if (fs.existsSync(artifactDir)) {
         fs.rmSync(artifactDir, { recursive: true, force: true });
       }
@@ -421,6 +421,19 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
 
   // ── Private helpers ──
 
+  /**
+   * Resolve artifact directory with path containment check.
+   * Prevents path traversal via malicious artifact.path values.
+   */
+  private resolveArtifactDir(worktreePath: string, artifactPath: string): string {
+    const resolved = path.resolve(worktreePath, artifactPath);
+    const worktreeReal = path.resolve(worktreePath);
+    if (!resolved.startsWith(worktreeReal + path.sep) && resolved !== worktreeReal) {
+      throw new Error('Path traversal detected: artifact path resolves outside worktree');
+    }
+    return resolved;
+  }
+
   private computeHash(dirPath: string): string {
     if (!fs.existsSync(dirPath)) return '';
 
@@ -435,15 +448,26 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     return hash.digest('hex');
   }
 
-  private getFileList(dirPath: string): string[] {
+  private getFileList(dirPath: string, rootDir?: string): string[] {
+    const root = rootDir ?? dirPath;
     const files: string[] = [];
     const entries = fs.readdirSync(dirPath, { withFileTypes: true });
 
     for (const entry of entries) {
       const fullPath = path.join(dirPath, entry.name);
+
+      // Skip symlinks to prevent escape outside artifact directory
+      if (entry.isSymbolicLink()) continue;
+
+      // Verify resolved path stays within root directory
+      const resolved = path.resolve(fullPath);
+      if (!resolved.startsWith(path.resolve(root) + path.sep) && resolved !== path.resolve(root)) {
+        continue;
+      }
+
       if (entry.isDirectory()) {
         if (entry.name !== 'node_modules' && entry.name !== '.git') {
-          files.push(...this.getFileList(fullPath));
+          files.push(...this.getFileList(fullPath, root));
         }
       } else {
         files.push(fullPath);
