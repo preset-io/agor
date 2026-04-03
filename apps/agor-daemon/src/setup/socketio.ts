@@ -9,6 +9,7 @@ import type { Application } from '@agor/core/feathers';
 import type { CursorLeaveEvent, CursorMovedEvent, CursorMoveEvent, User } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import type { Server, Socket } from 'socket.io';
+import { createServiceToken, spawnExecutor } from '../utils/spawn-executor.js';
 import type { CorsOrigin } from './cors.js';
 
 /**
@@ -246,9 +247,56 @@ export function createSocketIOConfig(
       // Route terminal input from browser to executor
       // Browser emits: terminal:input { userId, input }
       // Executor receives: terminal:input { userId, input }
-      socket.on('terminal:input', (data: { userId: string; input: string }) => {
-        const channel = `user/${data.userId}/terminal`;
-        // Broadcast to channel (executor will filter by userId)
+      socket.on('terminal:input', async (data: { userId: string; input: string }) => {
+        const { userId, input } = data;
+        const channel = `user/${userId}/terminal`;
+
+        // Intercept slash commands (e.g., /list-mcp-servers)
+        if (input.startsWith('/')) {
+          console.log(`[SocketIO] Slash command from user ${userId}: ${input}`);
+
+          try {
+            // Fetch user to run command with their permissions
+            const user = (await app.service('users').get(userId)) as User & {
+              unix_username?: string;
+            };
+            if (!user?.unix_username) {
+              console.error(`[SocketIO] User or unix_username not found for ${userId}`);
+              const errorMsg =
+                `\r\n[Agor] Error: Cannot execute command. User context not found.\r\n`;
+              io.to(channel).emit('terminal:output', { userId, data: errorMsg });
+              return;
+            }
+
+            // Create a short-lived service token for the executor to authenticate back to the daemon
+            const token = createServiceToken(jwtSecret);
+
+            // Spawn executor to handle the slash command.
+            // The executor will run the command and stream output back via `terminal:output` events.
+            spawnExecutor(
+              {
+                command: 'slash:run',
+                userId,
+                slashCommand: input,
+                token, // For executor to auth with daemon
+              },
+              {
+                asUser: user.unix_username,
+                logPrefix: `[SlashCommand/${user.unix_username}]`,
+                // Pass session/worktree context if available in the future
+              }
+            );
+          } catch (error) {
+            console.error(`[SocketIO] Error handling slash command for user ${userId}:`, error);
+            const errorMsg = `\r\n[Agor] Error: Failed to execute command: ${
+              (error as Error).message
+            }\r\n`;
+            io.to(channel).emit('terminal:output', { userId, data: errorMsg });
+          }
+          return; // Command handled, do not pass to PTY
+        }
+
+        // For regular input, broadcast to the terminal channel for the PTY
         io.to(channel).emit('terminal:input', data);
       });
 
