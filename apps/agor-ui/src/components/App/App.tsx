@@ -1,5 +1,6 @@
 import type { AgorClient } from '@agor/core/api';
 import type {
+  Artifact,
   Board,
   BoardComment,
   BoardEntityObject,
@@ -137,6 +138,9 @@ export interface AppProps {
   onCreateGatewayChannel?: (data: Partial<GatewayChannel>) => void;
   onUpdateGatewayChannel?: (channelId: string, updates: Partial<GatewayChannel>) => void;
   onDeleteGatewayChannel?: (channelId: string) => void;
+  artifactById: Map<string, Artifact>;
+  onUpdateArtifact?: (artifactId: string, updates: Partial<Artifact>) => void;
+  onDeleteArtifact?: (artifactId: string) => void;
   onUpdateSessionMcpServers?: (sessionId: string, mcpServerIds: string[]) => void;
   onSendComment?: (boardId: string, content: string) => void;
   onReplyComment?: (parentId: string, content: string) => void;
@@ -208,6 +212,9 @@ export const App: React.FC<AppProps> = ({
   onCreateGatewayChannel,
   onUpdateGatewayChannel,
   onDeleteGatewayChannel,
+  artifactById,
+  onUpdateArtifact,
+  onDeleteArtifact,
   onUpdateSessionMcpServers,
   onSendComment,
   onReplyComment,
@@ -984,6 +991,9 @@ export const App: React.FC<AppProps> = ({
             onCreateGatewayChannel={onCreateGatewayChannel}
             onUpdateGatewayChannel={onUpdateGatewayChannel}
             onDeleteGatewayChannel={onDeleteGatewayChannel}
+            artifactById={artifactById}
+            onUpdateArtifact={onUpdateArtifact}
+            onDeleteArtifact={onDeleteArtifact}
           />
           {sessionSettingsSession && (
             <SessionSettingsModal

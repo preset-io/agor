@@ -1,5 +1,6 @@
 import type { AgorClient } from '@agor/core/api';
 import type {
+  Artifact,
   Board,
   BoardEntityObject,
   CardType,
@@ -22,6 +23,7 @@ import {
   BranchesOutlined,
   CloseOutlined,
   CreditCardOutlined,
+  ExperimentOutlined,
   FolderOutlined,
   InfoCircleOutlined,
   MessageOutlined,
@@ -36,6 +38,7 @@ import { WorktreeModal } from '../WorktreeModal';
 import type { WorktreeUpdate } from '../WorktreeModal/tabs/GeneralTab';
 import { AboutTab } from './AboutTab';
 import { AgenticToolsSection } from './AgenticToolsSection';
+import { ArtifactsTable } from './ArtifactsTable';
 import { AssistantsTable } from './AssistantsTable';
 import { BoardsTable } from './BoardsTable';
 import { CardsTable } from './CardsTable';
@@ -106,6 +109,9 @@ export interface SettingsModalProps {
   onCreateGatewayChannel?: (data: Partial<GatewayChannel>) => void;
   onUpdateGatewayChannel?: (channelId: string, updates: Partial<GatewayChannel>) => void;
   onDeleteGatewayChannel?: (channelId: string) => void;
+  artifactById?: Map<string, Artifact>;
+  onUpdateArtifact?: (artifactId: string, updates: Partial<Artifact>) => void;
+  onDeleteArtifact?: (artifactId: string) => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -149,6 +155,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onCreateGatewayChannel,
   onUpdateGatewayChannel,
   onDeleteGatewayChannel,
+  artifactById = new Map(),
+  onUpdateArtifact,
+  onDeleteArtifact,
 }) => {
   const [selectedWorktree, setSelectedWorktree] = useState<Worktree | null>(null);
   const [selectedRepo, setSelectedRepo] = useState<Repo | null>(null);
@@ -234,6 +243,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </span>
           ),
           icon: <CreditCardOutlined />,
+        },
+        {
+          key: 'artifacts',
+          label: 'Artifacts',
+          icon: <ExperimentOutlined />,
         },
       ],
     },
@@ -352,6 +366,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             cardTypeById={cardTypeById}
             boardById={boardById}
             boardObjects={boardObjects}
+          />
+        );
+      case 'artifacts':
+        return (
+          <ArtifactsTable
+            artifactById={artifactById}
+            worktreeById={worktreeById}
+            boardById={boardById}
+            onUpdate={onUpdateArtifact}
+            onDelete={onDeleteArtifact}
           />
         );
       case 'mcp':

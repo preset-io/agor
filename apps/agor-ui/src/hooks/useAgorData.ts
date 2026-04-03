@@ -8,6 +8,7 @@
 import type { AgorClient } from '@agor/core/api';
 import { PAGINATION } from '@agor/core/config/browser';
 import type {
+  Artifact,
   Board,
   BoardComment,
   BoardEntityObject,
@@ -35,6 +36,7 @@ interface UseAgorDataResult {
   userById: Map<string, User>; // O(1) lookups by user_id - efficient, stable references
   mcpServerById: Map<string, MCPServer>; // O(1) lookups by mcp_server_id - efficient, stable references
   gatewayChannelById: Map<string, GatewayChannel>; // O(1) lookups by id - efficient, stable references
+  artifactById: Map<string, Artifact>; // O(1) lookups by artifact_id - efficient, stable references
   sessionMcpServerIds: Map<string, string[]>; // O(1) lookups by session_id - efficient, stable references
   loading: boolean;
   error: string | null;
@@ -69,6 +71,7 @@ export function useAgorData(
   const [gatewayChannelById, setGatewayChannelById] = useState<Map<string, GatewayChannel>>(
     new Map()
   );
+  const [artifactById, setArtifactById] = useState<Map<string, Artifact>>(new Map());
   const [sessionMcpServerIds, setSessionMcpServerIds] = useState<Map<string, string[]>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -102,6 +105,7 @@ export function useAgorData(
         mcpServersResult,
         sessionMcpResult,
         gatewayChannelsResult,
+        artifactsResult,
       ] = await Promise.all([
         client
           .service('sessions')
@@ -117,6 +121,7 @@ export function useAgorData(
         client.service('mcp-servers').find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
         client.service('session-mcp-servers').find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
         client.service('gateway-channels').find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+        client.service('artifacts').find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
       ]);
 
       // Handle paginated vs array results
@@ -140,6 +145,7 @@ export function useAgorData(
       const gatewayChannelsList = Array.isArray(gatewayChannelsResult)
         ? gatewayChannelsResult
         : gatewayChannelsResult.data;
+      const artifactsList = Array.isArray(artifactsResult) ? artifactsResult : artifactsResult.data;
 
       // Build session Maps for efficient lookups
       const sessionsById = new Map<string, Session>();
@@ -229,6 +235,13 @@ export function useAgorData(
         gatewayChannelsMap.set(channel.id, channel);
       }
       setGatewayChannelById(gatewayChannelsMap);
+
+      // Build artifact Map for efficient lookups
+      const artifactsMap = new Map<string, Artifact>();
+      for (const artifact of artifactsList) {
+        artifactsMap.set(artifact.artifact_id, artifact);
+      }
+      setArtifactById(artifactsMap);
 
       // Group session-MCP relationships by session_id
       const sessionMcpMap = new Map<string, string[]>();
@@ -674,6 +687,39 @@ export function useAgorData(
     cardTypesService.on('updated', handleCardTypePatched);
     cardTypesService.on('removed', handleCardTypeRemoved);
 
+    // Subscribe to artifact events
+    const artifactsService = client.service('artifacts');
+    const handleArtifactCreated = (artifact: Artifact) => {
+      setArtifactById((prev) => {
+        if (prev.has(artifact.artifact_id)) return prev;
+        const next = new Map(prev);
+        next.set(artifact.artifact_id, artifact);
+        return next;
+      });
+    };
+    const handleArtifactPatched = (artifact: Artifact) => {
+      setArtifactById((prev) => {
+        const existing = prev.get(artifact.artifact_id);
+        if (existing === artifact) return prev;
+        const next = new Map(prev);
+        next.set(artifact.artifact_id, artifact);
+        return next;
+      });
+    };
+    const handleArtifactRemoved = (artifact: Artifact) => {
+      setArtifactById((prev) => {
+        if (!prev.has(artifact.artifact_id)) return prev;
+        const next = new Map(prev);
+        next.delete(artifact.artifact_id);
+        return next;
+      });
+    };
+
+    artifactsService.on('created', handleArtifactCreated);
+    artifactsService.on('patched', handleArtifactPatched);
+    artifactsService.on('updated', handleArtifactPatched);
+    artifactsService.on('removed', handleArtifactRemoved);
+
     // Subscribe to session-MCP server relationship events
     const sessionMcpService = client.service('session-mcp-servers');
     const handleSessionMcpCreated = (relationship: {
@@ -807,6 +853,11 @@ export function useAgorData(
       cardTypesService.removeListener('patched', handleCardTypePatched);
       cardTypesService.removeListener('updated', handleCardTypePatched);
       cardTypesService.removeListener('removed', handleCardTypeRemoved);
+
+      artifactsService.removeListener('created', handleArtifactCreated);
+      artifactsService.removeListener('patched', handleArtifactPatched);
+      artifactsService.removeListener('updated', handleArtifactPatched);
+      artifactsService.removeListener('removed', handleArtifactRemoved);
     };
   }, [client, enabled, fetchData, hasInitiallyFetched]);
 
@@ -823,6 +874,7 @@ export function useAgorData(
     userById,
     mcpServerById,
     gatewayChannelById,
+    artifactById,
     sessionMcpServerIds,
     loading,
     error,

@@ -1,5 +1,6 @@
 import { getRepoReferenceOptions } from '@agor/core/config/browser';
 import type {
+  Artifact,
   Board,
   CreateMCPServerInput,
   CreateUserInput,
@@ -142,6 +143,7 @@ function AppContent() {
     userById,
     mcpServerById,
     gatewayChannelById,
+    artifactById,
     sessionMcpServerIds,
     loading,
     error: dataError,
@@ -1107,6 +1109,31 @@ function AppContent() {
     }
   };
 
+  // Handle artifact CRUD (edit + delete only — creation via MCP tools)
+  const handleUpdateArtifact = async (artifactId: string, updates: Partial<Artifact>) => {
+    if (!client) return;
+    try {
+      await client.service('artifacts').patch(artifactId, updates);
+      showSuccess('Artifact updated!');
+    } catch (error) {
+      showError(
+        `Failed to update artifact: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  };
+
+  const handleDeleteArtifact = async (artifactId: string) => {
+    if (!client) return;
+    try {
+      await client.service('artifacts').remove(artifactId);
+      showSuccess('Artifact deleted!');
+    } catch (error) {
+      showError(
+        `Failed to delete artifact: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  };
+
   // Handle update session-MCP server relationships
   const handleUpdateSessionMcpServers = async (sessionId: string, mcpServerIds: string[]) => {
     if (!client) return;
@@ -1398,6 +1425,9 @@ function AppContent() {
                 onCreateGatewayChannel={handleCreateGatewayChannel}
                 onUpdateGatewayChannel={handleUpdateGatewayChannel}
                 onDeleteGatewayChannel={handleDeleteGatewayChannel}
+                artifactById={artifactById}
+                onUpdateArtifact={handleUpdateArtifact}
+                onDeleteArtifact={handleDeleteArtifact}
                 onUpdateSessionMcpServers={handleUpdateSessionMcpServers}
                 onSendComment={handleSendComment}
                 onReplyComment={handleReplyComment}
@@ -1476,6 +1506,9 @@ function AppContent() {
                 onCreateGatewayChannel={handleCreateGatewayChannel}
                 onUpdateGatewayChannel={handleUpdateGatewayChannel}
                 onDeleteGatewayChannel={handleDeleteGatewayChannel}
+                artifactById={artifactById}
+                onUpdateArtifact={handleUpdateArtifact}
+                onDeleteArtifact={handleDeleteArtifact}
                 onUpdateSessionMcpServers={handleUpdateSessionMcpServers}
                 onSendComment={handleSendComment}
                 onReplyComment={handleReplyComment}
@@ -1554,6 +1587,9 @@ function AppContent() {
                 onCreateGatewayChannel={handleCreateGatewayChannel}
                 onUpdateGatewayChannel={handleUpdateGatewayChannel}
                 onDeleteGatewayChannel={handleDeleteGatewayChannel}
+                artifactById={artifactById}
+                onUpdateArtifact={handleUpdateArtifact}
+                onDeleteArtifact={handleDeleteArtifact}
                 onUpdateSessionMcpServers={handleUpdateSessionMcpServers}
                 onSendComment={handleSendComment}
                 onReplyComment={handleReplyComment}
