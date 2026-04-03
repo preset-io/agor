@@ -5,6 +5,27 @@
  * captures console events, and reloads on content_hash changes.
  */
 
+// Polyfill crypto.subtle for non-secure contexts (HTTP).
+// Sandpack uses crypto.subtle.digest() to generate short IDs, which is only
+// available in secure contexts (HTTPS/localhost). On plain HTTP, we provide
+// a simple fallback using Math.random.
+if (typeof globalThis.crypto !== 'undefined' && !globalThis.crypto.subtle) {
+  // biome-ignore lint/suspicious/noExplicitAny: minimal polyfill for Sandpack compatibility
+  (globalThis.crypto as any).subtle = {
+    async digest(_algo: string, data: ArrayBuffer) {
+      // Simple hash fallback — not cryptographically secure, only used for Sandpack IDs
+      const bytes = new Uint8Array(data);
+      let hash = 0;
+      for (const b of bytes) {
+        hash = (hash * 31 + b) | 0;
+      }
+      const result = new ArrayBuffer(4);
+      new DataView(result).setInt32(0, hash);
+      return result;
+    },
+  };
+}
+
 import type {
   ArtifactBoardObject,
   ArtifactID,

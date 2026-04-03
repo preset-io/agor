@@ -1013,6 +1013,9 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       setNodes((currentNodes) => {
         const existingZones = currentNodes.filter((n) => n.type === 'zone');
         const existingMarkdown = currentNodes.filter((n) => n.type === 'markdown');
+        const existingApps = currentNodes.filter(
+          (n) => n.type === 'appNode' || n.type === 'artifactNode'
+        );
         const existingCursors = currentNodes.filter((n) => n.type === 'cursor');
         const existingComments = currentNodes.filter((n) => n.type === 'comment');
 
@@ -1023,6 +1026,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           ...existingZones,
           ...updatedWorktrees,
           ...updatedCards,
+          ...existingApps,
           ...existingMarkdown,
           ...existingCursors,
           ...existingComments,
