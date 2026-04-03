@@ -191,6 +191,7 @@ interface WorktreeNodeData {
     }
   ) => void;
   onOpenSettings?: (worktreeId: string) => void;
+  onOpenSessionSettings?: (sessionId: string) => void;
   onOpenTerminal?: (commands: string[], worktreeId?: string) => void;
   onStartEnvironment?: (worktreeId: string) => void;
   onStopEnvironment?: (worktreeId: string) => void;
@@ -232,6 +233,7 @@ const WorktreeNode = React.memo(({ data }: { data: WorktreeNodeData }) => {
         onSpawnSession={data.onSpawnSession}
         onArchiveOrDelete={data.onArchiveOrDelete}
         onOpenSettings={data.onOpenSettings}
+        onOpenSessionSettings={data.onOpenSessionSettings}
         onOpenTerminal={data.onOpenTerminal}
         onStartEnvironment={data.onStartEnvironment}
         onStopEnvironment={data.onStopEnvironment}
@@ -613,6 +615,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             onSpawnSession,
             onArchiveOrDelete: onArchiveOrDeleteWorktree,
             onOpenSettings: onOpenWorktree,
+            onOpenSessionSettings: onOpenSettings,
             onOpenTerminal,
             onStartEnvironment,
             onStopEnvironment,
@@ -644,6 +647,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       onSpawnSession,
       onArchiveOrDeleteWorktree,
       onOpenWorktree,
+      onOpenSettings,
       onOpenTerminal,
       onStartEnvironment,
       onStopEnvironment,

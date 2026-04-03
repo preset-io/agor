@@ -143,6 +143,7 @@ interface WorktreeCardProps {
     }
   ) => void;
   onOpenSettings?: (worktreeId: string) => void;
+  onOpenSessionSettings?: (sessionId: string) => void;
   onOpenTerminal?: (commands: string[], worktreeId?: string) => void;
   onStartEnvironment?: (worktreeId: string) => void;
   onStopEnvironment?: (worktreeId: string) => void;
@@ -171,6 +172,7 @@ const WorktreeCardComponent = ({
   onSpawnSession,
   onArchiveOrDelete,
   onOpenSettings,
+  onOpenSessionSettings,
   onOpenTerminal,
   onStartEnvironment,
   onStopEnvironment,
@@ -389,10 +391,10 @@ const WorktreeCardComponent = ({
         isArchiving={archivingSessionIds.has(session.session_id)}
         onArchive={handleArchiveSession}
         onSettings={
-          onSessionClick
+          onOpenSessionSettings
             ? (id, e) => {
                 e.stopPropagation();
-                onSessionClick(id);
+                onOpenSessionSettings(id);
               }
             : undefined
         }
