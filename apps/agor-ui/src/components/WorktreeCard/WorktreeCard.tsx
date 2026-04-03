@@ -47,22 +47,33 @@ import { type ForkSpawnAction, ForkSpawnModal } from '../ForkSpawnModal';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { CreatedByTag } from '../metadata';
 import { ChannelPill, IssuePill, PullRequestPill } from '../Pill';
-import { TaskStatusIcon } from '../TaskStatusIcon';
 import { ToolIcon } from '../ToolIcon';
 import { buildSessionTree, type SessionTreeNode } from './buildSessionTree';
 
 const _WORKTREE_CARD_MAX_WIDTH = 600;
 const NOTES_MAX_LENGTH = 200; // Character limit for truncated notes
 
-/** Wrapper that adds a hover archive button overlay to session items */
-const SessionItemWithArchive: React.FC<{
+/** Wrapper that adds hover action buttons (settings + archive) overlay to session items */
+const SessionItemWithActions: React.FC<{
   sessionId: string;
   isArchiving: boolean;
   onArchive: (sessionId: string, e: React.MouseEvent) => void;
+  onSettings?: (sessionId: string, e: React.MouseEvent) => void;
   children: React.ReactNode;
-}> = ({ sessionId, isArchiving, onArchive, children }) => {
+}> = ({ sessionId, isArchiving, onArchive, onSettings, children }) => {
   const [hovered, setHovered] = useState(false);
   const { token } = theme.useToken();
+
+  const buttonStyle: React.CSSProperties = {
+    background: `${token.colorBgContainer}cc`,
+    borderRadius: 4,
+    width: 24,
+    height: 24,
+    minWidth: 24,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  };
 
   return (
     <div
@@ -80,8 +91,21 @@ const SessionItemWithArchive: React.FC<{
           opacity: hovered ? 1 : 0,
           transition: 'opacity 0.15s ease-in-out',
           pointerEvents: hovered ? 'auto' : 'none',
+          display: 'flex',
+          gap: 2,
         }}
       >
+        {onSettings && (
+          <Tooltip title="Session settings">
+            <Button
+              type="text"
+              size="small"
+              icon={<EditOutlined />}
+              onClick={(e) => onSettings(sessionId, e)}
+              style={buttonStyle}
+            />
+          </Tooltip>
+        )}
         <Tooltip title="Archive session">
           <Button
             type="text"
@@ -89,16 +113,7 @@ const SessionItemWithArchive: React.FC<{
             icon={<InboxOutlined />}
             loading={isArchiving}
             onClick={(e) => onArchive(sessionId, e)}
-            style={{
-              background: `${token.colorBgContainer}cc`,
-              borderRadius: 4,
-              width: 24,
-              height: 24,
-              minWidth: 24,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
+            style={buttonStyle}
           />
         </Tooltip>
       </div>
@@ -364,11 +379,21 @@ const WorktreeCardComponent = ({
       },
     ];
 
+    const isActive = session.status === 'running' || session.status === 'stopping';
+
     return (
-      <SessionItemWithArchive
+      <SessionItemWithActions
         sessionId={session.session_id}
         isArchiving={archivingSessionIds.has(session.session_id)}
         onArchive={handleArchiveSession}
+        onSettings={
+          onSessionClick
+            ? (id, e) => {
+                e.stopPropagation();
+                onSessionClick(id);
+              }
+            : undefined
+        }
       >
         <div
           style={{
@@ -377,7 +402,6 @@ const WorktreeCardComponent = ({
               : `1px solid rgba(255, 255, 255, 0.1)`,
             borderRadius: 4,
             padding: 8,
-            paddingRight: 32,
             background: 'transparent',
             display: 'flex',
             alignItems: 'center',
@@ -394,7 +418,7 @@ const WorktreeCardComponent = ({
           }}
         >
           <Space size={4} align="center" style={{ flex: 1, minWidth: 0 }}>
-            <ToolIcon tool={session.agentic_tool} size={20} />
+            {isActive ? <Spin size="small" /> : <ToolIcon tool={session.agentic_tool} size={20} />}
             {getRelationshipIcon()}
             <Typography.Text
               strong
@@ -407,21 +431,8 @@ const WorktreeCardComponent = ({
               {getSessionDisplayTitle(session, { includeAgentFallback: true })}
             </Typography.Text>
           </Space>
-
-          {/* Status indicator - fixed width to prevent layout shift */}
-          <div
-            style={{
-              marginLeft: 8,
-              width: 24,
-              display: 'flex',
-              justifyContent: 'center',
-              alignItems: 'center',
-            }}
-          >
-            <TaskStatusIcon status={session.status} size={16} />
-          </div>
         </div>
-      </SessionItemWithArchive>
+      </SessionItemWithActions>
     );
   };
 
@@ -504,55 +515,56 @@ const WorktreeCardComponent = ({
   // Scheduled runs content (flat list, no genealogy tree needed)
   const scheduledRunsContent = (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-      {scheduledSessions.map((session) => (
-        <SessionItemWithArchive
-          key={session.session_id}
-          sessionId={session.session_id}
-          isArchiving={archivingSessionIds.has(session.session_id)}
-          onArchive={handleArchiveSession}
-        >
-          <div
-            style={{
-              border: `1px solid rgba(255, 255, 255, 0.1)`,
-              borderRadius: 4,
-              padding: 8,
-              paddingRight: 32,
-              background: 'transparent',
-              display: 'flex',
-              alignItems: 'center',
-              cursor: 'pointer',
-            }}
-            onClick={() => onSessionClick?.(session.session_id)}
+      {scheduledSessions.map((session) => {
+        const isActive = session.status === 'running' || session.status === 'stopping';
+        return (
+          <SessionItemWithActions
+            key={session.session_id}
+            sessionId={session.session_id}
+            isArchiving={archivingSessionIds.has(session.session_id)}
+            onArchive={handleArchiveSession}
+            onSettings={
+              onSessionClick
+                ? (id, e) => {
+                    e.stopPropagation();
+                    onSessionClick(id);
+                  }
+                : undefined
+            }
           >
-            <Space size={4} align="center" style={{ flex: 1, minWidth: 0 }}>
-              <ToolIcon tool={session.agentic_tool} size={20} />
-              <Typography.Text
-                style={{
-                  fontSize: 12,
-                  flex: 1,
-                  color: token.colorTextSecondary,
-                  ...getSessionTitleStyles(2),
-                }}
-              >
-                {getSessionDisplayTitle(session, { includeAgentFallback: true })}
-              </Typography.Text>
-            </Space>
-
-            {/* Status indicator */}
             <div
               style={{
-                marginLeft: 8,
-                width: 24,
+                border: `1px solid rgba(255, 255, 255, 0.1)`,
+                borderRadius: 4,
+                padding: 8,
+                background: 'transparent',
                 display: 'flex',
-                justifyContent: 'center',
                 alignItems: 'center',
+                cursor: 'pointer',
               }}
+              onClick={() => onSessionClick?.(session.session_id)}
             >
-              <TaskStatusIcon status={session.status} size={16} />
+              <Space size={4} align="center" style={{ flex: 1, minWidth: 0 }}>
+                {isActive ? (
+                  <Spin size="small" />
+                ) : (
+                  <ToolIcon tool={session.agentic_tool} size={20} />
+                )}
+                <Typography.Text
+                  style={{
+                    fontSize: 12,
+                    flex: 1,
+                    color: token.colorTextSecondary,
+                    ...getSessionTitleStyles(2),
+                  }}
+                >
+                  {getSessionDisplayTitle(session, { includeAgentFallback: true })}
+                </Typography.Text>
+              </Space>
             </div>
-          </div>
-        </SessionItemWithArchive>
-      ))}
+          </SessionItemWithActions>
+        );
+      })}
     </div>
   );
 
@@ -586,19 +598,28 @@ const WorktreeCardComponent = ({
         // Extract denormalized gateway metadata (stamped at session creation)
         const gatewaySource = getGatewaySource(session);
 
+        const isActive = session.status === 'running' || session.status === 'stopping';
+
         return (
-          <SessionItemWithArchive
+          <SessionItemWithActions
             key={session.session_id}
             sessionId={session.session_id}
             isArchiving={archivingSessionIds.has(session.session_id)}
             onArchive={handleArchiveSession}
+            onSettings={
+              onSessionClick
+                ? (id, e) => {
+                    e.stopPropagation();
+                    onSessionClick(id);
+                  }
+                : undefined
+            }
           >
             <div
               style={{
                 border: `1px solid rgba(255, 255, 255, 0.1)`,
                 borderRadius: 4,
                 padding: 8,
-                paddingRight: 32,
                 background: 'transparent',
                 display: 'flex',
                 alignItems: 'center',
@@ -607,7 +628,11 @@ const WorktreeCardComponent = ({
               onClick={() => onSessionClick?.(session.session_id)}
             >
               <Space size={4} align="center" style={{ flex: 1, minWidth: 0 }}>
-                <ToolIcon tool={session.agentic_tool} size={20} />
+                {isActive ? (
+                  <Spin size="small" />
+                ) : (
+                  <ToolIcon tool={session.agentic_tool} size={20} />
+                )}
                 <div
                   style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}
                 >
@@ -636,21 +661,8 @@ const WorktreeCardComponent = ({
                   </div>
                 </div>
               </Space>
-
-              {/* Status indicator */}
-              <div
-                style={{
-                  marginLeft: 8,
-                  width: 24,
-                  display: 'flex',
-                  justifyContent: 'center',
-                  alignItems: 'center',
-                }}
-              >
-                <TaskStatusIcon status={session.status} size={16} />
-              </div>
             </div>
-          </SessionItemWithArchive>
+          </SessionItemWithActions>
         );
       })}
     </div>
