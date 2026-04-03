@@ -1,5 +1,53 @@
 # Changelog
 
+## 1.0.0 (2026-04-03)
+
+### Features
+- **Artifact board primitive** — render sandboxed artifacts on boards with Sandpack (#888)
+- **Generic SystemMessage component** — collapsible raw payload display for system messages (#889)
+- **MCP context tool** — comprehensive orientation tool for agents to understand their environment (#875)
+- **Board archiving** — archive and unarchive boards (#876)
+- **Superadmin role** — RBAC bypass role for administrative access (#867)
+- **Rate limit visibility** — surface rate limit events and API wait state to users (#868)
+- **MCP server inheritance** — worktrees pass MCP server configs down to sessions (#860)
+- **Tabbed Create Dialog** — redesigned plus button with tabbed creation flow (#857)
+- **Session settings redesign** — progressive disclosure for session configuration (#848)
+- **GitHub App integration** — connector, gateway routing, and callback endpoints (#841, #844)
+- **Session callbacks** — generalized callback system for remote sessions (#842)
+- **Gateway session filtering** — filter and bulk archive gateway sessions (#882)
+- **MCP assistants tool** — list assistants with description field via MCP (#883)
+- **Unified worktree header pill** — consolidated status pill in worktree headers (#850)
+- **Ripgrep in Docker** — add ripgrep to all Docker images for better search (#859)
+
+### Fixes
+- **Security**: block SSRF via health check URLs (#754)
+- Add FOR UPDATE lock to prevent lost updates in session patches (#865)
+- Use SDK getContextUsage() for accurate context window reporting (#878, #887)
+- Set task.model from SDK response to show correct model tags (#884)
+- Handle flattened arguments in agor_execute_tool MCP proxy (#886)
+- Restrict env command editing to admins + centralize role constants (#879)
+- Eliminate bad `as any` casts for type safety (#880)
+- Filter noisy system/task lifecycle messages from session conversations (#874)
+- Suppress noisy rate limit overage messages when request is allowed (#877)
+- Render markdown tables as monospace code blocks in Slack (#873)
+- Scope collapse header overflow to prevent badge clipping (#871)
+- Preserve form field values in collapsed Ant Design panels (#872)
+- Suppress error toasts when read-only users click worktree cards (#866)
+- Improve onboarding wizard error handling and clone feedback (#864)
+- Auto-clone framework repo when creating assistants (#861)
+- Sort Select dropdown options alphabetically (#858)
+- Fix archived worktree list returning empty data (#856)
+- Implement RFC 8414 Section 3 path-aware OAuth metadata discovery (#854, #855)
+- Support OAuth providers without RFC 8414 metadata discovery (#851)
+- Improve worktree creation — error handling, naming UX, validation (#847, #852)
+- Fix OpenCode directory scoping and MCP reliability (#839)
+- Resolve Slack channel type via cache + conversations.info API (#838)
+- Restart gateway listener on config change (#840)
+- Bump migration journal timestamps to ensure monotonic ordering (#881)
+
+### Chores
+- Bump Claude Code CLI to 2.1.87 and Agent SDK to 0.2.87 (#863)
+
 ## 0.15.0 (2026-03-28)
 
 ### Features
