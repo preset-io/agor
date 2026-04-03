@@ -343,9 +343,19 @@ export const ArtifactNode = ({
           style={{
             flex: 1,
             position: 'relative',
-            pointerEvents: interactMode ? 'auto' : 'none',
           }}
         >
+          {/* Transparent overlay blocks iframe from capturing mouse events (zoom/pan/drag)
+              when not in interact mode. Iframes ignore pointer-events:none on ancestors. */}
+          {!interactMode && (
+            <div
+              style={{
+                position: 'absolute',
+                inset: 0,
+                zIndex: 1,
+              }}
+            />
+          )}
           <SandpackProvider
             template={payload.template as 'react'}
             files={payload.files}
