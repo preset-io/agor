@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.0 (2026-04-03)
+## 0.16.0 (2026-04-03)
 
 ### Features
 - **Artifact board primitive** — render sandboxed artifacts on boards with Sandpack (#888)
