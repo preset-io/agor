@@ -19,6 +19,7 @@ import {
   PlusOutlined,
   PushpinFilled,
   RobotOutlined,
+  SettingOutlined,
   SubnodeOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
@@ -100,7 +101,7 @@ const SessionItemWithActions: React.FC<{
             <Button
               type="text"
               size="small"
-              icon={<EditOutlined />}
+              icon={<SettingOutlined />}
               onClick={(e) => onSettings(sessionId, e)}
               style={buttonStyle}
             />
