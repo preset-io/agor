@@ -11,12 +11,10 @@
  */
 
 import type { Message } from '@agor/core/types';
-import { CheckCircleFilled, RobotOutlined } from '@ant-design/icons';
-import { Bubble } from '@ant-design/x';
+import { CheckCircleFilled } from '@ant-design/icons';
 import { Space, Spin, Typography, theme } from 'antd';
 import type React from 'react';
-import { AgorAvatar } from '../AgorAvatar';
-import { ToolIcon } from '../ToolIcon';
+import { SystemMessage } from '../SystemMessage';
 
 const { Text } = Typography;
 
@@ -43,12 +41,6 @@ export const CompactionBlock: React.FC<CompactionBlockProps> = ({ messages, agen
     );
   });
 
-  const avatar = agentic_tool ? (
-    <ToolIcon tool={agentic_tool} size={32} />
-  ) : (
-    <AgorAvatar icon={<RobotOutlined />} style={{ backgroundColor: token.colorBgContainer }} />
-  );
-
   // If we have complete message, show completion state
   if (completeMessage && Array.isArray(completeMessage.content)) {
     const completeBlock = completeMessage.content.find(
@@ -71,54 +63,46 @@ export const CompactionBlock: React.FC<CompactionBlockProps> = ({ messages, agen
             new Date(startMessage.timestamp).getTime()
           : null;
 
+      const formattedContent = (
+        <Space orientation="vertical" size="small" style={{ width: '100%' }}>
+          <Space>
+            <CheckCircleFilled style={{ color: token.colorSuccess, fontSize: 14 }} />
+            <Text type="secondary">Context compacted successfully</Text>
+          </Space>
+          {/* Show metadata if available */}
+          {(trigger || preTokens || duration) && (
+            <div
+              style={{
+                fontSize: 12,
+                color: token.colorTextTertiary,
+                paddingLeft: 22,
+              }}
+            >
+              {trigger && <div>Trigger: {trigger}</div>}
+              {preTokens && <div>Pre-compaction tokens: {preTokens.toLocaleString()}</div>}
+              {duration && <div>Duration: {(duration / 1000).toFixed(2)}s</div>}
+            </div>
+          )}
+        </Space>
+      );
+
       return (
-        <div style={{ margin: `${token.sizeUnit}px 0` }}>
-          <Bubble
-            placement="start"
-            avatar={avatar}
-            content={
-              <Space orientation="vertical" size="small" style={{ width: '100%' }}>
-                <Space>
-                  <CheckCircleFilled style={{ color: token.colorSuccess, fontSize: 14 }} />
-                  <Text type="secondary">Context compacted successfully</Text>
-                </Space>
-                {/* Show metadata if available */}
-                {(trigger || preTokens || duration) && (
-                  <div
-                    style={{
-                      fontSize: 12,
-                      color: token.colorTextTertiary,
-                      paddingLeft: 22,
-                    }}
-                  >
-                    {trigger && <div>Trigger: {trigger}</div>}
-                    {preTokens && <div>Pre-compaction tokens: {preTokens.toLocaleString()}</div>}
-                    {duration && <div>Duration: {(duration / 1000).toFixed(2)}s</div>}
-                  </div>
-                )}
-              </Space>
-            }
-            variant="outlined"
-          />
-        </div>
+        <SystemMessage
+          content={formattedContent}
+          raw={completeBlock as Record<string, unknown>}
+          agenticTool={agentic_tool}
+        />
       );
     }
   }
 
   // Otherwise, show in-progress state (spinner)
-  return (
-    <div style={{ margin: `${token.sizeUnit}px 0` }}>
-      <Bubble
-        placement="start"
-        avatar={avatar}
-        content={
-          <Space>
-            <Spin size="small" />
-            <Text type="secondary">Compacting conversation context...</Text>
-          </Space>
-        }
-        variant="outlined"
-      />
-    </div>
+  const spinnerContent = (
+    <Space>
+      <Spin size="small" />
+      <Text type="secondary">Compacting conversation context...</Text>
+    </Space>
   );
+
+  return <SystemMessage content={spinnerContent} agenticTool={agentic_tool} />;
 };

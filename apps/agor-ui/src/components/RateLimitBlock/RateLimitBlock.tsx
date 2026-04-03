@@ -8,17 +8,10 @@
  */
 
 import type { Message } from '@agor/core/types';
-import {
-  ClockCircleOutlined,
-  InfoCircleOutlined,
-  RobotOutlined,
-  WarningOutlined,
-} from '@ant-design/icons';
-import { Bubble } from '@ant-design/x';
+import { ClockCircleOutlined, InfoCircleOutlined, WarningOutlined } from '@ant-design/icons';
 import { Space, Typography, theme } from 'antd';
 import type React from 'react';
-import { AgorAvatar } from '../AgorAvatar';
-import { ToolIcon } from '../ToolIcon';
+import { SystemMessage } from '../SystemMessage';
 
 const { Text } = Typography;
 
@@ -61,47 +54,40 @@ export const RateLimitBlock: React.FC<RateLimitBlockProps> = ({ message, agentic
     <ClockCircleOutlined style={{ color: iconColor, fontSize: 14 }} />
   );
 
-  const avatar = agentic_tool ? (
-    <ToolIcon tool={agentic_tool} size={32} />
-  ) : (
-    <AgorAvatar icon={<RobotOutlined />} style={{ backgroundColor: token.colorBgContainer }} />
+  const formattedContent = (
+    <Space direction="vertical" size="small" style={{ width: '100%' }}>
+      <Space>
+        {icon}
+        <Text type="secondary">{text}</Text>
+      </Space>
+      {/* Show metadata details */}
+      {(rateLimitType || resetsAt || waitMs || sdkType) && (
+        <div
+          style={{
+            fontSize: 12,
+            color: token.colorTextTertiary,
+            paddingLeft: 22,
+          }}
+        >
+          {rateLimitType && <div>Type: {rateLimitType}</div>}
+          {resetsAt && <div>Resets: {new Date(resetsAt * 1000).toLocaleString()}</div>}
+          {waitMs && <div>Wait time: {(waitMs / 1000).toFixed(1)}s</div>}
+          {sdkType && (
+            <div>
+              Source: {sdkType}
+              {sdkSubtype ? `/${sdkSubtype}` : ''}
+            </div>
+          )}
+        </div>
+      )}
+    </Space>
   );
 
   return (
-    <div style={{ margin: `${token.sizeUnit}px 0` }}>
-      <Bubble
-        placement="start"
-        avatar={avatar}
-        content={
-          <Space direction="vertical" size="small" style={{ width: '100%' }}>
-            <Space>
-              {icon}
-              <Text type="secondary">{text}</Text>
-            </Space>
-            {/* Show metadata details */}
-            {(rateLimitType || resetsAt || waitMs || sdkType) && (
-              <div
-                style={{
-                  fontSize: 12,
-                  color: token.colorTextTertiary,
-                  paddingLeft: 22,
-                }}
-              >
-                {rateLimitType && <div>Type: {rateLimitType}</div>}
-                {resetsAt && <div>Resets: {new Date(resetsAt * 1000).toLocaleString()}</div>}
-                {waitMs && <div>Wait time: {(waitMs / 1000).toFixed(1)}s</div>}
-                {sdkType && (
-                  <div>
-                    Source: {sdkType}
-                    {sdkSubtype ? `/${sdkSubtype}` : ''}
-                  </div>
-                )}
-              </div>
-            )}
-          </Space>
-        }
-        variant="outlined"
-      />
-    </div>
+    <SystemMessage
+      content={formattedContent}
+      raw={block as Record<string, unknown>}
+      agenticTool={agentic_tool}
+    />
   );
 };
