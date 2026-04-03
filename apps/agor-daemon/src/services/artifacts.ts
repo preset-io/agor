@@ -201,7 +201,14 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
         });
       } catch (boardError) {
         // Compensate: remove DB record if board placement fails
-        await this.artifactRepo.delete(artifactId);
+        try {
+          await this.artifactRepo.delete(artifactId);
+        } catch (deleteError) {
+          console.error(
+            `Rollback failed: could not delete orphan artifact ${artifactId}:`,
+            deleteError
+          );
+        }
         throw boardError;
       }
 
