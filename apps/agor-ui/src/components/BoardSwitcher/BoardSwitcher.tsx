@@ -140,7 +140,7 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
           setFilterText('');
         }
       }}
-      dropdownRender={(menu) =>
+      popupRender={(menu) =>
         showFilter ? (
           <div
             style={{
