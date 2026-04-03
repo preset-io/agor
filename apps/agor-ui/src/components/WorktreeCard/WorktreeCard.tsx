@@ -94,6 +94,7 @@ const SessionItemWithActions: React.FC<{
           pointerEvents: hovered ? 'auto' : 'none',
           display: 'flex',
           gap: 2,
+          width: 'fit-content',
         }}
       >
         {onSettings && (
