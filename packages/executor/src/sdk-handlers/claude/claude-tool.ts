@@ -1288,48 +1288,25 @@ export class ClaudeTool implements ITool {
    * The primary path (SDK's getContextUsage()) is handled in base-executor.ts
    * via rawContextUsage. This method is only called when that path fails.
    *
-   * NOTE: These values are CUMULATIVE across all API calls in a task, so they
-   * will overcount for multi-turn tasks. The SDK's getContextUsage() is the
-   * authoritative source — this is a best-effort fallback only.
+   * NOTE: The raw SDK response only has CUMULATIVE token counts across all API
+   * calls in a task (input + cache_creation + cache_read).  These sums routinely
+   * exceed the model's context window (e.g. 500k+ for a 200k window) because
+   * they count every API round-trip, not the current window snapshot.  Clamping
+   * the sum to maxContextWindow always produces exactly 100%, which is what
+   * caused the "everything shows 100%" bug.
+   *
+   * Rather than display a misleading value, return 0 so the UI shows "unknown"
+   * instead of a wrong percentage.  The SDK's getContextUsage() is the only
+   * reliable source for this metric.
    */
   async computeContextWindow(
     sessionId: string,
     _currentTaskId?: string,
-    currentRawSdkResponse?: unknown
+    _currentRawSdkResponse?: unknown
   ): Promise<number> {
-    if (!currentRawSdkResponse) {
-      return 0;
-    }
-
-    const response =
-      currentRawSdkResponse as import('../../types/sdk-response').ClaudeCodeSdkResponseTyped;
-
-    // Clamp to model's reported context window to prevent >100% values
-    let maxContextWindow = 0;
-    if (response.modelUsage && typeof response.modelUsage === 'object') {
-      for (const modelData of Object.values(response.modelUsage)) {
-        if (modelData.contextWindow && modelData.contextWindow > 0) {
-          maxContextWindow = Math.max(maxContextWindow, modelData.contextWindow);
-        }
-      }
-    }
-    if (maxContextWindow === 0) {
-      maxContextWindow = 200_000;
-    }
-
-    // Use cumulative usage fields, clamped to max context window
-    if (response.usage) {
-      const inputTokens = response.usage.input_tokens || 0;
-      const cacheCreation = response.usage.cache_creation_input_tokens || 0;
-      const cacheRead = response.usage.cache_read_input_tokens || 0;
-      const contextTokens = Math.min(inputTokens + cacheCreation + cacheRead, maxContextWindow);
-
-      console.log(
-        `📊 Context window fallback for session ${sessionId}: ${contextTokens} tokens (clamped to ${maxContextWindow})`
-      );
-      return contextTokens;
-    }
-
+    console.log(
+      `📊 Context window fallback for session ${sessionId}: returning 0 (cumulative token sums are unreliable for context window percentage)`
+    );
     return 0;
   }
 }

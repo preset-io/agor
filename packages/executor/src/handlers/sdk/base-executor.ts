@@ -444,6 +444,26 @@ export async function executeToolTask(params: {
       console.log(
         `[${toolName}] SDK context usage: ${result.rawContextUsage.totalTokens}/${result.rawContextUsage.maxTokens} tokens (${result.rawContextUsage.percentage}%)`
       );
+
+      // Store rawContextUsage in the raw_sdk_response for debugging
+      if (patchData.raw_sdk_response && typeof patchData.raw_sdk_response === 'object') {
+        (patchData.raw_sdk_response as Record<string, unknown>).rawContextUsage = {
+          totalTokens: result.rawContextUsage.totalTokens,
+          maxTokens: result.rawContextUsage.maxTokens,
+          percentage: result.rawContextUsage.percentage,
+        };
+      }
+
+      // Override contextWindowLimit in normalized response with the authoritative
+      // maxTokens from getContextUsage() so the UI computes percentage correctly
+      if (
+        patchData.normalized_sdk_response &&
+        typeof patchData.normalized_sdk_response === 'object' &&
+        result.rawContextUsage.maxTokens > 0
+      ) {
+        (patchData.normalized_sdk_response as Record<string, unknown>).contextWindowLimit =
+          result.rawContextUsage.maxTokens;
+      }
     } else if (tool.computeContextWindow) {
       try {
         const contextWindow = await tool.computeContextWindow(

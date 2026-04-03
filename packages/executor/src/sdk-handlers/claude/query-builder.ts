@@ -631,10 +631,25 @@ export async function setupQuery(
     queryOptions.mcpServers ? JSON.stringify(summarizeMcpConfig(queryOptions.mcpServers)) : 'none'
   );
 
+  // Wrap the string prompt in an AsyncIterable so the SDK treats this as a
+  // streaming-input query.  When a plain string is passed, the SDK sets
+  // `isSingleUserTurn = true` and closes stdin right after the first result
+  // event, which prevents control-request methods like `getContextUsage()`
+  // from working (they need to write to stdin).  By passing an iterable that
+  // yields one message and then completes, `isSingleUserTurn` stays false and
+  // stdin remains open long enough for post-result control requests.
+  async function* asUserMessageIterable(text: string) {
+    yield {
+      type: 'user' as const,
+      message: { role: 'user' as const, content: [{ type: 'text' as const, text }] },
+      parent_tool_use_id: null,
+    };
+  }
+
   let result: AsyncGenerator<unknown>;
   try {
     result = query({
-      prompt,
+      prompt: asUserMessageIterable(prompt),
       // queryOptions uses Record<string,unknown> to accommodate undocumented fields (debug, apiKey)
       // that are valid at runtime but not in the public Options type
       options: queryOptions as unknown as Options,
