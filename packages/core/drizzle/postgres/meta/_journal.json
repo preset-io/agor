@@ -148,6 +148,13 @@
       "when": 1775200100000,
       "tag": "0020_salty_marten_broadcloak",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1775192489912,
+      "tag": "0021_far_masked_marvel",
+      "breakpoints": true
     }
   ]
 }
