@@ -114,10 +114,36 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     onOpenTerminal,
   } = useAppActions();
 
-  // Per-session draft storage
-  const draftsRef = React.useRef<Map<string, string>>(new Map());
+  // Per-session draft storage (localStorage-backed to survive unmounts)
+  const DRAFT_KEY_PREFIX = 'agor-draft-';
+  const getDraft = React.useCallback((sessionId: string): string => {
+    try {
+      return localStorage.getItem(`${DRAFT_KEY_PREFIX}${sessionId}`) || '';
+    } catch {
+      return '';
+    }
+  }, []);
+  const saveDraft = React.useCallback((sessionId: string, value: string) => {
+    try {
+      if (value.trim()) {
+        localStorage.setItem(`${DRAFT_KEY_PREFIX}${sessionId}`, value);
+      } else {
+        localStorage.removeItem(`${DRAFT_KEY_PREFIX}${sessionId}`);
+      }
+    } catch {
+      // localStorage full or unavailable
+    }
+  }, []);
+  const deleteDraft = React.useCallback((sessionId: string) => {
+    try {
+      localStorage.removeItem(`${DRAFT_KEY_PREFIX}${sessionId}`);
+    } catch {
+      // ignore
+    }
+  }, []);
+
   const [inputValue, setInputValue] = React.useState(() => {
-    return session ? draftsRef.current.get(session.session_id) || '' : '';
+    return session ? getDraft(session.session_id) : '';
   });
 
   const prevSessionIdRef = React.useRef(session?.session_id);
@@ -127,16 +153,21 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     if (!session) return;
 
     if (prevSessionIdRef.current !== session.session_id) {
-      if (prevSessionIdRef.current && inputValue.trim()) {
-        draftsRef.current.set(prevSessionIdRef.current, inputValue);
-      } else if (prevSessionIdRef.current) {
-        draftsRef.current.delete(prevSessionIdRef.current);
+      if (prevSessionIdRef.current) {
+        saveDraft(prevSessionIdRef.current, inputValue);
       }
 
-      setInputValue(draftsRef.current.get(session.session_id) || '');
+      setInputValue(getDraft(session.session_id));
       prevSessionIdRef.current = session.session_id;
     }
-  }, [session, inputValue]);
+  }, [session, inputValue, saveDraft, getDraft]);
+
+  // Save draft on every change (so board switches don't lose it)
+  React.useEffect(() => {
+    if (session) {
+      saveDraft(session.session_id, inputValue);
+    }
+  }, [session, inputValue, saveDraft]);
 
   const getDefaultPermissionMode = React.useCallback((agent?: string): PermissionMode => {
     return agent === 'codex' ? 'auto' : 'acceptEdits';
@@ -364,10 +395,10 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
         message.success(`Message queued at position ${response.message.queue_position}`);
         setInputValue('');
-        draftsRef.current.delete(session.session_id);
+        deleteDraft(session.session_id);
       } else {
         setInputValue('');
-        draftsRef.current.delete(session.session_id);
+        deleteDraft(session.session_id);
         onSendPrompt?.(session.session_id, promptToSend, permissionMode);
       }
     } catch (error) {
@@ -400,7 +431,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     if (!session) return;
     onFork?.(session.session_id, inputValue.trim());
     setInputValue('');
-    draftsRef.current.delete(session.session_id);
+    deleteDraft(session.session_id);
   };
 
   const handleSpawnModalConfirm = async (config: string | Partial<SpawnConfig>) => {
