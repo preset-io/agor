@@ -51,6 +51,12 @@ export interface BaseTool {
     errorDetails?: string[];
     /** Raw SDK response for token accounting - stored and normalized */
     rawSdkResponse?: unknown;
+    /** Raw SDK context usage from getContextUsage() — authoritative context window snapshot */
+    rawContextUsage?: {
+      totalTokens: number;
+      maxTokens: number;
+      percentage: number;
+    };
   }>;
 
   // Optional stopTask method for tools that support interruption
@@ -429,8 +435,14 @@ export async function executeToolTask(params: {
         }
       }
 
-      // Compute context window usage using tool-specific logic
-      if (tool.computeContextWindow) {
+      // Use SDK's authoritative context usage when available (Claude Code),
+      // fall back to tool-specific computation for other tools (Codex, Gemini)
+      if (result.rawContextUsage && result.rawContextUsage.totalTokens > 0) {
+        patchData.computed_context_window = result.rawContextUsage.totalTokens;
+        console.log(
+          `[${toolName}] SDK context usage: ${result.rawContextUsage.totalTokens}/${result.rawContextUsage.maxTokens} tokens (${result.rawContextUsage.percentage}%)`
+        );
+      } else if (tool.computeContextWindow) {
         try {
           const contextWindow = await tool.computeContextWindow(
             sessionId,

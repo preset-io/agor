@@ -128,6 +128,7 @@ export interface QuerySetupDeps {
  */
 export interface InterruptibleQuery {
   interrupt(): Promise<void>;
+  getContextUsage(): Promise<import('@agor/core/sdk').SDKControlGetContextUsageResponse>;
   // biome-ignore lint/suspicious/noExplicitAny: SDK returns complex union of message types
   [Symbol.asyncIterator](): AsyncIterator<any>;
 }

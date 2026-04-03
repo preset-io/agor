@@ -272,6 +272,8 @@ export class ClaudeTool implements ITool {
     model?: string;
     modelUsage?: unknown;
     rawSdkResponse?: import('@agor/core/sdk').SDKResultMessage;
+    /** Raw SDK context usage snapshot from getContextUsage() — authoritative source */
+    rawContextUsage?: import('@agor/core/sdk').SDKControlGetContextUsageResponse;
     wasStopped?: boolean;
     hadError?: boolean;
     /** Error details from SDK when hadError is true (e.g., errors array from error_during_execution) */
@@ -341,6 +343,7 @@ export class ClaudeTool implements ITool {
     let contextWindowLimit: number | undefined;
     let modelUsage: unknown | undefined;
     let rawSdkResponse: import('@agor/core/sdk').SDKResultMessage | undefined;
+    let rawContextUsage: import('@agor/core/sdk').SDKControlGetContextUsageResponse | undefined;
     let wasStopped = false;
     let hadError = false;
     let errorDetails: string[] | undefined;
@@ -702,6 +705,11 @@ export class ClaudeTool implements ITool {
         }
       }
 
+      // Capture SDK context usage snapshot (authoritative context window data)
+      if (event.type === 'context_usage') {
+        rawContextUsage = event.contextUsage;
+      }
+
       // Capture metadata from result events (SDK may not type this properly)
       if ('token_usage' in event && event.token_usage) {
         tokenUsage = extractTokenUsage(event.token_usage);
@@ -862,6 +870,7 @@ export class ClaudeTool implements ITool {
       model: resolvedModel,
       modelUsage,
       rawSdkResponse,
+      rawContextUsage,
       wasStopped,
       hadError,
       errorDetails,
@@ -940,6 +949,8 @@ export class ClaudeTool implements ITool {
     model?: string;
     modelUsage?: unknown;
     rawSdkResponse?: import('@agor/core/sdk').SDKResultMessage;
+    /** Raw SDK context usage snapshot from getContextUsage() — authoritative source */
+    rawContextUsage?: import('@agor/core/sdk').SDKControlGetContextUsageResponse;
     wasStopped?: boolean;
     hadError?: boolean;
     /** Error details from SDK when hadError is true (e.g., errors array from error_during_execution) */
@@ -977,6 +988,7 @@ export class ClaudeTool implements ITool {
     let contextWindowLimit: number | undefined;
     let modelUsage: unknown | undefined;
     let rawSdkResponse: import('@agor/core/sdk').SDKResultMessage | undefined;
+    let rawContextUsage: import('@agor/core/sdk').SDKControlGetContextUsageResponse | undefined;
     let wasStopped = false;
     let hadError = false;
     let errorDetails: string[] | undefined;
@@ -1100,6 +1112,11 @@ export class ClaudeTool implements ITool {
         }
       }
 
+      // Capture SDK context usage snapshot (authoritative context window data)
+      if (event.type === 'context_usage') {
+        rawContextUsage = event.contextUsage;
+      }
+
       // Capture metadata from result events (SDK may not type this properly)
       if ('token_usage' in event && event.token_usage) {
         tokenUsage = extractTokenUsage(event.token_usage);
@@ -1184,6 +1201,7 @@ export class ClaudeTool implements ITool {
       model: resolvedModel,
       modelUsage,
       rawSdkResponse,
+      rawContextUsage,
       wasStopped,
       hadError,
       errorDetails,
@@ -1265,49 +1283,51 @@ export class ClaudeTool implements ITool {
    * @param currentRawSdkResponse - Raw SDK response for the current task
    * @returns Promise resolving to computed context window usage in tokens
    */
+  /**
+   * Fallback context window computation when getContextUsage() was unavailable.
+   * The primary path (SDK's getContextUsage()) is handled in base-executor.ts
+   * via rawContextUsage. This method is only called when that path fails.
+   *
+   * NOTE: These values are CUMULATIVE across all API calls in a task, so they
+   * will overcount for multi-turn tasks. The SDK's getContextUsage() is the
+   * authoritative source — this is a best-effort fallback only.
+   */
   async computeContextWindow(
     sessionId: string,
     _currentTaskId?: string,
     currentRawSdkResponse?: unknown
   ): Promise<number> {
     if (!currentRawSdkResponse) {
-      console.warn(
-        `⚠️  computeContextWindow: no raw SDK response available for session ${sessionId}`
-      );
       return 0;
     }
 
     const response =
       currentRawSdkResponse as import('../../types/sdk-response').ClaudeCodeSdkResponseTyped;
 
-    // Use the result message's usage which contains cumulative totals for this turn
-    // Context = input_tokens + cache_creation + cache_read (everything sent to the model)
+    // Clamp to model's reported context window to prevent >100% values
+    let maxContextWindow = 0;
+    if (response.modelUsage && typeof response.modelUsage === 'object') {
+      for (const modelData of Object.values(response.modelUsage)) {
+        if (modelData.contextWindow && modelData.contextWindow > 0) {
+          maxContextWindow = Math.max(maxContextWindow, modelData.contextWindow);
+        }
+      }
+    }
+    if (maxContextWindow === 0) {
+      maxContextWindow = 200_000;
+    }
+
+    // Use cumulative usage fields, clamped to max context window
     if (response.usage) {
       const inputTokens = response.usage.input_tokens || 0;
       const cacheCreation = response.usage.cache_creation_input_tokens || 0;
       const cacheRead = response.usage.cache_read_input_tokens || 0;
-      const contextTokens = inputTokens + cacheCreation + cacheRead;
+      const contextTokens = Math.min(inputTokens + cacheCreation + cacheRead, maxContextWindow);
 
       console.log(
-        `📊 Context window fallback for session ${sessionId}: ${contextTokens} tokens ` +
-          `(input: ${inputTokens}, cache_creation: ${cacheCreation}, cache_read: ${cacheRead})`
+        `📊 Context window fallback for session ${sessionId}: ${contextTokens} tokens (clamped to ${maxContextWindow})`
       );
       return contextTokens;
-    }
-
-    // If modelUsage exists but no top-level usage, sum across models
-    if (response.modelUsage && typeof response.modelUsage === 'object') {
-      let totalContext = 0;
-      for (const modelData of Object.values(response.modelUsage)) {
-        totalContext +=
-          (modelData.inputTokens || 0) +
-          (modelData.cacheReadInputTokens || 0) +
-          (modelData.cacheCreationInputTokens || 0);
-      }
-      console.log(
-        `📊 Context window fallback (multi-model) for session ${sessionId}: ${totalContext} tokens`
-      );
-      return totalContext;
     }
 
     return 0;

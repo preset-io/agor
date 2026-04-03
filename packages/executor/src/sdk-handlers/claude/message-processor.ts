@@ -139,6 +139,11 @@ export type ProcessedEvent =
       agentSessionId?: string;
     }
   | {
+      type: 'context_usage';
+      /** Raw response from SDK getContextUsage() — authoritative context window snapshot */
+      contextUsage: import('@agor/core/sdk').SDKControlGetContextUsageResponse;
+    }
+  | {
       type: 'stopped';
     }
   | {

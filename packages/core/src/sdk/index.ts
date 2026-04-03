@@ -20,6 +20,7 @@ export type {
   PermissionMode,
   SDKAssistantMessage,
   SDKCompactBoundaryMessage,
+  SDKControlGetContextUsageResponse,
   SDKMessage,
   SDKPartialAssistantMessage,
   SDKResultMessage,
