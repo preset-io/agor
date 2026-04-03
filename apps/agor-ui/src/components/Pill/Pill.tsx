@@ -218,6 +218,44 @@ const ContextWindowPopoverContent: React.FC<{
   // Get normalized SDK response (pre-computed by executor)
   const normalized = taskMetadata?.normalized_sdk_response;
 
+  // Add authoritative context usage from SDK's getContextUsage() if available
+  const rawContextUsage =
+    sdkResponse &&
+    typeof sdkResponse === 'object' &&
+    sdkResponse !== null &&
+    'rawContextUsage' in sdkResponse &&
+    sdkResponse.rawContextUsage &&
+    typeof sdkResponse.rawContextUsage === 'object'
+      ? (sdkResponse.rawContextUsage as {
+          totalTokens: number;
+          maxTokens: number;
+          percentage: number;
+        })
+      : null;
+
+  if (rawContextUsage) {
+    advancedItems.push({
+      key: 'sdk-context-usage',
+      label: 'Context Window (SDK)',
+      children: (
+        <div style={{ fontSize: '0.9em', color: token.colorTextSecondary }}>
+          <div>
+            Used: <strong>{rawContextUsage.totalTokens.toLocaleString()}</strong> tokens
+          </div>
+          <div>
+            Limit: <strong>{rawContextUsage.maxTokens.toLocaleString()}</strong> tokens
+          </div>
+          <div>
+            Percentage: <strong>{rawContextUsage.percentage}%</strong>
+          </div>
+          <div style={{ fontSize: '0.85em', color: token.colorTextTertiary, marginTop: 4 }}>
+            Authoritative snapshot from SDK getContextUsage()
+          </div>
+        </div>
+      ),
+    });
+  }
+
   // Add per-model usage if available (Claude Code multi-model)
   // Check for modelUsage field (only Claude SDK has this)
   if (
@@ -301,8 +339,8 @@ const ContextWindowPopoverContent: React.FC<{
         </div>
         <div style={{ fontSize: '0.85em', color: token.colorTextTertiary, marginTop: 6 }}>
           {limit > 0
-            ? 'Cumulative conversation tokens'
-            : 'Cumulative conversation tokens (limit unknown)'}
+            ? 'Current context window snapshot'
+            : 'Current context window snapshot (limit unknown)'}
         </div>
       </div>
 
