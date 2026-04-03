@@ -83,11 +83,5 @@ export const RateLimitBlock: React.FC<RateLimitBlockProps> = ({ message, agentic
     </Space>
   );
 
-  return (
-    <SystemMessage
-      content={formattedContent}
-      raw={block as Record<string, unknown>}
-      agenticTool={agentic_tool}
-    />
-  );
+  return <SystemMessage content={formattedContent} raw={block} agenticTool={agentic_tool} />;
 };

@@ -87,11 +87,7 @@ export const CompactionBlock: React.FC<CompactionBlockProps> = ({ messages, agen
       );
 
       return (
-        <SystemMessage
-          content={formattedContent}
-          raw={completeBlock as Record<string, unknown>}
-          agenticTool={agentic_tool}
-        />
+        <SystemMessage content={formattedContent} raw={completeBlock} agenticTool={agentic_tool} />
       );
     }
   }

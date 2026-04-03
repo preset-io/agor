@@ -8,18 +8,17 @@
 
 import { RobotOutlined } from '@ant-design/icons';
 import { Bubble } from '@ant-design/x';
-import { Typography, theme } from 'antd';
-import React, { useState } from 'react';
+import { Button, theme } from 'antd';
+import type React from 'react';
+import { useId, useState } from 'react';
 import { AgorAvatar } from '../AgorAvatar';
 import { ToolIcon } from '../ToolIcon';
-
-const { Text } = Typography;
 
 interface SystemMessageProps {
   /** The formatted, human-readable content (icon + text + metadata) */
   content: React.ReactNode;
   /** Optional raw payload — when provided, renders a collapsed "Details" toggle showing JSON */
-  raw?: Record<string, unknown>;
+  raw?: unknown;
   /** Avatar override (defaults to Agor robot avatar) */
   avatar?: React.ReactNode;
   /** Bubble variant (defaults to 'outlined') */
@@ -37,6 +36,7 @@ export const SystemMessage: React.FC<SystemMessageProps> = ({
 }) => {
   const { token } = theme.useToken();
   const [rawExpanded, setRawExpanded] = useState(false);
+  const detailsId = useId();
 
   const resolvedAvatar =
     avatar ??
@@ -54,21 +54,27 @@ export const SystemMessage: React.FC<SystemMessageProps> = ({
         content={
           <div>
             {content}
-            {raw && (
+            {raw != null && (
               <div style={{ marginTop: token.sizeUnit }}>
-                <Text
+                <Button
+                  type="text"
+                  size="small"
+                  onClick={() => setRawExpanded(!rawExpanded)}
+                  aria-expanded={rawExpanded}
+                  aria-controls={detailsId}
                   style={{
                     fontSize: 11,
                     color: token.colorTextQuaternary,
-                    cursor: 'pointer',
-                    userSelect: 'none',
+                    padding: '0 4px',
+                    height: 'auto',
+                    lineHeight: 'inherit',
                   }}
-                  onClick={() => setRawExpanded(!rawExpanded)}
                 >
                   {rawExpanded ? '▼' : '▶'} Details
-                </Text>
+                </Button>
                 {rawExpanded && (
                   <pre
+                    id={detailsId}
                     style={{
                       fontSize: 11,
                       color: token.colorTextQuaternary,
