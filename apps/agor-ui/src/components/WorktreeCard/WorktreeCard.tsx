@@ -78,7 +78,7 @@ const SessionItemWithActions: React.FC<{
 
   return (
     <div
-      style={{ position: 'relative' }}
+      style={{ position: 'relative', minWidth: 120 }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
