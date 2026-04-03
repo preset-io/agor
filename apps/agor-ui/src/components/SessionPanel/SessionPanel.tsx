@@ -342,7 +342,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const isStopping = session.status === SessionStatus.STOPPING;
 
   const handleSendPrompt = async () => {
-    if (!inputValue.trim()) return;
+    if (!inputValue.trim() || connectionDisabled) return;
 
     const promptToSend = inputValue.trim();
 
@@ -558,7 +558,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           onKeyPress={(e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault();
-              if (inputValue.trim()) {
+              if (inputValue.trim() && !connectionDisabled) {
                 handleSendPrompt();
               }
             }
@@ -678,27 +678,51 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                   loading={isStopping && !stopRequestInFlight}
                 />
               </Tooltip>
-              <Tooltip title={isRunning ? 'Session is running...' : 'Fork Session'}>
+              <Tooltip
+                title={
+                  connectionDisabled
+                    ? 'Disconnected from daemon'
+                    : isRunning
+                      ? 'Session is running...'
+                      : 'Fork Session'
+                }
+              >
                 <Button
                   icon={<ForkOutlined />}
                   onClick={handleFork}
                   disabled={connectionDisabled || isRunning}
                 />
               </Tooltip>
-              <Tooltip title={isRunning ? 'Session is running...' : 'Spawn Subsession'}>
+              <Tooltip
+                title={
+                  connectionDisabled
+                    ? 'Disconnected from daemon'
+                    : isRunning
+                      ? 'Session is running...'
+                      : 'Spawn Subsession'
+                }
+              >
                 <Button
                   icon={<BranchesOutlined />}
                   onClick={() => setSpawnModalOpen(true)}
                   disabled={connectionDisabled || isRunning}
                 />
               </Tooltip>
-              <Tooltip title="Upload Files">
+              <Tooltip title={connectionDisabled ? 'Disconnected from daemon' : 'Upload Files'}>
                 <FileUploadButton
                   onClick={() => setUploadModalOpen(true)}
                   disabled={connectionDisabled}
                 />
               </Tooltip>
-              <Tooltip title={isRunning ? 'Queue Message' : 'Send Prompt'}>
+              <Tooltip
+                title={
+                  connectionDisabled
+                    ? 'Disconnected from daemon'
+                    : isRunning
+                      ? 'Queue Message'
+                      : 'Send Prompt'
+                }
+              >
                 <Button
                   type="primary"
                   icon={<SendOutlined />}
