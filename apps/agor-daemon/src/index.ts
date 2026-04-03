@@ -1183,7 +1183,7 @@ async function main() {
   app.use('/cards', createCardsService(db));
 
   // Register artifacts service (live Sandpack web apps on boards)
-  app.use('/artifacts', createArtifactsService(db));
+  app.use('/artifacts', createArtifactsService(db, app));
 
   // Register board-comments service (human-to-human conversations)
   app.use('/board-comments', createBoardCommentsService(db));

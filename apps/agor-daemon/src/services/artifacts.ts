@@ -22,6 +22,7 @@ import {
   type Database,
   WorktreeRepository,
 } from '@agor/core/db';
+import type { Application } from '@agor/core/feathers';
 import type {
   Artifact,
   ArtifactBuildStatus,
@@ -74,11 +75,12 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   private artifactRepo: ArtifactRepository;
   private worktreeRepo: WorktreeRepository;
   private boardRepo: BoardRepository;
+  private app: Application;
 
   /** In-memory ring buffer for console logs per artifact */
   private consoleLogs: Map<string, ArtifactConsoleEntry[]> = new Map();
 
-  constructor(db: Database) {
+  constructor(db: Database, app: Application) {
     const artifactRepo = new ArtifactRepository(db);
     super(artifactRepo, {
       id: 'artifact_id',
@@ -91,6 +93,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     this.artifactRepo = artifactRepo;
     this.worktreeRepo = new WorktreeRepository(db);
     this.boardRepo = new BoardRepository(db);
+    this.app = app;
   }
 
   // Override Feathers CRUD to enforce lifecycle-safe operations.
@@ -191,7 +194,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       // Place on board as a thin reference
       const objectId = `artifact-${artifactId}`;
       try {
-        await this.boardRepo.upsertBoardObject(data.board_id, objectId, {
+        const updatedBoard = await this.boardRepo.upsertBoardObject(data.board_id, objectId, {
           type: 'artifact',
           artifact_id: artifactId,
           x: data.x ?? 0,
@@ -199,6 +202,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
           width: data.width ?? 600,
           height: data.height ?? 400,
         });
+
+        // Emit board patched event so the UI updates in real-time via WebSocket
+        if (this.app) {
+          this.app.service('boards').emit('patched', updatedBoard);
+        }
       } catch (boardError) {
         // Compensate: remove DB record if board placement fails
         try {
@@ -389,7 +397,10 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     // Remove board object reference
     const objectId = `artifact-${artifactId}`;
     try {
-      await this.boardRepo.removeBoardObject(artifact.board_id, objectId);
+      const updatedBoard = await this.boardRepo.removeBoardObject(artifact.board_id, objectId);
+      if (this.app && updatedBoard) {
+        this.app.service('boards').emit('patched', updatedBoard);
+      }
     } catch {
       // Board object may not exist or board may be deleted
     }
@@ -459,6 +470,6 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   }
 }
 
-export function createArtifactsService(db: Database): ArtifactsService {
-  return new ArtifactsService(db);
+export function createArtifactsService(db: Database, app: Application): ArtifactsService {
+  return new ArtifactsService(db, app);
 }
