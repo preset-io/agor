@@ -1,5 +1,5 @@
 import type { AgorClient } from '@agor/core/api';
-import type { Repo, Session, SpawnConfig, User, Worktree } from '@agor/core/types';
+import type { Repo, Session, SessionID, SpawnConfig, User, Worktree } from '@agor/core/types';
 import {
   getAssistantConfig,
   getGatewaySource as getGatewaySourceCore,
@@ -40,6 +40,7 @@ import {
 import { AggregationColor } from 'antd/es/color-picker/color';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
+import { useSessionActions } from '../../hooks/useSessionActions';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
 import { ensureColorVisible, isDarkTheme } from '../../utils/theme';
 import { ArchiveDeleteWorktreeModal } from '../ArchiveDeleteWorktreeModal';
@@ -223,23 +224,22 @@ const WorktreeCardComponent = ({
     }
   };
 
-  // Session archive state
+  // Session archive via shared hook
+  const { archiveSession } = useSessionActions(client);
   const [archivingSessionIds, setArchivingSessionIds] = useState<Set<string>>(new Set());
 
   const handleArchiveSession = useCallback(
     async (sessionId: string, e: React.MouseEvent) => {
       e.stopPropagation();
-      if (!client) return;
 
       setArchivingSessionIds((prev) => new Set(prev).add(sessionId));
       try {
-        await client.service('sessions').patch(sessionId, {
-          archived: true,
-          archived_reason: 'manual',
-        } as Partial<Session>);
-        message.success('Session archived');
-      } catch (err) {
-        message.error(err instanceof Error ? err.message : 'Failed to archive session');
+        const result = await archiveSession(sessionId as SessionID);
+        if (result) {
+          message.success('Session archived');
+        } else {
+          message.error('Failed to archive session');
+        }
       } finally {
         setArchivingSessionIds((prev) => {
           const next = new Set(prev);
@@ -248,7 +248,7 @@ const WorktreeCardComponent = ({
         });
       }
     },
-    [client]
+    [archiveSession]
   );
 
   // Gateway session helpers (delegating to @agor/core/types)
@@ -528,10 +528,10 @@ const WorktreeCardComponent = ({
             isArchiving={archivingSessionIds.has(session.session_id)}
             onArchive={handleArchiveSession}
             onSettings={
-              onSessionClick
+              onOpenSessionSettings
                 ? (id, e) => {
                     e.stopPropagation();
-                    onSessionClick(id);
+                    onOpenSessionSettings(id);
                   }
                 : undefined
             }
@@ -611,10 +611,10 @@ const WorktreeCardComponent = ({
             isArchiving={archivingSessionIds.has(session.session_id)}
             onArchive={handleArchiveSession}
             onSettings={
-              onSessionClick
+              onOpenSessionSettings
                 ? (id, e) => {
                     e.stopPropagation();
-                    onSessionClick(id);
+                    onOpenSessionSettings(id);
                   }
                 : undefined
             }

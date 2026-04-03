@@ -20,6 +20,8 @@ interface UseSessionActionsResult {
   createSession: (config: NewSessionConfig) => Promise<Session | null>;
   updateSession: (sessionId: SessionID, updates: Partial<Session>) => Promise<Session | null>;
   deleteSession: (sessionId: SessionID) => Promise<boolean>;
+  archiveSession: (sessionId: SessionID) => Promise<Session | null>;
+  unarchiveSession: (sessionId: SessionID) => Promise<Session | null>;
   forkSession: (sessionId: SessionID, prompt: string) => Promise<Session | null>;
   spawnSession: (sessionId: SessionID, config: Partial<SpawnConfig>) => Promise<Session | null>;
   creating: boolean;
@@ -203,10 +205,26 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
     }
   };
 
+  const archiveSession = async (sessionId: SessionID): Promise<Session | null> => {
+    return updateSession(sessionId, {
+      archived: true,
+      archived_reason: 'manual',
+    } as Partial<Session>);
+  };
+
+  const unarchiveSession = async (sessionId: SessionID): Promise<Session | null> => {
+    return updateSession(sessionId, {
+      archived: false,
+      archived_reason: undefined,
+    } as Partial<Session>);
+  };
+
   return {
     createSession,
     updateSession,
     deleteSession,
+    archiveSession,
+    unarchiveSession,
     forkSession,
     spawnSession,
     creating,
