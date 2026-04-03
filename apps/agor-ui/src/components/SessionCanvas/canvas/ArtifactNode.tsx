@@ -185,9 +185,6 @@ export const ArtifactNode = ({
     [data]
   );
 
-  const headerHeight = 40;
-  const previewHeight = data.height - headerHeight - 16;
-
   // Loading state
   if (loading && !payload) {
     return (
@@ -331,7 +328,18 @@ export const ArtifactNode = ({
           </div>
         }
       >
+        {/* Force Sandpack internal containers to fill available height */}
+        <style>{`
+          .artifact-sandpack-wrapper .sp-wrapper,
+          .artifact-sandpack-wrapper .sp-layout,
+          .artifact-sandpack-wrapper .sp-stack,
+          .artifact-sandpack-wrapper .sp-preview,
+          .artifact-sandpack-wrapper .sp-preview-container {
+            height: 100% !important;
+          }
+        `}</style>
         <div
+          className="artifact-sandpack-wrapper"
           style={{
             flex: 1,
             position: 'relative',
@@ -349,7 +357,7 @@ export const ArtifactNode = ({
           >
             <SandpackPreview
               style={{
-                height: previewHeight > 0 ? previewHeight : 200,
+                height: '100%',
                 border: 'none',
               }}
               showNavigator={false}
