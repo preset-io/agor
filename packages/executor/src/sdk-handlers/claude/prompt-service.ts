@@ -273,9 +273,10 @@ This is a CLI-only command that only works in the standalone Claude Code termina
             continue; // Don't yield this event upstream
           }
 
-          // On result event, call getContextUsage() BEFORE yielding to minimize
-          // the race with stdin close. The subprocess is most likely still alive
-          // at this point since we haven't suspended via yield yet.
+          // On result event, call getContextUsage() then release the held input
+          // stream so the SDK can close stdin.  The input iterable is kept alive
+          // (via a pending Promise) specifically so this control request can use
+          // stdin.  We must release it afterward regardless of success/failure.
           if (event.type === 'result') {
             try {
               const contextUsage = await result.getContextUsage();
@@ -287,6 +288,9 @@ This is a CLI-only command that only works in the standalone Claude Code termina
               console.warn(
                 `⚠️  getContextUsage() unavailable (subprocess may have exited): ${error instanceof Error ? error.message : String(error)}`
               );
+            } finally {
+              // Release the held input iterable so the SDK can close stdin
+              result.releaseInput();
             }
           }
 
@@ -306,6 +310,9 @@ This is a CLI-only command that only works in the standalone Claude Code termina
         }
       }
     } catch (error) {
+      // Ensure stdin is released on any error so the subprocess can exit cleanly
+      result.releaseInput();
+
       const state = processor.getState();
 
       // Check if this is an AbortError from AbortController.abort()
