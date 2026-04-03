@@ -162,6 +162,7 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
       okText={`${actionLabel} Session`}
       confirmLoading={loading}
       width={700}
+      forceRender
     >
       <div style={{ marginBottom: 16 }}>
         <Typography.Text type="secondary" style={{ fontSize: 13 }}>
