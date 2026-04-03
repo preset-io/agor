@@ -1,6 +1,6 @@
 import type { AgenticToolName } from './agentic-tool';
 import type { CardID } from './card';
-import type { BoardID, WorktreeID } from './id';
+import type { ArtifactID, BoardID, WorktreeID } from './id';
 
 /**
  * Board object types for canvas annotations
@@ -175,7 +175,7 @@ export interface ArtifactBoardObject {
   width: number; // Default: 600, min: 300
   height: number; // Default: 400, min: 200
   /** Reference to the artifact entity */
-  artifact_id: string;
+  artifact_id: ArtifactID;
 }
 
 /**

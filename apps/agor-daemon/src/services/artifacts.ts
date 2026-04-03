@@ -93,6 +93,25 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     this.boardRepo = new BoardRepository(db);
   }
 
+  // Override Feathers CRUD to enforce lifecycle-safe operations.
+  // Artifacts require filesystem scaffolding (create) and cleanup (remove).
+  // Raw Feathers create/remove would skip these, causing orphaned state.
+  // Use createArtifact() / deleteArtifact() or MCP tools instead.
+
+  async create(_data: Partial<Artifact>, _params?: unknown): Promise<Artifact> {
+    throw new Error(
+      'Direct artifact creation not supported. Use createArtifact() or agor_artifacts_create MCP tool.'
+    );
+  }
+
+  async remove(id: string | number, _params?: unknown): Promise<Artifact> {
+    const artifactId = String(id);
+    const artifact = await this.artifactRepo.findById(artifactId);
+    if (!artifact) throw new Error(`Artifact ${artifactId} not found`);
+    await this.deleteArtifact(artifactId);
+    return artifact;
+  }
+
   /**
    * Create an artifact: scaffold filesystem, create DB record, place on board
    */
@@ -125,55 +144,75 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     // Scaffold directory
     fs.mkdirSync(artifactDir, { recursive: true });
 
-    // Write sandpack.json manifest
-    const manifest: SandpackManifest = {
-      template,
-      dependencies: data.dependencies,
-      entry: data.entry,
-    };
-    fs.writeFileSync(path.join(artifactDir, 'sandpack.json'), JSON.stringify(manifest, null, 2));
+    try {
+      // Write sandpack.json manifest
+      const manifest: SandpackManifest = {
+        template,
+        dependencies: data.dependencies,
+        entry: data.entry,
+      };
+      fs.writeFileSync(path.join(artifactDir, 'sandpack.json'), JSON.stringify(manifest, null, 2));
 
-    // Write initial files
-    const files = data.files ?? DEFAULT_FILES[template] ?? DEFAULT_FILES.react;
-    for (const [filePath, content] of Object.entries(files)) {
-      const fullPath = path.join(
-        artifactDir,
-        filePath.startsWith('/') ? filePath.slice(1) : filePath
-      );
-      const dir = path.dirname(fullPath);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
+      // Write initial files with path containment check
+      const files = data.files ?? DEFAULT_FILES[template] ?? DEFAULT_FILES.react;
+      for (const [filePath, content] of Object.entries(files)) {
+        const relativePart = filePath.startsWith('/') ? filePath.slice(1) : filePath;
+        const fullPath = path.resolve(artifactDir, relativePart);
+
+        // Path traversal guard: ensure resolved path stays within artifact directory
+        if (!fullPath.startsWith(artifactDir + path.sep) && fullPath !== artifactDir) {
+          throw new Error(
+            `Path traversal detected: ${filePath} resolves outside artifact directory`
+          );
+        }
+
+        const dir = path.dirname(fullPath);
+        if (!fs.existsSync(dir)) {
+          fs.mkdirSync(dir, { recursive: true });
+        }
+        fs.writeFileSync(fullPath, content);
       }
-      fs.writeFileSync(fullPath, content);
+
+      // Compute initial content hash
+      const contentHash = this.computeHash(artifactDir);
+
+      // Create DB record
+      const artifact = await this.artifactRepo.create({
+        artifact_id: artifactId,
+        worktree_id: data.worktree_id as WorktreeID,
+        board_id: data.board_id as BoardID,
+        name: data.name,
+        path: relativePath,
+        template,
+        content_hash: contentHash,
+        created_by: userId,
+      });
+
+      // Place on board as a thin reference
+      const objectId = `artifact-${artifactId}`;
+      try {
+        await this.boardRepo.upsertBoardObject(data.board_id, objectId, {
+          type: 'artifact',
+          artifact_id: artifactId,
+          x: data.x ?? 0,
+          y: data.y ?? 0,
+          width: data.width ?? 600,
+          height: data.height ?? 400,
+        });
+      } catch (boardError) {
+        // Compensate: remove DB record if board placement fails
+        await this.artifactRepo.delete(artifactId);
+        throw boardError;
+      }
+
+      return artifact;
+    } catch (error) {
+      // Compensate: remove scaffolded directory on any failure
+      if (fs.existsSync(artifactDir)) {
+        fs.rmSync(artifactDir, { recursive: true, force: true });
+      }
+      throw error;
     }
-
-    // Compute initial content hash
-    const contentHash = this.computeHash(artifactDir);
-
-    // Create DB record
-    const artifact = await this.artifactRepo.create({
-      artifact_id: artifactId,
-      worktree_id: data.worktree_id as WorktreeID,
-      board_id: data.board_id as BoardID,
-      name: data.name,
-      path: relativePath,
-      template,
-      content_hash: contentHash,
-      created_by: userId,
-    });
-
-    // Place on board as a thin reference
-    const objectId = `artifact-${artifactId}`;
-    await this.boardRepo.upsertBoardObject(data.board_id, objectId, {
-      type: 'artifact',
-      artifact_id: artifactId,
-      x: data.x ?? 0,
-      y: data.y ?? 0,
-      width: data.width ?? 600,
-      height: data.height ?? 400,
-    });
-
-    return artifact;
   }
 
   /**
@@ -232,7 +271,12 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   }
 
   /**
-   * Check build: read files and run basic syntax validation
+   * Check build: verify artifact files exist and are non-empty.
+   *
+   * Note: `new Function()` was considered for syntax checking but it cannot
+   * parse ESM (export/import), JSX, or TypeScript — which are the primary
+   * Sandpack use cases. Real syntax validation requires esbuild (v2 enhancement).
+   * For now, we validate file existence and structure.
    */
   async checkBuild(artifactId: string): Promise<{
     status: ArtifactBuildStatus;
@@ -241,19 +285,19 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     const payload = await this.getPayload(artifactId);
     const errors: string[] = [];
 
-    // Basic syntax checking: try to parse each JS/TS/JSX/TSX file
-    for (const [filePath, content] of Object.entries(payload.files)) {
-      if (!/\.(js|jsx|ts|tsx)$/.test(filePath)) continue;
+    // Check that at least one source file exists
+    const sourceFiles = Object.entries(payload.files).filter(([fp]) =>
+      /\.(js|jsx|ts|tsx|html|css)$/.test(fp)
+    );
 
-      try {
-        // Use Function constructor for basic syntax validation
-        // This catches syntax errors but not import resolution issues
-        // For a more thorough check, we'd use esbuild (added as future enhancement)
-        new Function(content);
-      } catch (err) {
-        if (err instanceof SyntaxError) {
-          errors.push(`${filePath}: ${err.message}`);
-        }
+    if (sourceFiles.length === 0) {
+      errors.push('No source files found in artifact');
+    }
+
+    // Check for empty source files
+    for (const [filePath, content] of sourceFiles) {
+      if (!content || content.trim().length === 0) {
+        errors.push(`${filePath}: file is empty`);
       }
     }
 

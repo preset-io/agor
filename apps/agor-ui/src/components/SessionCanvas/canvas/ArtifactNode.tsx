@@ -5,7 +5,12 @@
  * captures console events, and reloads on content_hash changes.
  */
 
-import type { ArtifactBoardObject, ArtifactPayload, BoardObject } from '@agor/core/types';
+import type {
+  ArtifactBoardObject,
+  ArtifactID,
+  ArtifactPayload,
+  BoardObject,
+} from '@agor/core/types';
 import {
   CheckCircleOutlined,
   CloseCircleOutlined,
@@ -26,11 +31,21 @@ interface ArtifactNodeData {
   width: number;
   height: number;
   onUpdate: (id: string, data: BoardObject) => void;
-  onDelete?: (id: string) => void;
+  /** Lifecycle-safe delete: removes filesystem + board object + DB record */
+  onDeleteArtifact?: (objectId: string, artifactId: string) => void;
 }
 
 const MIN_WIDTH = 300;
 const MIN_HEIGHT = 200;
+
+/** Get auth headers for daemon REST calls (reads JWT from FeathersJS storage) */
+function getAuthHeaders(): HeadersInit {
+  const token = typeof window !== 'undefined' ? localStorage.getItem('feathers-jwt') : null;
+  return {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
 
 /**
  * Inner component that captures Sandpack console events and forwards them to the daemon.
@@ -64,7 +79,7 @@ function ConsoleReporter({ artifactId }: { artifactId: string }) {
 
     fetch(`${getDaemonUrl()}/artifacts/${artifactId}/console`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(),
       body: JSON.stringify({ entries }),
     }).catch(() => {
       // Silently ignore – console forwarding is best-effort
@@ -93,7 +108,9 @@ export const ArtifactNode = ({
     try {
       setLoading(true);
       setError(null);
-      const res = await fetch(`${getDaemonUrl()}/artifacts/${data.artifactId}/payload`);
+      const res = await fetch(`${getDaemonUrl()}/artifacts/${data.artifactId}/payload`, {
+        headers: getAuthHeaders(),
+      });
       if (!res.ok) {
         throw new Error(`Failed to load artifact: ${res.statusText}`);
       }
@@ -116,7 +133,9 @@ export const ArtifactNode = ({
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`${getDaemonUrl()}/artifacts/${data.artifactId}/hash`);
+        const res = await fetch(`${getDaemonUrl()}/artifacts/${data.artifactId}/hash`, {
+          headers: getAuthHeaders(),
+        });
         if (!res.ok) return;
         const { hash } = await res.json();
         if (hash && lastHashRef.current && hash !== lastHashRef.current) {
@@ -138,7 +157,7 @@ export const ArtifactNode = ({
         y: 0,
         width: Math.max(params.width, MIN_WIDTH),
         height: Math.max(params.height, MIN_HEIGHT),
-        artifact_id: data.artifactId,
+        artifact_id: data.artifactId as ArtifactID,
       };
       data.onUpdate(data.objectId, objectData);
     },
@@ -275,7 +294,7 @@ export const ArtifactNode = ({
                   }}
                 />
               </Tooltip>
-              {data.onDelete && (
+              {data.onDeleteArtifact && (
                 <Button
                   type="text"
                   size="small"
@@ -283,7 +302,7 @@ export const ArtifactNode = ({
                   icon={<DeleteOutlined />}
                   onClick={(e) => {
                     e.stopPropagation();
-                    data.onDelete?.(data.objectId);
+                    data.onDeleteArtifact?.(data.objectId, data.artifactId);
                   }}
                 />
               )}

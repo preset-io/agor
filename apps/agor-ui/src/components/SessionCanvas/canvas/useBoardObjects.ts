@@ -162,6 +162,35 @@ export const useBoardObjects = ({
   );
 
   /**
+   * Delete an artifact entity (filesystem + board object + DB record).
+   * Uses the artifacts service's lifecycle-safe remove method.
+   */
+  const deleteArtifact = useCallback(
+    async (objectId: string, artifactId: string) => {
+      if (!client) return;
+
+      // Mark as deleted to prevent re-appearance during WebSocket updates
+      deletedObjectsRef.current.add(objectId);
+
+      // Optimistic removal
+      setNodes((nodes) => nodes.filter((n) => n.id !== objectId));
+
+      try {
+        // Lifecycle-safe: removes filesystem + board object + DB record
+        await client.service('artifacts').remove(artifactId);
+
+        setTimeout(() => {
+          deletedObjectsRef.current.delete(objectId);
+        }, 1000);
+      } catch (error) {
+        console.error('Failed to delete artifact:', error);
+        deletedObjectsRef.current.delete(objectId);
+      }
+    },
+    [client, setNodes, deletedObjectsRef]
+  );
+
+  /**
    * Convert board.objects to React Flow nodes
    */
   const getBoardObjectNodes = useCallback((): Node[] => {
@@ -227,7 +256,7 @@ export const useBoardObjects = ({
               width: objectData.width,
               height: objectData.height,
               onUpdate: handleUpdateObject,
-              onDelete: deleteObject,
+              onDeleteArtifact: deleteArtifact,
             },
           };
         }
@@ -309,6 +338,7 @@ export const useBoardObjects = ({
     handleUpdateObject,
     deleteZone,
     deleteObject,
+    deleteArtifact,
     eraserMode,
     onEditMarkdown,
   ]);
