@@ -273,11 +273,10 @@ This is a CLI-only command that only works in the standalone Claude Code termina
             continue; // Don't yield this event upstream
           }
 
-          // Handle end event — try to capture context usage before breaking
-          if (event.type === 'end') {
-            // Call getContextUsage() while the subprocess may still be alive.
-            // The SDK closes stdin shortly after emitting the result message,
-            // so this is a best-effort call with graceful fallback.
+          // On result event, call getContextUsage() BEFORE yielding to minimize
+          // the race with stdin close. The subprocess is most likely still alive
+          // at this point since we haven't suspended via yield yet.
+          if (event.type === 'result') {
             try {
               const contextUsage = await result.getContextUsage();
               console.log(
@@ -289,7 +288,10 @@ This is a CLI-only command that only works in the standalone Claude Code termina
                 `⚠️  getContextUsage() unavailable (subprocess may have exited): ${error instanceof Error ? error.message : String(error)}`
               );
             }
+          }
 
+          // Handle end event
+          if (event.type === 'end') {
             console.log(`🏁 Conversation ended: ${event.reason}`);
             break; // Exit for-await loop
           }
