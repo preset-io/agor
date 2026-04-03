@@ -39,7 +39,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
   const { message: antMessage } = App.useApp();
   const [fileList, setFileList] = useState<UploadFile[]>([]);
   const [destination, setDestination] = useState<UploadDestination>('worktree');
-  const [notifyAgent, setNotifyAgent] = useState(false);
+  const [notifyAgent, setNotifyAgent] = useState(true);
   const [agentMessage, setAgentMessage] = useState('Please review this file: {filepath}');
   const [uploading, setUploading] = useState(false);
 
