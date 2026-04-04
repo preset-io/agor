@@ -3069,7 +3069,7 @@ async function main() {
         return artifactsService.getPayload(artifactId, _params.user?.user_id);
       },
     },
-    {},
+    { find: { role: ROLES.VIEWER, action: 'get artifact payload' } },
     requireAuth
   );
 
