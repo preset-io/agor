@@ -555,20 +555,12 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         if (resolvedZoneId && board) {
           const zone = board.objects?.[resolvedZoneId];
           if (zone?.type === 'zone') {
-            const zoneObj = zone as import('@agor/core/types').ZoneBoardObject;
-            const CARD_W = 500,
-              CARD_H = 200,
-              PAD = 80;
-            const maxPadX = Math.max(0, (zoneObj.width - CARD_W) / 2);
-            const maxPadY = Math.max(0, (zoneObj.height - CARD_H) / 2);
-            const padX = Math.min(PAD, maxPadX);
-            const padY = Math.min(PAD, maxPadY);
-            const jitterX = Math.max(0, zoneObj.width - CARD_W - 2 * padX);
-            const jitterY = Math.max(0, zoneObj.height - CARD_H - 2 * padY);
-            position = {
-              x: padX + Math.random() * jitterX,
-              y: padY + Math.random() * jitterY,
-            };
+            const { computeZoneRelativePosition } = await import(
+              '@agor/core/utils/board-placement'
+            );
+            position = computeZoneRelativePosition(
+              zone as import('@agor/core/types').ZoneBoardObject
+            );
           }
         }
 
@@ -620,8 +612,11 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             }
           }
         }
-      } catch {
-        // Positioning is best-effort
+      } catch (error) {
+        console.warn(
+          '⚠️  Smart positioning failed, using fallback:',
+          error instanceof Error ? error.message : String(error)
+        );
       }
 
       // Final fallback: near origin

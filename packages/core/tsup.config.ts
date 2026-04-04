@@ -23,6 +23,7 @@ export default defineConfig({
     'utils/permission-mode-mapper': 'src/utils/permission-mode-mapper.ts', // Permission mode mapping for cross-agent compatibility
     'utils/cron': 'src/utils/cron.ts', // Cron validation and parsing utilities
     'utils/context-window': 'src/utils/context-window.ts', // Context window calculation utilities
+    'utils/board-placement': 'src/utils/board-placement.ts', // Zone-relative positioning for worktree cards
     'utils/path': 'src/utils/path.ts', // Path expansion utilities (tilde to home directory)
     'utils/logger': 'src/utils/logger.ts', // Console monkey-patch for log level filtering
     'seed/index': 'src/seed/index.ts', // Development database seeding

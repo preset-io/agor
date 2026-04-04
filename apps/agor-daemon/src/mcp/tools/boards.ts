@@ -21,7 +21,7 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
           .boolean()
           .optional()
           .describe(
-            'Include positioned entities (worktrees, cards) with their x/y coordinates and zone assignments (default: true)'
+            'Include positioned entities (worktrees, cards) with their x/y coordinates and zone assignments (default: false). Enable when you need to know where worktrees are placed on the canvas.'
           ),
       }),
     },
@@ -30,7 +30,7 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
       if (!boardId) throw new Error('boardId is required');
       const board = await ctx.app.service('boards').get(boardId, ctx.baseServiceParams);
 
-      const includeEntities = args.includeEntities !== false; // default true
+      const includeEntities = args.includeEntities === true; // default false, opt-in
       if (includeEntities) {
         const boardObjectsResult = await ctx.app
           .service('board-objects')

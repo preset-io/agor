@@ -110,6 +110,11 @@
       "import": "./dist/utils/context-window.js",
       "require": "./dist/utils/context-window.cjs"
     },
+    "./utils/board-placement": {
+      "types": "./dist/utils/board-placement.d.ts",
+      "import": "./dist/utils/board-placement.js",
+      "require": "./dist/utils/board-placement.cjs"
+    },
     "./utils/path": {
       "types": "./dist/utils/path.d.ts",
       "import": "./dist/utils/path.js",
