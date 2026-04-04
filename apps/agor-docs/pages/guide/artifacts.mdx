@@ -59,6 +59,56 @@ Each artifact is a filesystem directory plus a database record:
 
 ---
 
+## Use cases
+
+The possibilities are genuinely endless. Artifacts are a general-purpose way for agents to express themselves visually and interactively — any time you need something rendered, an artifact can do it.
+
+The key advantage over having an agent build a regular app in a folder is that it's *right there on your board*. No deploy step, no preview URL, no context switching. You ask for a change, the agent writes code, and you see the result update live. It's the tightest iteration loop you can get.
+
+If you've used artifacts in Claude Desktop or ChatGPT Canvas, the concept is similar — rich interactive windows embedded in your conversation. But here they live on a multiplayer spatial canvas where multiple agents and humans collaborate side by side.
+
+The most basic use case is anything where you need visual feedback during agent collaboration. Writing an article and want to see it rendered? Building a form and want to click through it? Sketching a chart and want to see the data? If you need to *see* it while you work on it, artifacts are the answer.
+
+### Custom data visualization
+
+This is the killer app. Things that would take a D3.js expert days, an agent can scaffold in minutes.
+
+- **Interactive dashboards** — Real-time charts, metrics, and KPIs rendered live on the board. Ask "show me API latency by endpoint" and watch it materialize.
+- **Data explorers** — Filterable, sortable tables with search. Feed in a dataset and get an interactive viewer instead of squinting at terminal output.
+- **Network and graph visualizations** — Force-directed graphs, dependency trees, org charts. Complex visual structures that are nearly impossible to convey in text.
+
+### Developer tools
+
+- **Live component playground** — Iterate on a React component with your agent and see changes instantly. Like a mini Storybook embedded in your board.
+- **API playground** — A form-based endpoint tester with response viewer. Build one per service your team works with.
+- **Schema and architecture visualizer** — Interactive ER diagrams, service topology maps, data flow diagrams. Turn abstract architecture into something you can point at.
+
+### Design iteration and prototyping
+
+- **UI mockups** — "Sketch me a settings page for feature X" produces an interactive prototype right on the board, not a static screenshot.
+- **Content authoring** — Write a blog post, doc page, or marketing email with your agent and see it rendered live as you iterate. The most natural artifact use case.
+- **Landing page drafts** — Quick marketing page iterations without touching production. Get stakeholder feedback before a single line hits your real codebase.
+
+### Business operations
+
+Artifacts are not just for developers. Any role that needs a custom, purpose-built UI can get one in minutes.
+
+- **Contract redline viewer** — Legal gets an interactive diff showing proposed changes with accept/reject affordances, instead of emailing Word docs back and forth.
+- **Deal calculator** — Sales gets a pricing configurator with sliders for seats, tiers, and discounts, showing ARR impact in real time.
+- **Compliance checklist** — Ops gets an interactive onboarding tracker for a specific customer implementation, tailored to exactly what that deal requires.
+- **Customer health scorecard** — CS gets a single-page view pulling data from multiple sources that no single SaaS tool provides.
+
+### Ephemeral SaaS alternatives
+
+When you need a custom workflow but your existing tools (HubSpot, Salesforce, Jira) are too rigid for the situation:
+
+- **Custom approval forms** — Replace a 15-click SaaS workflow with a purpose-built form that does exactly what you need.
+- **Cross-tool aggregator** — Pull data from CRM, usage metrics, and support tickets into one unified view.
+- **QBR and report builder** — Agent pulls metrics from multiple sources and renders presentation-ready charts. No more copying numbers between tabs.
+- **Release notes generator** — An interactive editor that pulls from git log and PRs, letting you format customer-facing comms without context switching.
+
+---
+
 ## Templates
 
 Artifacts support several Sandpack templates:
