@@ -484,7 +484,9 @@ async function main() {
   // SECURITY: Disable anonymous authentication by default
   // Must explicitly set daemon.allowAnonymous=true in config to enable
   const allowAnonymous = config.daemon?.allowAnonymous === true;
-  const authStrategies = allowAnonymous ? ['jwt', 'api-key', 'anonymous'] : ['jwt', 'api-key'];
+  // api-key MUST be before jwt: JWT's parse() matches any Bearer token,
+  // so api-key needs first chance to intercept agor_sk_* tokens
+  const authStrategies = allowAnonymous ? ['api-key', 'jwt', 'anonymous'] : ['api-key', 'jwt'];
   const requireAuth = authenticate({ strategies: authStrategies });
 
   /**
