@@ -546,10 +546,13 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     if (data.boardId) {
       const boardObjectsService = this.app.service('board-objects');
 
-      // Fallback position: stagger by unique_id if viewport center not provided
+      // Fallback position: stagger near origin if no explicit position provided.
+      // Uses small offsets (column of 3, then wrap) to keep worktrees visible on canvas.
+      const col = (worktreeUniqueId - 1) % 3;
+      const row = Math.floor((worktreeUniqueId - 1) / 3);
       const fallbackPosition = {
-        x: 100 + (worktreeUniqueId - 1) * 60,
-        y: 100 + (worktreeUniqueId - 1) * 60,
+        x: 100 + col * 560,
+        y: 100 + row * 280,
       };
 
       const finalPosition = data.position || fallbackPosition;

@@ -276,7 +276,7 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
         resolvedZoneId = zoneId;
       }
 
-      // If no zoneId and no explicit position, compute smart default from existing worktrees
+      // If no zoneId and no explicit position, compute smart default from existing content
       let smartPosition: { x: number; y: number } | undefined;
       if (!zoneId && boardId) {
         try {
@@ -285,8 +285,7 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
             .find({ query: { board_id: boardId }, ...ctx.baseServiceParams });
           const existingObjects = (boardObjectsResult as { data: BoardEntityObject[] }).data;
 
-          // Only use absolute-positioned worktrees for centroid (skip zoned entries
-          // whose positions are relative to zone origin, not absolute canvas coords)
+          // Strategy 1: Use absolute-positioned worktrees for centroid
           const absoluteWorktrees = existingObjects.filter(
             (obj) => obj.entity_type === 'worktree' && !obj.zone_id
           );
@@ -297,7 +296,6 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
             const centroidX = sumX / absoluteWorktrees.length;
             const centroidY = sumY / absoluteWorktrees.length;
 
-            // Add random offset to avoid overlap (±150px)
             const offsetX = (Math.random() - 0.5) * 300;
             const offsetY = (Math.random() - 0.5) * 300;
 
@@ -306,8 +304,42 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
               y: centroidY + offsetY,
             };
           }
+
+          // Strategy 2: If no absolute worktrees, anchor near zones on the board
+          if (!smartPosition) {
+            const board = await ctx.app.service('boards').get(boardId, ctx.baseServiceParams);
+            const zones = Object.values(board.objects || {}).filter(
+              (obj: unknown) => (obj as { type: string }).type === 'zone'
+            ) as ZoneBoardObject[];
+
+            if (zones.length > 0) {
+              // Place below the lowest zone with some margin
+              let maxBottom = 0;
+              let anchorX = 0;
+              for (const zone of zones) {
+                const bottom = zone.y + zone.height;
+                if (bottom > maxBottom) {
+                  maxBottom = bottom;
+                  anchorX = zone.x;
+                }
+              }
+              smartPosition = {
+                x: anchorX + (Math.random() - 0.5) * 200,
+                y: maxBottom + 80 + Math.random() * 100,
+              };
+            }
+          }
+
+          // Strategy 3: Reasonable default near origin
+          if (!smartPosition) {
+            smartPosition = {
+              x: 100 + Math.random() * 200,
+              y: 100 + Math.random() * 200,
+            };
+          }
         } catch {
-          // Fall through to default positioning in repos service
+          // Last resort: fixed position near origin (avoids the unique_id*60 fallback)
+          smartPosition = { x: 200, y: 200 };
         }
       }
 
