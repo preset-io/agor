@@ -59,6 +59,9 @@ interface ArtifactNodeData {
 const MIN_WIDTH = 300;
 const MIN_HEIGHT = 200;
 
+/** Data URI CSS reset to remove default body margin in Sandpack iframe */
+const BODY_RESET_CSS = 'data:text/css,body{margin:0}';
+
 /** Get auth headers for daemon REST calls (reads JWT from FeathersJS storage) */
 function getAuthHeaders(): HeadersInit {
   const token = typeof window !== 'undefined' ? localStorage.getItem('feathers-jwt') : null;
@@ -362,6 +365,7 @@ export const ArtifactNode = ({
             customSetup={payload.dependencies ? { dependencies: payload.dependencies } : undefined}
             options={{
               initMode: 'user-visible',
+              externalResources: [BODY_RESET_CSS],
               ...(payload.entry ? { activeFile: payload.entry } : {}),
             }}
           >

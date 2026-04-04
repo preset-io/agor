@@ -23,6 +23,7 @@ interface AppNodeData {
 
 const MIN_WIDTH = 300;
 const MIN_HEIGHT = 200;
+const BODY_RESET_CSS = 'data:text/css,body{margin:0}';
 
 export const AppNode = ({ data, selected }: { data: AppNodeData; selected?: boolean }) => {
   const { token } = theme.useToken();
@@ -142,6 +143,7 @@ export const AppNode = ({ data, selected }: { data: AppNodeData; selected?: bool
             customSetup={data.dependencies ? { dependencies: data.dependencies } : undefined}
             options={{
               initMode: 'user-visible',
+              externalResources: [BODY_RESET_CSS],
               ...(data.entryFile ? { activeFile: data.entryFile } : {}),
             }}
           >
