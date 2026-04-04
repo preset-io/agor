@@ -83,7 +83,9 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
       description:
         'Create a worktree (and optional branch) for a repository, with required board placement. ' +
         'To fork from an existing branch with a unique worktree name, set sourceBranch to the base branch ' +
-        'and worktreeName to your desired unique name (e.g., sourceBranch="issue-282", worktreeName="issue-282-review-1").',
+        'and worktreeName to your desired unique name (e.g., sourceBranch="issue-282", worktreeName="issue-282-review-1"). ' +
+        'Use zoneId to place the worktree in a specific zone (pin only, no trigger). ' +
+        'For zone trigger behavior (prompt templates), use agor_worktrees_set_zone after creation.',
       inputSchema: z.object({
         repoId: z.string().describe('Repository ID where the worktree will be created'),
         worktreeName: z
@@ -138,6 +140,14 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
             'If worktreeName conflicts with an existing worktree, automatically append a numeric suffix ' +
               '(e.g., "my-feature" → "my-feature-2", "my-feature-3"). Defaults to true. Set to false to get an error on conflict instead.'
           ),
+        zoneId: z
+          .string()
+          .optional()
+          .describe(
+            'Zone ID to pin the worktree to (e.g., "zone-1770152859108"). ' +
+              'Places the worktree inside the zone with automatic positioning (pin only, no trigger). ' +
+              'For zone trigger behavior (prompt templates), use agor_worktrees_set_zone after creation.'
+          ),
         issueUrl: z.string().optional().describe('Issue URL to associate with the worktree.'),
         pullRequestUrl: z
           .string()
@@ -150,6 +160,7 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
       let worktreeName = coerceString(args.worktreeName)!;
       const originalName = worktreeName;
       const boardId = coerceString(args.boardId)!;
+      const zoneId = coerceString(args.zoneId);
       const autoSuffix = typeof args.autoSuffix === 'boolean' ? args.autoSuffix : true;
 
       if (!WORKTREE_NAME_PATTERN.test(worktreeName)) {
@@ -212,6 +223,68 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
         ref = worktreeName;
       }
 
+      // If zoneId provided, validate zone exists and compute position
+      let zonePosition: { x: number; y: number } | undefined;
+      let resolvedZoneId: string | undefined;
+      if (zoneId && boardId) {
+        const board = await ctx.app.service('boards').get(boardId, ctx.baseServiceParams);
+        const zone = board.objects?.[zoneId];
+        if (!zone || zone.type !== 'zone') {
+          throw new Error(`Zone ${zoneId} not found on board ${boardId}`);
+        }
+
+        // Calculate position relative to zone (same logic as set_zone, pin only)
+        const WORKTREE_CARD_WIDTH = 500;
+        const WORKTREE_CARD_HEIGHT = 200;
+        const DESIRED_PADDING = 80;
+
+        const maxPaddingX = Math.max(0, (zone.width - WORKTREE_CARD_WIDTH) / 2);
+        const maxPaddingY = Math.max(0, (zone.height - WORKTREE_CARD_HEIGHT) / 2);
+        const paddingX = Math.min(DESIRED_PADDING, maxPaddingX);
+        const paddingY = Math.min(DESIRED_PADDING, maxPaddingY);
+
+        const jitterRangeX = Math.max(0, zone.width - WORKTREE_CARD_WIDTH - 2 * paddingX);
+        const jitterRangeY = Math.max(0, zone.height - WORKTREE_CARD_HEIGHT - 2 * paddingY);
+
+        zonePosition = {
+          x: paddingX + Math.random() * jitterRangeX,
+          y: paddingY + Math.random() * jitterRangeY,
+        };
+        resolvedZoneId = zoneId;
+      }
+
+      // If no zoneId and no explicit position, compute smart default from existing worktrees
+      let smartPosition: { x: number; y: number } | undefined;
+      if (!zoneId && boardId) {
+        try {
+          const boardObjectsResult = await ctx.app
+            .service('board-objects')
+            .find({ query: { board_id: boardId }, ...ctx.baseServiceParams });
+          const existingObjects = (
+            boardObjectsResult as { data: { position: { x: number; y: number } }[] }
+          ).data;
+
+          if (existingObjects.length > 0) {
+            // Compute centroid of existing worktrees
+            const sumX = existingObjects.reduce((sum, obj) => sum + obj.position.x, 0);
+            const sumY = existingObjects.reduce((sum, obj) => sum + obj.position.y, 0);
+            const centroidX = sumX / existingObjects.length;
+            const centroidY = sumY / existingObjects.length;
+
+            // Add random offset to avoid overlap (±150px)
+            const offsetX = (Math.random() - 0.5) * 300;
+            const offsetY = (Math.random() - 0.5) * 300;
+
+            smartPosition = {
+              x: centroidX + offsetX,
+              y: centroidY + offsetY,
+            };
+          }
+        } catch {
+          // Fall through to default positioning in repos service
+        }
+      }
+
       const worktree = await reposService.createWorktree(
         repoId,
         {
@@ -224,18 +297,28 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
           ...(issueUrl ? { issue_url: issueUrl } : {}),
           ...(pullRequestUrl ? { pull_request_url: pullRequestUrl } : {}),
           ...(boardId ? { boardId } : {}),
+          ...(zonePosition ? { position: zonePosition } : {}),
+          ...(smartPosition ? { position: smartPosition } : {}),
+          ...(resolvedZoneId ? { zoneId: resolvedZoneId } : {}),
         },
         ctx.baseServiceParams
       );
 
-      // Make it very clear when auto-suffix was applied
+      // Build response with appropriate notes
+      const response: Record<string, unknown> = { ...worktree };
+
       if (worktreeName !== originalName) {
-        return textResult({
-          ...worktree,
-          _note: `Name '${originalName}' was already taken. Created as '${worktreeName}' instead (autoSuffix applied).`,
-        });
+        response._note = `Name '${originalName}' was already taken. Created as '${worktreeName}' instead (autoSuffix applied).`;
       }
-      return textResult(worktree);
+
+      if (resolvedZoneId) {
+        response._zone = { zone_id: resolvedZoneId, position: zonePosition };
+      } else {
+        response.hint =
+          'Use agor_worktrees_set_zone to pin this worktree to a specific zone and optionally trigger zone prompt templates.';
+      }
+
+      return textResult(response);
     }
   );
 

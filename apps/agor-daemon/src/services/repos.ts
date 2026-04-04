@@ -342,6 +342,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       pull_request_url?: string;
       boardId?: string;
       position?: { x: number; y: number };
+      zoneId?: string;
     },
     params?: RepoParams
   ): Promise<Worktree> {
@@ -546,6 +547,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
           board_id: data.boardId,
           worktree_id: worktree.worktree_id,
           position: finalPosition,
+          ...(data.zoneId ? { zone_id: data.zoneId } : {}),
         },
         params
       );
