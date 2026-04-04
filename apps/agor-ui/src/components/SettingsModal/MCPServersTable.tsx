@@ -95,6 +95,16 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
   const oauthCompletedCleanupRef = useRef<(() => void) | null>(null);
   const oauthFallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Clean up OAuth listener and timer on unmount
+  useEffect(() => {
+    return () => {
+      oauthCompletedCleanupRef.current?.();
+      if (oauthFallbackTimerRef.current) {
+        clearTimeout(oauthFallbackTimerRef.current);
+      }
+    };
+  }, []);
+
   // Track effective server ID (may differ from prop after onSaveFirst creates a new server)
   const [effectiveServerId, setEffectiveServerId] = useState<string | undefined>(serverId);
   useEffect(() => {

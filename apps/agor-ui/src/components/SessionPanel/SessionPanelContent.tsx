@@ -14,6 +14,7 @@ import type React from 'react';
 import { useAppActions } from '../../contexts/AppActionsContext';
 import { useAppData } from '../../contexts/AppDataContext';
 import { copyToClipboard } from '../../utils/clipboard';
+import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { ConversationView } from '../ConversationView';
 import { ForkSpawnModal } from '../ForkSpawnModal';
 import { IssuePill, PullRequestPill } from '../Pill';
@@ -114,12 +115,7 @@ export const SessionPanelContent: React.FC<SessionPanelContentProps> = ({
               .map((serverId) => mcpServerById.get(serverId))
               .filter(Boolean)
               .map((server) => {
-                const isOAuth = server?.auth?.type === 'oauth';
-                const hasSharedToken = !!server?.auth?.oauth_access_token;
-                const hasPerUserToken = server?.mcp_server_id
-                  ? userAuthenticatedMcpServerIds.has(server.mcp_server_id)
-                  : false;
-                const needsAuth = isOAuth && !hasSharedToken && !hasPerUserToken;
+                const needsAuth = mcpServerNeedsAuth(server, userAuthenticatedMcpServerIds);
                 return (
                   <Tooltip
                     key={server?.mcp_server_id}

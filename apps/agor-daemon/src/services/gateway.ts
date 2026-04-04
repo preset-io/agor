@@ -10,7 +10,6 @@ import {
   type Database,
   GatewayChannelRepository,
   MCPServerRepository,
-  SessionMCPServerRepository,
   ThreadSessionMapRepository,
   UserMCPOAuthTokenRepository,
   UsersRepository,
@@ -140,7 +139,7 @@ export class GatewayService {
   private channelRepo: GatewayChannelRepository;
   private threadMapRepo: ThreadSessionMapRepository;
   private usersRepo: UsersRepository;
-  private sessionMcpRepo: SessionMCPServerRepository;
+
   private mcpServerRepo: MCPServerRepository;
   private userTokenRepo: UserMCPOAuthTokenRepository;
   private app: Application;
@@ -169,7 +168,7 @@ export class GatewayService {
     this.channelRepo = new GatewayChannelRepository(db);
     this.threadMapRepo = new ThreadSessionMapRepository(db);
     this.usersRepo = new UsersRepository(db);
-    this.sessionMcpRepo = new SessionMCPServerRepository(db);
+
     this.mcpServerRepo = new MCPServerRepository(db);
     this.userTokenRepo = new UserMCPOAuthTokenRepository(db);
     this.app = app;
@@ -475,8 +474,9 @@ export class GatewayService {
       );
     } else {
       // New thread → create session via FeathersJS service
-      const sessionsService = this.app.service('sessions') as {
+      const sessionsService = this.app.service('sessions') as unknown as {
         create: (data: Partial<Session>) => Promise<Session>;
+        setMCPServers: (sessionId: SessionID, serverIds: string[], label: string) => Promise<void>;
       };
 
       this.sendDebugMessage(
@@ -540,28 +540,13 @@ export class GatewayService {
       sessionId = session.session_id;
       created = true;
 
-      // Attach MCP servers from channel agentic config
+      // Attach MCP servers from channel agentic config (reuses sessions service logic)
       const mcpServerIds = agenticConfig?.mcpServerIds;
       if (mcpServerIds && mcpServerIds.length > 0) {
-        for (const serverId of mcpServerIds) {
-          try {
-            await this.sessionMcpRepo.addServer(
-              session.session_id as SessionID,
-              serverId as MCPServerID
-            );
-            // Emit WebSocket event so UI updates in real-time
-            this.app?.service('session-mcp-servers')?.emit?.('created', {
-              session_id: session.session_id,
-              mcp_server_id: serverId,
-              enabled: true,
-              added_at: new Date(),
-            });
-          } catch {
-            console.warn(`[gateway] Failed to attach MCP server ${serverId} to session`);
-          }
-        }
-        console.log(
-          `[gateway] Attached ${mcpServerIds.length} MCP server(s) to session ${sessionId.substring(0, 8)}`
+        await sessionsService.setMCPServers(
+          session.session_id as SessionID,
+          mcpServerIds,
+          'gateway'
         );
 
         // Check which MCP servers are not authenticated for this user

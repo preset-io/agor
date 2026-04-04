@@ -807,8 +807,26 @@ export function useAgorData(
     commentsService.on('updated', handleCommentPatched);
     commentsService.on('removed', handleCommentRemoved);
 
+    // Listen for OAuth completion events to update per-user token state in real-time
+    const handleOAuthCompleted = (event: {
+      state: string;
+      success: boolean;
+      mcp_server_id?: string;
+    }) => {
+      if (event.success && event.mcp_server_id) {
+        setUserAuthenticatedMcpServerIds((prev) => {
+          if (prev.has(event.mcp_server_id!)) return prev;
+          const next = new Set(prev);
+          next.add(event.mcp_server_id!);
+          return next;
+        });
+      }
+    };
+    client.io.on('oauth:completed', handleOAuthCompleted);
+
     // Cleanup listeners on unmount
     return () => {
+      client.io.off('oauth:completed', handleOAuthCompleted);
       sessionsService.removeListener('created', handleSessionCreated);
       sessionsService.removeListener('patched', handleSessionPatched);
       sessionsService.removeListener('updated', handleSessionPatched);

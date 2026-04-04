@@ -1322,10 +1322,15 @@ async function main() {
 
       // Notify the initiating client that OAuth completed successfully
       if (app.io) {
+        const oauthEvent = {
+          state,
+          success: true,
+          mcp_server_id: pendingFlow.mcpServerId,
+        };
         if (pendingFlow.socketId) {
-          app.io.to(pendingFlow.socketId).emit('oauth:completed', { state, success: true });
+          app.io.to(pendingFlow.socketId).emit('oauth:completed', oauthEvent);
         } else {
-          app.io.emit('oauth:completed', { state, success: true });
+          app.io.emit('oauth:completed', oauthEvent);
         }
       }
 

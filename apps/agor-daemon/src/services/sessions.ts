@@ -114,11 +114,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
    * Attach explicit MCP server IDs to a session.
    * Emits WebSocket events so the UI updates in real-time.
    */
-  private async setMCPServers(
-    sessionId: SessionID,
-    serverIds: string[],
-    label: string
-  ): Promise<void> {
+  async setMCPServers(sessionId: SessionID, serverIds: string[], label: string): Promise<void> {
     for (const serverId of serverIds) {
       try {
         await this.sessionMCPRepo.addServer(sessionId, serverId as MCPServerID);

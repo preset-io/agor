@@ -29,6 +29,7 @@ import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useTasks } from '../../hooks/useTasks';
 import spawnSubsessionTemplate from '../../templates/spawn_subsession.hbs?raw';
 import { getContextWindowGradient } from '../../utils/contextWindow';
+import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
 import { compileTemplate } from '../../utils/templates';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
@@ -118,12 +119,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const unauthedMcpServerNames = React.useMemo(() => {
     return sessionMcpServerIds
       .map((id) => mcpServerById.get(id))
-      .filter((server) => {
-        if (!server || server.auth?.type !== 'oauth') return false;
-        const hasSharedToken = !!server.auth?.oauth_access_token;
-        const hasPerUserToken = userAuthenticatedMcpServerIds.has(server.mcp_server_id);
-        return !hasSharedToken && !hasPerUserToken;
-      })
+      .filter((server) => mcpServerNeedsAuth(server, userAuthenticatedMcpServerIds))
       .map((server) => server!.display_name || server!.name);
   }, [sessionMcpServerIds, mcpServerById, userAuthenticatedMcpServerIds]);
 
