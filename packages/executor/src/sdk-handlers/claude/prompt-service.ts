@@ -75,11 +75,10 @@ export class ClaudePromptService {
   }
 
   /**
-   * Build help message for CLI-only commands that don't work through the SDK
+   * Build help message for Agor-intercepted commands that need custom guidance
    */
-  private buildCLICommandHelpMessage(command: string): string {
-    if (command === 'login') {
-      return `**[Agor system message]**
+  private buildCLICommandHelpMessage(_command: string): string {
+    return `**[Agor system message]**
 
 \`/login\` is a CLI-only command that doesn't work in Agor.
 
@@ -90,13 +89,6 @@ To configure your Anthropic API key:
 3. **For Claude Max Pro plan (OAuth):** You must start a \`claude\` CLI session while logged in as the Agor user
 
 If you continue to see authentication errors, please contact your Agor administrator.`;
-    }
-
-    return `**[Agor system message]**
-
-\`/${command}\` command is not supported by the Claude Agent SDK.
-
-This is a CLI-only command that only works in the standalone Claude Code terminal application, not through Agor's API integration.`;
   }
 
   /**
@@ -121,14 +113,17 @@ This is a CLI-only command that only works in the standalone Claude Code termina
     _chunkCallback?: (messageId: string, chunk: string) => void,
     abortController?: AbortController
   ): AsyncGenerator<ProcessedEvent> {
-    // Intercept CLI-only slash commands and return helpful messages
+    // Intercept Agor-specific slash commands that need custom handling.
+    // Most slash commands (e.g., /compact, /clear, /cost, /help) are handled natively
+    // by the Claude Agent SDK and should pass through untouched.
     const trimmedPrompt = prompt.trim();
-    const cliOnlyMatch = trimmedPrompt.match(/^\/(\w+)(?:\s|$)/);
-    if (cliOnlyMatch) {
-      const command = cliOnlyMatch[1];
-      const cliOnlyCommands = ['login', 'cost', 'usage', 'help', 'compact', 'clear'];
+    const agorCommandMatch = trimmedPrompt.match(/^\/(\w+)(?:\s|$)/);
+    if (agorCommandMatch) {
+      const command = agorCommandMatch[1];
+      // Only intercept commands that genuinely don't work via SDK and need Agor-specific guidance
+      const agorInterceptedCommands = ['login'];
 
-      if (cliOnlyCommands.includes(command)) {
+      if (agorInterceptedCommands.includes(command)) {
         const helpMessage = this.buildCLICommandHelpMessage(command);
 
         // Yield synthetic complete message
