@@ -48,6 +48,8 @@ export interface WorktreeSessionActivity {
 export interface WorktreeWithZone extends Worktree {
   zone_id?: string;
   zone_label?: string;
+  board_object_id?: string;
+  position?: { x: number; y: number };
 }
 
 /**
@@ -558,7 +560,7 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
    * Just wraps the worktree in an array and unwraps the result.
    *
    * @param worktree - Worktree to enrich
-   * @returns Worktree with zone_id and zone_label added (if in a zone)
+   * @returns Worktree with board_object_id, position, zone_id, and zone_label added (if on a board)
    */
   async enrichWithZoneInfo(worktree: Worktree): Promise<WorktreeWithZone> {
     // Use batch enrichment for single worktree (same efficient query)
@@ -577,7 +579,7 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
    * This is correct behavior - if there's no board_object, the worktree isn't in a zone.
    *
    * @param worktrees - Array of worktrees to enrich
-   * @returns Array of worktrees with zone info added (where applicable)
+   * @returns Array of worktrees with board object + zone info added (where applicable)
    */
   async enrichManyWithZoneInfo(worktrees: Worktree[]): Promise<WorktreeWithZone[]> {
     // Quick path: if no worktrees, return empty array
@@ -603,7 +605,9 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
 
       const rows = await select(this.db, {
         worktree_id: boardObjectsTable.worktree_id,
+        object_id: boardObjectsTable.object_id,
         zone_id: jsonExtract(this.db, boardObjectsTable.data, 'zone_id'),
+        position: jsonExtract(this.db, boardObjectsTable.data, 'position'),
         board_data: boardsTable.data,
       })
         .from(boardObjectsTable)
@@ -611,43 +615,69 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
         .where(inArray(boardObjectsTable.worktree_id, worktreeIds))
         .all();
 
-      // Build a map of worktree_id -> zone info for O(1) lookup
-      const zoneInfoByWorktree = new Map<string, { zone_id: string; zone_label?: string }>();
+      // Build a map of worktree_id -> board object info for O(1) lookup
+      const boardObjectInfoByWorktree = new Map<
+        string,
+        {
+          board_object_id: string;
+          position?: { x: number; y: number };
+          zone_id?: string;
+          zone_label?: string;
+        }
+      >();
 
       for (const row of rows) {
-        if (!row.zone_id) {
-          // Worktree has board_object but no zone_id - on board but not in a zone
-          // Don't add to map, worktree will be returned as-is
-          continue;
+        const info: {
+          board_object_id: string;
+          position?: { x: number; y: number };
+          zone_id?: string;
+          zone_label?: string;
+        } = {
+          board_object_id: row.object_id as string,
+        };
+
+        // Parse position from JSON extract
+        if (row.position) {
+          try {
+            const pos = typeof row.position === 'string' ? JSON.parse(row.position) : row.position;
+            if (pos && typeof pos.x === 'number' && typeof pos.y === 'number') {
+              info.position = { x: pos.x, y: pos.y };
+            }
+          } catch {
+            // Invalid position JSON, skip
+          }
         }
 
-        // Extract zone definition from board.data.objects
-        const boardData = row.board_data as {
-          objects?: Record<string, { type: string; label?: string }>;
-        } | null;
+        // Extract zone info if present
+        if (row.zone_id) {
+          info.zone_id = row.zone_id;
 
-        const zone = boardData?.objects?.[row.zone_id];
-        const zoneLabel = zone?.type === 'zone' ? zone.label : undefined;
+          const boardData = row.board_data as {
+            objects?: Record<string, { type: string; label?: string }>;
+          } | null;
 
-        zoneInfoByWorktree.set(row.worktree_id as string, {
-          zone_id: row.zone_id,
-          zone_label: zoneLabel,
-        });
+          const zone = boardData?.objects?.[row.zone_id];
+          info.zone_label = zone?.type === 'zone' ? zone.label : undefined;
+        }
+
+        boardObjectInfoByWorktree.set(row.worktree_id as string, info);
       }
 
-      // Enrich worktrees with zone info using O(1) map lookup
-      // Worktrees not in the map are returned unchanged (no zone info)
+      // Enrich worktrees with board object info using O(1) map lookup
+      // Worktrees not in the map are returned unchanged (no board object)
       return worktrees.map((wt) => {
-        const zoneInfo = zoneInfoByWorktree.get(wt.worktree_id);
-        if (!zoneInfo) {
-          // Worktree not in a zone (or not on a board, or no board_object yet)
+        const info = boardObjectInfoByWorktree.get(wt.worktree_id);
+        if (!info) {
+          // Worktree not on a board or no board_object yet
           return wt;
         }
 
         return {
           ...wt,
-          zone_id: zoneInfo.zone_id,
-          zone_label: zoneInfo.zone_label,
+          board_object_id: info.board_object_id,
+          position: info.position,
+          zone_id: info.zone_id,
+          zone_label: info.zone_label,
         };
       });
     } catch (error) {

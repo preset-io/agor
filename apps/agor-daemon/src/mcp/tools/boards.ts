@@ -11,16 +11,36 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
     'agor_boards_get',
     {
       description:
-        'Get information about a board, including zones and layout. The response includes a `url` field with a clickable link to view the board in the UI.',
+        'Get information about a board, including zones, layout, and positioned entities (worktrees, cards). ' +
+        'The response includes a `url` field with a clickable link to view the board in the UI. ' +
+        'Set includeEntities=true to include positioned worktree/card entities with their coordinates.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         boardId: z.string().describe('Board ID (UUIDv7 or short ID)'),
+        includeEntities: z
+          .boolean()
+          .optional()
+          .describe(
+            'Include positioned entities (worktrees, cards) with their x/y coordinates and zone assignments (default: true)'
+          ),
       }),
     },
     async (args) => {
       const boardId = coerceString(args.boardId);
       if (!boardId) throw new Error('boardId is required');
       const board = await ctx.app.service('boards').get(boardId, ctx.baseServiceParams);
+
+      const includeEntities = args.includeEntities !== false; // default true
+      if (includeEntities) {
+        const boardObjectsResult = await ctx.app
+          .service('board-objects')
+          .find({ query: { board_id: board.board_id }, ...ctx.baseServiceParams });
+        const entities = (
+          boardObjectsResult as { data: import('@agor/core/types').BoardEntityObject[] }
+        ).data;
+        return textResult({ ...board, entities });
+      }
+
       return textResult(board);
     }
   );
