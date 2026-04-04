@@ -45,6 +45,7 @@ import { Badge, Button, Card, Spin, Tooltip, Typography, theme } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { NodeResizer } from 'reactflow';
 import { getDaemonUrl } from '@/config/daemon';
+import { BODY_RESET_CSS } from './utils/sandpackDefaults';
 
 interface ArtifactNodeData {
   objectId: string;
@@ -58,9 +59,6 @@ interface ArtifactNodeData {
 
 const MIN_WIDTH = 300;
 const MIN_HEIGHT = 200;
-
-/** Data URI CSS reset to remove default body margin in Sandpack iframe */
-const BODY_RESET_CSS = 'data:text/css,body{margin:0}';
 
 /** Get auth headers for daemon REST calls (reads JWT from FeathersJS storage) */
 function getAuthHeaders(): HeadersInit {

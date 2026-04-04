@@ -173,6 +173,17 @@ This design has a meaningful security advantage over tools like Claude Desktop a
 - **Template is transparent** — The raw `agor.config.js` on disk only contains placeholders, so anyone reviewing the artifact code sees *which* credentials are needed without seeing the actual values
 - **Encrypted at rest** — User environment variables are stored with AES-256-GCM encryption
 
+<div style={{
+  marginTop: '12px',
+  padding: '12px 16px',
+  border: '1px solid #d4940a',
+  borderRadius: '8px',
+  backgroundColor: 'rgba(212, 148, 10, 0.08)',
+  fontSize: '14px'
+}}>
+**Trust boundary:** Rendered secrets are injected into the artifact's JavaScript and execute in the Sandpack iframe. A malicious artifact could exfiltrate injected values (e.g., via `fetch` to an external URL). Only open artifacts from sources you trust — the same principle as running any untrusted code. The security guarantee is that **your secrets stay out of the LLM context and conversation history**, not that they're hidden from the artifact code itself.
+</div>
+
 ---
 
 ## From prototype to production

@@ -30,6 +30,7 @@ Available template variables:
 IMPORTANT:
 - Use {{ user.env.X }} for secrets (API keys, tokens). NEVER hardcode sensitive values.
 - All users can see the raw template file, but each user's rendered values are private.
+- Rendered secrets are injected into the artifact JS at view time. Artifact code CAN access these values, so only use this for artifacts you trust. The security guarantee is that secrets never enter the LLM context or conversation history.
 - Missing env vars render as empty string "". Your app should check for empty values and show a helpful message (e.g. "Please configure OPENAI_API_KEY in Settings > Environment Variables") instead of making API calls with empty credentials.
 
 Example /agor.config.js:

@@ -4,6 +4,7 @@ import { SandpackPreview, SandpackProvider } from '@codesandbox/sandpack-react';
 import { Button, Card, Tooltip, Typography, theme } from 'antd';
 import { useCallback, useRef, useState } from 'react';
 import { NodeResizer } from 'reactflow';
+import { BODY_RESET_CSS } from './utils/sandpackDefaults';
 
 interface AppNodeData {
   objectId: string;
@@ -23,7 +24,6 @@ interface AppNodeData {
 
 const MIN_WIDTH = 300;
 const MIN_HEIGHT = 200;
-const BODY_RESET_CSS = 'data:text/css,body{margin:0}';
 
 export const AppNode = ({ data, selected }: { data: AppNodeData; selected?: boolean }) => {
   const { token } = theme.useToken();

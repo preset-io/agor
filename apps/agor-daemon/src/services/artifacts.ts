@@ -23,6 +23,7 @@ import {
   WorktreeRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
+import { renderTemplate } from '@agor/core/templates/handlebars-helpers';
 import type {
   Artifact,
   ArtifactBuildStatus,
@@ -250,7 +251,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
    * If the artifact contains an /agor.config.js file, it is treated as a
    * Handlebars template and rendered with the requesting user's context.
    */
-  async getPayload(artifactId: string, userId?: string): Promise<ArtifactPayload> {
+  async getPayload(artifactId: string, userId?: UserID): Promise<ArtifactPayload> {
     const artifact = await this.artifactRepo.findById(artifactId);
     if (!artifact) throw new Error(`Artifact ${artifactId} not found`);
 
@@ -456,7 +457,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   private async renderAgorConfig(
     rawTemplate: string,
     artifact: Artifact,
-    userId?: string
+    userId?: UserID
   ): Promise<{ rendered: string; missingEnvVars: string[] }> {
     // Extract all user.env.* references from the template AST
     const requiredEnvVars = this.extractUserEnvPaths(rawTemplate);
@@ -475,11 +476,14 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     if (userId) {
       try {
         const usersService = this.app.service('users') as unknown as UsersService;
-        const envVars = await usersService.getEnvironmentVariables(userId as UserID);
+        const envVars = await usersService.getEnvironmentVariables(userId);
         context.user = { env: envVars };
         missingEnvVars = requiredEnvVars.filter((v) => !envVars[v]);
-      } catch {
-        // User service unavailable -- render without user context
+      } catch (error) {
+        console.error(
+          `Failed to resolve env vars for artifact ${artifact.artifact_id}, user ${userId}:`,
+          error
+        );
         context.user = { env: {} };
       }
 
@@ -487,41 +491,48 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       // (context.agor as any).token = await this.generateArtifactToken(artifact, userId);
     }
 
-    // Render template (missing values become "")
-    let rendered: string;
-    try {
-      const compiled = Handlebars.compile(rawTemplate);
-      rendered = compiled(context);
-    } catch (error) {
-      console.error(`Failed to render agor.config.js for artifact ${artifact.artifact_id}:`, error);
-      rendered = rawTemplate; // Fall back to raw template on error
-    }
-
-    return { rendered, missingEnvVars };
+    // Render template using shared core helper (missing values become "")
+    const rendered = renderTemplate(rawTemplate, context);
+    // renderTemplate returns "" on error; fall back to raw template so the user sees something
+    return { rendered: rendered || rawTemplate, missingEnvVars };
   }
 
   /**
-   * Parse a Handlebars template string and extract all user.env.* variable names.
+   * Parse a Handlebars template and extract all user.env.* variable names.
+   * Performs a full AST traversal to catch references in any position
+   * (mustache statements, block params, subexpressions, helpers, etc.).
    */
   private extractUserEnvPaths(templateString: string): string[] {
     try {
       const ast = Handlebars.parse(templateString);
       const paths: string[] = [];
 
-      function walk(node: Record<string, unknown>): void {
-        if (node.type === 'MustacheStatement') {
-          const nodePath = node.path as Record<string, unknown> | undefined;
-          if (nodePath?.type === 'PathExpression' && typeof nodePath.original === 'string') {
-            if (nodePath.original.startsWith('user.env.')) {
-              paths.push(nodePath.original.replace('user.env.', ''));
-            }
+      function collectPathExpression(node: Record<string, unknown>): void {
+        if (node.type === 'PathExpression' && typeof node.original === 'string') {
+          if (node.original.startsWith('user.env.')) {
+            paths.push(node.original.replace('user.env.', ''));
           }
         }
-        if (Array.isArray(node.body)) node.body.forEach(walk);
-        if (node.program) walk(node.program as Record<string, unknown>);
       }
 
-      walk(ast as unknown as Record<string, unknown>);
+      function walk(node: unknown): void {
+        if (!node || typeof node !== 'object') return;
+        const n = node as Record<string, unknown>;
+
+        // Check this node itself for PathExpression
+        collectPathExpression(n);
+
+        // Traverse all known AST child properties
+        for (const key of ['body', 'params', 'hash', 'pairs']) {
+          const child = n[key];
+          if (Array.isArray(child)) child.forEach(walk);
+        }
+        for (const key of ['path', 'program', 'inverse', 'value']) {
+          if (n[key] && typeof n[key] === 'object') walk(n[key]);
+        }
+      }
+
+      walk(ast);
       return [...new Set(paths)];
     } catch {
       return [];
