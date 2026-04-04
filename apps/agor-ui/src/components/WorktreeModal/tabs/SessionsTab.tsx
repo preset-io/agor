@@ -162,16 +162,6 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({ sessions, client, onSess
       onFilter: (value, record) => record.status === value,
     },
     {
-      title: 'Tasks',
-      key: 'message_count',
-      width: 70,
-      align: 'center' as const,
-      render: (_, session) => (
-        <Typography.Text type="secondary">{session.message_count ?? 0}</Typography.Text>
-      ),
-      sorter: (a, b) => (a.message_count ?? 0) - (b.message_count ?? 0),
-    },
-    {
       title: 'Created',
       key: 'created_at',
       width: 150,
