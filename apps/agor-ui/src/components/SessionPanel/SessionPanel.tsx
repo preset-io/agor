@@ -34,6 +34,7 @@ import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessi
 import { compileTemplate } from '../../utils/templates';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { FileUpload, FileUploadButton } from '../FileUpload';
+import { MCPServerPill } from '../MCPServerPill';
 import { CreatedByTag } from '../metadata';
 import { PermissionModeSelector } from '../PermissionModeSelector';
 import {
@@ -116,11 +117,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   } = useAppActions();
 
   // Compute which session MCP servers need authentication
-  const unauthedMcpServerNames = React.useMemo(() => {
+  const unauthedMcpServers = React.useMemo(() => {
     return sessionMcpServerIds
       .map((id) => mcpServerById.get(id))
       .filter((server) => mcpServerNeedsAuth(server, userAuthenticatedMcpServerIds))
-      .map((server) => server!.display_name || server!.name);
+      .map((server) => server!);
   }, [sessionMcpServerIds, mcpServerById, userAuthenticatedMcpServerIds]);
 
   // Per-session draft storage (localStorage-backed to survive unmounts)
@@ -590,15 +591,22 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         style={{ width: '100%', position: 'relative', zIndex: 1 }}
         size={8}
       >
-        {unauthedMcpServerNames.length > 0 && (
+        {unauthedMcpServers.length > 0 && (
           <Alert
             type="warning"
             showIcon
             message={
-              <>
-                {unauthedMcpServerNames.join(', ')} not authenticated — invisible to the agent.
-                Click the orange pill above to authenticate.
-              </>
+              <span>
+                {unauthedMcpServers.map((server) => (
+                  <MCPServerPill
+                    key={server.mcp_server_id}
+                    server={server}
+                    needsAuth
+                    client={client}
+                  />
+                ))}{' '}
+                not authenticated — click to sign in.
+              </span>
             }
             style={{ marginBottom: 0 }}
             banner

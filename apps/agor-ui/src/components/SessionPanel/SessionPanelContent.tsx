@@ -2,10 +2,8 @@ import type { AgorClient } from '@agor/core/api';
 import type { Message, Session, SpawnConfig, Worktree } from '@agor/core/types';
 import { getAssistantConfig, isAssistant } from '@agor/core/types';
 import {
-  ApiOutlined,
   CopyOutlined,
   DeleteOutlined,
-  LoginOutlined,
   VerticalAlignBottomOutlined,
   VerticalAlignTopOutlined,
 } from '@ant-design/icons';
@@ -17,8 +15,8 @@ import { copyToClipboard } from '../../utils/clipboard';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { ConversationView } from '../ConversationView';
 import { ForkSpawnModal } from '../ForkSpawnModal';
+import { MCPServerPill } from '../MCPServerPill';
 import { IssuePill, PullRequestPill } from '../Pill';
-import { Tag } from '../Tag';
 import { WorktreeHeaderPill } from '../WorktreeHeaderPill';
 
 export interface SessionPanelContentProps {
@@ -114,81 +112,14 @@ export const SessionPanelContent: React.FC<SessionPanelContentProps> = ({
             {sessionMcpServerIds
               .map((serverId) => mcpServerById.get(serverId))
               .filter(Boolean)
-              .map((server) => {
-                const needsAuth = mcpServerNeedsAuth(server, userAuthenticatedMcpServerIds);
-                return (
-                  <Tooltip
-                    key={server?.mcp_server_id}
-                    title={needsAuth ? 'Click to authenticate' : undefined}
-                  >
-                    <Tag
-                      color={needsAuth ? 'orange' : 'purple'}
-                      icon={needsAuth ? <LoginOutlined /> : <ApiOutlined />}
-                      style={needsAuth ? { cursor: 'pointer' } : undefined}
-                      onClick={
-                        needsAuth && client
-                          ? async () => {
-                              try {
-                                const data = (await client
-                                  .service('mcp-servers/oauth-start')
-                                  .create({
-                                    mcp_url: server?.url,
-                                    mcp_server_id: server?.mcp_server_id,
-                                    client_id: server?.auth?.oauth_client_id,
-                                  })) as {
-                                  success: boolean;
-                                  error?: string;
-                                  authorizationUrl?: string;
-                                  state?: string;
-                                };
-
-                                if (data.success && data.authorizationUrl) {
-                                  window.open(
-                                    data.authorizationUrl,
-                                    '_blank',
-                                    'noopener,noreferrer'
-                                  );
-                                  message.info(
-                                    'Authenticating... complete sign-in in the new tab.'
-                                  );
-
-                                  // Listen for automatic OAuth completion via daemon callback
-                                  if (data.state) {
-                                    const handleOAuthCompleted = (event: {
-                                      state: string;
-                                      success: boolean;
-                                    }) => {
-                                      if (event.state === data.state && event.success) {
-                                        message.success(
-                                          `${server?.display_name || server?.name} authenticated!`
-                                        );
-                                        client.io.off('oauth:completed', handleOAuthCompleted);
-                                      }
-                                    };
-                                    client.io.on('oauth:completed', handleOAuthCompleted);
-                                    // Clean up listener after 5 minutes (flow timeout)
-                                    setTimeout(
-                                      () => client.io.off('oauth:completed', handleOAuthCompleted),
-                                      5 * 60 * 1000
-                                    );
-                                  }
-                                } else if (!data.success) {
-                                  message.error(data.error || 'Failed to start OAuth flow');
-                                }
-                              } catch (err) {
-                                message.error(
-                                  `OAuth error: ${err instanceof Error ? err.message : String(err)}`
-                                );
-                              }
-                            }
-                          : undefined
-                      }
-                    >
-                      {server?.display_name || server?.name}
-                    </Tag>
-                  </Tooltip>
-                );
-              })}
+              .map((server) => (
+                <MCPServerPill
+                  key={server!.mcp_server_id}
+                  server={server!}
+                  needsAuth={mcpServerNeedsAuth(server, userAuthenticatedMcpServerIds)}
+                  client={client}
+                />
+              ))}
           </Space>
         )}
         {/* Spacer if no pills */}
