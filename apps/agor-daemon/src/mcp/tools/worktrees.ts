@@ -1,5 +1,13 @@
 import { WorktreeRepository } from '@agor/core/db';
-import type { AgenticToolName, BoardID, UUID, Worktree, WorktreeID } from '@agor/core/types';
+import type {
+  AgenticToolName,
+  BoardEntityObject,
+  BoardID,
+  UUID,
+  Worktree,
+  WorktreeID,
+  ZoneBoardObject,
+} from '@agor/core/types';
 import { getAssistantConfig, isAssistant } from '@agor/core/types';
 import { normalizeOptionalHttpUrl } from '@agor/core/utils/url';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -11,6 +19,37 @@ import { coerceString, textResult } from '../server.js';
 
 const WORKTREE_NAME_PATTERN = /^[a-z0-9-]+$/;
 const GIT_SHA_PATTERN = /^[0-9a-f]{40}$/i;
+
+/** Shared constants for worktree card dimensions used in zone placement */
+const WORKTREE_CARD_WIDTH = 500;
+const WORKTREE_CARD_HEIGHT = 200;
+const ZONE_DESIRED_PADDING = 80;
+
+/**
+ * Calculate a random position within a zone for placing a worktree card.
+ * Returns a position relative to the zone origin (not absolute canvas coordinates).
+ * Uses adaptive padding and jitter to prevent cards from stacking on top of each other.
+ */
+function computeZoneRelativePosition(zone: ZoneBoardObject): { x: number; y: number } {
+  const maxPaddingX = Math.max(0, (zone.width - WORKTREE_CARD_WIDTH) / 2);
+  const maxPaddingY = Math.max(0, (zone.height - WORKTREE_CARD_HEIGHT) / 2);
+  const paddingX = Math.min(ZONE_DESIRED_PADDING, maxPaddingX);
+  const paddingY = Math.min(ZONE_DESIRED_PADDING, maxPaddingY);
+
+  const jitterRangeX = Math.max(0, zone.width - WORKTREE_CARD_WIDTH - 2 * paddingX);
+  const jitterRangeY = Math.max(0, zone.height - WORKTREE_CARD_HEIGHT - 2 * paddingY);
+
+  if (zone.width < WORKTREE_CARD_WIDTH || zone.height < WORKTREE_CARD_HEIGHT) {
+    console.warn(
+      `⚠️  Zone is smaller than worktree card (${zone.width}x${zone.height} < ${WORKTREE_CARD_WIDTH}x${WORKTREE_CARD_HEIGHT}), card may overflow zone bounds`
+    );
+  }
+
+  return {
+    x: paddingX + Math.random() * jitterRangeX,
+    y: paddingY + Math.random() * jitterRangeY,
+  };
+}
 
 export function registerWorktreeTools(server: McpServer, ctx: McpContext): void {
   // Tool 1: agor_worktrees_get
@@ -233,23 +272,7 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
           throw new Error(`Zone ${zoneId} not found on board ${boardId}`);
         }
 
-        // Calculate position relative to zone (same logic as set_zone, pin only)
-        const WORKTREE_CARD_WIDTH = 500;
-        const WORKTREE_CARD_HEIGHT = 200;
-        const DESIRED_PADDING = 80;
-
-        const maxPaddingX = Math.max(0, (zone.width - WORKTREE_CARD_WIDTH) / 2);
-        const maxPaddingY = Math.max(0, (zone.height - WORKTREE_CARD_HEIGHT) / 2);
-        const paddingX = Math.min(DESIRED_PADDING, maxPaddingX);
-        const paddingY = Math.min(DESIRED_PADDING, maxPaddingY);
-
-        const jitterRangeX = Math.max(0, zone.width - WORKTREE_CARD_WIDTH - 2 * paddingX);
-        const jitterRangeY = Math.max(0, zone.height - WORKTREE_CARD_HEIGHT - 2 * paddingY);
-
-        zonePosition = {
-          x: paddingX + Math.random() * jitterRangeX,
-          y: paddingY + Math.random() * jitterRangeY,
-        };
+        zonePosition = computeZoneRelativePosition(zone as ZoneBoardObject);
         resolvedZoneId = zoneId;
       }
 
@@ -260,16 +283,19 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
           const boardObjectsResult = await ctx.app
             .service('board-objects')
             .find({ query: { board_id: boardId }, ...ctx.baseServiceParams });
-          const existingObjects = (
-            boardObjectsResult as { data: { position: { x: number; y: number } }[] }
-          ).data;
+          const existingObjects = (boardObjectsResult as { data: BoardEntityObject[] }).data;
 
-          if (existingObjects.length > 0) {
-            // Compute centroid of existing worktrees
-            const sumX = existingObjects.reduce((sum, obj) => sum + obj.position.x, 0);
-            const sumY = existingObjects.reduce((sum, obj) => sum + obj.position.y, 0);
-            const centroidX = sumX / existingObjects.length;
-            const centroidY = sumY / existingObjects.length;
+          // Only use absolute-positioned worktrees for centroid (skip zoned entries
+          // whose positions are relative to zone origin, not absolute canvas coords)
+          const absoluteWorktrees = existingObjects.filter(
+            (obj) => obj.entity_type === 'worktree' && !obj.zone_id
+          );
+
+          if (absoluteWorktrees.length > 0) {
+            const sumX = absoluteWorktrees.reduce((sum, obj) => sum + obj.position.x, 0);
+            const sumY = absoluteWorktrees.reduce((sum, obj) => sum + obj.position.y, 0);
+            const centroidX = sumX / absoluteWorktrees.length;
+            const centroidY = sumY / absoluteWorktrees.length;
 
             // Add random offset to avoid overlap (±150px)
             const offsetX = (Math.random() - 0.5) * 300;
@@ -486,33 +512,7 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
 
       // Calculate position RELATIVE to zone (not absolute canvas coordinates)
       // The UI expects relative positions and adds zone.x/zone.y when rendering
-      const WORKTREE_CARD_WIDTH = 500;
-      const WORKTREE_CARD_HEIGHT = 200;
-
-      // Add jitter to prevent worktree cards from stacking exactly on top of each other
-      // Use adaptive padding to keep cards away from zone edges when possible
-      const DESIRED_PADDING = 80;
-
-      // Calculate adaptive padding that respects zone constraints
-      const maxPaddingX = Math.max(0, (zone.width - WORKTREE_CARD_WIDTH) / 2);
-      const maxPaddingY = Math.max(0, (zone.height - WORKTREE_CARD_HEIGHT) / 2);
-      const paddingX = Math.min(DESIRED_PADDING, maxPaddingX);
-      const paddingY = Math.min(DESIRED_PADDING, maxPaddingY);
-
-      // Calculate jitter range (clamped to >= 0 for small zones)
-      const jitterRangeX = Math.max(0, zone.width - WORKTREE_CARD_WIDTH - 2 * paddingX);
-      const jitterRangeY = Math.max(0, zone.height - WORKTREE_CARD_HEIGHT - 2 * paddingY);
-
-      // Generate random position within valid area
-      const relativeX = paddingX + Math.random() * jitterRangeX;
-      const relativeY = paddingY + Math.random() * jitterRangeY;
-
-      // Log warning if zone is smaller than card
-      if (zone.width < WORKTREE_CARD_WIDTH || zone.height < WORKTREE_CARD_HEIGHT) {
-        console.warn(
-          `⚠️  Zone ${zoneId} is smaller than worktree card (${zone.width}x${zone.height} < ${WORKTREE_CARD_WIDTH}x${WORKTREE_CARD_HEIGHT}), card may overflow zone bounds`
-        );
-      }
+      const { x: relativeX, y: relativeY } = computeZoneRelativePosition(zone as ZoneBoardObject);
 
       // Find or create board object for this worktree
       const boardObjectsService = ctx.app.service('board-objects') as unknown as {
