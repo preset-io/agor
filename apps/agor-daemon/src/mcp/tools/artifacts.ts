@@ -23,9 +23,14 @@ If you include a file named "/agor.config.js", it is treated as a Handlebars tem
 
 Available template variables:
   {{ user.env.VAR_NAME }} - User's environment variable (configured in Settings > Environment Variables)
+  {{ user.id }}           - Current user's ID
+  {{ user.name }}         - Current user's display name
+  {{ user.email }}        - Current user's email
   {{ agor.apiUrl }}       - Agor daemon URL
   {{ artifact.id }}       - This artifact's ID
   {{ artifact.boardId }}  - Board ID
+  {{ board.id }}          - Board ID (same as artifact.boardId)
+  {{ board.slug }}        - Board slug (for URL construction)
 
 IMPORTANT:
 - Use {{ user.env.X }} for secrets (API keys, tokens). NEVER hardcode sensitive values.

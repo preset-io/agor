@@ -152,9 +152,14 @@ const res = await fetch('https://api.openai.com/v1/chat/completions', {
 | Variable | Source | Example |
 |----------|--------|---------|
 | `{{user.env.VAR_NAME}}` | Your environment variables (Settings > Environment Variables) | `{{user.env.OPENAI_API_KEY}}` |
+| `{{user.id}}` | Current user's ID | `6544d0ab-...` |
+| `{{user.name}}` | Current user's display name | `Max` |
+| `{{user.email}}` | Current user's email | `max@example.com` |
 | `{{agor.apiUrl}}` | Agor daemon URL | `http://localhost:3030` |
 | `{{artifact.id}}` | Current artifact's ID | `01924f3a-...` |
 | `{{artifact.boardId}}` | Board the artifact lives on | `01924f3b-...` |
+| `{{board.id}}` | Board ID | `01924f3b-...` |
+| `{{board.slug}}` | Board slug (for URL construction) | `my-board` |
 
 ### Setting up your environment variables
 

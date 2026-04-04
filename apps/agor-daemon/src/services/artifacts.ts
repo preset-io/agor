@@ -466,9 +466,13 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     const daemonUrl =
       process.env.VITE_DAEMON_URL || `http://localhost:${process.env.PORT || '3030'}`;
 
+    // Resolve board slug for template context
+    const board = await this.boardRepo.findById(artifact.board_id);
+
     const context: Record<string, unknown> = {
       artifact: { id: artifact.artifact_id, boardId: artifact.board_id },
       agor: { apiUrl: daemonUrl },
+      board: { id: artifact.board_id, slug: board?.slug ?? '' },
     };
 
     let missingEnvVars: string[] = requiredEnvVars; // all missing if no user
@@ -476,15 +480,18 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     if (userId) {
       try {
         const usersService = this.app.service('users') as unknown as UsersService;
-        const envVars = await usersService.getEnvironmentVariables(userId);
-        context.user = { env: envVars };
+        const [envVars, user] = await Promise.all([
+          usersService.getEnvironmentVariables(userId),
+          usersService.get(userId),
+        ]);
+        context.user = { id: userId, name: user.name ?? '', email: user.email, env: envVars };
         missingEnvVars = requiredEnvVars.filter((v) => !envVars[v]);
       } catch (error) {
         console.error(
           `Failed to resolve env vars for artifact ${artifact.artifact_id}, user ${userId}:`,
           error
         );
-        context.user = { env: {} };
+        context.user = { id: userId, env: {} };
       }
 
       // TODO: generate scoped artifact token via SessionTokenService
