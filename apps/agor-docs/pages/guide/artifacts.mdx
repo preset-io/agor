@@ -121,6 +121,60 @@ For anything that needs a real backend, the artifact is still a great starting p
 
 ---
 
+## Secrets and API credentials (`agor.config.js`)
+
+Artifacts can securely access API keys and credentials through a **convention-based config file**. If an artifact contains a file named `/agor.config.js`, Agor treats it as a [Handlebars](https://handlebarsjs.com/) template and renders it **per-user** at view time. This means each user's secrets are injected privately — the raw template on disk only contains placeholders, never actual values.
+
+### How it works
+
+The agent writes an `agor.config.js` file with template variables:
+
+```js
+// agor.config.js — template on disk (no secrets here)
+export const apiKey = "{{user.env.OPENAI_API_KEY}}";
+export const apiUrl = "{{agor.apiUrl}}";
+```
+
+When you view the artifact, Agor renders the template with **your** environment variables. The artifact code imports from it like any JS module:
+
+```js
+import { apiKey, apiUrl } from '/agor.config.js';
+
+// apiKey is your personal key, resolved at view time
+const res = await fetch('https://api.openai.com/v1/chat/completions', {
+  headers: { Authorization: `Bearer ${apiKey}` },
+  // ...
+});
+```
+
+### Available template variables
+
+| Variable | Source | Example |
+|----------|--------|---------|
+| `{{user.env.VAR_NAME}}` | Your environment variables (Settings > Environment Variables) | `{{user.env.OPENAI_API_KEY}}` |
+| `{{agor.apiUrl}}` | Agor daemon URL | `http://localhost:3030` |
+| `{{artifact.id}}` | Current artifact's ID | `01924f3a-...` |
+| `{{artifact.boardId}}` | Board the artifact lives on | `01924f3b-...` |
+
+### Setting up your environment variables
+
+1. Go to **Settings > Environment Variables**
+2. Add the keys your artifacts need (e.g., `OPENAI_API_KEY`, `GITHUB_TOKEN`)
+3. Values are encrypted at rest with AES-256-GCM — they're only decrypted when rendering your config
+
+If a referenced variable isn't set, it renders as an empty string. Well-written artifacts check for this and show a helpful message instead of failing silently.
+
+### Security properties
+
+This design has a meaningful security advantage over tools like Claude Desktop artifacts, where secrets are typically pasted into the conversation and become part of the LLM context:
+
+- **Secrets never hit the LLM** — The agent writes `{{user.env.OPENAI_API_KEY}}` as a placeholder. Your actual API key is resolved server-side at view time and never appears in conversation history or model context
+- **Per-user isolation** — Two users viewing the same artifact each get their own rendered config with their own keys
+- **Template is transparent** — The raw `agor.config.js` on disk only contains placeholders, so anyone reviewing the artifact code sees *which* credentials are needed without seeing the actual values
+- **Encrypted at rest** — User environment variables are stored with AES-256-GCM encryption
+
+---
+
 ## From prototype to production
 
 Artifacts are designed for rapid prototyping, not permanent hosting. When you're ready to ship, the graduation path is straightforward:
@@ -128,7 +182,7 @@ Artifacts are designed for rapid prototyping, not permanent hosting. When you're
 1. **The code is already on disk** — artifact source files live at `.agor/artifacts/<id>/` inside your worktree. They're standard source files, not a proprietary format
 2. **Ask your agent to scaffold a real project** — "Take this artifact and set it up as a Next.js app" or "Create a Vite project from this prototype"
 3. **Pick your hosting** — Vercel, Netlify, Cloudflare Pages, a Docker container — the agent can set up deployment config for whatever platform you choose
-4. **Add what Sandpack can't do** — Real databases, server-side auth, API routes, environment variables — the things that need actual infrastructure
+4. **Graduate your secrets** — Move `agor.config.js` template variables to your hosting platform's environment variable system (Vercel env vars, `.env` files, etc.)
 
 The artifact gets you from idea to working UI in minutes. The agent gets you from prototype to deployed app when you're ready.
 
