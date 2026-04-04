@@ -6,7 +6,7 @@
  */
 
 import type { UserApiKeysRepository } from '@agor/core/db';
-import { NotAuthenticated } from '@agor/core/feathers';
+import { BadRequest, NotAuthenticated } from '@agor/core/feathers';
 import type { AuthenticatedParams } from '@agor/core/types';
 
 export function createUserApiKeysService(apiKeysRepo: UserApiKeysRepository) {
@@ -24,13 +24,13 @@ export function createUserApiKeysService(apiKeysRepo: UserApiKeysRepository) {
       if (!user) throw new NotAuthenticated('Authentication required');
 
       const name = data.name?.trim();
-      if (!name) throw new Error('Key name is required');
-      if (name.length > 100) throw new Error('Key name must be 100 characters or less');
+      if (!name) throw new BadRequest('Key name is required');
+      if (name.length > 100) throw new BadRequest('Key name must be 100 characters or less');
 
       // Limit keys per user
       const existing = await apiKeysRepo.listByUser(user.user_id);
       if (existing.length >= 25) {
-        throw new Error('Maximum of 25 API keys per user');
+        throw new BadRequest('Maximum of 25 API keys per user');
       }
 
       const result = await apiKeysRepo.create(user.user_id, name);
@@ -47,8 +47,8 @@ export function createUserApiKeysService(apiKeysRepo: UserApiKeysRepository) {
 
       if (data.name !== undefined) {
         const name = data.name.trim();
-        if (!name) throw new Error('Key name is required');
-        if (name.length > 100) throw new Error('Key name must be 100 characters or less');
+        if (!name) throw new BadRequest('Key name is required');
+        if (name.length > 100) throw new BadRequest('Key name must be 100 characters or less');
         await apiKeysRepo.updateName(id, user.user_id, name);
       }
 

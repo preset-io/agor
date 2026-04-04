@@ -58,14 +58,6 @@ export async function loadToken(): Promise<StoredAuth | null> {
 }
 
 /**
- * Check if API key auth is configured via environment variable.
- */
-export function hasApiKeyAuth(): boolean {
-  const key = process.env.AGOR_API_KEY;
-  return !!key && key.startsWith('agor_sk_');
-}
-
-/**
  * Clear stored authentication token
  */
 export async function clearToken(): Promise<void> {

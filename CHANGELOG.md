@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.16.1 (2026-04-04)
+
+### Features
+- **User API keys** — personal API keys (`agor_sk_...`) for programmatic authentication via CLI, scripts, and CI pipelines (#913)
+  - CRUD management in Settings modal (create, list, revoke)
+  - Supports `Authorization: Bearer` and `X-API-Key` headers
+  - `AGOR_API_KEY` env var for CLI authentication
+  - bcrypt-hashed storage with prefix-based lookup
+
+### Fixes
+- Fix API key auth strategy ordering — `api-key` must precede `jwt` to prevent greedy Bearer token matching
+- Add `api-key` to auth service config `authStrategies` list
+- Add Private Network Access preflight header for browser iframe CORS
+
 ## 0.16.0 (2026-04-03)
 
 ### Features

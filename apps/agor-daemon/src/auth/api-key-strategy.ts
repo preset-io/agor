@@ -6,7 +6,7 @@
  */
 
 import type { UserApiKeysRepository } from '@agor/core/db';
-import { AuthenticationBaseStrategy } from '@agor/core/feathers';
+import { AuthenticationBaseStrategy, NotAuthenticated } from '@agor/core/feathers';
 
 export class ApiKeyStrategy extends AuthenticationBaseStrategy {
   private apiKeysRepo: UserApiKeysRepository | null = null;
@@ -22,18 +22,18 @@ export class ApiKeyStrategy extends AuthenticationBaseStrategy {
   // biome-ignore lint/suspicious/noExplicitAny: Feathers type compatibility
   async authenticate(authentication: any, params: any): Promise<any> {
     if (!this.apiKeysRepo || !this.usersService) {
-      throw new Error('ApiKeyStrategy not initialized');
+      throw new NotAuthenticated('ApiKeyStrategy not initialized');
     }
 
     const apiKey = authentication.apiKey;
     if (!apiKey || !apiKey.startsWith('agor_sk_')) {
-      throw new Error('Invalid API key format');
+      throw new NotAuthenticated('Invalid API key format');
     }
 
     // Verify key against stored hashes
     const keyRow = await this.apiKeysRepo.verifyKey(apiKey);
     if (!keyRow) {
-      throw new Error('Invalid API key');
+      throw new NotAuthenticated('Invalid API key');
     }
 
     // Update last_used_at (non-blocking)
@@ -44,7 +44,7 @@ export class ApiKeyStrategy extends AuthenticationBaseStrategy {
     // Load the user
     const user = await this.usersService.get(keyRow.user_id);
     if (!user) {
-      throw new Error('User not found for API key');
+      throw new NotAuthenticated('User not found for API key');
     }
 
     return {

@@ -193,14 +193,14 @@ export interface User extends BaseUserFields {
 }
 
 /**
- * User API Key - Personal API key for programmatic access
+ * User API Key - Public DTO for programmatic access keys.
+ * key_hash is internal to the DB layer and never exposed.
  */
 export interface UserApiKey {
-  id: UserID;
+  id: string;
   user_id: UserID;
   name: string;
   prefix: string;
-  key_hash: string;
   created_at: Date;
   last_used_at?: Date;
 }

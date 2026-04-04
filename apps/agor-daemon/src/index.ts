@@ -59,6 +59,7 @@ import {
 import {
   AuthenticationService,
   authenticate,
+  BadRequest,
   errorHandler,
   Forbidden,
   feathers,
@@ -6268,7 +6269,14 @@ async function main() {
   registerAuthenticatedRoute(
     app,
     '/api/v1/user/api-keys',
-    userApiKeysService,
+    {
+      async find(params: AuthenticatedParams) {
+        return userApiKeysService.find(params);
+      },
+      async create(data: { name: string }, params: AuthenticatedParams) {
+        return userApiKeysService.create(data, params);
+      },
+    },
     {
       find: { role: ROLES.MEMBER, action: 'list API keys' },
       create: { role: ROLES.MEMBER, action: 'create API keys' },
@@ -6283,13 +6291,13 @@ async function main() {
       // biome-ignore lint/suspicious/noExplicitAny: Feathers service type
       async patch(data: { name?: string }, params: any) {
         const id = params.route?.id;
-        if (!id) throw new Error('API key ID required');
+        if (!id) throw new BadRequest('API key ID required');
         return userApiKeysService.patch(id, data, params);
       },
       // biome-ignore lint/suspicious/noExplicitAny: Feathers service type
       async remove(_id: unknown, params: any) {
         const keyId = params.route?.id;
-        if (!keyId) throw new Error('API key ID required');
+        if (!keyId) throw new BadRequest('API key ID required');
         return userApiKeysService.remove(keyId, params);
       },
     },

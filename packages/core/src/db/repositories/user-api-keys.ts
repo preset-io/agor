@@ -14,6 +14,7 @@ import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { userApiKeys } from '../schema';
 
 const KEY_PREFIX = 'agor_sk_';
+const KEY_PREFIX_LENGTH = 12;
 const KEY_RANDOM_BYTES = 32;
 const BCRYPT_ROUNDS = 10;
 
@@ -48,7 +49,7 @@ export class UserApiKeysRepository {
     const id = generateId();
     const randomPart = randomBytes(KEY_RANDOM_BYTES).toString('base64url');
     const rawKey = `${KEY_PREFIX}${randomPart}`;
-    const prefix = rawKey.substring(0, 12);
+    const prefix = rawKey.substring(0, KEY_PREFIX_LENGTH);
     const keyHash = await bcrypt.hash(rawKey, BCRYPT_ROUNDS);
     return { rawKey, id, prefix, keyHash };
   }
@@ -95,7 +96,7 @@ export class UserApiKeysRepository {
 
   /** Verify a raw API key against stored hashes. Returns the matching row or null. */
   async verifyKey(rawKey: string): Promise<UserApiKeyRow | null> {
-    const prefix = rawKey.substring(0, 12);
+    const prefix = rawKey.substring(0, KEY_PREFIX_LENGTH);
     const candidates = await this.findByPrefix(prefix);
     for (const candidate of candidates) {
       if (await bcrypt.compare(rawKey, candidate.key_hash)) {
