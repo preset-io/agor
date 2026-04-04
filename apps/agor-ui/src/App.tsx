@@ -16,7 +16,7 @@ import type {
   UUID,
   Worktree,
 } from '@agor/core/types';
-import { Alert, App as AntApp, ConfigProvider, Input, Modal, Spin, theme } from 'antd';
+import { Alert, App as AntApp, Button, ConfigProvider, Modal, Spin, theme } from 'antd';
 import { useEffect, useState } from 'react';
 import { BrowserRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { AVAILABLE_AGENTS } from './components/AgentSelectionGrid';
@@ -197,7 +197,6 @@ function AppContent() {
     url: string;
     sessionId?: string;
   } | null>(null);
-  const [oauthCallbackUrl, setOauthCallbackUrl] = useState('');
   const [oauthFlowStarted, setOauthFlowStarted] = useState(false);
   const [oauthCooldownUntil, setOauthCooldownUntil] = useState<number>(0);
   const [oauthAuthUrl, setOauthAuthUrl] = useState<string | null>(null);
@@ -225,7 +224,6 @@ function AppContent() {
       if (data.servers.length > 0) {
         const server = data.servers[0];
         setPendingOAuthServer({ ...server, sessionId: data.session_id });
-        setOauthCallbackUrl('');
         setOauthFlowStarted(false);
       }
     };
@@ -240,6 +238,8 @@ function AppContent() {
   // Auto-start OAuth flow when pendingOAuthServer is set
   useEffect(() => {
     if (!client || !pendingOAuthServer || oauthFlowStarted) return;
+
+    let oauthCleanup: (() => void) | null = null;
 
     const startOAuthFlow = async () => {
       setOauthFlowStarted(true);
@@ -275,6 +275,40 @@ function AppContent() {
             console.log('[OAuth] Popup blocked — user can click the link in the modal');
           }
         }
+
+        // Listen for automatic completion via the daemon's callback endpoint
+        if (data.state) {
+          const handleOAuthCompleted = (event: { state: string; success: boolean }) => {
+            if (event.state === data.state && event.success) {
+              showSuccess('OAuth authentication successful! MCP tools are now available.');
+
+              // Auto-continue the session that was waiting for OAuth
+              const autoContinue = buildOAuthAutoContinuePrompt(pendingOAuthServer);
+              if (autoContinue) {
+                client
+                  .service(`sessions/${autoContinue.sessionId}/prompt`)
+                  .create({
+                    prompt: autoContinue.prompt,
+                    messageSource: autoContinue.messageSource,
+                  })
+                  .catch((err: unknown) =>
+                    console.warn('[OAuth] Failed to auto-continue session:', err)
+                  );
+              }
+
+              setPendingOAuthServer(null);
+              setOauthAuthUrl(null);
+              // Set 10 second cooldown to prevent immediate re-triggers
+              setOauthCooldownUntil(Date.now() + 10000);
+              oauthCleanup?.();
+            }
+          };
+          oauthCleanup = () => {
+            client.io.off('oauth:completed', handleOAuthCompleted);
+            oauthCleanup = null;
+          };
+          client.io.on('oauth:completed', handleOAuthCompleted);
+        }
       } catch (error) {
         showError(`OAuth error: ${error instanceof Error ? error.message : String(error)}`);
         setPendingOAuthServer(null);
@@ -282,54 +316,11 @@ function AppContent() {
     };
 
     startOAuthFlow();
-  }, [client, pendingOAuthServer, oauthFlowStarted, mcpServerById, showError]);
 
-  // Handle OAuth callback URL submission
-  const handleOAuthCallbackSubmit = async () => {
-    if (!client || !oauthCallbackUrl.trim()) {
-      showError('Please paste the callback URL');
-      return;
-    }
-
-    try {
-      const data = (await client.service('mcp-servers/oauth-complete').create({
-        callback_url: oauthCallbackUrl.trim(),
-      })) as {
-        success: boolean;
-        error?: string;
-        message?: string;
-      };
-
-      if (data.success) {
-        showSuccess(
-          data.message || 'OAuth authentication successful! MCP tools are now available.'
-        );
-
-        // Auto-continue the session that was waiting for OAuth
-        const autoContinue = buildOAuthAutoContinuePrompt(pendingOAuthServer);
-        if (autoContinue) {
-          try {
-            await client.service(`sessions/${autoContinue.sessionId}/prompt`).create({
-              prompt: autoContinue.prompt,
-              messageSource: autoContinue.messageSource,
-            });
-          } catch (err) {
-            console.warn('[OAuth] Failed to auto-continue session:', err);
-          }
-        }
-
-        setPendingOAuthServer(null);
-        setOauthCallbackUrl('');
-        setOauthAuthUrl(null);
-        // Set 10 second cooldown to prevent immediate re-triggers
-        setOauthCooldownUntil(Date.now() + 10000);
-      } else {
-        showError(data.error || 'Failed to complete OAuth flow');
-      }
-    } catch (error) {
-      showError(`OAuth error: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  };
+    return () => {
+      oauthCleanup?.();
+    };
+  }, [client, pendingOAuthServer, oauthFlowStarted, mcpServerById, showError, showSuccess]);
 
   // Get current user from users Map (real-time updates via WebSocket)
   // This ensures we get the latest onboarding_completed status
@@ -1273,40 +1264,40 @@ function AppContent() {
         onLogout={logout}
       />
 
-      {/* OAuth Callback Modal - shown when MCP server needs OAuth authentication */}
+      {/* OAuth waiting modal - closes automatically when daemon receives the callback */}
       <Modal
         title={`OAuth Authentication - ${pendingOAuthServer?.name || 'MCP Server'}`}
         open={!!pendingOAuthServer && oauthFlowStarted}
-        onOk={handleOAuthCallbackSubmit}
         onCancel={() => {
           setPendingOAuthServer(null);
-          setOauthCallbackUrl('');
           setOauthAuthUrl(null);
         }}
-        okText="Complete Authentication"
-        cancelText="Cancel"
+        footer={[
+          <Button
+            key="cancel"
+            onClick={() => {
+              setPendingOAuthServer(null);
+              setOauthAuthUrl(null);
+            }}
+          >
+            Cancel
+          </Button>,
+        ]}
       >
         {oauthAuthUrl ? (
           <p>
             <a href={oauthAuthUrl} target="_blank" rel="noopener noreferrer">
               Click here to open the authentication page
             </a>{' '}
-            if it didn't open automatically.
+            if it didn&apos;t open automatically.
           </p>
         ) : (
           <p>Starting OAuth authentication...</p>
         )}
         <p>
-          After you complete the login, you will be redirected to a callback URL.{' '}
-          <strong>Please copy and paste the entire callback URL here:</strong>
+          Waiting for authentication to complete in the browser tab. This dialog will close
+          automatically once sign-in is complete.
         </p>
-        <Input.TextArea
-          value={oauthCallbackUrl}
-          onChange={(e) => setOauthCallbackUrl(e.target.value)}
-          placeholder="Paste the callback URL here (e.g., http://localhost:3030/oauth/callback?code=...)"
-          rows={3}
-          style={{ marginTop: 8 }}
-        />
       </Modal>
 
       {/* Onboarding Wizard - shown for new users */}
