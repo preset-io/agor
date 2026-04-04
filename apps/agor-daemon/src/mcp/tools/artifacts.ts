@@ -16,8 +16,27 @@ export function registerArtifactTools(server: McpServer, ctx: McpContext): void 
   server.registerTool(
     'agor_artifacts_create',
     {
-      description:
-        'Create a live web application artifact on a board. Scaffolds a folder in the worktree at .agor/artifacts/{id}/, writes initial files, and places it on the board. The artifact renders in-browser using Sandpack. After creation, you can edit files in the returned path using normal file tools, then call agor_artifacts_refresh to push changes to the board.',
+      description: `Create a live web application artifact on a board. Scaffolds a folder in the worktree at .agor/artifacts/{id}/, writes initial files, and places it on the board. The artifact renders in-browser using Sandpack. After creation, you can edit files in the returned path using normal file tools, then call agor_artifacts_refresh to push changes to the board.
+
+CONFIG CONVENTION (agor.config.js):
+If you include a file named "/agor.config.js", it is treated as a Handlebars template and rendered per-user at view time. This lets artifacts access API credentials and Agor context without hardcoding secrets.
+
+Available template variables:
+  {{ user.env.VAR_NAME }} - User's environment variable (configured in Settings > Environment Variables)
+  {{ agor.apiUrl }}       - Agor daemon URL
+  {{ artifact.id }}       - This artifact's ID
+  {{ artifact.boardId }}  - Board ID
+
+IMPORTANT:
+- Use {{ user.env.X }} for secrets (API keys, tokens). NEVER hardcode sensitive values.
+- All users can see the raw template file, but each user's rendered values are private.
+- Missing env vars render as empty string "". Your app should check for empty values and show a helpful message (e.g. "Please configure OPENAI_API_KEY in Settings > Environment Variables") instead of making API calls with empty credentials.
+
+Example /agor.config.js:
+  export const apiKey = "{{ user.env.OPENAI_API_KEY }}";
+  export const apiUrl = "{{ agor.apiUrl }}";
+
+Then in your app: import { apiKey, apiUrl } from '/agor.config.js';`,
       inputSchema: z.object({
         name: z.string().describe('Artifact display name'),
         boardId: z.string().describe('Board to place the artifact on'),

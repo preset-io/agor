@@ -33,9 +33,24 @@ import type {
   QueryParams,
   SandpackManifest,
   SandpackTemplate,
+  UserID,
   WorktreeID,
 } from '@agor/core/types';
+import Handlebars from 'handlebars';
 import { DrizzleService } from '../adapters/drizzle.js';
+import type { UsersService } from './users.js';
+
+/**
+ * Convention: if an artifact contains a file named /agor.config.js,
+ * the backend treats it as a Handlebars template and renders it per-user
+ * at payload fetch time. Template variables:
+ *   {{ user.env.VAR_NAME }} - User's encrypted env var
+ *   {{ agor.token }}        - Scoped artifact API token (future)
+ *   {{ agor.apiUrl }}       - Daemon URL
+ *   {{ artifact.id }}       - Artifact ID
+ *   {{ artifact.boardId }}  - Board ID
+ */
+const AGOR_CONFIG_FILE = '/agor.config.js';
 
 export type ArtifactParams = QueryParams<{
   board_id?: BoardID;
@@ -231,9 +246,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   }
 
   /**
-   * Read artifact directory and build the payload for the frontend
+   * Read artifact directory and build the payload for the frontend.
+   * If the artifact contains an /agor.config.js file, it is treated as a
+   * Handlebars template and rendered with the requesting user's context.
    */
-  async getPayload(artifactId: string): Promise<ArtifactPayload> {
+  async getPayload(artifactId: string, userId?: string): Promise<ArtifactPayload> {
     const artifact = await this.artifactRepo.findById(artifactId);
     if (!artifact) throw new Error(`Artifact ${artifactId} not found`);
 
@@ -259,6 +276,16 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     // Compute hash
     const contentHash = this.computeHash(artifactDir);
 
+    // Render agor.config.js template if present
+    let missingEnvVars: string[] | undefined;
+    if (files[AGOR_CONFIG_FILE]) {
+      const result = await this.renderAgorConfig(files[AGOR_CONFIG_FILE], artifact, userId);
+      files[AGOR_CONFIG_FILE] = result.rendered;
+      if (result.missingEnvVars.length > 0) {
+        missingEnvVars = result.missingEnvVars;
+      }
+    }
+
     return {
       artifact_id: artifact.artifact_id,
       name: artifact.name,
@@ -268,6 +295,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       dependencies: manifest.dependencies,
       entry: manifest.entry,
       content_hash: contentHash,
+      ...(missingEnvVars ? { missing_env_vars: missingEnvVars } : {}),
     };
   }
 
@@ -420,6 +448,85 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   }
 
   // ── Private helpers ──
+
+  /**
+   * Render an agor.config.js Handlebars template with user-specific context.
+   * Returns the rendered string and a list of user.env.* vars that are missing.
+   */
+  private async renderAgorConfig(
+    rawTemplate: string,
+    artifact: Artifact,
+    userId?: string
+  ): Promise<{ rendered: string; missingEnvVars: string[] }> {
+    // Extract all user.env.* references from the template AST
+    const requiredEnvVars = this.extractUserEnvPaths(rawTemplate);
+
+    // Build template context
+    const daemonUrl =
+      process.env.VITE_DAEMON_URL || `http://localhost:${process.env.PORT || '3030'}`;
+
+    const context: Record<string, unknown> = {
+      artifact: { id: artifact.artifact_id, boardId: artifact.board_id },
+      agor: { apiUrl: daemonUrl },
+    };
+
+    let missingEnvVars: string[] = requiredEnvVars; // all missing if no user
+
+    if (userId) {
+      try {
+        const usersService = this.app.service('users') as unknown as UsersService;
+        const envVars = await usersService.getEnvironmentVariables(userId as UserID);
+        context.user = { env: envVars };
+        missingEnvVars = requiredEnvVars.filter((v) => !envVars[v]);
+      } catch {
+        // User service unavailable -- render without user context
+        context.user = { env: {} };
+      }
+
+      // TODO: generate scoped artifact token via SessionTokenService
+      // (context.agor as any).token = await this.generateArtifactToken(artifact, userId);
+    }
+
+    // Render template (missing values become "")
+    let rendered: string;
+    try {
+      const compiled = Handlebars.compile(rawTemplate);
+      rendered = compiled(context);
+    } catch (error) {
+      console.error(`Failed to render agor.config.js for artifact ${artifact.artifact_id}:`, error);
+      rendered = rawTemplate; // Fall back to raw template on error
+    }
+
+    return { rendered, missingEnvVars };
+  }
+
+  /**
+   * Parse a Handlebars template string and extract all user.env.* variable names.
+   */
+  private extractUserEnvPaths(templateString: string): string[] {
+    try {
+      const ast = Handlebars.parse(templateString);
+      const paths: string[] = [];
+
+      function walk(node: Record<string, unknown>): void {
+        if (node.type === 'MustacheStatement') {
+          const nodePath = node.path as Record<string, unknown> | undefined;
+          if (nodePath?.type === 'PathExpression' && typeof nodePath.original === 'string') {
+            if (nodePath.original.startsWith('user.env.')) {
+              paths.push(nodePath.original.replace('user.env.', ''));
+            }
+          }
+        }
+        if (Array.isArray(node.body)) node.body.forEach(walk);
+        if (node.program) walk(node.program as Record<string, unknown>);
+      }
+
+      walk(ast as unknown as Record<string, unknown>);
+      return [...new Set(paths)];
+    } catch {
+      return [];
+    }
+  }
 
   /**
    * Resolve artifact directory with path containment check.

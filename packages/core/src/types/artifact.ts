@@ -87,6 +87,8 @@ export interface ArtifactPayload {
   dependencies?: Record<string, string>;
   entry?: string;
   content_hash: string;
+  /** Env vars referenced in agor.config.js that the requesting user hasn't configured */
+  missing_env_vars?: string[];
 }
 
 /**
