@@ -3,9 +3,12 @@ import type { MCPServer } from '@agor/core/types';
 /**
  * Determine if an MCP server needs authentication from the current user.
  *
- * Branches by oauth_mode:
- * - 'shared': only checks for a shared token on the server record
- * - 'per_user' (default): only checks per-user token status
+ * A server is considered authenticated if EITHER:
+ * - It has a shared token (oauth_access_token) — works regardless of mode
+ * - The current user has a per-user token
+ *
+ * This avoids a regression where servers with a shared token but no explicit
+ * oauth_mode would be treated as unauthenticated.
  *
  * Non-OAuth servers always return false (no auth needed).
  */
@@ -15,12 +18,11 @@ export function mcpServerNeedsAuth(
 ): boolean {
   if (!server || server.auth?.type !== 'oauth') return false;
 
-  const oauthMode = server.auth.oauth_mode || 'per_user';
+  // A shared token always means the server is authenticated
+  if (server.auth.oauth_access_token) return false;
 
-  if (oauthMode === 'shared') {
-    return !server.auth.oauth_access_token;
-  }
+  // For per_user mode (or unset mode), check the user's token set
+  if (userAuthenticatedMcpServerIds.has(server.mcp_server_id)) return false;
 
-  // per_user mode: check the user's token set
-  return !userAuthenticatedMcpServerIds.has(server.mcp_server_id);
+  return true;
 }

@@ -1326,6 +1326,7 @@ async function main() {
           state,
           success: true,
           mcp_server_id: pendingFlow.mcpServerId,
+          oauth_mode: pendingFlow.oauthMode || 'per_user',
         };
         if (pendingFlow.socketId) {
           app.io.to(pendingFlow.socketId).emit('oauth:completed', oauthEvent);

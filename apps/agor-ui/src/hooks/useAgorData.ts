@@ -807,13 +807,19 @@ export function useAgorData(
     commentsService.on('updated', handleCommentPatched);
     commentsService.on('removed', handleCommentRemoved);
 
-    // Listen for OAuth completion events to update per-user token state in real-time
+    // Listen for OAuth completion events to update per-user token state in real-time.
+    // Only update the per-user set when oauth_mode is 'per_user' (or unset, which defaults
+    // to per_user). Shared-mode completions update the server record itself and don't need
+    // per-user tracking. This also prevents stale data when the event is broadcast globally
+    // (fallback path when socketId is absent).
     const handleOAuthCompleted = (event: {
       state: string;
       success: boolean;
       mcp_server_id?: string;
+      oauth_mode?: string;
     }) => {
-      if (event.success && event.mcp_server_id) {
+      const mode = event.oauth_mode || 'per_user';
+      if (event.success && event.mcp_server_id && mode === 'per_user') {
         setUserAuthenticatedMcpServerIds((prev) => {
           if (prev.has(event.mcp_server_id!)) return prev;
           const next = new Set(prev);
