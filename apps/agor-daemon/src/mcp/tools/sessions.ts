@@ -221,7 +221,6 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         status: session.status,
         agentic_tool: session.agentic_tool,
         title: session.title,
-        message_count: session.message_count,
         model: session.model_config?.model || null,
         thinking_mode: session.model_config?.thinkingMode || null,
 
@@ -343,13 +342,11 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
                     title?: string;
                     status: string;
                     agentic_tool: string;
-                    message_count?: number;
                   }) => ({
                     session_id: s.session_id,
                     title: s.title,
                     status: s.status,
                     agentic_tool: s.agentic_tool,
-                    message_count: s.message_count,
                   })
                 );
               if (siblingList.length > 0) {
@@ -729,7 +726,6 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         },
         genealogy: { children: [] },
         tasks: [],
-        message_count: 0,
       };
 
       const session = await ctx.app.service('sessions').create(sessionData, ctx.baseServiceParams);

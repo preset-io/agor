@@ -925,7 +925,7 @@ async function main() {
             role: 'system' as Message['role'],
             content: errorContent,
             content_preview: `Missing required env vars: ${missingVars.join(', ')}`,
-            index: session.message_count,
+            index: await sessionsRepository.countMessages(sessionId),
             timestamp: new Date().toISOString(),
           };
           await messagesService.create(systemMessage);
@@ -4984,7 +4984,7 @@ async function main() {
         console.log(
           `   Session permission_config.mode: ${session.permission_config?.mode || 'not set'}`
         );
-        const messageStartIndex = session.message_count;
+        const messageStartIndex = await sessionsRepository.countMessages(id as string);
         const startTimestamp = new Date().toISOString();
 
         // Get current git state from session's working directory

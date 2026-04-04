@@ -95,7 +95,6 @@ async function testSessionRepository(db: ReturnType<typeof createDatabase>) {
     },
     contextFiles: [],
     tasks: [],
-    message_count: 0,
   });
 
   console.log(`  ✅ Created session: ${formatShortId(session.session_id)}`);
@@ -274,7 +273,6 @@ async function testGenealogy(db: ReturnType<typeof createDatabase>) {
     genealogy: { children: [] },
     contextFiles: [],
     tasks: [],
-    message_count: 0,
   });
 
   console.log(`  ✅ Created parent: ${formatShortId(parent.session_id)}`);
@@ -293,7 +291,6 @@ async function testGenealogy(db: ReturnType<typeof createDatabase>) {
     },
     contextFiles: [],
     tasks: [],
-    message_count: 0,
   });
 
   console.log(`  ✅ Created fork: ${formatShortId(fork.session_id)}`);
@@ -312,7 +309,6 @@ async function testGenealogy(db: ReturnType<typeof createDatabase>) {
     },
     contextFiles: [],
     tasks: [],
-    message_count: 0,
   });
 
   console.log(`  ✅ Created spawn: ${formatShortId(spawn.session_id)}`);

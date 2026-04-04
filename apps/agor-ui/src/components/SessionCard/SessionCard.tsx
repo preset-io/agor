@@ -301,12 +301,8 @@ const SessionCard = ({
           style={{ marginTop: 8 }}
         />
 
-        {/* Footer metadata - always visible */}
-        <div style={{ marginTop: 12 }}>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            💬 {session.message_count} messages
-          </Typography.Text>
-        </div>
+        {/* Footer spacer */}
+        <div style={{ marginTop: 12 }} />
       </div>
     </Card>
   );

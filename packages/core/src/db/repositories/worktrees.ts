@@ -5,7 +5,18 @@
  */
 
 import type { AgenticToolName, SessionStatus, UUID, Worktree, WorktreeID } from '@agor/core/types';
-import { and, desc, eq, getTableColumns, inArray, isNotNull, isNull, like, or } from 'drizzle-orm';
+import {
+  and,
+  desc,
+  eq,
+  getTableColumns,
+  inArray,
+  isNotNull,
+  isNull,
+  like,
+  or,
+  sql,
+} from 'drizzle-orm';
 import { formatShortId, generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { deleteFrom, insert, lockRowForUpdate, select, txAsDb, update } from '../database-wrapper';
@@ -689,9 +700,7 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
       // Import schema tables dynamically
       const { sessions: sessionsTable, messages: messagesTable } = await import('../schema');
 
-      // Query to get recent sessions for these worktrees with last message
-      // We use a subquery to get the latest message for each session
-      // We also extract message_count from the data column to avoid COUNT(*) queries
+      // Query to get recent sessions for these worktrees
       const sessionRows = await select(this.db, {
         worktree_id: sessionsTable.worktree_id,
         session_id: sessionsTable.session_id,
@@ -699,14 +708,12 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
         agentic_tool: sessionsTable.agentic_tool,
         updated_at: sessionsTable.updated_at,
         unix_username: sessionsTable.unix_username,
-        data: sessionsTable.data,
       })
         .from(sessionsTable)
         .where(inArray(sessionsTable.worktree_id, worktreeIds))
         .orderBy(sessionsTable.updated_at)
         .all();
 
-      // Get message counts and last messages for all sessions in one query
       const sessionIds = sessionRows.map((s: { session_id: unknown }) => s.session_id as string);
 
       if (sessionIds.length === 0) {
@@ -760,7 +767,19 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
         }
       }
 
-      // Note: We extract message_count from sessions.data column instead of running COUNT(*)
+      // Batch count messages per session in one query
+      const countRows = await select(this.db, {
+        session_id: messagesTable.session_id,
+        count: sql<number>`count(*)`,
+      })
+        .from(messagesTable)
+        .where(inArray(messagesTable.session_id, sessionIds))
+        .groupBy(messagesTable.session_id)
+        .all();
+      const messageCountBySession = new Map<string, number>();
+      for (const r of countRows) {
+        messageCountBySession.set(r.session_id as string, Number(r.count));
+      }
 
       // Build sessions map grouped by worktree_id
       const sessionsByWorktree = new Map<string, WorktreeSessionActivity[]>();
@@ -775,10 +794,6 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
           lastMessage = `${lastMessage.substring(0, truncationLength)}...truncated`;
         }
 
-        // Extract message_count from data column (materialized field)
-        const sessionData = row.data as { message_count?: number } | null;
-        const messageCount = sessionData?.message_count ?? 0;
-
         const sessionActivity: WorktreeSessionActivity = {
           session_id: sessionId,
           status: row.status as WorktreeSessionActivity['status'],
@@ -787,7 +802,7 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
             ? new Date(row.updated_at).toISOString()
             : new Date().toISOString(),
           last_message: lastMessage,
-          message_count: messageCount,
+          message_count: messageCountBySession.get(sessionId) ?? 0,
           unix_username: (row.unix_username as string) || 'unknown',
         };
 

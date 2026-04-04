@@ -167,9 +167,9 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({ sessions, client, onSess
       width: 70,
       align: 'center' as const,
       render: (_, session) => (
-        <Typography.Text type="secondary">{session.message_count}</Typography.Text>
+        <Typography.Text type="secondary">{session.message_count ?? 0}</Typography.Text>
       ),
-      sorter: (a, b) => a.message_count - b.message_count,
+      sorter: (a, b) => (a.message_count ?? 0) - (b.message_count ?? 0),
     },
     {
       title: 'Created',

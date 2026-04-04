@@ -91,7 +91,6 @@ export interface ExecutePromptParams {
 
 export interface ExecutePromptResult {
   status: 'completed' | 'failed' | 'cancelled';
-  message_count: number;
   token_usage?: {
     input_tokens: number;
     output_tokens: number;

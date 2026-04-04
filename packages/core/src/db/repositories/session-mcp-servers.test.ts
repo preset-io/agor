@@ -42,7 +42,6 @@ function createSessionData(worktreeId: UUID, overrides?: Partial<Session>): Part
       current_sha: 'def456',
     },
     tasks: overrides?.tasks ?? [],
-    message_count: overrides?.message_count ?? 0,
     contextFiles: overrides?.contextFiles ?? [],
     genealogy: overrides?.genealogy ?? {
       children: [],

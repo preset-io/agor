@@ -171,13 +171,13 @@ export interface Session {
     forked_from_session_id?: SessionID;
     /** Task where fork occurred */
     fork_point_task_id?: TaskID;
-    /** Message index where fork occurred (parent's message_count at fork time) */
+    /** Message index where fork occurred (count of parent's messages at fork time) */
     fork_point_message_index?: number;
     /** Parent session that spawned this one (child relationship) */
     parent_session_id?: SessionID;
     /** Task where spawn occurred */
     spawn_point_task_id?: TaskID;
-    /** Message index where spawn occurred (parent's message_count at spawn time) */
+    /** Message index where spawn occurred (count of parent's messages at spawn time) */
     spawn_point_message_index?: number;
     /** Child sessions spawned from this session */
     children: SessionID[];
@@ -186,7 +186,6 @@ export interface Session {
   // Tasks
   /** Task IDs in this session */
   tasks: TaskID[];
-  message_count: number;
 
   // UI metadata
   /** Session title (user-provided or auto-generated) */

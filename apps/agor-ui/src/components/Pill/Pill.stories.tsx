@@ -259,7 +259,7 @@ export const EventStream: Story = {
                     children: [],
                   },
                   tasks: [],
-                  message_count: 15,
+
                   permission_config: { mode: 'auto' },
                   scheduled_from_worktree: false,
                   ready_for_prompt: false,
@@ -342,7 +342,6 @@ export const SessionMetadata: Story = {
               children: [],
             },
             tasks: [],
-            message_count: 15,
             permission_config: { mode: 'auto' },
             scheduled_from_worktree: false,
             ready_for_prompt: false,
@@ -414,7 +413,6 @@ export const SessionMetadata: Story = {
               children: [],
             },
             tasks: [],
-            message_count: 8,
             permission_config: {
               mode: 'auto',
               codex: { sandboxMode: 'workspace-write', approvalPolicy: 'on-request' },
@@ -455,7 +453,6 @@ export const SessionMetadata: Story = {
             contextFiles: [],
             genealogy: { children: [] },
             tasks: [],
-            message_count: 3,
             permission_config: { mode: 'ask' },
             scheduled_from_worktree: false,
             ready_for_prompt: false,

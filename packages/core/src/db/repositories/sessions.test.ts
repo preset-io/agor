@@ -31,7 +31,6 @@ function createSessionData(overrides?: Partial<Session>): Partial<Session> {
       current_sha: 'def456',
     },
     tasks: overrides?.tasks ?? [],
-    message_count: overrides?.message_count ?? 0,
     contextFiles: overrides?.contextFiles ?? [],
     genealogy: overrides?.genealogy ?? {
       children: [],
@@ -851,7 +850,6 @@ describe('SessionRepository.update', () => {
         base_sha: 'xyz789',
         current_sha: 'uvw456',
       },
-      message_count: 10,
       custom_context: { foo: 'baz', newField: 123 },
     });
 
@@ -862,7 +860,6 @@ describe('SessionRepository.update', () => {
       base_sha: 'xyz789',
       current_sha: 'uvw456',
     });
-    expect(updated.message_count).toBe(10);
     expect(updated.custom_context).toEqual({ foo: 'baz', newField: 123 });
   });
 

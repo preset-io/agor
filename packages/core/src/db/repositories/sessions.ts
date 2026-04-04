@@ -14,6 +14,7 @@ import type { Database } from '../client';
 import { deleteFrom, insert, lockRowForUpdate, select, txAsDb, update } from '../database-wrapper';
 import {
   boards,
+  messages,
   type SessionInsert,
   type SessionRow,
   sessions,
@@ -142,7 +143,6 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         },
         contextFiles: session.contextFiles ?? [],
         tasks: session.tasks ?? [],
-        message_count: session.message_count ?? 0,
         permission_config: session.permission_config,
         model_config: session.model_config
           ? {
@@ -549,6 +549,20 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         error
       );
     }
+  }
+
+  /**
+   * Count messages for a session (live query, no caching)
+   */
+  async countMessages(sessionId: string): Promise<number> {
+    const fullId = await this.resolveId(sessionId);
+    const result = await select(this.db, {
+      count: sql<number>`count(*)`,
+    })
+      .from(messages)
+      .where(eq(messages.session_id, fullId))
+      .one();
+    return Number(result?.count ?? 0);
   }
 
   /**

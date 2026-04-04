@@ -189,12 +189,11 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
         genealogy: {
           forked_from_session_id: parent.session_id,
           fork_point_task_id: data.task_id as TaskID,
-          fork_point_message_index: parent.message_count, // Capture parent's message count at fork time
+          fork_point_message_index: await this.sessionRepo.countMessages(parent.session_id),
           children: [],
         },
         contextFiles: [...(parent.contextFiles || [])],
         tasks: [],
-        message_count: 0,
         // Don't copy sdk_session_id - fork will get its own via forkSession:true
       },
       params
@@ -366,12 +365,11 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
         genealogy: {
           parent_session_id: parent.session_id,
           spawn_point_task_id: data.task_id as TaskID,
-          spawn_point_message_index: parent.message_count, // Capture parent's message count at spawn time
+          spawn_point_message_index: await this.sessionRepo.countMessages(parent.session_id),
           children: [],
         },
         contextFiles: [...(parent.contextFiles || [])],
         tasks: [],
-        message_count: 0,
         permission_config: permissionConfig,
         model_config: modelConfig,
         callback_config: callbackConfig,

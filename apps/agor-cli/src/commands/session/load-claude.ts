@@ -144,7 +144,6 @@ export default class SessionLoadClaude extends BaseCommand {
           children: [],
         },
         tasks: [],
-        message_count: conversation.length,
       };
 
       // Create session in daemon

@@ -516,7 +516,6 @@ export class GatewayService {
             }
           : undefined,
         tasks: [],
-        message_count: 0,
         // Denormalized gateway metadata (immutable snapshot at creation time)
         // Avoids N+1 lookups when rendering board cards
         custom_context: {

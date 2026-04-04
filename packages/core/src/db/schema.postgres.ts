@@ -127,8 +127,7 @@ export const sessions = pgTable(
         contextFiles: string[];
         tasks: string[];
 
-        // Aggregates
-        message_count: number;
+        // Note: message_count was removed — computed dynamically via COUNT(*) where needed
 
         // Permission config (session-level permission settings)
         permission_config?: {

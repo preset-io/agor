@@ -653,7 +653,6 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
             },
             genealogy: { children: [] },
             tasks: [],
-            message_count: 0,
           };
 
           const newSession = await ctx.app
