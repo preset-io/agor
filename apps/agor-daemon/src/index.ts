@@ -619,6 +619,14 @@ async function main() {
     corsOriginOverride: process.env.CORS_ORIGIN,
   });
 
+  // Allow browser Private Network Access preflight (public iframe -> localhost daemon).
+  // Must run before cors() because cors can terminate OPTIONS requests early.
+  app.use((req, res, next) => {
+    if (req.headers['access-control-request-private-network'] === 'true') {
+      res.setHeader('Access-Control-Allow-Private-Network', 'true');
+    }
+    next();
+  });
   app.use(
     cors({
       origin: corsOrigin,
@@ -4407,7 +4415,8 @@ async function main() {
 
   // Configure authentication options BEFORE creating service
   // Note: jwtSecret is initialized earlier (before Socket.io config)
-  const authStrategiesArray = ['jwt', 'local', 'anonymous'];
+  // api-key must be part of configured authStrategies, and precede jwt for Bearer agor_sk_* tokens.
+  const authStrategiesArray = ['api-key', 'jwt', 'local', 'anonymous'];
   if (sessionTokenService) {
     authStrategiesArray.push('session-token');
   }
