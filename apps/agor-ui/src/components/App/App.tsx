@@ -1086,6 +1086,7 @@ export const App: React.FC<AppProps> = ({
             }}
             user={user || null}
             mcpServerById={mcpServerById}
+            client={client}
             onUpdate={onUpdateUser}
           />
         </Layout>

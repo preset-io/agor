@@ -1,6 +1,8 @@
+import type { AgorClient } from '@agor/core/api';
 import type { AgenticToolName, MCPServer, UpdateUserInput, User } from '@agor/core/types';
 import { getDefaultPermissionMode, hasMinimumRole, ROLES } from '@agor/core/types';
 import {
+  ApiOutlined,
   CloseOutlined,
   KeyOutlined,
   RobotOutlined,
@@ -32,6 +34,7 @@ import { ApiKeyFields, type ApiKeyStatus } from '../ApiKeyFields';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { EnvVarEditor } from '../EnvVarEditor';
 import { AudioSettingsTab } from './AudioSettingsTab';
+import { PersonalApiKeysTab } from './PersonalApiKeysTab';
 
 const { Sider, Content } = Layout;
 
@@ -40,6 +43,7 @@ export interface UserSettingsModalProps {
   onClose: () => void;
   user: User | null;
   mcpServerById: Map<string, MCPServer>;
+  client: AgorClient | null;
   currentUser?: User | null;
   onUpdate?: (userId: string, updates: UpdateUserInput) => void;
 }
@@ -49,6 +53,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   onClose,
   user,
   mcpServerById,
+  client,
   currentUser,
   onUpdate,
 }) => {
@@ -406,6 +411,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         break;
       case 'api-keys':
       case 'env-vars':
+      case 'personal-api-keys':
         // These tabs save individually, just close
         handleClose();
         break;
@@ -444,6 +450,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           key: 'audio',
           label: 'Audio',
           icon: <SoundOutlined />,
+        },
+        {
+          key: 'personal-api-keys',
+          label: 'Personal API Keys',
+          icon: <ApiOutlined />,
         },
       ],
     },
@@ -612,6 +623,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         );
       case 'audio':
         return <AudioSettingsTab user={user} form={audioForm} />;
+      case 'personal-api-keys':
+        return <PersonalApiKeysTab client={client} />;
       case 'claude-code':
       case 'codex':
       case 'gemini':
@@ -664,6 +677,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       'api-keys': 'API Keys',
       'env-vars': 'Environment Variables',
       audio: 'Audio',
+      'personal-api-keys': 'Personal API Keys',
       'claude-code': 'Claude Code',
       codex: 'Codex',
       gemini: 'Gemini',

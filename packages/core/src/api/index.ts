@@ -460,19 +460,46 @@ function extendBoardsService(client: AgorClient): void {
  * @returns Feathers client instance with socket exposed
  */
 /**
+ * Check if an AGOR_API_KEY environment variable is set.
+ * Returns the key if valid format, null otherwise.
+ */
+export function getApiKeyFromEnv(): string | null {
+  const key = typeof process !== 'undefined' ? process.env?.AGOR_API_KEY : null;
+  if (key?.startsWith('agor_sk_')) {
+    return key;
+  }
+  return null;
+}
+
+/**
  * Create REST-only Feathers client for CLI (prevents hanging processes)
  *
  * Uses REST transport instead of WebSocket to avoid keeping Node.js processes alive.
  * Only use this in CLI commands - UI should use createClient() with WebSocket.
+ *
+ * @param url - Daemon URL
+ * @param apiKey - Optional API key to use for authentication (sets Authorization header on all requests)
  */
-export async function createRestClient(url: string = DEFAULT_DAEMON_URL): Promise<AgorClient> {
+export async function createRestClient(
+  url: string = DEFAULT_DAEMON_URL,
+  apiKey?: string
+): Promise<AgorClient> {
   const client = feathers<ServiceTypes>() as AgorClient;
 
   // Lazy-load REST client (only imported when needed, not in browser bundles)
   const { default: rest } = await import('@feathersjs/rest-client');
 
+  // When an API key is provided, wrap fetch to inject the Authorization header
+  const fetchFn = apiKey
+    ? (input: string | URL | globalThis.Request, init?: RequestInit) => {
+        const headers = new Headers(init?.headers);
+        headers.set('Authorization', `Bearer ${apiKey}`);
+        return fetch(input, { ...init, headers });
+      }
+    : fetch;
+
   // Configure REST transport
-  client.configure(rest(url).fetch(fetch));
+  client.configure(rest(url).fetch(fetchFn));
 
   // Configure authentication with no storage (CLI will manage tokens separately)
   client.configure(authentication({ storage: undefined }));

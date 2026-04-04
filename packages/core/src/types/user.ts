@@ -193,6 +193,19 @@ export interface User extends BaseUserFields {
 }
 
 /**
+ * User API Key - Personal API key for programmatic access
+ */
+export interface UserApiKey {
+  id: UserID;
+  user_id: UserID;
+  name: string;
+  prefix: string;
+  key_hash: string;
+  created_at: Date;
+  last_used_at?: Date;
+}
+
+/**
  * Create user input (password required, not stored in User type)
  */
 export interface CreateUserInput extends Partial<Omit<BaseUserFields, 'role'>> {

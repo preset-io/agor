@@ -211,6 +211,13 @@
       "when": 1775200200000,
       "tag": "0031_breezy_speed_demon",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1775300000000,
+      "tag": "0032_add_user_api_keys",
+      "breakpoints": true
     }
   ]
 }

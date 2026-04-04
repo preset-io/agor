@@ -38,6 +38,7 @@ export const userMcpOauthTokens = schema.userMcpOauthTokens;
 export const boardComments = schema.boardComments;
 export const gatewayChannels = schema.gatewayChannels;
 export const threadSessionMap = schema.threadSessionMap;
+export const userApiKeys = schema.userApiKeys;
 
 // Re-export all types
 export type * from './schema.sqlite';

@@ -1,3 +1,4 @@
+import type { AgorClient } from '@agor/core/api';
 import type { CreateUserInput, MCPServer, UpdateUserInput, User } from '@agor/core/types';
 import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
 import {
@@ -22,6 +23,7 @@ import { UserSettingsModal } from './UserSettingsModal';
 interface UsersTableProps {
   userById: Map<string, User>;
   mcpServerById: Map<string, MCPServer>;
+  client: AgorClient | null;
   currentUser?: User | null;
   onCreate?: (data: CreateUserInput) => void;
   onUpdate?: (userId: string, updates: UpdateUserInput) => void;
@@ -31,6 +33,7 @@ interface UsersTableProps {
 export const UsersTable: React.FC<UsersTableProps> = ({
   userById,
   mcpServerById,
+  client,
   currentUser,
   onCreate,
   onUpdate,
@@ -252,6 +255,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
         onClose={() => setEditingUser(null)}
         user={editingUser}
         mcpServerById={mcpServerById}
+        client={client}
         currentUser={currentUser}
         onUpdate={onUpdate}
       />

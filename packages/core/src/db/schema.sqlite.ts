@@ -690,6 +690,31 @@ export const users = sqliteTable(
 );
 
 /**
+ * User API Keys table - Personal API keys for programmatic access
+ *
+ * Stores bcrypt-hashed API keys with a prefix for identification.
+ * The raw key is shown once at creation time and never stored.
+ */
+export const userApiKeys = sqliteTable(
+  'user_api_keys',
+  {
+    id: text('id', { length: 36 }).primaryKey(),
+    user_id: text('user_id', { length: 36 })
+      .notNull()
+      .references(() => users.user_id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    prefix: text('prefix').notNull(), // first 12 chars: 'agor_sk_XXXX' for identification
+    key_hash: text('key_hash').notNull(), // bcrypt hash of full key
+    created_at: t.timestamp('created_at').notNull(),
+    last_used_at: t.timestamp('last_used_at'),
+  },
+  (table) => ({
+    userIdx: index('user_api_keys_user_idx').on(table.user_id),
+    prefixIdx: index('user_api_keys_prefix_idx').on(table.prefix),
+  })
+);
+
+/**
  * MCP Servers table - MCP server configurations
  *
  * Stores MCP (Model Context Protocol) server configurations that can be attached to sessions.

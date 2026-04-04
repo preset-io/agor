@@ -408,6 +408,7 @@ import { createSessionsService } from './services/sessions';
 import { createTasksService } from './services/tasks';
 import { TerminalsService } from './services/terminals';
 import { createThreadSessionMapService } from './services/thread-session-map';
+import { createUserApiKeysService } from './services/user-api-keys';
 import { createUsersService } from './services/users';
 import { setupWorktreeOwnersService } from './services/worktree-owners.js';
 import { createWorktreesService } from './services/worktrees';
@@ -483,7 +484,7 @@ async function main() {
   // SECURITY: Disable anonymous authentication by default
   // Must explicitly set daemon.allowAnonymous=true in config to enable
   const allowAnonymous = config.daemon?.allowAnonymous === true;
-  const authStrategies = allowAnonymous ? ['jwt', 'anonymous'] : ['jwt'];
+  const authStrategies = allowAnonymous ? ['jwt', 'api-key', 'anonymous'] : ['jwt', 'api-key'];
   const requireAuth = authenticate({ strategies: authStrategies });
 
   /**
@@ -4442,6 +4443,16 @@ async function main() {
   authentication.register('local', new LocalStrategy());
   authentication.register('anonymous', new AnonymousStrategy());
 
+  // Register API key authentication strategy
+  const { ApiKeyStrategy } = await import('./auth/api-key-strategy.js');
+  const apiKeyStrategy = new ApiKeyStrategy();
+  authentication.register('api-key', apiKeyStrategy);
+
+  // Initialize API key strategy with dependencies (db and usersService are available from earlier)
+  const { UserApiKeysRepository } = await import('@agor/core/db');
+  const userApiKeysRepo = new UserApiKeysRepository(db);
+  apiKeyStrategy.setDependencies(userApiKeysRepo, usersService);
+
   // SECURITY: Simple in-memory rate limiter for authentication endpoints
   const authAttempts = new Map<string, { count: number; resetAt: number }>();
   const AUTH_RATE_LIMIT = 50; // Max attempts (increased for development/multiple tabs)
@@ -6236,6 +6247,44 @@ async function main() {
     },
     {
       create: { role: ROLES.MEMBER, action: 'export .agor.yml' },
+    },
+    requireAuth
+  );
+
+  // User API Keys CRUD routes
+  const userApiKeysService = createUserApiKeysService(userApiKeysRepo);
+
+  registerAuthenticatedRoute(
+    app,
+    '/api/v1/user/api-keys',
+    userApiKeysService,
+    {
+      find: { role: ROLES.MEMBER, action: 'list API keys' },
+      create: { role: ROLES.MEMBER, action: 'create API keys' },
+    },
+    requireAuth
+  );
+
+  registerAuthenticatedRoute(
+    app,
+    '/api/v1/user/api-keys/:id',
+    {
+      // biome-ignore lint/suspicious/noExplicitAny: Feathers service type
+      async patch(data: { name?: string }, params: any) {
+        const id = params.route?.id;
+        if (!id) throw new Error('API key ID required');
+        return userApiKeysService.patch(id, data, params);
+      },
+      // biome-ignore lint/suspicious/noExplicitAny: Feathers service type
+      async remove(_id: unknown, params: any) {
+        const keyId = params.route?.id;
+        if (!keyId) throw new Error('API key ID required');
+        return userApiKeysService.remove(keyId, params);
+      },
+    },
+    {
+      patch: { role: ROLES.MEMBER, action: 'update API keys' },
+      remove: { role: ROLES.MEMBER, action: 'delete API keys' },
     },
     requireAuth
   );

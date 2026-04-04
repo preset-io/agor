@@ -5,7 +5,7 @@
  */
 
 import type { AgorClient } from '@agor/core/api';
-import { createRestClient, isDaemonRunning } from '@agor/core/api';
+import { createRestClient, getApiKeyFromEnv, isDaemonRunning } from '@agor/core/api';
 import { getDaemonUrl } from '@agor/core/config';
 import { Command } from '@oclif/core';
 import chalk from 'chalk';
@@ -44,6 +44,12 @@ export abstract class BaseCommand extends Command {
           chalk.gray(`Current: ${this.daemonUrl}`)
       );
       this.exit(1);
+    }
+
+    // Check for API key auth (takes precedence over stored JWT)
+    const apiKey = getApiKeyFromEnv();
+    if (apiKey) {
+      return await createRestClient(this.daemonUrl, apiKey);
     }
 
     // Create REST-only client (prevents hanging processes)
