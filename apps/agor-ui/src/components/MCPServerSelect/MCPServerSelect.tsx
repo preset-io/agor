@@ -35,11 +35,20 @@ export const MCPServerSelect: React.FC<MCPServerSelectProps> = ({
   const enabledServers = filteredServers.filter((server) => server.enabled);
 
   const options = enabledServers
-    .map((server) => ({
-      label: `${server.display_name || server.name} (${server.transport})`,
-      value: server.mcp_server_id,
-      disabled: !server.enabled,
-    }))
+    .map((server) => {
+      const name = server.display_name || server.name;
+      const authSuffix =
+        server.auth?.type === 'oauth'
+          ? ` · OAuth ${server.auth.oauth_mode === 'shared' ? '(shared)' : '(per-user)'}`
+          : server.auth?.type === 'bearer' || server.auth?.token
+            ? ' · Token'
+            : '';
+      return {
+        label: `${name} (${server.transport})${authSuffix}`,
+        value: server.mcp_server_id,
+        disabled: !server.enabled,
+      };
+    })
     .sort((a, b) => a.label.localeCompare(b.label));
 
   return (

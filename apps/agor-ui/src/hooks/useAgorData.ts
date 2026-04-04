@@ -38,6 +38,7 @@ interface UseAgorDataResult {
   gatewayChannelById: Map<string, GatewayChannel>; // O(1) lookups by id - efficient, stable references
   artifactById: Map<string, Artifact>; // O(1) lookups by artifact_id - efficient, stable references
   sessionMcpServerIds: Map<string, string[]>; // O(1) lookups by session_id - efficient, stable references
+  userAuthenticatedMcpServerIds: Set<string>; // MCP server IDs where current user has valid per-user OAuth tokens
   loading: boolean;
   error: string | null;
   refetch: () => Promise<void>;
@@ -73,6 +74,9 @@ export function useAgorData(
   );
   const [artifactById, setArtifactById] = useState<Map<string, Artifact>>(new Map());
   const [sessionMcpServerIds, setSessionMcpServerIds] = useState<Map<string, string[]>>(new Map());
+  const [userAuthenticatedMcpServerIds, setUserAuthenticatedMcpServerIds] = useState<Set<string>>(
+    new Set()
+  );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -106,6 +110,7 @@ export function useAgorData(
         sessionMcpResult,
         gatewayChannelsResult,
         artifactsResult,
+        oauthStatusResult,
       ] = await Promise.all([
         client
           .service('sessions')
@@ -122,6 +127,10 @@ export function useAgorData(
         client.service('session-mcp-servers').find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
         client.service('gateway-channels').find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
         client.service('artifacts').find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+        client
+          .service('mcp-servers/oauth-status')
+          .find()
+          .catch(() => ({ authenticated_server_ids: [] })),
       ]);
 
       // Handle paginated vs array results
@@ -252,6 +261,10 @@ export function useAgorData(
         sessionMcpMap.get(relationship.session_id)!.push(relationship.mcp_server_id);
       }
       setSessionMcpServerIds(sessionMcpMap);
+
+      // Set per-user OAuth auth status
+      const oauthStatus = oauthStatusResult as { authenticated_server_ids?: string[] };
+      setUserAuthenticatedMcpServerIds(new Set(oauthStatus?.authenticated_server_ids ?? []));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch data');
     } finally {
@@ -876,6 +889,7 @@ export function useAgorData(
     gatewayChannelById,
     artifactById,
     sessionMcpServerIds,
+    userAuthenticatedMcpServerIds,
     loading,
     error,
     refetch: fetchData,

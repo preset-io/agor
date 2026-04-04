@@ -49,6 +49,13 @@ export interface GatewayAgenticConfig {
   codexSandboxMode?: CodexSandboxMode;
   codexApprovalPolicy?: CodexApprovalPolicy;
   codexNetworkAccess?: boolean;
+  /**
+   * Gateway-level environment variables (e.g., service account tokens).
+   * Merged into the session's process environment with LOWER priority than
+   * per-user env vars (user values take precedence when both exist).
+   * Useful for providing fallback service account tokens for MCP servers.
+   */
+  envVars?: Record<string, string>;
 }
 
 // ============================================================================

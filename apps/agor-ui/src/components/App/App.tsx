@@ -81,6 +81,7 @@ export interface AppProps {
   userById: Map<string, User>; // Map-based user storage
   mcpServerById: Map<string, MCPServer>; // Map-based MCP server storage
   sessionMcpServerIds: Map<string, string[]>; // Map-based session-MCP relationships
+  userAuthenticatedMcpServerIds: Set<string>; // Per-user OAuth auth status
   initialBoardId?: string;
   openSettingsTab?: string | null; // Open settings modal to a specific tab
   onSettingsClose?: () => void; // Called when settings modal closes
@@ -173,6 +174,7 @@ export const App: React.FC<AppProps> = ({
   userById,
   mcpServerById,
   sessionMcpServerIds,
+  userAuthenticatedMcpServerIds,
   initialBoardId,
   openSettingsTab,
   onSettingsClose,
@@ -607,6 +609,7 @@ export const App: React.FC<AppProps> = ({
       repoById,
       mcpServerById,
       sessionMcpServerIds,
+      userAuthenticatedMcpServerIds,
       userById,
       boardById,
       boardObjectById,
@@ -619,6 +622,7 @@ export const App: React.FC<AppProps> = ({
       repoById,
       mcpServerById,
       sessionMcpServerIds,
+      userAuthenticatedMcpServerIds,
       userById,
       boardById,
       boardObjectById,

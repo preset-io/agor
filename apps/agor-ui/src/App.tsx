@@ -145,6 +145,7 @@ function AppContent() {
     gatewayChannelById,
     artifactById,
     sessionMcpServerIds,
+    userAuthenticatedMcpServerIds,
     loading,
     error: dataError,
   } = useAgorData(connected ? client : null, {
@@ -1386,6 +1387,7 @@ function AppContent() {
                 userById={userById}
                 mcpServerById={mcpServerById}
                 sessionMcpServerIds={sessionMcpServerIds}
+                userAuthenticatedMcpServerIds={userAuthenticatedMcpServerIds}
                 initialBoardId={Array.from(boardById.values())[0]?.board_id}
                 openSettingsTab={settingsTabToOpen}
                 onSettingsClose={handleSettingsClose}
@@ -1467,6 +1469,7 @@ function AppContent() {
                 userById={userById}
                 mcpServerById={mcpServerById}
                 sessionMcpServerIds={sessionMcpServerIds}
+                userAuthenticatedMcpServerIds={userAuthenticatedMcpServerIds}
                 initialBoardId={Array.from(boardById.values())[0]?.board_id}
                 openSettingsTab={settingsTabToOpen}
                 onSettingsClose={handleSettingsClose}
@@ -1548,6 +1551,7 @@ function AppContent() {
                 userById={userById}
                 mcpServerById={mcpServerById}
                 sessionMcpServerIds={sessionMcpServerIds}
+                userAuthenticatedMcpServerIds={userAuthenticatedMcpServerIds}
                 initialBoardId={Array.from(boardById.values())[0]?.board_id}
                 openSettingsTab={settingsTabToOpen}
                 onSettingsClose={handleSettingsClose}

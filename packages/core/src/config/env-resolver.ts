@@ -256,7 +256,13 @@ export async function createUserProcessEnvironment(
   userId?: UserID,
   db?: Database,
   additionalEnv?: Record<string, string>,
-  forImpersonation = false
+  forImpersonation = false,
+  /**
+   * Gateway-level env vars (e.g., service account tokens).
+   * Merged BEFORE user env vars — user values take precedence.
+   * Included in AGOR_USER_ENV_KEYS so MCP templates can resolve them.
+   */
+  gatewayEnv?: Record<string, string>
 ): Promise<Record<string, string>> {
   // SECURITY: Start with allowlisted env vars only — never inherit full process.env
   const env = buildAllowlistedEnv();
@@ -272,14 +278,26 @@ export async function createUserProcessEnvironment(
   // Track user-defined env var keys (for MCP template scoping)
   const userEnvKeys: string[] = [];
 
+  // Merge gateway-level env vars (low priority — user vars override these)
+  if (gatewayEnv) {
+    for (const [key, value] of Object.entries(gatewayEnv)) {
+      if (value && value.trim() !== '') {
+        env[key] = value;
+        userEnvKeys.push(key);
+      }
+    }
+  }
+
   // Resolve and merge user environment variables (if userId provided)
-  // Only override if values are non-empty
+  // Only override if values are non-empty — takes precedence over gateway vars
   if (userId && db) {
     const userEnv = await resolveUserEnvironment(userId, db);
     for (const [key, value] of Object.entries(userEnv)) {
       if (value && value.trim() !== '') {
         env[key] = value;
-        userEnvKeys.push(key);
+        if (!userEnvKeys.includes(key)) {
+          userEnvKeys.push(key);
+        }
       }
     }
   }

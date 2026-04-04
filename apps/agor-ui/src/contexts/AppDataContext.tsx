@@ -27,6 +27,7 @@ export interface AppDataContextValue {
   repoById: Map<string, Repo>;
   mcpServerById: Map<string, MCPServer>;
   sessionMcpServerIds: Map<string, string[]>; // Session ID -> MCP server IDs
+  userAuthenticatedMcpServerIds: Set<string>; // MCP server IDs where current user has valid per-user OAuth tokens
 
   // Users
   userById: Map<string, User>;

@@ -63,7 +63,7 @@ export const SessionPanelContent: React.FC<SessionPanelContentProps> = ({
   const { message } = App.useApp();
 
   // Get data from context
-  const { userById, repoById, mcpServerById } = useAppData();
+  const { userById, repoById, mcpServerById, userAuthenticatedMcpServerIds } = useAppData();
 
   // Get actions from context
   const {
@@ -114,8 +114,12 @@ export const SessionPanelContent: React.FC<SessionPanelContentProps> = ({
               .map((serverId) => mcpServerById.get(serverId))
               .filter(Boolean)
               .map((server) => {
-                const needsAuth =
-                  server?.auth?.type === 'oauth' && !server?.auth?.oauth_access_token;
+                const isOAuth = server?.auth?.type === 'oauth';
+                const hasSharedToken = !!server?.auth?.oauth_access_token;
+                const hasPerUserToken = server?.mcp_server_id
+                  ? userAuthenticatedMcpServerIds.has(server.mcp_server_id)
+                  : false;
+                const needsAuth = isOAuth && !hasSharedToken && !hasPerUserToken;
                 return (
                   <Tooltip
                     key={server?.mcp_server_id}
@@ -139,6 +143,7 @@ export const SessionPanelContent: React.FC<SessionPanelContentProps> = ({
                                   success: boolean;
                                   error?: string;
                                   authorizationUrl?: string;
+                                  state?: string;
                                 };
 
                                 if (data.success && data.authorizationUrl) {
@@ -147,6 +152,30 @@ export const SessionPanelContent: React.FC<SessionPanelContentProps> = ({
                                     '_blank',
                                     'noopener,noreferrer'
                                   );
+                                  message.info(
+                                    'Authenticating... complete sign-in in the new tab.'
+                                  );
+
+                                  // Listen for automatic OAuth completion via daemon callback
+                                  if (data.state) {
+                                    const handleOAuthCompleted = (event: {
+                                      state: string;
+                                      success: boolean;
+                                    }) => {
+                                      if (event.state === data.state && event.success) {
+                                        message.success(
+                                          `${server?.display_name || server?.name} authenticated!`
+                                        );
+                                        client.io.off('oauth:completed', handleOAuthCompleted);
+                                      }
+                                    };
+                                    client.io.on('oauth:completed', handleOAuthCompleted);
+                                    // Clean up listener after 5 minutes (flow timeout)
+                                    setTimeout(
+                                      () => client.io.off('oauth:completed', handleOAuthCompleted),
+                                      5 * 60 * 1000
+                                    );
+                                  }
                                 } else if (!data.success) {
                                   message.error(data.error || 'Failed to start OAuth flow');
                                 }

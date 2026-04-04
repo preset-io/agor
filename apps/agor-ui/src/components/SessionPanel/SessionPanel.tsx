@@ -19,7 +19,7 @@ import {
   SettingOutlined,
   StopOutlined,
 } from '@ant-design/icons';
-import { App, Badge, Button, Space, Spin, Tooltip, Typography, theme } from 'antd';
+import { Alert, App, Badge, Button, Space, Spin, Tooltip, Typography, theme } from 'antd';
 import Handlebars from 'handlebars';
 import React from 'react';
 import { getDaemonUrl } from '../../config/daemon';
@@ -102,7 +102,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const connectionDisabled = useConnectionDisabled();
 
   // Get data from context
-  const { userById } = useAppData();
+  const { userById, mcpServerById, userAuthenticatedMcpServerIds } = useAppData();
 
   // Get actions from context
   const {
@@ -113,6 +113,19 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     onDeleteSession: onDelete,
     onOpenTerminal,
   } = useAppActions();
+
+  // Compute which session MCP servers need authentication
+  const unauthedMcpServerNames = React.useMemo(() => {
+    return sessionMcpServerIds
+      .map((id) => mcpServerById.get(id))
+      .filter((server) => {
+        if (!server || server.auth?.type !== 'oauth') return false;
+        const hasSharedToken = !!server.auth?.oauth_access_token;
+        const hasPerUserToken = userAuthenticatedMcpServerIds.has(server.mcp_server_id);
+        return !hasSharedToken && !hasPerUserToken;
+      })
+      .map((server) => server!.display_name || server!.name);
+  }, [sessionMcpServerIds, mcpServerById, userAuthenticatedMcpServerIds]);
 
   // Per-session draft storage (localStorage-backed to survive unmounts)
   const DRAFT_KEY_PREFIX = 'agor-draft-';
@@ -581,6 +594,20 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         style={{ width: '100%', position: 'relative', zIndex: 1 }}
         size={8}
       >
+        {unauthedMcpServerNames.length > 0 && (
+          <Alert
+            type="warning"
+            showIcon
+            message={
+              <>
+                {unauthedMcpServerNames.join(', ')} not authenticated — invisible to the agent.
+                Click the orange pill above to authenticate.
+              </>
+            }
+            style={{ marginBottom: 0 }}
+            banner
+          />
+        )}
         <AutocompleteTextarea
           value={inputValue}
           onChange={setInputValue}
