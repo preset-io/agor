@@ -1,7 +1,6 @@
 import { WorktreeRepository } from '@agor/core/db';
 import type {
   AgenticToolName,
-  BoardEntityObject,
   BoardID,
   UUID,
   Worktree,
@@ -262,86 +261,8 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
         ref = worktreeName;
       }
 
-      // If zoneId provided, validate zone exists and compute position
-      let zonePosition: { x: number; y: number } | undefined;
-      let resolvedZoneId: string | undefined;
-      if (zoneId && boardId) {
-        const board = await ctx.app.service('boards').get(boardId, ctx.baseServiceParams);
-        const zone = board.objects?.[zoneId];
-        if (!zone || zone.type !== 'zone') {
-          throw new Error(`Zone ${zoneId} not found on board ${boardId}`);
-        }
-
-        zonePosition = computeZoneRelativePosition(zone as ZoneBoardObject);
-        resolvedZoneId = zoneId;
-      }
-
-      // If no zoneId and no explicit position, compute smart default from existing content
-      let smartPosition: { x: number; y: number } | undefined;
-      if (!zoneId && boardId) {
-        try {
-          const boardObjectsResult = await ctx.app
-            .service('board-objects')
-            .find({ query: { board_id: boardId }, ...ctx.baseServiceParams });
-          const existingObjects = (boardObjectsResult as { data: BoardEntityObject[] }).data;
-
-          // Strategy 1: Use absolute-positioned worktrees for centroid
-          const absoluteWorktrees = existingObjects.filter(
-            (obj) => obj.entity_type === 'worktree' && !obj.zone_id
-          );
-
-          if (absoluteWorktrees.length > 0) {
-            const sumX = absoluteWorktrees.reduce((sum, obj) => sum + obj.position.x, 0);
-            const sumY = absoluteWorktrees.reduce((sum, obj) => sum + obj.position.y, 0);
-            const centroidX = sumX / absoluteWorktrees.length;
-            const centroidY = sumY / absoluteWorktrees.length;
-
-            const offsetX = (Math.random() - 0.5) * 300;
-            const offsetY = (Math.random() - 0.5) * 300;
-
-            smartPosition = {
-              x: centroidX + offsetX,
-              y: centroidY + offsetY,
-            };
-          }
-
-          // Strategy 2: If no absolute worktrees, anchor near zones on the board
-          if (!smartPosition) {
-            const board = await ctx.app.service('boards').get(boardId, ctx.baseServiceParams);
-            const zones = Object.values(board.objects || {}).filter(
-              (obj: unknown) => (obj as { type: string }).type === 'zone'
-            ) as ZoneBoardObject[];
-
-            if (zones.length > 0) {
-              // Place below the lowest zone with some margin
-              let maxBottom = 0;
-              let anchorX = 0;
-              for (const zone of zones) {
-                const bottom = zone.y + zone.height;
-                if (bottom > maxBottom) {
-                  maxBottom = bottom;
-                  anchorX = zone.x;
-                }
-              }
-              smartPosition = {
-                x: anchorX + (Math.random() - 0.5) * 200,
-                y: maxBottom + 80 + Math.random() * 100,
-              };
-            }
-          }
-
-          // Strategy 3: Reasonable default near origin
-          if (!smartPosition) {
-            smartPosition = {
-              x: 100 + Math.random() * 200,
-              y: 100 + Math.random() * 200,
-            };
-          }
-        } catch {
-          // Last resort: fixed position near origin (avoids the unique_id*60 fallback)
-          smartPosition = { x: 200, y: 200 };
-        }
-      }
+      // Positioning is handled automatically by the repos service —
+      // agents don't need to think about x/y coordinates.
 
       const worktree = await reposService.createWorktree(
         repoId,
@@ -355,9 +276,7 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
           ...(issueUrl ? { issue_url: issueUrl } : {}),
           ...(pullRequestUrl ? { pull_request_url: pullRequestUrl } : {}),
           ...(boardId ? { boardId } : {}),
-          ...(zonePosition ? { position: zonePosition } : {}),
-          ...(smartPosition ? { position: smartPosition } : {}),
-          ...(resolvedZoneId ? { zoneId: resolvedZoneId } : {}),
+          ...(zoneId ? { zoneId } : {}),
         },
         ctx.baseServiceParams
       );
@@ -369,8 +288,8 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
         response._note = `Name '${originalName}' was already taken. Created as '${worktreeName}' instead (autoSuffix applied).`;
       }
 
-      if (resolvedZoneId) {
-        response._zone = { zone_id: resolvedZoneId, position: zonePosition };
+      if (zoneId) {
+        response._zone = { zone_id: zoneId };
       } else {
         response.hint =
           'Use agor_worktrees_set_zone to pin this worktree to a specific zone and optionally trigger zone prompt templates.';
