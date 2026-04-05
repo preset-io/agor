@@ -161,6 +161,7 @@ export const ToolUseRenderer: React.FC<ToolUseRendererProps> = ({ toolUse, toolR
         </summary>
         <ThemedSyntaxHighlighter
           language="json"
+          PreTag="pre"
           customStyle={{
             marginTop: token.sizeUnit / 2,
             fontSize: 11,
