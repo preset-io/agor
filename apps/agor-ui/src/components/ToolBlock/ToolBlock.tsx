@@ -70,7 +70,7 @@ export const ToolBlock: React.FC<ToolBlockProps> = ({
       <span style={{ flexShrink: 0, fontSize: 14, color: statusColor, lineHeight: 1 }}>{icon}</span>
 
       {/* Expand/collapse chevron (only when there's expandable content) */}
-      {hasBody && !expandedByDefault && (
+      {hasBody && (
         <span style={{ flexShrink: 0, fontSize: 9, color: token.colorTextQuaternary }}>
           {expanded ? <DownOutlined /> : <RightOutlined />}
         </span>
