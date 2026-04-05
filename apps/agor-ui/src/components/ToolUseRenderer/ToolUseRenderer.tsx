@@ -19,6 +19,7 @@ import type React from 'react';
 import { shouldUseAnsiRendering } from '../../utils/ansi';
 import { CollapsibleText } from '../CollapsibleText';
 import { CollapsibleAnsiText } from '../CollapsibleText/CollapsibleAnsiText';
+import { ThemedSyntaxHighlighter } from '../ThemedSyntaxHighlighter';
 import { getToolRenderer } from './renderers';
 
 interface ToolUseBlock {
@@ -149,23 +150,26 @@ export const ToolUseRenderer: React.FC<ToolUseRendererProps> = ({ toolUse, toolR
       {/* Tool input parameters (collapsible below result) */}
       <details style={{ marginTop: token.sizeUnit }}>
         <summary
-          style={{ cursor: 'pointer', fontSize: token.fontSizeSM, color: token.colorTextSecondary }}
-        >
-          Show input parameters
-        </summary>
-        <pre
           style={{
+            cursor: 'pointer',
+            fontSize: 11,
+            color: token.colorTextTertiary,
+            userSelect: 'none',
+          }}
+        >
+          Input parameters
+        </summary>
+        <ThemedSyntaxHighlighter
+          language="json"
+          customStyle={{
             marginTop: token.sizeUnit / 2,
-            background: token.colorBgLayout,
-            padding: token.sizeUnit,
-            borderRadius: token.borderRadius,
-            fontFamily: 'Monaco, Menlo, Ubuntu Mono, Consolas, source-code-pro, monospace',
-            fontSize: token.fontSizeSM,
-            overflowX: 'auto',
+            fontSize: 11,
+            maxHeight: 300,
+            overflow: 'auto',
           }}
         >
           {JSON.stringify(input, null, 2)}
-        </pre>
+        </ThemedSyntaxHighlighter>
       </details>
     </div>
   ) : null;

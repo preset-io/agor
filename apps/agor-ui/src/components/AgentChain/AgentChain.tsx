@@ -41,7 +41,6 @@ import { copyToClipboard } from '../../utils/clipboard';
 import { getToolDisplayName } from '../../utils/toolDisplayName';
 import { CollapsibleText } from '../CollapsibleText';
 import { Tag } from '../Tag';
-import { ThemedSyntaxHighlighter } from '../ThemedSyntaxHighlighter';
 import { ToolBlock } from '../ToolBlock';
 import { ToolUseRenderer } from '../ToolUseRenderer';
 
@@ -433,29 +432,6 @@ export const AgentChain = React.memo<AgentChainProps>(({ messages }) => {
         expandedByDefault={isAlwaysExpanded}
       >
         {toolResult && <ToolUseRenderer toolUse={toolUse} toolResult={toolResult} />}
-        <details style={{ marginTop: token.sizeUnit }}>
-          <summary
-            style={{
-              cursor: 'pointer',
-              fontSize: 11,
-              color: token.colorTextTertiary,
-              userSelect: 'none',
-            }}
-          >
-            Input parameters
-          </summary>
-          <ThemedSyntaxHighlighter
-            language="json"
-            customStyle={{
-              marginTop: token.sizeUnit / 2,
-              fontSize: 11,
-              maxHeight: 300,
-              overflow: 'auto',
-            }}
-          >
-            {JSON.stringify(toolUse.input, null, 2)}
-          </ThemedSyntaxHighlighter>
-        </details>
       </ToolBlock>
     );
   };
