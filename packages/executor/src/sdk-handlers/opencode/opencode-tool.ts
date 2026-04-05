@@ -25,6 +25,7 @@ import type {
   SessionMCPServerRepository,
 } from '../../db/feathers-repositories.js';
 import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response.js';
+import { enrichContentBlocks } from '../base/diff-enrichment.js';
 import type {
   CreateSessionConfig,
   SessionHandle,
@@ -830,6 +831,9 @@ export class OpenCodeTool implements ITool {
         toolUses.length,
         'tool uses'
       );
+
+      // Best-effort diff enrichment for Edit/Write tool results
+      enrichContentBlocks(contentBlocks);
 
       const message = await this.messagesService.create({
         message_id: (currentTextMessageId || generateId()) as MessageID,

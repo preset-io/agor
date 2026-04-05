@@ -35,8 +35,8 @@ import {
   type TaskID,
   TaskStatus,
 } from '../../types.js';
+import { enrichToolResults, registerToolUses } from '../base/diff-enrichment.js';
 import type { ImportOptions, ITool, SessionData, ToolCapabilities } from '../base/index.js';
-import { enrichToolResults, registerToolUses } from './diff-enrichment.js';
 import { loadClaudeSession } from './import/load-session.js';
 import { transcriptsToMessages } from './import/message-converter.js';
 import {

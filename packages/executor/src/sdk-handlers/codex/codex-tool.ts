@@ -29,6 +29,7 @@ import {
   type SessionID,
   type TaskID,
 } from '../../types.js';
+import { enrichContentBlocks } from '../base/diff-enrichment.js';
 import type { ITool, StreamingCallbacks, ToolCapabilities } from '../base/index.js';
 import type { MessagesService, TasksService } from '../claude/claude-tool.js';
 import { DEFAULT_CODEX_MODEL } from './models.js';
@@ -278,6 +279,9 @@ export class CodexTool implements ITool {
               ]
             : []),
         ];
+
+        // Best-effort diff enrichment for Edit/Write tool results
+        enrichContentBlocks(toolContent);
 
         await this.createAssistantMessage(
           sessionId,

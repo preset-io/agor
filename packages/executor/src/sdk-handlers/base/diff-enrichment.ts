@@ -1,12 +1,21 @@
 /**
- * Diff Enrichment for Tool Results
+ * Diff Enrichment for Tool Results (Shared)
  *
  * Computes structuredPatch data for Edit/Write tool results at execution time.
  * This enrichment is best-effort: if it fails for any reason, the original
  * content is returned unchanged and the UI falls back to client-side diffing.
  *
- * Inspired by how Claude Code CLI generates diffs internally — using the `diff`
- * library's structuredPatch() against the file content, not `git diff`.
+ * Used by all SDK handlers (Claude, Codex, Gemini, OpenCode).
+ *
+ * Two usage patterns:
+ *
+ * 1. **Split messages** (Claude): tool_use in assistant msg, tool_result in user msg.
+ *    Call `registerToolUses()` on assistant messages, then `enrichToolResults()` on
+ *    the user message containing tool_results.
+ *
+ * 2. **Inline** (Codex, OpenCode): tool_use + tool_result in same content array.
+ *    Call `enrichContentBlocks()` which finds tool_use blocks and uses their input
+ *    to enrich adjacent tool_result blocks in one pass.
  */
 
 import * as fs from 'node:fs';
@@ -25,6 +34,9 @@ interface ToolUseInfo {
 
 interface ContentBlock {
   type: string;
+  id?: string;
+  name?: string;
+  input?: Record<string, unknown>;
   tool_use_id?: string;
   content?: unknown;
   is_error?: boolean;
@@ -39,6 +51,10 @@ export interface StructuredPatchHunk {
   lines: string[];
 }
 
+// ---------------------------------------------------------------------------
+// Pattern 1: Split messages (Claude)
+// ---------------------------------------------------------------------------
+
 /**
  * In-memory map of recent tool_use IDs → their input.
  * Populated when assistant messages with tool_use blocks are processed,
@@ -50,7 +66,7 @@ const pendingToolUses = new Map<string, ToolUseInfo>();
 
 /**
  * Register tool uses from an assistant message for later enrichment lookup.
- * Call this when processing assistant 'complete' events that contain toolUses.
+ * Used when tool_use and tool_result are in separate messages (Claude pattern).
  */
 export function registerToolUses(
   toolUses: Array<{ id: string; name: string; input: Record<string, unknown> }>
@@ -61,10 +77,11 @@ export function registerToolUses(
 }
 
 /**
- * Enrich tool_result content blocks with structuredPatch diff data.
- * Mutates the content blocks in-place by adding a `diff` field.
+ * Enrich tool_result content blocks using previously registered tool_use data.
+ * Used when tool_use and tool_result are in separate messages (Claude pattern).
  *
- * Best-effort: any failure silently falls through, leaving the block unchanged.
+ * Mutates content blocks in-place by adding a `diff` field.
+ * Best-effort: any failure silently falls through.
  */
 export function enrichToolResults(contentBlocks: ContentBlock[]): void {
   for (const block of contentBlocks) {
@@ -79,21 +96,74 @@ export function enrichToolResults(contentBlocks: ContentBlock[]): void {
     // Consume the entry — we no longer need it
     pendingToolUses.delete(toolUseId);
 
-    try {
-      if (toolUse.name === 'Edit') {
-        enrichEditResult(block, toolUse.input);
-      } else if (toolUse.name === 'Write') {
-        enrichWriteResult(block, toolUse.input);
-      }
-    } catch {
-      // Best effort — swallow any errors
+    enrichBlock(block, toolUse.name, toolUse.input);
+  }
+
+  // GC: clear any stale entries older than expected
+  if (pendingToolUses.size > 200) {
+    pendingToolUses.clear();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Pattern 2: Inline (Codex, OpenCode, Gemini)
+// ---------------------------------------------------------------------------
+
+/**
+ * Enrich content blocks where tool_use and tool_result appear in the same array.
+ * Scans for tool_use blocks, builds a local map, then enriches matching tool_results.
+ *
+ * Used by Codex, OpenCode, and Gemini handlers.
+ * Mutates content blocks in-place. Best-effort.
+ */
+export function enrichContentBlocks(contentBlocks: ContentBlock[]): void {
+  // Build local map from tool_use blocks in this array
+  const localToolUses = new Map<string, ToolUseInfo>();
+  for (const block of contentBlocks) {
+    if (block.type === 'tool_use' && block.id && block.name && block.input) {
+      localToolUses.set(block.id, { name: block.name, input: block.input });
     }
   }
 
-  // GC: clear any stale entries older than expected (shouldn't happen,
-  // but prevents unbounded growth if tool_results are lost)
-  if (pendingToolUses.size > 200) {
-    pendingToolUses.clear();
+  if (localToolUses.size === 0) return;
+
+  // Enrich tool_result blocks
+  for (const block of contentBlocks) {
+    if (block.type !== 'tool_result' || block.is_error) continue;
+
+    const toolUseId = block.tool_use_id;
+    if (!toolUseId) continue;
+
+    const toolUse = localToolUses.get(toolUseId);
+    if (!toolUse) continue;
+
+    enrichBlock(block, toolUse.name, toolUse.input);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Core enrichment logic (shared)
+// ---------------------------------------------------------------------------
+
+/**
+ * Enrich a single tool_result block with diff data.
+ * Best-effort — swallows all errors.
+ */
+function enrichBlock(
+  block: ContentBlock,
+  toolName: string,
+  toolInput: Record<string, unknown>
+): void {
+  try {
+    // Normalize tool names across SDKs (Claude: "Edit", Codex: "edit", etc.)
+    const normalized = toolName.toLowerCase();
+    if (normalized === 'edit') {
+      enrichEditResult(block, toolInput);
+    } else if (normalized === 'write') {
+      enrichWriteResult(block, toolInput);
+    }
+  } catch {
+    // Best effort — swallow any errors
   }
 }
 

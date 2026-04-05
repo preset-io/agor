@@ -32,6 +32,7 @@ import {
   type SessionID,
   type TaskID,
 } from '../../types.js';
+import { enrichContentBlocks } from '../base/diff-enrichment.js';
 import type { ITool, StreamingCallbacks, ToolCapabilities } from '../base/index.js';
 import type { MessagesService, TasksService } from '../claude/claude-tool.js';
 import { DEFAULT_GEMINI_MODEL } from './models.js';
@@ -221,6 +222,9 @@ export class GeminiTool implements ITool {
 
         // Use existing message ID or generate new one
         const assistantMessageId = currentMessageId || (generateId() as MessageID);
+
+        // Best-effort diff enrichment for Edit/Write tool results
+        enrichContentBlocks(event.content);
 
         // Create complete message in DB
         await this.createAssistantMessage(
@@ -415,6 +419,9 @@ export class GeminiTool implements ITool {
 
       // Handle complete messages only
       if (event.type === 'complete' && event.content && event.content.length > 0) {
+        // Best-effort diff enrichment for Edit/Write tool results
+        enrichContentBlocks(event.content);
+
         const messageId = generateId() as MessageID;
         await this.createAssistantMessage(
           sessionId,
