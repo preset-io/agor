@@ -564,12 +564,13 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
           }
         }
 
-        // If not in a zone, compute a smart default position
+        // If not in a zone, compute a smart default position using board entities
         if (!position) {
-          const { toAbsolutePosition, computeDefaultBoardPosition } = await import(
+          const { resolveEntityAbsolutePositions, computeDefaultBoardPosition } = await import(
             '@agor/core/utils/board-placement'
           );
 
+          // Fetch all entities for THIS board
           const existingResult = await boardObjectsService.find({
             query: { board_id: data.boardId },
             ...params,
@@ -580,7 +581,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             }
           ).data;
 
-          // Collect worktree entities and filter out archived ones
+          // Filter to active (non-archived) worktree entities
           const worktreeEntities = existing.filter(
             (obj: import('@agor/core/types').BoardEntityObject) =>
               obj.entity_type === 'worktree' && obj.worktree_id
@@ -601,23 +602,14 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             activeEntities = worktreeEntities.filter((e) => !archivedIds.has(e.worktree_id!));
           }
 
-          // Build zone lookup from board objects
+          // Extract zones from THIS board's objects
           const zones = board?.objects
             ? Object.entries(board.objects)
                 .filter(([, o]) => (o as { type: string }).type === 'zone')
                 .map(([id, o]) => ({ id, ...(o as import('@agor/core/types').ZoneBoardObject) }))
             : [];
-          const zoneMap = new Map(zones.map((z) => [z.id, z]));
 
-          // Convert zone-relative positions to absolute canvas coordinates
-          const absolutePositions = activeEntities.map((entity) => {
-            if (entity.zone_id) {
-              const zone = zoneMap.get(entity.zone_id);
-              if (zone) return toAbsolutePosition(entity.position, zone);
-            }
-            return entity.position;
-          });
-
+          const absolutePositions = resolveEntityAbsolutePositions(activeEntities, zones);
           position = computeDefaultBoardPosition(absolutePositions, zones);
         }
       } catch (error) {

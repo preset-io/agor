@@ -48,12 +48,41 @@ export function getZoneBoundingBoxCenter(
   return { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
 }
 
+interface ZoneMapEntry extends Pick<ZoneBoardObject, 'x' | 'y' | 'width' | 'height'> {
+  id: string;
+}
+
 /**
- * Compute a default board position for a new entity based on existing positions.
+ * Resolve absolute canvas positions for a set of board entities.
+ * Zone-pinned entities have their positions converted from zone-relative to absolute.
+ *
+ * All inputs must come from the same board — this function does not validate board_id
+ * consistency, the caller is responsible for passing board-scoped data.
+ */
+export function resolveEntityAbsolutePositions(
+  entities: readonly { position: Position; zone_id?: string }[],
+  zones: readonly ZoneMapEntry[]
+): Position[] {
+  const zoneMap = new Map(zones.map((z) => [z.id, z]));
+  return entities.map((entity) => {
+    if (entity.zone_id) {
+      const zone = zoneMap.get(entity.zone_id);
+      if (zone) return toAbsolutePosition(entity.position, zone);
+    }
+    return entity.position;
+  });
+}
+
+/**
+ * Compute a default board position for a new entity based on existing positions
+ * and zones from a single board.
  *
  * Strategy 1: Median of existing positions + jitter (robust to outliers).
  * Strategy 2: Center of zone bounding box + jitter (when no entities exist).
  * Strategy 3: Near origin (when no zones either).
+ *
+ * All inputs must come from the same board — this function does not validate board_id
+ * consistency, the caller is responsible for passing board-scoped data.
  */
 export function computeDefaultBoardPosition(
   absolutePositions: Position[],
