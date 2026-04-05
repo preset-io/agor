@@ -158,16 +158,23 @@ pnpm build
 if [[ "$WITH_SANDPACK" == true ]]; then
   echo ""
   echo "🧩 Building self-hosted Sandpack bundler..."
-  SANDPACK_DIR="$REPO_ROOT/.sandpack-bundler"
+  # IMPORTANT: Clone OUTSIDE the monorepo. sandpack-bundler uses yarn, but yarn
+  # walks up from CWD looking for package.json and will find the monorepo root's
+  # "packageManager": "pnpm@..." field and refuse to run. Keeping it outside the
+  # repo avoids the collision entirely.
+  SANDPACK_DIR="${AGOR_SANDPACK_DIR:-$HOME/.cache/agor/sandpack-bundler}"
   if [[ ! -d "$SANDPACK_DIR" ]]; then
-    echo "  → Cloning sandpack-bundler..."
+    echo "  → Cloning sandpack-bundler to $SANDPACK_DIR..."
+    mkdir -p "$(dirname "$SANDPACK_DIR")"
     git clone --depth 1 https://github.com/codesandbox/sandpack-bundler.git "$SANDPACK_DIR"
   fi
   cd "$SANDPACK_DIR"
   echo "  → Installing dependencies..."
   yarn install --frozen-lockfile 2>/dev/null || yarn install
   echo "  → Building..."
-  yarn build
+  # --public-url ./ makes Parcel emit relative asset paths so the bundle works
+  # when served from a subpath like /static/sandpack/ instead of the server root.
+  yarn build --public-url ./
   echo "  ✓ Sandpack bundler built"
 fi
 
