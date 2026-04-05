@@ -3,6 +3,11 @@ import type { CardID } from './card';
 import type { ArtifactID, BoardID, WorktreeID } from './id';
 
 /**
+ * Canvas position (x/y coordinates in board space)
+ */
+export type BoardPosition = { x: number; y: number };
+
+/**
  * Board object types for canvas annotations
  */
 export type BoardObjectType = 'text' | 'zone' | 'markdown' | 'app' | 'artifact';
@@ -35,7 +40,7 @@ export interface BoardEntityObject {
   entity_type: BoardEntityType;
 
   /** Position on canvas */
-  position: { x: number; y: number };
+  position: BoardPosition;
 
   /** Zone this entity is pinned to (optional) */
   zone_id?: string;

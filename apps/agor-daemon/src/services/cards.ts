@@ -80,24 +80,14 @@ export class CardsService extends DrizzleService<Card, Partial<Card>, CardParams
     const zoneId = data.zoneId;
 
     if (zoneId && data.zoneData) {
-      const zone = data.zoneData;
-      // Jitter positioning (same as worktrees_set_zone)
-      const CARD_WIDTH = 400;
-      const CARD_HEIGHT = 150;
-      const DESIRED_PADDING = 60;
-
-      const maxPaddingX = Math.max(0, (zone.width - CARD_WIDTH) / 2);
-      const maxPaddingY = Math.max(0, (zone.height - CARD_HEIGHT) / 2);
-      const paddingX = Math.min(DESIRED_PADDING, maxPaddingX);
-      const paddingY = Math.min(DESIRED_PADDING, maxPaddingY);
-
-      const jitterRangeX = Math.max(0, zone.width - CARD_WIDTH - 2 * paddingX);
-      const jitterRangeY = Math.max(0, zone.height - CARD_HEIGHT - 2 * paddingY);
-
-      position = {
-        x: paddingX + Math.random() * jitterRangeX,
-        y: paddingY + Math.random() * jitterRangeY,
-      };
+      const { computeZoneRelativePosition, CARD_WIDTH, CARD_HEIGHT } = await import(
+        '@agor/core/utils/board-placement'
+      );
+      position = computeZoneRelativePosition(data.zoneData, {
+        entityWidth: CARD_WIDTH,
+        entityHeight: CARD_HEIGHT,
+        desiredPadding: 60,
+      });
     }
 
     // Create board object placement — compensate on failure to avoid orphan cards
@@ -191,22 +181,14 @@ export class CardsService extends DrizzleService<Card, Partial<Card>, CardParams
 
     // If moving to a zone with zone data, calculate position
     if (zoneId && zoneData) {
-      const CARD_WIDTH = 400;
-      const CARD_HEIGHT = 150;
-      const DESIRED_PADDING = 60;
-
-      const maxPaddingX = Math.max(0, (zoneData.width - CARD_WIDTH) / 2);
-      const maxPaddingY = Math.max(0, (zoneData.height - CARD_HEIGHT) / 2);
-      const paddingX = Math.min(DESIRED_PADDING, maxPaddingX);
-      const paddingY = Math.min(DESIRED_PADDING, maxPaddingY);
-
-      const jitterRangeX = Math.max(0, zoneData.width - CARD_WIDTH - 2 * paddingX);
-      const jitterRangeY = Math.max(0, zoneData.height - CARD_HEIGHT - 2 * paddingY);
-
-      const position = {
-        x: paddingX + Math.random() * jitterRangeX,
-        y: paddingY + Math.random() * jitterRangeY,
-      };
+      const { computeZoneRelativePosition, CARD_WIDTH, CARD_HEIGHT } = await import(
+        '@agor/core/utils/board-placement'
+      );
+      const position = computeZoneRelativePosition(zoneData, {
+        entityWidth: CARD_WIDTH,
+        entityHeight: CARD_HEIGHT,
+        desiredPadding: 60,
+      });
 
       await this.boardObjectRepo.updatePosition(boardObj.object_id, position);
     }

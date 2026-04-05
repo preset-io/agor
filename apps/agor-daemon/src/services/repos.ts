@@ -581,7 +581,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             }
           ).data;
 
-          // Filter to active (non-archived) worktree entities
+          // Filter to active (non-archived) worktree entities via single batch query
           const worktreeEntities = existing.filter(
             (obj: import('@agor/core/types').BoardEntityObject) =>
               obj.entity_type === 'worktree' && obj.worktree_id
@@ -589,16 +589,18 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
 
           let activeEntities = worktreeEntities;
           if (worktreeEntities.length > 0) {
-            const worktreesService = this.app.service('worktrees');
-            const archivedIds = new Set<string>();
-            for (const entity of worktreeEntities) {
-              try {
-                const wt = await worktreesService.get(entity.worktree_id!);
-                if (wt.archived) archivedIds.add(entity.worktree_id!);
-              } catch {
-                archivedIds.add(entity.worktree_id!);
-              }
-            }
+            const worktreesResult = await this.app.service('worktrees').find({
+              query: { repo_id: repo.repo_id, $limit: 500 },
+              paginate: false,
+            });
+            const worktreesList = Array.isArray(worktreesResult)
+              ? worktreesResult
+              : (worktreesResult as { data: { worktree_id: string; archived: boolean }[] }).data;
+            const archivedIds = new Set(
+              worktreesList
+                .filter((wt: { archived: boolean }) => wt.archived)
+                .map((wt: { worktree_id: string }) => wt.worktree_id)
+            );
             activeEntities = worktreeEntities.filter((e) => !archivedIds.has(e.worktree_id!));
           }
 

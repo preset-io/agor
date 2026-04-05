@@ -1,11 +1,12 @@
-import type { ZoneBoardObject } from '../types/board.js';
+import type { BoardPosition, ZoneBoardObject } from '../types/board.js';
 
 /** Standard worktree card dimensions used for zone placement calculations */
 export const WORKTREE_CARD_WIDTH = 500;
 export const WORKTREE_CARD_HEIGHT = 200;
 const ZONE_DESIRED_PADDING = 80;
 
-export type Position = { x: number; y: number };
+/** @deprecated Use BoardPosition from types/board instead */
+export type Position = BoardPosition;
 
 /**
  * Convert a zone-relative position to absolute canvas coordinates.
@@ -111,23 +112,37 @@ export function computeDefaultBoardPosition(
   return { x: 100 + Math.random() * 200, y: 100 + Math.random() * 200 };
 }
 
+/** Standard card dimensions used for zone placement calculations */
+export const CARD_WIDTH = 400;
+export const CARD_HEIGHT = 150;
+
 /**
- * Calculate a random position within a zone for placing a worktree card.
+ * Calculate a random position within a zone for placing an entity.
  * Returns a position relative to the zone origin (not absolute canvas coordinates).
- * Uses adaptive padding and jitter to prevent cards from stacking on top of each other.
+ * Uses adaptive padding and jitter to prevent entities from stacking on top of each other.
+ *
+ * Defaults to worktree card dimensions. Pass entityWidth/entityHeight/desiredPadding
+ * to use for other entity types (e.g. cards).
  */
-export function computeZoneRelativePosition(zone: ZoneBoardObject): { x: number; y: number } {
-  const maxPaddingX = Math.max(0, (zone.width - WORKTREE_CARD_WIDTH) / 2);
-  const maxPaddingY = Math.max(0, (zone.height - WORKTREE_CARD_HEIGHT) / 2);
-  const paddingX = Math.min(ZONE_DESIRED_PADDING, maxPaddingX);
-  const paddingY = Math.min(ZONE_DESIRED_PADDING, maxPaddingY);
+export function computeZoneRelativePosition(
+  zone: Pick<ZoneBoardObject, 'width' | 'height'>,
+  options?: { entityWidth?: number; entityHeight?: number; desiredPadding?: number }
+): BoardPosition {
+  const entityWidth = options?.entityWidth ?? WORKTREE_CARD_WIDTH;
+  const entityHeight = options?.entityHeight ?? WORKTREE_CARD_HEIGHT;
+  const desiredPadding = options?.desiredPadding ?? ZONE_DESIRED_PADDING;
 
-  const jitterRangeX = Math.max(0, zone.width - WORKTREE_CARD_WIDTH - 2 * paddingX);
-  const jitterRangeY = Math.max(0, zone.height - WORKTREE_CARD_HEIGHT - 2 * paddingY);
+  const maxPaddingX = Math.max(0, (zone.width - entityWidth) / 2);
+  const maxPaddingY = Math.max(0, (zone.height - entityHeight) / 2);
+  const paddingX = Math.min(desiredPadding, maxPaddingX);
+  const paddingY = Math.min(desiredPadding, maxPaddingY);
 
-  if (zone.width < WORKTREE_CARD_WIDTH || zone.height < WORKTREE_CARD_HEIGHT) {
+  const jitterRangeX = Math.max(0, zone.width - entityWidth - 2 * paddingX);
+  const jitterRangeY = Math.max(0, zone.height - entityHeight - 2 * paddingY);
+
+  if (zone.width < entityWidth || zone.height < entityHeight) {
     console.warn(
-      `⚠️  Zone is smaller than worktree card (${zone.width}x${zone.height} < ${WORKTREE_CARD_WIDTH}x${WORKTREE_CARD_HEIGHT}), card may overflow zone bounds`
+      `⚠️  Zone is smaller than entity (${zone.width}x${zone.height} < ${entityWidth}x${entityHeight}), entity may overflow zone bounds`
     );
   }
 
